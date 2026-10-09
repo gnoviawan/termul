@@ -53,22 +53,16 @@ export function useCodeMirrorActiveHeading({
 interface UseBlockNoteActiveHeadingOptions {
   headings: TocHeading[]
   container: HTMLElement | null
-  isEnabled?: boolean
 }
 
 export function useBlockNoteActiveHeading({
   headings,
-  container,
-  isEnabled = true
+  container
 }: UseBlockNoteActiveHeadingOptions): string | undefined {
-  const [activeHeadingId, setActiveHeadingId] = useState<string | undefined>(headings[0]?.id)
+  const [observedHeadingId, setObservedHeadingId] = useState<string | undefined>()
 
   useEffect(() => {
-    setActiveHeadingId(headings[0]?.id)
-  }, [headings])
-
-  useEffect(() => {
-    if (!isEnabled || !container || !headings.length) {
+    if (!container || !headings.length) {
       return
     }
 
@@ -84,7 +78,7 @@ export function useBlockNoteActiveHeading({
         .map(([headingId]) => headingId)[0]
 
       if (next) {
-        setActiveHeadingId(next)
+        setObservedHeadingId(next)
       }
     }
 
@@ -131,7 +125,10 @@ export function useBlockNoteActiveHeading({
       observer.disconnect()
       visibleHeadings.clear()
     }
-  }, [container, headings, isEnabled])
+  }, [container, headings])
 
-  return activeHeadingId
+  // Keep the observed heading across edits while it is still in the list.
+  return observedHeadingId && headings.some((heading) => heading.id === observedHeadingId)
+    ? observedHeadingId
+    : headings[0]?.id
 }

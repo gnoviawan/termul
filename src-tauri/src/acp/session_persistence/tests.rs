@@ -3136,3 +3136,110 @@ async fn user_close_does_not_append_interrupted_marker() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// A prompt whose `turnId` serialized as `null` (Option inside `json!`)
+/// is an unnameable open turn — NOT a named turn no completion can match.
+/// Shutdown appends ONE `interrupted` marker without a turnId, and that
+/// marker itself closes the pending scan so a second shutdown stays silent.
+#[tokio::test]
+async fn shutdown_marks_null_turn_id_prompt_once() {
+    let root = temp_dir("interrupted-null-turnid");
+    let (persistence, _metadata) = registered(&root).await;
+
+    persistence
+        .enqueue_event(payload_record(
+            1,
+            "user_prompt",
+            json!({"agentId":"runtime-1","sessionId":"session-1","turnId":null,"content":[]}),
+        ))
+        .unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    let marker = records
+        .iter()
+        .find(|r| r.type_ == "prompt_complete")
+        .expect("interrupted marker appended for the open null-turnId turn");
+    assert_eq!(marker.payload["stopReason"], "interrupted");
+    assert!(
+        marker.payload.get("turnId").is_none(),
+        "unnameable turn must not mint a turnId onto the marker"
+    );
+
+    // Reopen + shut down again: the marker closed the pending scan, so no
+    // second marker accumulates.
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    reopened.shutdown().await.unwrap();
+    let replayed = reopened.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        replayed
+            .iter()
+            .filter(|r| r.type_ == "prompt_complete")
+            .count(),
+        1,
+        "the null-turnId marker must satisfy its own pending scan"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// An abandoned prompt superseded by a newer `user_prompt` can never emit
+/// `prompt_complete` — it must not resurrect when the LAST turn completed.
+#[tokio::test]
+async fn shutdown_appends_no_marker_when_earlier_turn_was_superseded() {
+    let root = temp_dir("interrupted-superseded");
+    let (persistence, _metadata) = registered(&root).await;
+
+    // Turn A died with its agent (no completion); turn B ran and finished.
+    for (seq, type_, payload) in [
+        (1, "user_prompt", json!({"sessionId":"session-1","turnId":"turn-dead","content":[]})),
+        (2, "user_prompt", json!({"sessionId":"session-1","turnId":"turn-2","content":[]})),
+        (3, "prompt_complete", json!({"sessionId":"session-1","turnId":"turn-2","stopReason":"cancelled"})),
+    ] {
+        persistence
+            .enqueue_event(payload_record(seq, type_, payload))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| r.type_ == "prompt_complete")
+            .count(),
+        1,
+        "superseded turn must not gain an interrupted marker"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A durable `agent_switch` abandons the pending turn (ownership moved) —
+/// shutdown must not append an `interrupted` marker for it.
+#[tokio::test]
+async fn shutdown_appends_no_marker_after_agent_switch() {
+    let root = temp_dir("interrupted-after-switch");
+    let (persistence, _metadata) = registered(&root).await;
+
+    persistence
+        .enqueue_event(payload_record(
+            1,
+            "user_prompt",
+            json!({"agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1","content":[]}),
+        ))
+        .unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+    persistence
+        .append_agent_switch("session-1", agent_switch_record())
+        .await
+        .unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert!(
+        records.iter().all(|r| r.type_ != "prompt_complete"),
+        "a switch-abandoned turn must not gain an interrupted marker"
+    );
+    let _ = fs::remove_dir_all(root);
+}

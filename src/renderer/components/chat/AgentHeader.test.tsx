@@ -9,6 +9,18 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileShellRef.current
 }))
 
+/**
+ * The chip trigger (Radix sets `aria-haspopup="dialog"`). A closing menu stays
+ * in the DOM for its close animation, so a row can share the chip's name.
+ */
+function pill(name: RegExp): HTMLElement {
+  const match = screen
+    .getAllByRole('button', { name })
+    .find((b) => b.getAttribute('aria-haspopup') === 'dialog')
+  if (!match) throw new Error(`No chip trigger named ${name}`)
+  return match
+}
+
 function clickMenuOption(name: string): void {
   const dialog = screen.getByRole('dialog')
   fireEvent.click(within(dialog).getByText(name))
@@ -90,18 +102,18 @@ describe('ConfigChip pending selection', () => {
 
     render(<ConfigChip option={option('a')} disabled={false} onSelect={onSelect} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Alpha$/ }))
+    fireEvent.click(pill(/^Alpha$/))
     clickMenuOption('Beta')
 
     expect(onSelect).toHaveBeenCalledWith('b')
-    expect(screen.getByRole('button', { name: /^Beta$/ })).toHaveAttribute('aria-busy', 'true')
+    expect(pill(/^Beta$/)).toHaveAttribute('aria-busy', 'true')
 
     await act(async () => {
       resolveSelect()
     })
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Beta$/ })).not.toHaveAttribute('aria-busy')
+      expect(pill(/^Beta$/)).not.toHaveAttribute('aria-busy')
     })
   })
 
@@ -116,26 +128,26 @@ describe('ConfigChip pending selection', () => {
 
     render(<ConfigChip option={option('a')} disabled={false} onSelect={onSelect} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Alpha$/ }))
+    fireEvent.click(pill(/^Alpha$/))
     clickMenuOption('Beta')
-    expect(screen.getByRole('button', { name: /^Beta$/ })).toHaveAttribute('aria-busy', 'true')
+    expect(pill(/^Beta$/)).toHaveAttribute('aria-busy', 'true')
 
-    fireEvent.click(screen.getByRole('button', { name: /^Beta$/ }))
+    fireEvent.click(pill(/^Beta$/))
     clickMenuOption('Gamma')
     expect(onSelect).toHaveBeenCalledTimes(2)
-    expect(screen.getByRole('button', { name: /^Gamma$/ })).toHaveAttribute('aria-busy', 'true')
+    expect(pill(/^Gamma$/)).toHaveAttribute('aria-busy', 'true')
 
     await act(async () => {
       resolvers[0]?.()
     })
     // Stale first completion must not clear the second pending state.
-    expect(screen.getByRole('button', { name: /^Gamma$/ })).toHaveAttribute('aria-busy', 'true')
+    expect(pill(/^Gamma$/)).toHaveAttribute('aria-busy', 'true')
 
     await act(async () => {
       resolvers[1]?.()
     })
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Gamma$/ })).not.toHaveAttribute('aria-busy')
+      expect(pill(/^Gamma$/)).not.toHaveAttribute('aria-busy')
     })
   })
 
@@ -150,17 +162,17 @@ describe('ConfigChip pending selection', () => {
 
     render(<ConfigChip option={option('a')} disabled={false} onSelect={onSelect} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Alpha$/ }))
+    fireEvent.click(pill(/^Alpha$/))
     clickMenuOption('Beta')
-    expect(screen.getByRole('button', { name: /^Beta$/ })).toBeInTheDocument()
+    expect(pill(/^Beta$/)).toBeInTheDocument()
 
     await act(async () => {
       rejectSelect(new Error('nope'))
     })
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Alpha$/ })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /^Alpha$/ })).not.toHaveAttribute('aria-busy')
+      expect(pill(/^Alpha$/)).toBeInTheDocument()
+      expect(pill(/^Alpha$/)).not.toHaveAttribute('aria-busy')
     })
   })
 
@@ -168,11 +180,11 @@ describe('ConfigChip pending selection', () => {
     const onSelect = vi.fn(async () => undefined)
     render(<ConfigChip option={option('a')} disabled={false} onSelect={onSelect} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Alpha$/ }))
+    fireEvent.click(pill(/^Alpha$/))
     clickMenuOption('Alpha')
 
     expect(onSelect).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: /^Alpha$/ })).not.toHaveAttribute('aria-busy')
+    expect(pill(/^Alpha$/)).not.toHaveAttribute('aria-busy')
   })
 })
 
@@ -181,18 +193,20 @@ describe('ModeChip pending selection', () => {
     render(
       <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
     )
-    const button = screen.getByRole('button', { name: /^Agent$/ })
+    const button = pill(/^Agent$/)
     expect(button.querySelector('svg')).toBeTruthy()
   })
 
-  it('scrolls agent mode options when the list exceeds the viewport', () => {
+  it('shows up to six modes without an inner scroll at 180px', () => {
     render(
       <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    fireEvent.click(pill(/^Agent$/))
 
-    expect(screen.getByTestId('mode-chip-options')).toHaveClass('max-h-[180px]', 'overflow-y-auto')
+    const list = screen.getByTestId('mode-chip-options')
+    expect(list).not.toHaveClass('max-h-[180px]')
+    expect(list).toHaveClass('overflow-y-auto')
   })
 
   it('scrolls config chip options even without maxVisibleOptions', () => {
@@ -219,18 +233,18 @@ describe('ModeChip pending selection', () => {
       <ModeChip session={session('agent')} disabled={false} onSelect={onSelect} label="Agent" />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    fireEvent.click(pill(/^Agent$/))
     clickMenuOption('Plan')
 
     expect(onSelect).toHaveBeenCalledWith('plan')
-    expect(screen.getByRole('button', { name: /^Plan$/ })).toHaveAttribute('aria-busy', 'true')
+    expect(pill(/^Plan$/)).toHaveAttribute('aria-busy', 'true')
 
     await act(async () => {
       resolveSelect()
     })
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Plan$/ })).not.toHaveAttribute('aria-busy')
+      expect(pill(/^Plan$/)).not.toHaveAttribute('aria-busy')
     })
   })
 
@@ -247,17 +261,17 @@ describe('ModeChip pending selection', () => {
       <ModeChip session={session('agent')} disabled={false} onSelect={onSelect} label="Agent" />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    fireEvent.click(pill(/^Agent$/))
     clickMenuOption('Plan')
-    expect(screen.getByRole('button', { name: /^Plan$/ })).toBeInTheDocument()
+    expect(pill(/^Plan$/)).toBeInTheDocument()
 
     await act(async () => {
       rejectSelect(new Error('nope'))
     })
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Agent$/ })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /^Agent$/ })).not.toHaveAttribute('aria-busy')
+      expect(pill(/^Agent$/)).toBeInTheDocument()
+      expect(pill(/^Agent$/)).not.toHaveAttribute('aria-busy')
     })
   })
 })
@@ -301,7 +315,7 @@ describe('mobile modal selection', () => {
       <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    fireEvent.click(pill(/^Agent$/))
 
     const dialog = screen.getByRole('dialog', { name: 'Agent' })
     expect(within(dialog).getByTestId('mode-chip-options')).toBeInTheDocument()
@@ -378,11 +392,202 @@ describe('mobile modal selection', () => {
       <ModeChip session={session('agent')} disabled={false} onSelect={onSelect} label="Agent" />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    fireEvent.click(pill(/^Agent$/))
     clickMenuOption('Plan')
 
     expect(onSelect).toHaveBeenCalledWith('plan')
     expect(onSelect).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+})
+
+/** Claude Agent's modes, as `claude-agent-acp` sends them. */
+function claudeSession(currentModeId = 'default'): AcpSession {
+  return {
+    ...session(currentModeId),
+    modes: {
+      currentModeId,
+      availableModes: [
+        { id: 'default', name: 'Manual', description: 'Always ask before making changes' },
+        {
+          id: 'acceptEdits',
+          name: 'Accept edits',
+          description: 'Automatically accept all file edits'
+        },
+        { id: 'plan', name: 'Plan', description: 'Create a plan before making changes' },
+        { id: 'auto', name: 'Auto', description: 'Claude handles permission decisions' },
+        {
+          id: 'bypassPermissions',
+          name: 'Bypass permissions',
+          description: 'Accepts all permissions'
+        }
+      ]
+    }
+  }
+}
+
+function iconOf(element: HTMLElement): string | null {
+  return element.querySelector('[data-termul-icon]')?.getAttribute('data-termul-icon') ?? null
+}
+
+describe('ModeChip mode menu (icons and risk groups)', () => {
+  beforeEach(() => {
+    mobileShellRef.current = false
+  })
+
+  it('groups modes by risk: Ask first, Let <agent> act, and Bypass set apart', () => {
+    render(
+      <ModeChip
+        session={claudeSession()}
+        disabled={false}
+        onSelect={vi.fn()}
+        label="Agent"
+        agentName="Claude Agent"
+      />
+    )
+    fireEvent.click(pill(/^Manual$/))
+
+    const askFirst = screen.getByRole('group', { name: 'Ask first' })
+    expect(
+      within(askFirst)
+        .getAllByRole('button')
+        .map((b) => b.dataset.modeId)
+    ).toEqual(['default', 'plan'])
+    const act = screen.getByRole('group', { name: 'Let Claude Agent act' })
+    expect(
+      within(act)
+        .getAllByRole('button')
+        .map((b) => b.dataset.modeId)
+    ).toEqual(['acceptEdits', 'auto'])
+    const careful = screen.getByRole('group', { name: 'Use with care' })
+    const bypass = within(careful).getByRole('button', { name: /Bypass permissions/ })
+    expect(bypass).toHaveTextContent('Accepts all permissions. Use with care.')
+    expect(bypass.querySelector('[data-termul-icon="ShieldAlert"]')).toHaveClass('text-warning')
+  })
+
+  it('gives each mode its hugeicons icon', () => {
+    render(<ModeChip session={claudeSession()} disabled={false} onSelect={vi.fn()} label="Agent" />)
+    fireEvent.click(pill(/^Manual$/))
+
+    const icons = Object.fromEntries(
+      screen
+        .getAllByRole('button')
+        .filter((b) => b.dataset.modeId)
+        .map((b) => [b.dataset.modeId, iconOf(b)])
+    )
+    expect(icons).toEqual({
+      default: 'Hand',
+      plan: 'Maps',
+      acceptEdits: 'FileEdit',
+      auto: 'Sparkles',
+      bypassPermissions: 'ShieldAlert'
+    })
+  })
+
+  it('marks the selected mode with a check only (the fill means hover or focus)', () => {
+    render(<ModeChip session={claudeSession()} disabled={false} onSelect={vi.fn()} label="Agent" />)
+    fireEvent.click(pill(/^Manual$/))
+
+    const manual = screen.getByRole('button', { name: /^Manual/, pressed: true })
+    expect(manual).not.toHaveClass('bg-foreground/10')
+    expect(manual.querySelector('[data-termul-icon="Check"]')).toHaveClass('opacity-100')
+  })
+
+  it('shows the current mode icon on the chip, in yellow for a risky mode', () => {
+    const { rerender } = render(
+      <ModeChip session={claudeSession()} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+    expect(iconOf(pill(/^Manual$/))).toBe('Hand')
+
+    rerender(
+      <ModeChip
+        session={claudeSession('bypassPermissions')}
+        disabled={false}
+        onSelect={vi.fn()}
+        label="Agent"
+      />
+    )
+    const chip = pill(/^Bypass permissions$/)
+    expect(chip.querySelector('[data-termul-icon="ShieldAlert"]')).toHaveClass('text-warning')
+  })
+
+  it('maps Cursor and Codex modes, and puts unknown modes under Other modes', () => {
+    const s = session('agent')
+    s.modes = {
+      currentModeId: 'agent',
+      availableModes: [
+        { id: 'agent', name: 'Agent' },
+        { id: 'ask', name: 'Ask' },
+        { id: 'read-only', name: 'Read-only' },
+        { id: 'workspace-write', name: 'Workspace access' },
+        { id: 'agent-full-access', name: 'Full access' },
+        { id: 'yolo-2', name: 'Something new' }
+      ]
+    }
+    render(<ModeChip session={s} disabled={false} onSelect={vi.fn()} label="Agent" />)
+    fireEvent.click(pill(/^Agent$/))
+
+    expect(
+      within(screen.getByRole('group', { name: 'Ask first' }))
+        .getAllByRole('button')
+        .map((b) => [b.dataset.modeId, iconOf(b)])
+    ).toEqual([
+      ['ask', 'MessageQuestion'],
+      ['read-only', 'Eye']
+    ])
+    expect(
+      within(screen.getByRole('group', { name: 'Let the agent act' }))
+        .getAllByRole('button')
+        .map((b) => [b.dataset.modeId, iconOf(b)])
+    ).toEqual([
+      ['agent', 'Bot'],
+      ['workspace-write', 'FolderEdit']
+    ])
+    expect(
+      within(screen.getByRole('group', { name: 'Use with care' })).getByRole('button', {
+        name: /Full access/
+      })
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('group', { name: 'Other modes' })).getByRole('button', {
+        name: /Something new/
+      })
+    ).toBeInTheDocument()
+  })
+
+  it('selects a mode and closes the menu', async () => {
+    const onSelect = vi.fn()
+    render(
+      <ModeChip session={claudeSession()} disabled={false} onSelect={onSelect} label="Agent" />
+    )
+    fireEvent.click(pill(/^Manual$/))
+    fireEvent.click(screen.getByRole('button', { name: /^Auto/ }))
+
+    expect(onSelect).toHaveBeenCalledWith('auto')
+    await waitFor(() => expect(screen.queryByTestId('mode-chip-options')).toBeNull())
+  })
+})
+
+describe('composer menus share the dropdown motion', () => {
+  beforeEach(() => {
+    mobileShellRef.current = false
+  })
+
+  it('the mode menu opens with the shared dropdown motion', () => {
+    render(<ModeChip session={claudeSession()} disabled={false} onSelect={vi.fn()} label="Agent" />)
+    fireEvent.click(pill(/^Manual$/))
+    expect(screen.getByTestId('mode-chip-options').closest('[data-menu-motion]')).toHaveAttribute(
+      'data-menu-motion',
+      'dropdown'
+    )
+  })
+
+  it('config chips open with the shared dropdown motion', () => {
+    render(<ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+    expect(screen.getByRole('dialog').closest('[data-menu-motion]')).toHaveAttribute(
+      'data-menu-motion',
+      'dropdown'
+    )
   })
 })

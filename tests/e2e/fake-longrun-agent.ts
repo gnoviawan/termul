@@ -31,6 +31,17 @@
  * is reopened, and a real crash is a process accident, not a property of
  * the prompt text. The default 0.4s lands before the first 1s chunk tick,
  * so the persisted transcript ends on the user bubble.
+ *
+ * Prompt markers (elicitation suite): `[ELICIT]` makes the agent issue an
+ * ACP `elicitation/create` request to the client (agent→client JSON-RPC
+ * request — the only outbound request this fake makes) with the Devin
+ * `ask_user_question` wire shape captured for GH-935: form mode, a `q0`
+ * single-select (`oneOf` titled options), a `q1` multi-select
+ * (`items.anyOf` titled options), and `_meta["cognition.ai/allowOther"]`.
+ * The turn then holds open WITHOUT streaming until the client's response
+ * arrives; the verbatim result is echoed into the transcript as
+ * `ELICIT_ANSWER=<json>` in an `agent_message_chunk` so specs parse the
+ * real wire response back, and the prompt resolves `end_turn`.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -42,6 +53,9 @@ interface JsonRpcMessage {
   id?: number | string
   method?: string
   params?: JsonValue
+  /** Set on RESPONSES to our outbound requests (elicitation/create). */
+  result?: JsonValue
+  error?: JsonValue
 }
 
 function envNumber(name: string, fallback: number): number {
@@ -83,6 +97,12 @@ interface InFlight {
   chunks: number
   /** Per-prompt override from a `[DURATION:n]` marker, else DURATION_SEC. */
   durationSec?: number
+  /**
+   * `[ELICIT]` turns hold open on the client's `elicitation/create`
+   * response — they never stream tick chunks and never hit the duration
+   * timer (the response itself ends the turn).
+   */
+  awaitingElicitation?: boolean
 }
 
 function promptText(prompt: JsonValue | undefined): string {
@@ -115,8 +135,62 @@ function durationSeconds(prompt: JsonValue | undefined): number | undefined {
   return match ? Number(match[1]) : undefined
 }
 
+/** `[ELICIT]` marker: issue an `elicitation/create` request mid-turn. */
+function elicitationRequested(prompt: JsonValue | undefined): boolean {
+  return /\[ELICIT\]/.test(promptText(prompt))
+}
+
+/**
+ * The two-question `requestedSchema` Devin sends for `ask_user_question`,
+ * captured live for GH-935 (verbatim): `q0` is a single-select string
+ * property with titled `oneOf` options, `q1` a multi-select array property
+ * with titled `items.anyOf` options. Both are `required` — unanswered
+ * questions come back omitted from `content` (skipped), not errors.
+ */
+const ELICIT_SCHEMA: JsonValue = {
+  type: 'object',
+  required: ['q0', 'q1'],
+  properties: {
+    q0: {
+      type: 'string',
+      title: 'Color',
+      description: 'Which color should I use?',
+      oneOf: [
+        { const: 'Red', title: 'Use the red color' },
+        { const: 'Blue', title: 'Use the blue color' }
+      ]
+    },
+    q1: {
+      type: 'array',
+      title: 'Features',
+      description: 'Which features should I enable?',
+      minItems: 1,
+      items: {
+        anyOf: [
+          { const: 'Logging', title: 'Enable logging' },
+          { const: 'Tracing', title: 'Enable tracing' }
+        ]
+      }
+    }
+  }
+}
+
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
 const inFlightBySession = new Map<string, InFlight>()
+
+interface PendingElicitation {
+  /** The held `session/prompt` request id for the awaiting turn. */
+  promptId: number | string
+  sessionId: string
+}
+
+/**
+ * Outbound `elicitation/create` requests awaiting the client's response,
+ * keyed by OUR request id (agent-chosen `elicit-N`, distinct from any
+ * host-chosen inbound id space).
+ */
+const pendingElicitations = new Map<number | string, PendingElicitation>()
+let nextElicitationId = 0
 
 /**
  * One-shot crash arming: the suite writes this file before launching a
@@ -135,8 +209,62 @@ function consumeCrashArm(): boolean {
   }
 }
 
+/**
+ * Resolve a held `[ELICIT]` turn when the client's `elicitation/create`
+ * response arrives: echo the verbatim result (or the error object, so a
+ * rejection is diagnosable from the transcript instead of a silent hang)
+ * as `ELICIT_ANSWER=<json>`, then end the turn — the same notify-then-
+ * respond order `tick()` uses for DONE turns.
+ */
+function resolveElicitation(msg: JsonRpcMessage): void {
+  if (msg.id === undefined) return
+  const pending = pendingElicitations.get(msg.id)
+  // Unknown or already-dropped request ids are ignored — a response is not
+  // a request, so there is nothing valid to reply to it with anyway.
+  if (!pending) return
+  pendingElicitations.delete(msg.id)
+  const payload = msg.error !== undefined ? { error: msg.error } : (msg.result ?? null)
+  notify('session/update', {
+    sessionId: pending.sessionId,
+    update: {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: `ELICIT_ANSWER=${JSON.stringify(payload)}` }
+    }
+  })
+  respond(pending.promptId, { stopReason: 'end_turn' })
+  inFlightBySession.delete(pending.sessionId)
+}
+
+/** How long a held `[ELICIT]` turn waits for the client's response before
+ * ending the turn anyway — a lost/never-answered request must not wedge the
+ * session (every later prompt would fail 'turn already in progress'). */
+const ELICIT_TIMEOUT_SEC = 60
+
 function tick(): void {
   for (const inFlight of inFlightBySession.values()) {
+    // `[ELICIT]` turns wait on the client's elicitation/create response;
+    // no chunk stream — only the timeout below applies.
+    if (inFlight.awaitingElicitation) {
+      const elapsed = (Date.now() - inFlight.startedAt) / 1000
+      if (elapsed >= ELICIT_TIMEOUT_SEC) {
+        for (const [elicitId, pending] of pendingElicitations) {
+          if (pending.sessionId === inFlight.sessionId) pendingElicitations.delete(elicitId)
+        }
+        notify('session/update', {
+          sessionId: inFlight.sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: 'ELICIT_ANSWER={"error":{"message":"elicitation response timed out"}}'
+            }
+          }
+        })
+        respond(inFlight.id, { stopReason: 'end_turn' })
+        inFlightBySession.delete(inFlight.sessionId)
+      }
+      continue
+    }
     const elapsed = (Date.now() - inFlight.startedAt) / 1000
     if (elapsed >= (inFlight.durationSec ?? DURATION_SEC)) {
       notify('session/update', {
@@ -172,6 +300,15 @@ setInterval(tick, Math.max(100, Math.floor(1000 / RATE)))
 
 function handle(msg: JsonRpcMessage): void {
   const { id, method, params } = msg
+  // A RESPONSE to one of our outbound requests carries `id` + `result`/
+  // `error` but no `method`. The only outbound request this agent makes is
+  // `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
+  // method switch so it never falls into the `default` reply arm (replying
+  // to a response would be protocol noise).
+  if (method === undefined) {
+    resolveElicitation(msg)
+    return
+  }
   const p = (params ?? {}) as Record<string, JsonValue>
   switch (method) {
     case 'initialize':
@@ -207,13 +344,36 @@ function handle(msg: JsonRpcMessage): void {
         respondError(id, -32000, 'turn already in progress for this session')
         return
       }
+      const elicit = elicitationRequested(p.prompt)
       inFlightBySession.set(sessionId, {
         id: id!,
         sessionId,
         startedAt: Date.now(),
         chunks: 0,
-        durationSec: durationSeconds(p.prompt)
+        durationSec: durationSeconds(p.prompt),
+        awaitingElicitation: elicit
       })
+      if (elicit) {
+        // Session-scoped form elicitation on the Devin wire: `sessionId`
+        // sits flattened at the params top level (camelCase), `mode` is
+        // the mode discriminator, `_meta` carries the allowOther flag.
+        const elicitId = `elicit-${++nextElicitationId}`
+        pendingElicitations.set(elicitId, { promptId: id!, sessionId })
+        const line = JSON.stringify({
+          jsonrpc: '2.0',
+          id: elicitId,
+          method: 'elicitation/create',
+          params: {
+            mode: 'form',
+            sessionId,
+            message: 'Which color should I use?',
+            _meta: { 'cognition.ai/allowOther': true },
+            requestedSchema: ELICIT_SCHEMA
+          }
+        })
+        wireLog(`OUT: ${line}`)
+        write(line)
+      }
       // Crash only when armed AND the marker is present: the host re-sends
       // the persisted open user turn verbatim on reopen (possibly on a
       // different session id), and a real crash is a one-time process
@@ -241,6 +401,11 @@ function handle(msg: JsonRpcMessage): void {
         })
         respond(inFlight.id, { stopReason: 'cancelled' })
         inFlightBySession.delete(sessionId)
+        // A cancelled turn drops its held elicitation — a late client
+        // response then finds no pending entry and is ignored.
+        for (const [elicitId, pending] of pendingElicitations) {
+          if (pending.sessionId === sessionId) pendingElicitations.delete(elicitId)
+        }
       }
       // The server's CancelNotification carries no id — reply only when one
       // is present (a notification reply would be protocol noise).

@@ -1,22 +1,20 @@
-import { memo, useMemo, useRef, useState } from 'react'
-import {
-  SELECTOR_OPTION_ROW,
-  SELECTOR_OPTION_ROW_DESKTOP,
-  SELECTOR_OPTION_ROW_MOBILE,
-  SELECTOR_OPTION_SELECTED,
-  SELECTOR_SECTION_LABEL,
-  SelectorModal,
-  SelectorOptionLabel
-} from '@/components/chat/AgentHeader'
+import { memo, useMemo, useState } from 'react'
+import { SelectedCheck, SelectorModal, SelectorOptionLabel } from '@/components/chat/AgentHeader'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import {
   flattenConfigOptionValues,
   type partitionConfigOptions
 } from '@/components/chat/chat-input-bar-config'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
-import { Check } from '@/components/icons'
+import { keepFocusOnMousePress, useTapSelect } from '@/components/chat/use-tap-select'
 import { Button } from '@/components/ui/button'
+import {
+  MENU_LABEL_CLASS,
+  menuOptionRowClass,
+  pickerSearchTextClass
+} from '@/components/ui/menu-styles'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { AuthMethod } from '@/lib/acp-api'
@@ -28,9 +26,6 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { cn } from '@/lib/utils'
-
-/** Max finger travel (px) for a touchend to count as a tap, not a drag-scroll. */
-const TOUCH_SELECT_THRESHOLD_PX = 10
 
 export function AcpAgentPicker({
   agents,
@@ -53,6 +48,7 @@ export function AcpAgentPicker({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
+  const tapSelect = useTapSelect()
   const visibleAgents = useMemo(() => filterSupportedAcpAgents(agents, query), [agents, query])
   const rawLabel = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
   const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
@@ -73,88 +69,68 @@ export function AcpAgentPicker({
     </ComposerPill>
   )
 
-  const contentBody = (
-    <>
-      <input
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search agents…"
-        aria-label="Search ACP agents"
-        className={cn(
-          'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
-          isMobile ? 'text-base' : 'text-sm'
-        )}
-      />
-      <div className="max-h-64 overflow-y-auto pr-1">
-        {visibleAgents.length === 0 ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No agents match.</div>
-        ) : (
-          visibleAgents.map((entry) => {
-            const selected = entry.configId === selectedEntry?.configId
-            return (
-              <button
-                key={entry.configId}
-                type="button"
-                onClick={() => {
-                  setOpen(false)
-                  onSelectAgent(entry)
-                }}
-                aria-pressed={selected}
-                data-press-feedback="off"
-                className={cn(
-                  SELECTOR_OPTION_ROW,
-                  isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-                  selected && SELECTOR_OPTION_SELECTED
-                )}
-              >
-                <span className="mt-0.5 inline-flex shrink-0">
-                  <EntryGlyph
-                    config={entry.config}
-                    templateId={entry.agent.id}
-                    name={entry.agent.name}
-                  />
-                </span>
-                <span className="min-w-0 flex-1 truncate">
-                  {entry.config?.name ?? entry.agent.name}
-                </span>
-                {updateAgentIds?.has(entry.agent.id) && (
-                  // Entrance signal (user trust): the agent chosen for a new
-                  // session visibly shows when it is not on the latest
-                  // registry version.
-                  <span
-                    className="rounded bg-connection/15 px-1.5 py-0.5 text-3xs font-medium text-connection"
-                    data-testid={`picker-update-${entry.agent.id}`}
-                  >
-                    Update
-                  </span>
-                )}
-                {entry.status === 'install-required' && (
-                  <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
-                    {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
-                  </span>
-                )}
-                {entry.status === 'needs-runtime' && (
-                  <span className="text-3xs text-muted-foreground">
-                    {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
-                  </span>
-                )}
-                {entry.status === 'manual-install' && (
-                  <span className="text-3xs text-muted-foreground">Manual install</span>
-                )}
-                {entry.status === 'unavailable' && (
-                  <span className="text-3xs text-muted-foreground">Unavailable</span>
-                )}
-                <Check
-                  size={14}
-                  aria-hidden="true"
-                  className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+  const searchBand = (
+    <PopoverSearchBand
+      value={query}
+      onChange={setQuery}
+      placeholder="Search agents…"
+      ariaLabel="Search ACP agents"
+      inputClassName={pickerSearchTextClass(isMobile)}
+    />
+  )
+
+  const agentList = (
+    <div className="max-h-64 overflow-y-auto">
+      {visibleAgents.length === 0 ? (
+        <div className="px-2 py-1.5 text-xs text-muted-foreground">No agents match.</div>
+      ) : (
+        visibleAgents.map((entry) => {
+          const selected = entry.configId === selectedEntry?.configId
+          return (
+            <button
+              key={entry.configId}
+              type="button"
+              {...tapSelect(() => {
+                setOpen(false)
+                onSelectAgent(entry)
+              })}
+              onPointerDown={keepFocusOnMousePress}
+              aria-pressed={selected}
+              data-press-feedback="off"
+              className={menuOptionRowClass(isMobile)}
+            >
+              <span className="mt-0.5 inline-flex shrink-0">
+                <EntryGlyph
+                  config={entry.config}
+                  templateId={entry.agent.id}
+                  name={entry.agent.name}
                 />
-              </button>
-            )
-          })
-        )}
-      </div>
-    </>
+              </span>
+              <span className="min-w-0 flex-1 truncate">
+                {entry.config?.name ?? entry.agent.name}
+              </span>
+              {updateAgentIds?.has(entry.agent.id) && (
+                // Entrance signal (user trust): the agent chosen for a new
+                // session visibly shows when it is not on the latest
+                // registry version.
+                <span
+                  className="rounded bg-connection/15 px-1.5 py-0.5 text-3xs font-medium text-connection"
+                  data-testid={`picker-update-${entry.agent.id}`}
+                >
+                  Update
+                </span>
+              )}
+              <EntryStatusTag
+                status={entry.status}
+                runtimeLauncher={entry.runtimeLauncher}
+                installing={installingConfigId === entry.configId}
+              />
+              <SelectedCheck selected={selected} />
+            </button>
+          )
+        })
+      )}
+    </div>
   )
 
   if (isMobile) {
@@ -166,7 +142,8 @@ export function AcpAgentPicker({
         trigger={trigger}
         disabled={disabled}
       >
-        {contentBody}
+        <div className="-mx-1">{searchBand}</div>
+        <div className="pt-1">{agentList}</div>
       </SelectorModal>
     )
   }
@@ -176,9 +153,12 @@ export function AcpAgentPicker({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent align="end" side="top" className="w-72 p-1">
-        <div className={SELECTOR_SECTION_LABEL}>ACP Agent</div>
-        {contentBody}
+      <PopoverContent align="end" side="top" className="w-72 rounded-xl p-0">
+        {searchBand}
+        <div className="p-1">
+          <div className={MENU_LABEL_CLASS}>ACP Agent</div>
+          {agentList}
+        </div>
       </PopoverContent>
     </Popover>
   )
@@ -212,11 +192,7 @@ export function AcpModelPicker({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
-  // Touch-safe selection (parity with ComposerMenu): record touchstart coords
-  // so touchend can distinguish a tap (select) from a drag-scroll (skip). The
-  // lastInputType ref guards against touch→mouse synthesis double-fire.
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
-  const lastInputType = useRef<'mouse' | 'touch' | null>(null)
+  const tapSelect = useTapSelect()
   const { displayValue, pending, select } = useOptimisticSelect(
     typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : undefined,
     onSelectModel
@@ -274,7 +250,7 @@ export function AcpModelPicker({
         : ''
 
   const modelHeading = (
-    <div className={SELECTOR_SECTION_LABEL}>
+    <div className={MENU_LABEL_CLASS}>
       Model
       {modelStatusSuffix && (
         <span className="ml-1 font-normal normal-case tracking-normal">{modelStatusSuffix}</span>
@@ -297,61 +273,28 @@ export function AcpModelPicker({
       ) : !setupError && modelOption ? (
         <>
           {showSearch && (
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search models…"
-              aria-label="Search models"
-              className={cn(
-                'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
-                isMobile ? 'text-base' : 'text-sm'
-              )}
-            />
+            // -mx-1 lets the hairline run edge to edge inside the p-1 shell.
+            <div className="-mx-1 mb-1">
+              <PopoverSearchBand
+                value={query}
+                onChange={setQuery}
+                placeholder="Search models…"
+                ariaLabel="Search models"
+                inputClassName={pickerSearchTextClass(isMobile)}
+              />
+            </div>
           )}
-          <div data-testid="acp-model-options" className="max-h-[180px] overflow-y-auto pr-1">
+          <div data-testid="acp-model-options" className="max-h-[180px] overflow-y-auto">
             {filteredModels.length > 0 ? (
               filteredModels.map((value) => (
                 <button
                   key={value.value}
                   type="button"
-                  onTouchStart={(event) => {
-                    const t = event.touches[0]
-                    if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
-                  }}
-                  onTouchEnd={(event) => {
-                    event.preventDefault()
-                    const start = touchStartRef.current
-                    touchStartRef.current = null
-                    const t = event.changedTouches[0]
-                    const isTap =
-                      start && t
-                        ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
-                          TOUCH_SELECT_THRESHOLD_PX ** 2
-                        : true
-                    if (!isTap) return
-                    lastInputType.current = 'touch'
-                    handleSelectModel(value.value)
-                    window.setTimeout(() => {
-                      if (lastInputType.current === 'touch') lastInputType.current = null
-                    }, 500)
-                  }}
-                  onPointerDown={(event) => {
-                    if (event.pointerType === 'touch') return
-                    if ((event.button ?? 0) !== 0) return
-                    event.preventDefault()
-                  }}
-                  onClick={(event) => {
-                    if (lastInputType.current === 'touch') return
-                    event.preventDefault()
-                    handleSelectModel(value.value)
-                  }}
+                  {...tapSelect(() => handleSelectModel(value.value))}
+                  onPointerDown={keepFocusOnMousePress}
                   data-press-feedback="off"
                   aria-pressed={value.value === displayValue}
-                  className={cn(
-                    SELECTOR_OPTION_ROW,
-                    isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-                    value.value === displayValue && SELECTOR_OPTION_SELECTED
-                  )}
+                  className={menuOptionRowClass(isMobile)}
                 >
                   <SelectorOptionLabel
                     name={value.name}
@@ -421,12 +364,45 @@ export function AcpModelPicker({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent align="end" side="top" className="w-72 p-1">
+      <PopoverContent align="end" side="top" className="w-72 rounded-xl p-1">
         {modelHeading}
         {contentBody}
       </PopoverContent>
     </Popover>
   )
+}
+
+/**
+ * Trailing tag on an agent row that cannot start yet (install, runtime,
+ * manual install, unavailable). Ready rows render nothing.
+ */
+export function EntryStatusTag({
+  status,
+  runtimeLauncher,
+  installing
+}: Pick<SupportedAcpAgentEntry, 'status' | 'runtimeLauncher'> & {
+  installing: boolean
+}): React.JSX.Element | null {
+  switch (status) {
+    case 'install-required':
+      return (
+        <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
+          {installing ? 'Installing…' : 'Install'}
+        </span>
+      )
+    case 'needs-runtime':
+      return (
+        <span className="text-3xs text-muted-foreground">
+          {runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
+        </span>
+      )
+    case 'manual-install':
+      return <span className="text-3xs text-muted-foreground">Manual install</span>
+    case 'unavailable':
+      return <span className="text-3xs text-muted-foreground">Unavailable</span>
+    default:
+      return null
+  }
 }
 
 export const EntryGlyph = memo(function EntryGlyph({

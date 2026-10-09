@@ -1,26 +1,25 @@
-import { useState } from 'react'
 import { toast } from 'sonner'
-import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
+import { ModeChip } from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
-import { FastModeToggle } from '@/components/chat/FastModeToggle'
+import { AgentModelSelector } from '@/components/chat/agent-model-selector/AgentModelSelector'
+import type { SelectorSource } from '@/components/chat/agent-model-selector/selector-source'
+import type { ComposerToolbarMode } from '@/components/chat/chat-layout'
 import { McpBadge } from '@/components/chat/McpBadge'
 import { ArrowUp } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import type { AuthMethod, McpToolInfo, ProbeStatus, SessionConfigOption } from '@/lib/acp-api'
+import type { McpToolInfo, ProbeStatus, SessionConfigOption } from '@/lib/acp-api'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
-import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { cn } from '@/lib/utils'
 import { type AcpSession, useAcpStore } from '@/stores/acp-store'
 import { AgentUpdateCta } from './AgentUpdateCta'
-import { AcpAgentPicker, AcpModelPicker } from './pickers'
 
 /**
  * The composer card's bottom row: attachments + MCP badge on the left; the
- * update CTA, agent/model pickers, config chips (thought level, fast mode,
- * generics, mode) and the launch button on the right.
+ * update CTA, the agent/model selector (agent, model, effort, Fast, agent
+ * options), the mode chip, and the launch button on the right.
  */
 export function LauncherToolbar({
   pickFiles,
@@ -44,20 +43,13 @@ export function LauncherToolbar({
   restartingUpdatedAgent,
   handleSelectedAgentUpdate,
   handleRestartUpdatedAgent,
-  supportedAgents,
   selectedConfig,
   installingConfigId,
   savingManualPath,
-  updateAgentIds,
-  handleSelectAgent,
+  selectorSource,
   modelOption,
-  showModelLoading,
-  prepareError,
-  hasCachedModels,
-  signInMethod,
-  handleSignIn,
+  modelSource,
   optionsInteractive,
-  handleRetryPrepare,
   handleSetModel,
   thoughtLevel,
   modelConfig,
@@ -67,11 +59,14 @@ export function LauncherToolbar({
   modePreviewSession,
   handleSetMode,
   canLaunch,
-  launch
+  launch,
+  onSelectorCloseAutoFocus,
+  toolbarMode
 }: {
   pickFiles: () => Promise<void>
   canPick: boolean
   isMobileShell: boolean
+  toolbarMode: ComposerToolbarMode
   mcpCount: number
   mcpServers: StoredMcpServer[]
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
@@ -90,20 +85,13 @@ export function LauncherToolbar({
   restartingUpdatedAgent: boolean
   handleSelectedAgentUpdate: () => void
   handleRestartUpdatedAgent: () => void
-  supportedAgents: readonly SupportedAcpAgentEntry[]
   selectedConfig: StoredAgentConfig | null
   installingConfigId: string | null
   savingManualPath: boolean
-  updateAgentIds: ReadonlySet<string>
-  handleSelectAgent: (entry: SupportedAcpAgentEntry) => void
+  selectorSource: SelectorSource
   modelOption: SessionConfigOption | null
-  showModelLoading: boolean
-  prepareError: PrepareChatError | null
-  hasCachedModels: boolean
-  signInMethod: AuthMethod | null
-  handleSignIn: () => void
+  modelSource: 'config' | 'models' | null
   optionsInteractive: boolean
-  handleRetryPrepare: () => void
   handleSetModel: (valueId: string) => Promise<void>
   thoughtLevel: SessionConfigOption | null
   modelConfig: SessionConfigOption[]
@@ -114,10 +102,19 @@ export function LauncherToolbar({
   handleSetMode: (modeId: string) => Promise<void>
   canLaunch: boolean
   launch: () => Promise<void>
+  /**
+   * Deferred composer focus after an in-popover agent pick (see
+   * AgentLauncher.handleSelectorCloseAutoFocus): fires when the selector
+   * finishes closing, after Radix's own close-focus pass.
+   */
+  onSelectorCloseAutoFocus?: (event: Event) => void
 }): React.JSX.Element {
   return (
-    <div className="flex items-center justify-between gap-3 px-3 pb-3">
-      <div className="flex min-w-0 items-center gap-2">
+    <div
+      className="flex items-center justify-between gap-3 px-2 pb-2"
+      data-composer-toolbar={toolbarMode}
+    >
+      <div className="flex min-w-0 items-center gap-3">
         <AttachFilesButton
           onClick={() => void pickFiles()}
           disabled={!canPick}
@@ -146,110 +143,82 @@ export function LauncherToolbar({
           }}
         />
       </div>
-      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
-        {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
-          // One CTA communicates the full lifecycle: Update → Updating
-          // → Restart. The Restart action opens a new chat on the new
-          // version; currently open chats are deliberately preserved.
-          <AgentUpdateCta
-            agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
-            version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
-            updating={updatingSelected}
-            restarting={restartingUpdatedAgent}
-            restartAvailable={pendingRestartVersion !== null}
-            onUpdate={handleSelectedAgentUpdate}
-            onRestart={handleRestartUpdatedAgent}
-          />
+      <div
+        className={cn(
+          'flex min-w-0 items-center justify-end gap-2.5',
+          toolbarMode === 'narrow' && 'flex-1'
         )}
-        <AcpAgentPicker
-          agents={supportedAgents}
-          selectedEntry={selectedEntry}
-          selectedConfig={selectedConfig}
-          disabled={Boolean(installingConfigId) || savingManualPath}
-          installingConfigId={installingConfigId}
-          updateAgentIds={updateAgentIds}
-          onSelectAgent={handleSelectAgent}
-        />
-        <AcpModelPicker
-          selectedEntry={selectedEntry}
-          modelOption={modelOption}
-          loading={showModelLoading}
-          connecting={false}
-          stale={Boolean(prepareError && hasCachedModels)}
-          setupError={prepareError}
-          signInMethod={signInMethod}
-          onSignIn={() => void handleSignIn()}
-          disabled={
-            Boolean(installingConfigId) ||
-            savingManualPath ||
-            (!optionsInteractive && !prepareError)
-          }
-          onRetry={handleRetryPrepare}
-          onSelectModel={handleSetModel}
-        />
-        {thoughtLevel && (
-          <ConfigChip
-            option={thoughtLevel}
-            disabled={!optionsInteractive}
-            promoted
-            onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
-          />
-        )}
-        {modelConfig.map((option) =>
-          option.type === 'boolean' ? (
-            <BooleanOptionPill
-              key={option.id}
-              option={option}
-              disabled={!optionsInteractive}
-              onToggle={(value) => {
-                void handleSetConfig(option.id, value).catch(() => {})
-              }}
-            />
-          ) : (
-            <ConfigChip
-              key={option.id}
-              option={option}
-              disabled={!optionsInteractive}
-              onSelect={(valueId) => {
-                void handleSetConfig(option.id, valueId).catch(() => {})
-              }}
-            />
+      >
+        {(() => {
+          // The chat composer's #859 pattern: a narrow toolbar scrolls its
+          // chip rows horizontally instead of wrapping into stacked lines.
+          // The launch button stays a fixed sibling so it never scrolls away.
+          const chips = (
+            <>
+              {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
+                // One CTA communicates the full lifecycle: Update → Updating
+                // → Restart. The Restart action opens a new chat on the new
+                // version; currently open chats are deliberately preserved.
+                <AgentUpdateCta
+                  agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
+                  version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
+                  updating={updatingSelected}
+                  restarting={restartingUpdatedAgent}
+                  restartAvailable={pendingRestartVersion !== null}
+                  onUpdate={handleSelectedAgentUpdate}
+                  onRestart={handleRestartUpdatedAgent}
+                />
+              )}
+              {/* One control for agent, model, effort, Fast, and agent options:
+                  the same selector as a chat, with the launcher's draft as its
+                  source. */}
+              <AgentModelSelector
+                draft={{
+                  source: selectorSource,
+                  agentName: selectedConfig?.name ?? selectedEntry?.agent.name ?? null
+                }}
+                disabled={Boolean(installingConfigId) || savingManualPath}
+                busy={false}
+                modelOption={modelOption}
+                modelSource={modelSource}
+                thoughtLevel={optionsInteractive ? thoughtLevel : null}
+                fastMode={optionsInteractive ? fastMode : null}
+                agentTemplateId={selectedConfig?.templateId ?? selectedEntry?.agent.id ?? null}
+                agentIcon={selectedConfig?.icon ?? null}
+                genericOptions={
+                  optionsInteractive ? [...modelConfig, ...nonFastGenericOptions] : []
+                }
+                onSetConfig={handleSetConfig}
+                onSetModel={handleSetModel}
+                onCloseAutoFocus={onSelectorCloseAutoFocus}
+              />
+              {modePreviewSession && (
+                <ModeChip
+                  session={modePreviewSession}
+                  disabled={!optionsInteractive}
+                  onSelect={handleSetMode}
+                  label="Agent"
+                  agentName={selectedConfig?.name}
+                />
+              )}
+            </>
           )
-        )}
-        {fastMode && (
-          <FastModeToggle
-            option={fastMode}
-            disabled={!optionsInteractive}
-            onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
-          />
-        )}
-        {nonFastGenericOptions.map((option) =>
-          option.type === 'boolean' ? (
-            <BooleanOptionPill
-              key={option.id}
-              option={option}
-              disabled={!optionsInteractive}
-              onToggle={(value) => {
-                void handleSetConfig(option.id, value).catch(() => {})
-              }}
-            />
+          return toolbarMode === 'narrow' ? (
+            <div
+              className="flex min-w-0 max-w-full items-center justify-end gap-2 overflow-x-auto scrollbar-hide"
+              data-composer-toolbar-row="1"
+            >
+              {chips}
+            </div>
           ) : (
-            <ConfigChip
-              key={option.id}
-              option={option}
-              disabled={!optionsInteractive}
-              onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
-            />
+            <div
+              className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
+              data-composer-toolbar-row="single"
+            >
+              {chips}
+            </div>
           )
-        )}
-        {modePreviewSession && (
-          <ModeChip
-            session={modePreviewSession}
-            disabled={!optionsInteractive}
-            onSelect={handleSetMode}
-            label="Agent"
-          />
-        )}
+        })()}
         <Button
           type="button"
           variant="composer"
@@ -264,38 +233,5 @@ export function LauncherToolbar({
         </Button>
       </div>
     </div>
-  )
-}
-
-/** On/off control for an ACP boolean config option. Select chips stay menus. */
-function BooleanOptionPill({
-  option,
-  disabled,
-  onToggle
-}: {
-  option: SessionConfigOption
-  disabled: boolean
-  onToggle: (value: boolean) => void
-}): React.JSX.Element {
-  const advertised = option.currentValue === true
-  const [optimistic, setOptimistic] = useState<boolean | null>(null)
-  const on = optimistic ?? advertised
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      aria-pressed={on}
-      className={cn(
-        'shrink-0 rounded-full border px-2.5 py-1 text-xs',
-        on ? 'border-border bg-secondary text-foreground' : 'border-border/60 text-muted-foreground'
-      )}
-      onClick={() => {
-        const next = !on
-        setOptimistic(next)
-        void Promise.resolve(onToggle(next)).finally(() => setOptimistic(null))
-      }}
-    >
-      {option.name}
-    </button>
   )
 }

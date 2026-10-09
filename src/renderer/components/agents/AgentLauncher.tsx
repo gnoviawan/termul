@@ -15,7 +15,6 @@ import {
 } from '@/components/agents/launcher/constants'
 import { LauncherContextStrip } from '@/components/agents/launcher/context-strip'
 import { useFactoryKeyAuth } from '@/components/agents/launcher/FactoryApiKeyForm'
-import { LauncherHero } from '@/components/agents/launcher/hero'
 import {
   LAUNCHER_DISMISS_MS,
   LAUNCHER_DOCK_BOTTOM_PX,
@@ -31,6 +30,7 @@ import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-laun
 import { spawnAcpLoginTerminal } from '@/components/agents/launcher/spawn-acp-login-terminal'
 import { LauncherStatusBanners } from '@/components/agents/launcher/status-banners'
 import { LauncherToolbar } from '@/components/agents/launcher/toolbar'
+import { useLauncherSelectorSource } from '@/components/agents/launcher/use-launcher-selector-source'
 import { useServerAdmitsRemoteWrites } from '@/components/agents/launcher/use-server-admits-remote-writes'
 import {
   emptyPendingLauncherOptions,
@@ -50,6 +50,8 @@ import {
   resolveModelOption,
   wireConfigValue
 } from '@/components/chat/chat-input-bar-config'
+import { useComposerToolbarMode } from '@/components/chat/chat-layout'
+import { ChatStarters, ChatStartHero } from '@/components/chat/chat-start'
 import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
@@ -146,6 +148,21 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const launchInFlightRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
   const editorRef = useRef<Editor | null>(null)
+  // Set when an agent pick happens INSIDE the open selector popover (the only
+  // place picks originate): the editor must not take focus while that popover
+  // is open — Radix dismisses a popover the moment focus moves outside its
+  // content, which would close the menu on every provider switch. The intent
+  // is consumed by `handleSelectorCloseAutoFocus` once the popover finishes
+  // closing.
+  const deferEditorFocusRef = useRef(false)
+  // A model chosen together with its agent in the model selector. The restore
+  // effect for the new agent applies it over the saved options, so a saved
+  // model does not replace the user's pick.
+  const pendingPickRef = useRef<{
+    configId: string
+    modelId: string
+    modelConfigId: string | null
+  } | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
 
@@ -632,6 +649,68 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     })
   }, [])
 
+  // Persist the in-progress launch prompt per project (same lifecycle as the
+  // chat composer's session draft, ChatInputBar): hydrate on mount/project
+  // change, debounced write on change, delete when empty, flush on unmount.
+  // An accidental Escape/backdrop dismiss must not cost the user their text.
+  // The launch path clears `prompt` before unmount, so the persisted draft is
+  // deleted by the empty-value branch — a sent launch never lingers. Restored
+  // text is taken as-is: skill/file tokens it may carry are validated at
+  // launch (buildPromptParts toasts on a missing path), matching the chat.
+  const launchDraftKey = activeProjectId ? `last-launch-draft/${activeProjectId}` : null
+  const launchDraftHydratedRef = useRef(false)
+  const launchDraftValueRef = useRef(prompt)
+  launchDraftValueRef.current = prompt
+  useEffect(() => {
+    if (!launchDraftKey) {
+      launchDraftHydratedRef.current = true
+      return
+    }
+    let cancelled = false
+    const firstHydration = !launchDraftHydratedRef.current
+    launchDraftHydratedRef.current = false
+    void (async () => {
+      try {
+        const result = await persistenceApi.read<string>(launchDraftKey)
+        if (cancelled) return
+        const saved = result.success && typeof result.data === 'string' ? result.data : ''
+        // First hydration only fills an untouched composer — a starter pick or
+        // typing may land while the read is in flight. A project switch
+        // replaces the prompt, like a chat session switch does.
+        if (saved && (firstHydration || launchDraftValueRef.current === '')) {
+          setPrompt(saved)
+        }
+      } catch {
+        // Storage unavailable/corrupt — degrade to empty (no UI crash).
+      } finally {
+        if (!cancelled) launchDraftHydratedRef.current = true
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [launchDraftKey])
+  useEffect(() => {
+    if (!launchDraftKey) return
+    if (!launchDraftHydratedRef.current) return
+    if (!prompt) {
+      void persistenceApi.delete(launchDraftKey).catch(() => {})
+      return
+    }
+    const handle = setTimeout(() => {
+      void persistenceApi.writeDebounced(launchDraftKey, prompt).catch(() => {})
+    }, 400)
+    return () => clearTimeout(handle)
+  }, [prompt, launchDraftKey])
+  useEffect(() => {
+    return () => {
+      if (!launchDraftKey) return
+      const latest = launchDraftValueRef.current
+      if (!latest) return
+      void persistenceApi.write(launchDraftKey, latest).catch(() => {})
+    }
+  }, [launchDraftKey])
+
   // Composer-selection persistence is delegated to the store's
   // `persistComposerOptions` helper, which serializes per-key mutations so
   // concurrent calls (e.g. model + mode in the same tick) can't overwrite
@@ -662,8 +741,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         toast.error(`Failed to set option: ${String(err)}`)
         throw err
       }
+      // The store skips persistence for warm-session defaults. An explicit
+      // pick on the prepared session still has to be remembered for the next
+      // new chat. Model picks also record modelId.
+      if (activeConfigId) {
+        persistComposerOptions(activeConfigId, {
+          ...(modelOption?.id === configId ? { modelId: stored } : {}),
+          configValues: { [configId]: stored }
+        })
+      }
     },
-    [preparedSessionId, activeConfigId]
+    [preparedSessionId, activeConfigId, modelOption]
   )
 
   const handleSetModel = useCallback(
@@ -801,7 +889,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           PersistenceKeys.lastComposerOptions(activeConfigId)
         )
         if (cancelled) return
-        if (!result.success || !result.data) return
+        if (!result.success || !result.data) {
+          if (pendingPickRef.current?.configId === activeConfigId) pendingPickRef.current = null
+          return
+        }
         const saved = result.data
         const configValues: Record<string, string> = {}
         if (saved.configValues) {
@@ -850,6 +941,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             })
             modeId = undefined
           }
+        }
+        const pick = pendingPickRef.current
+        if (pick && pick.configId === activeConfigId) {
+          pendingPickRef.current = null
+          modelId = pick.modelId
+          if (pick.modelConfigId) configValues[pick.modelConfigId] = pick.modelId
         }
         if (modelId || modeId || Object.keys(configValues).length > 0) {
           setPendingOptions({ modelId, modeId, configValues })
@@ -1159,7 +1256,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       // No-op when re-selecting the same agent — avoids resetting
       // worktree/pending state and overwriting the persisted record.
       if (entry.configId === selectedConfigId) {
-        editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+        deferEditorFocusRef.current = true
         return
       }
       setManualPath('')
@@ -1173,9 +1270,36 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       setBaseBranch(null)
       setSelectedConfigId(entry.configId)
       persistSelection(entry.configId)
-      editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+      deferEditorFocusRef.current = true
     },
     [persistSelection, selectedConfigId, factoryKeyAuth]
+  )
+
+  // Focus the composer when the selector popover finishes closing, but only
+  // when an agent pick deferred it (see `handleSelectAgent`). Radix fires
+  // `onCloseAutoFocus` after the close animation, when the picker content has
+  // fully unmounted; `preventDefault` takes over its default refocus of the
+  // trigger pill so the caret lands in the editor instead. A close without a
+  // pick keeps the default (trigger) focus.
+  const handleSelectorCloseAutoFocus = useCallback((event: Event) => {
+    if (!deferEditorFocusRef.current) return
+    event.preventDefault()
+    deferEditorFocusRef.current = false
+    editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+  }, [])
+
+  // Model selector: a model on another agent's tab selects that agent with
+  // that model (as pending options, applied when the chat starts).
+  const handleSelectAgentWithModel = useCallback(
+    (entry: SupportedAcpAgentEntry, pick: { modelId: string; modelConfigId: string | null }) => {
+      const configId = entry.config?.id ?? null
+      pendingPickRef.current = configId ? { configId, ...pick } : null
+      handleSelectAgent(entry)
+      const configValues = pick.modelConfigId ? { [pick.modelConfigId]: pick.modelId } : {}
+      setPendingOptions({ modelId: pick.modelId, configValues })
+      if (configId) persistComposerOptions(configId, { modelId: pick.modelId, configValues })
+    },
+    [handleSelectAgent]
   )
 
   // Run the agent-advertised authenticate for a chosen method, then re-prepare
@@ -1702,11 +1826,39 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // so the column still fits above the fold. Desktop keeps the centered
   // layout byte-identical.
   const isMobileShell = useMobileWebShell()
+  const handleInstallFromSelector = useCallback(
+    (entry: SupportedAcpAgentEntry) => void handleInstallAgent(entry),
+    [handleInstallAgent]
+  )
+  const handleSignInFromSelector = useCallback(() => void handleSignIn(), [handleSignIn])
+  const selectorSource = useLauncherSelectorSource({
+    paneKey: paneId,
+    supportedAgents,
+    agentConfigs: acpConfigs,
+    selectedEntry,
+    installingConfigId,
+    cwd: projectRoot ?? '',
+    projectId: activeProjectId ?? '',
+    onSelectAgent: handleSelectAgent,
+    onSelectAgentWithModel: handleSelectAgentWithModel,
+    onInstall: handleInstallFromSelector,
+    showModelLoading,
+    prepareError,
+    hasCachedModels,
+    canSignIn: Boolean(signInMethod),
+    onSignIn: handleSignInFromSelector,
+    onRetry: handleRetryPrepare,
+    updateAgentIds
+  })
   // Keyboard-aware bottom anchor: when the OSK opens, the visual viewport
   // shrinks but (iOS) the layout viewport does not — inset the bottom by the
   // live keyboard height so the composer stays visible above the keys. The
   // same --termul-keyboard-height CSS var mirrors this value document-wide.
   const osk = useOskViewport()
+  // Same narrow/wide seam as the chat composer toolbar (#859), measured on
+  // the composer card (the toolbar's width container): the chip row scrolls
+  // horizontally instead of wrapping when the window is tight.
+  const toolbarMode = useComposerToolbarMode(composerCardRef)
   // The overlay variant (agentLauncherPaneId set) renders a backdrop + a
   // close control — the empty-pane launcher IS the pane content, so it gets
   // neither. During exit the store value is already cleared, so
@@ -1760,7 +1912,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         )}
         style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
       >
-        <LauncherHero
+        <ChatStartHero
           isMobileShell={isMobileShell}
           isExiting={isExiting}
           reducedMotion={reducedMotion}
@@ -1811,7 +1963,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               ref={composerCardRef}
               data-agent-launcher-composer="true"
               className={cn(
-                'relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+                'relative z-10 rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
+                // Same focus affordance as the chat composer card
+                // (ChatInputBar) — the two cards are one visual family.
+                'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
                 dragActive && 'border-primary/70'
               )}
               onDragEnter={dropProps.onDragEnter}
@@ -1847,12 +2002,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 factoryKeyAuth={factoryKeyAuth}
                 inlineKeyMethodId={inlineKeyMethodId}
               />
-              <AttachmentPreviewGroup
-                attachments={attachments}
-                onRemove={removeAttachment}
-                className="px-5 pt-4"
-              />
-              <div className="relative px-5 pb-2 pt-4">
+              <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
+              {/* Same inner rhythm as the chat composer card (ChatInputBar):
+                  editor row px-4 pb-1.5 pt-3.5, toolbar px-2 pb-2. */}
+              <div className="px-4 pb-1.5 pt-3.5">
                 {/* Tiptap rich-text editor — the skill "pill" is a real inline
                    DOM node, so the caret sits flush against the pill's right
                    edge by construction. No transparent textarea + mirror
@@ -1872,26 +2025,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   minHeight={76}
                   maxHeight={160}
                   placeholder={
-                    hasCommandToken
-                      ? 'Add a message (optional)…'
-                      : 'Ask anything… (/ for commands, @ for files)'
+                    composerDisabled
+                      ? 'Composer unavailable'
+                      : hasCommandToken
+                        ? 'Add a message (optional)…'
+                        : 'Ask anything… (/ for commands, @ for files)'
                   }
                   ariaLabel="Agent prompt"
                   autoFocus
                 />
-                {/* Tiptap's `Placeholder` extension is configured with
-                  `showOnlyWhenEditable: true` (ChatComposerEditor.tsx:237-240),
-                  so it suppresses the `data-placeholder` decoration when the
-                  editor is non-editable. The `composerDisabled` branch
-                  (install-required / saving) would therefore paint nothing.
-                  Render an explicit muted hint so the user sees why the
-                  composer is inert. Mirrors the editable-state placeholder's
-                  text-base/pointer-fine:text-sm/leading-relaxed/muted-foreground styling. */}
-                {composerDisabled && (
-                  <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground pointer-fine:text-sm">
-                    Composer unavailable
-                  </p>
-                )}
               </div>
               <LauncherToolbar
                 pickFiles={pickFiles}
@@ -1915,20 +2057,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 restartingUpdatedAgent={restartingUpdatedAgent}
                 handleSelectedAgentUpdate={handleSelectedAgentUpdate}
                 handleRestartUpdatedAgent={handleRestartUpdatedAgent}
-                supportedAgents={supportedAgents}
                 selectedConfig={selectedConfig}
                 installingConfigId={installingConfigId}
                 savingManualPath={savingManualPath}
-                updateAgentIds={updateAgentIds}
-                handleSelectAgent={handleSelectAgent}
+                selectorSource={selectorSource}
                 modelOption={modelOption}
-                showModelLoading={showModelLoading}
-                prepareError={prepareError}
-                hasCachedModels={hasCachedModels}
-                signInMethod={signInMethod}
-                handleSignIn={handleSignIn}
+                modelSource={modelSource}
                 optionsInteractive={optionsInteractive}
-                handleRetryPrepare={handleRetryPrepare}
                 handleSetModel={handleSetModel}
                 thoughtLevel={thoughtLevel}
                 modelConfig={modelConfig}
@@ -1939,19 +2074,33 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 handleSetMode={handleSetMode}
                 canLaunch={canLaunch}
                 launch={launch}
+                onSelectorCloseAutoFocus={handleSelectorCloseAutoFocus}
+                toolbarMode={toolbarMode}
               />
             </div>
-            {canUseWorktree && (
-              <LauncherContextStrip
-                isolationMode={isolationMode}
-                setIsolationMode={setIsolationMode}
-                baseBranch={baseBranch}
-                setBaseBranch={setBaseBranch}
-                baseBranchInfo={baseBranchInfo}
-                baseOptions={baseOptions}
-              />
-            )}
+            <LauncherContextStrip
+              isolationMode={isolationMode}
+              setIsolationMode={setIsolationMode}
+              baseBranch={baseBranch}
+              setBaseBranch={setBaseBranch}
+              baseBranchInfo={baseBranchInfo}
+              baseOptions={baseOptions}
+              interactive={canUseWorktree}
+              gitBranch={projectGitBranch}
+              isGitRepo={projectIsGitRepo}
+            />
           </div>
+          {/* Shared start screen (same starters as an empty chat). Mobile
+              keeps the composer at the bottom, so no starters there. */}
+          {!isMobileShell && (
+            <ChatStarters
+              isExiting={isExiting}
+              onPick={(text) => {
+                setPrompt(text)
+                editorRef.current?.commands.focus('end', { scrollIntoView: false })
+              }}
+            />
+          )}
         </div>
       </div>
     </div>
