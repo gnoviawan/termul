@@ -39,7 +39,8 @@ export function syntaxThemeFor(theme: ColorThemeDefinition): ThemeRegistrationRe
           'storage.type',
           'keyword.control',
           'constant.language',
-          'variable.language'
+          'variable.language',
+          'support.type.primitive'
         ],
         settings: { foreground: colors.keyword }
       },
@@ -65,19 +66,20 @@ export function syntaxThemeFor(theme: ColorThemeDefinition): ThemeRegistrationRe
         settings: { foreground: colors.function }
       },
       {
-        scope: [
-          'entity.name.type',
-          'entity.name.class',
-          'support.type',
-          'support.class',
-          'storage.type.class',
-          'storage.type.interface'
-        ],
+        scope: ['entity.name.type', 'entity.name.class', 'support.type', 'support.class'],
         settings: { foreground: colors.type }
       },
       {
-        scope: ['variable', 'variable.other', 'variable.parameter', 'variable.other.readwrite'],
+        scope: ['variable', 'variable.other', 'variable.other.readwrite'],
         settings: { foreground: colors.variable }
+      },
+      {
+        scope: ['variable.parameter'],
+        settings: { foreground: colors.property }
+      },
+      {
+        scope: ['meta.definition.variable variable', 'variable.other.constant'],
+        settings: { foreground: colors.definition }
       },
       {
         scope: [

@@ -12,6 +12,7 @@ function resolveVariant(variant: ThemeVariant): ResolvedSyntaxColors {
     number: overrides['syntax-constant'] ?? palette.warning,
     bool: overrides['syntax-primitive'] ?? palette.info,
     variable: overrides['syntax-variable'] ?? palette.ink,
+    definition: overrides['syntax-definition'] ?? overrides['syntax-variable'] ?? palette.ink,
     function: overrides['syntax-function'] ?? palette.accent,
     type: overrides['syntax-type'] ?? palette.info,
     property: overrides['syntax-property'] ?? palette.ink,

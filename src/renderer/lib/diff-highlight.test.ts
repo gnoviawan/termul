@@ -61,10 +61,10 @@ describe('highlightDiffText', () => {
     const tokens = lines?.[0] ?? []
     const keyword = tokens.find((token) => token.content === 'const')
     const string = tokens.find((token) => token.content.includes('ada'))
-    expect(keyword?.dark?.toLowerCase()).toBe('#d5b2ff')
-    expect(keyword?.light?.toLowerCase()).toBe('#753ba8')
-    expect(string?.dark?.toLowerCase()).toBe('#7fe4a5')
-    expect(string?.light?.toLowerCase()).toBe('#036a34')
+    expect(keyword?.dark?.toLowerCase()).toBe('#95d0cd')
+    expect(keyword?.light?.toLowerCase()).toBe('#3e7875')
+    expect(string?.dark?.toLowerCase()).toBe('#d898d8')
+    expect(string?.light?.toLowerCase()).toBe('#945995')
   })
 
   it('keeps multi-line block comments one color across lines', async () => {

@@ -79,9 +79,9 @@ The StatusBar is quiet: `bg-card`, `border-t border-border`, ink `text-muted-for
 
 Code color is not a UI token. The editor, chat fences, and diffs share one map: `resolveSyntaxColors`. Termul's map is `termul-syntax.ts`. Other families keep their own overrides.
 
-Use few hues. Put keywords, strings, functions, types, and numbers on separate hues at a similar lightness. Keep chroma high on those roles so the color stays clean. Keep comments a neutral gray. Keep variables, properties, and tag names on the foreground so the file is not painted.
+Termul follows the Cursor editor. Teal is a keyword. Peach is a declared function or type name. Blue is a name being read. Lavender is a name being declared, and also a JSX tag. Pink is a string. Comments stay neutral gray. Property names stay on the foreground.
 
-Do not use the olive, brown, and khaki set from VS Code Dark+ (`#6a9955`, `#ce9178`, `#dcdcaa`). Do not use the UI blue (`primary`) as a syntax hue. Each syntax color must clear WCAG AA (4.5:1) on the theme background and on the card.
+Roles that sit next to each other stay at least 15° apart in OKLCH hue. Do not use the olive, brown, and khaki set from VS Code Dark+ (`#6a9955`, `#ce9178`, `#dcdcaa`). Do not use the UI blue (`primary`) as a syntax hue. Each syntax color must clear WCAG AA (4.5:1) on the theme background and on the card.
 
 ## Incorrect
 

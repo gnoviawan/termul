@@ -17,11 +17,11 @@ const EXPECTED_SYNTAX: Record<
   }>
 > = {
   termul: {
-    keyword: '#d5b2ff',
-    string: '#7fe4a5',
-    function: '#9dc7fe',
-    variable: '#e5e5e6',
-    type: '#72dee4'
+    keyword: '#95d0cd',
+    string: '#d898d8',
+    function: '#e6b387',
+    variable: '#94c2fa',
+    type: '#e6b387'
   },
   cursor: {
     keyword: '#82d2ce',
@@ -79,11 +79,11 @@ const EXPECTED_SYNTAX: Record<
     property: '#39c5cf'
   },
   'termul-light': {
-    keyword: '#753ba8',
-    string: '#036a34',
-    function: '#0256a9',
-    variable: '#0d0d0d',
-    type: '#03758e'
+    keyword: '#3e7875',
+    string: '#945995',
+    function: '#94653b',
+    variable: '#4570a3',
+    type: '#94653b'
   },
   'github-light': {
     keyword: '#cf222e',
@@ -111,16 +111,23 @@ describe('resolveSyntaxColors', () => {
     expect(syntax.tag).toBe(syntax.keyword)
   })
 
-  it('keeps termul tags on the foreground, not the keyword hue', () => {
+  it('paints termul tags and declarations in lavender', () => {
     const dark = resolveSyntaxColors(BUNDLED_COLOR_THEMES.termul)
     const light = resolveSyntaxColors(BUNDLED_COLOR_THEMES['termul-light'])
-    expect(dark.tag).toBe(dark.variable)
-    expect(dark.attributeName).toBe(dark.variable)
-    expect(light.tag).toBe(light.variable)
-    expect(light.attributeName).toBe(light.variable)
+    expect(dark.definition).toBe('#a9a1f4')
+    expect(dark.tag).toBe(dark.definition)
+    expect(dark.attributeName).toBe(dark.definition)
+    expect(light.definition).toBe('#6e64b2')
+    expect(light.tag).toBe(light.definition)
+    expect(light.attributeName).toBe(light.definition)
   })
 
-  it('keeps termul syntax bright, with gray comments', () => {
+  it('keeps other themes from splitting declaration color', () => {
+    const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES.dracula)
+    expect(syntax.definition).toBe(syntax.variable)
+  })
+
+  it('keeps termul syntax roles apart and readable', () => {
     const cases = [
       {
         themeId: 'termul',
@@ -131,8 +138,18 @@ describe('resolveSyntaxColors', () => {
         surfaces: [TERMUL_LIGHT_CHROME.background, TERMUL_LIGHT_CHROME.card]
       }
     ] as const
-    const colored = ['keyword', 'string', 'function', 'type', 'number'] as const
-    const readable = [...colored, 'comment', 'variable', 'punctuation'] as const
+    const readable = [
+      'keyword',
+      'string',
+      'function',
+      'type',
+      'number',
+      'comment',
+      'variable',
+      'definition',
+      'punctuation'
+    ] as const
+    const distinct = ['keyword', 'string', 'function', 'variable', 'definition', 'number'] as const
 
     for (const { themeId, surfaces } of cases) {
       const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES[themeId])
@@ -143,8 +160,13 @@ describe('resolveSyntaxColors', () => {
           )
         }
       }
-      for (const key of colored) {
-        expect(hexToOklch(syntax[key]).c, `${themeId} ${key}`).toBeGreaterThanOrEqual(0.09)
+      const hues = distinct.map((key) => hexToOklch(syntax[key]).h)
+      for (let i = 0; i < hues.length; i++) {
+        for (let j = i + 1; j < hues.length; j++) {
+          const gap = Math.abs(hues[i] - hues[j])
+          const distance = Math.min(gap, 360 - gap)
+          expect(distance, `${themeId} ${distinct[i]} ${distinct[j]}`).toBeGreaterThanOrEqual(15)
+        }
       }
       expect(hexToOklch(syntax.comment).c, themeId).toBeLessThan(0.03)
     }

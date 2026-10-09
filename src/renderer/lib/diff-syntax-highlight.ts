@@ -16,7 +16,7 @@ export interface TokenSpan {
 // specificity, so walking `.set` gives the most specific match first.
 const tagColorKeys = new Map<Tag, keyof ResolvedSyntaxColors>()
 tagColorKeys.set(tags.function(tags.variableName), 'function')
-tagColorKeys.set(tags.definition(tags.variableName), 'variable')
+tagColorKeys.set(tags.definition(tags.variableName), 'definition')
 tagColorKeys.set(tags.variableName, 'variable')
 tagColorKeys.set(tags.keyword, 'keyword')
 tagColorKeys.set(tags.comment, 'comment')
