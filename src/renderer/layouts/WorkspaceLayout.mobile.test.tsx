@@ -65,6 +65,8 @@ vi.mock('@/lib/platform', async () => {
 })
 
 vi.mock('@/stores/project-store', () => ({
+  // The drawer's project row reads the active worktree (none in this fixture).
+  getActiveWorktreeFromStore: () => undefined,
   useProjectsLoaded: () => true,
   useProjects: () => [projectRef.current],
   useActiveProject: () => projectRef.current,
@@ -482,9 +484,9 @@ vi.mock('@/components/ssh/SSHFileExplorer', () => ({
 import { TooltipProvider } from '@/components/ui/tooltip'
 import WorkspaceLayout from './WorkspaceLayout'
 
-// Story 11: StatusBar now renders on the mobile branch too. Its tooltips
-// require a TooltipProvider — the real app mounts one at the root (App.tsx /
-// TauriApp.tsx), so mirror that here instead of mocking StatusBar away.
+// Mirror the real app's root TooltipProvider (App.tsx / TauriApp.tsx): the
+// mobile shell no longer mounts StatusBar, but the lazily loaded sheets and
+// header controls still render under it in production.
 function renderLayout(): RenderResult {
   return render(
     <TooltipProvider>
@@ -588,22 +590,14 @@ describe('WorkspaceLayout mobile branch', () => {
       })
     }
   })
-  // Story 11 (QA F9): StatusBar (connection health) renders on the mobile
-  // shell — previously `!isMobileWebShell` gated it out entirely, so mobile
-  // users had no visibility into web connection status.
-  it('renders StatusBar on the mobile shell (connection health visible)', async () => {
+  // The mobile revamp retires the desktop StatusBar on the phone shell:
+  // connection health moved to the drawer footer and ContextBarSettingsPopover
+  // (a StatusBar child) is not mounted. Desktop keeps it (see the breakpoint suite).
+  it('does not render the StatusBar on the mobile shell', async () => {
     renderLayout()
 
-    // MobileChatShell is React.lazy — wait for the shell, then assert the
-    // StatusBar is present below the workspace child. Story 12 hides the
-    // project-name slug on mobile (name dedupe — the mobile header already
-    // shows the project), so assert on the connection-health status bar
-    // container rather than the slug.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
-    // The StatusBar carries the connection indicator (control + terminal
-    // channels); it renders inside the mobile shell column.
-    const statusBar = document.querySelector('[data-status-bar]')
-    expect(statusBar).toBeTruthy()
+    expect(document.querySelector('[data-status-bar]')).toBeNull()
   })
 
   it('opens the CommandPalette overlay when the mobile trigger is tapped', async () => {

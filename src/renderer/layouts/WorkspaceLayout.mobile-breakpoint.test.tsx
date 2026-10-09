@@ -459,6 +459,7 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     expect(screen.queryByLabelText('Global actions')).toBeNull()
     expect(screen.queryByTestId('header-new-project')).toBeNull()
     expect(screen.queryByText('demo')).toBeNull()
+    expect(document.querySelector('[data-status-bar]')).toBeNull()
 
     // The mobile header affordances are present: ☰, the subtitle that opens
     // the project sheet, and ⋯ whose sheet reaches Files.
@@ -513,6 +514,7 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     // Desktop chrome present: ProjectSidebar + StatusBar ("demo").
     expect(screen.getByTestId('header-new-project')).toBeInTheDocument()
     expect(screen.getByText('demo')).toBeInTheDocument()
+    expect(document.querySelector('[data-status-bar]')).toBeTruthy()
   })
 
   // The hook's contract is `(max-width: Npx)` — guard the exact boundary so

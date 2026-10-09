@@ -18,7 +18,7 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 ### Layout and Shell
 
 - `TitleBar.tsx` — custom desktop title bar with sidebar/file explorer toggles, settings navigation, and native window controls
-- `StatusBar.tsx` — active project/terminal context bar showing git branch, git status, working directory, exit code, and updater state
+- `StatusBar.tsx` — active project/terminal context bar showing git branch, git status, working directory, exit code, and updater state; rendered on the desktop layout only (the desktop app and the desktop-width web client), not on the mobile web shell, where connection health lives in the `MobileShellDrawer` footer
 - `ProjectSidebar.tsx` — project switcher, reorderable workspace list, archive/restore flows, rename/color operations, shell discovery hooks
 - `WorkspaceLayout.tsx` — top-level application shell coordinating sidebar, pane area, file explorer, modals, keyboard shortcuts, and close workflows
 
@@ -37,8 +37,10 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `terminal/TauriTerminal.tsx` — alternate direct Tauri PTY terminal implementation
 - `terminal/TerminalSearchBar.tsx` — terminal text search UI
 - `terminal/ActivityIndicator.tsx` — recent terminal activity indicator
-- `mobile/MobileChatShell.tsx` — narrow web shell with terminal creation, selection, and close navigation alongside chat history
+- `mobile/MobileChatShell.tsx` — narrow web shell: the header, the left drawer and the header-opened sheets (project, Files, header ⋯, terminal ⋯). Opens the drawer and records the control that opened it (☰ or the attention pill) so focus returns there
 - `mobile/MobileShellHeader.tsx` — shell header: ☰, title block (heading plus the project subtitle button), attention pill, ✎ and ⋯
+- `mobile/MobileShellDrawer.tsx` — the shell drawer as home: project row (web only), chat search, New chat, a scrolling body (Open, then History), and a pinned footer (Settings, Snapshots, Git history, labelled connection status). Owns drawer focus on open/close and mounts the unread tracker
+- `mobile/MobileDrawerOpenSection.tsx` — the drawer's Open body: agent chats with live status (shared with the desktop `agent-chat-tab` via `workspace/tabs/agent-chat-status.tsx`), then Terminals (create, rename, close), then the remaining tabs, each with a guarded close
 - `mobile/MobileHeaderMoreSheet.tsx` — header ⋯ bottom sheet for chats and tabs (Git changes, Files, Command palette, New terminal, Project settings, Close chat)
 - `mobile/MobileTerminalActionsSheet.tsx` — terminal ⋯ bottom sheet (last exit code, rename, restart, command history, close)
 - `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences
