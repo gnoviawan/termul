@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { Locator, Page } from 'playwright/test'
-import { expect, request, test } from 'playwright/test'
+import { chromium, expect, request, test } from 'playwright/test'
 import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
 
 /**
@@ -42,7 +43,16 @@ const ANDROID_USER_AGENT =
 const PORTRAIT = { width: 390, height: 844 }
 const LANDSCAPE = { width: 844, height: 390 }
 
+/**
+ * Playwright's bundled Chromium is the default. A machine that never ran
+ * `playwright install chromium` falls back to the system Chrome;
+ * E2E_BROWSER_CHANNEL forces a channel (for example `msedge`).
+ */
+const browserChannel =
+  process.env.E2E_BROWSER_CHANNEL || (existsSync(chromium.executablePath()) ? undefined : 'chrome')
+
 test.use({
+  channel: browserChannel,
   viewport: PORTRAIT,
   isMobile: true,
   hasTouch: true,
