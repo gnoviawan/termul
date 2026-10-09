@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Locator, Page } from 'playwright/test'
+import type { Locator, Page, WebSocket } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
 import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
 import { launchChat, openWorkspace } from './ui'
@@ -122,6 +122,20 @@ async function bootMobileShell(
   return { ...project, base }
 }
 
+const WARMUP_TIMEOUT_MS = 45_000
+
+/** One websocket frame as JSON, or null for a binary or non-JSON frame. */
+function parseFrame(payload: string | Buffer): { id?: string; type?: string; ok?: boolean } | null {
+  try {
+    const parsed: unknown = JSON.parse(String(payload))
+    return parsed !== null && typeof parsed === 'object'
+      ? (parsed as { id?: string; type?: string; ok?: boolean })
+      : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Resolves once the app's boot-time agent warm-up has settled: the empty
  * launcher spawns the agent and creates a draft session, and that session
@@ -130,23 +144,56 @@ async function bootMobileShell(
  * the drawer). An agent that fails to start also ends the warm-up.
  */
 function watchAgentWarmup(page: Page): Promise<void> {
-  return new Promise<void>((resolve) => {
-    page.on('websocket', (socket) => {
+  const warmup = new Promise<void>((resolve, reject) => {
+    const cleanups: Array<() => void> = []
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (settle: () => void): void => {
+      clearTimeout(timer)
+      for (const cleanup of cleanups) cleanup()
+      settle()
+    }
+    timer = setTimeout(
+      () =>
+        finish(() =>
+          reject(
+            new Error(
+              `watchAgentWarmup: the agent warm-up did not settle in ${WARMUP_TIMEOUT_MS}ms`
+            )
+          )
+        ),
+      WARMUP_TIMEOUT_MS
+    )
+
+    const onWebSocket = (socket: WebSocket): void => {
       if (socket.url().endsWith('/terminal/ws')) return
       const watched = new Map<string, string>()
-      socket.on('framesent', (frame) => {
-        const message = JSON.parse(String(frame.payload)) as { id?: string; type?: string }
-        if (message.id && (message.type === 'create_session' || message.type === 'spawn_agent')) {
+      const onFrameSent = (frame: { payload: string | Buffer }): void => {
+        const message = parseFrame(frame.payload)
+        if (message?.id && (message.type === 'create_session' || message.type === 'spawn_agent')) {
           watched.set(message.id, message.type)
         }
+      }
+      const onFrameReceived = (frame: { payload: string | Buffer }): void => {
+        const reply = parseFrame(frame.payload)
+        const kind = reply?.id ? watched.get(reply.id) : undefined
+        if (kind === 'create_session' || (kind === 'spawn_agent' && reply?.ok === false)) {
+          finish(resolve)
+        }
+      }
+      socket.on('framesent', onFrameSent)
+      socket.on('framereceived', onFrameReceived)
+      cleanups.push(() => {
+        socket.off('framesent', onFrameSent)
+        socket.off('framereceived', onFrameReceived)
       })
-      socket.on('framereceived', (frame) => {
-        const reply = JSON.parse(String(frame.payload)) as { id?: string; ok?: boolean }
-        const kind = reply.id ? watched.get(reply.id) : undefined
-        if (kind === 'create_session' || (kind === 'spawn_agent' && reply.ok === false)) resolve()
-      })
-    })
+    }
+    page.on('websocket', onWebSocket)
+    cleanups.push(() => page.off('websocket', onWebSocket))
   })
+  // A test that has not reached its `await` yet must not turn a late timeout
+  // into an unhandled rejection; the `await` still sees the rejection.
+  warmup.catch(() => undefined)
+  return warmup
 }
 
 async function historyPosition(page: Page): Promise<HistoryPosition> {

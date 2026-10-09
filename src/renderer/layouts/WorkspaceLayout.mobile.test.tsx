@@ -771,7 +771,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
         // The palette closes and the lazy sub-modal opens in one batch.
         fireEvent.click(screen.getByRole('button', { name: 'Open command history' }))
-        expect(await screen.findByPlaceholderText('Search commands...')).toBeInTheDocument()
+        expect(await screen.findByText('command-history-modal')).toBeInTheDocument()
         expect(
           screen.queryByPlaceholderText('Search commands, projects, settings...')
         ).not.toBeInTheDocument()
@@ -785,7 +785,7 @@ describe('WorkspaceLayout mobile branch', () => {
         // One back closes the sub-modal.
         await pressSystemBack()
         await waitFor(() =>
-          expect(screen.queryByPlaceholderText('Search commands...')).not.toBeInTheDocument()
+          expect(screen.queryByText('command-history-modal')).not.toBeInTheDocument()
         )
         expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
         backSpy.mockRestore()
