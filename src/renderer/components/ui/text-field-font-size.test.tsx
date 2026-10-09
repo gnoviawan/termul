@@ -342,7 +342,7 @@ const DESKTOP_ONLY: ReadonlyArray<AllowRule & { file: string; reason: string }> 
     file: 'components/git/GitHistoryPanel.tsx',
     tagIncludes: 'Filter commits',
     reason:
-      'the one phone-reachable exception: the git-history tab mounts on the shell, and its filter belongs to G9 mobile-git-history-layout'
+      'the desktop branch of the git-history panel; the phone branch has its own 16px filter field (#973)'
   }
 ]
 
