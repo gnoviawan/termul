@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useId, useState } from 'react'
 import { X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 
 interface CreateSnapshotModalProps {
   isOpen: boolean
@@ -14,6 +15,10 @@ export function CreateSnapshotModal({
   onClose,
   onCreateSnapshot
 }: CreateSnapshotModalProps): React.JSX.Element {
+  // Mobile web shell: system back closes this modal (inert on desktop).
+  const overlayId = `create-snapshot-modal:${useId()}`
+  useOverlayRegistration(overlayId, isOpen, onClose, { mobileShellOnly: true })
+
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [isCreating, setIsCreating] = useState(false)
