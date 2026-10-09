@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { BUNDLED_COLOR_THEMES, COLOR_THEME_LIST, getColorThemeDefinition } from './bundled-themes'
-import { shouldOverrideToken } from './color-utils'
+import { contrastRatio, hexToOklch, shouldOverrideToken, TEXT_CONTRAST_MIN } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
+import { TERMUL_DARK_CHROME } from './termul-dark-chrome'
+import { TERMUL_LIGHT_CHROME } from './termul-light-chrome'
 
 const EXPECTED_SYNTAX: Record<
   string,
@@ -15,10 +17,11 @@ const EXPECTED_SYNTAX: Record<
   }>
 > = {
   termul: {
-    keyword: '#c586c0',
-    string: '#ce9178',
-    function: '#dcdcaa',
-    variable: '#9cdcfe'
+    keyword: '#95d0cd',
+    string: '#d898d8',
+    function: '#e6b387',
+    variable: '#94c2fa',
+    type: '#e6b387'
   },
   cursor: {
     keyword: '#82d2ce',
@@ -76,10 +79,11 @@ const EXPECTED_SYNTAX: Record<
     property: '#39c5cf'
   },
   'termul-light': {
-    keyword: '#0000ff',
-    string: '#a31515',
-    function: '#795e26',
-    variable: '#001080'
+    keyword: '#3e7875',
+    string: '#945995',
+    function: '#94653b',
+    variable: '#4570a3',
+    type: '#94653b'
   },
   'github-light': {
     keyword: '#cf222e',
@@ -105,6 +109,67 @@ describe('resolveSyntaxColors', () => {
   it('maps tags from keyword color', () => {
     const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES.dracula)
     expect(syntax.tag).toBe(syntax.keyword)
+  })
+
+  it('paints termul tags and declarations in lavender', () => {
+    const dark = resolveSyntaxColors(BUNDLED_COLOR_THEMES.termul)
+    const light = resolveSyntaxColors(BUNDLED_COLOR_THEMES['termul-light'])
+    expect(dark.definition).toBe('#a9a1f4')
+    expect(dark.tag).toBe(dark.definition)
+    expect(dark.attributeName).toBe(dark.definition)
+    expect(light.definition).toBe('#6e64b2')
+    expect(light.tag).toBe(light.definition)
+    expect(light.attributeName).toBe(light.definition)
+  })
+
+  it('keeps other themes from splitting declaration color', () => {
+    const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES.dracula)
+    expect(syntax.definition).toBe(syntax.variable)
+  })
+
+  it('keeps termul syntax roles apart and readable', () => {
+    const cases = [
+      {
+        themeId: 'termul',
+        surfaces: [TERMUL_DARK_CHROME.background, TERMUL_DARK_CHROME.card]
+      },
+      {
+        themeId: 'termul-light',
+        surfaces: [TERMUL_LIGHT_CHROME.background, TERMUL_LIGHT_CHROME.card]
+      }
+    ] as const
+    const readable = [
+      'keyword',
+      'string',
+      'function',
+      'type',
+      'number',
+      'comment',
+      'variable',
+      'definition',
+      'punctuation'
+    ] as const
+    const distinct = ['keyword', 'string', 'function', 'variable', 'definition', 'number'] as const
+
+    for (const { themeId, surfaces } of cases) {
+      const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES[themeId])
+      for (const key of readable) {
+        for (const surface of surfaces) {
+          expect(contrastRatio(syntax[key], surface), `${themeId} ${key}`).toBeGreaterThanOrEqual(
+            TEXT_CONTRAST_MIN
+          )
+        }
+      }
+      const hues = distinct.map((key) => hexToOklch(syntax[key]).h)
+      for (let i = 0; i < hues.length; i++) {
+        for (let j = i + 1; j < hues.length; j++) {
+          const gap = Math.abs(hues[i] - hues[j])
+          const distance = Math.min(gap, 360 - gap)
+          expect(distance, `${themeId} ${distinct[i]} ${distinct[j]}`).toBeGreaterThanOrEqual(15)
+        }
+      }
+      expect(hexToOklch(syntax.comment).c, themeId).toBeLessThan(0.03)
+    }
   })
 
   it('falls back to accent for function when no override', () => {

@@ -56,6 +56,17 @@ describe('highlightDiffText', () => {
     expect(colored.length).toBeGreaterThan(0)
   })
 
+  it('paints termul keywords and strings in the bright palette', async () => {
+    const lines = await highlightDiffText('const name = "ada"', 'typescript')
+    const tokens = lines?.[0] ?? []
+    const keyword = tokens.find((token) => token.content === 'const')
+    const string = tokens.find((token) => token.content.includes('ada'))
+    expect(keyword?.dark?.toLowerCase()).toBe('#95d0cd')
+    expect(keyword?.light?.toLowerCase()).toBe('#3e7875')
+    expect(string?.dark?.toLowerCase()).toBe('#d898d8')
+    expect(string?.light?.toLowerCase()).toBe('#945995')
+  })
+
   it('keeps multi-line block comments one color across lines', async () => {
     const text = '/* line one\nline two */\nconst x = 1'
     const lines = await highlightDiffText(text, 'css')

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FileDiff } from '@/components/icons'
+import { useSyntaxThemeId } from '@/hooks/use-syntax-theme-id'
 import type { DiffContent } from '@/lib/acp-api'
 import { type DiffTokenLine, highlightDiffText, resolveDiffLanguage } from '@/lib/diff-highlight'
 import { cn } from '@/lib/utils'
@@ -26,14 +27,15 @@ function useDiffHighlight(
   newText: string
 ): DiffHighlight | null {
   const [highlight, setHighlight] = useState<DiffHighlight | null>(null)
+  const themeId = useSyntaxThemeId()
 
   useEffect(() => {
     let cancelled = false
     setHighlight(null)
     const lang = resolveDiffLanguage(path)
     void Promise.all([
-      highlightDiffText(oldText ?? '', lang),
-      highlightDiffText(newText, lang)
+      highlightDiffText(oldText ?? '', lang, themeId),
+      highlightDiffText(newText, lang, themeId)
     ]).then(([oldLines, newLines]) => {
       if (cancelled) return
       setHighlight(oldLines && newLines ? { oldLines, newLines } : null)
@@ -41,7 +43,7 @@ function useDiffHighlight(
     return () => {
       cancelled = true
     }
-  }, [path, oldText, newText])
+  }, [path, oldText, newText, themeId])
 
   return highlight
 }

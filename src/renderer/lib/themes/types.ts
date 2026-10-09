@@ -21,11 +21,17 @@ export type ThemeSyntaxOverrides = Partial<{
   'syntax-string': string
   'syntax-primitive': string
   'syntax-variable': string
+  /** Name at a declaration. Defaults to the variable color. */
+  'syntax-definition': string
   'syntax-property': string
   'syntax-type': string
   'syntax-constant': string
   'syntax-operator': string
   'syntax-punctuation': string
+  /** JSX and HTML tag names. Defaults to the keyword color. */
+  'syntax-tag': string
+  /** Attribute names. Defaults to the property color, then the info hue. */
+  'syntax-attribute': string
 }>
 
 /**
@@ -84,6 +90,8 @@ export interface ResolvedSyntaxColors {
   number: string
   bool: string
   variable: string
+  /** Binding being declared. Equals `variable` when a theme does not split them. */
+  definition: string
   function: string
   type: string
   property: string
