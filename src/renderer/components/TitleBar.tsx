@@ -3,12 +3,12 @@ import { Copy, Minus, Square, X } from '@/components/icons'
 import {
   FileExplorerToggleButton,
   SidebarToggleButton,
+  TitleStripTitle,
   titlebarNoDragStyle
 } from '@/components/TitlebarPanelToggles'
 import { windowApi } from '@/lib/api'
 import { isMac } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { useActiveProject } from '@/stores/project-store'
 
 const windowControlClass =
   'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer'
@@ -22,7 +22,7 @@ const windowControlClass =
  * - Windows/Linux desktop (Tauri): the in-app minimize/maximize/close controls
  *   are required (`decorations: false`); the sidebar and file-explorer
  *   visibility toggles sit beside the OS controls.
- * - Web (browser tab): renders only the centered active-project name. The
+ * - Web (browser tab): renders only the centered "project · file" title. The
  *   window controls are no-ops in a tab, and the panel toggles live in their
  *   own panel headers (plus a slim edge toggle when hidden) — see
  *   WorkspaceLayout, ProjectSidebar, and FileExplorer.
@@ -31,7 +31,6 @@ const windowControlClass =
  */
 export function TitleBar(): React.JSX.Element | null {
   const [isMaximized, setIsMaximized] = useState(false)
-  const activeProject = useActiveProject()
 
   useEffect(() => {
     return windowApi.onMaximizeChange((maximized) => {
@@ -44,15 +43,11 @@ export function TitleBar(): React.JSX.Element | null {
   if (isMac && isTauriContext()) return null
 
   // Web (browser): no window controls and no panel toggles in the strip —
-  // the toggles live beside their panels. Keep the strip for the project name.
+  // the toggles live beside their panels. Keep the strip for the title.
   if (!isTauriContext()) {
     return (
       <header className="h-8 flex items-center bg-background select-none shrink-0 relative">
-        {activeProject && (
-          <span className="absolute left-1/2 -translate-x-1/2 text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
-            {activeProject.name}
-          </span>
-        )}
+        <TitleStripTitle />
       </header>
     )
   }
@@ -67,11 +62,7 @@ export function TitleBar(): React.JSX.Element | null {
         <SidebarToggleButton />
       </div>
 
-      {activeProject && (
-        <span className="absolute left-1/2 -translate-x-1/2 text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
-          {activeProject.name}
-        </span>
-      )}
+      <TitleStripTitle />
 
       <div className="flex-1 h-full" data-tauri-drag-region />
 
