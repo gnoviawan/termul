@@ -5,7 +5,7 @@ import { Switch } from '@/components/ui/switch'
 import type { McpToolInfo, ProbeStatus } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 
-interface McpServerSummary {
+export interface McpServerSummary {
   id: string
   name: string
   enabled?: boolean
@@ -175,25 +175,74 @@ function McpPopover({
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-3 text-xs">
         <p className="font-medium text-foreground">MCP servers</p>
-        <p className="mt-0.5 text-muted-foreground">
-          {count > 0 ? `${count} attached to this session.` : 'No servers attached yet.'}
-        </p>
-        <ul className="mt-2 max-h-[300px] space-y-1.5 overflow-y-auto pr-2">
-          {servers.map((server) => (
-            <McpServerRow
-              key={server.id}
-              server={server}
-              onToggle={onToggle}
-              probeStatus={probeStatus?.[server.id]}
-              probeError={probeError?.[server.id]}
-              tools={tools?.[server.id]}
-              onLoadTools={onLoadTools}
-            />
-          ))}
-        </ul>
-        <p className="mt-3 text-2xs text-muted-foreground">Takes effect on the next chat.</p>
+        <McpServerList
+          count={count}
+          servers={servers}
+          onToggle={onToggle}
+          probeStatus={probeStatus}
+          probeError={probeError}
+          tools={tools}
+          onLoadTools={onLoadTools}
+        />
       </PopoverContent>
     </Popover>
+  )
+}
+
+export interface McpServerListProps {
+  count: number
+  servers: McpServerSummary[]
+  onToggle?: (id: string, enabled: boolean) => void
+  probeStatus?: Record<string, ProbeStatus>
+  probeError?: Record<string, string | undefined>
+  tools?: Record<string, McpToolInfo[]>
+  onLoadTools?: (id: string) => void
+  /**
+   * Merged onto the rows `<ul>` after its default `max-h-[300px] overflow-y-auto pr-2`
+   * scroller classes, so a host that scrolls itself (the + sheet) can lift the cap.
+   */
+  listClassName?: string
+}
+
+/**
+ * Summary line, per-server rows and the next-chat footnote shared by the
+ * desktop popover and the mobile + sheet. Rows and footnote render only when
+ * there is at least one server; the host owns its own heading.
+ */
+export function McpServerList({
+  count,
+  servers,
+  onToggle,
+  probeStatus,
+  probeError,
+  tools,
+  onLoadTools,
+  listClassName
+}: McpServerListProps): React.JSX.Element {
+  return (
+    <>
+      <p className="mt-0.5 text-muted-foreground">
+        {count > 0 ? `${count} attached to this session.` : 'No servers attached yet.'}
+      </p>
+      {servers.length > 0 && (
+        <>
+          <ul className={cn('mt-2 max-h-[300px] space-y-1.5 overflow-y-auto pr-2', listClassName)}>
+            {servers.map((server) => (
+              <McpServerRow
+                key={server.id}
+                server={server}
+                onToggle={onToggle}
+                probeStatus={probeStatus?.[server.id]}
+                probeError={probeError?.[server.id]}
+                tools={tools?.[server.id]}
+                onLoadTools={onLoadTools}
+              />
+            ))}
+          </ul>
+          <p className="mt-3 text-2xs text-muted-foreground">Takes effect on the next chat.</p>
+        </>
+      )}
+    </>
   )
 }
 
@@ -206,7 +255,7 @@ interface ServerRowProps {
   onLoadTools?: (id: string) => void
 }
 
-function McpServerRow({
+export function McpServerRow({
   server,
   onToggle,
   probeStatus,
