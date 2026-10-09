@@ -1,34 +1,22 @@
 use std::path::Path;
 
-/// Returns the failure message when a release-profile desktop build would
-/// compile with Tauri's `cfg(dev)` on (no `custom-protocol`), which makes the
-/// binary load `devUrl` and show "Could not connect to localhost".
+/// Cfg set when a release-profile build would compile with Tauri's `cfg(dev)`
+/// on (no `custom-protocol`). The desktop entry point (`src/main.rs`) turns it
+/// into a `compile_error!`, so only the desktop binary is blocked: a build
+/// script cannot see which `--bin` targets Cargo selected, but the guard then
+/// fires exactly when the desktop binary compiles, whatever features are on.
+/// The `termul-server` binary (`server_main.rs`) and the library never trip it.
+const RELEASE_WITHOUT_CUSTOM_PROTOCOL_CFG: &str = "termul_release_without_custom_protocol";
+
+/// Whether a release-profile build lacks `custom-protocol`, which makes the
+/// desktop binary load `devUrl` and show "Could not connect to localhost".
 ///
 /// `dev` is `tauri_build::is_dev()` (the `DEP_TAURI_DEV` value emitted by the
 /// `tauri` crate's build script, `true` whenever `tauri/custom-protocol` is
-/// off). Never guards the standalone `termul-server` build (`standalone-server`
-/// feature) or when the escape hatch is `1` / `true`.
-fn release_custom_protocol_guard(
-    profile: &str,
-    dev: bool,
-    standalone_server: bool,
-    allow_override: &str,
-) -> Option<String> {
+/// off). The escape hatch `1` / `true` disables the guard.
+fn release_without_custom_protocol(profile: &str, dev: bool, allow_override: &str) -> bool {
     let allowed = matches!(allow_override.trim(), "1" | "true");
-    if profile != "release" || !dev || standalone_server || allowed {
-        return None;
-    }
-    Some(
-        [
-            "termul: refusing to build a release desktop binary without the `custom-protocol` feature.",
-            "Without it Tauri compiles with cfg(dev) and the app loads `devUrl` instead of the embedded",
-            "frontend, showing \"Could not connect to localhost\".",
-            "Fix: run `cargo build --release --features custom-protocol`, or build through the Tauri CLI",
-            "(`bun run build:tauri --no-bundle`).",
-            "For `cargo test/clippy --release` only, set TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1.",
-        ]
-        .join("\n"),
-    )
+    profile == "release" && dev && !allowed
 }
 
 fn main() {
@@ -79,15 +67,16 @@ fn main() {
         println!("cargo:rustc-cfg=web_embed_missing");
     }
 
-    // Fail fast on a raw release desktop build without `custom-protocol`.
+    // Block a raw release desktop build without `custom-protocol` (enforced by
+    // the `compile_error!` in `src/main.rs`).
+    println!("cargo:rustc-check-cfg=cfg({RELEASE_WITHOUT_CUSTOM_PROTOCOL_CFG})");
     println!("cargo:rerun-if-env-changed=TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL");
-    if let Some(message) = release_custom_protocol_guard(
+    if release_without_custom_protocol(
         &std::env::var("PROFILE").unwrap_or_default(),
         tauri_build::is_dev(),
-        std::env::var_os("CARGO_FEATURE_STANDALONE_SERVER").is_some(),
         &std::env::var("TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL").unwrap_or_default(),
     ) {
-        panic!("{message}");
+        println!("cargo:rustc-cfg={RELEASE_WITHOUT_CUSTOM_PROTOCOL_CFG}");
     }
 
     tauri_build::build()

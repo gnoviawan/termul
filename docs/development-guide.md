@@ -91,7 +91,11 @@ Or let the Tauri CLI do both steps without bundling (run from the repo root; wit
 bun run build:tauri --no-bundle
 ```
 
-`src-tauri/build.rs` fails a release-profile desktop build that lacks `custom-protocol` and prints these fixes. The guard reads Tauri's own computed dev state, so it passes whenever `tauri/custom-protocol` is on, however it was enabled. It is not triggered by debug-profile builds or by any build with the `standalone-server` feature, which is how the `termul-server` build (`cargo build --release --bin termul-server --features standalone-server`) stays exempt; do not use that feature to build the desktop binary. For `cargo test --release`, `cargo clippy --release`, `cargo install --path src-tauri` and similar commands that never ship the desktop binary, set `TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1` (or `true`) to skip the guard. A binary built under that override loads `devUrl`; do not distribute it.
+To install the desktop binary with cargo, enable the feature the same way: `cargo install --path src-tauri --features custom-protocol`.
+
+A release-profile build that lacks `custom-protocol` fails to compile the desktop binary and prints these fixes: `src-tauri/build.rs` sets a cfg, and a `compile_error!` in the desktop entry point (`src-tauri/src/main.rs`) enforces it. The check reads Tauri's own computed dev state, so it passes whenever `tauri/custom-protocol` is on, however it was enabled. Because the error lives in the desktop entry point, it blocks only the desktop binary, whatever features are on: debug-profile builds, the library, and the `termul-server` binary (`cargo build --release --bin termul-server --features standalone-server`) are never blocked.
+
+For `cargo test --release` and `cargo clippy --release`, which compile the desktop entry point but never ship it, set `TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1` (or `true`) to skip the check. Never use the override for a command that installs or distributes a binary (`cargo build`, `cargo install`): a binary built under it loads `devUrl`.
 
 ## Quality Checks
 
