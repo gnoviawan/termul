@@ -364,6 +364,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         message={deleteTarget ? `Delete "${deleteTarget.name}"? This cannot be undone.` : ''}
         confirmLabel="Delete"
         variant="danger"
+        isLoading={flows.isDeleting}
         onConfirm={() => void flows.confirmDelete()}
         onCancel={flows.cancelDelete}
       />

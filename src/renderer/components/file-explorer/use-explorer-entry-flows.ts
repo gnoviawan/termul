@@ -27,6 +27,8 @@ export interface ExplorerEntryFlows {
   inlineInputContext: ExplorerInlineInputContextValue
   /** Entry waiting for delete confirmation. */
   deleteTarget: DirectoryEntry | null
+  /** True while that delete is in flight. The dialog stays open until it finishes. */
+  isDeleting: boolean
   /** Header New File / New Folder: the target follows the selection. */
   startHeaderCreate: (type: 'file' | 'folder') => Promise<void>
   /** Context-menu New File / New Folder in `dirPath`. */
@@ -57,6 +59,8 @@ export function useExplorerEntryFlows({
   const [inlineInput, setInlineInput] = useState<InlineInputState | null>(null)
   const [inputValue, setInputValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<DirectoryEntry | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const deleteInFlightRef = useRef(false)
   // Mirrors of component state so async header-create handlers can re-check
   // the latest values after awaiting chain expansion (GH-539 / GH-540).
   // Synced in useLayoutEffect (not during render) so the mirror is committed
@@ -290,68 +294,75 @@ export function useExplorerEntryFlows({
   )
 
   const confirmDelete = useCallback(async () => {
-    if (!deleteTarget) return
+    if (!deleteTarget || deleteInFlightRef.current) return
+    deleteInFlightRef.current = true
+    setIsDeleting(true)
 
-    const isDir = deleteTarget.type === 'directory'
-    const result = await filesystemApi.deletePath(deleteTarget.path, {
-      recursive: isDir
-    })
-
-    if (!result.success) {
-      toast.error(`Failed to delete ${deleteTarget.path}: ${result.error}`)
-      return
-    }
-
-    const normalizedDeletePath = deleteTarget.path.replace(/\\/g, '/')
-
-    // If deleting a directory, clean up expanded dirs, cached contents,
-    // and any open editor tabs for files inside the deleted directory
-    if (isDir) {
-      const store = useFileExplorerStore.getState()
-      const newExpanded = new Set(store.expandedDirs)
-      const newContents = new Map(store.directoryContents)
-
-      // Close editor tabs for files inside the deleted directory
-      const editorState = useEditorStore.getState()
-      const workspaceState = useWorkspaceStore.getState()
-      for (const [openFilePath] of editorState.openFiles) {
-        const normalizedOpenPath = openFilePath.replace(/\\/g, '/')
-        if (
-          normalizedOpenPath === normalizedDeletePath ||
-          normalizedOpenPath.startsWith(`${normalizedDeletePath}/`)
-        ) {
-          editorState.closeFile(openFilePath)
-          workspaceState.removeTab(editorTabId(openFilePath))
-        }
-      }
-
-      // Remove all cached directories and expanded dirs that are children of the deleted dir
-      for (const key of newContents.keys()) {
-        if (key.startsWith(`${normalizedDeletePath}/`) || key === normalizedDeletePath) {
-          newExpanded.delete(key)
-          newContents.delete(key)
-          void filesystemApi.unwatchDirectory(key)
-        }
-      }
-
-      useFileExplorerStore.setState({
-        expandedDirs: newExpanded,
-        directoryContents: newContents
+    try {
+      const isDir = deleteTarget.type === 'directory'
+      const result = await filesystemApi.deletePath(deleteTarget.path, {
+        recursive: isDir
       })
-    } else {
-      // Close editor tab if file was open
-      const editorState = useEditorStore.getState()
-      if (editorState.openFiles.has(deleteTarget.path)) {
-        editorState.closeFile(deleteTarget.path)
-        useWorkspaceStore.getState().removeTab(editorTabId(deleteTarget.path))
-      }
-    }
 
-    const parentPath = normalizedDeletePath.substring(0, normalizedDeletePath.lastIndexOf('/'))
-    // Clear selection if the deleted item was selected
-    useFileExplorerStore.getState().clearSelection()
-    await refreshDirectory(parentPath)
-    setDeleteTarget(null)
+      if (!result.success) {
+        toast.error(`Failed to delete ${deleteTarget.path}: ${result.error}`)
+        return
+      }
+
+      const normalizedDeletePath = deleteTarget.path.replace(/\\/g, '/')
+
+      // If deleting a directory, clean up expanded dirs, cached contents,
+      // and any open editor tabs for files inside the deleted directory
+      if (isDir) {
+        const store = useFileExplorerStore.getState()
+        const newExpanded = new Set(store.expandedDirs)
+        const newContents = new Map(store.directoryContents)
+
+        // Close editor tabs for files inside the deleted directory
+        const editorState = useEditorStore.getState()
+        const workspaceState = useWorkspaceStore.getState()
+        for (const [openFilePath] of editorState.openFiles) {
+          const normalizedOpenPath = openFilePath.replace(/\\/g, '/')
+          if (
+            normalizedOpenPath === normalizedDeletePath ||
+            normalizedOpenPath.startsWith(`${normalizedDeletePath}/`)
+          ) {
+            editorState.closeFile(openFilePath)
+            workspaceState.removeTab(editorTabId(openFilePath))
+          }
+        }
+
+        // Remove all cached directories and expanded dirs that are children of the deleted dir
+        for (const key of newContents.keys()) {
+          if (key.startsWith(`${normalizedDeletePath}/`) || key === normalizedDeletePath) {
+            newExpanded.delete(key)
+            newContents.delete(key)
+            void filesystemApi.unwatchDirectory(key)
+          }
+        }
+
+        useFileExplorerStore.setState({
+          expandedDirs: newExpanded,
+          directoryContents: newContents
+        })
+      } else {
+        // Close editor tab if file was open
+        const editorState = useEditorStore.getState()
+        if (editorState.openFiles.has(deleteTarget.path)) {
+          editorState.closeFile(deleteTarget.path)
+          useWorkspaceStore.getState().removeTab(editorTabId(deleteTarget.path))
+        }
+      }
+
+      const parentPath = normalizedDeletePath.substring(0, normalizedDeletePath.lastIndexOf('/'))
+      // Clear selection if the deleted item was selected
+      useFileExplorerStore.getState().clearSelection()
+      await refreshDirectory(parentPath)
+      setDeleteTarget(null)
+    } finally {
+      deleteInFlightRef.current = false
+      setIsDeleting(false)
+    }
   }, [deleteTarget, refreshDirectory])
 
   const cancelDelete = useCallback(() => setDeleteTarget(null), [])
@@ -360,6 +371,7 @@ export function useExplorerEntryFlows({
     inlineInput,
     inlineInputContext,
     deleteTarget,
+    isDeleting,
     startHeaderCreate,
     startCreateIn,
     startRename,
