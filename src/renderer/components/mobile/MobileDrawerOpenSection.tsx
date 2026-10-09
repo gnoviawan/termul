@@ -543,11 +543,18 @@ export function MobileDrawerOpenSection({
                       type="text"
                       value={renameValue}
                       aria-label={`Rename ${name}`}
+                      data-open-rename-input=""
                       onChange={(e) => setRenameValue(e.target.value)}
                       onBlur={() => endRename('commit', 'leave')}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') endRename('commit', 'rename-button')
-                        if (e.key === 'Escape') endRename('cancel', 'rename-button')
+                        if (e.key !== 'Enter' && e.key !== 'Escape') return
+                        // Focus moves to the Rename button inside this very
+                        // keydown. Left alone, the browser then fires the key's
+                        // keypress on that button, and Enter on a button clicks
+                        // it: the field would reopen as soon as it closed.
+                        // Cancelling the keydown suppresses the keypress.
+                        e.preventDefault()
+                        endRename(e.key === 'Enter' ? 'commit' : 'cancel', 'rename-button')
                       }}
                       className="min-h-11 w-28 rounded border border-border bg-background px-2 text-base"
                       autoFocus

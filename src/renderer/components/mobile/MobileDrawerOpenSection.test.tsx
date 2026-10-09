@@ -1437,6 +1437,18 @@ describe('MobileDrawerOpenSection focus after a rename ends', () => {
     expect(screen.getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
   })
 
+  it('Enter cancels the key’s default, so the same key press cannot activate the Rename button that took focus', () => {
+    const input = startRenaming(vi.fn())
+
+    // Focus moves to the Rename button inside this very keydown. A browser then
+    // fires the key's keypress on the focused button, and Enter on a button
+    // clicks it: the field would reopen straight after it closed. Cancelling
+    // the keydown suppresses that keypress (fireEvent returns false when a
+    // handler called preventDefault).
+    expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(false)
+    expect(screen.getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
+  })
+
   it('Enter with an empty name still ends the rename and returns focus', () => {
     const onRenameTerminal = vi.fn()
     const input = startRenaming(onRenameTerminal)

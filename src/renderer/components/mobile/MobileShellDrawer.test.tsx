@@ -1024,6 +1024,25 @@ describe('MobileShellDrawer focus', () => {
       await waitFor(() => expect(menu).toHaveFocus())
     })
 
+    it('keeps the drawer open when Escape ends a terminal rename, and focuses its Rename button', async () => {
+      seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
+      terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+      const onRenameTerminal = vi.fn()
+      const { dialog } = await openDrawer({ onRenameTerminal })
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Rename zsh' }))
+      const input = within(dialog).getByRole('textbox', { name: 'Rename zsh' })
+      fireEvent.change(input, { target: { value: 'dev server' } })
+      // Radix listens for Escape on the document and would dismiss the sheet:
+      // inside a rename field the key only cancels the rename.
+      fireEvent.keyDown(input, { key: 'Escape' })
+
+      expect(within(dialog).queryByRole('textbox', { name: 'Rename zsh' })).toBeNull()
+      expect(onRenameTerminal).not.toHaveBeenCalled()
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toHaveAttribute('data-state', 'open')
+      expect(within(dialog).getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
+    })
+
     it('returns to ☰ from the built-in close', async () => {
       const { menu, dialog } = await openDrawer()
 

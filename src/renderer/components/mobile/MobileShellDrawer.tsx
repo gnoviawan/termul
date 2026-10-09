@@ -225,6 +225,14 @@ export function MobileShellDrawer({
         side="left"
         id="mobile-shell-drawer"
         className="flex w-[min(82vw,20rem)] flex-col gap-0 p-0"
+        onEscapeKeyDown={(event) => {
+          // Radix hears Escape on the document before the rename field does and
+          // would dismiss the drawer. Inside a row's rename field the key only
+          // cancels the rename (its own handler returns focus to the pencil).
+          if (event.target instanceof Element && event.target.closest('[data-open-rename-input]')) {
+            event.preventDefault()
+          }
+        }}
         onOpenAutoFocus={(event) => {
           // Land on the active Open row (or the title), never the search: the
           // on-screen keyboard must not rise just because the drawer opened.
