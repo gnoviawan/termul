@@ -6,6 +6,7 @@ import { FastModeToggle } from '@/components/chat/FastModeToggle'
 import { McpBadge } from '@/components/chat/McpBadge'
 import { ArrowUp } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { pressedToggleClass } from '@/components/ui/panel-styles'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { AuthMethod, McpToolInfo, ProbeStatus, SessionConfigOption } from '@/lib/acp-api'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
@@ -285,10 +286,7 @@ function BooleanOptionPill({
       type="button"
       disabled={disabled}
       aria-pressed={on}
-      className={cn(
-        'shrink-0 rounded-full border px-2.5 py-1 text-xs',
-        on ? 'border-border bg-secondary text-foreground' : 'border-border/60 text-muted-foreground'
-      )}
+      className={cn('shrink-0 rounded-full border px-2.5 py-1 text-xs', pressedToggleClass(on))}
       onClick={() => {
         const next = !on
         setOptimistic(next)

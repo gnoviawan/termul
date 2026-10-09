@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { EntryGlyph } from '@/components/agents/launcher/pickers'
-import {
-  SELECTOR_OPTION_ROW,
-  SELECTOR_OPTION_ROW_DESKTOP,
-  SELECTOR_OPTION_ROW_MOBILE,
-  SELECTOR_SECTION_LABEL,
-  SelectorModal
-} from '@/components/chat/AgentHeader'
+import { EntryGlyph, EntryStatusTag } from '@/components/agents/launcher/pickers'
+import { SelectorModal } from '@/components/chat/AgentHeader'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { X } from '@/components/icons'
+import {
+  MENU_LABEL_CLASS,
+  menuOptionRowClass,
+  pickerSearchTextClass
+} from '@/components/ui/menu-styles'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Spinner } from '@/components/ui/spinner'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -361,7 +360,7 @@ export function AgentSwitchPicker({
       aria-label="Cancel agent switch"
       title="Cancel the armed switch — the next send stays with the current agent"
       data-testid="agent-switch-cancel"
-      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 disabled:cursor-not-allowed disabled:opacity-60"
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 disabled:cursor-not-allowed disabled:opacity-60"
       onClick={() => cancelAgentSwitch(sessionId)}
     >
       <X size={10} aria-hidden="true" />
@@ -387,11 +386,11 @@ export function AgentSwitchPicker({
         placeholder="Search agents…"
         aria-label="Search agents to switch to"
         className={cn(
-          'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
-          isMobile ? 'text-base' : 'text-sm'
+          'mb-1 h-8 w-full border-b border-border bg-transparent px-2 text-foreground outline-none placeholder:text-muted-foreground',
+          pickerSearchTextClass(isMobile)
         )}
       />
-      <div className="max-h-64 overflow-y-auto pr-1">
+      <div className="max-h-64 overflow-y-auto">
         {visibleAgents.length === 0 ? (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {switchTargets.length === 0
@@ -463,8 +462,7 @@ export function AgentSwitchPicker({
                   handlePick(entry)
                 }}
                 className={cn(
-                  SELECTOR_OPTION_ROW,
-                  isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
+                  menuOptionRowClass(isMobile),
                   'disabled:cursor-not-allowed disabled:opacity-60'
                 )}
               >
@@ -479,22 +477,11 @@ export function AgentSwitchPicker({
                   {entry.config?.name ?? entry.agent.name}
                 </span>
                 {installing && <Spinner size={11} decorative />}
-                {entry.status === 'install-required' && (
-                  <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
-                    {installing ? 'Installing…' : 'Install'}
-                  </span>
-                )}
-                {entry.status === 'needs-runtime' && (
-                  <span className="text-3xs text-muted-foreground">
-                    {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
-                  </span>
-                )}
-                {entry.status === 'manual-install' && (
-                  <span className="text-3xs text-muted-foreground">Manual install</span>
-                )}
-                {entry.status === 'unavailable' && (
-                  <span className="text-3xs text-muted-foreground">Unavailable</span>
-                )}
+                <EntryStatusTag
+                  status={entry.status}
+                  runtimeLauncher={entry.runtimeLauncher}
+                  installing={installing}
+                />
                 {rowTitle && <span className="sr-only">{rowTitle}</span>}
               </button>
             )
@@ -535,8 +522,8 @@ export function AgentSwitchPicker({
         <PopoverTrigger asChild disabled={controlDisabled}>
           {pill}
         </PopoverTrigger>
-        <PopoverContent align="end" side="top" className="w-72 p-1">
-          <div className={SELECTOR_SECTION_LABEL}>Switch agent</div>
+        <PopoverContent align="end" side="top" className="w-72 rounded-xl p-1">
+          <div className={MENU_LABEL_CLASS}>Switch agent</div>
           {contentBody}
         </PopoverContent>
       </Popover>

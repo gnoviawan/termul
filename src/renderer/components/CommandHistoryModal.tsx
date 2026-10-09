@@ -203,7 +203,7 @@ export function CommandHistoryModal({
                         onClose()
                       }}
                       className={`px-4 py-3 cursor-pointer transition-colors ${
-                        index === selectedIndex ? 'bg-secondary' : 'hover:bg-secondary/50'
+                        index === selectedIndex ? 'keycap' : 'hover:bg-foreground/[0.03]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">

@@ -9,12 +9,13 @@ import {
   useState
 } from 'react'
 import { Check, type TermulIcon } from '@/components/icons'
-import { cn } from '@/lib/utils'
 import {
-  SELECTOR_OPTION_ROW,
-  SELECTOR_OPTION_SELECTED,
-  SELECTOR_SECTION_LABEL
-} from './AgentHeader'
+  MENU_ACTIVE_ROW_CLASS,
+  MENU_LABEL_CLASS,
+  MENU_OPTION_ROW_CLASS
+} from '@/components/ui/menu-styles'
+import { cn } from '@/lib/utils'
+import { useTapSelect } from './use-tap-select'
 
 export interface ComposerMenuItem {
   key: string
@@ -62,12 +63,9 @@ interface FlatRow {
   item: ComposerMenuItem
 }
 
-/**
- * Max finger travel (px) for a touchend to count as a tap rather than a
- * drag-scroll. A touchend past this radius from its touchstart is treated as
- * scrolling and does not select (Story 5.3 T4.2 touch-reliability fix).
- */
-const TOUCH_SELECT_THRESHOLD_PX = 10
+/** Popover shell above the composer: 12px radius, 4px padding (rows are 8px). */
+const COMPOSER_MENU_SHELL_CLASS =
+  'absolute bottom-full left-2 right-2 mb-1 rounded-xl border bg-popover p-1 text-popover-foreground shadow-md'
 
 /** Flatten sections to a single ordered list for highlight indexing. */
 function flatten(sections: ComposerMenuSection[]): FlatRow[] {
@@ -85,13 +83,8 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
     const flat = useMemo(() => flatten(sections), [sections])
     const [highlight, setHighlight] = useState(0)
     const listRef = useRef<HTMLDivElement>(null)
-    // Story 5.3 (T4.2): guard against touch→mouse synthesis double-fire.
-    // Tracks the last input type so a tap selects exactly once. Reset after
-    // 500ms so the next interaction starts fresh.
-    const lastInputType = useRef<'mouse' | 'touch' | null>(null)
-    // Story 5.3 (T4.2): record the touchstart coords so `onTouchEnd` can tell
-    // a tap (select) from a drag-scroll (skip) by travel distance.
-    const touchStartRef = useRef<{ x: number; y: number } | null>(null)
+    // Story 5.3 (T4.2): a tap selects exactly once; a drag-scroll does not.
+    const tapSelect = useTapSelect()
     // Stable id for the listbox + each option so the owning textarea can
     // reference the active option via `aria-activedescendant`.
     const listboxId = useId()
@@ -146,10 +139,7 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
 
     if (flat.length === 0) {
       return (
-        <div
-          id={listboxId}
-          className="absolute bottom-full left-2 right-2 mb-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
-        >
+        <div id={listboxId} className={COMPOSER_MENU_SHELL_CLASS}>
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {emptyLabel ?? 'Nothing matches. Try another name.'}
           </div>
@@ -168,11 +158,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
         // pane (mobile), use `max-h-[40vh]` so a long slash list doesn't push
         // above the top of the visible viewport. The `@[400px]:` variant
         // restores `max-h-64` on wider panes (desktop non-regression).
-        className="absolute bottom-full left-2 right-2 mb-1 max-h-[40vh] @[400px]:max-h-64 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+        className={cn(COMPOSER_MENU_SHELL_CLASS, 'max-h-[40vh] overflow-y-auto @[400px]:max-h-64')}
       >
         {sections.map((section) => (
           <div key={section.id}>
-            <div className={SELECTOR_SECTION_LABEL}>{section.heading}</div>
+            <div className={MENU_LABEL_CLASS}>{section.heading}</div>
             {section.items.map((item) => {
               idx += 1
               const isHighlighted = idx === highlight
@@ -187,53 +177,14 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                   aria-selected={isHighlighted}
                   tabIndex={-1}
                   data-idx={rowIdx}
-                  // Story 5.3 (T4.2): touch synthesis on iOS can fire
-                  // `mousedown` after `touchend` unreliably, or fire both for
-                  // a single tap. We add `onTouchEnd` to select reliably on
-                  // touch, and guard with a "last input type" ref so a tap
-                  // selects exactly once. `onMouseDown` keeps `preventDefault`
-                  // so the textarea doesn't blur on mouse path.
-                  onMouseDown={(e) => {
-                    // Keep the composer focused. Select on click so a drag can cancel.
-                    e.preventDefault()
-                  }}
-                  onClick={() => {
-                    if (lastInputType.current === 'touch') return
-                    onSelect(section.id, item)
-                  }}
-                  onTouchStart={(e) => {
-                    const t = e.touches[0]
-                    if (t) {
-                      touchStartRef.current = { x: t.clientX, y: t.clientY }
-                    }
-                  }}
-                  onTouchEnd={(e) => {
-                    e.preventDefault()
-                    const start = touchStartRef.current
-                    touchStartRef.current = null
-                    const t = e.changedTouches[0]
-                    // Only select if the touch stayed within a small movement
-                    // threshold — a touchend after a drag-scroll must not
-                    // select (treat as scrolling). The mouse-synthesis guard
-                    // (`lastInputType`) is only claimed for a real tap.
-                    const isTap =
-                      start && t
-                        ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
-                          TOUCH_SELECT_THRESHOLD_PX ** 2
-                        : true
-                    if (!isTap) {
-                      return
-                    }
-                    lastInputType.current = 'touch'
-                    onSelect(section.id, item)
-                    // Reset the guard after a short delay so the next
-                    // interaction (mouse or touch) starts fresh.
-                    window.setTimeout(() => {
-                      if (lastInputType.current === 'touch') {
-                        lastInputType.current = null
-                      }
-                    }, 500)
-                  }}
+                  // Story 5.3 (T4.2): iOS may fire `mousedown` after
+                  // `touchend`, or both for one tap; `tapSelect` selects on
+                  // `touchend` and drops the synthesized click.
+                  // `onMouseDown` keeps `preventDefault` so the editor does
+                  // not blur on the mouse path; select happens on click so a
+                  // drag can cancel.
+                  {...tapSelect(() => onSelect(section.id, item))}
+                  onMouseDown={(e) => e.preventDefault()}
                   onMouseEnter={() => setHighlight(rowIdx)}
                   className={cn(
                     // Story 5.3 (T4.1): raise the touch hit-target height on
@@ -241,19 +192,18 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                     // restores `py-1.5` on wider panes (desktop
                     // non-regression). Pure CSS variant — no JS two-branch
                     // render (Story 5.1 threshold-remount lesson).
-                    // Row radius is concentric with the popover: rounded-md is
-                    // calc(var(--radius) - 2px) and p-1 is 4px, so the inner
-                    // radius is calc(var(--radius) - 6px).
-                    SELECTOR_OPTION_ROW,
-                    'min-h-11 rounded-[calc(var(--radius)-6px)] py-2.5 @[400px]:min-h-10 @[400px]:py-2',
+                    // Rows are rounded-lg (8px), concentric with the
+                    // rounded-xl (12px) shell and its 4px padding.
+                    MENU_OPTION_ROW_CLASS,
+                    'min-h-11 py-2.5 @[400px]:min-h-8 @[400px]:py-1.5',
                     item.wrap ? 'flex-wrap items-start' : 'items-center',
-                    isHighlighted && SELECTOR_OPTION_SELECTED,
+                    isHighlighted && MENU_ACTIVE_ROW_CLASS,
                     item.dimmed && 'text-disabled-foreground'
                   )}
                 >
                   {Icon && (
                     <Icon
-                      size={13}
+                      size={14}
                       className={cn('shrink-0 text-muted-foreground', item.iconClassName)}
                     />
                   )}
@@ -265,14 +215,16 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                   {item.description && (
                     <span
                       className={cn(
-                        'min-w-0 flex-1 truncate text-xs text-muted-foreground',
+                        'min-w-0 flex-1 truncate text-2xs text-muted-foreground',
                         item.wrap && 'whitespace-normal break-words'
                       )}
                     >
                       {item.description}
                     </span>
                   )}
-                  {item.selected && <Check size={13} className="ml-auto shrink-0 text-primary" />}
+                  {item.selected && (
+                    <Check size={14} className="ml-auto shrink-0 text-foreground" />
+                  )}
                 </button>
               )
             })}

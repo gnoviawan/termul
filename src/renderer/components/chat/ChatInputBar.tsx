@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
 import { buttonVariants } from '@/components/ui/button'
+import { pressedToggleClass } from '@/components/ui/panel-styles'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -606,12 +607,7 @@ export function ChatInputBar({
           type="button"
           disabled={disabled}
           aria-pressed={on}
-          className={cn(
-            'shrink-0 rounded-full border px-2.5 py-1 text-xs',
-            on
-              ? 'border-border bg-secondary text-foreground'
-              : 'border-border/60 text-muted-foreground'
-          )}
+          className={cn('shrink-0 rounded-full border px-2.5 py-1 text-xs', pressedToggleClass(on))}
           onClick={() => {
             void Promise.resolve(onSetConfig(option.id, !on)).catch(() => {})
           }}
