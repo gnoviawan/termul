@@ -42,6 +42,12 @@
  * arrives; the verbatim result is echoed into the transcript as
  * `ELICIT_ANSWER=<json>` in an `agent_message_chunk` so specs parse the
  * real wire response back, and the prompt resolves `end_turn`.
+ *
+ * `[PERMISSION]` (mobile shell suites): right after accepting the prompt the
+ * agent asks the host for a tool permission (`session/request_permission`)
+ * and leaves it unanswered, so the chat shows a pending approval — "needs
+ * you" — for as long as a client is connected (the host denies it only after
+ * its disconnect grace). The turn keeps streaming.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -175,6 +181,44 @@ const ELICIT_SCHEMA: JsonValue = {
   }
 }
 
+/**
+ * Delay (seconds) before the permission request when the prompt text carries a
+ * `[PERMISSION[:n]]` marker (0 without a number), else null.
+ */
+function permissionDelaySeconds(prompt: JsonValue | undefined): number | null {
+  const match = /\[PERMISSION(?::(\d+(?:\.\d+)?))?\]/.exec(promptText(prompt))
+  if (!match) return null
+  return match[1] ? Number(match[1]) : 0
+}
+
+/** Ids of the permission requests this agent sent: the host's replies carry no method. */
+const permissionRequestIds = new Set<string>()
+
+function requestPermission(sessionId: string): void {
+  const requestId = `perm-${randomUUID().slice(0, 8)}`
+  permissionRequestIds.add(requestId)
+  write(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: requestId,
+      method: 'session/request_permission',
+      params: {
+        sessionId,
+        toolCall: {
+          toolCallId: `call-${requestId}`,
+          title: 'Run the e2e tool',
+          kind: 'execute',
+          status: 'pending'
+        },
+        options: [
+          { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+          { optionId: 'reject', name: 'Reject', kind: 'reject_once' }
+        ]
+      }
+    })
+  )
+}
+
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
 const inFlightBySession = new Map<string, InFlight>()
 
@@ -300,9 +344,12 @@ setInterval(tick, Math.max(100, Math.floor(1000 / RATE)))
 
 function handle(msg: JsonRpcMessage): void {
   const { id, method, params } = msg
-  // A RESPONSE to one of our outbound requests carries `id` + `result`/
-  // `error` but no `method`. The only outbound request this agent makes is
-  // `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
+  // The host's reply to a permission request this agent sent (the
+  // `[PERMISSION]` marker flow) carries `id` but no `method`: nothing to answer.
+  if (method === undefined && id !== undefined && permissionRequestIds.delete(String(id))) return
+  // A RESPONSE to one of our other outbound requests carries `id` + `result`/
+  // `error` but no `method`. The remaining outbound request this agent makes
+  // is `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
   // method switch so it never falls into the `default` reply arm (replying
   // to a response would be protocol noise).
   if (method === undefined) {
@@ -373,6 +420,11 @@ function handle(msg: JsonRpcMessage): void {
         })
         wireLog(`OUT: ${line}`)
         write(line)
+      }
+      const permissionDelaySec = permissionDelaySeconds(p.prompt)
+      if (permissionDelaySec !== null) {
+        if (permissionDelaySec === 0) requestPermission(sessionId)
+        else setTimeout(() => requestPermission(sessionId), permissionDelaySec * 1000)
       }
       // Crash only when armed AND the marker is present: the host re-sends
       // the persisted open user turn verbatim on reopen (possibly on a
