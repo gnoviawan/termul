@@ -828,6 +828,18 @@ jobs:
             if (!m.platforms || typeof m.platforms !== "object" || Array.isArray(m.platforms)) {
               throw new Error("promote: latest-insider.json has no platforms object");
             }
+            // An RC published before the arm64 server build has no
+            // `linux-aarch64-server` record; promoting it would leave ARM
+            // servers on stable without an update entry. Keep in sync with the
+            // `-server` keys in requiredPlatformKeys
+            // (scripts/release/merge-updater-manifests.mjs).
+            const requiredServerKeys = ["linux-x86_64-server", "linux-aarch64-server"];
+            const missingServerKeys = requiredServerKeys.filter((key) => !m.platforms[key]);
+            if (missingServerKeys.length > 0) {
+              throw new Error(
+                `promote: latest-insider.json is missing ${missingServerKeys.join(", ")}; publish a new RC that includes every server build before promoting`
+              );
+            }
             m.version = stable;
             // (patch 15) Refresh pub_date to the promotion timestamp and replace
             // the RC-flavored notes so the stable manifest does not advertise a
