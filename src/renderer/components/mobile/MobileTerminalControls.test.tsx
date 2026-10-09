@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileTerminalControls } from './MobileTerminalControls'
 
 const { writeMock, readTextMock, toastErrorMock } = vi.hoisted(() => ({
@@ -283,5 +283,127 @@ describe('MobileTerminalControls pointer-down focus guard', () => {
     fireEvent.pointerDown(toggle)
     fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+// The toast stack clears the key bar: the bar reports its top edge to
+// `useDockClearance` (`--mobile-dock-height`), one row or two. jsdom lays
+// nothing out, so the bar's rect is stubbed and the observer notification the
+// browser would deliver after the toggle changes the layout is fired by hand.
+describe('MobileTerminalControls toast clearance', () => {
+  const DOCK_VAR = '--mobile-dock-height'
+  const dockVar = (): string => document.documentElement.style.getPropertyValue(DOCK_VAR)
+  const originalInnerHeight = window.innerHeight
+  const observers: Array<{ targets: Set<Element>; callback: () => void }> = []
+  const rects = new Map<Element, { top: number; height: number }>()
+
+  class CapturingResizeObserver {
+    readonly targets = new Set<Element>()
+    constructor(readonly callback: () => void) {
+      observers.push(this)
+    }
+    observe(target: Element): void {
+      this.targets.add(target)
+    }
+    unobserve(target: Element): void {
+      this.targets.delete(target)
+    }
+    disconnect(): void {
+      this.targets.clear()
+    }
+  }
+
+  const notifyResize = (): void => {
+    act(() => {
+      for (const observer of observers) if (observer.targets.size > 0) observer.callback()
+    })
+  }
+  const bar = (): HTMLElement => {
+    const shell = screen.getByRole('group', { name: 'Terminal keys' }).parentElement
+    if (!shell) throw new Error('the key bar shell is missing')
+    return shell
+  }
+
+  beforeEach(() => {
+    observers.length = 0
+    rects.clear()
+    vi.stubGlobal('ResizeObserver', CapturingResizeObserver)
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element
+    ) {
+      const stub = rects.get(this)
+      const top = stub?.top ?? 0
+      const height = stub?.height ?? 0
+      const width = stub ? 390 : 0
+      return {
+        x: 0,
+        y: top,
+        top,
+        left: 0,
+        width,
+        height,
+        right: width,
+        bottom: top + height,
+        toJSON: () => ({})
+      }
+    })
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      writable: true,
+      value: 844
+    })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      writable: true,
+      value: originalInnerHeight
+    })
+    document.documentElement.style.removeProperty(DOCK_VAR)
+  })
+
+  it('publishes the bar top as the distance from the viewport bottom, one row or two', () => {
+    render(<MobileTerminalControls terminalId="t1" />)
+    // Nothing is laid out yet: no value to publish.
+    expect(dockVar()).toBe('')
+
+    // Two rows at 390px: 104px tall, so the top sits 104px above the bottom.
+    rects.set(bar(), { top: 740, height: 104 })
+    notifyResize()
+    expect(dockVar()).toBe('104px')
+
+    // The toggle collapses the nine keys; the bar shrinks to one row and the
+    // observer reports the new layout.
+    fireEvent.click(screen.getByRole('button', { name: TOGGLE_NAME }))
+    expect(screen.getByRole('button', { name: TOGGLE_NAME })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+    rects.set(bar(), { top: 780, height: 64 })
+    notifyResize()
+    expect(dockVar()).toBe('64px')
+
+    fireEvent.click(screen.getByRole('button', { name: TOGGLE_NAME }))
+    rects.set(bar(), { top: 740, height: 104 })
+    notifyResize()
+    expect(dockVar()).toBe('104px')
+  })
+
+  it('observes the bar and its parent, and removes the property on unmount', () => {
+    const { unmount } = render(<MobileTerminalControls terminalId="t1" />)
+    rects.set(bar(), { top: 740, height: 104 })
+    notifyResize()
+    expect(dockVar()).toBe('104px')
+
+    const targets = observers.flatMap((observer) => [...observer.targets])
+    expect(targets).toEqual(expect.arrayContaining([bar(), bar().parentElement]))
+
+    unmount()
+    expect(dockVar()).toBe('')
+    expect(observers.flatMap((observer) => [...observer.targets])).toEqual([])
   })
 })

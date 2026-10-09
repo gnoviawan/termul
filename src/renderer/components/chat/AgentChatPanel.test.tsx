@@ -343,7 +343,8 @@ vi.mock('./ChatChangedFilesPanel', () => ({
     onOpenGitChanges?: (opener: HTMLElement) => void
   }) => {
     changedFilesPanelPropsRef.current.push(props)
-    return null
+    // A marker, so the dock tests can assert the bar sits inside the dock wrapper.
+    return <div data-testid="changed-files-stub" />
   }
 }))
 const { chatInputBarPropsRef } = vi.hoisted(() => ({
@@ -383,22 +384,24 @@ vi.mock('./ChatMessageList', () => ({
     return null
   }
 }))
+// The three prompt stubs render a marker each (like `composer-stub`) so the dock
+// tests can assert they sit inside the dock wrapper.
 vi.mock('./PermissionPrompt', () => ({
   PermissionPrompt: (props: { isVisible?: boolean; embedded?: boolean }) => {
     permissionPromptPropsRef.current.push(props)
-    return null
+    return <div data-testid="permission-stub" />
   }
 }))
 vi.mock('./AskUserQuestion', () => ({
   AskUserQuestion: (props: { autoFocusFirstOption?: boolean }) => {
     askQuestionPropsRef.current.push(props)
-    return null
+    return <div data-testid="question-stub" />
   }
 }))
 vi.mock('./ElicitationPrompt', () => ({
   ElicitationPrompt: (props: { autoFocusHeading?: boolean }) => {
     elicitationPropsRef.current.push(props)
-    return null
+    return <div data-testid="elicitation-stub" />
   }
 }))
 vi.mock('./BrowserConsentCard', () => ({
@@ -1739,6 +1742,147 @@ describe('AgentChatPanel mobile dock wiring', () => {
 
       expect(screen.getByTestId('composer-stub')).not.toHaveFocus()
       expect(document.body).toHaveFocus()
+    })
+  })
+
+  // The dock wrapper reports its top edge (`--mobile-dock-height`) so the toast
+  // stack clears it. Layout: a plain box on the mobile shell, `display:
+  // contents` on desktop. The rect of the wrapper is stubbed through its
+  // `data-chat-dock` attribute: jsdom lays nothing out.
+  describe('dock clearance', () => {
+    const DOCK_VAR = '--mobile-dock-height'
+    const dockVar = (): string => document.documentElement.style.getPropertyValue(DOCK_VAR)
+    const originalInnerHeight = window.innerHeight
+    let rectSpy: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        writable: true,
+        value: 844
+      })
+      rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+        this: Element
+      ) {
+        const isDock = this.getAttribute('data-chat-dock') === 'true'
+        const top = isDock ? 708 : 0
+        const width = isDock ? 390 : 0
+        const height = isDock ? 136 : 0
+        return {
+          x: 0,
+          y: top,
+          top,
+          left: 0,
+          width,
+          height,
+          right: width,
+          bottom: top + height,
+          toJSON: () => ({})
+        }
+      })
+    })
+
+    afterEach(() => {
+      rectSpy.mockRestore()
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        writable: true,
+        value: originalInnerHeight
+      })
+      document.documentElement.style.removeProperty(DOCK_VAR)
+    })
+
+    const dockOf = (container: HTMLElement): HTMLElement | null =>
+      container.querySelector<HTMLElement>('[data-chat-dock="true"]')
+
+    it('writes the distance to the composer dock top for a visible mobile chat', () => {
+      const { container, unmount } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+      // The composer and the changed-files bar are the wrapper's children.
+      expect(screen.getByTestId('composer-stub').parentElement).toBe(dockOf(container))
+      expect(dockVar()).toBe('136px')
+
+      unmount()
+      expect(dockVar()).toBe('')
+    })
+
+    it.each([
+      ['a question', seedQuestion],
+      ['an elicitation', seedElicitation]
+    ])('reports the prompt dock too while %s replaces the composer', (_label, seed) => {
+      seed()
+      const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+      expect(screen.queryByTestId('composer-stub')).toBeNull()
+      expect(dockOf(container)).not.toBeNull()
+      expect(dockVar()).toBe('136px')
+    })
+
+    // The wrapper's rect is only worth measuring if everything that sits on the
+    // dock is inside it: a child outside would be uncounted and a toast could
+    // cover it.
+    it('holds the changed-files bar and the composer in the composer branch', () => {
+      const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
+      const dock = dockOf(container)
+
+      expect(dock).not.toBeNull()
+      expect(screen.getByTestId('changed-files-stub').closest('[data-chat-dock="true"]')).toBe(dock)
+      expect(screen.getByTestId('composer-stub').closest('[data-chat-dock="true"]')).toBe(dock)
+    })
+
+    it('holds the question, the elicitation and the permission in the prompt branch', () => {
+      seedQuestion()
+      seedElicitation()
+      seedPermission()
+      const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
+      const dock = dockOf(container)
+
+      expect(dock).not.toBeNull()
+      expect(screen.queryByTestId('composer-stub')).toBeNull()
+      for (const id of ['question-stub', 'elicitation-stub', 'permission-stub']) {
+        expect(screen.getByTestId(id).closest('[data-chat-dock="true"]')).toBe(dock)
+      }
+    })
+
+    it('keeps one wrapper element across the composer and prompt branches', () => {
+      const { container, rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+      const dock = dockOf(container)
+      expect(dock).not.toBeNull()
+
+      seedQuestion()
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(screen.queryByTestId('composer-stub')).toBeNull()
+      expect(dockOf(container)).toBe(dock)
+      expect(dockVar()).toBe('136px')
+    })
+
+    it('leaves the property absent for a hidden pane, then writes it once visible', () => {
+      const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+      expect(dockVar()).toBe('')
+
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(dockVar()).toBe('136px')
+
+      rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
+      expect(dockVar()).toBe('')
+    })
+
+    it('leaves the property absent on the desktop shell', () => {
+      mobileRef.current = false
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(dockVar()).toBe('')
+    })
+
+    it('lays the wrapper out as a box on mobile and as display: contents on desktop', () => {
+      const mobile = render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(dockOf(mobile.container)).toHaveClass('flex', 'shrink-0', 'flex-col')
+      expect(dockOf(mobile.container)).not.toHaveClass('contents')
+      mobile.unmount()
+
+      mobileRef.current = false
+      const desktop = render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(dockOf(desktop.container)).toHaveClass('contents')
+      expect(dockOf(desktop.container)).not.toHaveClass('flex')
     })
   })
 })

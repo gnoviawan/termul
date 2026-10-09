@@ -44,7 +44,7 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `mobile/MobileHeaderMoreSheet.tsx` — header ⋯ bottom sheet for chats and tabs (Git changes, Files, Command palette, New terminal, Project settings, Close chat)
 - `mobile/MobileTerminalActionsSheet.tsx` — terminal ⋯ bottom sheet (last exit code, rename, restart, command history, then Git changes, Files, Command palette and Project settings with the header sheet's gates, then close)
 - `mobile/mobile-sheet-rows.ts` — the 44px action-row class, the destructive-row divider class and the shared navigation rows (Git changes, Files, Command palette, New terminal, Project settings) that both ⋯ sheets render from their callbacks
-- `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences
+- `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences. It also reports its top edge to the toast stack through `useDockClearance` (`hooks/use-dock-clearance.ts`), which publishes `--mobile-dock-height` so toasts clear the bar
 - `TerminalTabBar.tsx` / `TerminalView.tsx` — legacy or transitional terminal view helpers retained in repository
 
 ### Editor Components

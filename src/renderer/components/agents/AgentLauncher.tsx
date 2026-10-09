@@ -66,6 +66,7 @@ import { Paperclip } from '@/components/icons'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
+import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -1826,6 +1827,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // so the column still fits above the fold. Desktop keeps the centered
   // layout byte-identical.
   const isMobileShell = useMobileWebShell()
+  // Toasts raised here clear the composer column (`useDockClearance`).
+  const dockRef = useDockClearance(isMobileShell)
   const handleInstallFromSelector = useCallback(
     (entry: SupportedAcpAgentEntry) => void handleInstallAgent(entry),
     [handleInstallAgent]
@@ -1919,7 +1922,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           projectLabel={projectLabel}
         />
 
-        <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
+        <div ref={dockRef} className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
           <div
             data-agent-launcher-composer-group="true"
             className={cn(
