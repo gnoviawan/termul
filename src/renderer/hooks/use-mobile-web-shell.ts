@@ -57,7 +57,7 @@ export function resolveMobileWebShell(
  * alias so the shell still tracks orientation changes on the older mobile
  * browsers this hook targets.
  */
-function subscribeMediaQuery(
+export function subscribeMediaQuery(
   mql: MediaQueryList,
   onChange: (matches: boolean) => void
 ): () => void {

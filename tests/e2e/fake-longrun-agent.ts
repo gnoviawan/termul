@@ -396,15 +396,14 @@ setInterval(tick, Math.max(100, Math.floor(1000 / RATE)))
 
 function handle(msg: JsonRpcMessage): void {
   const { id, method, params } = msg
-  // The host's reply to a permission request this agent sent (the
-  // `[PERMISSION]` marker flow) carries `id` but no `method`: nothing to answer.
-  if (method === undefined && id !== undefined && permissionRequestIds.delete(String(id))) return
-  // A RESPONSE to one of our other outbound requests carries `id` + `result`/
-  // `error` but no `method`. The remaining outbound request this agent makes
-  // is `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
+  // A RESPONSE to one of our outbound requests carries `id` + `result`/
+  // `error` but no `method`. The only outbound request this agent makes is
+  // `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
   // method switch so it never falls into the `default` reply arm (replying
-  // to a response would be protocol noise).
+  // to a response would be protocol noise). The host's reply to a permission
+  // request this agent sent (`[PERMISSION]` marker) needs no answer either.
   if (method === undefined) {
+    if (id !== undefined && permissionRequestIds.delete(String(id))) return
     resolveElicitation(msg)
     return
   }

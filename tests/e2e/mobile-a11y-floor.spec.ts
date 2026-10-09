@@ -199,6 +199,28 @@ async function settled(locator: Locator): Promise<void> {
   )
 }
 
+/**
+ * The header ⋯ button. The Files and Git changes sheets open from its sheet, so
+ * it is the control they return focus to when they close.
+ */
+function moreButton(page: Page): Locator {
+  return page.getByRole('button', { name: 'More', exact: true })
+}
+
+/** Open the header ⋯ sheet and choose one of its rows (Files, Git changes, ...). */
+async function chooseFromMore(page: Page, row: string): Promise<void> {
+  await moreButton(page).tap()
+  await page
+    .locator('#mobile-header-more-sheet')
+    .getByRole('button', { name: row, exact: true })
+    .tap()
+}
+
+/** The subtitle button (project · branch · Local/Worktree) that opens the project sheet. */
+function projectSwitcher(page: Page): Locator {
+  return page.getByRole('button', { name: /, switch project$/ })
+}
+
 interface Box {
   x: number
   y: number
@@ -213,14 +235,14 @@ async function boxOf(locator: Locator): Promise<Box> {
 }
 
 /**
- * Open the centred "Create New Branch" Dialog on the mobile shell: Git changes,
+ * Open the centred "Create New Branch" Dialog on the mobile shell: ⋯ → Git changes,
  * the branch menu, then "Create new branch...". It is the Dialog (with the
  * built-in Close) a phone can reach. The launcher's agent selector used to be a
  * Dialog, but the combined agent / model / effort selector opens a bottom sheet
  * on the mobile shell. The project needs a git repository (`registerProject({ git: true })`).
  */
 async function openCreateBranchDialog(page: Page): Promise<Locator> {
-  await page.getByRole('button', { name: 'Git changes' }).tap()
+  await chooseFromMore(page, 'Git changes')
   const gitSheet = page.getByRole('dialog', { name: 'Git changes' })
   await expect(gitSheet).toBeVisible()
   // The branch picker: a repo with no commit yet reads "Detached HEAD".
@@ -363,7 +385,7 @@ test.describe('shell live region', () => {
     const target = await registerProject()
     await bootShell(page, current)
 
-    await page.getByRole('button', { name: 'Switch project' }).tap()
+    await projectSwitcher(page).tap()
     await page
       .getByRole('dialog', { name: 'Projects' })
       .getByRole('button', { name: target.name, exact: true })
@@ -402,7 +424,7 @@ test.describe('shell live region', () => {
     })
     await bootShell(page, current)
 
-    await page.getByRole('button', { name: 'Switch project' }).tap()
+    await projectSwitcher(page).tap()
     await page
       .getByRole('dialog', { name: 'Projects' })
       .getByRole('button', { name: target.name, exact: true })
@@ -507,41 +529,41 @@ test.describe('shell live region', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('sheet focus return', () => {
-  test('closing the Files sheet by Escape, its close button or the back button returns focus to Browse files', async ({
+  test('closing the Files sheet by Escape, its close button or the back button returns focus to ⋯', async ({
     page
   }) => {
     const project = await registerProject({ files: true })
     await bootShell(page, project)
-    const opener = page.getByRole('button', { name: 'Browse files' })
+    const opener = moreButton(page)
     const filesSheet = page.getByRole('dialog', { name: project.name })
 
-    await opener.tap()
+    await chooseFromMore(page, 'Files')
     await expect(filesSheet).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(filesSheet).toBeHidden()
     await expect(opener).toBeFocused()
 
-    await opener.tap()
+    await chooseFromMore(page, 'Files')
     await expect(filesSheet).toBeVisible()
     await filesSheet.getByRole('button', { name: 'Close', exact: true }).tap()
     await expect(filesSheet).toBeHidden()
     await expect(opener).toBeFocused()
 
     // The hardware back button closes the topmost overlay.
-    await opener.tap()
+    await chooseFromMore(page, 'Files')
     await expect(filesSheet).toBeVisible()
     await page.goBack()
     await expect(filesSheet).toBeHidden()
     await expect(opener).toBeFocused()
   })
 
-  test('opening a file lands focus on the header title, not on Browse files or the editor', async ({
+  test('opening a file lands focus on the header title, not on ⋯ or the editor', async ({
     page
   }) => {
     const project = await registerProject({ files: true })
     await bootShell(page, project)
 
-    await page.getByRole('button', { name: 'Browse files' }).tap()
+    await chooseFromMore(page, 'Files')
     await page.getByRole('button', { name: 'Open notes.md' }).tap()
     await expect(page.getByRole('dialog', { name: project.name })).toBeHidden()
 
@@ -553,7 +575,7 @@ test.describe('sheet focus return', () => {
   }) => {
     const project = await registerProject({ files: true })
     await bootShell(page, project)
-    await page.getByRole('button', { name: 'Browse files' }).tap()
+    await chooseFromMore(page, 'Files')
     const actions = page.getByRole('button', { name: 'Actions for notes.md' })
     // Radix names the dialog by its title (the file name), ahead of the aria-label.
     const actionsSheet = page.getByRole('dialog', { name: 'notes.md', exact: true })
@@ -586,27 +608,27 @@ test.describe('sheet focus return', () => {
     await expect(page.getByRole('textbox', { name: 'Rename notes.md' })).toBeFocused()
   })
 
-  test('closing the Git sheet by Escape, its close button or its scrim returns focus to Git changes', async ({
+  test('closing the Git sheet by Escape, its close button or its scrim returns focus to ⋯', async ({
     page
   }) => {
     await bootShell(page, await registerProject({ git: true }))
-    const opener = page.getByRole('button', { name: 'Git changes' })
+    const opener = moreButton(page)
     const gitSheet = page.getByRole('dialog', { name: 'Git changes' })
 
-    await opener.tap()
+    await chooseFromMore(page, 'Git changes')
     await expect(gitSheet).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(gitSheet).toBeHidden()
     await expect(opener).toBeFocused()
 
-    await opener.tap()
+    await chooseFromMore(page, 'Git changes')
     await expect(gitSheet).toBeVisible()
     await gitSheet.getByRole('button', { name: 'Close', exact: true }).tap()
     await expect(gitSheet).toBeHidden()
     await expect(opener).toBeFocused()
 
     // The sheet is 90vh tall: a tap in the strip above it lands on the scrim.
-    await opener.tap()
+    await chooseFromMore(page, 'Git changes')
     await expect(gitSheet).toBeVisible()
     await page.touchscreen.tap(195, 30)
     await expect(gitSheet).toBeHidden()
@@ -623,7 +645,7 @@ test.describe('touch targets and reduced motion', () => {
     const project = await registerProject({ files: true })
     await bootShell(page, project)
 
-    await page.getByRole('button', { name: 'Browse files' }).tap()
+    await chooseFromMore(page, 'Files')
     const filesSheet = page.getByRole('dialog', { name: project.name })
     await expect(filesSheet).toBeVisible()
     await settled(filesSheet)
@@ -687,7 +709,7 @@ test.describe('touch targets and reduced motion', () => {
     }> = [
       {
         name: 'sheet',
-        open: () => page.getByRole('button', { name: 'Browse files' }).tap(),
+        open: () => chooseFromMore(page, 'Files'),
         content: page.getByRole('dialog', { name: project.name })
       },
       {
