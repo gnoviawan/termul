@@ -813,11 +813,14 @@ export function AgentChatPanel({
           </div>
         </div>
       )}
-      {pendingElicitation && !isClosed ? (
-        <ElicitationPrompt key={pendingElicitation.requestId} request={pendingElicitation} />
-      ) : null}
-      {pendingQuestion && !isClosed ? (
+      {/* Any pending agent prompt morphs the composer into the question
+          dialog — the composer, changed-files strip, and queued prompts all
+          hide until the prompt resolves. */}
+      {!isClosed && (pendingElicitation || pendingQuestion) ? (
         <>
+          {pendingElicitation && (
+            <ElicitationPrompt key={pendingElicitation.requestId} request={pendingElicitation} />
+          )}
           {pendingPermission && (
             <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
               <div className="mx-auto w-full max-w-3xl">
@@ -825,7 +828,9 @@ export function AgentChatPanel({
               </div>
             </div>
           )}
-          <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+          {pendingQuestion && (
+            <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+          )}
         </>
       ) : (
         <>

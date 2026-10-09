@@ -44,6 +44,13 @@ export const CHAT_ROW_MIN_H = 'min-h-7 pointer-coarse:min-h-11'
 /** Icon control inside a dense activity row; must not grow the row past {@link CHAT_ROW_MIN_H}. */
 export const CHAT_ROW_ICON = 'size-7 pointer-coarse:size-11'
 
+/**
+ * Max height for the scrollable body of an inline agent prompt panel
+ * (`AskUserQuestion`, `ElicitationQuestions`). Bounded so a long question
+ * batch can never push the message list off-screen.
+ */
+export const QUESTION_PANEL_MAX_H = 'max-h-[min(55vh,30rem)]'
+
 export type ComposerToolbarMode = 'narrow' | 'wide'
 
 /**
