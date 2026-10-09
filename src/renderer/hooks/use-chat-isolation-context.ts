@@ -39,7 +39,8 @@ export function useChatIsolationContext({
   const isolationModeTitle = isWorktree
     ? `Agent works in a separate git worktree: ${worktreePath}`
     : 'Agent edits files in your project folder directly'
-  const isolationBranch = worktreeBranch ?? projectGitBranch
+  // A worktree chat never falls back to the project branch: the agent is not on it.
+  const isolationBranch = isWorktree ? (worktreeBranch ?? null) : projectGitBranch
   const isDetachedHead = !isolationBranch && !isWorktree && projectIsGitRepo
   return { isWorktree, isolationModeLabel, isolationModeTitle, isolationBranch, isDetachedHead }
 }

@@ -52,6 +52,17 @@ describe('useChatIsolationContext', () => {
     })
   })
 
+  it('Worktree without a recorded branch: never falls back to the project branch', () => {
+    seedProject({ gitBranch: 'main', isGitRepo: true })
+    const { result } = renderHook(() =>
+      useChatIsolationContext({ projectId: 'p1', worktreePath: '/work/.termul/worktrees/ab12' })
+    )
+
+    expect(result.current.isWorktree).toBe(true)
+    expect(result.current.isolationBranch).toBeNull()
+    expect(result.current.isDetachedHead).toBe(false)
+  })
+
   it('detached: a git project with no branch', () => {
     seedProject({ isGitRepo: true })
     const { result } = renderHook(() => useChatIsolationContext({ projectId: 'p1' }))
