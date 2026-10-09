@@ -94,3 +94,120 @@ fn parse_env_agent_id_is_optional() {
     assert_eq!(cfg.agent_id, "");
     clear_env();
 }
+
+fn handshake_config() -> ChildConfig {
+    ChildConfig {
+        port: 9,
+        token: "tok".to_string(),
+        session_id: "sess".to_string(),
+        agent_id: "agent".to_string(),
+    }
+}
+
+async fn read_json_id(
+    reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
+    id: i64,
+) -> serde_json::Value {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await.expect("read response");
+        assert!(n > 0, "eof before response id {id}");
+        let value: serde_json::Value =
+            serde_json::from_str(line.trim()).unwrap_or_else(|e| panic!("bad json {line}: {e}"));
+        if value.get("id").and_then(|v| v.as_i64()) == Some(id) {
+            return value;
+        }
+    }
+}
+
+#[tokio::test]
+async fn server_discover_without_meta_lists_tools() {
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let (client_read, mut client_write) = tokio::io::split(client_io);
+    let serve = tokio::spawn(async move {
+        serve_mcp_transport(handshake_config(), server_read, server_write).await
+    });
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+        client_write
+            .write_all(br#"{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}"#)
+            .await
+            .unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        let mut reader = BufReader::new(client_read);
+        let discover = read_json_id(&mut reader, 1).await;
+        assert!(
+            discover.get("error").is_none(),
+            "discover failed: {discover}"
+        );
+        assert!(discover.get("result").is_some(), "{discover}");
+
+        client_write
+            .write_all(br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
+            .await
+            .unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        let tools = read_json_id(&mut reader, 2).await;
+        assert!(tools.get("error").is_none(), "tools/list failed: {tools}");
+        let names = tools["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"plan"), "{names:?}");
+        drop(client_write);
+        drop(reader);
+        serve.await.expect("serve task").expect("serve ok");
+    })
+    .await;
+    result.expect("handshake timed out");
+}
+
+#[tokio::test]
+async fn legacy_initialize_still_lists_tools() {
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let (client_read, mut client_write) = tokio::io::split(client_io);
+    let serve = tokio::spawn(async move {
+        serve_mcp_transport(handshake_config(), server_read, server_write).await
+    });
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"0.0.1"}}}"#;
+        client_write.write_all(init.as_bytes()).await.unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        let mut reader = BufReader::new(client_read);
+        let init_reply = read_json_id(&mut reader, 1).await;
+        assert!(
+            init_reply.get("error").is_none(),
+            "initialize failed: {init_reply}"
+        );
+        client_write
+            .write_all(br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+            .await
+            .unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        client_write
+            .write_all(br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+            .await
+            .unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        let tools = read_json_id(&mut reader, 2).await;
+        assert!(tools.get("error").is_none(), "tools/list failed: {tools}");
+        let names = tools["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"plan"), "{names:?}");
+        drop(client_write);
+        drop(reader);
+        serve.await.expect("serve task").expect("serve ok");
+    })
+    .await;
+    result.expect("legacy handshake timed out");
+}

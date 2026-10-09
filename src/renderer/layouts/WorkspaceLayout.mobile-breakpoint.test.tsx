@@ -1,8 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { MOBILE_WEB_SHELL_MAX_PX } from '@/hooks/use-mobile-web-shell'
+import { useWorkspaceStore } from '@/stores/workspace-store'
+import type { LeafNode, SplitNode } from '@/types/workspace.types'
 
 // Story 12 (CAP-8, QA finding F3): regression test for the REAL
 // `useMobileWebShell` breakpoint detection. The sibling suites
@@ -173,9 +175,27 @@ vi.mock('@/hooks/use-command-history', () => ({
   useAllCommandHistory: vi.fn(() => [])
 }))
 
+// The stub exposes which optional commands the layout wired so the desktop
+// row can prove "New Project" stays off the desktop palette while "Open
+// Shortcut Menu" stays on it.
 vi.mock('@/components/CommandPalette', () => ({
-  CommandPalette: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <input placeholder="Search commands, projects, settings..." readOnly /> : null
+  CommandPalette: ({
+    isOpen,
+    onNewProject,
+    onOpenShortcutMenu
+  }: {
+    isOpen: boolean
+    onNewProject?: () => void
+    onOpenShortcutMenu?: () => void
+  }) =>
+    isOpen ? (
+      <div
+        data-palette-new-project={onNewProject ? 'wired' : 'absent'}
+        data-palette-shortcut-menu={onOpenShortcutMenu ? 'wired' : 'absent'}
+      >
+        <input placeholder="Search commands, projects, settings..." readOnly />
+      </div>
+    ) : null
 }))
 
 // GitPanel dependencies (rendered inside the mobile git Sheet).
@@ -233,11 +253,24 @@ vi.mock('@/lib/api', async () => {
 
 // Stub heavy child components so both branches render without dragging in
 // CodeMirror / xterm / page implementations.
+// The stub exposes the node it was handed so the desktop rows can prove a
+// split is passed through whole (only the mobile shell collapses it).
 vi.mock('@/components/workspace/PaneRenderer', () => ({
-  PaneRenderer: () => <div data-pane-renderer-stub />
+  PaneRenderer: ({ node }: { node: { id: string; type: string } }) => (
+    <div data-pane-renderer-stub data-node-id={node.id} data-node-type={node.type} />
+  )
 }))
 vi.mock('@/components/file-explorer/FileExplorer', () => ({
   FileExplorer: () => <div data-testid="file-explorer-stub" />
+}))
+
+// Persistence restore replaces the whole pane tree (resetLayout /
+// loadProjectWorkspace) when it finds nothing for the project. The pane-tree
+// rows below seed a specific tree, so keep the restore out of the way, as the
+// other WorkspaceLayout suites do.
+vi.mock('@/hooks/use-editor-persistence', () => ({
+  useEditorPersistence: vi.fn(),
+  persistState: vi.fn()
 }))
 
 vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
@@ -503,5 +536,103 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
       await waitFor(() => expect(screen.getByLabelText('Global actions')).toBeInTheDocument())
       expect(document.querySelector('[data-mobile-chat-shell]')).toBeNull()
     }
+  })
+})
+
+// The mobile shell fixes (split collapse, palette New Project) are gated on
+// the mobile shell. At desktop width the layout must behave exactly as before:
+// a split goes to PaneRenderer whole, a fullscreen leaf keeps its own path, and
+// the palette keeps "Open Shortcut Menu" and does not gain "New Project".
+describe('WorkspaceLayout desktop parity for the mobile shell fixes', () => {
+  const leafA: LeafNode = {
+    type: 'leaf',
+    id: 'pane-a',
+    tabs: [{ type: 'git', id: 'git-a', cwd: '/demo' }],
+    activeTabId: 'git-a'
+  }
+  const leafB: LeafNode = {
+    type: 'leaf',
+    id: 'pane-b',
+    tabs: [{ type: 'git-history', id: 'git-history-b', cwd: '/demo' }],
+    activeTabId: 'git-history-b'
+  }
+  const splitRoot: SplitNode = {
+    type: 'split',
+    id: 'split-1',
+    direction: 'horizontal',
+    children: [leafA, leafB],
+    sizes: [50, 50]
+  }
+
+  const renderDesktop = (): void => {
+    viewportWidthRef.current = 1024
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tauriRef.current = false
+    projectRef.current = { id: 'p1', name: 'Demo', path: '/demo', color: 'blue', gitBranch: 'main' }
+    gitState.statuses = {}
+    gitState.selectedFile = null
+    gitState.commitContexts = {}
+    installMatchMediaStub()
+  })
+
+  afterEach(() => {
+    useWorkspaceStore.getState().resetLayout()
+    if (originalMatchMedia !== undefined) {
+      Object.defineProperty(window, 'matchMedia', originalMatchMedia)
+    }
+  })
+
+  it('passes a split tree to PaneRenderer whole (no collapse on desktop)', async () => {
+    useWorkspaceStore.setState({
+      root: splitRoot,
+      activePaneId: 'pane-b',
+      fullscreenPaneId: null,
+      agentLauncherPaneId: null
+    })
+    renderDesktop()
+
+    await waitFor(() => expect(document.querySelector('[data-pane-renderer-stub]')).toBeTruthy())
+    const stubs = document.querySelectorAll('[data-pane-renderer-stub]')
+    expect(stubs).toHaveLength(1)
+    expect(stubs[0]).toHaveAttribute('data-node-id', 'split-1')
+    expect(stubs[0]).toHaveAttribute('data-node-type', 'split')
+  })
+
+  it('still renders the fullscreen leaf alone when a pane is fullscreen on desktop', async () => {
+    useWorkspaceStore.setState({
+      root: splitRoot,
+      activePaneId: 'pane-a',
+      fullscreenPaneId: 'pane-a',
+      agentLauncherPaneId: null
+    })
+    renderDesktop()
+
+    await waitFor(() => expect(document.querySelector('[data-pane-renderer-stub]')).toBeTruthy())
+    const stub = document.querySelector('[data-pane-renderer-stub]')
+    expect(stub).toHaveAttribute('data-node-id', 'pane-a')
+    expect(stub).toHaveAttribute('data-node-type', 'leaf')
+  })
+
+  it('keeps Open Shortcut Menu wired and New Project off the desktop palette', async () => {
+    renderDesktop()
+
+    fireEvent.click(await screen.findByLabelText('Open projects'))
+
+    expect(
+      await screen.findByPlaceholderText('Search commands, projects, settings...')
+    ).toBeTruthy()
+    const palette = document.querySelector('[data-palette-shortcut-menu]')
+    expect(palette).toHaveAttribute('data-palette-shortcut-menu', 'wired')
+    expect(palette).toHaveAttribute('data-palette-new-project', 'absent')
   })
 })
