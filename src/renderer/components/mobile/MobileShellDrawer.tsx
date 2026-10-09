@@ -27,7 +27,12 @@ import {
   describeIsolationDetail,
   useChatIsolationContext
 } from '@/hooks/use-chat-isolation-context'
-import { setSheetFocusDestination, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
+import { returnFocusAfterConfirm } from '@/lib/confirm-focus-return'
+import {
+  holdSheetReturnTargets,
+  setSheetFocusDestination,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
@@ -75,9 +80,11 @@ interface MobileShellDrawerProps {
   canNewChat: boolean
   onNewChat: () => void
   onNewTerminal?: () => void
-  onCloseTerminal?: (terminalId: string, tabId: string) => void
+  /** Returns `true` only when the close opened the confirm (the drawer then hands off to it). */
+  onCloseTerminal?: (terminalId: string, tabId: string) => boolean
   onRenameTerminal?: (terminalId: string, name: string) => void
-  onCloseEditorTab?: (filePath: string) => void
+  /** Returns `true` only when the close opened the dirty-file confirm. */
+  onCloseEditorTab?: (filePath: string) => boolean
   /** Opens a git history tab in the active pane (desktop entry mirrors this). */
   onOpenGitHistory?: () => void
   /** Opens the project sheet (web only). */
@@ -174,6 +181,9 @@ export function MobileShellDrawer({
   const contentRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // The pending focus return of a hand-off to a close confirm; cancelled when
+  // the drawer unmounts first, or when a newer hand-off replaces it.
+  const cancelFocusReturnRef = useRef<(() => void) | null>(null)
   const searchId = useId()
   const openHeadingId = useId()
   const historyHeadingId = useId()
@@ -188,6 +198,8 @@ export function MobileShellDrawer({
     if (!open) setQuery('')
   }, [open])
 
+  useEffect(() => () => cancelFocusReturnRef.current?.(), [])
+
   // A row took the user somewhere: focus follows to the destination (resolved
   // at close time). A hand-off (another overlay opening) or a dismissal sets
   // nothing, so focus stays in the overlay that took it, else returns to the opener.
@@ -197,6 +209,18 @@ export function MobileShellDrawer({
   }
   const closeForHandoff = (): void => onOpenChange(false)
 
+  // A row close that raised a confirm (a terminal, a dirty file): the confirm
+  // would render under this drawer's overlay, so the drawer gets out of its
+  // way (a hand-off, like New chat). The confirm never takes or returns focus,
+  // and the close consumes the recorded opener, so read it first and put focus
+  // back on it once the confirm is gone.
+  const onConfirmOpened = (): void => {
+    const restoreFocus = holdSheetReturnTargets(DRAWER_FOCUS_ID)
+    closeForHandoff()
+    cancelFocusReturnRef.current?.()
+    cancelFocusReturnRef.current = returnFocusAfterConfirm(restoreFocus)
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -204,6 +228,14 @@ export function MobileShellDrawer({
         side="left"
         id="mobile-shell-drawer"
         className="flex w-[min(82vw,20rem)] flex-col gap-0 p-0"
+        onEscapeKeyDown={(event) => {
+          // Radix hears Escape on the document before the rename field does and
+          // would dismiss the drawer. Inside a row's rename field the key only
+          // cancels the rename (its own handler returns focus to the pencil).
+          if (event.target instanceof Element && event.target.closest('[data-open-rename-input]')) {
+            event.preventDefault()
+          }
+        }}
         onOpenAutoFocus={(event) => {
           // Land on the active Open row (or the title), never the search: the
           // on-screen keyboard must not rise just because the drawer opened.
@@ -269,7 +301,11 @@ export function MobileShellDrawer({
         </div>
 
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <h2 id={openHeadingId} className="label-group px-3 pb-1 pt-3 text-muted-foreground">
+          <h2
+            id={openHeadingId}
+            tabIndex={-1}
+            className="label-group px-3 pb-1 pt-3 text-muted-foreground"
+          >
             Open
           </h2>
           <MobileDrawerOpenSection
@@ -280,6 +316,7 @@ export function MobileShellDrawer({
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
+            onConfirmOpened={onConfirmOpened}
           />
 
           <h2

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { type ComponentProps, type MutableRefObject, useEffect, useRef, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AskUserQuestion } from '@/components/chat/AskUserQuestion'
+import { logFrontendError } from '@/lib/log-api'
 import { _resetSheetFocusReturnForTests, recordSheetOpener } from '@/lib/sheet-focus-return'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
 import {
@@ -13,6 +14,7 @@ import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
+import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import type { Project } from '@/types/project'
@@ -394,7 +396,7 @@ describe('MobileShellDrawer shell', () => {
       within(dialog).getByRole('button', { name: 'Settings' }),
       within(dialog).getByRole('button', { name: 'Snapshots' }),
       within(dialog).getByRole('button', { name: 'Git history' }),
-      within(dialog).getByText('Connected')
+      within(dialog).getByText(`Connected · ${window.location.host}`)
     ]
     for (let i = 1; i < inOrder.length; i++) {
       expect(
@@ -634,10 +636,27 @@ describe('MobileShellDrawer footer', () => {
     const { dialog } = await openDrawer()
 
     const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent('Connected')
+    expect(status).toHaveTextContent(`Connected · ${window.location.host}`)
     expect(status).toHaveClass('text-2xs', 'text-muted-foreground')
     expect(status).not.toHaveAttribute('aria-label')
     expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-connection')
+  })
+
+  it('names the host this client talks to, one text node that may wrap', async () => {
+    const { dialog } = await openDrawer()
+
+    const label = within(dialog).getByText(`Connected · ${window.location.host}`)
+    expect(window.location.host).not.toBe('')
+    expect(label.childNodes).toHaveLength(1)
+    expect(label).toHaveClass('min-w-0', 'break-words')
+  })
+
+  it('shows no connection status on Tauri, as before', async () => {
+    tauriRef.current = true
+    const { dialog } = await openDrawer()
+
+    expect(within(dialog).queryByRole('status')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(/Connected/)).not.toBeInTheDocument()
   })
 
   it('names the degraded channel and warns', async () => {
@@ -646,6 +665,7 @@ describe('MobileShellDrawer footer', () => {
 
     const status = within(dialog).getByRole('status')
     expect(status).toHaveTextContent('Control channel: reconnecting')
+    expect(status).not.toHaveTextContent(window.location.host)
     expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-warning')
   })
 
@@ -656,6 +676,153 @@ describe('MobileShellDrawer footer', () => {
     const status = within(dialog).getByRole('status')
     expect(status).toHaveTextContent('Terminal channel: disconnected')
     expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-destructive')
+  })
+})
+
+describe('MobileShellDrawer close confirm hand-off', () => {
+  beforeEach(() => {
+    useOverlayStackStore.setState({ stack: [] })
+    seedTabs(
+      [
+        { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+        { type: 'editor', id: 'edit-/p/a.ts', filePath: '/p/a.ts' }
+      ],
+      null
+    )
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+  })
+
+  afterEach(() => {
+    useOverlayStackStore.setState({ stack: [] })
+    document.querySelectorAll('[data-sibling-dialog]').forEach((node) => {
+      node.remove()
+    })
+  })
+
+  /**
+   * Stands in for `ConfirmDialog`: it registers on the overlay stack, keeps a
+   * `data-sibling-dialog` root in the DOM, and never takes focus on its own
+   * (a tap on Cancel focuses Cancel; closing it drops focus to <body>).
+   */
+  function openFakeConfirm(): { cancel: () => void } {
+    const root = document.createElement('div')
+    root.setAttribute('data-sibling-dialog', '')
+    const cancelButton = document.createElement('button')
+    root.appendChild(cancelButton)
+    document.body.appendChild(root)
+    act(() => useOverlayStackStore.getState().registerOverlay('confirm-dialog:test', () => {}))
+    cancelButton.focus()
+    return {
+      cancel: () =>
+        act(() => {
+          useOverlayStackStore.getState().unregisterOverlay('confirm-dialog:test')
+          root.remove()
+        })
+    }
+  }
+
+  it('makes the Open heading programmatically focusable, like History', async () => {
+    const { dialog } = await openDrawer()
+
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'Open' })).toHaveAttribute(
+      'tabindex',
+      '-1'
+    )
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'History' })).toHaveAttribute(
+      'tabindex',
+      '-1'
+    )
+  })
+
+  it('closes when closing a terminal opened the confirm, and Cancel leaves focus on ☰', async () => {
+    const onCloseTerminal = vi.fn(() => true)
+    const { dialog, menu } = await openDrawer({ onCloseTerminal })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
+
+    expect(onCloseTerminal).toHaveBeenCalledWith('t1', 'term-t1')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    const confirm = openFakeConfirm()
+    confirm.cancel()
+
+    await waitFor(() => expect(menu).toHaveFocus())
+  })
+
+  it('returns focus to the recorded opener, not always ☰', async () => {
+    const onCloseTerminal = vi.fn(() => true)
+    render(<Harness onCloseTerminal={onCloseTerminal} />)
+    const second = screen.getByRole('button', { name: 'Second opener' })
+    fireEvent.click(second)
+    const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    const confirm = openFakeConfirm()
+    confirm.cancel()
+
+    await waitFor(() => expect(second).toHaveFocus())
+  })
+
+  it('closes for a dirty editor row whose close opened the confirm', async () => {
+    const onCloseEditorTab = vi.fn(() => true)
+    const { dialog, menu } = await openDrawer({ onCloseEditorTab })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close a.ts' }))
+
+    expect(onCloseEditorTab).toHaveBeenCalledWith('/p/a.ts')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    openFakeConfirm().cancel()
+    await waitFor(() => expect(menu).toHaveFocus())
+  })
+
+  it('does not take focus back when something else already holds it', async () => {
+    const onCloseTerminal = vi.fn(() => true)
+    const { dialog } = await openDrawer({ onCloseTerminal })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    const confirm = openFakeConfirm()
+    // The confirm's action opened another dialog that took focus.
+    const next = document.createElement('input')
+    document.body.appendChild(next)
+    confirm.cancel()
+    next.focus()
+
+    await settle(120)
+    expect(next).toHaveFocus()
+    next.remove()
+  })
+
+  it('stops waiting for the confirm when the drawer unmounts first', async () => {
+    const onCloseTerminal = vi.fn(() => true)
+    const { dialog, unmount } = await openDrawer({ onCloseTerminal })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    vi.mocked(logFrontendError).mockClear()
+
+    unmount()
+    // A cancelled watcher never sees the confirm, so it neither restores focus
+    // to the gone opener nor logs a missed target.
+    openFakeConfirm().cancel()
+
+    await settle(120)
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a terminal closed without a confirm', 'Close zsh', { onCloseTerminal: vi.fn(() => false) }],
+    ['a clean editor tab', 'Close a.ts', { onCloseEditorTab: vi.fn(() => false) }],
+    ['a terminal when no close handler is threaded', 'Close zsh', {}]
+  ])('stays open for %s, so rows can be closed in a row', async (_label, closeName, props) => {
+    const { dialog } = await openDrawer(props)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: closeName }))
+    await settle()
+
+    expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(dialog)
+    expect(useOverlayStackStore.getState().stack.map((entry) => entry.id)).not.toContain(
+      'confirm-dialog:test'
+    )
   })
 })
 
@@ -932,6 +1099,25 @@ describe('MobileShellDrawer focus', () => {
 
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
       await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('keeps the drawer open when Escape ends a terminal rename, and focuses its Rename button', async () => {
+      seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
+      terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+      const onRenameTerminal = vi.fn()
+      const { dialog } = await openDrawer({ onRenameTerminal })
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Rename zsh' }))
+      const input = within(dialog).getByRole('textbox', { name: 'Rename zsh' })
+      fireEvent.change(input, { target: { value: 'dev server' } })
+      // Radix listens for Escape on the document and would dismiss the sheet:
+      // inside a rename field the key only cancels the rename.
+      fireEvent.keyDown(input, { key: 'Escape' })
+
+      expect(within(dialog).queryByRole('textbox', { name: 'Rename zsh' })).toBeNull()
+      expect(onRenameTerminal).not.toHaveBeenCalled()
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toHaveAttribute('data-state', 'open')
+      expect(within(dialog).getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
     })
 
     it('returns to ☰ from the built-in close', async () => {

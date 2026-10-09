@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { logFrontendError } from '@/lib/log-api'
 import {
   _resetSheetFocusReturnForTests,
+  holdSheetReturnTargets,
   recordSheetOpener,
   setSheetFocusDestination,
   sheetCloseAutoFocus
@@ -547,5 +548,51 @@ describe('sheet focus return', () => {
     opener.remove()
     sheetCloseAutoFocus('mobile-drawer')(closeEvent())
     expect(document.activeElement).toBe(document.body)
+  })
+
+  describe('holdSheetReturnTargets', () => {
+    it('keeps the opener after the close consumed it, and focuses it on demand', () => {
+      const opener = mount<HTMLButtonElement>('button')
+      recordSheetOpener('mobile-drawer', opener)
+      const restore = holdSheetReturnTargets('mobile-drawer')
+
+      // The drawer's own close handler consumes the record.
+      sheetCloseAutoFocus('mobile-drawer')(closeEvent())
+      opener.blur()
+      expect(document.activeElement).toBe(document.body)
+
+      expect(restore()).toBe(true)
+      expect(document.activeElement).toBe(opener)
+    })
+
+    it('falls back when the opener is gone, and reports a miss when both are', () => {
+      const fallback = mount<HTMLButtonElement>('button')
+      const opener = mount<HTMLButtonElement>('button')
+      recordSheetOpener('mobile-drawer', opener, fallback)
+      const restore = holdSheetReturnTargets('mobile-drawer')
+
+      opener.remove()
+      expect(restore()).toBe(true)
+      expect(document.activeElement).toBe(fallback)
+
+      fallback.blur()
+      fallback.remove()
+      expect(restore()).toBe(false)
+      expect(document.activeElement).toBe(document.body)
+    })
+
+    it('never lands on an editor or terminal surface', () => {
+      const terminal = mount<HTMLDivElement>('div')
+      terminal.className = 'xterm'
+      const inside = mount<HTMLButtonElement>('button', terminal)
+      recordSheetOpener('mobile-drawer', inside)
+
+      expect(holdSheetReturnTargets('mobile-drawer')()).toBe(false)
+      expect(document.activeElement).toBe(document.body)
+    })
+
+    it('holds nothing when no opener was recorded', () => {
+      expect(holdSheetReturnTargets('mobile-drawer')()).toBe(false)
+    })
   })
 })
