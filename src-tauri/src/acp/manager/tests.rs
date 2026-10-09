@@ -420,6 +420,70 @@ async fn session_resume_reopen_preserves_omitted_fields() {
     );
 }
 
+fn legacy_model_state() -> SessionModelState {
+    SessionModelState {
+        current_model_id: "legacy-1".to_string(),
+        available_models: vec![crate::acp::events::SessionModel {
+            model_id: "legacy-1".to_string(),
+            name: "Legacy One".to_string(),
+            description: None,
+        }],
+    }
+}
+
+/// Issue #822: a reopen whose result carries only the legacy `models` field
+/// surfaces that list in the outcome and marks the session read-only.
+#[tokio::test]
+async fn session_reopen_uses_legacy_models_and_marks_session_read_only() {
+    use crate::acp::legacy_models::WithLegacyModels;
+    let state = Mutex::new(DriverState::new());
+    let outcome = run_session_reopen("session/load", "sess-legacy", "/work", &state, async {
+        Ok::<_, agent_client_protocol::Error>(WithLegacyModels {
+            response: LoadSessionResponse::new(),
+            legacy: Some(legacy_model_state()),
+        })
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.models, Some(legacy_model_state()));
+    assert!(state.lock().is_legacy_models("sess-legacy"));
+    // Closing the session forgets the marker.
+    state.lock().remove_session_root("sess-legacy");
+    assert!(!state.lock().is_legacy_models("sess-legacy"));
+}
+
+/// Issue #822: an advertised Model config option beats the legacy list and
+/// clears a stale legacy marker from an earlier reopen of the same session.
+#[tokio::test]
+async fn session_reopen_config_model_option_wins_over_legacy_models() {
+    use crate::acp::legacy_models::WithLegacyModels;
+    use agent_client_protocol::schema::v1::{
+        SessionConfigOptionCategory, SessionConfigSelectOption,
+    };
+    let state = Mutex::new(DriverState::new());
+    state.lock().mark_legacy_models("sess-cfg".to_string());
+    let model_option = SessionConfigOption::select(
+        "model",
+        "Model",
+        "m1",
+        vec![SessionConfigSelectOption::new("m1", "Model 1")],
+    )
+    .category(SessionConfigOptionCategory::Model);
+    let expected = events::models_from_config_options(Some(std::slice::from_ref(&model_option)));
+    let outcome = run_session_reopen("session/resume", "sess-cfg", "/work", &state, async {
+        Ok::<_, agent_client_protocol::Error>(WithLegacyModels {
+            response: ResumeSessionResponse::new().config_options(vec![model_option]),
+            legacy: Some(legacy_model_state()),
+        })
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.models, expected);
+    assert!(!state.lock().is_legacy_models("sess-cfg"));
+}
+
 /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).
 /// `send_prompt`'s guard is a pure pre-check; assert its predicate here
 /// (the manager method needs a sink fan-out, but the guard runs first).

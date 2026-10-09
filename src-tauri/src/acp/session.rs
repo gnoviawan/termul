@@ -92,6 +92,10 @@ pub(crate) struct DriverState {
     /// not guaranteed). Caching it per session lets `set_model` target the
     /// agent's actual model selector id instead of hardcoding `"model"`.
     model_config_ids: HashMap<String, String>,
+    /// Sessions whose model list came only from the legacy `models` field
+    /// (issue #822). Such lists are read-only: `set_model` has no protocol path
+    /// for them, so it fails fast instead of sending a bogus config-option call.
+    legacy_model_sessions: HashSet<String>,
     /// Per-session replay windows for in-flight `session/load` /
     /// `session/resume` requests (story 3: replay contract). While a window is
     /// open, agent-replayed history arrives as `session/update` notifications
@@ -436,6 +440,7 @@ impl DriverState {
         self.session_roots.remove(session_id);
         self.ephemeral_sessions.remove(session_id);
         self.model_config_ids.remove(session_id);
+        self.legacy_model_sessions.remove(session_id);
         self.promotable_sessions.remove(session_id);
     }
 
@@ -444,6 +449,21 @@ impl DriverState {
     /// are loaded, resumed, or refreshed via `session/set_config_option`.
     pub(crate) fn set_model_config_id(&mut self, session_id: String, config_id: String) {
         self.model_config_ids.insert(session_id, config_id);
+    }
+
+    /// Mark a session whose models came only from the legacy `models` field.
+    pub(crate) fn mark_legacy_models(&mut self, session_id: String) {
+        self.legacy_model_sessions.insert(session_id);
+    }
+
+    /// Clear the legacy marker (the session now resolves to config-option models).
+    pub(crate) fn clear_legacy_models(&mut self, session_id: &str) {
+        self.legacy_model_sessions.remove(session_id);
+    }
+
+    /// Whether the session's model list is legacy-only (read-only).
+    pub(crate) fn is_legacy_models(&self, session_id: &str) -> bool {
+        self.legacy_model_sessions.contains(session_id)
     }
 
     /// The cached Model-selector configId for a session, if one was advertised.
