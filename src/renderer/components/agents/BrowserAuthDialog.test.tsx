@@ -7,6 +7,7 @@ const {
   mockToastError,
   mockCompleteBrowserAuth,
   mockClearPendingBrowserOpen,
+  mockIsTauriContext,
   dialogStoreState
 } = vi.hoisted(() => ({
   mockDeliverAuthRedirect: vi.fn(),
@@ -14,6 +15,7 @@ const {
   mockToastError: vi.fn(),
   mockCompleteBrowserAuth: vi.fn(),
   mockClearPendingBrowserOpen: vi.fn(),
+  mockIsTauriContext: vi.fn(() => false),
   dialogStoreState: {
     pendingBrowserOpen: {} as Record<string, string>,
     configToLiveAgent: {} as Record<string, string>,
@@ -32,6 +34,14 @@ vi.mock('@/lib/acp-api', () => ({
 vi.mock('@/lib/api', () => ({
   openerApi: { openUrlWithSystemBrowser: mockOpenUrl }
 }))
+
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/tauri-runtime')>()
+  return {
+    ...actual,
+    isTauriContext: () => mockIsTauriContext()
+  }
+})
 
 vi.mock('@/stores/acp-store', () => {
   // Build state lazily so tests can reassign dialogStoreState fields.
@@ -98,6 +108,7 @@ describe('BrowserAuthDialog', () => {
     mockToastError.mockClear()
     mockCompleteBrowserAuth.mockClear()
     mockClearPendingBrowserOpen.mockClear()
+    mockIsTauriContext.mockReturnValue(false)
     dialogStoreState.pendingBrowserOpen = {}
     dialogStoreState.configToLiveAgent = {}
     dialogStoreState.agentConfigs = []
@@ -209,6 +220,19 @@ describe('BrowserAuthDialog', () => {
 })
 
 describe('BrowserAuthDialogHost', () => {
+  beforeEach(() => {
+    mockOpenUrl.mockClear()
+    mockClearPendingBrowserOpen.mockClear()
+    mockIsTauriContext.mockReturnValue(false)
+    dialogStoreState.pendingBrowserOpen = {}
+    dialogStoreState.configToLiveAgent = {}
+    dialogStoreState.agentConfigs = []
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
   it('opens Factory login even before the registry config is saved', async () => {
     dialogStoreState.pendingBrowserOpen = { 'factory-agent': AUTH_URL }
     dialogStoreState.configToLiveAgent = {
@@ -227,6 +251,26 @@ describe('BrowserAuthDialogHost', () => {
     render(<BrowserAuthDialogHost />)
     expect(screen.getByText('Finish signing in to Devin')).toBeInTheDocument()
     expect(screen.getByText(AUTH_URL)).toBeInTheDocument()
+  })
+
+  it('auto-opens the system browser for every agent on desktop', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    dialogStoreState.pendingBrowserOpen = { 'agent-1': AUTH_URL }
+    dialogStoreState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
+    dialogStoreState.agentConfigs = [{ id: 'cfg-1', name: 'Google Antigravity' }]
+    render(<BrowserAuthDialogHost />)
+    await waitFor(() => expect(mockOpenUrl).toHaveBeenCalledWith(AUTH_URL))
+    expect(screen.getByText('Finish signing in to Google Antigravity')).toBeInTheDocument()
+    expect(screen.getByText(/Waiting for sign-in in your browser/)).toBeInTheDocument()
+  })
+
+  it('keeps paste-back copy for other agents on the web client', () => {
+    dialogStoreState.pendingBrowserOpen = { 'agent-1': AUTH_URL }
+    dialogStoreState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
+    dialogStoreState.agentConfigs = [{ id: 'cfg-1', name: 'Google Antigravity' }]
+    render(<BrowserAuthDialogHost />)
+    expect(mockOpenUrl).not.toHaveBeenCalled()
+    expect(screen.getByText(/this machine cannot open a browser/)).toBeInTheDocument()
   })
 
   it('falls back to a generic name and clears the entry on dismiss', () => {
