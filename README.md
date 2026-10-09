@@ -136,6 +136,26 @@ curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/main/scripts/insta
 
 Windows users should install the `.exe` or `.msi` from [GitHub Releases](https://github.com/gnoviawan/termul/releases). Manual DMG downloads in a browser may still hit Gatekeeper, so macOS users should prefer Homebrew or curl.
 
+### Install on a server (VPS)
+
+Linux x86_64 only. This installs the headless `termul-server` (the browser UI, without the desktop app), checks the download, and opens a short setup wizard.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/dev/scripts/install-server.sh | bash
+```
+
+Remove it later (saved sessions and the login token stay unless you agree to delete them):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gnoviawan/termul/dev/scripts/uninstall-server.sh | bash
+```
+
+The wizard always runs in the terminal. Press Enter to keep each suggested answer. `TERMUL_INSTALL_YES=1` only skips the installer's own yes/no question; it does not pick a host or port for you. `TERMUL_VERSION=v0.4.18` installs that release instead of the latest one. Running the installer again updates the program and restarts it if it is already running.
+
+macOS and ARM stop with an error. On a Mac, use the desktop installer above.
+
+When the wizard asks for a bind address, keep `127.0.0.1` and open an SSH tunnel from your computer. If you choose `0.0.0.0`, put HTTPS in front of the server (a reverse proxy) instead of leaving plain HTTP on the public internet. `TERMUL_PURGE=1` on the uninstaller deletes the saved sessions, store, and token without asking.
+
 ## 🚀 Getting Started
 
 ### Prerequisites

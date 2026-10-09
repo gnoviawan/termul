@@ -148,6 +148,16 @@ jobs:
       - name: Test
         run: bun run test
 
+      - name: Shell scripts (bash -n, shellcheck, bats)
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y shellcheck
+          bash -n scripts/install.sh
+          bash -n scripts/install-server.sh
+          bash -n scripts/uninstall-server.sh
+          shellcheck scripts/install-server.sh scripts/uninstall-server.sh
+          bun run test:shell
+
   rust-checks:
     name: Rust Checks
     if: github.event.action != 'edited' || github.event.changes.base != null
