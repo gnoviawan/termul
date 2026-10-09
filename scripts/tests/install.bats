@@ -166,6 +166,10 @@ command chmod \"\$@\"
 @test "require_tools fails early and names missing tools before download" {
   stub_uname Darwin arm64
   load_install
+  # Stubs are `#!/usr/bin/env bash` scripts, so bash must stay resolvable
+  # once PATH is narrowed to the stub dir; nothing else from the system leaks in.
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v bash)" >"$TERMUL_TEST_STUB_BIN/bash"
+  chmod +x "$TERMUL_TEST_STUB_BIN/bash"
   local saved_path="$PATH"
   PATH="$TERMUL_TEST_STUB_BIN"
 
