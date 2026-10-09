@@ -52,9 +52,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
-    self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
-    AgentSwitchEvent, AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent,
-    SessionClosedEvent, SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
+    self, AgentDisconnectedEvent, AgentSpawnedEvent, AgentSwitchEvent, AuthMethodInfo,
+    ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent, SessionCreatedEvent,
+    SessionInfoUpdateEvent, SessionModelState,
 };
 use crate::acp::session::{DriverState, ReopenReservation, ReplayWindowGuard};
 use crate::acp::session_persistence::{

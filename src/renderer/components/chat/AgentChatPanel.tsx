@@ -880,7 +880,9 @@ export function AgentChatPanel({
             cwd={session.cwd}
             toolCalls={toolCalls}
             forceCollapsed={compactDock}
-            onOpenGitChanges={isMobileShell ? () => openGitSheet(session.cwd) : undefined}
+            onOpenGitChanges={
+              isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
+            }
           />
           <ChatInputBar
             session={composerSession ?? session}

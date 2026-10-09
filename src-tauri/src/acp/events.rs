@@ -637,6 +637,96 @@ pub struct PromptCompleteEvent {
     pub turn_id: Option<String>,
 }
 
+/// An error flattened for the manager's `Err(String)` / event boundaries while
+/// keeping the JSON-RPC `code` and `data` of an `agent_client_protocol::Error`.
+///
+/// `message` is exactly the prior `Error::to_string()` (`Display`, which already
+/// appends pretty `data`), so user-visible text is unchanged. `code` / `data`
+/// are `None` for non-RPC failures (timeouts, flush failures, plain strings).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcpErrorDetail {
+    pub message: String,
+    pub code: Option<i32>,
+    pub data: Option<serde_json::Value>,
+}
+
+impl From<&agent_client_protocol::Error> for AcpErrorDetail {
+    fn from(error: &agent_client_protocol::Error) -> Self {
+        Self {
+            message: error.to_string(),
+            code: Some(i32::from(error.code)),
+            data: error.data.clone(),
+        }
+    }
+}
+
+impl From<agent_client_protocol::Error> for AcpErrorDetail {
+    fn from(error: agent_client_protocol::Error) -> Self {
+        Self::from(&error)
+    }
+}
+
+impl From<String> for AcpErrorDetail {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            code: None,
+            data: None,
+        }
+    }
+}
+
+impl AcpErrorDetail {
+    /// Replace the message with a generic one and drop the structured
+    /// `code` / `data` (used when failure details must not reach the renderer).
+    #[must_use]
+    pub fn masked(self, generic_message: &str) -> Self {
+        Self {
+            message: generic_message.to_string(),
+            code: None,
+            data: None,
+        }
+    }
+
+    /// Build the `acp:agent_error` payload for this error.
+    #[must_use]
+    pub fn into_agent_error(
+        self,
+        agent_id: AgentId,
+        session_id: Option<SessionId>,
+    ) -> AgentErrorEvent {
+        AgentErrorEvent {
+            agent_id,
+            session_id,
+            message: self.message,
+            code: self.code,
+            data: self.data,
+        }
+    }
+
+    /// Build the `acp:agent_crashed` payload for this error.
+    #[must_use]
+    pub fn into_agent_crashed(
+        self,
+        agent_id: AgentId,
+        session_id: Option<SessionId>,
+    ) -> AgentCrashedEvent {
+        AgentCrashedEvent {
+            agent_id,
+            session_id,
+            message: self.message,
+            code: self.code,
+            data: self.data,
+        }
+    }
+}
+
+impl std::fmt::Display for AcpErrorDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 /// `acp:agent_error`
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -645,6 +735,14 @@ pub struct AgentErrorEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     pub message: String,
+    /// JSON-RPC error `code` when the failure is an agent RPC error; absent
+    /// on the wire for non-RPC failures (timeouts, flush failures, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    /// JSON-RPC error `data` (already part of `message` via `Display`, kept
+    /// structured here); absent on the wire when the error carried none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 /// `acp:agent_crashed` (Story 1.9 FR26)
@@ -662,6 +760,13 @@ pub struct AgentCrashedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     pub message: String,
+    /// JSON-RPC error `code` of the connection-ending error, when it was an
+    /// RPC error. Absent on the wire otherwise (and for masked failures).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    /// JSON-RPC error `data` of the connection-ending error, when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 /// `acp:agent_disconnected`

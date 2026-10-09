@@ -19,7 +19,11 @@ vi.mock('@/stores/acp-store', () => ({
 
 import { AskUserQuestion } from './AskUserQuestion'
 import { PermissionPrompt } from './PermissionPrompt'
-import { useApprovalDock } from './use-approval-dock'
+import {
+  findQuestionFocusTarget,
+  findVisibleQuestionFocusTarget,
+  useApprovalDock
+} from './use-approval-dock'
 
 function permission(requestId: string): PendingPermission {
   return {
@@ -356,6 +360,101 @@ describe('useApprovalDock', () => {
 
       expect(document.body).toHaveFocus()
       expect(logFrontendError).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('question focus target', () => {
+  const noOptions = (questionId: string): PendingQuestion =>
+    ({ ...question(questionId), options: [] }) as PendingQuestion
+
+  it('names the first option, not the pager or Cancel that precede it in the stepper', () => {
+    const { container } = render(<AskUserQuestion question={question('q1')} />)
+
+    // The real QuestionStepper markup: previous, next and cancel come first.
+    const order = Array.from(container.querySelectorAll('button')).map(
+      (button) => button.getAttribute('aria-label') ?? button.textContent
+    )
+    expect(order.slice(0, 3)).toEqual(['Previous question', 'Next question', 'Cancel'])
+
+    const target = findQuestionFocusTarget(container)
+    expect(target).toBe(screen.getByRole('button', { name: /Plan A/ }))
+    expect(target).not.toBe(screen.getByRole('button', { name: 'Cancel' }))
+  })
+
+  it('falls back to Cancel, the first enabled button, when the question has no options', () => {
+    const { container } = render(<AskUserQuestion question={noOptions('q1')} />)
+
+    // The pager is disabled at "1 of 1", so Cancel is the first enabled button.
+    expect(screen.getByRole('button', { name: 'Previous question' })).toBeDisabled()
+    expect(findQuestionFocusTarget(container)).toBe(screen.getByRole('button', { name: 'Cancel' }))
+  })
+
+  it('finds nothing when no question is open', () => {
+    const { container } = render(<PermissionPrompt permission={permission('r1')} />)
+
+    expect(findQuestionFocusTarget(container)).toBeNull()
+    expect(findQuestionFocusTarget(null)).toBeNull()
+  })
+
+  describe('findVisibleQuestionFocusTarget', () => {
+    it('finds the first option of a question in the visible chat tab', () => {
+      render(
+        <>
+          <div data-chat-tab-state="hidden" />
+          <div data-chat-tab-state="visible">
+            <AskUserQuestion question={question('q1')} />
+          </div>
+        </>
+      )
+
+      expect(findVisibleQuestionFocusTarget()).toBe(screen.getByRole('button', { name: /Plan A/ }))
+    })
+
+    it('ignores a question in a hidden chat tab', () => {
+      render(
+        <>
+          <div data-chat-tab-state="hidden">
+            <AskUserQuestion question={question('q-hidden')} />
+          </div>
+          <div data-chat-tab-state="visible" />
+        </>
+      )
+
+      expect(findVisibleQuestionFocusTarget()).toBeNull()
+    })
+
+    it('prefers the visible tab when another tab also has a question open', () => {
+      render(
+        <>
+          <div data-chat-tab-state="hidden">
+            <AskUserQuestion question={question('q-hidden')} />
+          </div>
+          <div data-chat-tab-state="visible">
+            <AskUserQuestion question={noOptions('q-visible')} />
+          </div>
+        </>
+      )
+
+      // The visible tab's question has no options, so its Cancel is the target:
+      // the hidden tab's first option (which comes first in the document) is not.
+      expect(findVisibleQuestionFocusTarget()).toBe(
+        document
+          .querySelector('[data-chat-tab-state="visible"]')
+          ?.querySelector('button[aria-label="Cancel"]')
+      )
+    })
+
+    it('finds nothing when the visible tab has no question, or no chat tab is mounted', () => {
+      const { unmount } = render(
+        <div data-chat-tab-state="visible">
+          <PermissionPrompt permission={permission('r1')} />
+        </div>
+      )
+      expect(findVisibleQuestionFocusTarget()).toBeNull()
+
+      unmount()
+      expect(findVisibleQuestionFocusTarget()).toBeNull()
     })
   })
 })

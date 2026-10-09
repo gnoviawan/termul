@@ -8,12 +8,17 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
+import {
+  SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME,
+  SHEET_ROW_CLASS_NAME,
+  type ShellNavigationActions,
+  visibleNavigationRows
+} from './mobile-sheet-rows'
 
 export const MOBILE_TERMINAL_ACTIONS_SHEET_ID = 'mobile-terminal-actions-sheet'
 
-const ROW_CLASS_NAME = 'flex min-h-11 w-full items-center gap-2 rounded-md px-2 text-sm'
-
-interface MobileTerminalActionsSheetProps {
+// No New terminal row: in a terminal the header ✎ already is New terminal.
+interface MobileTerminalActionsSheetProps extends Omit<ShellNavigationActions, 'onNewTerminal'> {
   open: boolean
   onOpenChange: (open: boolean) => void
   terminalId: string
@@ -22,9 +27,9 @@ interface MobileTerminalActionsSheetProps {
   name: string
   /** Exit code of the last command; the description shows only when it is a number. */
   lastExitCode?: number | null
-  /** Returns focus per the shell's focus rules (see `useSheetCloseFocus`). */
+  /** Returns focus per the shell's registry (`sheetCloseAutoFocus`, `lib/sheet-focus-return.ts`). */
   onCloseAutoFocus: (event: Event) => void
-  /** Marks that a row was chosen, so focus lands on the destination title. */
+  /** Called when a row was chosen: the shell sets the destination title as the focus target. */
   onItemChosen: () => void
   /** Each row renders only when its callback is given. */
   onRenameTerminal?: (terminalId: string, name: string) => void
@@ -35,8 +40,10 @@ interface MobileTerminalActionsSheetProps {
 
 /**
  * Terminal ⋯ bottom sheet: rename (the inline input moved here), restart,
- * command history and close. The drawer keeps its own rename pencil. Rows use
- * the `MobileFileExplorer` action-row pattern at 44px.
+ * command history, the shell navigation rows the header ⋯ sheet offers (Git
+ * changes, Files, Command palette, Project settings) and close. The drawer
+ * keeps its own rename pencil. Rows use the `MobileFileExplorer` action-row
+ * pattern at 44px.
  */
 export function MobileTerminalActionsSheet({
   open,
@@ -50,7 +57,8 @@ export function MobileTerminalActionsSheet({
   onRenameTerminal,
   onRestartTerminal,
   onOpenCommandHistory,
-  onCloseTerminal
+  onCloseTerminal,
+  ...navigation
 }: MobileTerminalActionsSheetProps): React.JSX.Element {
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState('')
@@ -91,6 +99,9 @@ export function MobileTerminalActionsSheet({
   }
 
   const hasExitCode = typeof lastExitCode === 'number'
+  // The same rows, gates and order as the header ⋯ sheet; each renders only
+  // when its callback is given.
+  const navigationRows = visibleNavigationRows(navigation)
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -145,7 +156,7 @@ export function MobileTerminalActionsSheet({
           ) : (
             <button
               type="button"
-              className={`${ROW_CLASS_NAME} hover:bg-accent`}
+              className={`${SHEET_ROW_CLASS_NAME} hover:bg-accent`}
               onClick={startRename}
             >
               <Pencil size={16} />
@@ -155,7 +166,7 @@ export function MobileTerminalActionsSheet({
         {onRestartTerminal && (
           <button
             type="button"
-            className={`${ROW_CLASS_NAME} hover:bg-accent`}
+            className={`${SHEET_ROW_CLASS_NAME} hover:bg-accent`}
             onClick={choose(() => onRestartTerminal(terminalId))}
           >
             <RotateCcw size={16} />
@@ -165,22 +176,37 @@ export function MobileTerminalActionsSheet({
         {onOpenCommandHistory && (
           <button
             type="button"
-            className={`${ROW_CLASS_NAME} hover:bg-accent`}
+            className={`${SHEET_ROW_CLASS_NAME} hover:bg-accent`}
             onClick={choose(onOpenCommandHistory)}
           >
             <History size={16} />
             Command history
           </button>
         )}
-        {onCloseTerminal && (
+        {navigationRows.map(({ label, Icon, run }) => (
           <button
+            key={label}
             type="button"
-            className={`${ROW_CLASS_NAME} text-destructive hover:bg-destructive/10`}
-            onClick={choose(() => onCloseTerminal(terminalId, tabId))}
+            className={`${SHEET_ROW_CLASS_NAME} hover:bg-accent`}
+            onClick={choose(run)}
           >
-            <X size={16} />
-            Close terminal
+            <Icon size={16} />
+            {label}
           </button>
+        ))}
+        {onCloseTerminal && (
+          <div
+            className={navigationRows.length > 0 ? SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME : undefined}
+          >
+            <button
+              type="button"
+              className={`${SHEET_ROW_CLASS_NAME} text-destructive hover:bg-destructive/10`}
+              onClick={choose(() => onCloseTerminal(terminalId, tabId))}
+            >
+              <X size={16} />
+              Close terminal
+            </button>
+          </div>
         )}
       </SheetContent>
     </Sheet>

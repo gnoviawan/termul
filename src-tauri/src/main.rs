@@ -1,6 +1,19 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// Set by build.rs for a release-profile build without `custom-protocol`. Lives
+// in the desktop entry point so it blocks only this binary, never the
+// `termul-server` binary or the library.
+#[cfg(termul_release_without_custom_protocol)]
+compile_error!(concat!(
+    "termul: refusing to build a release desktop binary without the `custom-protocol` feature.\n",
+    "Without it Tauri compiles with cfg(dev) and the app loads `devUrl` instead of the embedded\n",
+    "frontend, showing \"Could not connect to localhost\".\n",
+    "Fix: run `cargo build --release --features custom-protocol`, or build through the Tauri CLI\n",
+    "(`bun run build:tauri --no-bundle`).\n",
+    "For `cargo test/clippy --release` only, set TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1."
+));
+
 fn main() {
     // Self-spawned `--internal-mcp-plan-server` child: the agent spawns this
     // binary (current_exe) as the injected `McpServer::Stdio` for the

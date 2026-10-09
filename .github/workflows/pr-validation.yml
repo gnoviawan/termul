@@ -148,6 +148,9 @@ jobs:
       - name: Test
         run: bun run test
 
+      - name: Shell tests (installer and Homebrew cask)
+        run: bun run test:shell
+
   rust-checks:
     name: Rust Checks
     if: github.event.action != 'edited' || github.event.changes.base != null

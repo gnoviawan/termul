@@ -160,6 +160,8 @@ fn agent_crashed_serializes_camel_case() {
         agent_id: AgentId("a1".to_string()),
         session_id: None,
         message: "child exited: signal 11".to_string(),
+        code: None,
+        data: None,
     };
     let value = serde_json::to_value(&event).unwrap();
     assert_eq!(value["agentId"], "a1");
@@ -169,6 +171,10 @@ fn agent_crashed_serializes_camel_case() {
         "sessionId must be absent when None (byte-identical to pre-1.9)"
     );
     assert_eq!(EVENT_AGENT_CRASHED, "acp:agent_crashed");
+    assert!(
+        value.get("code").is_none() && value.get("data").is_none(),
+        "code/data must be absent when None (byte-identical to pre-821)"
+    );
 }
 
 /// Story 1.9 FR26: `AgentCrashedEvent` with a session id (turn-scoped
@@ -179,6 +185,8 @@ fn agent_crashed_serializes_session_id_when_set() {
         agent_id: AgentId("a1".to_string()),
         session_id: Some(SessionId::new("sess-1")),
         message: "turn timed out".to_string(),
+        code: None,
+        data: None,
     };
     let value = serde_json::to_value(&event).unwrap();
     assert_eq!(value["sessionId"], "sess-1");
@@ -655,7 +663,9 @@ fn elicitation_request_serializes_allow_other_and_field_metadata() {
     // Absent title/description and absent option description are omitted.
     assert!(value["fields"][1].get("title").is_none());
     assert!(value["fields"][1].get("description").is_none());
-    assert!(value["fields"][1]["options"][0].get("description").is_none());
+    assert!(value["fields"][1]["options"][0]
+        .get("description")
+        .is_none());
     assert_eq!(EVENT_ELICITATION_REQUEST, "acp:elicitation_request");
 }
 
@@ -688,8 +698,8 @@ fn elicitation_fields_drops_optional_unrepresentable_field() {
         }
     }))
     .expect("schema deserializes");
-    let fields =
-        elicitation_fields(&schema, false).expect("optional unknown variant must not cancel the request");
+    let fields = elicitation_fields(&schema, false)
+        .expect("optional unknown variant must not cancel the request");
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].name, "name");
     assert_eq!(fields[0].title.as_deref(), Some("Name"));
@@ -720,8 +730,8 @@ fn elicitation_fields_multi_enum_other_items_unrepresentable() {
         }
     }))
     .expect("schema deserializes");
-    let fields =
-        elicitation_fields(&schema, false).expect("optional unrepresentable multi-select is dropped");
+    let fields = elicitation_fields(&schema, false)
+        .expect("optional unrepresentable multi-select is dropped");
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].name, "name");
 }
@@ -765,7 +775,10 @@ fn elicitation_fields_dedupes_option_values() {
     .expect("schema deserializes");
     let fields = elicitation_fields(&schema, false).expect("oneOf is representable");
     assert_eq!(fields[0].options.len(), 1);
-    assert_eq!(fields[0].options[0].description.as_deref(), Some("Use the red color"));
+    assert_eq!(
+        fields[0].options[0].description.as_deref(),
+        Some("Use the red color")
+    );
 }
 
 /// A multi-select with an EMPTY option list is unrepresentable without
@@ -824,4 +837,125 @@ fn elicitation_fields_enum_takes_precedence_over_one_of() {
     let fields = elicitation_fields(&schema, false).expect("enum is representable");
     assert_eq!(fields[0].options.len(), 1);
     assert_eq!(fields[0].options[0].value, "plain");
+}
+
+/// gh-821: an RPC error carrying code + data flattens to the unchanged
+/// `Display` message plus the structured code/data.
+#[test]
+fn error_detail_from_rpc_error_with_data() {
+    let rpc = agent_client_protocol::Error::new(-32000, "auth")
+        .data(serde_json::json!({ "reason": "login" }));
+    let detail = AcpErrorDetail::from(&rpc);
+    assert_eq!(detail.message, rpc.to_string());
+    assert_eq!(detail.code, Some(-32000));
+    assert_eq!(detail.data, Some(serde_json::json!({ "reason": "login" })));
+}
+
+/// gh-821: an RPC error without data keeps the code and leaves data absent.
+#[test]
+fn error_detail_from_rpc_error_without_data() {
+    let rpc = agent_client_protocol::Error::internal_error();
+    let detail = AcpErrorDetail::from(rpc.clone());
+    assert_eq!(detail.message, rpc.to_string());
+    assert_eq!(detail.code, Some(-32603));
+    assert_eq!(detail.data, None);
+}
+
+/// gh-821: a plain string (timeouts, flush failures) carries no code/data.
+#[test]
+fn error_detail_from_string_has_no_code_or_data() {
+    let detail = AcpErrorDetail::from("turn idle timeout".to_string());
+    assert_eq!(detail.message, "turn idle timeout");
+    assert_eq!(detail.code, None);
+    assert_eq!(detail.data, None);
+    assert_eq!(detail.to_string(), "turn idle timeout");
+}
+
+/// gh-821: `agent_error` / `agent_crashed` serialize code + data when set and
+/// omit both keys (no `null`) when `None`.
+#[test]
+fn agent_error_and_crashed_serialize_code_and_data() {
+    let data = serde_json::json!({ "hint": "retry" });
+    let error = AgentErrorEvent {
+        agent_id: AgentId("a1".to_string()),
+        session_id: Some(SessionId::new("s1")),
+        message: "boom".to_string(),
+        code: Some(-32000),
+        data: Some(data.clone()),
+    };
+    let value = serde_json::to_value(&error).unwrap();
+    assert_eq!(value["code"], -32000);
+    assert_eq!(value["data"], data);
+    assert_eq!(value["message"], "boom");
+
+    let crashed = AgentCrashedEvent {
+        agent_id: AgentId("a1".to_string()),
+        session_id: None,
+        message: "boom".to_string(),
+        code: Some(-32603),
+        data: None,
+    };
+    let value = serde_json::to_value(&crashed).unwrap();
+    assert_eq!(value["code"], -32603);
+    assert!(value.get("data").is_none());
+
+    let bare = AgentErrorEvent {
+        agent_id: AgentId("a1".to_string()),
+        session_id: None,
+        message: "timeout".to_string(),
+        code: None,
+        data: None,
+    };
+    let value = serde_json::to_value(&bare).unwrap();
+    assert!(value.get("code").is_none());
+    assert!(value.get("data").is_none());
+}
+
+/// gh-821: the event builders carry the RPC code/data into both events with
+/// the `Display` message unchanged (the turn-error + teardown wiring).
+#[test]
+fn error_detail_builds_events_with_code_and_data() {
+    let rpc = agent_client_protocol::Error::new(-32000, "auth")
+        .data(serde_json::json!({ "reason": "login" }));
+    let detail = AcpErrorDetail::from(&rpc);
+
+    let error = detail
+        .clone()
+        .into_agent_error(AgentId("a1".to_string()), Some(SessionId::new("s1")));
+    let value = serde_json::to_value(&error).unwrap();
+    assert_eq!(value["message"], rpc.to_string());
+    assert_eq!(value["code"], -32000);
+    assert_eq!(value["data"]["reason"], "login");
+    assert_eq!(value["sessionId"], "s1");
+
+    let crashed = detail.into_agent_crashed(AgentId("a1".to_string()), None);
+    let value = serde_json::to_value(&crashed).unwrap();
+    assert_eq!(value["code"], -32000);
+    assert_eq!(value["data"]["reason"], "login");
+    assert!(value.get("sessionId").is_none());
+}
+
+/// gh-821: masking (Factory Droid) drops the structured code/data along with
+/// the message, so neither event leaks agent-supplied detail.
+#[test]
+fn masked_error_detail_drops_code_and_data() {
+    let rpc = agent_client_protocol::Error::new(-32000, "secret")
+        .data(serde_json::json!({ "token": "x" }));
+    let masked = AcpErrorDetail::from(&rpc).masked("generic failure");
+    assert_eq!(masked.message, "generic failure");
+    assert_eq!(masked.code, None);
+    assert_eq!(masked.data, None);
+
+    let value = serde_json::to_value(
+        masked
+            .clone()
+            .into_agent_crashed(AgentId("a1".to_string()), None),
+    )
+    .unwrap();
+    assert!(value.get("code").is_none());
+    assert!(value.get("data").is_none());
+    let value =
+        serde_json::to_value(masked.into_agent_error(AgentId("a1".to_string()), None)).unwrap();
+    assert!(value.get("code").is_none());
+    assert!(value.get("data").is_none());
 }

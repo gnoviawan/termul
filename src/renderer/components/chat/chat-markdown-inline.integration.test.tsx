@@ -93,6 +93,47 @@ describe('chat inline termul tags with real Streamdown', () => {
     expect(container.textContent).not.toContain('[blocked]')
   })
 
+  it.each([
+    ['[DESIGN.md](file:///C:/p/DESIGN.md)', 'C:/p/DESIGN.md', 'DESIGN.md'],
+    ['[x](file:///home/u/a.ts)', '/home/u/a.ts', 'x'],
+    ['[DESIGN.md](DESIGN.md)', 'DESIGN.md', 'DESIGN.md'],
+    ['[x](/abs/path/file.md)', '/abs/path/file.md', 'x'],
+    ['[spec](file:///C:/my%20proj/a.md#L12)', 'C:/my proj/a.md:12', 'spec']
+  ])('renders markdown link %s as an open-in-editor button', async (markdown, path, label) => {
+    const { container } = renderChat(markdown)
+
+    await waitFor(() => {
+      const button = container.querySelector<HTMLElement>('button[data-testid="termul-file-path"]')
+      expect(button).not.toBeNull()
+      expect(button).toHaveAttribute('data-path', path)
+      expect(button).toHaveTextContent(label)
+    })
+    expect(container.textContent).not.toContain('[blocked]')
+  })
+
+  it('keeps https links as anchors, not file buttons', async () => {
+    const { container } = renderChat('[x](https://example.com/a.md)')
+
+    await waitFor(() => {
+      expect(container.querySelector('a, button[data-streamdown="link"]')).not.toBeNull()
+    })
+    expect(container.querySelector('[data-testid="termul-file-path"]')).toBeNull()
+  })
+
+  it.each([
+    '[x](#sec)',
+    '[x](mailto:a@b.c)',
+    '[x](file:///%zz)',
+    '[x](file://server/share/a.md)'
+  ])('does not rewrite %s into a file button', async (markdown) => {
+    const { container } = renderChat(markdown)
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('x')
+    })
+    expect(container.querySelector('[data-testid="termul-file-path"]')).toBeNull()
+  })
+
   it('renders data: images inline with no [Image blocked', async () => {
     const { container } = renderChat('![tiny](data:image/png;base64,QUJD)')
 

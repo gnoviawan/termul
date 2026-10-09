@@ -9,6 +9,7 @@ import {
   type AuthMethod,
   acpApi,
   browserConsentRespond,
+  parseAcpErrorDetail,
   type SessionId
 } from '@/lib/acp-api'
 import { saveAuthMethodMemory as saveAuthMethodMemoryToDisk } from '@/lib/acp-auth-method-memory'
@@ -803,6 +804,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     if (hadCommit || hadAssist) return
     // Flush coalesced updates so the error reflects the final transcript state.
     flushCoalescedSync()
+    const detail = parseAcpErrorDetail(e)
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
@@ -822,6 +824,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
               // now preserves the 'error' status (it skips 'error' sessions).
               status: 'error' as SessionStatus,
               lastError: e.message,
+              lastErrorCode: detail.code ?? null,
+              lastErrorData: detail.data,
               activeTurn: false,
               openTurnId: null
             }
@@ -834,6 +838,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           sessions[id] = {
             ...sessions[id],
             lastError: e.message,
+            lastErrorCode: detail.code ?? null,
+            lastErrorData: detail.data,
             activeTurn: false,
             openTurnId: null
           }
@@ -878,6 +884,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     }
     // Flush coalesced updates so the crash reflects the final transcript state.
     flushCoalescedSync()
+    const detail = parseAcpErrorDetail(e)
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
       // A crashed agent can never land its in-flight launch: drop the stale
@@ -901,6 +908,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
               ...s.sessions[e.sessionId],
               status: 'error' as SessionStatus,
               lastError: e.message,
+              lastErrorCode: detail.code ?? null,
+              lastErrorData: detail.data,
               activeTurn: false,
               openTurnId: null
             }
@@ -914,6 +923,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
             ...sessions[id],
             status: 'error' as SessionStatus,
             lastError: e.message,
+            lastErrorCode: detail.code ?? null,
+            lastErrorData: detail.data,
             activeTurn: false,
             openTurnId: null
           }

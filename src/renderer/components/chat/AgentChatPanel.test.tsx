@@ -112,7 +112,7 @@ const {
       cwd: string
       toolCalls: unknown[]
       forceCollapsed?: boolean
-      onOpenGitChanges?: () => void
+      onOpenGitChanges?: (opener: HTMLElement) => void
     }>
   },
   discoveredContextRef: {
@@ -297,8 +297,9 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileRef.current
 }))
 vi.mock('@/stores/git-sheet-store', () => ({
-  useGitSheetStore: (sel: (s: { openGitSheet: (cwd?: string) => void }) => unknown) =>
-    sel({ openGitSheet: (cwd) => openGitSheetRef.current(cwd) })
+  useGitSheetStore: (
+    sel: (s: { openGitSheet: (cwd?: string, opener?: HTMLElement | null) => void }) => unknown
+  ) => sel({ openGitSheet: (cwd, opener) => openGitSheetRef.current(cwd, opener) })
 }))
 
 // Child components pull in heavy chat rendering; the states under test render
@@ -319,7 +320,7 @@ vi.mock('./ChatChangedFilesPanel', () => ({
     cwd: string
     toolCalls: unknown[]
     forceCollapsed?: boolean
-    onOpenGitChanges?: () => void
+    onOpenGitChanges?: (opener: HTMLElement) => void
   }) => {
     changedFilesPanelPropsRef.current.push(props)
     // A marker, so the dock tests can assert the bar sits inside the dock wrapper.
@@ -1411,9 +1412,11 @@ describe('AgentChatPanel mobile dock wiring', () => {
       expect(lastChangedFiles()).toMatchObject({ cwd: '/repo/.worktrees/a', forceCollapsed: false })
       expect(typeof lastChangedFiles()?.onOpenGitChanges).toBe('function')
 
-      lastChangedFiles()?.onOpenGitChanges?.()
+      // The tapped Git button is forwarded, so the sheet can return focus to it.
+      const gitButton = document.createElement('button')
+      lastChangedFiles()?.onOpenGitChanges?.(gitButton)
       expect(openGitSheetRef.current).toHaveBeenCalledTimes(1)
-      expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a')
+      expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a', gitButton)
     })
 
     it('keeps the baseline props on the desktop shell', () => {
