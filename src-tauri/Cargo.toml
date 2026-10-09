@@ -42,6 +42,12 @@ default = []
 # "default `cargo build` / `tauri build` do NOT bundle the standalone server
 # binary" invariant.
 standalone-server = []
+# Forwards to `tauri/custom-protocol`, which makes the Tauri build script
+# embed `frontendDist` instead of loading `devUrl`. The Tauri CLI (`tauri
+# build`) enables it itself; raw `cargo build --release` packagers must pass
+# `--features custom-protocol`. `build.rs` fails a release desktop build that
+# lacks it.
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

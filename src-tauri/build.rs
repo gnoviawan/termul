@@ -1,5 +1,36 @@
 use std::path::Path;
 
+/// Returns the failure message when a release-profile desktop build would
+/// compile with Tauri's `cfg(dev)` on (no `custom-protocol`), which makes the
+/// binary load `devUrl` and show "Could not connect to localhost".
+///
+/// `dev` is `tauri_build::is_dev()` (the `DEP_TAURI_DEV` value emitted by the
+/// `tauri` crate's build script, `true` whenever `tauri/custom-protocol` is
+/// off). Never guards the standalone `termul-server` build (`standalone-server`
+/// feature) or when the escape hatch is `1` / `true`.
+fn release_custom_protocol_guard(
+    profile: &str,
+    dev: bool,
+    standalone_server: bool,
+    allow_override: &str,
+) -> Option<String> {
+    let allowed = matches!(allow_override.trim(), "1" | "true");
+    if profile != "release" || !dev || standalone_server || allowed {
+        return None;
+    }
+    Some(
+        [
+            "termul: refusing to build a release desktop binary without the `custom-protocol` feature.",
+            "Without it Tauri compiles with cfg(dev) and the app loads `devUrl` instead of the embedded",
+            "frontend, showing \"Could not connect to localhost\".",
+            "Fix: run `cargo build --release --features custom-protocol`, or build through the Tauri CLI",
+            "(`bun run build:tauri --no-bundle`).",
+            "For `cargo test/clippy --release` only, set TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1.",
+        ]
+        .join("\n"),
+    )
+}
+
 fn main() {
     // The Vite web build output (`../dist-web/`) is embedded into BOTH the
     // standalone `termul-server` binary and the desktop app (the desktop's
@@ -46,6 +77,17 @@ fn main() {
         .any(|file| !Path::new("../dist-web").join(file).is_file())
     {
         println!("cargo:rustc-cfg=web_embed_missing");
+    }
+
+    // Fail fast on a raw release desktop build without `custom-protocol`.
+    println!("cargo:rerun-if-env-changed=TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL");
+    if let Some(message) = release_custom_protocol_guard(
+        &std::env::var("PROFILE").unwrap_or_default(),
+        tauri_build::is_dev(),
+        std::env::var_os("CARGO_FEATURE_STANDALONE_SERVER").is_some(),
+        &std::env::var("TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL").unwrap_or_default(),
+    ) {
+        panic!("{message}");
     }
 
     tauri_build::build()

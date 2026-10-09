@@ -74,6 +74,25 @@ bun run build:tauri:mac-x64
 bun run build:tauri:linux
 ```
 
+### Packager / Raw Cargo Release Build
+
+Tauri's build script compiles with `cfg(dev)` whenever the `tauri/custom-protocol` feature is off, and a `cfg(dev)` binary loads `devUrl` ("Could not connect to localhost") instead of the embedded `frontendDist`. Only `tauri build` enables the feature for you. When building the desktop binary with plain cargo (for example a distro packager), enable it through the app feature:
+
+```bash
+# From the repo root: build the frontends first (embedded as frontendDist / dist-web)
+bun run build:web && bun run build:frontend:tauri
+cd src-tauri
+cargo build --release --features custom-protocol
+```
+
+Or let the Tauri CLI do both steps without bundling (run from the repo root; with npm or pnpm add `--` before `--no-bundle`):
+
+```bash
+bun run build:tauri --no-bundle
+```
+
+`src-tauri/build.rs` fails a release-profile desktop build that lacks `custom-protocol` and prints these fixes. The guard reads Tauri's own computed dev state, so it passes whenever `tauri/custom-protocol` is on, however it was enabled. It is not triggered by debug-profile builds or by any build with the `standalone-server` feature, which is how the `termul-server` build (`cargo build --release --bin termul-server --features standalone-server`) stays exempt; do not use that feature to build the desktop binary. For `cargo test --release`, `cargo clippy --release`, `cargo install --path src-tauri` and similar commands that never ship the desktop binary, set `TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1` (or `true`) to skip the guard. A binary built under that override loads `devUrl`; do not distribute it.
+
 ## Quality Checks
 
 ### Lint
