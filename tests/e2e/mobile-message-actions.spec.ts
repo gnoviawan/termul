@@ -88,6 +88,15 @@ function chatFor(page: Page, prompt: string): Chat {
   }
 }
 
+/** The JSON body of a websocket frame, or `undefined` for a non-JSON (or binary) one. */
+function parseFrame<T>(payload: string | Buffer): T | undefined {
+  try {
+    return JSON.parse(String(payload)) as T
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Resolves once the app's boot-time agent warm-up has settled: the empty
  * launcher spawns the agent and creates a draft session, and that session
@@ -95,25 +104,41 @@ function chatFor(page: Page, prompt: string): Chat {
  * is discarded with the old composer (a test-only race: a person needs seconds
  * to start typing). An agent that fails to start also ends the warm-up: no
  * session will follow it.
+ *
+ * Rejects after `timeoutMs` when no matching frame is seen (the app reused an
+ * existing session, the request ids differ, ...), so a failure points at the
+ * warm-up step instead of the 120s test timeout. Non-JSON frames are ignored.
  */
-function watchAgentWarmup(page: Page): Promise<void> {
-  return new Promise<void>((resolve) => {
+function watchAgentWarmup(page: Page, timeoutMs = 30_000): Promise<void> {
+  const warmup = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`agent warm-up not observed within ${timeoutMs}ms`)),
+      timeoutMs
+    )
+    const done = (): void => {
+      clearTimeout(timer)
+      resolve()
+    }
     page.on('websocket', (socket) => {
       if (socket.url().endsWith('/terminal/ws')) return
       const watched = new Map<string, string>()
       socket.on('framesent', (frame) => {
-        const message = JSON.parse(String(frame.payload)) as { id?: string; type?: string }
-        if (message.id && (message.type === 'create_session' || message.type === 'spawn_agent')) {
+        const message = parseFrame<{ id?: string; type?: string }>(frame.payload)
+        if (message?.id && (message.type === 'create_session' || message.type === 'spawn_agent')) {
           watched.set(message.id, message.type)
         }
       })
       socket.on('framereceived', (frame) => {
-        const reply = JSON.parse(String(frame.payload)) as { id?: string; ok?: boolean }
-        const kind = reply.id ? watched.get(reply.id) : undefined
-        if (kind === 'create_session' || (kind === 'spawn_agent' && reply.ok === false)) resolve()
+        const reply = parseFrame<{ id?: string; ok?: boolean }>(frame.payload)
+        const kind = reply?.id ? watched.get(reply.id) : undefined
+        if (kind === 'create_session' || (kind === 'spawn_agent' && reply?.ok === false)) done()
       })
     })
   })
+  // The wait is awaited later, after the project is registered and the page has
+  // loaded; a timeout in between must not surface as an unhandled rejection.
+  warmup.catch(() => undefined)
+  return warmup
 }
 
 /**
