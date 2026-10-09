@@ -22,9 +22,9 @@ interface MobileHeaderMoreSheetProps extends ShellNavigationActions {
   title: string
   /** The header subtitle text (project, branch, Local or Worktree). */
   subtitle: string
-  /** Returns focus per the shell's focus rules (see `useSheetCloseFocus`). */
+  /** Returns focus per the shell's registry (`sheetCloseAutoFocus`, `lib/sheet-focus-return.ts`). */
   onCloseAutoFocus: (event: Event) => void
-  /** Marks that a row was chosen, so focus lands on the destination title. */
+  /** Called when a row was chosen: the shell sets the destination title as the focus target. */
   onItemChosen: () => void
   /** Agent-chat tabs only. */
   onCloseChat?: () => void

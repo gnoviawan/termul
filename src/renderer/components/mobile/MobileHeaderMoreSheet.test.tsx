@@ -1,7 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { type ComponentProps, useRef, useState } from 'react'
-import { describe, expect, it, vi } from 'vitest'
-import { useSheetCloseFocus } from '@/hooks/use-sheet-close-focus'
+import { type ComponentProps, useEffect, useRef, useState } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  _resetSheetFocusReturnForTests,
+  recordSheetOpener,
+  setSheetFocusDestination,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { MobileHeaderMoreSheet } from './MobileHeaderMoreSheet'
 
 type SheetProps = ComponentProps<typeof MobileHeaderMoreSheet>
@@ -170,11 +175,17 @@ describe('MobileHeaderMoreSheet', () => {
   })
 
   describe('focus return', () => {
+    const closeAutoFocus = sheetCloseAutoFocus('header-more-sheet')
+
+    beforeEach(() => _resetSheetFocusReturnForTests())
+
+    // Mirrors MobileChatShell: ⋯ is recorded as the opener, and choosing a row
+    // sets the header title as the destination.
     function Harness({ onFiles }: { onFiles?: () => void }): React.JSX.Element {
       const [open, setOpen] = useState(true)
       const openerRef = useRef<HTMLButtonElement>(null)
       const titleRef = useRef<HTMLHeadingElement>(null)
-      const { markItemChosen, onCloseAutoFocus } = useSheetCloseFocus(openerRef, titleRef)
+      useEffect(() => recordSheetOpener('header-more-sheet', openerRef.current), [])
       return (
         <>
           <h1 ref={titleRef} tabIndex={-1}>
@@ -188,8 +199,8 @@ describe('MobileHeaderMoreSheet', () => {
             onOpenChange={setOpen}
             title="Chat"
             subtitle="termul"
-            onCloseAutoFocus={onCloseAutoFocus}
-            onItemChosen={markItemChosen}
+            onCloseAutoFocus={closeAutoFocus}
+            onItemChosen={() => setSheetFocusDestination('header-more-sheet', titleRef.current)}
             onOpenFiles={onFiles}
           />
         </>

@@ -27,9 +27,9 @@ interface MobileTerminalActionsSheetProps extends Omit<ShellNavigationActions, '
   name: string
   /** Exit code of the last command; the description shows only when it is a number. */
   lastExitCode?: number | null
-  /** Returns focus per the shell's focus rules (see `useSheetCloseFocus`). */
+  /** Returns focus per the shell's registry (`sheetCloseAutoFocus`, `lib/sheet-focus-return.ts`). */
   onCloseAutoFocus: (event: Event) => void
-  /** Marks that a row was chosen, so focus lands on the destination title. */
+  /** Called when a row was chosen: the shell sets the destination title as the focus target. */
   onItemChosen: () => void
   /** Each row renders only when its callback is given. */
   onRenameTerminal?: (terminalId: string, name: string) => void

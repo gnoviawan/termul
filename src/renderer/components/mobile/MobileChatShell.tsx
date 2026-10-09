@@ -7,9 +7,12 @@ import {
   useChatIsolationContext
 } from '@/hooks/use-chat-isolation-context'
 import { useMobileAttentionCount } from '@/hooks/use-mobile-attention-count'
-import { useSheetCloseFocus } from '@/hooks/use-sheet-close-focus'
 import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
-import { recordSheetOpener, setSheetFocusDestination } from '@/lib/sheet-focus-return'
+import {
+  recordSheetOpener,
+  setSheetFocusDestination,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { returnToWorkspaceRoute } from '@/lib/workspace-route'
 import { useAcpStore } from '@/stores/acp-store'
@@ -41,6 +44,14 @@ function browserTabLabel(tab: { title: string; url: string } | undefined): strin
   }
   return 'Browser'
 }
+
+// Focus return for the shell's sheets (`lib/sheet-focus-return.ts`), keyed by the
+// overlay id each is registered under. Radix refocuses only a `Dialog.Trigger`,
+// and these openers are plain Buttons. Built once at module scope so the
+// handlers keep a stable identity across renders.
+const projectSheetCloseAutoFocus = sheetCloseAutoFocus('projects-sheet')
+const moreSheetCloseAutoFocus = sheetCloseAutoFocus('header-more-sheet')
+const terminalSheetCloseAutoFocus = sheetCloseAutoFocus('terminal-actions-sheet')
 
 interface MobileChatShellProps {
   children: React.ReactNode
@@ -117,18 +128,18 @@ export function MobileChatShell({
   const subtitleRef = useRef<HTMLButtonElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
   // The drawer returns focus to whatever opened it. ☰ and the attention pill
-  // both record themselves through `openDrawer`; ☰ is also the fallback when a
+  // both record themselves through `openDrawer`; ☰ is also the fallback when the
   // recorded opener is gone (the pill disappears once nothing needs the user).
-  const drawerOpenerRef = useRef<HTMLElement | null>(null)
   const openDrawer = (opener: HTMLElement | null): void => {
-    drawerOpenerRef.current = opener ?? menuButtonRef.current
+    recordSheetOpener('mobile-drawer', opener ?? menuButtonRef.current, menuButtonRef.current)
     setDrawerOpen(true)
   }
-  // Focus return for the three header-opened sheets. Radix refocuses only a
-  // `Dialog.Trigger`, and these openers are plain Buttons.
-  const moreFocus = useSheetCloseFocus(moreButtonRef, titleRef)
-  const terminalFocus = useSheetCloseFocus(moreButtonRef, titleRef)
-  const projectFocus = useSheetCloseFocus(subtitleRef)
+  // The project sheet opens from the header subtitle and from the drawer's
+  // project row; focus returns to the subtitle either way.
+  const openProjectSheet = (): void => {
+    recordSheetOpener('projects-sheet', subtitleRef.current)
+    setProjectsOpen(true)
+  }
 
   // One persistent, visually hidden live region for the whole shell (rendered
   // below as a direct child of the root). The hook registers it and feeds it
@@ -326,14 +337,22 @@ export function MobileChatShell({
         onOpenDrawer={openDrawer}
         menuButtonRef={menuButtonRef}
         projectSheetOpen={projectsOpen}
-        onOpenProjectSheet={() => setProjectsOpen(true)}
+        onOpenProjectSheet={openProjectSheet}
         attentionCount={attentionCount}
         isTerminal={isTerminalTab}
         canNewChat={canNewChat}
         onNewChat={onNewChat}
         onNewTerminal={newTerminal}
         moreOpen={isTerminalTab ? terminalSheetOpen : moreOpen}
-        onOpenMore={() => (isTerminalTab ? setTerminalActionsOpen(true) : setMoreOpen(true))}
+        onOpenMore={() => {
+          if (isTerminalTab) {
+            recordSheetOpener('terminal-actions-sheet', moreButtonRef.current)
+            setTerminalActionsOpen(true)
+          } else {
+            recordSheetOpener('header-more-sheet', moreButtonRef.current)
+            setMoreOpen(true)
+          }
+        }}
         moreButtonRef={moreButtonRef}
         subtitleRef={subtitleRef}
         titleRef={titleRef}
@@ -359,9 +378,7 @@ export function MobileChatShell({
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
         onOpenGitHistory={openGitHistory}
-        onOpenProjects={() => setProjectsOpen(true)}
-        returnFocusRef={drawerOpenerRef}
-        menuButtonRef={menuButtonRef}
+        onOpenProjects={openProjectSheet}
       />
 
       {!isTauriContext() && (
@@ -371,7 +388,7 @@ export function MobileChatShell({
           onAddProject={onNewProject}
           side="bottom"
           id="mobile-project-sheet"
-          onCloseAutoFocus={projectFocus.onCloseAutoFocus}
+          onCloseAutoFocus={projectSheetCloseAutoFocus}
         />
       )}
 
@@ -391,8 +408,8 @@ export function MobileChatShell({
         onOpenChange={setMoreOpen}
         title={headerTitle}
         subtitle={subtitle.text}
-        onCloseAutoFocus={moreFocus.onCloseAutoFocus}
-        onItemChosen={moreFocus.markItemChosen}
+        onCloseAutoFocus={moreSheetCloseAutoFocus}
+        onItemChosen={() => setSheetFocusDestination('header-more-sheet', titleRef.current)}
         onOpenGitChanges={openGitChangesFromSheet}
         onOpenFiles={openFilesFromSheet}
         onOpenCommandPalette={openCommandPalette}
@@ -409,8 +426,8 @@ export function MobileChatShell({
           tabId={activeTab.id}
           name={terminalName}
           lastExitCode={activeTerminal?.lastExitCode}
-          onCloseAutoFocus={terminalFocus.onCloseAutoFocus}
-          onItemChosen={terminalFocus.markItemChosen}
+          onCloseAutoFocus={terminalSheetCloseAutoFocus}
+          onItemChosen={() => setSheetFocusDestination('terminal-actions-sheet', titleRef.current)}
           onRenameTerminal={onRenameTerminal}
           onRestartTerminal={onRestartTerminal}
           onOpenCommandHistory={onOpenCommandHistory}

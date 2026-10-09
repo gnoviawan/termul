@@ -1256,8 +1256,12 @@ describe('MobileFileExplorer focus return', () => {
     return opener
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    // A sheet the previous test left mounted is unmounted by cleanup, and Radix
+    // fires its close-focus handler in a setTimeout(0). Let that run before this
+    // test records its own opener, which the handler would otherwise consume.
+    await new Promise((resolve) => setTimeout(resolve, 0))
     _resetSheetFocusReturnForTests()
     mockProjectId = undefined
     mockPersistenceRead.mockReset()
