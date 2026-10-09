@@ -345,9 +345,8 @@ for (const phone of PHONES) {
       await bootOn(page, { coarse: true, mdApplies: phone.mdApplies })
       await openGitSheet(page, touch)
 
-      // Stash: the header button is enabled because the project has an untracked file. The sheet's
-      // own Close button sits over it at the top right on a phone (see the summary: a layout
-      // defect outside this goal), so a tap lands on Close; the keyboard reaches the button.
+      // Stash: the header button is enabled because the project has an untracked file. The
+      // keyboard opens it; the dialog's field is what this test measures, not how it was opened.
       await page.getByRole('button', { name: 'Stash changes' }).focus()
       await page.keyboard.press('Enter')
       const stashDialog = page.getByRole('dialog', { name: 'Stash Changes' })
