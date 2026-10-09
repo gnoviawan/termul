@@ -54,8 +54,12 @@ test.use({
 
 test.setTimeout(90_000)
 
-/** The fake agent's launcher chip: the SelectorModal trigger on the phone shell. */
-const AGENT_CHIP = 'Select ACP agent: Fake Longrun'
+/**
+ * The launcher's agent and model pill: a bottom sheet on the phone shell, a popover
+ * on desktop. Found by role, which skips the copy mounted in a hidden pane.
+ */
+const AGENT_SELECTOR_PILL = 'Agent and model. Currently Fake Longrun'
+const AGENT_SELECTOR_SHEET = 'Model and agent'
 
 interface HistoryPosition {
   /** Index of the current entry in this tab's history (Navigation API). */
@@ -360,7 +364,7 @@ test('command palette to Change Color Theme and to Command History each swap one
 })
 
 // ---------------------------------------------------------------------------
-// The agent launcher and its SelectorModal
+// The agent launcher and its agent and model sheet
 // ---------------------------------------------------------------------------
 
 test('an empty pane shows the launcher as the pane body, not as an overlay: no history entry', async ({
@@ -377,12 +381,12 @@ test('an empty pane shows the launcher as the pane body, not as an overlay: no h
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 })
 
-test('the agent selector modal closes on back and on Esc, and focus returns to its chip', async ({
+test('the agent selector sheet closes on back and on Esc, and focus returns to its pill', async ({
   page
 }) => {
   const { base } = await bootMobileShell(page)
-  const chip = page.getByRole('button', { name: AGENT_CHIP })
-  const modal = page.getByRole('dialog', { name: 'ACP Agent' })
+  const chip = page.getByRole('button', { name: AGENT_SELECTOR_PILL })
+  const modal = page.getByRole('dialog', { name: AGENT_SELECTOR_SHEET })
 
   await chip.tap()
   await expect(modal).toBeVisible()
@@ -453,7 +457,7 @@ test.describe('with a terminal tab open', () => {
     await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
   })
 
-  test('the agent selector modal over the launcher: back closes the modal, then the launcher, then it is a real back', async ({
+  test('the agent selector sheet over the launcher: back closes the sheet, then the launcher, then it is a real back', async ({
     page
   }) => {
     const warmedUp = watchAgentWarmup(page)
@@ -461,8 +465,8 @@ test.describe('with a terminal tab open', () => {
     await openTerminalTab(page, warmedUp)
     await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
     const launcher = page.getByRole('dialog', { name: 'Agent launcher' })
-    const chip = page.getByRole('button', { name: AGENT_CHIP })
-    const modal = page.getByRole('dialog', { name: 'ACP Agent' })
+    const chip = page.getByRole('button', { name: AGENT_SELECTOR_PILL })
+    const modal = page.getByRole('dialog', { name: AGENT_SELECTOR_SHEET })
 
     await openDrawer(page)
     await page.getByRole('button', { name: 'New chat', exact: true }).tap()
@@ -976,8 +980,8 @@ test.describe('desktop shell', () => {
     )
     await expectInertOverlay(
       page,
-      () => page.getByRole('button', { name: AGENT_CHIP }).click(),
-      page.getByRole('textbox', { name: 'Search ACP agents' })
+      () => page.getByRole('button', { name: AGENT_SELECTOR_PILL }).click(),
+      page.getByTestId('agent-model-selector-panel')
     )
   })
 
