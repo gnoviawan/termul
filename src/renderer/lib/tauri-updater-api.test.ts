@@ -134,27 +134,27 @@ describe('fetchChannelManifest via invoke (CSP/CORS-free server-side fetch)', ()
     _resetUpdaterStateForTesting()
   })
 
-  it('routes the nightly manifest fetch through updater_fetch_channel_manifest', async () => {
+  it('routes the nightly check through the signed updater command', async () => {
     mockInvoke.mockResolvedValue({
       success: true,
       data: {
         version: '0.9.0',
-        notes: 'nightly build',
-        pub_date: '2026-08-09T00:00:00Z',
-        platforms: {}
+        releaseNotes: 'nightly build',
+        releaseDate: '2026-08-09T00:00:00Z',
+        currentVersion: '0.4.8'
       }
     })
     mockGetVersion.mockResolvedValue('0.4.8')
 
     const update = await checkForUpdates('nightly')
 
-    expect(mockInvoke).toHaveBeenCalledWith('updater_fetch_channel_manifest', {
+    expect(mockInvoke).toHaveBeenCalledWith('updater_check_signed', {
       channel: 'nightly'
     })
     expect(update).not.toBeNull()
     expect(update?.version).toBe('0.9.0')
     expect(update?.releaseNotes).toBe('nightly build')
-    expect(update?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/nightly')
+    expect(update?.downloadUrl).toBeUndefined()
   })
 
   it('surfaces an IpcResult error as createUpdaterCheckError naming the manifest URL', async () => {

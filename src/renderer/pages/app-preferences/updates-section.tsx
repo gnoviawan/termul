@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Download, ExternalLink } from '@/components/icons'
+import { AlertCircle, CheckCircle2, Download } from '@/components/icons'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { Button } from '@/components/ui/button'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -12,12 +12,9 @@ interface UpdatesSectionProps {
   version: string | null
   lastChecked: Date | null
   autoUpdateEnabled: boolean
-  skippedVersion: string | null
   updateError: string | null
-  isManualUpdateMode: boolean
   updateChannel: UpdateChannel
   checkForUpdates: () => void
-  installAndRestart: () => void
   handleAutoUpdateToggle: (enabled: boolean) => void
   setUpdateChannel: (channel: UpdateChannel) => void
 }
@@ -29,12 +26,9 @@ export function UpdatesSection({
   version,
   lastChecked,
   autoUpdateEnabled,
-  skippedVersion,
   updateError,
-  isManualUpdateMode,
   updateChannel,
   checkForUpdates,
-  installAndRestart,
   handleAutoUpdateToggle,
   setUpdateChannel
 }: UpdatesSectionProps): React.JSX.Element {
@@ -171,8 +165,8 @@ export function UpdatesSection({
                     <AlertCircle size={14} className="text-warning flex-shrink-0 mt-0.5" />
                     <div className="text-xs text-foreground">
                       {updateChannel === 'nightly'
-                        ? 'Nightly builds are automated from the latest commit and may be unstable. Updates are offered as a manual download from the nightly release page.'
-                        : 'Insider release candidates may be unfinished. Updates are offered as a manual download from the insider release page.'}
+                        ? 'Nightly builds come from the latest commit and may be unstable. Update downloads, installs, and restarts Termul.'
+                        : 'Insider builds may be unfinished. Update downloads, installs, and restarts Termul.'}
                     </div>
                   </div>
                 )}
@@ -186,21 +180,8 @@ export function UpdatesSection({
               <label className="block text-sm font-medium text-secondary-foreground mb-2">
                 Update Available
               </label>
-              <div
-                className={cn(
-                  'border rounded-md px-4 py-3 flex items-center gap-3',
-                  isManualUpdateMode
-                    ? 'bg-warning/10 border-warning/20'
-                    : 'bg-success/10 border-success/20'
-                )}
-              >
-                <CheckCircle2
-                  size={18}
-                  className={cn(
-                    'flex-shrink-0',
-                    isManualUpdateMode ? 'text-warning' : 'text-success'
-                  )}
-                />
+              <div className="border rounded-md px-4 py-3 flex items-center gap-3 bg-success/10 border-success/20">
+                <CheckCircle2 size={18} className="flex-shrink-0 text-success" />
                 <div className="flex-1">
                   <div className="text-sm font-medium text-foreground">
                     Version {version} is available!
@@ -208,9 +189,7 @@ export function UpdatesSection({
                   <div className="text-xs text-muted-foreground mt-0.5">
                     {isAurUpdater
                       ? 'Update through AUR with: yay -S termul-manager'
-                      : isManualUpdateMode
-                        ? 'Automatic update is unavailable. Please download and install the latest version manually.'
-                        : 'A new version is ready to download.'}
+                      : 'Choose Update in the dialog. Termul downloads, installs, and restarts.'}
                   </div>
                 </div>
               </div>
@@ -242,15 +221,6 @@ export function UpdatesSection({
                 <Download />
                 {isChecking ? 'Checking for updates...' : 'Check for Updates'}
               </Button>
-              {updateAvailable && isManualUpdateMode && (
-                <button
-                  onClick={installAndRestart}
-                  className="flex h-9 items-center gap-2 rounded-lg border border-warning bg-warning px-3 text-sm text-warning-foreground transition-colors hover:bg-warning/90"
-                >
-                  <ExternalLink size={16} />
-                  Open Download Page
-                </button>
-              )}
             </div>
             {lastChecked && (
               <p className="text-xs text-muted-foreground mt-1">
@@ -287,24 +257,6 @@ export function UpdatesSection({
               </button>
             </div>
           </div>
-
-          {/* Skipped Version */}
-          {skippedVersion && (
-            <div>
-              <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                Skipped Version
-              </label>
-              <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
-                <div className="text-sm text-foreground">
-                  You are currently skipping version{' '}
-                  <span className="font-mono">{skippedVersion}</span>
-                </div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  This version will not be offered again until a newer version is available.
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </SettingsSection>

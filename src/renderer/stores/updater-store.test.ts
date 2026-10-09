@@ -189,21 +189,28 @@ describe('updater-store', () => {
       expect(state.downloadProgress).toBe(0)
     })
 
-    it('should keep version skipped without surfacing update availability', async () => {
+    it('should still surface an update when a version was skipped earlier', async () => {
       vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
         version: '2.0.0',
         releaseDate: '2026-01-01T00:00:00.000Z',
         isSecurityUpdate: false
       })
       vi.mocked(tauriVersionSkip.getSkippedVersion).mockResolvedValue('2.0.0')
-      vi.mocked(tauriVersionSkip.isVersionSkipped).mockResolvedValue(true)
 
       await useUpdaterStore.getState().checkForUpdates()
 
       const state = useUpdaterStore.getState()
       expect(state.skippedVersion).toBe('2.0.0')
-      expect(state.updateAvailable).toBe(false)
+      expect(state.updateAvailable).toBe(true)
       expect(state.version).toBe('2.0.0')
+    })
+
+    it('should not check while a signed install is in progress', async () => {
+      useUpdaterStore.setState({ isDownloading: true })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
     })
 
     it('should still check for updates when active terminals exist', async () => {
@@ -231,6 +238,25 @@ describe('updater-store', () => {
 
       expect(useUpdaterStore.getState().error).toBe('Network error')
       expect(useUpdaterStore.getState().isChecking).toBe(false)
+    })
+
+    it('clears a previous offer when a later check fails', async () => {
+      useUpdaterStore.setState({
+        updateAvailable: true,
+        version: '2.0.0',
+        releaseNotes: 'old notes',
+        downloaded: false
+      })
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockRejectedValue(new Error('Network error'))
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      const state = useUpdaterStore.getState()
+      expect(state.error).toBe('Network error')
+      expect(state.updateAvailable).toBe(false)
+      expect(state.version).toBeNull()
+      expect(state.releaseNotes).toBeNull()
+      expect(state.downloaded).toBe(false)
     })
   })
 

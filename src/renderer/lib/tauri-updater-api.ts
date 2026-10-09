@@ -6,28 +6,20 @@ import {
   type UpdateState
 } from '@shared/types/updater.types'
 import { getVersion } from '@tauri-apps/api/app'
-import { invoke } from '@tauri-apps/api/core'
-import { openUrl } from '@tauri-apps/plugin-opener'
-import { relaunch } from '@tauri-apps/plugin-process'
-import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+import { Channel, invoke } from '@tauri-apps/api/core'
+import type { Update } from '@tauri-apps/plugin-updater'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
-// Stable signed-manifest alias published alongside `latest-stable.json` so the
-// Tauri updater plugin's build-time `endpoints` config (which cannot be
-// overridden per check from the renderer) keeps resolving for stable users.
-const STABLE_UPDATE_MANIFEST_URL =
-  'https://github.com/gnoviawan/termul/releases/latest/download/latest.json'
 const UPSTREAM_LATEST_RELEASE_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/latest'
 const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
 
 /**
  * Release channel selection for the desktop updater. The persisted preference
- * selects which per-channel manifest the facade consults. Stable reuses the
- * signed `@tauri-apps/plugin-updater` `check()` flow (the plugin's endpoint
- * resolves to the stable manifest alias); Insider/Nightly fetch their manifest
- * JSON directly and offer the update via manual download, because the Tauri
- * updater plugin cannot take a runtime endpoint URL from the renderer.
+ * selects which signed manifest Rust checks. Stable, Insider, and Nightly all
+ * download, install, and restart inside the app. The JavaScript plugin
+ * `check()` cannot take a runtime endpoint, so the check and install commands
+ * live in `desktop_updater`.
  */
 export type UpdateChannel = 'stable' | 'insider' | 'nightly'
 
@@ -70,15 +62,26 @@ const UPDATE_MODE: UpdateMode = import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur
  * AUR mode only checks upstream GitHub Releases and asks users to update with yay.
  */
 
-let pendingTauriUpdate: Update | null = null
-let downloadedUpdate: Update | null = null
 let pendingAurUpdate: UpdateInfo | null = null
-let manualUpdateInfo: UpdateInfo | null = null
+let signedUpdateInfo: UpdateInfo | null = null
 let autoUpdateEnabled = true
 let lastCheckedAt: string | null = null
-let downloadedVersion: string | null = null
 let preparedUpdateVersion: string | null = null
-let isManualUpdateMode = false
+
+interface SignedUpdatePayload {
+  version: string
+  currentVersion: string
+  releaseNotes?: string | null
+  releaseDate?: string | null
+}
+
+interface SignedDownloadEvent {
+  event: string
+  data?: {
+    contentLength?: number
+    chunkLength?: number
+  }
+}
 
 export interface TauriUpdaterEventHandlers {
   onUpdateAvailable?: (update: Update) => void
@@ -178,12 +181,12 @@ export function mapTauriUpdateToInfo(update: Update): UpdateInfo {
 }
 
 function mapDownloadEventToProgress(
-  event: DownloadEvent,
+  event: SignedDownloadEvent,
   downloadedSoFar: number,
   totalBytes: number
 ): { progress: DownloadProgress; downloadedSoFar: number; totalBytes: number } {
   if (event.event === 'Started') {
-    const total = event.data.contentLength ?? totalBytes
+    const total = event.data?.contentLength ?? totalBytes
     return {
       progress: {
         bytesPerSecond: 0,
@@ -197,7 +200,7 @@ function mapDownloadEventToProgress(
   }
 
   if (event.event === 'Progress') {
-    const nextDownloaded = downloadedSoFar + event.data.chunkLength
+    const nextDownloaded = downloadedSoFar + (event.data?.chunkLength ?? 0)
     const percent = totalBytes > 0 ? Math.min(100, (nextDownloaded / totalBytes) * 100) : 0
 
     return {
@@ -366,72 +369,49 @@ async function checkAurUpdate(): Promise<UpdateInfo | null> {
   return compareVersions(latestVersion, currentVersion) > 0 ? mapGitHubReleaseToInfo(release) : null
 }
 
-interface ChannelManifest {
-  version?: string
-  notes?: string
-  pub_date?: string
-  platforms?: Record<string, unknown>
-}
-
-async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelManifest> {
-  const result = await invoke<IpcResult<unknown>>('updater_fetch_channel_manifest', { channel })
-  if (!result.success) {
-    throw new Error(result.error)
+function payloadToUpdateInfo(payload: SignedUpdatePayload): UpdateInfo {
+  return {
+    version: payload.version,
+    releaseDate: payload.releaseDate ?? undefined,
+    releaseNotes: payload.releaseNotes ?? undefined,
+    isSecurityUpdate: false
   }
-  const body = result.data
-  if (typeof body !== 'object' || body === null) {
-    throw new Error('Channel manifest is not a JSON object')
-  }
-  const manifest = body as ChannelManifest
-  if (manifest.version !== undefined && typeof manifest.version !== 'string') {
-    throw new Error('Channel manifest `version` is not a string')
-  }
-  return manifest
 }
 
 /**
- * Insider/Nightly check: fetch the per-channel manifest, compare against the
- * current app version with SemVer prerelease precedence, and offer the update
- * via manual download. The Tauri updater plugin cannot take a runtime endpoint
- * URL from the renderer, so non-stable channels offer a manual download of the
- * channel's GitHub release page instead of the signed in-app install.
- *
- * On manifest fetch failure (404 / network) the call throws so the store
- * surfaces the error and the periodic retry re-attempts next cycle.
+ * Signed check for every channel. Rust selects the manifest URL, verifies the
+ * signature on install, and keeps the update handle. A missing manifest is an
+ * error. This path does not open a browser.
  */
-async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | null> {
-  let manifest: ChannelManifest
+async function checkSignedUpdate(channel: UpdateChannel): Promise<UpdateInfo | null> {
+  let result: IpcResult<SignedUpdatePayload | null>
   try {
-    manifest = await fetchChannelManifest(channel)
+    result = await invoke<IpcResult<SignedUpdatePayload | null>>('updater_check_signed', {
+      channel
+    })
   } catch (error) {
+    signedUpdateInfo = null
     lastCheckedAt = new Date().toISOString()
     throw createUpdaterCheckError(error, getChannelManifestUrl(channel))
   }
 
-  const latestVersion = normalizeVersion(manifest.version ?? '')
-  let updateInfo: UpdateInfo | null = null
-
-  if (latestVersion) {
-    const currentVersion = await getVersion()
-    if (compareVersions(latestVersion, currentVersion) > 0) {
-      updateInfo = {
-        version: latestVersion,
-        // Use the manifest's actual pub_date; do NOT fabricate a "now"
-        // timestamp for a stale/undated manifest (it would masquerade as
-        // just-published). Omit when the manifest lacks pub_date.
-        releaseDate: manifest.pub_date,
-        releaseNotes: manifest.notes ?? undefined,
-        isSecurityUpdate: false,
-        downloadUrl: getChannelReleasePageUrl(channel)
-      }
-    }
+  if (!result?.success && result?.code === UpdaterErrorCodes.UPDATE_INSTALL_IN_PROGRESS) {
+    lastCheckedAt = new Date().toISOString()
+    return signedUpdateInfo
   }
 
-  pendingTauriUpdate = null
-  isManualUpdateMode = updateInfo !== null
-  manualUpdateInfo = updateInfo
-  downloadedVersion = null
-  preparedUpdateVersion = null
+  if (!result?.success) {
+    signedUpdateInfo = null
+    lastCheckedAt = new Date().toISOString()
+    throw createUpdaterCheckError(
+      new Error(result?.error ?? 'Signed update check failed'),
+      getChannelManifestUrl(channel)
+    )
+  }
+
+  const updateInfo = result.data ? payloadToUpdateInfo(result.data) : null
+  signedUpdateInfo = updateInfo
+  preparedUpdateVersion = updateInfo ? preparedUpdateVersion : null
   lastCheckedAt = new Date().toISOString()
   return updateInfo
 }
@@ -448,94 +428,74 @@ export async function checkForUpdates(
       lastCheckedAt = new Date().toISOString()
       return update
     } catch (error) {
+      pendingAurUpdate = null
       lastCheckedAt = new Date().toISOString()
       throw createUpdaterCheckError(error, UPSTREAM_LATEST_RELEASE_URL)
     }
   }
 
-  // Insider / Nightly consult their per-channel manifest and offer manual
-  // download (the signed `check()` flow is stable-only by plugin limitation).
-  if (channel !== DEFAULT_UPDATE_CHANNEL) {
-    return checkChannelUpdate(channel)
-  }
-
-  // Stable: reuse the signed `@tauri-apps/plugin-updater` `check()` flow so the
-  // existing signed download/install path and its backward compatibility are
-  // preserved (the plugin endpoint resolves to the stable manifest alias).
-  try {
-    const update = await check()
-    pendingTauriUpdate = update
-    isManualUpdateMode = false
-    manualUpdateInfo = null
-    downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
-    // Preserve the already-downloaded Update instance (and its in-memory bytes)
-    // when a periodic re-check returns the same version; otherwise drop it so a
-    // newer version is re-downloaded before install.
-    downloadedUpdate =
-      update && downloadedUpdate && downloadedUpdate.version === update.version
-        ? downloadedUpdate
-        : null
-    preparedUpdateVersion =
-      update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
-    lastCheckedAt = new Date().toISOString()
-    return update ? mapTauriUpdateToInfo(update) : null
-  } catch (error) {
-    lastCheckedAt = new Date().toISOString()
-
-    const errorMsg = getErrorMessage(error, '')
-    const isManifestMissing =
-      errorMsg.includes('valid release JSON') ||
-      errorMsg.includes('Could not fetch') ||
-      errorMsg.includes('404')
-    if (isManifestMissing) {
-      try {
-        const fallback = await checkGitHubFallback()
-        if (fallback) {
-          isManualUpdateMode = true
-          manualUpdateInfo = fallback
-          pendingTauriUpdate = null
-          return fallback
-        }
-        return null
-      } catch (fallbackError) {
-        throw createUpdaterCheckError(fallbackError, UPSTREAM_LATEST_RELEASE_URL)
-      }
-    }
-
-    throw createUpdaterCheckError(error, STABLE_UPDATE_MANIFEST_URL)
-  }
+  return checkSignedUpdate(channel)
 }
 
-async function checkGitHubFallback(): Promise<UpdateInfo | null> {
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => {
-    controller.abort()
-  }, AUR_UPDATE_CHECK_TIMEOUT_MS)
+async function installSignedUpdate(
+  onProgress?: (progress: DownloadProgress) => void
+): Promise<IpcResult<void>> {
+  if (!signedUpdateInfo) {
+    return {
+      success: false,
+      error: 'No update available to download',
+      code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
+    }
+  }
 
-  const [currentVersion, response] = await Promise.all([
-    getVersion(),
-    fetch(UPSTREAM_LATEST_RELEASE_URL, {
-      headers: {
-        Accept: 'application/vnd.github+json'
-      },
-      signal: controller.signal
+  const updateVersion = signedUpdateInfo.version
+
+  if (preparedUpdateVersion !== updateVersion) {
+    const preparationResult = await prepareUpdateRecovery()
+    if (!preparationResult.success) {
+      return preparationResult
+    }
+    preparedUpdateVersion = updateVersion
+  }
+
+  let downloadedSoFar = 0
+  let totalBytes = 0
+
+  if (onProgress) {
+    onProgress({
+      bytesPerSecond: 0,
+      percent: 0,
+      transferred: 0,
+      total: 0
     })
-  ]).finally(() => {
-    window.clearTimeout(timeoutId)
-  })
-
-  if (!response.ok) {
-    throw new Error(`GitHub returned HTTP ${response.status}`)
   }
 
-  const release = (await response.json()) as GitHubRelease
-  const latestVersion = normalizeVersion(release.tag_name ?? release.name ?? '')
-
-  if (!latestVersion) {
-    throw new Error('Latest release has no version tag')
+  const onEvent = new Channel<SignedDownloadEvent>()
+  onEvent.onmessage = (event) => {
+    if (!onProgress) return
+    const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
+    downloadedSoFar = mapped.downloadedSoFar
+    totalBytes = mapped.totalBytes
+    onProgress(mapped.progress)
   }
 
-  return compareVersions(latestVersion, currentVersion) > 0 ? mapGitHubReleaseToInfo(release) : null
+  try {
+    const result = await invoke<IpcResult<void>>('updater_install_signed', { onEvent })
+    if (!result?.success) {
+      return {
+        success: false,
+        error: result?.error ?? 'Failed to install update',
+        code: result?.code ?? UpdaterErrorCodes.DOWNLOAD_FAILED
+      }
+    }
+    return { success: true, data: undefined }
+  } catch (error) {
+    return {
+      success: false,
+      error: getErrorMessage(error, 'Failed to download update'),
+      code: UpdaterErrorCodes.DOWNLOAD_FAILED
+    }
+  }
 }
 
 export async function downloadUpdate(
@@ -557,67 +517,8 @@ export async function downloadUpdate(
     }
   }
 
-  if (isManualUpdateMode && manualUpdateInfo) {
-    await openUrl(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
-    return { success: true, data: undefined }
-  }
-
-  if (!pendingTauriUpdate) {
-    return {
-      success: false,
-      error: 'No update available to download',
-      code: UpdaterErrorCodes.UPDATE_NOT_AVAILABLE
-    }
-  }
-
-  // Capture the handle before any await: a concurrent periodic checkForUpdates()
-  // can reassign the module-scoped pendingTauriUpdate mid-download, which would
-  // otherwise make the post-await assignments point at the wrong Update.
-  const updateHandle = pendingTauriUpdate
-
-  try {
-    const updateVersion = updateHandle.version
-
-    if (preparedUpdateVersion !== updateVersion) {
-      const preparationResult = await prepareUpdateRecovery()
-      if (!preparationResult.success) {
-        return preparationResult
-      }
-      preparedUpdateVersion = updateVersion
-    }
-
-    let downloadedSoFar = 0
-    let totalBytes = 0
-
-    if (onProgress) {
-      onProgress({
-        bytesPerSecond: 0,
-        percent: 0,
-        transferred: 0,
-        total: 0
-      })
-    }
-
-    await updateHandle.download((event) => {
-      if (!onProgress) return
-
-      const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
-      downloadedSoFar = mapped.downloadedSoFar
-      totalBytes = mapped.totalBytes
-      onProgress(mapped.progress)
-    })
-
-    downloadedUpdate = updateHandle
-    downloadedVersion = updateVersion
-
-    return { success: true, data: undefined }
-  } catch (error) {
-    return {
-      success: false,
-      error: getErrorMessage(error, 'Failed to download update'),
-      code: UpdaterErrorCodes.DOWNLOAD_FAILED
-    }
-  }
+  // One action downloads the signed bundle, installs it, and restarts the app.
+  return installSignedUpdate(onProgress)
 }
 
 export async function installAndRestart(): Promise<IpcResult<void>> {
@@ -629,16 +530,7 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
     }
   }
 
-  if (isManualUpdateMode && manualUpdateInfo) {
-    await openUrl(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
-    return { success: true, data: undefined }
-  }
-
-  if (
-    !pendingTauriUpdate ||
-    downloadedVersion !== pendingTauriUpdate.version ||
-    !downloadedUpdate
-  ) {
+  if (!signedUpdateInfo) {
     return {
       success: false,
       error: 'No downloaded update ready to install',
@@ -646,46 +538,27 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
     }
   }
 
-  try {
-    // Apply the already-downloaded package, then restart into the new version.
-    // Split from download so the app is never force-restarted during download.
-    await downloadedUpdate.install()
-    await relaunch()
-    return { success: true, data: undefined }
-  } catch (error) {
-    return {
-      success: false,
-      error: getErrorMessage(error, 'Failed to install and restart after update'),
-      code: UpdaterErrorCodes.INSTALL_FAILED
-    }
-  }
+  return installSignedUpdate()
 }
 
 export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
-  const updateAvailable = isAurUpdateMode()
-    ? pendingAurUpdate !== null
-    : pendingTauriUpdate !== null || isManualUpdateMode
+  const updateAvailable = isAurUpdateMode() ? pendingAurUpdate !== null : signedUpdateInfo !== null
   const version = isAurUpdateMode()
     ? (pendingAurUpdate?.version ?? null)
-    : (pendingTauriUpdate?.version ?? manualUpdateInfo?.version ?? null)
-  const downloaded = isAurUpdateMode()
-    ? false
-    : !isManualUpdateMode &&
-      pendingTauriUpdate !== null &&
-      downloadedVersion === pendingTauriUpdate.version
+    : (signedUpdateInfo?.version ?? null)
 
   return {
     success: true,
     data: {
       updateAvailable,
-      downloaded,
+      downloaded: false,
       version,
       isChecking: false,
       isDownloading: false,
       downloadProgress: null,
       error: null,
       lastChecked: lastCheckedAt,
-      isManualUpdateMode: !isAurUpdateMode() && isManualUpdateMode
+      isManualUpdateMode: false
     }
   }
 }
@@ -712,27 +585,21 @@ export function registerUpdateEventHandlers(handlers: TauriUpdaterEventHandlers)
 }
 
 export async function clearPendingUpdate(): Promise<void> {
-  pendingTauriUpdate = null
-  downloadedUpdate = null
   pendingAurUpdate = null
-  manualUpdateInfo = null
-  downloadedVersion = null
+  signedUpdateInfo = null
   preparedUpdateVersion = null
-  isManualUpdateMode = false
+  try {
+    await invoke('updater_clear_pending')
+  } catch {
+    // The desktop command drops the signed handle. A missing runtime still
+    // clears the renderer copy above.
+  }
 }
 
 export function _resetUpdaterStateForTesting(): void {
-  pendingTauriUpdate = null
-  downloadedUpdate = null
   pendingAurUpdate = null
-  manualUpdateInfo = null
-  downloadedVersion = null
+  signedUpdateInfo = null
   preparedUpdateVersion = null
   lastCheckedAt = null
   autoUpdateEnabled = true
-  isManualUpdateMode = false
-}
-
-export function isInManualUpdateMode(): boolean {
-  return !isAurUpdateMode() && isManualUpdateMode
 }
