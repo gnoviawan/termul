@@ -10,9 +10,9 @@ import { E2E_BASE_URL, E2E_TOKEN } from './helpers'
  * Covers spec-mobile-composer-row.md in a REAL browser, where the jsdom unit
  * tests cannot reach: layout on a 390 / 360 / 320px phone viewport, the focus
  * order of the "Add to chat" sheet (Radix focus trap, synchronous editor focus
- * from a tap), the picker opening from a tap (user activation), the nested
- * SelectorModal over the sheet, `dvh` height caps, system Back and the toast
- * clearance above the composer.
+ * from a tap), the picker opening from a tap (user activation), the combined
+ * model, effort and agent selector sheet, `dvh` height caps, system Back and
+ * the toast clearance above the composer.
  *
  * Every test creates its OWN project (a directory whose name carries the
  * `composer-row-e2e` marker) and launches its own chat through the phone shell,
@@ -44,7 +44,11 @@ test.setTimeout(120_000)
 /** Marker the fake agent looks for in the `session/new` cwd. */
 const CWD_MARKER = 'composer-row-e2e'
 const AGENT = 'Fake Longrun'
-const MODEL_CHIP = `Model: Opus 5.5 (${AGENT})`
+/**
+ * The combined model, effort and agent pill: model, then effort, then the agent
+ * line. The fake agent's thought level starts at Medium.
+ */
+const MODEL_PILL = `Opus 5.5. Medium. Switch agent. Currently ${AGENT}`
 const VIEWPORT_HEIGHT = 844
 /** A file in every project, for the @ mention menu to find. */
 const MENTION_TARGET = 'mention-target.md'
@@ -112,10 +116,18 @@ async function openChat(
   await page.keyboard.type(prompt)
   await page.keyboard.press('Enter')
 
-  await expect(page.getByRole('button', { name: MODEL_CHIP })).toBeVisible()
+  await expect(page.getByRole('button', { name: MODEL_PILL })).toBeVisible()
 }
 
 const composerCard = (page: Page): Locator => page.locator('[data-chat-composer="true"]')
+/**
+ * The selector pill by test id (Radix hides it from the a11y tree while its sheet
+ * is open), scoped to the chat composer: the launcher pane keeps its own selector
+ * with the same test id in the page.
+ */
+const selectorPill = (page: Page): Locator =>
+  composerCard(page).getByTestId('agent-model-selector-trigger')
+const selectorSheet = (page: Page): Locator => page.getByRole('dialog', { name: 'Model and agent' })
 const toolbarRow = (page: Page): Locator =>
   composerCard(page).locator('[data-composer-toolbar-row="mobile"]')
 /** `includeHidden`: Radix marks the composer aria-hidden while a sheet or modal is open. */
@@ -202,7 +214,7 @@ test('lays the composer out as one row: +, model, mode, context ring, send', asy
 
   await expectControls(row, [
     'Add to chat',
-    MODEL_CHIP,
+    MODEL_PILL,
     'Default',
     'Context 28 percent used',
     'Send message'
@@ -216,7 +228,8 @@ test('lays the composer out as one row: +, model, mode, context ring, send', asy
   ).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Attach files' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /MCP servers/ })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /^Switch agent/ })).toHaveCount(0)
+  // Effort is part of the one selector pill, not a chip of its own.
+  await expect(page.getByRole('button', { name: 'Medium', exact: true })).toHaveCount(0)
   await expect(page.locator('[data-chat-composer-context-strip]')).toHaveCount(0)
 
   // One visual line: every control shares a centre line and nothing spills sideways.
@@ -233,28 +246,52 @@ test('lays the composer out as one row: +, model, mode, context ring, send', asy
   expect(plus.height).toBeGreaterThanOrEqual(44)
 })
 
-test('the model chip and mode chip open dvh-capped pickers', async ({ page, request }) => {
+test('the selector pill opens the model sheet and the mode chip a dvh-capped picker', async ({
+  page,
+  request
+}) => {
   await openChat(page, request, 'pickers', '[USAGE] [DURATION:2] picker check')
 
-  // The chip shows the agent glyph and the model name; the agent name lives
-  // only in the accessible name.
-  const modelChip = page.getByRole('button', { name: MODEL_CHIP })
-  await expect(modelChip).toContainText('Opus 5.5')
-  await expect(modelChip).not.toContainText(AGENT)
-  await expect(modelChip.locator('svg').first()).toBeVisible()
-  await modelChip.tap()
-  const modelPicker = page.getByRole('dialog', { name: 'Model' })
-  await expect(modelPicker).toBeVisible()
-  await expect(modelPicker).toHaveClass(/max-h-\[80dvh\]/)
-  await expect(modelPicker).not.toHaveClass(/max-h-\[80vh\]/)
-  await expect(modelPicker).toHaveCSS('max-height', `${VIEWPORT_HEIGHT * 0.8}px`)
-  await modelPicker.getByRole('button', { name: 'Sonnet 5.5' }).tap()
+  // The pill shows the agent glyph, the model and the effort; the agent name
+  // lives only in the accessible name.
+  const pill = selectorPill(page)
+  await expect(pill).toHaveAccessibleName(MODEL_PILL)
+  await expect(pill).toContainText('Opus 5.5')
+  await expect(pill).toContainText('Medium')
+  await expect(pill).not.toContainText(AGENT)
+  await expect(pill.locator('svg').first()).toBeVisible()
+  await pill.tap()
+  const selector = selectorSheet(page)
+  await expect(selector).toBeVisible()
+  // A bottom sheet: it sits on the bottom edge of the phone and never outgrows it.
+  // (Poll: it is still sliding in right after it becomes visible.)
+  await expect
+    .poll(async () => {
+      const box = await boxOf(selector)
+      return box.y + box.height
+    })
+    .toBeCloseTo(VIEWPORT_HEIGHT, 0)
+  expect((await boxOf(selector)).height).toBeLessThan(VIEWPORT_HEIGHT)
+  // Choosing a model keeps the sheet open; the pill follows the pick.
+  await selector.getByRole('button', { name: 'Sonnet 5.5' }).tap()
+  await expect(selector.getByRole('button', { name: 'Sonnet 5.5' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  )
+  // Radix hides the pill while the sheet is open, so read the attribute, not the computed name.
+  await expect(pill).toHaveAttribute(
+    'aria-label',
+    `Sonnet 5.5. Medium. Switch agent. Currently ${AGENT}`
+  )
+  await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: `Model: Sonnet 5.5 (${AGENT})` })).toBeFocused()
+  await expect(pill).toBeFocused()
 
   await page.getByRole('button', { name: 'Default', exact: true }).tap()
   const modePicker = page.getByRole('dialog', { name: 'Agent' })
   await expect(modePicker).toBeVisible()
+  await expect(modePicker).toHaveClass(/max-h-\[80dvh\]/)
+  await expect(modePicker).not.toHaveClass(/max-h-\[80vh\]/)
   await expect(modePicker).toHaveCSS('max-height', `${VIEWPORT_HEIGHT * 0.8}px`)
   await expect(modePicker.getByRole('button', { name: 'Default' })).toHaveAttribute(
     'aria-pressed',
@@ -286,11 +323,9 @@ test('the + sheet lists its sections and dismisses back to the + button', async 
   await expect(sheet.getByRole('button', { name: 'Attach files' })).toBeVisible()
   await expect(sheet.getByRole('button', { name: 'Mention file' })).toBeVisible()
   await expect(sheet.getByRole('button', { name: 'Commands' })).toBeVisible()
-  await expect(sheet.getByRole('heading', { name: 'Chat options' })).toBeVisible()
-  await expect(
-    sheet.getByRole('button', { name: `Switch agent. Currently ${AGENT}` })
-  ).toBeVisible()
-  await expect(sheet.getByRole('button', { name: 'Medium' })).toBeVisible()
+  // The agent, model and effort live in the selector pill, not in this sheet.
+  await expect(sheet.getByRole('heading', { name: 'Chat options' })).toHaveCount(0)
+  await expect(sheet.getByRole('button', { name: 'Medium', exact: true })).toHaveCount(0)
   await expect(sheet.getByRole('heading', { name: 'MCP servers' })).toBeVisible()
   await expect(sheet.getByText('No servers attached yet.')).toBeVisible()
   await expect(sheet.getByText('Takes effect on the next chat.')).toHaveCount(0)
@@ -440,35 +475,32 @@ test('the toast stack sits above the composer card', async ({ page, request }) =
   expect(toastBox.width).toBeGreaterThan(300)
 })
 
-test('a chip in the sheet opens its picker over the sheet and returns focus to the chip', async ({
+test('the effort is set from the selector sheet and shows on the pill', async ({
   page,
   request
 }) => {
-  await openChat(page, request, 'nested', '[USAGE] [DURATION:2] nested check')
-  await openAddSheet(page)
+  await openChat(page, request, 'effort', '[USAGE] [DURATION:2] effort check')
+  const pill = selectorPill(page)
+  await pill.tap()
+  const selector = selectorSheet(page)
+  await expect(selector).toBeVisible()
 
-  await addSheet(page).getByRole('button', { name: 'Medium' }).tap()
-  const picker = page.getByRole('dialog', { name: 'Thinking Level' })
-  await expect(picker).toBeVisible()
-  await expect(picker).toHaveCSS('max-height', `${VIEWPORT_HEIGHT * 0.8}px`)
-  // The + sheet stays open beneath the picker (hidden from the a11y tree only).
-  await expect(page.getByRole('dialog', { name: 'Add to chat', includeHidden: true })).toBeVisible()
+  const medium = selector.getByRole('button', { name: 'Medium', exact: true })
+  await expect(medium).toHaveAttribute('aria-pressed', 'true')
+  await selector.getByRole('button', { name: 'High', exact: true }).tap()
+  await expect(selector.getByRole('button', { name: 'High', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  )
+  await expect(pill).toHaveAttribute(
+    'aria-label',
+    `Opus 5.5. High. Switch agent. Currently ${AGENT}`
+  )
 
-  await picker.getByRole('button', { name: 'High' }).tap()
-  await expect(picker).toBeHidden()
-  await expect(addSheet(page)).toBeVisible()
-  await expect(addSheet(page).getByRole('button', { name: 'High' })).toBeFocused()
-
-  // Escape closes only the picker; a second Escape closes the sheet.
-  await addSheet(page).getByRole('button', { name: 'High' }).tap()
-  await expect(picker).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(picker).toBeHidden()
-  await expect(addSheet(page)).toBeVisible()
-  await expect(addSheet(page).getByRole('button', { name: 'High' })).toBeFocused()
+  // Escape closes the sheet and returns focus to the pill.
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(addButton(page)).toBeFocused()
+  await expect(pill).toBeFocused()
 })
 
 test('the context ring opens a details sheet and returns focus to the ring', async ({
@@ -525,7 +557,7 @@ test('a running turn queues a draft and cancels on an empty draft; no ring witho
   const row = toolbarRow(page)
   // No usage reported: no ring (and no empty gap where it would be).
   await expect(contextRing(page)).toHaveCount(0)
-  await expectControls(row, ['Add to chat', MODEL_CHIP, 'Default', 'Cancel turn'])
+  await expectControls(row, ['Add to chat', MODEL_PILL, 'Default', 'Cancel turn'])
 
   // Draft text on a busy turn: the button queues.
   await enterDraft(page, 'queued note')
