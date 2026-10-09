@@ -40,7 +40,7 @@ export function TabListItem({
         layout: { duration: 0.18, ease: EASE_OUT }
       }}
       className={cn(
-        'list-none h-full min-w-0 overflow-hidden shrink-0',
+        'list-none flex h-full min-w-0 items-center overflow-hidden shrink-0',
         !isPresent && 'pointer-events-none'
       )}
     >

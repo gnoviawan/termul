@@ -44,8 +44,6 @@ interface ChatMessageListProps {
   items: TimelineItem[]
   /** Active session — resets enter-animation baseline on switch. */
   sessionId: SessionId
-  /** Agent behind this session (drives the agent name/icon on replies). */
-  agentId: AgentId
   /** True for the complete duration of an in-flight agent turn. */
   showRunningIndicator: boolean
   /** Seed the composer with a user message's text (edit affordance). */
@@ -292,7 +290,6 @@ function VirtualizedTimeline({
 export function ChatMessageList({
   items,
   sessionId,
-  agentId,
   showRunningIndicator,
   onEditMessage,
   onRetry,
@@ -332,7 +329,7 @@ export function ChatMessageList({
       : null
 
   if (items.length === 0 && !showRunningIndicator) {
-    return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
+    return <ChatEmptyState sessionId={sessionId} />
   }
 
   return (

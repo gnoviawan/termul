@@ -10,7 +10,12 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A description or title edit uses action `edited`. Code jobs skip that
+  # action. Cancelling the in-progress run would abort the synchronize jobs
+  # and leave them skipped.
+  # A base-branch edit is also `edited`, but the merge commit changed.
+  # Cancel the older run. The code jobs on this run still execute.
+  cancel-in-progress: ${{ github.event.action != 'edited' || github.event.changes.base != null }}
 
 jobs:
   pr-title-check:
@@ -115,8 +120,9 @@ jobs:
 
   validate:
     name: Lint, Typecheck & Test
-    # Code jobs don't need to re-run when only the PR description is edited.
-    if: github.event.action != 'edited'
+    # Skip a description or title edit. A base-branch edit changes the merge
+    # commit, so these jobs still run.
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -144,7 +150,7 @@ jobs:
 
   rust-checks:
     name: Rust Checks
-    if: github.event.action != 'edited'
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -207,7 +213,7 @@ jobs:
 
   web-build:
     name: Web Client Build
-    if: github.event.action != 'edited'
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -232,7 +238,7 @@ jobs:
 
   standalone-server-build:
     name: Standalone Server Build
-    if: github.event.action != 'edited'
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -289,7 +295,7 @@ jobs:
 
   rust-windows-check:
     name: Rust Windows Smoke Check
-    if: github.event.action != 'edited'
+    if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -334,7 +340,7 @@ jobs:
 
   build-check:
     name: Verify Tauri Frontend Build
-    if: github.event.action != 'edited'
+    if: github.event.action != 'edited' || github.event.changes.base != null
     needs: [validate, rust-checks, rust-windows-check, web-build, standalone-server-build]
     runs-on: ubuntu-latest
     timeout-minutes: 15

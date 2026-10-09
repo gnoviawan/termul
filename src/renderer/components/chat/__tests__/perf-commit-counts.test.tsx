@@ -201,12 +201,7 @@ describe('perf-commit-counts (CAP-8)', () => {
       withProfiler(
         'ChatMessageList',
         list.onRender,
-        <ChatMessageList
-          items={[]}
-          sessionId={SESSION_ID}
-          agentId={AGENT_ID}
-          showRunningIndicator
-        />
+        <ChatMessageList items={[]} sessionId={SESSION_ID} showRunningIndicator />
       )
     )
 
@@ -312,12 +307,7 @@ describe('perf-commit-counts (CAP-8)', () => {
       withProfiler(
         'ChatMessageList',
         list.onRender,
-        <ChatMessageList
-          items={[]}
-          sessionId={SESSION_ID}
-          agentId={AGENT_ID}
-          showRunningIndicator
-        />
+        <ChatMessageList items={[]} sessionId={SESSION_ID} showRunningIndicator />
       )
     )
 
@@ -352,12 +342,7 @@ describe('perf-commit-counts (CAP-8)', () => {
       withProfiler(
         'ChatMessageList',
         list.onRender,
-        <ChatMessageList
-          items={[]}
-          sessionId={SESSION_ID}
-          agentId={AGENT_ID}
-          showRunningIndicator
-        />
+        <ChatMessageList items={[]} sessionId={SESSION_ID} showRunningIndicator />
       )
     )
 

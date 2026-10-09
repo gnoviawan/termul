@@ -1332,7 +1332,7 @@ fn cancel_elicitation(item: PendingElicitation) {
         .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
 }
 
-fn elicitation_response(
+pub(crate) fn elicitation_response(
     action: &str,
     content: Option<serde_json::Map<String, Value>>,
 ) -> CreateElicitationResponse {
@@ -1348,10 +1348,30 @@ fn elicitation_response(
                             .as_i64()
                             .map(ElicitationContentValue::Integer)
                             .or_else(|| number.as_f64().map(ElicitationContentValue::Number)),
+                        // Multi-select answers arrive as string arrays (issue
+                        // #935). An array holding ANY non-string element is
+                        // unrepresentable — the key is dropped, no panic.
+                        Value::Array(items) => items
+                            .into_iter()
+                            .map(|item| match item {
+                                Value::String(text) => Some(text),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<String>>>()
+                            .map(ElicitationContentValue::StringArray),
                         _ => None,
                     };
-                    if let Some(converted) = converted {
-                        fields.insert(key, converted);
+                    match converted {
+                        Some(converted) => {
+                            fields.insert(key, converted);
+                        }
+                        None => {
+                            // Counts only — answer keys/values are payload.
+                            log::warn!(
+                                "[acp] elicitation response dropped an unrepresentable \
+                                 content value"
+                            );
+                        }
                     }
                 }
             }

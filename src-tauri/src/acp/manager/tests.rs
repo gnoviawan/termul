@@ -2005,3 +2005,71 @@ fn delete_logout_and_extra_roots_follow_advertised_capabilities() {
         vec![other]
     );
 }
+
+/// Issue #935: `elicitation_response` maps an all-string JSON array to
+/// `ElicitationContentValue::StringArray` so multi-select answers reach the
+/// agent; sibling keys keep their existing mappings.
+#[test]
+fn elicitation_response_maps_string_arrays() {
+    let content = serde_json::Map::from_iter([
+        ("q0".to_string(), serde_json::json!("Red")),
+        ("q1".to_string(), serde_json::json!(["Logging", "My custom feature"])),
+    ]);
+    let response = elicitation_response("accept", Some(content));
+    let ElicitationAction::Accept(accept) = response.action else {
+        panic!("accept must produce ElicitationAction::Accept");
+    };
+    let fields = accept.content.expect("accept carries content");
+    assert_eq!(
+        fields.get("q0"),
+        Some(&ElicitationContentValue::String("Red".to_string()))
+    );
+    assert_eq!(
+        fields.get("q1"),
+        Some(&ElicitationContentValue::StringArray(vec![
+            "Logging".to_string(),
+            "My custom feature".to_string(),
+        ]))
+    );
+}
+
+/// A `Value::Array` holding ANY non-string element is unrepresentable — that
+/// key is dropped (no panic); sibling keys still map.
+#[test]
+fn elicitation_response_drops_mixed_type_arrays() {
+    let content = serde_json::Map::from_iter([
+        ("q0".to_string(), serde_json::json!("Red")),
+        ("q1".to_string(), serde_json::json!(["a", 1])),
+    ]);
+    let response = elicitation_response("accept", Some(content));
+    let ElicitationAction::Accept(accept) = response.action else {
+        panic!("accept must produce ElicitationAction::Accept");
+    };
+    let fields = accept.content.expect("accept carries content");
+    assert_eq!(
+        fields.get("q0"),
+        Some(&ElicitationContentValue::String("Red".to_string()))
+    );
+    assert!(
+        !fields.contains_key("q1"),
+        "a mixed-type array drops the key instead of panicking"
+    );
+}
+
+/// `decline`/`cancel` (and unknown action strings) are unchanged by the
+/// StringArray mapping.
+#[test]
+fn elicitation_response_decline_and_cancel_unchanged() {
+    assert!(matches!(
+        elicitation_response("decline", None).action,
+        ElicitationAction::Decline
+    ));
+    assert!(matches!(
+        elicitation_response("cancel", None).action,
+        ElicitationAction::Cancel
+    ));
+    assert!(matches!(
+        elicitation_response("unknown-action", None).action,
+        ElicitationAction::Cancel
+    ));
+}

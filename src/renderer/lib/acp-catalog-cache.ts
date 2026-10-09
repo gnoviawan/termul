@@ -4,7 +4,7 @@
  * QA on 2026-10-04 found the web UI requesting `GET /acp/catalog` ~15k/min
  * (~400/s peak) while a turn streams: several components call `listCatalog()`
  * on their own schedule (`useResolvedSupportedAcpAgents` consumers —
- * AgentSwitchPicker, AgentLauncher, AcpAgentsSettings; `DirectoryPicker`'s
+ * the composer agent selector, AgentLauncher, AcpAgentsSettings; `DirectoryPicker`'s
  * host-OS seed; `agent-update-orchestration`), and transcript-driven
  * re-renders re-fire those call sites in a loop. The renderer-side fix is
  * shared-state memoization at the facade boundary:

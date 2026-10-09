@@ -41,6 +41,7 @@ import {
 } from '../prompt-queue-orchestration'
 import { ephemeralSessionIds } from './ephemeral-ids'
 import { isIndexedRealSession } from './live-turn'
+import { modelCatalogFromOptions, persistModelCatalog } from './model-catalog'
 
 // Re-export so the transcript/session slices can consult turn-busy state via
 // the shared helpers surface they already import (issue #838/#846 wiring).
@@ -1030,6 +1031,7 @@ export function writeAgentOptionsCache(
     configOptions?: SessionConfigOption[]
   }
 ): void {
+  const written: { entry: AgentOptionsCacheEntry | null } = { entry: null }
   set((s) => {
     const prev = s.agentOptionsCache[configId]
     const next: AgentOptionsCacheEntry = {
@@ -1050,10 +1052,15 @@ export function writeAgentOptionsCache(
       delete agentOptionsCache[configId]
       return { agentOptionsCache }
     }
+    written.entry = next
     return {
       agentOptionsCache: { ...s.agentOptionsCache, [configId]: next }
     }
   })
+  // Keep the model list after a restart so the composer selector can show
+  // this agent's models before it runs again.
+  const catalog = written.entry ? modelCatalogFromOptions(written.entry) : null
+  if (catalog) persistModelCatalog(configId, catalog)
 }
 
 export function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {

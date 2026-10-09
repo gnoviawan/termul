@@ -10,11 +10,19 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
-import { Spinner } from '@/components/ui/spinner'
+import {
+  PANEL_HEADER_CLASS,
+  PANEL_ICON_BUTTON_CLASS,
+  QUIET_ICON_BUTTON_CLASS
+} from '@/components/ui/panel-styles'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHConnections, useSSHProfiles } from '@/stores/ssh-store'
 import { SSHProfileForm } from './SSHProfileForm'
+import { resolveSSHHostState, SSHHostLamp, SSHHostStateWord } from './ssh-host-status'
+
+/** Small row action button (edit / connect / disconnect). */
+const ROW_ACTION_BUTTON = `${QUIET_ICON_BUTTON_CLASS} size-6`
 
 interface SSHPanelProps {
   onConnect?: (profileId: string) => void
@@ -30,8 +38,8 @@ export function SSHPanel({
   const profiles = useSSHProfiles()
   const connections = useSSHConnections()
   const { loadProfiles, disconnect, importConfig, deleteProfile, selectProfile } = useSSHActions()
-  const [showForm, setShowForm] = useState(false)
-  const [editingProfile, setEditingProfile] = useState<SSHProfile | null>(null)
+  // Profile form: closed when null; `profile` null = new profile.
+  const [form, setForm] = useState<{ profile: SSHProfile | null } | null>(null)
   const [connectingId, setConnectingId] = useState<string | null>(null)
   const [showCredentials, setShowCredentials] = useState(false)
   // Delete is irreversible — gate it behind a confirmation dialog (mirrors
@@ -108,71 +116,94 @@ export function SSHPanel({
     }
   }
 
+  const openNewProfile = () => setForm({ profile: null })
+
   const getConnectionForProfile = (profileId: string) =>
     connections.find((c) => c.profileId === profileId)
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="h-9 flex items-center justify-between px-3">
-        <div className="flex items-center gap-1.5">
-          <span className="label-section text-sidebar-foreground">SSH</span>
+      <div className={cn(PANEL_HEADER_CLASS, 'h-9')}>
+        <div className="flex items-center gap-1">
+          <span className="label-panel">SSH</span>
+          {/* Shows/hides user@host:port on each row (privacy). Panel visibility
+              itself is toggled from the activity rail. */}
           <button
-            onClick={() => setShowCredentials(!showCredentials)}
-            className="group h-5 w-5 inline-flex items-center justify-center rounded hover:bg-sidebar-accent transition-colors"
+            type="button"
+            onClick={() => setShowCredentials((shown) => !shown)}
+            className={ROW_ACTION_BUTTON}
             title={showCredentials ? 'Hide credentials' : 'Show credentials'}
+            aria-label={showCredentials ? 'Hide credentials' : 'Show credentials'}
+            aria-pressed={showCredentials}
           >
-            {showCredentials ? (
-              <Eye className="h-3 w-3 text-muted-foreground group-hover:text-foreground" />
-            ) : (
-              <EyeOff className="h-3 w-3 text-muted-foreground/50 group-hover:text-foreground" />
-            )}
+            {showCredentials ? <Eye size={12} /> : <EyeOff size={12} />}
           </button>
         </div>
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center">
           <button
+            type="button"
             onClick={handleImport}
-            className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors"
+            className={PANEL_ICON_BUTTON_CLASS}
             title="Import from ~/.ssh/config"
+            aria-label="Import from ~/.ssh/config"
           >
-            <Download className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground" />
+            <Download size={14} />
           </button>
           <button
-            onClick={() => {
-              setEditingProfile(null)
-              setShowForm(true)
-            }}
-            className="group h-6 w-6 inline-flex items-center justify-center rounded-md hover:bg-sidebar-accent transition-colors"
+            type="button"
+            onClick={openNewProfile}
+            className={PANEL_ICON_BUTTON_CLASS}
             title="New SSH Profile"
+            aria-label="New SSH Profile"
           >
-            <Plus className="h-3.5 w-3.5 text-muted-foreground group-hover:text-foreground" />
+            <Plus size={14} />
           </button>
         </div>
       </div>
 
       {/* Profile List */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto px-2 pb-1">
         {profiles.length === 0 ? (
-          <div className="px-3 pb-2">
-            <p className="text-xs text-muted-foreground">No profiles yet</p>
+          <div className="flex flex-col gap-2 px-2 pb-2" data-testid="ssh-empty-state">
+            <p className="text-xs text-secondary-foreground">No SSH hosts yet.</p>
+            <div className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={openNewProfile}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-popover px-2.5 text-xs font-medium text-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <Plus size={12} aria-hidden="true" />
+                Add host
+              </button>
+              <button
+                type="button"
+                onClick={handleImport}
+                className="inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                Import ~/.ssh/config
+              </button>
+            </div>
           </div>
         ) : (
-          <div className="pb-0.5">
+          <div className="flex flex-col gap-0.5">
             {profiles.map((profile) => {
               const connection = getConnectionForProfile(profile.id)
               const isConnecting = connectingId === profile.id
               const isConnected = connection?.status === 'connected'
+              const isSelected = activeProfileId === profile.id
+              const hostState = resolveSSHHostState(connection?.status, isConnecting)
 
               return (
                 <ContextMenu key={profile.id}>
                   <ContextMenuTrigger asChild>
                     <div
                       className={cn(
-                        'flex items-center gap-2 px-3 py-1.5 hover:bg-sidebar-accent cursor-pointer group transition-colors',
-                        isConnected && 'bg-sidebar-accent/30',
-                        activeProfileId === profile.id &&
-                          'bg-sidebar-accent/60 border-l-2 border-primary'
+                        'group flex h-10 cursor-pointer items-center gap-2.5 rounded-md px-2 transition-colors duration-150 ease-out',
+                        isSelected ? 'keycap text-foreground' : 'hover:bg-foreground/[0.03]'
                       )}
+                      data-selected={isSelected ? 'true' : undefined}
+                      data-testid={`ssh-host-row-${profile.id}`}
                       onClick={() => onSelectProfile?.(profile.id)}
                       onDoubleClick={() => {
                         if (isTauriContext() && !isConnected && !isConnecting) {
@@ -180,53 +211,33 @@ export function SSHPanel({
                         }
                       }}
                     >
-                      {/* Status dot */}
-                      <div className="flex-shrink-0">
-                        {isConnecting ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-warning/20">
-                            <Spinner size={10} decorative className="text-warning" />
-                          </span>
-                        ) : isConnected ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-success/20">
-                            <span className="h-2 w-2 rounded-full bg-success-fill" />
-                          </span>
-                        ) : connection?.status === 'failed' ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-destructive/20">
-                            <span className="h-2 w-2 rounded-full bg-destructive-fill" />
-                          </span>
-                        ) : connection?.status === 'reconnecting' ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-warning/20">
-                            <span className="h-2 w-2 rounded-full bg-warning animate-pulse" />
-                          </span>
-                        ) : (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-muted-foreground/10">
-                            <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+                      <SSHHostLamp state={hostState} />
+
+                      {/* Profile info */}
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-xs font-medium text-foreground">
+                          {profile.name}
+                        </span>
+                        {showCredentials && (
+                          <span className="truncate font-mono text-3xs text-muted-foreground">
+                            {profile.username}@{profile.host}:{profile.port}
                           </span>
                         )}
                       </div>
 
-                      {/* Profile info */}
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-medium truncate">{profile.name}</div>
-                        {showCredentials && (
-                          <div className="text-3xs text-muted-foreground truncate">
-                            {profile.username}@{profile.host}:{profile.port}
-                          </div>
-                        )}
-                      </div>
+                      <SSHHostStateWord state={hostState} className="shrink-0" />
 
                       {/* Row actions (opacity reveal — stays mounted, no layout shift) */}
                       <div className="flex shrink-0 items-center gap-0.5 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            setEditingProfile(profile)
-                            setShowForm(true)
+                            setForm({ profile })
                           }}
-                          className="p-1 rounded hover:bg-sidebar-accent text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                          className={ROW_ACTION_BUTTON}
                           title="Edit profile"
                         >
-                          <Pencil className="h-3 w-3" />
+                          <Pencil size={12} />
                         </button>
                         {isConnected ? (
                           <button
@@ -236,10 +247,13 @@ export function SSHPanel({
                                 handleDisconnect(connection.id, profile.name)
                               }
                             }}
-                            className="p-1 rounded hover:bg-destructive/20 text-destructive focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                            className={cn(
+                              ROW_ACTION_BUTTON,
+                              'text-destructive hover:text-destructive'
+                            )}
                             title="Disconnect"
                           >
-                            <WifiOff className="h-3 w-3" />
+                            <WifiOff size={12} />
                           </button>
                         ) : (
                           <button
@@ -247,23 +261,18 @@ export function SSHPanel({
                               e.stopPropagation()
                               handleConnect(profile)
                             }}
-                            className="p-1 rounded hover:bg-sidebar-accent text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                            className={ROW_ACTION_BUTTON}
                             title={isTauriContext() ? 'Connect' : 'SSH is desktop-only'}
                             disabled={isConnecting || !isTauriContext()}
                           >
-                            <Wifi className="h-3 w-3" />
+                            <Wifi size={12} />
                           </button>
                         )}
                       </div>
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-48">
-                    <ContextMenuItem
-                      onSelect={() => {
-                        setEditingProfile(profile)
-                        setShowForm(true)
-                      }}
-                    >
+                    <ContextMenuItem onSelect={() => setForm({ profile })}>
                       <Pencil className="mr-2 h-4 w-4" /> Edit Profile
                     </ContextMenuItem>
                     {isTauriContext() &&
@@ -275,11 +284,7 @@ export function SSHPanel({
                         </ContextMenuItem>
                       ) : (
                         <ContextMenuItem
-                          disabled={
-                            isConnecting ||
-                            connection?.status === 'connecting' ||
-                            connection?.status === 'reconnecting'
-                          }
+                          disabled={hostState === 'connecting' || hostState === 'reconnecting'}
                           onSelect={() => void handleConnect(profile)}
                         >
                           <Wifi className="mr-2 h-4 w-4" /> Connect
@@ -302,12 +307,12 @@ export function SSHPanel({
       </div>
 
       {/* Profile Form Modal */}
-      {showForm && (
+      {form && (
         <SSHProfileForm
-          profile={editingProfile}
-          onClose={() => setShowForm(false)}
+          profile={form.profile}
+          onClose={() => setForm(null)}
           onSaved={() => {
-            setShowForm(false)
+            setForm(null)
             loadProfiles()
           }}
         />

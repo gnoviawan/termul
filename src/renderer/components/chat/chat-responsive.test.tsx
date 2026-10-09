@@ -8,7 +8,7 @@
  * `@[400px]:` class application visually.
  */
 
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
@@ -211,7 +211,6 @@ describe('Story 5.1 responsive chat layout', () => {
         <ChatMessageList
           items={[timelineItem]}
           sessionId="session-1"
-          agentId="agent-1"
           showRunningIndicator={false}
         />
       </TooltipProvider>
@@ -278,7 +277,8 @@ describe('Story 5.1 responsive chat layout', () => {
       option('model', 'Model', 'model', 'composer', [{ value: 'composer', name: 'composer-2.5' }]),
       option('thought_level', 'Thinking', 'thought_level', 'high', [
         { value: 'high', name: 'High' }
-      ])
+      ]),
+      option('custom', 'Tools', 'other', 'alpha', [{ value: 'alpha', name: 'Alpha' }])
     ]
 
     render(
@@ -306,15 +306,27 @@ describe('Story 5.1 responsive chat layout', () => {
     const row1 = toolbar?.querySelector('[data-composer-toolbar-row="1"]')
     const row2 = toolbar?.querySelector('[data-composer-toolbar-row="2"]')
     expect(row1).toBeTruthy()
-    expect(row2).toBeTruthy()
+    expect(row2).toBeNull()
     expect(toolbar?.querySelector('[data-composer-toolbar-row="single"]')).toBeNull()
 
     expect(within(row1 as HTMLElement).getByRole('button', { name: /^Agent$/ })).toBeInTheDocument()
     expect(
-      within(row1 as HTMLElement).getByRole('button', { name: 'composer-2.5' })
+      within(row1 as HTMLElement).getByRole('button', { name: /composer-2\.5/ })
     ).toBeInTheDocument()
+    expect(
+      within(row1 as HTMLElement).queryByRole('button', { name: 'High' })
+    ).not.toBeInTheDocument()
+    expect(
+      within(row1 as HTMLElement).queryByRole('button', { name: 'Alpha' })
+    ).not.toBeInTheDocument()
 
-    expect(within(row2 as HTMLElement).getByRole('button', { name: 'High' })).toBeInTheDocument()
+    fireEvent.click(within(row1 as HTMLElement).getByTestId('agent-model-selector-trigger'))
+    // Generic options are footer tracks: the option name labels the track.
+    const tools = screen.getByRole('group', { name: 'Tools' })
+    expect(within(tools).getByRole('button', { name: 'Alpha' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
     expect(
       within(toolbar as HTMLElement).getByRole('button', { name: /MCP servers/i })
     ).toBeInTheDocument()

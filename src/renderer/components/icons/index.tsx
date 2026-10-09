@@ -48,6 +48,7 @@ import {
   Files01Icon,
   FileTextIcon as FileTextIconData,
   Folder01Icon,
+  FolderEditIcon,
   FolderGit2Icon,
   FolderInputIcon,
   FolderKanbanIcon,
@@ -60,6 +61,7 @@ import {
   Globe02Icon,
   Grid3X3Icon,
   GripVerticalIcon,
+  HandIcon,
   HashIcon,
   HistoryIcon,
   Home01Icon,
@@ -75,7 +77,9 @@ import {
   ListIcon,
   LoaderCircleIcon,
   Loading02Icon,
+  MapsIcon,
   Menu01Icon,
+  MessageQuestionIcon,
   MessageSquareIcon,
   MessageSquarePlusIcon,
   MinimizeIcon,
@@ -228,6 +232,11 @@ export const File = hugeIcon('File', File02Icon)
 export const FileCode = hugeIcon('FileCode', FileCodeIcon)
 export const FileDiff = hugeIcon('FileDiff', FileDiffIcon)
 export const FileEdit = hugeIcon('FileEdit', FileEditIcon)
+// Agent permission modes (composer mode menu).
+export const FolderEdit = hugeIcon('FolderEdit', FolderEditIcon)
+export const Hand = hugeIcon('Hand', HandIcon)
+export const Maps = hugeIcon('Maps', MapsIcon)
+export const MessageQuestion = hugeIcon('MessageQuestion', MessageQuestionIcon)
 export const FilePlus = hugeIcon('FilePlus', FilePlusIcon)
 export const FileQuestion = hugeIcon('FileQuestion', FileQuestionMarkIcon)
 export const Files = hugeIcon('Files', Files01Icon)
