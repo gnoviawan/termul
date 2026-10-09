@@ -685,6 +685,46 @@ describe('WorkspaceLayout mobile branch', () => {
       expect(terminalKill).not.toHaveBeenCalled()
     })
 
+    it('leaves fullscreen and shows the other leaf when a drawer row for its tab is tapped', async () => {
+      seed('pane-b', 'pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      // The Git Changes row belongs to leaf A, not the fullscreen leaf B.
+      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
+
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
+      expect(paneStubs()).toHaveLength(1)
+
+      const state = useWorkspaceStore.getState()
+      expect(state.fullscreenPaneId).toBeNull()
+      expect(state.activePaneId).toBe('pane-a')
+      // Nothing was closed or merged: both leaves are still in the tree, and
+      // no PTY died.
+      expect(state.root.type).toBe('split')
+      expect(getAllLeafPanes(state.root).map((leaf) => leaf.id)).toEqual(['pane-a', 'pane-b'])
+      expect(terminalKill).not.toHaveBeenCalled()
+    })
+
+    it('keeps fullscreen when the tapped drawer row belongs to the fullscreen leaf', async () => {
+      seed('pane-b', 'pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Git History' }))
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      )
+      expect(paneStubs()).toHaveLength(1)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      const state = useWorkspaceStore.getState()
+      expect(state.fullscreenPaneId).toBe('pane-b')
+      expect(state.activePaneId).toBe('pane-b')
+    })
+
     it('keeps the same leaf mounted across re-renders while it stays active', async () => {
       seed('pane-b')
       renderLayout()

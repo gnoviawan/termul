@@ -265,6 +265,38 @@ describe('MobileFileExplorer', () => {
     expect(mockPersistenceRead).toHaveBeenCalledWith('mobile-file-explorer/proj-1')
   })
 
+  it('falls back to the project root when a persisted `..` path escapes the root', async () => {
+    // `/proj/../other/sub` starts with the root prefix but resolves outside it.
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj/../other/sub' })
+    setRoot([entry('a.txt', 'file')])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+    expect(screen.queryByRole('navigation', { name: 'Folder path' })).not.toBeInTheDocument()
+  })
+
+  it('restores a persisted path with dot segments as its resolved folder', async () => {
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: '/proj/./sub/../src' })
+    setRoot([entry('src', 'directory')])
+    mockExplorerState.directoryContents.set('/proj/src', [])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByRole('heading', { name: 'src' })).toBeInTheDocument()
+    // The clean path drives the breadcrumb: no `.` or `..` crumb appears.
+    const nav = await screen.findByRole('navigation', { name: 'Folder path' })
+    expect(
+      within(nav)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['proj'])
+    expect(within(nav).getByText('src')).toHaveAttribute('aria-current', 'page')
+  })
+
   it('restores a canonical-cased persisted folder against a config-cased root (case-insensitive isWithinRoot)', async () => {
     // The persisted folder is canonical casing (`E:/proj/sub`, written from a
     // server-canonicalized entry.path) while the active root is config casing
@@ -914,6 +946,32 @@ describe('MobileFileExplorer', () => {
       expect(resolveBreadcrumbTarget('E:/proj/sub', 'e:/proj', 'E:/proj/sub')).toBeNull()
       expect(resolveBreadcrumbTarget('/proj/src', '/proj', '/proj/src/lib')).toBe('/proj/src')
       expect(resolveBreadcrumbTarget('e:/proj', 'e:/proj', 'E:/proj/sub')).toBe('e:/proj')
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
+    })
+
+    it('resolves dot segments before the containment check', () => {
+      // Lexically under `/proj` by prefix, but outside once `..` is applied.
+      expect(resolveBreadcrumbTarget('/proj/../private', '/proj', '/proj/sub')).toBeNull()
+      expect(resolveBreadcrumbTarget('/proj/..', '/proj', '/proj/sub')).toBeNull()
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(2)
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'MobileFileExplorer.navigateTo' })
+      )
+
+      // Dot segments that stay inside the root resolve to the clean folder.
+      mockLogFrontendError.mockClear()
+      expect(resolveBreadcrumbTarget('/proj/./sub/../src', '/proj', '/proj/sub/lib')).toBe(
+        '/proj/src'
+      )
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
+    })
+
+    it('keeps drive and posix roots when resolving dot segments', () => {
+      expect(resolveBreadcrumbTarget('C:/Users/Alice/..', 'C:/', 'C:/Users/Alice')).toBe('C:/Users')
+      // `..` cannot climb above a drive root.
+      expect(resolveBreadcrumbTarget('C:\\Users\\..\\..', 'C:/', 'C:/Users/Alice')).toBe('C:/')
+      expect(resolveBreadcrumbTarget('/usr/lib/..', '/', '/usr/lib')).toBe('/usr')
+      expect(resolveBreadcrumbTarget('/usr/../../..', '/', '/usr/lib')).toBe('/')
       expect(mockLogFrontendError).not.toHaveBeenCalled()
     })
 

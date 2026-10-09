@@ -59,8 +59,26 @@ interface RenameState {
 
 type NavigationDirection = -1 | 0 | 1
 
+const DOT_SEGMENT = /(^|\/)\.\.?(\/|$)/
+
+/** Resolves `.` and `..` segments, keeping a UNC (`//`), posix (`/`) or drive
+ * (`C:/`) root; `..` cannot climb above a root. Paths without a dot segment
+ * are returned untouched, so every ordinary path normalizes exactly as before. */
+function resolveDotSegments(path: string): string {
+  if (!DOT_SEGMENT.test(path)) return path
+  const root = /^(?:\/\/|[A-Za-z]:\/|\/)/.exec(path)?.[0] ?? ''
+  const kept: string[] = []
+  for (const segment of path.slice(root.length).split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment !== '..') kept.push(segment)
+    else if (kept.length > 0 && kept[kept.length - 1] !== '..') kept.pop()
+    else if (!root) kept.push('..')
+  }
+  return root + kept.join('/')
+}
+
 function normalizePath(path: string): string {
-  const normalized = path.replace(/\\/g, '/')
+  const normalized = resolveDotSegments(path.replace(/\\/g, '/'))
   if (normalized === '/' || /^[A-Za-z]:\/$/.test(normalized)) return normalized
   return normalized.replace(/\/+$/, '') || '/'
 }
@@ -213,7 +231,9 @@ export function MobileFileExplorer({
       .read<string>(PersistenceKeys.mobileFileExplorerFolder(projectId))
       .then((res) => {
         if (cancelled) return
-        const persisted = res.success ? res.data : null
+        // Normalize before the containment check so a persisted `..` path
+        // that lexically escapes the root is dropped, never restored.
+        const persisted = res.success && res.data ? normalizePath(res.data) : null
         setCurrentPath(persisted && isWithinRoot(persisted, rootPath) ? persisted : normalizedRoot)
       })
       .catch(() => {

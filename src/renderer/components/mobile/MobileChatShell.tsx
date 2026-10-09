@@ -221,17 +221,26 @@ export function MobileChatShell({
     // on /c/<id> through setActiveTab.
     const selectedType = paneTabs.find(({ tab }) => tab.id === tabId)?.tab.type
     const returnToWorkspace = !isWorkspaceRoutePath(pathname) && selectedType !== 'agent-chat'
+    const activate = (): void => {
+      const current = useWorkspaceStore.getState()
+      // Fullscreen pins activePaneId to its own leaf (resolveActivePaneId), so
+      // a tab chosen in any other leaf would update that leaf's active tab yet
+      // leave the mobile view on the fullscreen one (a dead tap). Fullscreen is
+      // per-client view state, so leave it (existing store action) when the row
+      // belongs to a different leaf; a row in the fullscreen leaf keeps it.
+      if (current.fullscreenPaneId && current.fullscreenPaneId !== paneId) {
+        current.clearFullscreenPane()
+      }
+      current.setActiveTab(paneId, tabId)
+      if (returnToWorkspace) navigate('/')
+    }
     if (workspace.activePaneId !== paneId) {
       // Defer tab activation until pane is active. The return navigation
       // follows the activation inside the same frame callback, so the
       // workspace route never paints the previously active leaf first.
-      requestAnimationFrame(() => {
-        useWorkspaceStore.getState().setActiveTab(paneId, tabId)
-        if (returnToWorkspace) navigate('/')
-      })
+      requestAnimationFrame(activate)
     } else {
-      workspace.setActiveTab(paneId, tabId)
-      if (returnToWorkspace) navigate('/')
+      activate()
     }
     closeDrawer()
   }

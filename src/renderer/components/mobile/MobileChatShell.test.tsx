@@ -30,8 +30,10 @@ const {
         activeTabId: string | null
       }>,
       activePaneId: 'pane-1',
+      fullscreenPaneId: null as string | null,
       removeTab: vi.fn(),
-      setActiveTab: vi.fn()
+      setActiveTab: vi.fn(),
+      clearFullscreenPane: vi.fn()
     }
   },
   editorRef: {
@@ -169,6 +171,7 @@ describe('MobileChatShell', () => {
     mockRemoveBrowserTab.mockReset()
     workspaceRef.current.removeTab.mockReset()
     workspaceRef.current.setActiveTab.mockReset()
+    workspaceRef.current.clearFullscreenPane.mockReset()
     tauriRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo' }
     // Default leaf: one agent-chat tab (the pre-Story-6 drawer shape).
@@ -182,7 +185,8 @@ describe('MobileChatShell', () => {
           activeTabId: 'tab-1'
         }
       ],
-      activePaneId: 'pane-1'
+      activePaneId: 'pane-1',
+      fullscreenPaneId: null
     }
     editorRef.current.openFiles = new Map()
     browserTabsRef.current = new Map()
@@ -804,6 +808,87 @@ describe('MobileChatShell', () => {
       const [activation] = workspaceRef.current.setActiveTab.mock.invocationCallOrder
       const [navigation] = mockNavigate.mock.invocationCallOrder
       expect(activation).toBeLessThan(navigation)
+    })
+  })
+
+  describe('while a pane is fullscreen', () => {
+    let raf: { mockRestore: () => void }
+
+    beforeEach(() => {
+      // Run the deferred cross-pane activation at once; restored in afterEach
+      // so a failing assertion cannot leak the stub into later tests.
+      raf = vi
+        .spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((callback: FrameRequestCallback) => {
+          callback(0)
+          return 1
+        })
+      workspaceRef.current = {
+        ...workspaceRef.current,
+        leaves: [
+          {
+            type: 'leaf',
+            id: 'pane-1',
+            tabs: [{ type: 'git', id: 'git-/a', cwd: '/a' }],
+            activeTabId: 'git-/a'
+          },
+          {
+            type: 'leaf',
+            id: 'pane-2',
+            tabs: [{ type: 'git-history', id: 'git-history-/b', cwd: '/b' }],
+            activeTabId: 'git-history-/b'
+          }
+        ],
+        activePaneId: 'pane-1',
+        fullscreenPaneId: 'pane-1'
+      }
+    })
+
+    afterEach(() => {
+      raf.mockRestore()
+    })
+
+    function tapRow(name: string): void {
+      renderShellAt('/')
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name }))
+    }
+
+    it('leaves fullscreen before activating a tab in another leaf, so the view follows it', () => {
+      tapRow('Git History')
+
+      expect(workspaceRef.current.clearFullscreenPane).toHaveBeenCalledTimes(1)
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-history-/b')
+      // Cleared first: with fullscreen still set, setActiveTab would keep
+      // activePaneId on the fullscreen leaf.
+      const [clearing] = workspaceRef.current.clearFullscreenPane.mock.invocationCallOrder
+      const [activation] = workspaceRef.current.setActiveTab.mock.invocationCallOrder
+      expect(clearing).toBeLessThan(activation)
+    })
+
+    it('keeps fullscreen when the row belongs to the fullscreen leaf', () => {
+      tapRow('Git Changes')
+
+      expect(workspaceRef.current.clearFullscreenPane).not.toHaveBeenCalled()
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'git-/a')
+    })
+
+    it('leaves a fullscreen leaf that is not the active one, even for a row in the active leaf', () => {
+      // `loadProjectWorkspace` can keep a stale fullscreenPaneId, which would
+      // otherwise hand activePaneId back to the fullscreen leaf.
+      workspaceRef.current.fullscreenPaneId = 'pane-2'
+      tapRow('Git Changes')
+
+      expect(workspaceRef.current.clearFullscreenPane).toHaveBeenCalledTimes(1)
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'git-/a')
+    })
+
+    it('never touches fullscreen when no pane is fullscreen', () => {
+      workspaceRef.current.fullscreenPaneId = null
+      tapRow('Git History')
+
+      expect(workspaceRef.current.clearFullscreenPane).not.toHaveBeenCalled()
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-history-/b')
     })
   })
 
