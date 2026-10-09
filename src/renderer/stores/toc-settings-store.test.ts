@@ -8,7 +8,8 @@ describe('toc-settings-store', () => {
     useTocSettingsStore.setState({
       settings: { ...DEFAULT_TOC_SETTINGS },
       isLoaded: false,
-      loadFailed: false
+      loadFailed: false,
+      collapsedByFile: {}
     })
   })
 
@@ -37,7 +38,7 @@ describe('toc-settings-store', () => {
       result.current.setMaxHeadingLevel(9)
     })
 
-    expect(result.current.settings.width).toBe(350)
+    expect(result.current.settings.width).toBe(360)
     expect(result.current.settings.maxHeadingLevel).toBe(6)
 
     act(() => {
@@ -45,7 +46,7 @@ describe('toc-settings-store', () => {
       result.current.setMaxHeadingLevel(0)
     })
 
-    expect(result.current.settings.width).toBe(150)
+    expect(result.current.settings.width).toBe(180)
     expect(result.current.settings.maxHeadingLevel).toBe(1)
   })
 
@@ -71,5 +72,29 @@ describe('toc-settings-store', () => {
     })
 
     expect(result.current.isLoaded).toBe(true)
+  })
+
+  it('keeps collapsed outline keys per file and toggles them', () => {
+    const { toggleCollapsedKey, setCollapsedKeys } = useTocSettingsStore.getState()
+
+    act(() => {
+      toggleCollapsedKey('/a.md', '1:Intro:0')
+      toggleCollapsedKey('/b.md', '2:Setup:0')
+    })
+    expect(useTocSettingsStore.getState().collapsedByFile).toEqual({
+      '/a.md': ['1:Intro:0'],
+      '/b.md': ['2:Setup:0']
+    })
+
+    act(() => {
+      toggleCollapsedKey('/a.md', '1:Intro:0')
+      setCollapsedKeys('/b.md', ['x', 'x', 'y'])
+    })
+    expect(useTocSettingsStore.getState().collapsedByFile).toEqual({ '/b.md': ['x', 'y'] })
+
+    act(() => {
+      setCollapsedKeys('/b.md', [])
+    })
+    expect(useTocSettingsStore.getState().collapsedByFile).toEqual({})
   })
 })

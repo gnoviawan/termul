@@ -30,14 +30,13 @@ describe('ContextBarSettingsPopover', () => {
   it('gives the trigger a 44px border box on coarse pointers only (#881)', () => {
     render(<ContextBarSettingsPopover />)
     const button = screen.getByRole('button', { name: 'Context bar settings' })
-    expect(button.className).toContain('h-5')
-    expect(button.className).toContain('w-5')
+    expect(button.className).toContain('size-6')
     expect(button.className).not.toContain('max-md:')
     expect(button.className).toContain('pointer-coarse:size-11')
     expect(button.className).toContain('pointer-coarse:-my-2.5')
     expect(button.className).toContain('pointer-coarse:-translate-y-2.5')
     expect(button.className).toContain('pointer-coarse:after:inset-0')
-    // 14px glyph stays put; the wrapper cancels the button's upward shift.
+    // 12px glyph stays put; the wrapper cancels the button's upward shift.
     expect(button.querySelector('span')?.className).toContain('pointer-coarse:translate-y-2.5')
     expect(button.querySelector('span')?.className).not.toContain('max-md:')
   })

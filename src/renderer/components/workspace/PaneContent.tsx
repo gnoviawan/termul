@@ -226,8 +226,15 @@ export function PaneContent({
       data-pane-content={pane.id}
       className={cn(
         'flex flex-col h-full relative',
-        isActivePane && hasMultiplePanes && !isFullscreenPane && 'ring-1 ring-primary/30',
-        isFullscreenPane && 'ring-1 ring-primary/30 rounded-xl overflow-hidden'
+        // The mobile shell collapses a split to the active leaf, so the leaf
+        // must read as a single-leaf workspace: no active-pane or fullscreen
+        // ring (desktop rings unchanged).
+        !isMobileWebShell &&
+          isActivePane &&
+          hasMultiplePanes &&
+          !isFullscreenPane &&
+          'ring-1 ring-primary/30',
+        !isMobileWebShell && isFullscreenPane && 'ring-1 ring-primary/30 rounded-xl overflow-hidden'
       )}
       onMouseDown={handleFocus}
       onKeyDownCapture={handleKeyDownCapture}

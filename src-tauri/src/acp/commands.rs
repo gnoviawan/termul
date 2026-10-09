@@ -882,7 +882,9 @@ pub async fn acp_probe_mcp_server(
 /// has no UI to drive the browser flow.
 #[tauri::command]
 pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> Result<(), String> {
-    use rmcp::transport::auth::{AuthorizationManager, AuthorizationSession, OAuthState};
+    use rmcp::transport::auth::{
+        AuthorizationManager, AuthorizationRequest, AuthorizationSession, OAuthState,
+    };
     use std::net::TcpListener;
     use tauri_plugin_opener::OpenerExt;
 
@@ -907,18 +909,19 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
     let mut manager = AuthorizationManager::new(&server_url)
         .await
         .map_err(|e| format!("OAuth discovery failed: {e}"))?;
-    let metadata = manager
-        .discover_metadata()
+    let resolution = manager
+        .resolve_metadata()
         .await
         .map_err(|e| format!("OAuth discovery failed: {e}"))?;
-    manager.set_metadata(metadata);
+    manager.set_metadata(resolution.metadata);
 
     // 2. Create the authorization session (handles dynamic registration + PKCE).
     //    The session holds the PKCE verifier in its InMemoryStateStore — we MUST
     //    keep it alive until the callback arrives, then use it for the token exchange.
-    let session = AuthorizationSession::new(manager, &[], &redirect_uri, Some("Termul"), None)
+    let request = AuthorizationRequest::new(&redirect_uri).with_client_name("Termul");
+    let session = AuthorizationSession::new(manager, request)
         .await
-        .map_err(|e| format!("OAuth registration failed: {e}"))?;
+        .map_err(|(_manager, e)| format!("OAuth registration failed: {e}"))?;
 
     let auth_url = session.get_authorization_url().to_string();
 

@@ -260,7 +260,12 @@ export function ChatComposerEditor({
         createComposerKeymap(beforeKeyDownRef),
         Placeholder.configure({
           placeholder: () => placeholderRef.current,
-          showOnlyWhenEditable: true
+          // Both composer surfaces (chat + launcher) must show their hint when
+          // the editor is disabled and empty — an inert composer has to say
+          // why. `false` paints the decoration regardless of editability;
+          // each surface passes its own disabled wording (see AgentLauncher /
+          // ChatInputBar `placeholder` props).
+          showOnlyWhenEditable: false
         }),
         StarterKit.configure({
           blockquote: false,

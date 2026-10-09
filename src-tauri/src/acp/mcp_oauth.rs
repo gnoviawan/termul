@@ -7,8 +7,8 @@
 //! has a 2560-char limit that OAuth JWTs routinely exceed).
 
 use rmcp::transport::auth::{
-    AuthorizationCallback, AuthorizationManager, AuthorizationSession, CredentialStore, OAuthState,
-    StoredCredentials,
+    AuthorizationCallback, AuthorizationManager, AuthorizationRequest, AuthorizationSession,
+    CredentialStore, OAuthState, StoredCredentials,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -211,11 +211,11 @@ async fn refresh_token(stored: &StoredToken) -> Result<StoredToken, McpOAuthErro
     let mut manager = AuthorizationManager::new(&stored.issuer)
         .await
         .map_err(|e| McpOAuthError::DiscoveryFailed(e.to_string()))?;
-    let metadata = manager
-        .discover_metadata()
+    let resolution = manager
+        .resolve_metadata()
         .await
         .map_err(|e| McpOAuthError::DiscoveryFailed(e.to_string()))?;
-    manager.set_metadata(metadata);
+    manager.set_metadata(resolution.metadata);
     let config = rmcp::transport::auth::OAuthClientConfig::new(
         stored.client_id.clone(),
         "http://127.0.0.1/callback",
@@ -255,14 +255,15 @@ pub async fn run_full_flow(
     let mut manager = AuthorizationManager::new(server_url)
         .await
         .map_err(|e| McpOAuthError::DiscoveryFailed(e.to_string()))?;
-    let metadata = manager
-        .discover_metadata()
+    let resolution = manager
+        .resolve_metadata()
         .await
         .map_err(|e| McpOAuthError::DiscoveryFailed(e.to_string()))?;
-    manager.set_metadata(metadata);
-    let session = AuthorizationSession::new(manager, &[], redirect_uri, Some("Termul"), None)
+    manager.set_metadata(resolution.metadata);
+    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Termul");
+    let session = AuthorizationSession::new(manager, request)
         .await
-        .map_err(|e| McpOAuthError::RegistrationFailed(e.to_string()))?;
+        .map_err(|(_manager, e)| McpOAuthError::RegistrationFailed(e.to_string()))?;
     let callback = AuthorizationCallback::from_redirect_url(&callback_url)
         .map_err(|e| McpOAuthError::TokenExchangeFailed(format!("callback: {e}")))?;
     let mut state = OAuthState::Session(session);

@@ -1,5 +1,5 @@
 use super::*;
-use agent_client_protocol::schema::v1::SessionConfigSelectOption;
+use agent_client_protocol::schema::v1::{ElicitationSchema, SessionConfigSelectOption};
 
 #[test]
 fn agent_spawned_serializes_camel_case() {
@@ -371,4 +371,457 @@ fn model_config_id_from_options_uses_advertised_id() {
     )
     .category(SessionConfigOptionCategory::Mode);
     assert_eq!(model_config_id_from_options(Some(&[non_model])), None);
+}
+
+// ---- issue #935: multi-question elicitation fields ----
+
+/// A titled multi-select property (`type:"array"`, `items.anyOf`) flattens to
+/// `multi-enum` carrying the property `title`/`description` and structured
+/// options: `value = const`, `label = title` only when a `description` is also
+/// present (else `const`), `description = option.description ?? option.title`.
+#[test]
+fn elicitation_fields_flattens_titled_multi_enum() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "required": ["q1"],
+        "properties": {
+            "q1": {
+                "type": "array",
+                "title": "Features",
+                "description": "Which features should I enable?",
+                "minItems": 1,
+                "items": {
+                    "anyOf": [
+                        {"const": "Logging", "title": "Enable logging"},
+                        {"const": "us", "title": "United States", "description": "Use US spelling"}
+                    ]
+                }
+            }
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("titled multi-select is representable");
+    assert_eq!(fields.len(), 1);
+    let field = &fields[0];
+    assert_eq!(field.name, "q1");
+    assert_eq!(field.kind, "multi-enum");
+    assert!(field.required);
+    assert_eq!(field.title.as_deref(), Some("Features"));
+    assert_eq!(
+        field.description.as_deref(),
+        Some("Which features should I enable?")
+    );
+    assert_eq!(field.options.len(), 2);
+    // Devin-style option: the label lives in `const`; `title` becomes the
+    // description when no real `description` field exists.
+    assert_eq!(field.options[0].value, "Logging");
+    assert_eq!(field.options[0].label, "Logging");
+    assert_eq!(
+        field.options[0].description.as_deref(),
+        Some("Enable logging")
+    );
+    // Spec-conformant option: `title` is the label once `description` exists.
+    assert_eq!(field.options[1].value, "us");
+    assert_eq!(field.options[1].label, "United States");
+    assert_eq!(
+        field.options[1].description.as_deref(),
+        Some("Use US spelling")
+    );
+}
+
+/// An untitled multi-select (`items: {type:"string", enum:[...]}`) flattens to
+/// `multi-enum` whose options carry `value == label == string` and no
+/// description.
+#[test]
+fn elicitation_fields_flattens_untitled_multi_enum() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "required": ["q1"],
+        "properties": {
+            "q1": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["alpha", "beta"]}
+            }
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("string multi-select is representable");
+    assert_eq!(fields.len(), 1);
+    let field = &fields[0];
+    assert_eq!(field.name, "q1");
+    assert_eq!(field.kind, "multi-enum");
+    assert!(field.required);
+    assert_eq!(field.options.len(), 2);
+    assert_eq!(field.options[0].value, "alpha");
+    assert_eq!(field.options[0].label, "alpha");
+    assert!(field.options[0].description.is_none());
+}
+
+/// Every representable property kind carries `title`/`description` through to
+/// the emitted field (issue #935 — the question text, never the raw `qN`
+/// property name).
+#[test]
+fn elicitation_fields_carries_title_and_description() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "s": {"type": "string", "title": "S", "description": "string field"},
+            "n": {"type": "number", "title": "N", "description": "number field"},
+            "i": {"type": "integer", "title": "I", "description": "integer field"},
+            "b": {"type": "boolean", "title": "B", "description": "boolean field"},
+            "e": {"type": "string", "title": "E", "description": "enum field",
+                  "enum": ["x"]},
+            "m": {"type": "array", "title": "M", "description": "multi field",
+                  "items": {"type": "string", "enum": ["y"]}}
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("all fields representable");
+    let find = |name: &str| {
+        fields
+            .iter()
+            .find(|field| field.name == name)
+            .expect("field exists")
+    };
+    for (name, title, description) in [
+        ("s", "S", "string field"),
+        ("n", "N", "number field"),
+        ("i", "I", "integer field"),
+        ("b", "B", "boolean field"),
+        ("e", "E", "enum field"),
+        ("m", "M", "multi field"),
+    ] {
+        let field = find(name);
+        assert_eq!(field.title.as_deref(), Some(title), "{name} title");
+        assert_eq!(
+            field.description.as_deref(),
+            Some(description),
+            "{name} description"
+        );
+    }
+    assert_eq!(find("s").kind, "string");
+    assert_eq!(find("n").kind, "number");
+    assert_eq!(find("i").kind, "integer");
+    assert_eq!(find("b").kind, "boolean");
+    assert_eq!(find("e").kind, "enum");
+    assert_eq!(find("m").kind, "multi-enum");
+}
+
+/// A titled single-select (`oneOf`) maps options the same way as titled
+/// multi-select `items.anyOf` (issue #935 — the Devin `ask_user_question`
+/// shape: label in `const`, descriptive sentence in `title`).
+#[test]
+fn elicitation_fields_flattens_titled_single_enum() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "required": ["q0"],
+        "properties": {
+            "q0": {
+                "type": "string",
+                "title": "Color",
+                "description": "Which color should I use?",
+                "oneOf": [
+                    {"const": "Red", "title": "Use the red color"},
+                    {"const": "Blue", "title": "Use the blue color"}
+                ]
+            }
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("oneOf is representable");
+    assert_eq!(fields.len(), 1);
+    let field = &fields[0];
+    assert_eq!(field.name, "q0");
+    assert_eq!(field.kind, "enum");
+    assert!(field.required);
+    assert_eq!(field.title.as_deref(), Some("Color"));
+    assert_eq!(
+        field.description.as_deref(),
+        Some("Which color should I use?")
+    );
+    assert_eq!(field.options.len(), 2);
+    assert_eq!(field.options[0].value, "Red");
+    assert_eq!(field.options[0].label, "Red");
+    assert_eq!(
+        field.options[0].description.as_deref(),
+        Some("Use the red color")
+    );
+    assert_eq!(field.options[1].value, "Blue");
+    assert_eq!(field.options[1].label, "Blue");
+}
+
+/// An untitled `enum` keeps `value == label == string` with no description.
+#[test]
+fn elicitation_fields_flattens_untitled_single_enum() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "pick": {"type": "string", "enum": ["a", "b"]}
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("enum is representable");
+    assert_eq!(fields.len(), 1);
+    let field = &fields[0];
+    assert_eq!(field.kind, "enum");
+    assert_eq!(field.options.len(), 2);
+    assert_eq!(field.options[0].value, "a");
+    assert_eq!(field.options[0].label, "a");
+    assert!(field.options[0].description.is_none());
+}
+
+/// `elicitation_allow_other` reads only a literal `true` at
+/// `_meta["cognition.ai/allowOther"]` (issue #935).
+#[test]
+fn elicitation_allow_other_reads_meta_flag() {
+    let meta = Meta::from_iter([(
+        "cognition.ai/allowOther".to_string(),
+        serde_json::Value::Bool(true),
+    )]);
+    assert!(elicitation_allow_other(Some(&meta)));
+
+    let meta = Meta::from_iter([(
+        "cognition.ai/allowOther".to_string(),
+        serde_json::Value::Bool(false),
+    )]);
+    assert!(!elicitation_allow_other(Some(&meta)));
+
+    // A non-boolean value does not enable the affordance.
+    let meta = Meta::from_iter([(
+        "cognition.ai/allowOther".to_string(),
+        serde_json::Value::String("yes".to_string()),
+    )]);
+    assert!(!elicitation_allow_other(Some(&meta)));
+
+    // Key absent and `_meta` absent both read as false.
+    assert!(!elicitation_allow_other(Some(&Meta::new())));
+    assert!(!elicitation_allow_other(None));
+}
+
+/// `ElicitationRequestEvent` serializes `allowOther` plus the per-field
+/// `title`/`description`/structured `options` (issue #935); absent optionals
+/// are omitted from the wire, not `null`.
+#[test]
+fn elicitation_request_serializes_allow_other_and_field_metadata() {
+    let event = ElicitationRequestEvent {
+        agent_id: AgentId("a".to_string()),
+        session_id: SessionId::new("s"),
+        request_id: "r-1".to_string(),
+        mode: "form".to_string(),
+        message: "Which color?".to_string(),
+        url: None,
+        allow_other: true,
+        fields: vec![
+            ElicitationField {
+                name: "q0".to_string(),
+                kind: "enum".to_string(),
+                required: true,
+                title: Some("Color".to_string()),
+                description: Some("Which color should I use?".to_string()),
+                options: vec![ElicitationOption {
+                    value: "Red".to_string(),
+                    label: "Red".to_string(),
+                    description: Some("Use the red color".to_string()),
+                }],
+            },
+            ElicitationField {
+                name: "q1".to_string(),
+                kind: "multi-enum".to_string(),
+                required: false,
+                title: None,
+                description: None,
+                options: vec![ElicitationOption {
+                    value: "x".to_string(),
+                    label: "x".to_string(),
+                    description: None,
+                }],
+            },
+        ],
+    };
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(value["allowOther"], true);
+    assert_eq!(value["fields"][0]["title"], "Color");
+    assert_eq!(
+        value["fields"][0]["description"],
+        "Which color should I use?"
+    );
+    assert_eq!(value["fields"][0]["options"][0]["value"], "Red");
+    assert_eq!(value["fields"][0]["options"][0]["label"], "Red");
+    assert_eq!(
+        value["fields"][0]["options"][0]["description"],
+        "Use the red color"
+    );
+    assert_eq!(value["fields"][1]["kind"], "multi-enum");
+    // Absent title/description and absent option description are omitted.
+    assert!(value["fields"][1].get("title").is_none());
+    assert!(value["fields"][1].get("description").is_none());
+    assert!(value["fields"][1]["options"][0].get("description").is_none());
+    assert_eq!(EVENT_ELICITATION_REQUEST, "acp:elicitation_request");
+}
+
+/// A required property with an unrecognized schema variant keeps the existing
+/// contract: `elicitation_fields` returns `None` → the caller cancels the
+/// elicitation.
+#[test]
+fn elicitation_fields_required_unknown_variant_returns_none() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "required": ["mystery"],
+        "properties": {
+            "mystery": {"type": "matrix", "rows": 3},
+            "name": {"type": "string"}
+        }
+    }))
+    .expect("schema deserializes");
+    assert!(elicitation_fields(&schema, false).is_none());
+}
+
+/// An OPTIONAL unrepresentable property is dropped, not fatal — the surviving
+/// fields still render.
+#[test]
+fn elicitation_fields_drops_optional_unrepresentable_field() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "mystery": {"type": "matrix", "rows": 3},
+            "name": {"type": "string", "title": "Name"}
+        }
+    }))
+    .expect("schema deserializes");
+    let fields =
+        elicitation_fields(&schema, false).expect("optional unknown variant must not cancel the request");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].name, "name");
+    assert_eq!(fields[0].title.as_deref(), Some("Name"));
+}
+
+/// A multi-select whose `items` is an unknown shape is unrepresentable: the
+/// field is dropped when optional and cancels the request when required — the
+/// same treatment as an unknown property variant.
+#[test]
+fn elicitation_fields_multi_enum_other_items_unrepresentable() {
+    // Required → the whole request is unrepresentable.
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "required": ["q1"],
+        "properties": {
+            "q1": {"type": "array", "items": {"type": "number"}}
+        }
+    }))
+    .expect("schema deserializes");
+    assert!(elicitation_fields(&schema, false).is_none());
+
+    // Optional → the field is dropped, the rest still render.
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "q1": {"type": "array", "items": {"type": "number"}},
+            "name": {"type": "string"}
+        }
+    }))
+    .expect("schema deserializes");
+    let fields =
+        elicitation_fields(&schema, false).expect("optional unrepresentable multi-select is dropped");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].name, "name");
+}
+
+/// Fields emit in the agent's declared order — `required` order first
+/// (`properties` is a BTreeMap, so raw iteration would sort `q10` before
+/// `q2`), optional fields afterwards in schema order.
+#[test]
+fn elicitation_fields_orders_required_first_in_declared_order() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "required": ["q2", "q10"],
+        "properties": {
+            "q10": {"type": "string", "enum": ["a"]},
+            "q2": {"type": "string", "enum": ["b"]},
+            "extra": {"type": "string"}
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("all fields representable");
+    let names: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
+    assert_eq!(names, ["q2", "q10", "extra"]);
+}
+
+/// Duplicate option values collapse to one (first wins) — same-value options
+/// would collide as keys and toggle together in the renderer.
+#[test]
+fn elicitation_fields_dedupes_option_values() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "q0": {
+                "type": "string",
+                "oneOf": [
+                    {"const": "Red", "title": "Use the red color"},
+                    {"const": "Red", "title": "Duplicate red"}
+                ]
+            }
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("oneOf is representable");
+    assert_eq!(fields[0].options.len(), 1);
+    assert_eq!(fields[0].options[0].description.as_deref(), Some("Use the red color"));
+}
+
+/// A multi-select with an EMPTY option list is unrepresentable without
+/// `allowOther` (nothing to pick and no free-text stand-in — a required one
+/// would wedge the form) but representable with it ("Other" supplies the
+/// answer).
+#[test]
+fn elicitation_fields_empty_multi_enum_needs_allow_other() {
+    let schema = || {
+        serde_json::from_value::<ElicitationSchema>(serde_json::json!({
+            "type": "object",
+            "required": ["q1"],
+            "properties": {
+                "q1": {"type": "array", "title": "Features", "items": {"anyOf": []}}
+            }
+        }))
+        .expect("schema deserializes")
+    };
+    assert!(elicitation_fields(&schema(), false).is_none());
+    let fields = elicitation_fields(&schema(), true).expect("allowOther makes it answerable");
+    assert_eq!(fields[0].kind, "multi-enum");
+    assert!(fields[0].options.is_empty());
+}
+
+/// A `required` entry absent from `properties` fails the coverage check —
+/// the field can never be rendered, so the request cancels.
+#[test]
+fn elicitation_fields_required_name_absent_from_properties_returns_none() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "required": ["ghost"],
+        "properties": {
+            "name": {"type": "string"}
+        }
+    }))
+    .expect("schema deserializes");
+    assert!(elicitation_fields(&schema, false).is_none());
+}
+
+/// When a string property carries BOTH `enum` and `oneOf`, the `enum` values
+/// win (the first non-empty option source — matching the pre-existing arm
+/// order).
+#[test]
+fn elicitation_fields_enum_takes_precedence_over_one_of() {
+    let schema: ElicitationSchema = serde_json::from_value(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "q0": {
+                "type": "string",
+                "enum": ["plain"],
+                "oneOf": [{"const": "titled", "title": "Titled option"}]
+            }
+        }
+    }))
+    .expect("schema deserializes");
+    let fields = elicitation_fields(&schema, false).expect("enum is representable");
+    assert_eq!(fields[0].options.len(), 1);
+    assert_eq!(fields[0].options[0].value, "plain");
 }

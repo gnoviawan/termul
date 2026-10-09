@@ -107,9 +107,7 @@ describe('ChatMessageList', () => {
     ['while a tool runs', [userItem, toolItem]],
     ['while an agent response streams', [userItem, streamingAgentItem]]
   ] satisfies Array<[string, TimelineItem[]]>)('shows open Working activity %s', (_, items) => {
-    render(
-      <ChatMessageList items={items} sessionId="session-1" agentId="agent-1" showRunningIndicator />
-    )
+    render(<ChatMessageList items={items} sessionId="session-1" showRunningIndicator />)
 
     const trigger = screen.getByRole('button', { name: /Working/ })
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
@@ -120,7 +118,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, toolItem, streamingAgentItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator
       />
     )
@@ -129,7 +126,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, completedToolItem, streamingAgentItem, finalAgentItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator={false}
       />
     )
@@ -164,7 +160,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, delegation, streamingAgentItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator
       />
     )
@@ -187,7 +182,6 @@ describe('ChatMessageList', () => {
           finalAgentItem
         ]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator={false}
       />
     )
@@ -209,7 +203,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, completedToolItem, finalAgentItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator={false}
       />
     )
@@ -255,7 +248,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, completedToolItem, attachmentItem, finalAgentItem, emptyTailItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator={false}
       />
     )
@@ -276,7 +268,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, streamingAgentItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator
       />
     )
@@ -286,7 +277,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, streamingAgentItem, toolItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator
       />
     )
@@ -300,7 +290,6 @@ describe('ChatMessageList', () => {
       <ChatMessageList
         items={[userItem, failedToolItem]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator={false}
       />
     )
@@ -321,7 +310,6 @@ describe('ChatMessageList worktree progress row', () => {
       <ChatMessageList
         items={[userItem, { kind: 'worktree', key: 'worktree:wt-list-1', progressId: 'wt-list-1' }]}
         sessionId="session-1"
-        agentId="agent-1"
         showRunningIndicator={false}
       />
     )

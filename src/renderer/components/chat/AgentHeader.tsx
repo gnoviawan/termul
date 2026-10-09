@@ -1,5 +1,6 @@
 import { type ReactNode, useRef, useState } from 'react'
-import { Bot, Brain, Check } from '@/components/icons'
+import { Brain, Check } from '@/components/icons'
+import { AnimatedMenuContent } from '@/components/ui/animated-menu-content'
 import {
   Dialog,
   DialogContent,
@@ -8,28 +9,25 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  MENU_LABEL_CLASS,
+  menuOptionRowClass,
+  pickerSearchTextClass
+} from '@/components/ui/menu-styles'
+import { Popover, PopoverTrigger } from '@/components/ui/popover'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { ComposerPill } from './ComposerPill'
 import { flattenConfigOptionValues } from './chat-input-bar-config'
+import { ModeIcon, ModeMenuList } from './mode-menu'
 import { KNOWN_CATEGORY_HEADINGS } from './slash-menu-model'
 import { useOptimisticSelect } from './use-optimistic-select'
+import { keepFocusOnMousePress, useTapSelect } from './use-tap-select'
 
-/**
- * Shared option-row chrome for composer config/mode selectors and the launcher
- * agent picker. Desktop rows match the app dropdown item (32px); the mobile
- * modal keeps 44px touch rows.
- */
-export const SELECTOR_OPTION_ROW =
-  'flex w-full items-start gap-2 rounded-md px-2 text-left text-sm text-foreground hover:bg-secondary'
-export const SELECTOR_OPTION_ROW_DESKTOP = 'min-h-8 py-1.5'
-export const SELECTOR_OPTION_ROW_MOBILE = 'min-h-11 py-2.5'
-export const SELECTOR_OPTION_SELECTED = 'bg-secondary'
-const SELECTOR_OPTION_DESCRIPTION = 'text-xs text-muted-foreground'
-export const SELECTOR_SECTION_LABEL = 'label-group px-2 py-1 text-muted-foreground'
+/** Max finger travel (px) for a touchend to count as a tap, not a drag-scroll. */
+const TOUCH_SELECT_THRESHOLD_PX = 10
 
 export function SelectorOptionLabel({
   name,
@@ -44,19 +42,27 @@ export function SelectorOptionLabel({
     <>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span>{name}</span>
-        {description && <span className={SELECTOR_OPTION_DESCRIPTION}>{description}</span>}
+        {description && <span className="text-2xs text-muted-foreground">{description}</span>}
       </span>
-      <Check
-        size={14}
-        aria-hidden="true"
-        className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
-      />
+      <SelectedCheck selected={selected} />
     </>
   )
 }
 
-/** Max finger travel (px) for a touchend to count as a tap, not a drag-scroll. */
-const TOUCH_SELECT_THRESHOLD_PX = 10
+/**
+ * Trailing selection mark on a picker option row. Always rendered, hidden when
+ * not selected, so rows keep one width. Selection has no fill: see
+ * docs/design/overlays.md (Menus).
+ */
+export function SelectedCheck({ selected }: { selected: boolean }): React.JSX.Element {
+  return (
+    <Check
+      size={14}
+      aria-hidden="true"
+      className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+    />
+  )
+}
 
 /**
  * Resolve the display label for a config chip. Promoted chips (e.g.
@@ -72,9 +78,12 @@ function getLabelForConfigChip(option: SessionConfigOption, promoted: boolean): 
  * Centered modal shell for a selector's option list on mobile web. Mirrors the
  * `CommandPalette` centered-overlay feel: `w-[calc(100%-2rem)]` leaves a 1rem
  * horizontal margin so the panel never bleeds edge-to-edge, `max-w-md` caps the
- * panel larger than the desktop `w-56` popover, and `max-h-[80vh]` keeps it on
- * screen when the OSK is open. A Radix `DialogTitle` + visually-hidden
- * `DialogDescription` (a11y-required by Dialog) carry the section label. The
+ * panel larger than the desktop `w-56` popover, and `max-h-[80dvh]` caps its
+ * height to the dynamic viewport, so it tracks the browser toolbar collapsing
+ * (the static `vh` does not). `dvh` does not shrink for the on-screen keyboard
+ * on iOS Safari or Chrome Android's default mode, so the keyboard is a separate
+ * concern. A Radix `DialogTitle` + visually-hidden `DialogDescription` (a11y-required by
+ * Dialog) carry the section label. The
  * `disabled` prop forwards to `DialogTrigger` so the mobile trigger gates
  * opening identically to the desktop `PopoverTrigger`. The search input +
  * option rows are passed as children (the children own their own scroll
@@ -86,7 +95,8 @@ export function SelectorModal({
   title,
   trigger,
   disabled,
-  children
+  children,
+  onEscapeKeyDown
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -94,14 +104,19 @@ export function SelectorModal({
   trigger: ReactNode
   disabled: boolean
   children: ReactNode
+  /** When set, the host can keep the dialog open (for example to close a nested view first). */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void
 }): React.JSX.Element {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild disabled={disabled}>
         {trigger}
       </DialogTrigger>
-      <DialogContent className="mx-auto max-h-[80vh] w-[calc(100%-2rem)] max-w-md gap-0 overflow-y-auto rounded-2xl p-0">
-        <DialogHeader className={cn(SELECTOR_SECTION_LABEL, 'px-3 pb-1 pt-3 pr-9')}>
+      <DialogContent
+        onEscapeKeyDown={onEscapeKeyDown}
+        className="mx-auto max-h-[80dvh] w-[calc(100%-2rem)] max-w-md gap-0 overflow-y-auto rounded-2xl p-0"
+      >
+        <DialogHeader className={cn(MENU_LABEL_CLASS, 'px-3 pb-1 pt-3 pr-9')}>
           <DialogTitle className="text-muted-foreground">{title}</DialogTitle>
           <DialogDescription className="sr-only">{title} options</DialogDescription>
         </DialogHeader>
@@ -147,10 +162,7 @@ export function ConfigChip({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
-  // Touch-safe selection (parity with ComposerMenu): record touchstart coords
-  // so touchend can distinguish a tap (select) from a drag-scroll (skip).
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
-  const lastInputType = useRef<'mouse' | 'touch' | null>(null)
+  const tapSelect = useTapSelect()
   const committed = typeof option.currentValue === 'string' ? option.currentValue : undefined
   const { displayValue, pending, select } = useOptimisticSelect(committed, onSelect)
   const values = flattenConfigOptionValues(option)
@@ -192,9 +204,8 @@ export function ConfigChip({
           placeholder="Search models…"
           aria-label="Search models"
           className={cn(
-            'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
-            // 16px on mobile keeps iOS Safari from zooming into the field.
-            isMobile ? 'text-base' : 'text-sm'
+            'mb-1 h-8 w-full border-b border-border bg-transparent px-2 text-foreground outline-none placeholder:text-muted-foreground',
+            pickerSearchTextClass(isMobile)
           )}
         />
       )}
@@ -206,50 +217,15 @@ export function ConfigChip({
           filteredOptions.map((v, index) => (
             <div key={v.value}>
               {v.group && filteredOptions[index - 1]?.group !== v.group ? (
-                <div className="px-2 pb-1 pt-2 text-2xs font-medium text-muted-foreground">
-                  {v.group}
-                </div>
+                <div className={MENU_LABEL_CLASS}>{v.group}</div>
               ) : null}
               <button
                 type="button"
-                onTouchStart={(event) => {
-                  const t = event.touches[0]
-                  if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
-                }}
-                onTouchEnd={(event) => {
-                  event.preventDefault()
-                  const start = touchStartRef.current
-                  touchStartRef.current = null
-                  const t = event.changedTouches[0]
-                  const isTap =
-                    start && t
-                      ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
-                        TOUCH_SELECT_THRESHOLD_PX ** 2
-                      : true
-                  if (!isTap) return
-                  lastInputType.current = 'touch'
-                  handleSelect(v.value)
-                  window.setTimeout(() => {
-                    if (lastInputType.current === 'touch') lastInputType.current = null
-                  }, 500)
-                }}
-                onPointerDown={(event) => {
-                  if (event.pointerType === 'touch') return
-                  if ((event.button ?? 0) !== 0) return
-                  event.preventDefault()
-                }}
-                onClick={(event) => {
-                  if (lastInputType.current === 'touch') return
-                  event.preventDefault()
-                  handleSelect(v.value)
-                }}
+                {...tapSelect(() => handleSelect(v.value))}
+                onPointerDown={keepFocusOnMousePress}
                 data-press-feedback="off"
                 aria-pressed={v.value === displayValue}
-                className={cn(
-                  SELECTOR_OPTION_ROW,
-                  isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-                  v.value === displayValue && SELECTOR_OPTION_SELECTED
-                )}
+                className={menuOptionRowClass(isMobile)}
               >
                 <SelectorOptionLabel
                   name={v.name}
@@ -287,16 +263,17 @@ export function ConfigChip({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent
+      <AnimatedMenuContent
+        open={open}
         align="start"
         side="top"
         sideOffset={8}
         collisionPadding={8}
-        className={cn('p-1', searchable ? 'w-56' : 'w-40')}
+        className={cn('rounded-xl p-1', searchable ? 'w-56' : 'w-40')}
       >
-        <div className={SELECTOR_SECTION_LABEL}>{promoted ? fallbackLabel : option.name}</div>
+        <div className={MENU_LABEL_CLASS}>{promoted ? fallbackLabel : option.name}</div>
         {optionsList}
-      </PopoverContent>
+      </AnimatedMenuContent>
     </Popover>
   )
 }
@@ -312,12 +289,21 @@ export function ModeChip({
   session,
   disabled,
   onSelect,
-  label = 'Mode'
+  label = 'Mode',
+  agentName,
+  className,
+  labelClassName
 }: {
   session: AcpSession
   disabled: boolean
   onSelect: (modeId: string) => void | Promise<void>
   label?: string
+  /** Names the "Let <agent> act" group. */
+  agentName?: string
+  /** Merged onto the `ComposerPill` trigger. */
+  className?: string
+  /** When set, the visible label renders in a `<span>` carrying these classes (e.g. sr-only). */
+  labelClassName?: string
 }): React.JSX.Element | null {
   const modes = session.modes
   const [open, setOpen] = useState(false)
@@ -335,69 +321,59 @@ export function ModeChip({
     select(modeId)
   }
 
+  const modeLabel = current?.name ?? label
   const trigger = (
-    <ComposerPill disabled={disabled} chevron pending={pending}>
-      <Bot size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-      {current?.name ?? label}
+    <ComposerPill disabled={disabled} chevron pending={pending} className={className}>
+      <ModeIcon modeId={current?.id} />
+      {labelClassName ? <span className={labelClassName}>{modeLabel}</span> : modeLabel}
     </ComposerPill>
   )
 
+  // Touch: select on a tap (not a scroll drag); mouse: select on click and
+  // keep the focus in the menu on pointer down.
+  const rowHandlers = (modeId: string): React.ButtonHTMLAttributes<HTMLButtonElement> => ({
+    onTouchStart: (event) => {
+      const t = event.touches[0]
+      if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
+    },
+    onTouchEnd: (event) => {
+      event.preventDefault()
+      const start = touchStartRef.current
+      touchStartRef.current = null
+      const t = event.changedTouches[0]
+      const isTap =
+        start && t
+          ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
+            TOUCH_SELECT_THRESHOLD_PX ** 2
+          : true
+      if (!isTap) return
+      lastInputType.current = 'touch'
+      handleSelect(modeId)
+      window.setTimeout(() => {
+        if (lastInputType.current === 'touch') lastInputType.current = null
+      }, 500)
+    },
+    onPointerDown: (event) => {
+      if (event.pointerType === 'touch') return
+      if ((event.button ?? 0) !== 0) return
+      event.preventDefault()
+    },
+    onClick: (event) => {
+      if (lastInputType.current === 'touch') return
+      event.preventDefault()
+      handleSelect(modeId)
+    }
+  })
+
   const optionsList = (
-    <div
-      data-testid="mode-chip-options"
-      className="max-h-[180px] overflow-y-auto overscroll-contain pr-1"
-    >
-      {modes.availableModes.map((m) => (
-        <button
-          key={m.id}
-          type="button"
-          onTouchStart={(event) => {
-            const t = event.touches[0]
-            if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
-          }}
-          onTouchEnd={(event) => {
-            event.preventDefault()
-            const start = touchStartRef.current
-            touchStartRef.current = null
-            const t = event.changedTouches[0]
-            const isTap =
-              start && t
-                ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
-                  TOUCH_SELECT_THRESHOLD_PX ** 2
-                : true
-            if (!isTap) return
-            lastInputType.current = 'touch'
-            handleSelect(m.id)
-            window.setTimeout(() => {
-              if (lastInputType.current === 'touch') lastInputType.current = null
-            }, 500)
-          }}
-          onPointerDown={(event) => {
-            if (event.pointerType === 'touch') return
-            if ((event.button ?? 0) !== 0) return
-            event.preventDefault()
-          }}
-          onClick={(event) => {
-            if (lastInputType.current === 'touch') return
-            event.preventDefault()
-            handleSelect(m.id)
-          }}
-          data-press-feedback="off"
-          aria-pressed={m.id === displayValue}
-          className={cn(
-            SELECTOR_OPTION_ROW,
-            isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-            m.id === displayValue && SELECTOR_OPTION_SELECTED
-          )}
-        >
-          <SelectorOptionLabel
-            name={m.name}
-            description={m.description}
-            selected={m.id === displayValue}
-          />
-        </button>
-      ))}
-    </div>
+    <ModeMenuList
+      modes={modes.availableModes}
+      selectedId={displayValue}
+      agentName={agentName}
+      touch={isMobile}
+      onPick={handleSelect}
+      rowHandlers={rowHandlers}
+    />
   )
 
   if (isMobile) {
@@ -419,16 +395,16 @@ export function ModeChip({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent
+      <AnimatedMenuContent
+        open={open}
         align="start"
         side="top"
         sideOffset={8}
         collisionPadding={8}
-        className="w-40 p-1"
+        className="w-72 rounded-xl border-border p-1"
       >
-        <div className={SELECTOR_SECTION_LABEL}>{label}</div>
         {optionsList}
-      </PopoverContent>
+      </AnimatedMenuContent>
     </Popover>
   )
 }

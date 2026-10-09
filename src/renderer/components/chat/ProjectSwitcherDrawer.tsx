@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { AlertCircle, Check, Clock3, FolderGit2, Home } from '@/components/icons'
+import { AlertCircle, Check, Clock3, FolderGit2, Home, Plus } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
+import { Button } from '@/components/ui/button'
 import {
   Sheet,
   SheetContent,
@@ -10,6 +11,7 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
+import { logFrontendError } from '@/lib/log-api'
 import { setHostDefaultProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerProjects } from '@/lib/web-server-api'
@@ -22,7 +24,19 @@ interface ProjectSwitcherDrawerProps {
   onOpenChange: (open: boolean) => void
   /** Opens the existing New project flow. Omitted when that action is not available. */
   onAddProject?: () => void
+  /** Edge the sheet opens from. `left` (default) is the desktop-style side drawer. */
+  side?: 'left' | 'bottom'
+  /** DOM id for the sheet content, so a trigger can point `aria-controls` at it. */
+  id?: string
+  /** Radix close auto-focus hook; the opener is a plain Button, so the owner returns focus. */
+  onCloseAutoFocus?: (event: Event) => void
 }
+
+const SIDE_CLASS_NAME = {
+  left: 'flex w-[72vw] max-w-20rem flex-col gap-0 p-0 sm:max-w-sm',
+  bottom:
+    'flex max-h-[85dvh] flex-col gap-0 overflow-y-auto overscroll-contain p-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]'
+} as const
 
 /**
  * Web/remote project switcher (Epic-4 bridge). Mirrors the desktop's available
@@ -43,7 +57,10 @@ interface ProjectSwitcherDrawerProps {
 export function ProjectSwitcherDrawer({
   open,
   onOpenChange,
-  onAddProject
+  onAddProject,
+  side = 'left',
+  id,
+  onCloseAutoFocus
 }: ProjectSwitcherDrawerProps): React.JSX.Element {
   const projects = useProjectStore((s) => s.projects)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
@@ -64,8 +81,12 @@ export function ProjectSwitcherDrawer({
     if (!open && failedProjectSwitchId !== null) setFailedProjectSwitch(null)
   }, [open, failedProjectSwitchId, setFailedProjectSwitch])
 
+  // A switch is in flight or queued: rows stay focusable (`aria-disabled`, not
+  // `disabled`, so the focused row keeps focus) but ignore taps.
+  const switchBusy = switchingId !== null || queuedProjectSwitchId !== null
+
   async function handleSwitch(project: Project): Promise<void> {
-    if (switchingId !== null) return
+    if (switchBusy) return
     setSwitchingId(project.id)
     try {
       const outcome = await switchProject(project.id)
@@ -76,8 +97,14 @@ export function ProjectSwitcherDrawer({
       // `AcpTransportError.message` is the human string callers already toast
       // (e.g. "no_agent" → "switch_project requires a live agent; …"). Surface
       // the failure inline too — toasts are easy to miss on mobile.
+      const message = err instanceof Error ? err.message : String(err)
       setFailedProjectSwitch(project.id)
-      toast.error(err instanceof Error ? err.message : String(err))
+      toast.error(message)
+      void logFrontendError({
+        level: 'warn',
+        source: 'ProjectSwitcherDrawer',
+        message: `Project switch failed for ${project.id}: ${message}`
+      })
     } finally {
       setSwitchingId(null)
     }
@@ -117,8 +144,10 @@ export function ProjectSwitcherDrawer({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        side="left"
-        className="flex w-[72vw] max-w-20rem flex-col gap-0 p-0 sm:max-w-sm"
+        side={side}
+        id={id}
+        onCloseAutoFocus={onCloseAutoFocus}
+        className={SIDE_CLASS_NAME[side]}
       >
         <SheetHeader className="space-y-0 border-b border-border/60 p-2 text-left">
           <div className="flex items-center gap-2 pr-8">
@@ -131,23 +160,9 @@ export function ProjectSwitcherDrawer({
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-auto p-2">
           {projects.length === 0 ? (
-            <div className="flex flex-col items-start gap-3 px-2 py-4">
-              <p className="text-sm text-muted-foreground">
-                No projects available. Add one to get started.
-              </p>
-              {onAddProject && (
-                <button
-                  type="button"
-                  className="inline-flex min-h-11 items-center rounded-md bg-foreground px-3 text-sm text-background"
-                  onClick={() => {
-                    onOpenChange(false)
-                    onAddProject()
-                  }}
-                >
-                  Add project
-                </button>
-              )}
-            </div>
+            <p className="px-2 py-4 text-sm text-muted-foreground">
+              No projects available. Add one to get started.
+            </p>
           ) : (
             <ul className="flex flex-col gap-0.5">
               {projects.map((project) => {
@@ -158,20 +173,24 @@ export function ProjectSwitcherDrawer({
                 const isSettingDefault = defaultingId === project.id
                 const isQueued = queuedProjectSwitchId === project.id
                 const isFailed = failedProjectSwitchId === project.id
-                const switchDisabled =
-                  isArchived || isActive || switchingId !== null || queuedProjectSwitchId !== null
+                const switchDisabled = isArchived || isActive
+                const switchBlocked = switchDisabled || switchBusy
                 return (
                   <li key={project.id} className="flex items-center gap-1">
                     <button
                       type="button"
                       disabled={switchDisabled}
+                      aria-disabled={switchBusy && !switchDisabled ? 'true' : undefined}
                       aria-current={isActive ? 'true' : undefined}
-                      onClick={() => void handleSwitch(project)}
+                      onClick={() => {
+                        if (switchBusy) return
+                        void handleSwitch(project)
+                      }}
                       className={[
-                        'flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm transition-colors',
-                        isActive ? 'bg-secondary' : 'hover:bg-sidebar-accent/50',
+                        'flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors duration-150 ease-out',
+                        isActive ? 'keycap text-foreground' : 'hover:bg-foreground/[0.03]',
                         isArchived ? 'text-disabled-foreground' : '',
-                        switchDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
+                        switchBlocked ? 'cursor-not-allowed' : 'cursor-pointer'
                       ].join(' ')}
                     >
                       <ProjectIcon project={project} size={18} />
@@ -238,7 +257,7 @@ export function ProjectSwitcherDrawer({
                             ? 'cursor-wait'
                             : defaultingId !== null
                               ? 'cursor-not-allowed text-disabled-foreground'
-                              : 'hover:bg-sidebar-accent/50 hover:text-foreground'
+                              : 'hover:bg-foreground/[0.03] hover:text-foreground'
                         ].join(' ')}
                       >
                         {isSettingDefault ? <Spinner size={14} decorative /> : <Home size={14} />}
@@ -250,6 +269,24 @@ export function ProjectSwitcherDrawer({
             </ul>
           )}
         </div>
+        {/* Pinned below the scrolling list so a long project list never pushes
+         * the only creation entry out of reach. */}
+        {onAddProject && (
+          <div className="shrink-0 border-t border-border/60 p-2">
+            <Button
+              type="button"
+              variant="ghost"
+              className="min-h-11 w-full justify-start"
+              onClick={() => {
+                onOpenChange(false)
+                onAddProject()
+              }}
+            >
+              <Plus size={16} />
+              Add project
+            </Button>
+          </div>
+        )}
       </SheetContent>
     </Sheet>
   )

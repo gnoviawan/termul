@@ -38,7 +38,10 @@ if (typeof document.elementFromPoint !== 'function') {
 const PT = (name: string): string => skillToken(name, SKILL_PAD_DEFAULT)
 
 function clickMenuOption(name: string | RegExp): void {
-  const dialog = screen.getByRole('dialog')
+  // A menu that is closing stays in the DOM for its close animation; use the
+  // open one.
+  const dialog = screen.getAllByRole('dialog').find((d) => d.getAttribute('data-state') === 'open')
+  if (!dialog) throw new Error('No open menu')
   fireEvent.click(within(dialog).getByText(name))
 }
 
@@ -61,6 +64,8 @@ const {
   mockSwitching,
   mockSessionAgentId,
   mockArmAgentSwitch,
+  mockSetSwitchPendingOption,
+  mockAgentOptionsCache,
   mockCancelAgentSwitch,
   mockCancelPrompt,
   mockSaveAgentConfig,
@@ -150,6 +155,8 @@ const {
     // empty-row test clears it).
     mockSessionAgentId: { current: 'agent-1' as string },
     mockArmAgentSwitch: vi.fn(async () => true),
+    mockSetSwitchPendingOption: vi.fn(async () => {}),
+    mockAgentOptionsCache: { current: {} as Record<string, unknown> },
     mockCancelAgentSwitch: vi.fn(),
     mockCancelPrompt: vi.fn(async () => {}),
     mockSaveAgentConfig: vi.fn(async () => {})
@@ -197,6 +204,9 @@ vi.mock('@/stores/acp-store', () => {
     agentConfigs: mockAgentConfigs.current,
     saveAgentConfig: mockSaveAgentConfig,
     armAgentSwitch: mockArmAgentSwitch,
+    setSwitchPendingOption: mockSetSwitchPendingOption,
+    agentOptionsCache: mockAgentOptionsCache.current,
+    prepareChat: vi.fn(),
     cancelAgentSwitch: mockCancelAgentSwitch,
     cancelPrompt: mockCancelPrompt,
     sessions: {
@@ -474,6 +484,7 @@ describe('ChatInputBar config controls', () => {
     const modelPill = screen.getByRole('button', { name: /composer-2\.5/ })
     expect(modelPill.querySelector('svg')).toBeTruthy()
 
+    // The pill opens straight to the model list (no Model row or flyout).
     fireEvent.click(modelPill)
     clickMenuOption('sonnet-4.5')
     expect(mockSetConfig).toHaveBeenCalledWith('model', 'sonnet')
@@ -520,15 +531,14 @@ describe('ChatInputBar config controls', () => {
       </TooltipProvider>
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'OpenAI/GPT-5.4 mini Fast' }))
+    fireEvent.click(screen.getByRole('button', { name: /OpenAI\/GPT-5\.4 mini Fast/ }))
 
-    expect(screen.getByLabelText('Search models')).toBeInTheDocument()
-    expect(screen.getByTestId('config-chip-model-options')).toHaveClass(
-      'max-h-[180px]',
-      'overflow-y-auto'
-    )
+    expect(screen.getByLabelText('Search models and agents')).toBeInTheDocument()
+    expect(screen.getByTestId('selector-list')).toHaveClass('max-h-64', 'overflow-y-auto')
 
-    fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'grok 4.3' } })
+    fireEvent.change(screen.getByLabelText('Search models and agents'), {
+      target: { value: 'grok 4.3' }
+    })
 
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
@@ -565,7 +575,7 @@ describe('ChatInputBar config controls', () => {
       </TooltipProvider>
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'kiro/Claude Opus 4.8' }))
+    fireEvent.click(screen.getByRole('button', { name: /kiro\/Claude Opus 4\.8/ }))
     clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('openrouter/gpt-5.5')
@@ -622,6 +632,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     mockSwitching.current = null
     mockResolvedAgents.current = null
     mockSessionAgentId.current = 'agent-1'
+    mockAgentOptionsCache.current = {}
   })
 
   it('renders the agent switch control in the right chip cluster', async () => {
@@ -634,6 +645,50 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     expect(trigger).toHaveTextContent('Cursor')
     // It lives inside the composer toolbar (the modelChip/agentModeChip family).
     expect(trigger.closest('[data-composer-toolbar]')).not.toBeNull()
+  })
+
+  it('opens agent tabs from the combined pill when the session has no model', async () => {
+    renderInputBar()
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    fireEvent.click(trigger)
+    const tabs = await screen.findByRole('tablist', { name: 'Agents' })
+    expect(within(tabs).getByRole('tab', { name: 'Cursor' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByText('This agent gives no model choice.')).toBeInTheDocument()
+  })
+
+  it('arms the switch with a model chosen on another agent tab', async () => {
+    const claude = mockAgentConfigs.current[1]
+    mockAgentOptionsCache.current = {
+      [claude.id]: {
+        models: {
+          currentModelId: 'opus',
+          availableModels: [
+            { modelId: 'opus', name: 'Opus 5.5' },
+            { modelId: 'sonnet', name: 'Sonnet 5.5' }
+          ]
+        },
+        modes: null,
+        configOptions: [],
+        updatedAt: 1
+      }
+    }
+    renderInputBar()
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Claude Agent' }))
+    expect(screen.getByText('Switches to Claude Agent on the next send')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Sonnet 5\.5/ }))
+
+    await waitFor(() => {
+      expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', claude.id)
+    })
+    await waitFor(() => {
+      expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('session-1', { modelId: 'sonnet' })
+    })
   })
 
   it('shows the armed target on the chip while session.switching is set', async () => {
@@ -737,7 +792,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     })
     const row = trigger.closest('[data-composer-toolbar-row]')
     expect(row).not.toBeNull()
-    expect(row?.querySelector('[data-testid="agent-switch-trigger"]')).not.toBeNull()
+    expect(row?.querySelector('[data-testid="agent-model-selector-trigger"]')).not.toBeNull()
   })
 
   it('renders no chip row when the store session has no agent and no modes/model exist', async () => {

@@ -10,9 +10,9 @@
 
 use crate::acp::config::{AgentId, SessionId};
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions, SessionMode,
-    SessionModeId, StopReason, ToolCall, ToolCallUpdate,
+    AgentCapabilities, AvailableCommand, ContentBlock, EnumOption, Meta, PermissionOption, Plan,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelectOptions, SessionMode, SessionModeId, StopReason, ToolCall, ToolCallUpdate,
 };
 use serde::Serialize;
 
@@ -378,6 +378,25 @@ pub struct ElicitationRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub fields: Vec<ElicitationField>,
+    /// `_meta["cognition.ai/allowOther"] == true` — when set, the renderer adds
+    /// an "Other" free-text affordance to each question card; its text submits
+    /// as a non-option value (issue #935). Always serialized so the renderer
+    /// sees a stable boolean.
+    pub allow_other: bool,
+}
+
+/// One selectable option of an `enum`/`multi-enum` [`ElicitationField`].
+///
+/// `value` is the wire value that round-trips in the elicitation `content` map;
+/// `label` is the human-readable text; `description` is optional context
+/// (omitted from the wire when absent — mirrors [`QuestionOption`]).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationOption {
+    pub value: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// One primitive field of an elicitation form.
@@ -385,56 +404,203 @@ pub struct ElicitationRequestEvent {
 #[serde(rename_all = "camelCase")]
 pub struct ElicitationField {
     pub name: String,
-    /// `string`, `number`, `integer`, `boolean`, or `enum`.
+    /// `string`, `number`, `integer`, `boolean`, `enum`, or `multi-enum`.
+    /// `multi-enum` is a multi-select (`type:"array"`) property whose answer
+    /// flows back as a string array.
     pub kind: String,
     pub required: bool,
-    pub options: Vec<String>,
+    /// Property `title` — the header chip for question-style elicitations
+    /// (issue #935); the renderer falls back to `name` when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Property `description` — the question/help text under the chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub options: Vec<ElicitationOption>,
+}
+
+/// Map an untitled `enum` string (single-select `enum` or multi-select
+/// `items.enum`) to the option contract: `value`/`label` are the raw string,
+/// `description` is absent.
+fn elicitation_plain_option(value: &str) -> ElicitationOption {
+    ElicitationOption {
+        value: value.to_string(),
+        label: value.to_string(),
+        description: None,
+    }
+}
+
+/// Map a titled [`EnumOption`] (single-select `oneOf` or multi-select
+/// `items.anyOf`) to the option contract (issue #935).
+///
+/// `value` is the wire `const` (it round-trips in `content`). `label` is the
+/// option's `title` ONLY when a real `description` is also present — Devin's
+/// `ask_user_question` puts the label in `const` and the descriptive sentence
+/// in `title` (`{const:"Red",title:"Use the red color"}`), so with no
+/// `description` field the label falls back to `const`. `description` is
+/// `option.description ?? option.title` (always present for titled options).
+///
+/// Known trade-off: a spec-conformant `{const:"us",title:"United States"}`
+/// (opaque const, no description) shows the const as the label — the two
+/// wire shapes are indistinguishable without a `description`, and Devin's
+/// shape is the one this renderer was built against.
+fn elicitation_enum_option(option: &EnumOption) -> ElicitationOption {
+    let (label, description) = match &option.description {
+        Some(description) => (option.title.clone(), description.clone()),
+        None => (option.value.clone(), option.title.clone()),
+    };
+    ElicitationOption {
+        value: option.value.clone(),
+        label,
+        description: Some(description),
+    }
+}
+
+/// Drop duplicate option values (first wins) — two options sharing a `const`
+/// would collide as React keys and toggle together in the renderer.
+fn dedupe_options(options: &mut Vec<ElicitationOption>) {
+    let mut seen = std::collections::HashSet::new();
+    options.retain(|option| seen.insert(option.value.clone()));
+}
+
+/// Extract the `cognition.ai/allowOther` flag from an elicitation request's
+/// `_meta` (issue #935). Only a literal boolean `true` enables the renderer's
+/// "Other" free-text affordance — absent, `false`, and non-boolean values all
+/// read as `false`.
+pub(crate) fn elicitation_allow_other(meta: Option<&Meta>) -> bool {
+    meta.and_then(|meta| meta.get("cognition.ai/allowOther"))
+        == Some(&serde_json::Value::Bool(true))
 }
 
 /// Flatten a form schema into the primitive fields the chat dialog can render.
+///
+/// `allow_other` is the request's `cognition.ai/allowOther` flag: an enum-like
+/// field with an empty option list is only representable when free text can
+/// stand in for the missing options.
+///
+/// Returns `None` when a **required** property uses a schema variant the dialog
+/// cannot represent (unknown property `type`, or a multi-select whose `items`
+/// is neither plain strings nor titled `anyOf` options) — the caller cancels
+/// the elicitation. Unrepresentable *optional* properties are dropped, not
+/// fatal.
+///
+/// Field order: `schema.properties` is a `BTreeMap` (lexicographic, so `q10`
+/// would sort before `q2`); the agent's declared order survives only in
+/// `required` — required fields emit first in `required` order, then the
+/// optional remainder in schema order.
 pub(crate) fn elicitation_fields(
     schema: &agent_client_protocol::schema::v1::ElicitationSchema,
+    allow_other: bool,
 ) -> Option<Vec<ElicitationField>> {
-    use agent_client_protocol::schema::v1::ElicitationPropertySchema;
+    use agent_client_protocol::schema::v1::{ElicitationPropertySchema, MultiSelectItems};
     let required = schema.required.clone().unwrap_or_default();
-    let fields: Vec<ElicitationField> = schema
+    let mut by_name: std::collections::BTreeMap<String, ElicitationField> = schema
         .properties
         .iter()
         .filter_map(|(name, property)| {
-            let (kind, options) = match property {
+            let (kind, title, description, mut options) = match property {
                 ElicitationPropertySchema::String(value) => {
-                    let mut options = value.enum_values.clone().unwrap_or_default();
+                    let mut options: Vec<ElicitationOption> = value
+                        .enum_values
+                        .clone()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|option| elicitation_plain_option(option))
+                        .collect();
                     if options.is_empty() {
                         if let Some(one_of) = &value.one_of {
-                            options = one_of.iter().map(|option| option.value.clone()).collect();
+                            options = one_of.iter().map(elicitation_enum_option).collect();
                         }
                     }
-                    if options.is_empty() {
-                        ("string".to_string(), Vec::new())
-                    } else {
-                        ("enum".to_string(), options)
-                    }
+                    let kind = if options.is_empty() { "string" } else { "enum" };
+                    (
+                        kind.to_string(),
+                        value.title.clone(),
+                        value.description.clone(),
+                        options,
+                    )
                 }
-                ElicitationPropertySchema::Number(_) => ("number".to_string(), Vec::new()),
-                ElicitationPropertySchema::Integer(_) => ("integer".to_string(), Vec::new()),
-                ElicitationPropertySchema::Boolean(_) => ("boolean".to_string(), Vec::new()),
-                ElicitationPropertySchema::Array(_) | ElicitationPropertySchema::Other(_) | _ => {
+                ElicitationPropertySchema::Number(value) => (
+                    "number".to_string(),
+                    value.title.clone(),
+                    value.description.clone(),
+                    Vec::new(),
+                ),
+                ElicitationPropertySchema::Integer(value) => (
+                    "integer".to_string(),
+                    value.title.clone(),
+                    value.description.clone(),
+                    Vec::new(),
+                ),
+                ElicitationPropertySchema::Boolean(value) => (
+                    "boolean".to_string(),
+                    value.title.clone(),
+                    value.description.clone(),
+                    Vec::new(),
+                ),
+                ElicitationPropertySchema::Array(value) => {
+                    // Multi-select (`type:"array"`): `items` decides whether the
+                    // option list is representable — plain `enum` strings and
+                    // titled `anyOf` options both map to `multi-enum`; any other
+                    // `items` shape is unrepresentable (drop this field; the
+                    // required check below cancels the request if it was
+                    // required) — issue #935.
+                    let options: Vec<ElicitationOption> = match &value.items {
+                        MultiSelectItems::String(items) => items
+                            .values
+                            .iter()
+                            .map(|item| elicitation_plain_option(item))
+                            .collect(),
+                        MultiSelectItems::Titled(items) => {
+                            items.options.iter().map(elicitation_enum_option).collect()
+                        }
+                        _ => return None,
+                    };
+                    // An option-less multi-select is unanswerable when free
+                    // text cannot stand in (no Other affordance) — treat it
+                    // as unrepresentable rather than emitting a dead field.
+                    if options.is_empty() && !allow_other {
+                        return None;
+                    }
+                    (
+                        "multi-enum".to_string(),
+                        value.title.clone(),
+                        value.description.clone(),
+                        options,
+                    )
+                }
+                ElicitationPropertySchema::Other(_) | _ => {
                     return None;
                 }
             };
-            Some(ElicitationField {
-                required: required.iter().any(|field| field == name),
-                name: name.clone(),
-                kind,
-                options,
-            })
+            dedupe_options(&mut options);
+            Some((
+                name.clone(),
+                ElicitationField {
+                    required: required.iter().any(|field| field == name),
+                    name: name.clone(),
+                    kind,
+                    title,
+                    description,
+                    options,
+                },
+            ))
         })
         .collect();
-    let covered: std::collections::HashSet<&str> =
-        fields.iter().map(|field| field.name.as_str()).collect();
+    let covered: std::collections::HashSet<&str> = by_name.keys().map(String::as_str).collect();
     if required.iter().any(|name| !covered.contains(name.as_str())) {
         return None;
     }
+    // Required fields first in the agent's declared `required` order (the
+    // only order preserved through the BTreeMap properties map), then the
+    // optional remainder in schema order.
+    let mut fields: Vec<ElicitationField> = Vec::with_capacity(by_name.len());
+    for name in &required {
+        if let Some(field) = by_name.remove(name) {
+            fields.push(field);
+        }
+    }
+    fields.extend(by_name.into_values());
     Some(fields)
 }
 

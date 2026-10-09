@@ -263,6 +263,11 @@ export interface PendingElicitation {
   message: string
   url?: string
   fields: ElicitationField[]
+  /**
+   * GH-935: the agent permits a free-text "Other" answer per question field
+   * (`_meta["cognition.ai/allowOther"]` on the elicitation request).
+   */
+  allowOther?: boolean
 }
 
 export interface GeneratedCommitMessage {
@@ -822,7 +827,8 @@ export interface AcpState {
   respondElicitation: (
     requestId: string,
     action: 'accept' | 'decline' | 'cancel',
-    content?: Record<string, string | number | boolean>
+    // GH-935: `string[]` = multi-select (`multi-enum`) answers.
+    content?: Record<string, string | number | boolean | string[]>
   ) => Promise<void>
   logoutAgent: (agentId: AgentId) => Promise<void>
 

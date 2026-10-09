@@ -303,18 +303,19 @@ async fn build_web_auth_url(
     server_url: &str,
     redirect_uri: &str,
 ) -> Result<(String, String, String), mcp_oauth::McpOAuthError> {
-    use rmcp::transport::auth::{AuthorizationManager, AuthorizationSession};
+    use rmcp::transport::auth::{AuthorizationManager, AuthorizationRequest, AuthorizationSession};
     let mut manager = AuthorizationManager::new(server_url)
         .await
         .map_err(|e| mcp_oauth::McpOAuthError::DiscoveryFailed(e.to_string()))?;
-    let metadata = manager
-        .discover_metadata()
+    let resolution = manager
+        .resolve_metadata()
         .await
         .map_err(|e| mcp_oauth::McpOAuthError::DiscoveryFailed(e.to_string()))?;
-    manager.set_metadata(metadata);
-    let session = AuthorizationSession::new(manager, &[], redirect_uri, Some("Termul"), None)
+    manager.set_metadata(resolution.metadata);
+    let request = AuthorizationRequest::new(redirect_uri).with_client_name("Termul");
+    let session = AuthorizationSession::new(manager, request)
         .await
-        .map_err(|e| mcp_oauth::McpOAuthError::RegistrationFailed(e.to_string()))?;
+        .map_err(|(_manager, e)| mcp_oauth::McpOAuthError::RegistrationFailed(e.to_string()))?;
     let auth_url = session.get_authorization_url().to_string();
     let registered_uri = session.redirect_uri.clone();
     // Extract the CSRF state from the authorization URL query so the pending

@@ -80,6 +80,10 @@ export const PersistenceKeys = {
   // so the next chat starts with the user's last pick regardless of which
   // surface (launcher or running chatbox) set it.
   lastComposerOptions: (configId: string): string => `agents/composer-options/${configId}`,
+  // Last-known model list per agent-config-id (`PersistedModelCatalog`). The
+  // composer selector shows another agent's models from it before that agent
+  // runs in this app session.
+  agentModelCatalog: (configId: string): string => `agents/model-catalog/${configId}`,
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
   mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`,
@@ -108,6 +112,23 @@ export interface PersistedComposerOptions {
   configValues?: Record<string, string>
   isolationMode?: 'current' | 'worktree'
   baseBranch?: string | null
+}
+
+// Last-known model list for one agent config. `modelOption` is the agent's
+// `category: 'model'` config option when it has one; `models` is the native
+// ACP model state. Either may be null. Lists only: no current pick.
+export interface PersistedModelCatalog {
+  models: {
+    currentModelId: string
+    availableModels: { modelId: string; name: string; description?: string | null }[]
+  } | null
+  modelOption: {
+    id: string
+    name: string
+    currentValue: string
+    options: { value: string; name: string; description?: string | null }[]
+  } | null
+  updatedAt: number
 }
 
 // Persisted project data (stored at projects.json)

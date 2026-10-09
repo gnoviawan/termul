@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsHooks from '@/hooks/use-app-settings'
+import { useGitStatusStore } from '@/stores/git-status-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
 import { ActivityRail } from './ActivityRail'
@@ -14,6 +16,16 @@ const { mockUpdatePanelVisibility, mockToastError, mockNavigate, platformState }
     platformState: { isMac: false }
   })
 )
+
+const { runningRef } = vi.hoisted(() => ({ runningRef: { current: new Set<string>() } }))
+
+vi.mock('@/hooks/use-agent-chat-attention', () => ({
+  useAgentChatProjectSignals: () => ({
+    attentionCounts: {},
+    firstNeedsYouSessionId: {},
+    runningProjectIds: runningRef.current
+  })
+}))
 
 vi.mock('sonner', () => ({
   toast: {
@@ -187,7 +199,8 @@ describe('ActivityRail', () => {
 
     const canvasButton = screen.getByRole('button', { name: 'Open canvas' })
     expect(canvasButton).not.toBeDisabled()
-    expect(canvasButton).toHaveAttribute('title', 'Open canvas')
+    // Radix tooltip replaces the native title (redesign).
+    expect(canvasButton).not.toHaveAttribute('title')
 
     fireEvent.click(canvasButton)
 
@@ -204,7 +217,8 @@ describe('ActivityRail', () => {
 
     const canvasButton = screen.getByRole('button', { name: 'Open canvas' })
     expect(canvasButton).toBeDisabled()
-    expect(canvasButton).toHaveAttribute('title', 'Open canvas (open a project first)')
+    expect(canvasButton).not.toHaveAttribute('title')
+    expect(canvasButton.className).toContain('disabled:opacity-40')
     fireEvent.click(canvasButton)
     expect(onOpenCanvas).not.toHaveBeenCalled()
   })
@@ -265,5 +279,69 @@ describe('ActivityRail', () => {
     } finally {
       tauriRef.current = prev
     }
+  })
+
+  describe('redesign states', () => {
+    it('marks a pressed view with the keycap surface and no accent fill', () => {
+      useSettingsModalStore.setState({ view: 'app' })
+      renderRail()
+      const prefs = screen.getByRole('button', { name: 'Open preferences' })
+      expect(prefs).toHaveAttribute('aria-pressed', 'true')
+      expect(prefs.className).toContain('keycap')
+      expect(prefs.className).toContain('size-9')
+      expect(prefs.className).not.toMatch(/bg-(secondary|accent|primary)/)
+    })
+
+    it('shows the changed-file count on the git button for the active project', () => {
+      const prevProjects = useProjectStore.getState()
+      useProjectStore.setState({
+        projects: [{ id: 'p1', name: 'P', path: '/repo', color: 'blue' }],
+        activeProjectId: 'p1'
+      })
+      useGitStatusStore.setState({
+        statuses: {
+          '/repo': [
+            { path: 'a.ts', staged: true },
+            { path: 'a.ts', staged: false },
+            { path: 'b.ts', staged: false }
+          ] as never
+        }
+      })
+      try {
+        render(
+          <MemoryRouter>
+            <ActivityRail onOpenGitChanges={vi.fn()} canOpenGitChanges />
+          </MemoryRouter>
+        )
+        expect(screen.getByTestId('rail-git-badge')).toHaveTextContent('2')
+      } finally {
+        useGitStatusStore.setState({ statuses: {} })
+        useProjectStore.setState({
+          projects: prevProjects.projects,
+          activeProjectId: prevProjects.activeProjectId
+        })
+      }
+    })
+
+    it('shows a live dot on new agent chat while a chat in the active project runs', () => {
+      const prev = useProjectStore.getState()
+      useProjectStore.setState({
+        projects: [{ id: 'p1', name: 'P', path: '/repo', color: 'blue' }],
+        activeProjectId: 'p1'
+      })
+      runningRef.current = new Set(['p1'])
+      try {
+        renderRail()
+        expect(screen.getByTestId('rail-agent-live-dot').className).toContain('bg-primary')
+      } finally {
+        runningRef.current = new Set()
+        useProjectStore.setState({ projects: prev.projects, activeProjectId: prev.activeProjectId })
+      }
+    })
+
+    it('shows no git badge without changes', () => {
+      renderRail()
+      expect(screen.queryByTestId('rail-git-badge')).toBeNull()
+    })
   })
 })

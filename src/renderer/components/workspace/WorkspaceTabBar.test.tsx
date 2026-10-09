@@ -143,7 +143,9 @@ vi.mock('@/stores/agent-chat-lifetime-store', () => ({
   )
 }))
 
-vi.mock('@/stores/git-status-store', () => ({
+vi.mock('@/stores/git-status-store', async (importOriginal) => ({
+  selectChangedFileCount: (await importOriginal<typeof import('@/stores/git-status-store')>())
+    .selectChangedFileCount,
   useGitStatusStore: vi.fn((selector: (state: unknown) => unknown) => selector({ statuses: {} }))
 }))
 
@@ -485,7 +487,7 @@ describe('WorkspaceTabBar', () => {
     expect(tabEl.className).toContain('text-foreground')
     expect(tabEl.className).not.toContain('border-b')
     // The raised surface is its own layer so it can slide between tabs.
-    expect(tabEl.querySelector('.bg-muted')).toBeTruthy()
+    expect(tabEl.querySelector('.keycap')).toBeTruthy()
     expect(container.querySelector('.h-10')?.className).not.toContain('border-b')
   })
 
