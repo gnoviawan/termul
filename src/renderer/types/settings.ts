@@ -48,6 +48,7 @@ export interface AppSettings {
   terminalFontSize: number
   terminalBufferSize: number // Scrollback buffer size in lines
   terminalRenderer: 'auto' | 'webgl' | 'dom'
+  terminalScreenReaderMode: boolean // xterm screenReaderMode for new terminals (off by default)
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
   maxTerminalsPerProject: number // Maximum terminals allowed per project
@@ -255,6 +256,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalFontSize: 14,
   terminalBufferSize: 10000,
   terminalRenderer: 'auto',
+  terminalScreenReaderMode: false,
   defaultShell: '',
   defaultProjectColor: 'blue',
   maxTerminalsPerProject: 10,
