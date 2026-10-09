@@ -217,7 +217,8 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     if (!isOpen) return
 
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
-      if (e.key === 'Escape') {
+      // A layer above this modal (the DirectoryPicker) already took this Esc.
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         e.preventDefault()
         onClose()
       }
@@ -393,7 +394,8 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       if (e.key === 'Enter' && name.trim() && path.trim()) {
         e.preventDefault()
         handleCreate()
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'Escape' && !e.defaultPrevented) {
+        // Focus can stay on Browse while the picker is open above this panel.
         e.preventDefault()
         onClose()
       }

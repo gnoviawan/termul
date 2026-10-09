@@ -177,6 +177,20 @@ function logOverlay(level: 'info' | 'warn', message: string, error?: unknown): v
   })
 }
 
+/** Route-change listeners of the installed back handlers (one per handler). */
+const routeChangeListeners = new Set<() => void>()
+
+/**
+ * Tell the installed back handler that the router pushed or replaced a route.
+ * Pushes and replaces never fire `popstate`, so without this the sentinels are
+ * never re-checked and, with an overlay still open, the next back lands on a
+ * stale entry (a second press is needed). The handler schedules a coalesced
+ * reconcile; a no-op when no handler is installed or the shell is not mobile.
+ */
+export function notifyOverlayRouteChange(): void {
+  for (const listener of routeChangeListeners) listener()
+}
+
 /** Legacy (desktop) popstate branch — unchanged while `mobileShell` is false. */
 function handleLegacyPopState(): void {
   const store = useOverlayStackStore.getState()
@@ -242,6 +256,8 @@ export function installOverlayBackHandler(options: OverlayBackHandlerOptions = {
   let disposed = false
   let reconcileScheduled = false
   let traversalPending = false
+  let routeChangePending = false
+  let flipCleanupArmed = false
   let lostTraversals = 0
   let traversalTimer: ReturnType<typeof setTimeout> | null = null
   let frameHandle: number | null = null
@@ -302,8 +318,12 @@ export function installOverlayBackHandler(options: OverlayBackHandlerOptions = {
       `Overlay history traversal produced no popstate within ${traversalTimeoutMs}ms (miss ${lostTraversals})`
     )
     // Retry through the reconciler, but never in an endless loop when the
-    // browser keeps ignoring the traversal.
-    if (lostTraversals < MAX_CONSECUTIVE_LOST_TRAVERSALS) scheduleReconcile()
+    // browser keeps ignoring the traversal. On desktop the only traversal is
+    // the flip cleanup's (its one-shot flag is already spent), so re-arm it.
+    if (lostTraversals < MAX_CONSECUTIVE_LOST_TRAVERSALS) {
+      if (!useOverlayStackStore.getState().mobileShell) flipCleanupArmed = true
+      scheduleReconcile()
+    }
   }
 
   const startTraversal = (delta: number): void => {
@@ -322,13 +342,45 @@ export function installOverlayBackHandler(options: OverlayBackHandlerOptions = {
     }
   }
 
-  const reconcile = (): void => {
-    const { mobileShell, stack } = useOverlayStackStore.getState()
-    if (!mobileShell || traversalPending) return
+  /**
+   * One-shot cleanup after the mobile to desktop flip: the depth-tagged
+   * sentinels beyond the overlays still registered (default-scope ones stay open
+   * on desktop and keep one each) would each cost a dead back press. Consume
+   * them with one traversal that both popstate paths ignore. It only runs while
+   * the current entry is a sentinel, so it never crosses a route entry.
+   */
+  const consumeStrandedSentinels = (): void => {
+    flipCleanupArmed = false
+    const keep = useOverlayStackStore.getState().stack.length
+    const depth = readOverlaySentinelDepth(history.state)
+    if (depth <= keep) return
+    logOverlay(
+      'info',
+      `Breakpoint crossed to desktop: consuming ${depth - keep} stranded overlay history sentinel(s) (${keep} overlay(s) still registered)`
+    )
+    startTraversal(keep - depth)
+  }
 
+  const reconcile = (): void => {
+    if (traversalPending) return
+    const { mobileShell, stack } = useOverlayStackStore.getState()
+    if (!mobileShell) {
+      routeChangePending = false
+      if (flipCleanupArmed) consumeStrandedSentinels()
+      return
+    }
+
+    const routeChange = routeChangePending
+    routeChangePending = false
     const desired = stack.length
     const actual = readOverlaySentinelDepth(history.state)
     if (desired > actual) {
+      if (routeChange) {
+        logOverlay(
+          'info',
+          `Route changed with ${desired} overlay(s) open: re-arming overlay history sentinels (depth ${actual} -> ${desired})`
+        )
+      }
       pushSentinels(actual + 1, desired)
     } else if (desired < actual) {
       startTraversal(desired - actual)
@@ -356,12 +408,6 @@ export function installOverlayBackHandler(options: OverlayBackHandlerOptions = {
 
   const handleManagedPopState = (): void => {
     lostTraversals = 0
-    if (traversalPending) {
-      // The popstate of our own consume traversal: nothing to close.
-      clearTraversal()
-      scheduleReconcile()
-      return
-    }
 
     const store = useOverlayStackStore.getState()
     const depth = readOverlaySentinelDepth(history.state)
@@ -384,6 +430,14 @@ export function installOverlayBackHandler(options: OverlayBackHandlerOptions = {
   }
 
   const handlePopState = (): void => {
+    if (traversalPending) {
+      // The popstate of our own consume traversal, in either shell (a traversal
+      // can outlive a breakpoint flip): nothing to close and nothing to re-arm.
+      lostTraversals = 0
+      clearTraversal()
+      scheduleReconcile()
+      return
+    }
     if (useOverlayStackStore.getState().mobileShell) {
       handleManagedPopState()
       return
@@ -419,14 +473,25 @@ export function installOverlayBackHandler(options: OverlayBackHandlerOptions = {
     }
     if (state.mobileShell !== prev.mobileShell) {
       if (state.mobileShell) {
+        flipCleanupArmed = false
         // Also clears a sentinel left over from a reload.
         noteStaleSentinel()
         scheduleReconcile()
       } else {
-        clearTraversal()
+        // A traversal already in flight keeps its pending flag: its popstate
+        // must still be ignored on desktop. The cleanup itself runs in the
+        // deferred reconcile, after the mobile-only registrations unregistered.
+        flipCleanupArmed = true
+        scheduleReconcile()
       }
     }
   })
+
+  const onRouteChange = (): void => {
+    routeChangePending = true
+    scheduleReconcile()
+  }
+  routeChangeListeners.add(onRouteChange)
 
   window.addEventListener('popstate', handlePopState)
   window.addEventListener('keydown', handleKeyDown, true)
@@ -443,6 +508,7 @@ export function installOverlayBackHandler(options: OverlayBackHandlerOptions = {
     window.removeEventListener('popstate', handlePopState)
     window.removeEventListener('keydown', handleKeyDown, true)
     unsubscribe()
+    routeChangeListeners.delete(onRouteChange)
     clearTraversal()
     reconcileScheduled = false
     if (frameHandle !== null && typeof cancelAnimationFrame === 'function') {

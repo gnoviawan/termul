@@ -374,6 +374,74 @@ describe('DirectoryPicker', () => {
     })
   })
 
+  describe('Escape ordering (L-32)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('takes Esc in the capture phase: a window bubble listener registered earlier sees it prevented', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ success: true, data: [] }))
+      // Registered before the picker opens, like NewProjectModal's window
+      // handler: a bubble-phase picker handler would run after it and the
+      // `defaultPrevented` guard could not tell the picker already took the Esc.
+      const seen: boolean[] = []
+      const earlier = (event: KeyboardEvent): void => {
+        if (event.key === 'Escape') seen.push(event.defaultPrevented)
+      }
+      window.addEventListener('keydown', earlier)
+      try {
+        render(<DirectoryPicker />)
+        await waitFor(() => expect(registeredPicker.current).not.toBeNull())
+        const promise = openPicker()
+        await waitFor(() =>
+          expect(screen.getByText('No subdirectories in this folder')).toBeInTheDocument()
+        )
+
+        fireEvent.keyDown(document.body, { key: 'Escape' })
+
+        expect(await promise).toEqual({
+          success: false,
+          error: 'No directory selected',
+          code: 'CANCELLED'
+        })
+        expect(seen).toEqual([true])
+
+        // Closed: the picker's capture listener is gone, so a later Esc stays
+        // unprevented for the modal underneath.
+        fireEvent.keyDown(document.body, { key: 'Escape' })
+        expect(seen).toEqual([true, false])
+      } finally {
+        window.removeEventListener('keydown', earlier)
+      }
+    })
+
+    it('ignores other keys', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ success: true, data: [] }))
+      const seen: boolean[] = []
+      const earlier = (event: KeyboardEvent): void => {
+        seen.push(event.defaultPrevented)
+      }
+      window.addEventListener('keydown', earlier)
+      try {
+        render(<DirectoryPicker />)
+        await waitFor(() => expect(registeredPicker.current).not.toBeNull())
+        const promise = openPicker()
+        await waitFor(() =>
+          expect(screen.getByText('No subdirectories in this folder')).toBeInTheDocument()
+        )
+
+        fireEvent.keyDown(document.body, { key: 'Enter' })
+        expect(seen).toEqual([false])
+        expect(screen.getByText('Select Project Folder')).toBeInTheDocument()
+
+        fireEvent.click(screen.getByText('Cancel'))
+        await promise
+      } finally {
+        window.removeEventListener('keydown', earlier)
+      }
+    })
+  })
+
   describe('overlay back stack', () => {
     const cancelled = { success: false, error: 'No directory selected', code: 'CANCELLED' }
     const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)

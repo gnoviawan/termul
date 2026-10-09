@@ -603,6 +603,54 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
     })
     expect(screen.queryByTestId('new-project-name-warning')).not.toBeInTheDocument()
   })
+
+  describe('Escape (L-32: one Esc closes one layer)', () => {
+    it('closes once on an Esc nothing else handled', async () => {
+      const onClose = vi.fn()
+      render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
+      await screen.findByPlaceholderText('No directory selected')
+
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it('closes once, not twice, on an Esc inside the panel (panel handler, then the window handler)', async () => {
+      const onClose = vi.fn()
+      render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
+      const pathInput = await screen.findByPlaceholderText('No directory selected')
+
+      fireEvent.keyDown(pathInput, { key: 'Escape' })
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it('closes nothing on an Esc a layer above already prevented (window handler)', async () => {
+      const onClose = vi.fn()
+      render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
+      await screen.findByPlaceholderText('No directory selected')
+      const layerAbove = (event: KeyboardEvent): void => event.preventDefault()
+      window.addEventListener('keydown', layerAbove, true)
+
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      window.removeEventListener('keydown', layerAbove, true)
+
+      expect(onClose).not.toHaveBeenCalled()
+    })
+
+    it('closes nothing on a prevented Esc with focus inside the panel (panel onKeyDown)', async () => {
+      const onClose = vi.fn()
+      render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
+      const pathInput = await screen.findByPlaceholderText('No directory selected')
+      const layerAbove = (event: KeyboardEvent): void => event.preventDefault()
+      window.addEventListener('keydown', layerAbove, true)
+
+      fireEvent.keyDown(pathInput, { key: 'Escape' })
+      window.removeEventListener('keydown', layerAbove, true)
+
+      expect(onClose).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('NewProjectModal overlay back stack', () => {

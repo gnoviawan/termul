@@ -331,6 +331,9 @@ export function DirectoryPicker(): React.JSX.Element {
   }, [currentPath, loadPath])
 
   // Escape to cancel (matches NewProjectModal / ConfirmDialog convention).
+  // Capture phase, so the picker (the topmost layer) takes the Esc first and its
+  // preventDefault() makes the NewProjectModal underneath ignore it: one Esc
+  // closes one layer.
   useEffect(() => {
     if (!isOpen) return
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
@@ -339,8 +342,8 @@ export function DirectoryPicker(): React.JSX.Element {
         handleCancel()
       }
     }
-    window.addEventListener('keydown', handleEscape)
-    return () => window.removeEventListener('keydown', handleEscape)
+    window.addEventListener('keydown', handleEscape, { capture: true })
+    return () => window.removeEventListener('keydown', handleEscape, { capture: true })
   }, [isOpen, handleCancel])
 
   const canGoUp = parentPath(currentPath) !== null
