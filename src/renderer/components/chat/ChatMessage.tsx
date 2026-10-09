@@ -1,37 +1,14 @@
-import { code as codePlugin } from '@streamdown/code'
-import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
 import { motion, useReducedMotion } from 'framer-motion'
 import { memo, useEffect, useMemo, useState } from 'react'
-import { toast } from 'sonner'
-import {
-  type AllowedTags,
-  type Components,
-  defaultRemarkPlugins,
-  type LinkSafetyConfig,
-  type LinkSafetyModalProps,
-  Streamdown
-} from 'streamdown'
 
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
-import { useThrottledStreamingText } from '@/hooks/use-throttled-streaming-text'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ContentBlock } from '@/lib/acp-api'
-import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
-import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
-import { logFrontendError } from '@/lib/log-api'
+import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import {
   parseCommandSegments,
   parseFileSegments,
@@ -39,10 +16,9 @@ import {
   sanitizeDisplayText
 } from '@/lib/skill-tokens'
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
-import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
+import { AgentProse } from './chat-agent-prose'
 import {
   blockData,
   blockDisplayName,
@@ -55,33 +31,21 @@ import {
   isLocalFileUri,
   uint8ToBase64
 } from './chat-attachments'
-import { ChatMarkdownCode } from './chat-markdown-code'
-import { remarkFilePathLinks } from './chat-markdown-file-links'
-import { remarkTermulImages, resolveLocalImagePath } from './chat-markdown-images'
-import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { FileChip } from './FileChip'
-import { MessageActions } from './MessageActions'
+import {
+  logLongPressFallbackOnce,
+  MessageActions,
+  MessageActionsContextMenu,
+  type MessageActionsMode,
+  resolveMessageActionsMode,
+  supportsLongPressMenu
+} from './MessageActions'
 import { SkillChip } from './SkillChip'
 
-/** Always-on remark plugins: streamdown defaults plus the termul-image rewrite. */
-const IMAGE_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulImages]
-/** Adds prose file-path linkification when a `filePathContext` exists. */
-const FILE_PATH_REMARK_PLUGINS = [
-  ...Object.values(defaultRemarkPlugins),
-  remarkTermulImages,
-  remarkFilePathLinks
-]
-
-/**
- * Custom tags streamdown must keep through `rehype-sanitize`. Values are hast
- * property names (`data-path` -> `dataPath`); the tags themselves carry no
- * `href`/`src`, so `rehype-harden` never blocks them.
- */
-const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
-  'termul-file-path': ['dataPath'],
-  'termul-image': ['dataUrl', 'dataAlt']
-}
+// The markdown renderer moved to `chat-agent-prose.tsx` to keep this file under
+// the ~800-line limit. Re-exported so existing importers keep their paths.
+export { AgentProse, TermulFilePathButton, TermulMarkdownImage } from './chat-agent-prose'
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -317,337 +281,6 @@ export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.E
   )
 }
 
-/**
- * Shiki syntax-highlighting for fenced code blocks. Themes track the app's
- * light/dark mode via Streamdown's dual-theme output (github-light/dark).
- */
-const CODE_PLUGIN = codePlugin
-/** Live Mermaid diagram rendering for ```mermaid fences. */
-const MERMAID_PLUGIN = mermaidPlugin
-/**
- * Base plugin set used while the agent message is still streaming. The
- * `termul-plan` renderer is deliberately absent here so an in-flight turn
- * never renders a duplicate inline plan (the live sticky `PlanPanel` covers
- * the streaming turn). Historical (non-streaming) messages swap in
- * `STREAMDOWN_PLUGINS_WITH_PLAN` via the `plugins` prop on `AgentProse`.
- */
-const STREAMDOWN_PLUGINS = { code: CODE_PLUGIN, mermaid: MERMAID_PLUGIN }
-const STREAMDOWN_PLUGINS_WITH_PLAN = {
-  ...STREAMDOWN_PLUGINS,
-  renderers: [{ language: 'termul-plan', component: TermulPlanRenderer }]
-}
-
-// Copy on code blocks, plus download (save an agent-generated file); no line
-// numbers (chat snippets are short). Mermaid keeps its interactive controls.
-const STREAMDOWN_CONTROLS = {
-  // Fenced code copy/download come from ChatMarkdownCode (IconActionButton).
-  code: false,
-  table: { copy: true, download: true, fullscreen: true },
-  mermaid: { copy: true, download: true, fullscreen: true, panZoom: true }
-} as const
-
-const STREAMDOWN_COMPONENTS = {
-  code: ChatMarkdownCode,
-  table: ChatMarkdownTable
-} as const
-
-// Streamdown blurIn, tuned to the streaming-text tokens.
-// Duration = --stream-fade. Easing = --stream-ease. Word gap = --stream-gap.
-// The 1px blur lives in the sd-blurIn keyframe (--stream-blur).
-// Active only while isAnimating is true. Settled markdown is not replayed.
-const STREAMDOWN_ANIMATED = {
-  animation: 'blurIn',
-  duration: 350,
-  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-  sep: 'word',
-  stagger: 60
-} as const
-
-/**
- * Confirm external links, then hand off to the OS browser.
- *
- * `onLinkCheck` only decides whether to show the confirm UI (never opens).
- * Opening happens in the modal action so Streamdown's default `window.open`
- * path is not used and the dialog actually closes after confirm.
- */
-function StreamdownLinkSafetyModal({
-  isOpen,
-  onClose,
-  url
-}: LinkSafetyModalProps): React.JSX.Element {
-  return (
-    <AlertDialog
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Open external link?</AlertDialogTitle>
-          <AlertDialogDescription className="break-all">{url}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={() => {
-              void openerApi.openUrlWithSystemBrowser(url)
-              onClose()
-            }}
-          >
-            Open
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-const LINK_SAFETY: LinkSafetyConfig = {
-  enabled: true,
-  // Always take the confirm path; never open from the check callback.
-  onLinkCheck: () => false,
-  renderModal: (props) => <StreamdownLinkSafetyModal {...props} />
-}
-
-/** Muted fallback for images we cannot render (web without Tauri, unreadable). */
-function TermulImageAltChip({ alt }: { alt: string }): React.JSX.Element {
-  return (
-    <span
-      data-testid="termul-image-alt"
-      title={alt}
-      className="inline-flex max-w-[16rem] items-center rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 align-middle text-xs text-muted-foreground"
-    >
-      <span className="truncate">{alt || 'image'}</span>
-    </span>
-  )
-}
-
-/** What an async-resolved preview belongs to, so stale previews get dropped. */
-interface ResolvedImagePreview {
-  url: string
-  cwd?: string
-  src: string
-}
-
-/**
- * Renders a `<termul-image>` element emitted by `remarkTermulImages`.
- * `data:`/`blob:` URLs render directly; `file://` and relative URLs are
- * resolved against the chat cwd and read via the brokered
- * `readAttachmentBytes` command (Tauri only). On the web or any read failure
- * the muted alt-text chip renders instead. A preview that fails to decode
- * after render (`<img>` onError) also falls back to the chip.
- */
-export function TermulMarkdownImage({
-  url,
-  alt,
-  cwd
-}: {
-  url: string
-  alt: string
-  cwd?: string
-}): React.JSX.Element {
-  const directUrl = url.startsWith('data:') || url.startsWith('blob:') ? url : null
-  const readablePath = directUrl ? null : resolveLocalImagePath(url, cwd)
-  const [resolved, setResolved] = useState<ResolvedImagePreview | null>(null)
-  const [failed, setFailed] = useState<{ url: string; cwd?: string } | null>(null)
-  if (resolved !== null && (resolved.url !== url || resolved.cwd !== cwd)) {
-    // The markdown re-parsed with a different URL or the project switched cwd:
-    // drop the stale preview so the new combination resolves from a clean slate.
-    setResolved(null)
-  }
-  if (failed !== null && (failed.url !== url || failed.cwd !== cwd)) {
-    setFailed(null)
-  }
-
-  useEffect(() => {
-    if (directUrl || !readablePath || !isTauriContext()) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const bytes = await readAttachmentBytes(readablePath)
-        if (cancelled) return
-        setResolved({
-          url,
-          cwd,
-          src: `data:${guessMimeType(readablePath)};base64,${uint8ToBase64(bytes)}`
-        })
-      } catch (error) {
-        if (cancelled) return
-        void logFrontendError({
-          level: 'warn',
-          source: 'ChatMessage.termulImage',
-          message: `Failed to read chat image '${url}': ${String(error)}`
-        })
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [directUrl, readablePath, url, cwd])
-
-  const failedNow = failed !== null && failed.url === url && failed.cwd === cwd
-  const src = directUrl ?? resolved?.src
-  if (src && !failedNow) {
-    return (
-      <img
-        src={src}
-        alt={alt}
-        className="max-h-96 max-w-full rounded-md"
-        onError={() => {
-          setFailed({ url, cwd })
-          setResolved(null)
-          void logFrontendError({
-            level: 'warn',
-            source: 'ChatMessage.termulImage',
-            message: `Failed to display chat image '${url}': image decode/load failed`
-          })
-        }}
-      />
-    )
-  }
-  return <TermulImageAltChip alt={alt} />
-}
-
-/**
- * Renders a `<termul-file-path>` element emitted by `remarkFilePathLinks` as
- * the open-in-editor button. The path arrives in the `data-path` attribute
- * (hast property `dataPath`), already HTML-unescaped by the parser.
- */
-export function TermulFilePathButton({
-  path,
-  context,
-  children
-}: {
-  path: string
-  context: FilePathResolutionContext
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      data-testid="termul-file-path"
-      data-path={path}
-      className="cursor-pointer appearance-none text-left font-medium text-primary underline underline-offset-2"
-      title="Open in editor"
-      onClick={(event) => {
-        if (event.button !== 0 || event.shiftKey) return
-        const selection = window.getSelection()
-        if (selection && !selection.isCollapsed) return
-        event.preventDefault()
-        void openFilePathFromTerminal(path, context)
-          .then((result) => {
-            if (!result.ok) toast.error(result.message)
-          })
-          .catch((error: unknown) => {
-            void logFrontendError({
-              level: 'warn',
-              source: 'ChatMessage.filePathLink',
-              message: `Failed to open ${path}: ${String(error)}`
-            })
-            toast.error('Failed to open file from chat.')
-          })
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-/** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
-export function AgentProse({
-  text: rawText,
-  streaming,
-  reduced,
-  filePathContext
-}: {
-  text: string
-  streaming: boolean
-  reduced: boolean
-  filePathContext?: FilePathResolutionContext
-}): React.JSX.Element {
-  // While streaming, the store re-renders this component on every flush (up
-  // to once per frame) and Streamdown re-parses the full tail markdown on
-  // each text change. Throttle the VALUE, not the component: the text fed to
-  // Streamdown commits at 10 Hz trailing-edge while streaming; the turn-end
-  // render commits the exact final text immediately.
-  const text = useThrottledStreamingText(rawText, streaming)
-  const [externalUrl, setExternalUrl] = useState<string | null>(null)
-  const components = useMemo<Components>(() => {
-    const merged: Components = {
-      ...STREAMDOWN_COMPONENTS,
-      'termul-image': (props: Record<string, unknown>) => {
-        const url = typeof props['data-url'] === 'string' ? props['data-url'] : ''
-        const alt = typeof props['data-alt'] === 'string' ? props['data-alt'] : ''
-        return <TermulMarkdownImage url={url} alt={alt} cwd={filePathContext?.cwd} />
-      }
-    }
-    if (filePathContext) {
-      const context = filePathContext
-      merged.a = ({ href, children, ...props }) => (
-        <a
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          {...props}
-          onClick={(event) => {
-            event.preventDefault()
-            if (href) setExternalUrl(href)
-          }}
-          onAuxClick={(event) => {
-            event.preventDefault()
-          }}
-        >
-          {children}
-        </a>
-      )
-      merged['termul-file-path'] = (props: Record<string, unknown>) => {
-        const path = typeof props['data-path'] === 'string' ? props['data-path'] : ''
-        return (
-          <TermulFilePathButton path={path} context={context}>
-            {props.children as React.ReactNode}
-          </TermulFilePathButton>
-        )
-      }
-    }
-    return merged
-  }, [filePathContext])
-
-  return (
-    <div className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">
-      <Streamdown
-        mode={streaming ? 'streaming' : 'static'}
-        isAnimating={streaming}
-        caret={streaming ? 'block' : undefined}
-        animated={reduced ? false : STREAMDOWN_ANIMATED}
-        parseIncompleteMarkdown={streaming}
-        // The `termul-plan` renderer is attached only to historical
-        // (non-streaming) messages so an in-flight turn never renders a
-        // duplicate inline plan — the live sticky `PlanPanel` owns the
-        // streaming turn.
-        plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
-        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : IMAGE_REMARK_PLUGINS}
-        allowedTags={STREAMDOWN_ALLOWED_TAGS}
-        controls={STREAMDOWN_CONTROLS}
-        components={components}
-        lineNumbers={false}
-        linkSafety={LINK_SAFETY}
-        shikiTheme={['github-light', 'github-dark']}
-      >
-        {text}
-      </Streamdown>
-      {externalUrl && (
-        <StreamdownLinkSafetyModal
-          isOpen
-          url={externalUrl}
-          onClose={() => setExternalUrl(null)}
-          onConfirm={() => setExternalUrl(null)}
-        />
-      )}
-    </div>
-  )
-}
-
 interface StaggerSectionProps {
   delay: number
   align: BubbleAlign
@@ -701,6 +334,41 @@ interface ChatMessageProps {
   filePathContext?: FilePathResolutionContext
 }
 
+/** The same inset focus ring as `ToolCallCard`, for a focusable message. */
+const MOBILE_ACTIONS_RING_CLASS =
+  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+
+/**
+ * Classes for a message that owns mobile actions: the focus ring in every
+ * mobile mode, plus no native text selection on coarse pointers only in
+ * `focus-reveal`, where the long-press belongs to the menu (see
+ * `MessageActionsContextMenu`). In `visible-fallback` long-press cannot work,
+ * so selection stays and the always-visible row carries Copy.
+ */
+function mobileActionsMessageClass(mode: MessageActionsMode): string | undefined {
+  if (mode === 'desktop') return undefined
+  return mode === 'focus-reveal'
+    ? `${MOBILE_ACTIONS_RING_CLASS} pointer-coarse:select-none`
+    : MOBILE_ACTIONS_RING_CLASS
+}
+
+/**
+ * Touch / pen `pointerdown` on a message that owns the long-press menu: cancel
+ * the default so the app-root `GlobalContextMenu` (Copy / Cut / Paste / Select
+ * All) does not arm its own 700ms timer. Radix composes the root trigger's
+ * handler behind a `defaultPrevented` check, and the deeper message trigger has
+ * already armed by the time the event reaches this wrapper. The event is NOT
+ * stopped: `ChatRoute` and Radix outside-pointer detection need it to bubble.
+ *
+ * Events from portaled descendants (link-safety dialog, image lightbox) bubble
+ * here through React but are not on the message: leave their default alone.
+ */
+function suppressGlobalLongPress(event: React.PointerEvent<HTMLDivElement>): void {
+  if (event.pointerType === 'mouse') return
+  if (!event.currentTarget.contains(event.target as Node)) return
+  event.preventDefault()
+}
+
 function ChatMessageComponent({
   message,
   showHeader = true,
@@ -714,10 +382,29 @@ function ChatMessageComponent({
   filePathContext
 }: ChatMessageProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
+  const isMobileShell = useMobileWebShell()
 
   const isUser = message.role === 'user'
   const text = blocksToText(message.blocks)
   const hasMedia = mediaBlocks(message.blocks).length > 0
+  // Only messages that render `MessageActions` take part in the mobile actions
+  // model: every user message, and an agent message only at its settled turn
+  // tail. Messages inside `TurnActivity` never qualify.
+  const hasActions = isUser || (!message.streaming && isTurnTail)
+  const actionsMode: MessageActionsMode = hasActions
+    ? resolveMessageActionsMode(isMobileShell, supportsLongPressMenu())
+    : 'desktop'
+  const mobileActions = actionsMode !== 'desktop'
+  const mobileActionsClass = mobileActionsMessageClass(actionsMode)
+  // On the mobile shell every message keeps the same menu wrapper (inert unless
+  // it has actions), so a message that gains or loses actions as its stream
+  // settles or the turn tail moves does not remount its subtree.
+  const menuWrapped = isMobileShell
+  const actionsReveal = actionsMode === 'focus-reveal' ? 'focus' : 'hover'
+  const actionsMenuId = `message-actions-menu:${message.id}`
+  useEffect(() => {
+    if (actionsMode === 'visible-fallback') logLongPressFallbackOnce()
+  }, [actionsMode])
   let staggerStep = 0
   const nextDelay = (): number => {
     const delay = staggerStep * 0.08
@@ -726,52 +413,77 @@ function ChatMessageComponent({
   }
 
   if (isUser) {
-    return (
-      <div className="w-full">
-        <Message align="end" className="py-2">
-          <MessageContent className="w-fit max-w-[85%]">
-            {hasMedia && (
-              <StaggerSection
-                delay={nextDelay()}
-                align="end"
-                reduced={reduced}
-                animateEnter={animateEnter}
-              >
-                <MediaBlocks blocks={message.blocks} />
-              </StaggerSection>
-            )}
-            {text.length > 0 && (
-              <StaggerSection
-                delay={nextDelay()}
-                align="end"
-                reduced={reduced}
-                animateEnter={animateEnter}
-              >
-                <Bubble variant="tinted" align="end" className="max-w-full">
-                  <UserMessageText text={text} />
-                </Bubble>
-              </StaggerSection>
-            )}
+    // Copy a display-safe string: skill/file tokens become `(name)` and command
+    // tokens become `/name` so the clipboard never carries private-use
+    // sentinels. Edit keeps the raw token text so the composer re-seeds with
+    // chips inline (command pill included). The row and the mobile menu share
+    // both.
+    const copyTextForActions = sanitizeDisplayText(text)
+    const editForActions = onEdit && text.length > 0 ? () => onEdit(text) : undefined
+    const userMessage = (
+      <Message
+        align="end"
+        className={cn('py-2', mobileActionsClass)}
+        // On the mobile shell a message with actions is focusable so keyboard and
+        // switch users reach its focus-revealed row. Biome does not flag tabIndex
+        // on this component, so no suppression is needed.
+        tabIndex={mobileActions ? 0 : undefined}
+      >
+        <MessageContent className="w-fit max-w-[85%]">
+          {hasMedia && (
             <StaggerSection
               delay={nextDelay()}
               align="end"
               reduced={reduced}
               animateEnter={animateEnter}
             >
-              <MessageActions
-                // Copy a display-safe string: skill/file tokens become
-                // `(name)` and command tokens become `/name` so the
-                // clipboard never carries private-use sentinels. Edit keeps
-                // the raw token text so the composer re-seeds with chips
-                // inline (command pill included).
-                text={sanitizeDisplayText(text)}
-                align="end"
-                pinned={actionsPinned}
-                onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
-              />
+              <MediaBlocks blocks={message.blocks} />
             </StaggerSection>
-          </MessageContent>
-        </Message>
+          )}
+          {text.length > 0 && (
+            <StaggerSection
+              delay={nextDelay()}
+              align="end"
+              reduced={reduced}
+              animateEnter={animateEnter}
+            >
+              <Bubble variant="tinted" align="end" className="max-w-full">
+                <UserMessageText text={text} />
+              </Bubble>
+            </StaggerSection>
+          )}
+          <StaggerSection
+            delay={nextDelay()}
+            align="end"
+            reduced={reduced}
+            animateEnter={animateEnter}
+          >
+            <MessageActions
+              text={copyTextForActions}
+              align="end"
+              pinned={actionsPinned}
+              reveal={actionsReveal}
+              onEdit={editForActions}
+            />
+          </StaggerSection>
+        </MessageContent>
+      </Message>
+    )
+
+    return (
+      <div className="w-full" onPointerDown={mobileActions ? suppressGlobalLongPress : undefined}>
+        {menuWrapped ? (
+          <MessageActionsContextMenu
+            overlayId={actionsMenuId}
+            text={copyTextForActions}
+            onEdit={editForActions}
+            disabled={!mobileActions}
+          >
+            {userMessage}
+          </MessageActionsContextMenu>
+        ) : (
+          userMessage
+        )}
       </div>
     )
   }
@@ -781,69 +493,93 @@ function ChatMessageComponent({
   const proseDelay = nextDelay()
   const mediaDelay = hasMedia ? nextDelay() : null
   const actionsDelay = nextDelay()
+  const agentCopyText = turnText ?? text
+
+  const agentMessage = (
+    <Message
+      align="start"
+      className={cn(showHeader ? 'py-2' : 'pb-2', mobileActionsClass)}
+      // On the mobile shell a message with actions is focusable so keyboard and
+      // switch users reach its focus-revealed row. Biome does not flag tabIndex
+      // on this component, so no suppression is needed.
+      tabIndex={mobileActions ? 0 : undefined}
+    >
+      <MessageContent className="min-w-0 flex-1">
+        {/* Skip the ghost bubble entirely for attachment-only assistant turns
+            so they don't render a blank shell above the media grid. The
+            streaming caret still needs a bubble to live in while the turn is
+            in progress, even before any text has arrived. */}
+        {(proseText.length > 0 || streaming) && (
+          <Bubble variant="ghost" className="w-full">
+            <BubbleContent>
+              <StaggerSection
+                delay={proseDelay}
+                align="start"
+                reduced={reduced}
+                animateEnter={animateEnter}
+              >
+                {proseText.length > 0 && (
+                  <AgentProse
+                    text={proseText}
+                    streaming={streaming}
+                    reduced={reduced}
+                    filePathContext={filePathContext}
+                  />
+                )}
+                {streaming && proseText.length === 0 && (
+                  <span
+                    aria-hidden="true"
+                    className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-foreground align-middle motion-reduce:animate-none motion-reduce:opacity-100"
+                  />
+                )}
+              </StaggerSection>
+            </BubbleContent>
+          </Bubble>
+        )}
+        {hasMedia && mediaDelay != null && (
+          <StaggerSection
+            delay={mediaDelay}
+            align="start"
+            reduced={reduced}
+            animateEnter={animateEnter}
+          >
+            <MediaBlocks blocks={message.blocks} />
+          </StaggerSection>
+        )}
+        {hasActions && (
+          <StaggerSection
+            delay={actionsDelay}
+            align="start"
+            reduced={reduced}
+            animateEnter={animateEnter}
+          >
+            <MessageActions
+              text={agentCopyText}
+              align="start"
+              pinned={actionsPinned}
+              reveal={actionsReveal}
+              onRetry={onRetry}
+            />
+          </StaggerSection>
+        )}
+      </MessageContent>
+    </Message>
+  )
 
   return (
-    <div className="w-full">
-      <Message align="start" className={cn(showHeader ? 'py-2' : 'pb-2')}>
-        <MessageContent className="min-w-0 flex-1">
-          {/* Skip the ghost bubble entirely for attachment-only assistant turns
-              so they don't render a blank shell above the media grid. The
-              streaming caret still needs a bubble to live in while the turn is
-              in progress, even before any text has arrived. */}
-          {(proseText.length > 0 || streaming) && (
-            <Bubble variant="ghost" className="w-full">
-              <BubbleContent>
-                <StaggerSection
-                  delay={proseDelay}
-                  align="start"
-                  reduced={reduced}
-                  animateEnter={animateEnter}
-                >
-                  {proseText.length > 0 && (
-                    <AgentProse
-                      text={proseText}
-                      streaming={streaming}
-                      reduced={reduced}
-                      filePathContext={filePathContext}
-                    />
-                  )}
-                  {streaming && proseText.length === 0 && (
-                    <span
-                      aria-hidden="true"
-                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-foreground align-middle motion-reduce:animate-none motion-reduce:opacity-100"
-                    />
-                  )}
-                </StaggerSection>
-              </BubbleContent>
-            </Bubble>
-          )}
-          {hasMedia && mediaDelay != null && (
-            <StaggerSection
-              delay={mediaDelay}
-              align="start"
-              reduced={reduced}
-              animateEnter={animateEnter}
-            >
-              <MediaBlocks blocks={message.blocks} />
-            </StaggerSection>
-          )}
-          {!message.streaming && isTurnTail && (
-            <StaggerSection
-              delay={actionsDelay}
-              align="start"
-              reduced={reduced}
-              animateEnter={animateEnter}
-            >
-              <MessageActions
-                text={turnText ?? text}
-                align="start"
-                pinned={actionsPinned}
-                onRetry={onRetry}
-              />
-            </StaggerSection>
-          )}
-        </MessageContent>
-      </Message>
+    <div className="w-full" onPointerDown={mobileActions ? suppressGlobalLongPress : undefined}>
+      {menuWrapped ? (
+        <MessageActionsContextMenu
+          overlayId={actionsMenuId}
+          text={agentCopyText}
+          onRetry={onRetry}
+          disabled={!mobileActions}
+        >
+          {agentMessage}
+        </MessageActionsContextMenu>
+      ) : (
+        agentMessage
+      )}
     </div>
   )
 }
