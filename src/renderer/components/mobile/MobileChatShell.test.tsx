@@ -1066,6 +1066,220 @@ describe('MobileChatShell', () => {
       )
     })
 
+    describe('navigation rows (web mode)', () => {
+      function renderWebTerminal(props: Partial<ShellProps> = {}) {
+        tauriRef.current = false
+        seedActiveTerminal()
+        const navigation = {
+          onOpenGitChanges: vi.fn(),
+          onOpenCommandPalette: vi.fn(),
+          onOpenProjectSettings: vi.fn()
+        }
+        const view = renderTerminal({ ...navigation, ...props })
+        return { ...view, navigation }
+      }
+
+      function terminalSheetRows(): string[] {
+        const sheet = document.getElementById('mobile-terminal-actions-sheet')
+        return Array.from(sheet?.querySelectorAll('button') ?? [])
+          .map((button) => button.textContent?.trim() ?? '')
+          .filter((text) => text.length > 0 && text !== 'Close')
+      }
+
+      function closeEvent(): Event {
+        return new Event('focusScope.autoFocusOnUnmount', { cancelable: true })
+      }
+
+      /** Lets the terminal sheet hand focus to the title, then drops it to `<body>`. */
+      async function settleAfterTerminalSheetCloses(): Promise<void> {
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        await waitFor(() =>
+          expect(document.activeElement).toBe(document.getElementById('mobile-shell-title'))
+        )
+        act(() => {
+          ;(document.activeElement as HTMLElement | null)?.blur()
+        })
+        expect(document.activeElement).toBe(document.body)
+      }
+
+      it('lists the header sheet rows after Command history and before Close terminal', async () => {
+        renderWebTerminal()
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Git changes',
+          'Files',
+          'Command palette',
+          'Project settings',
+          'Close terminal'
+        ])
+        expect(screen.getByRole('button', { name: 'Close terminal' }).className).toContain(
+          'text-destructive'
+        )
+      })
+
+      it('has no New terminal row even when the shell can create one', async () => {
+        renderWebTerminal({ onNewTerminal: vi.fn() })
+        await openTerminalSheet()
+
+        expect(screen.queryByRole('button', { name: 'New terminal' })).not.toBeInTheDocument()
+        // The header pencil is New terminal in a terminal.
+        expect(screen.getByLabelText('New terminal')).toBeInTheDocument()
+      })
+
+      it.each([
+        ['Git changes', 'onOpenGitChanges'],
+        ['Command palette', 'onOpenCommandPalette'],
+        ['Project settings', 'onOpenProjectSettings']
+      ] as const)('"%s" runs exactly its callback once, closes and focuses the title', async (label, key) => {
+        const { navigation, callbacks } = renderWebTerminal()
+        await openTerminalSheet()
+
+        fireEvent.click(screen.getByRole('button', { name: label }))
+
+        expect(navigation[key]).toHaveBeenCalledTimes(1)
+        for (const [name, callback] of Object.entries(navigation)) {
+          if (name !== key) expect(callback, name).not.toHaveBeenCalled()
+        }
+        expect(callbacks.onRestartTerminal).not.toHaveBeenCalled()
+        expect(callbacks.onCloseTerminal).not.toHaveBeenCalled()
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        // The destination changed, so focus lands on the title, not the more button.
+        await waitFor(() =>
+          expect(document.activeElement).toBe(document.getElementById('mobile-shell-title'))
+        )
+      })
+
+      it('"Files" opens the existing Files sheet and closes the terminal sheet', async () => {
+        renderWebTerminal()
+        await openTerminalSheet()
+        expect(screen.queryByText('files-drawer')).not.toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+
+        expect(await screen.findByText('files-drawer')).toBeInTheDocument()
+        await waitFor(() =>
+          expect(document.getElementById('mobile-terminal-actions-sheet')).not.toBeInTheDocument()
+        )
+      })
+
+      it('records the more button as the Git sheet opener and still opens it', async () => {
+        const { navigation } = renderWebTerminal()
+        const more = screen.getByLabelText('Terminal actions')
+        await openTerminalSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'Git changes' }))
+
+        expect(navigation.onOpenGitChanges).toHaveBeenCalledTimes(1)
+        await settleAfterTerminalSheetCloses()
+        sheetCloseAutoFocus('git-sheet')(closeEvent())
+
+        expect(document.activeElement).toBe(more)
+      })
+
+      it('records the more button as the Files sheet opener', async () => {
+        renderWebTerminal()
+        const more = screen.getByLabelText('Terminal actions')
+        await openTerminalSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+        expect(await screen.findByText('files-drawer')).toBeInTheDocument()
+        await settleAfterTerminalSheetCloses()
+
+        const event = closeEvent()
+        sheetCloseAutoFocus('files-sheet')(event)
+
+        expect(event.defaultPrevented).toBe(true)
+        expect(document.activeElement).toBe(more)
+      })
+
+      it('keeps the Tauri gates: no Git changes, Files or Command palette, but Project settings', async () => {
+        tauriRef.current = true
+        seedActiveTerminal()
+        renderTerminal({
+          onOpenGitChanges: vi.fn(),
+          onOpenCommandPalette: vi.fn(),
+          onOpenProjectSettings: vi.fn()
+        })
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Project settings',
+          'Close terminal'
+        ])
+      })
+
+      it('omits Git changes when the project has no path', async () => {
+        projectRef.current = { id: 'p1', name: 'Demo' }
+        renderWebTerminal()
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Files',
+          'Command palette',
+          'Project settings',
+          'Close terminal'
+        ])
+      })
+
+      it('omits Project settings when there is no active project', async () => {
+        projectRef.current = undefined
+        renderWebTerminal()
+        await openTerminalSheet()
+
+        expect(screen.queryByRole('button', { name: 'Project settings' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Git changes' })).not.toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument()
+      })
+
+      it('omits rows whose callback is not threaded', async () => {
+        tauriRef.current = false
+        seedActiveTerminal()
+        renderTerminal()
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Files',
+          'Close terminal'
+        ])
+      })
+
+      it('offers the same navigation rows as the header sheet does for a chat', async () => {
+        const view = renderWebTerminal()
+        await openTerminalSheet()
+        const navigationLabels = ['Git changes', 'Files', 'Command palette', 'Project settings']
+        const fromTerminal = terminalSheetRows().filter((row) => navigationLabels.includes(row))
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+        seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }], 'tab-1')
+        rerenderShell(view, {
+          onOpenGitChanges: view.navigation.onOpenGitChanges,
+          onOpenCommandPalette: view.navigation.onOpenCommandPalette,
+          onOpenProjectSettings: view.navigation.onOpenProjectSettings
+        })
+        await openHeaderSheet()
+        const fromHeader = Array.from(
+          document.getElementById('mobile-header-more-sheet')?.querySelectorAll('button') ?? []
+        )
+          .map((button) => button.textContent?.trim() ?? '')
+          .filter((text) => navigationLabels.includes(text))
+
+        expect(fromTerminal).toEqual(navigationLabels)
+        expect(fromHeader).toEqual(fromTerminal)
+      })
+    })
+
     it('titles the sheet "Terminal" when the terminal name is empty', async () => {
       seedActiveTerminal({ name: '' })
       renderTerminal()
