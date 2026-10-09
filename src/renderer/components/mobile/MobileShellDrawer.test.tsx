@@ -319,8 +319,12 @@ async function settle(ms = 30): Promise<void> {
   })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   mockNavigate.mockReset()
+  // A drawer the previous test left mounted is unmounted by cleanup, and Radix
+  // fires its close-focus handler in a setTimeout(0). Let that run before this
+  // test records its own opener, which the handler would otherwise consume.
+  await new Promise((resolve) => setTimeout(resolve, 0))
   _resetSheetFocusReturnForTests()
   locationRef.current = { pathname: '/' }
   mockAddAgentChatTab.mockReset()

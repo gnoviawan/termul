@@ -13,7 +13,9 @@
  * - the opener calls `recordSheetOpener(id, event.currentTarget, fallback?)`
  *   before opening; the optional fallback is tried when the opener is gone (the
  *   attention pill unmounts once nothing needs the user, so the drawer falls
- *   back to ☰);
+ *   back to ☰). Each open records its own opener and the next close consumes
+ *   it, so an open that records none restores nothing rather than reusing the
+ *   previous open's opener;
  * - a flow that navigates somewhere calls `setSheetFocusDestination(id, target)`
  *   before closing. `target` is an element, or a resolver that runs when the
  *   sheet has closed, for a destination that only exists after the close
@@ -40,7 +42,8 @@ const destinations = new Map<string, SheetFocusDestination>()
 
 /**
  * Remember the control that opened sheet `id`, and optionally a `fallback`
- * tried after it. Overwrites any earlier opener and replaces the fallback (a
+ * tried after it. One shot, like the destination: the next close of that sheet
+ * consumes both. Overwrites any earlier opener and replaces the fallback (a
  * record without one clears the old one), and drops a destination left over
  * from an earlier open that was abandoned (a file finished opening after the
  * sheet was already dismissed), so a stale destination cannot steal focus from
@@ -99,7 +102,9 @@ function takeDestination(id: string): HTMLElement | null {
 /**
  * Build the `onCloseAutoFocus` handler for sheet `id`.
  *
- * Always prevents Radix's default. Then:
+ * Always prevents Radix's default, and consumes the sheet's opener and fallback
+ * whichever step below settles, so a later open that records none cannot return
+ * focus to this open's opener. Then:
  * 1. focus already sits on a connected element other than `body` (a rename
  *    input autofocused, an alert dialog opened, a prompt that grabbed focus):
  *    leave it;
@@ -115,6 +120,12 @@ function takeDestination(id: string): HTMLElement | null {
 export function sheetCloseAutoFocus(id: string): (event: Event) => void {
   return (event) => {
     event.preventDefault()
+    // The opener and fallback belong to this open. Take them before any early
+    // return so they cannot leak into the next close.
+    const opener = openers.get(id)
+    const fallback = fallbacks.get(id)
+    openers.delete(id)
+    fallbacks.delete(id)
     const active = document.activeElement
     if (active && active !== document.body && active.isConnected) {
       // Consume the destination even though it goes unused, so it cannot leak
@@ -127,7 +138,7 @@ export function sheetCloseAutoFocus(id: string): (event: Event) => void {
     // A connected target can still refuse focus (a disabled opener, a hidden or
     // inert subtree), and `focus()` then no-ops silently. Check that focus took
     // effect before settling, so the next candidate is tried and a miss is logged.
-    for (const target of [destination, openers.get(id), fallbacks.get(id)]) {
+    for (const target of [destination, opener, fallback]) {
       if (!isFocusReturnTarget(target)) continue
       target.focus()
       if (document.activeElement === target) return

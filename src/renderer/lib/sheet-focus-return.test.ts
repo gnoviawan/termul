@@ -68,7 +68,7 @@ describe('sheet focus return', () => {
     expect(document.activeElement).toBe(destination)
   })
 
-  it('consumes the destination: the next close returns to the opener', () => {
+  it('consumes the destination: the next open returns to its opener', () => {
     const opener = mount<HTMLButtonElement>('button')
     const destination = mount<HTMLHeadingElement>('h1')
     destination.tabIndex = -1
@@ -80,6 +80,7 @@ describe('sheet focus return', () => {
     expect(document.activeElement).toBe(destination)
 
     destination.blur()
+    recordSheetOpener('files-sheet', opener)
     handler(closeEvent())
     expect(document.activeElement).toBe(opener)
   })
@@ -98,8 +99,46 @@ describe('sheet focus return', () => {
     expect(document.activeElement).toBe(input)
 
     input.blur()
+    recordSheetOpener('files-sheet', opener)
     handler(closeEvent())
     expect(document.activeElement).toBe(opener)
+  })
+
+  it('consumes the opener and fallback: a later close with none recorded restores nothing', () => {
+    const opener = mount<HTMLButtonElement>('button')
+    const fallback = mount<HTMLButtonElement>('button')
+    recordSheetOpener('git-sheet', opener, fallback)
+    const handler = sheetCloseAutoFocus('git-sheet')
+
+    handler(closeEvent())
+    expect(document.activeElement).toBe(opener)
+    expect(logFrontendError).not.toHaveBeenCalled()
+
+    // The sheet is reopened by something that records no opener, so the earlier
+    // opener (still connected) must not take focus.
+    opener.blur()
+    handler(closeEvent())
+    expect(document.activeElement).toBe(document.body)
+    expect(logFrontendError).toHaveBeenCalledWith({
+      level: 'info',
+      source: 'sheet-focus-return',
+      message: 'Sheet closed with no connected focus target: git-sheet'
+    })
+  })
+
+  it('consumes the opener even when focus already sits elsewhere', () => {
+    const opener = mount<HTMLButtonElement>('button')
+    const input = mount<HTMLInputElement>('input')
+    recordSheetOpener('git-sheet', opener)
+    const handler = sheetCloseAutoFocus('git-sheet')
+
+    input.focus()
+    handler(closeEvent())
+    expect(document.activeElement).toBe(input)
+
+    input.blur()
+    handler(closeEvent())
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('leaves focus where it is when it already sits on a connected element other than body', () => {
@@ -301,7 +340,7 @@ describe('sheet focus return', () => {
       expect(document.activeElement).toBe(target)
     })
 
-    it('consumes the resolver: the next close returns to the opener', () => {
+    it('consumes the resolver: the next open returns to its opener', () => {
       const opener = mount<HTMLButtonElement>('button')
       const destination = mount<HTMLHeadingElement>('h1')
       destination.tabIndex = -1
@@ -312,6 +351,7 @@ describe('sheet focus return', () => {
 
       handler(closeEvent())
       destination.blur()
+      recordSheetOpener('mobile-drawer', opener)
       handler(closeEvent())
 
       expect(resolver).toHaveBeenCalledTimes(1)
@@ -332,6 +372,7 @@ describe('sheet focus return', () => {
       expect(document.activeElement).toBe(input)
 
       input.blur()
+      recordSheetOpener('mobile-drawer', opener)
       handler(closeEvent())
       expect(resolver).not.toHaveBeenCalled()
       expect(document.activeElement).toBe(opener)
