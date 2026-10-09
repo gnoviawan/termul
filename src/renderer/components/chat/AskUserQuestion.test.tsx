@@ -109,7 +109,7 @@ describe('AskUserQuestion (issue #411)', () => {
     const send = screen.getByRole('button', { name: 'Submit' })
     expect(send).toBeDisabled()
     // Enter must not bypass the disabled state.
-    fireEvent.keyDown(screen.getByRole('button', { name: 'A' }), { key: 'Enter' })
+    fireEvent.keyDown(screen.getByRole('heading'), { key: 'Enter' })
     expect(mockAnswer).not.toHaveBeenCalled()
     fireEvent.click(screen.getByText('A'))
     expect(send).toBeEnabled()
@@ -127,8 +127,19 @@ describe('AskUserQuestion (issue #411)', () => {
     const optionA = screen.getByRole('button', { name: /Plan A/ })
     fireEvent.keyDown(optionA, { key: '2' })
     expect(screen.getByRole('button', { name: /Plan B/ })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.keyDown(optionA, { key: 'Enter' })
+    fireEvent.keyDown(screen.getByRole('heading'), { key: 'Enter' })
     expect(mockAnswer).toHaveBeenCalledWith('q-1', ['plan-b'])
+  })
+
+  it('Enter on a button keeps native activation instead of submitting', () => {
+    render(<AskUserQuestion question={question} />)
+    fireEvent.click(screen.getByText('Plan A'))
+    // Enter on × or an option must not be hijacked into Submit.
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    const enter = fireEvent.keyDown(cancel, { key: 'Enter' })
+    expect(enter).toBe(true) // not preventDefault-ed → native click fires
+    fireEvent.keyDown(screen.getByRole('button', { name: /Plan B/ }), { key: 'Enter' })
+    expect(mockAnswer).not.toHaveBeenCalled()
   })
 
   it('cancel via the × button resolves the question as cancelled', () => {

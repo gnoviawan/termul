@@ -202,6 +202,16 @@ describe('ElicitationQuestions (GH-935)', () => {
     expect(onSubmit).toHaveBeenCalledWith({ q1: ['Tracing', 'Logging'] })
   })
 
+  it('Enter in the Other input submits, but not while an IME composition is active', () => {
+    const { onSubmit } = renderPanel({ fields: [pending.fields[0]] })
+    const input = screen.getByLabelText('Other answer for Color')
+    fireEvent.change(input, { target: { value: '赤' } })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith({ q0: '赤' })
+  })
+
   it('Other text submits as a custom string value for enum questions', () => {
     const { onSubmit } = renderPanel({ fields: [pending.fields[0]] })
     fireEvent.change(screen.getByLabelText('Other answer for Color'), {

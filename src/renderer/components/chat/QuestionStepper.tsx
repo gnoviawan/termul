@@ -104,13 +104,18 @@ export function QuestionStepper({
       onClose()
       return
     }
+    const target = event.target
     if (event.key === 'Enter') {
+      // IME candidate confirmation must not advance/submit half-typed text,
+      // and buttons keep their native Enter activation (× cancels, an
+      // option toggles) instead of being hijacked into Next/Submit.
+      if (event.nativeEvent.isComposing) return
+      if (target instanceof HTMLElement && target.closest('button')) return
       event.preventDefault()
       primary()
       return
     }
     // Number/arrow shortcuts must not fire while typing in the Other input.
-    const target = event.target
     if (
       target instanceof HTMLElement &&
       target.closest('input, textarea, select, [contenteditable="true"]')
