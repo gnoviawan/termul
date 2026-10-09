@@ -9,6 +9,35 @@ const QUESTION_PROMPT_SELECTOR = '[data-approval-prompt^="question:"]'
 // (× Cancel) for a question with no options.
 const QUESTION_FIRST_OPTION_SELECTOR = `${QUESTION_PROMPT_SELECTOR} button[aria-pressed]`
 const QUESTION_FIRST_BUTTON_SELECTOR = `${QUESTION_PROMPT_SELECTOR} button:not(:disabled)`
+// Chat tabs stay mounted while hidden (PaneContent), so a question can sit in a
+// pane the user is not looking at; only the visible one counts.
+const VISIBLE_CHAT_TAB_SELECTOR = '[data-chat-tab-state="visible"]'
+
+/**
+ * The control to focus in an open question inside `root`: its first option
+ * (`aria-pressed` toggle), else its first enabled button (× Cancel) for a
+ * question with no options. Never just the first button: the stepper renders
+ * its pager and × before the options. Null when no question is open.
+ */
+export function findQuestionFocusTarget(root: ParentNode | null | undefined): HTMLElement | null {
+  if (!root) return null
+  return (
+    root.querySelector<HTMLElement>(QUESTION_FIRST_OPTION_SELECTOR) ??
+    root.querySelector<HTMLElement>(QUESTION_FIRST_BUTTON_SELECTOR)
+  )
+}
+
+/**
+ * `findQuestionFocusTarget` over the chat tab on screen only: a question open in
+ * a hidden chat tab is ignored.
+ */
+export function findVisibleQuestionFocusTarget(): HTMLElement | null {
+  for (const pane of Array.from(document.querySelectorAll(VISIBLE_CHAT_TAB_SELECTOR))) {
+    const target = findQuestionFocusTarget(pane)
+    if (target) return target
+  }
+  return null
+}
 
 interface UseApprovalDockOptions {
   /** The chat panel root: scopes focus tracking and the composer / question lookups. */
@@ -148,9 +177,7 @@ export function useApprovalDock({
 
     const root = rootRef.current
     const target =
-      root?.querySelector<HTMLElement>(COMPOSER_SELECTOR) ??
-      root?.querySelector<HTMLElement>(QUESTION_FIRST_OPTION_SELECTOR) ??
-      root?.querySelector<HTMLElement>(QUESTION_FIRST_BUTTON_SELECTOR)
+      root?.querySelector<HTMLElement>(COMPOSER_SELECTOR) ?? findQuestionFocusTarget(root)
     if (!target) {
       void logFrontendError({
         level: 'warn',

@@ -345,6 +345,58 @@ async fn fan_out_preserves_skip_serializing_if_byte_identity() {
     assert_eq!(recorded[0].payload["agentId"], "a1");
 }
 
+/// gh-821: the REAL `AgentErrorEvent` / `AgentCrashedEvent` carry JSON-RPC
+/// `code` + `data` through the WS relay when set, and omit both when `None`.
+#[tokio::test]
+async fn fan_out_agent_error_and_crashed_carry_code_and_data() {
+    use crate::acp::config::{AgentId, SessionId};
+    use crate::acp::events::{AgentCrashedEvent, AgentErrorEvent};
+
+    let ws = Arc::new(WsRelaySink::new());
+    ws.seed_session_for_test("sess-err");
+    let (_client, mut rx, _replay) = ws.subscribe("sess-err", None).await;
+    let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+    let data = serde_json::json!({ "reason": "login" });
+
+    let with_detail = AgentErrorEvent {
+        agent_id: AgentId("a1".to_string()),
+        session_id: Some(SessionId::new("sess-err")),
+        message: "auth".to_string(),
+        code: Some(-32000),
+        data: Some(data.clone()),
+    };
+    fan_out(&sinks, Some("sess-err"), "acp:agent_error", &with_detail);
+    let without_detail = AgentErrorEvent {
+        agent_id: AgentId("a1".to_string()),
+        session_id: Some(SessionId::new("sess-err")),
+        message: "turn idle timeout".to_string(),
+        code: None,
+        data: None,
+    };
+    fan_out(&sinks, Some("sess-err"), "acp:agent_error", &without_detail);
+    let crashed = AgentCrashedEvent {
+        agent_id: AgentId("a1".to_string()),
+        session_id: Some(SessionId::new("sess-err")),
+        message: "gone".to_string(),
+        code: Some(-32603),
+        data: Some(data.clone()),
+    };
+    fan_out(&sinks, Some("sess-err"), "acp:agent_crashed", &crashed);
+
+    let recorded = drain_rx(&mut rx);
+    assert_eq!(recorded.len(), 3);
+    assert_eq!(
+        recorded[0].payload,
+        serde_json::to_value(&with_detail).unwrap()
+    );
+    assert_eq!(recorded[0].payload["code"], -32000);
+    assert_eq!(recorded[0].payload["data"], data);
+    assert!(recorded[1].payload.get("code").is_none());
+    assert!(recorded[1].payload.get("data").is_none());
+    assert_eq!(recorded[2].payload["code"], -32603);
+    assert_eq!(recorded[2].payload["data"], data);
+}
+
 /// P2: compile-time proof that `EventSink` and its implementations are
 /// `Send + Sync` (the trait requires it, so `Arc<dyn EventSink>` can cross
 /// from the Tauri command thread into each agent's dedicated driver

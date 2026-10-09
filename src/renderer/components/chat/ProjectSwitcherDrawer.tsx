@@ -11,11 +11,10 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
-import { logFrontendError } from '@/lib/log-api'
+import { useProjectSwitch, useProjectSwitchState } from '@/hooks/use-project-switch'
 import { setHostDefaultProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerProjects } from '@/lib/web-server-api'
-import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 
@@ -64,11 +63,13 @@ export function ProjectSwitcherDrawer({
 }: ProjectSwitcherDrawerProps): React.JSX.Element {
   const projects = useProjectStore((s) => s.projects)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
-  const switchProject = useAcpStore((s) => s.switchProject)
-  const queuedProjectSwitchId = useAcpStore((s) => s.queuedProjectSwitchId)
-  const failedProjectSwitchId = useAcpStore((s) => s.failedProjectSwitchId)
-  const setFailedProjectSwitch = useAcpStore((s) => s.setFailedProjectSwitch)
-  const [switchingId, setSwitchingId] = useState<string | null>(null)
+  const { switchTo, clearFailed } = useProjectSwitch('ProjectSwitcherDrawer')
+  const {
+    switchingId,
+    queuedId: queuedProjectSwitchId,
+    failedId: failedProjectSwitchId,
+    busy: switchBusy
+  } = useProjectSwitchState()
   const [defaultingId, setDefaultingId] = useState<string | null>(null)
 
   // The inline "Failed" badge is transient: dismiss it when the drawer closes
@@ -78,36 +79,16 @@ export function ProjectSwitcherDrawer({
   // closes (e.g. a queued switch rejected while closed) — the effect re-runs
   // and clears it immediately so no stale badge resurfaces on reopen.
   useEffect(() => {
-    if (!open && failedProjectSwitchId !== null) setFailedProjectSwitch(null)
-  }, [open, failedProjectSwitchId, setFailedProjectSwitch])
+    if (!open && failedProjectSwitchId !== null) clearFailed()
+  }, [open, failedProjectSwitchId, clearFailed])
 
-  // A switch is in flight or queued: rows stay focusable (`aria-disabled`, not
-  // `disabled`, so the focused row keeps focus) but ignore taps.
-  const switchBusy = switchingId !== null || queuedProjectSwitchId !== null
-
+  // While a switch is in flight or queued (`switchBusy`) rows stay focusable
+  // (`aria-disabled`, not `disabled`, so the focused row keeps focus) and the
+  // hook ignores taps. The palette shares the routine, so the spinner and the
+  // Queued badge also show for a switch it started.
   async function handleSwitch(project: Project): Promise<void> {
-    if (switchBusy) return
-    setSwitchingId(project.id)
-    try {
-      const outcome = await switchProject(project.id)
-      if (outcome.status === 'completed' || outcome.status === 'selected') {
-        onOpenChange(false)
-      }
-    } catch (err) {
-      // `AcpTransportError.message` is the human string callers already toast
-      // (e.g. "no_agent" → "switch_project requires a live agent; …"). Surface
-      // the failure inline too — toasts are easy to miss on mobile.
-      const message = err instanceof Error ? err.message : String(err)
-      setFailedProjectSwitch(project.id)
-      toast.error(message)
-      void logFrontendError({
-        level: 'warn',
-        source: 'ProjectSwitcherDrawer',
-        message: `Project switch failed for ${project.id}: ${message}`
-      })
-    } finally {
-      setSwitchingId(null)
-    }
+    const status = await switchTo(project.id)
+    if (status === 'completed' || status === 'selected') onOpenChange(false)
   }
 
   // Explicit host-default change (Epic 7). Distinct from `switchProject`
@@ -182,10 +163,7 @@ export function ProjectSwitcherDrawer({
                       disabled={switchDisabled}
                       aria-disabled={switchBusy && !switchDisabled ? 'true' : undefined}
                       aria-current={isActive ? 'true' : undefined}
-                      onClick={() => {
-                        if (switchBusy) return
-                        void handleSwitch(project)
-                      }}
+                      onClick={() => void handleSwitch(project)}
                       className={[
                         'flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors duration-150 ease-out',
                         isActive ? 'keycap text-foreground' : 'hover:bg-foreground/[0.03]',

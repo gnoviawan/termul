@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
 import {
   type ChatIsolationContext,
+  describeIsolationDetail,
   describeProjectSubtitle,
   useChatIsolationContext
 } from './use-chat-isolation-context'
@@ -162,5 +163,58 @@ describe('describeProjectSubtitle', () => {
       text: 'No project',
       label: 'No project, switch project'
     })
+  })
+})
+
+describe('describeIsolationDetail', () => {
+  const local: ChatIsolationContext = {
+    isWorktree: false,
+    isolationModeLabel: 'Local',
+    isolationModeTitle: '',
+    isolationBranch: 'main',
+    isDetachedHead: false
+  }
+  const worktree: ChatIsolationContext = {
+    ...local,
+    isWorktree: true,
+    isolationModeLabel: 'Worktree',
+    isolationBranch: 'chat/ab12'
+  }
+
+  it('git local: branch · Local', () => {
+    expect(describeIsolationDetail(local)).toBe('main · Local')
+  })
+
+  it('worktree chat: branch · Worktree', () => {
+    expect(describeIsolationDetail(worktree)).toBe('chat/ab12 · Worktree')
+  })
+
+  it('detached HEAD: Detached HEAD · Local', () => {
+    expect(describeIsolationDetail({ ...local, isolationBranch: null, isDetachedHead: true })).toBe(
+      'Detached HEAD · Local'
+    )
+  })
+
+  it('worktree with no recorded branch: Worktree alone, never the project branch', () => {
+    expect(describeIsolationDetail({ ...worktree, isolationBranch: null })).toBe('Worktree')
+  })
+
+  it('non-git project: nothing', () => {
+    expect(describeIsolationDetail({ ...local, isolationBranch: null })).toBeNull()
+  })
+
+  it('composes the subtitle: the detail follows the project name', () => {
+    for (const isolation of [
+      local,
+      worktree,
+      { ...local, isolationBranch: null, isDetachedHead: true },
+      { ...worktree, isolationBranch: null },
+      { ...local, isolationBranch: null }
+    ]) {
+      const detail = describeIsolationDetail(isolation)
+      expect(describeProjectSubtitle('termul', isolation).text).toBe(
+        detail ? `termul · ${detail}` : 'termul'
+      )
+    }
   })
 })

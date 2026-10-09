@@ -131,6 +131,13 @@ export interface AcpSession {
   models?: SessionModelState | null
   configOptions: SessionConfigOption[]
   lastError: string | null
+  /** gh-821: JSON-RPC code of the error behind `lastError`, when it was an
+   * agent RPC error (`null`/absent otherwise). Only set by the `agent_error` /
+   * `agent_crashed` reducers: other `lastError` writers do not touch it, so
+   * read it only while the `lastError` it accompanies is the event's message. */
+  lastErrorCode?: number | null
+  /** gh-821: JSON-RPC `data` of the error behind `lastError`, when present. */
+  lastErrorData?: unknown
   createdAt: number
   /**
    * Set while a `session/load` replay may still deliver history chunks.

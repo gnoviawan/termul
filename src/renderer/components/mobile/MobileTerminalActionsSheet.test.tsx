@@ -1,10 +1,27 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { type ComponentProps, useRef, useState } from 'react'
-import { describe, expect, it, vi } from 'vitest'
-import { useSheetCloseFocus } from '@/hooks/use-sheet-close-focus'
+import { type ComponentProps, useEffect, useRef, useState } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  _resetSheetFocusReturnForTests,
+  recordSheetOpener,
+  setSheetFocusDestination,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { MobileTerminalActionsSheet } from './MobileTerminalActionsSheet'
 
 type SheetProps = ComponentProps<typeof MobileTerminalActionsSheet>
+
+/** The shell navigation callbacks the owner threads in when they apply. */
+function navigationCallbacks() {
+  return {
+    onOpenGitChanges: vi.fn(),
+    onOpenFiles: vi.fn(),
+    onOpenCommandPalette: vi.fn(),
+    onOpenProjectSettings: vi.fn()
+  }
+}
+
+const NAVIGATION_LABELS = ['Git changes', 'Files', 'Command palette', 'Project settings']
 
 function renderSheet(overrides: Partial<SheetProps> = {}) {
   const props: SheetProps = {
@@ -72,6 +89,136 @@ describe('MobileTerminalActionsSheet', () => {
     const close = screen.getByRole('button', { name: 'Close terminal' })
     expect(close.className).toContain('min-h-11')
     expect(close.className).toContain('text-destructive')
+  })
+
+  describe('navigation rows', () => {
+    it('lists the eight rows in order, with Close terminal last', async () => {
+      renderSheet({ ...navigationCallbacks() })
+      await screen.findByRole('dialog')
+
+      expect(rowLabels()).toEqual([
+        'Rename terminal',
+        'Restart terminal',
+        'Command history',
+        'Git changes',
+        'Files',
+        'Command palette',
+        'Project settings',
+        'Close terminal',
+        'Close'
+      ])
+    })
+
+    it('keeps every row at 44px and only Close terminal destructive', async () => {
+      renderSheet({ ...navigationCallbacks() })
+      await screen.findByRole('dialog')
+
+      for (const name of NAVIGATION_LABELS) {
+        const row = screen.getByRole('button', { name })
+        expect(row.className, name).toContain('min-h-11')
+        expect(row.className, name).not.toContain('text-destructive')
+      }
+      const close = screen.getByRole('button', { name: 'Close terminal' })
+      expect(close.className).toContain('min-h-11')
+      expect(close.className).toContain('text-destructive')
+    })
+
+    it('has no New terminal row, because the header already is New terminal', async () => {
+      renderSheet({ ...navigationCallbacks() })
+      await screen.findByRole('dialog')
+
+      expect(screen.queryByRole('button', { name: 'New terminal' })).not.toBeInTheDocument()
+    })
+
+    it('sets Close terminal apart with the header sheet divider when a row precedes it', async () => {
+      renderSheet({ ...navigationCallbacks() })
+      await screen.findByRole('dialog')
+
+      const wrapper = screen.getByRole('button', { name: 'Close terminal' }).parentElement
+      expect(wrapper?.className).toContain('mt-1')
+      expect(wrapper?.className).toContain('border-t')
+      expect(wrapper?.className).toContain('border-border/60')
+      expect(wrapper?.className).toContain('pt-1')
+      // The divider wraps only the destructive row.
+      expect(wrapper?.querySelectorAll('button')).toHaveLength(1)
+    })
+
+    it('adds no divider when no navigation row is shown', async () => {
+      renderSheet()
+      await screen.findByRole('dialog')
+
+      const wrapper = screen.getByRole('button', { name: 'Close terminal' }).parentElement
+      expect(wrapper?.className ?? '').not.toContain('border-t')
+    })
+
+    it.each([
+      ['Git changes', 'onOpenGitChanges'],
+      ['Files', 'onOpenFiles'],
+      ['Command palette', 'onOpenCommandPalette'],
+      ['Project settings', 'onOpenProjectSettings']
+    ] as const)('choosing "%s" runs only its callback once, marks the choice and closes', async (label, key) => {
+      const calls: string[] = []
+      const navigation = navigationCallbacks()
+      const { props } = renderSheet({
+        ...navigation,
+        onItemChosen: vi.fn(() => calls.push('chosen')),
+        onOpenChange: vi.fn((open: boolean) => calls.push(`open:${open}`))
+      })
+      navigation[key].mockImplementation(() => calls.push('run'))
+      await screen.findByRole('dialog')
+
+      fireEvent.click(screen.getByRole('button', { name: label }))
+
+      expect(navigation[key]).toHaveBeenCalledTimes(1)
+      expect(navigation[key]).toHaveBeenCalledWith()
+      for (const [other, callback] of Object.entries(navigation)) {
+        if (other !== key) expect(callback, other).not.toHaveBeenCalled()
+      }
+      expect(props.onRestartTerminal).not.toHaveBeenCalled()
+      expect(props.onCloseTerminal).not.toHaveBeenCalled()
+      expect(calls).toEqual(['chosen', 'open:false', 'run'])
+    })
+
+    it.each([
+      ['Git changes', 'onOpenGitChanges'],
+      ['Files', 'onOpenFiles'],
+      ['Command palette', 'onOpenCommandPalette'],
+      ['Project settings', 'onOpenProjectSettings']
+    ] as const)('omits only "%s" when its callback is missing', async (label, key) => {
+      const navigation: Partial<ReturnType<typeof navigationCallbacks>> = navigationCallbacks()
+      navigation[key] = undefined
+      renderSheet({ ...navigation })
+      await screen.findByRole('dialog')
+
+      expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument()
+      for (const other of NAVIGATION_LABELS.filter((name) => name !== label)) {
+        expect(screen.getByRole('button', { name: other })).toBeInTheDocument()
+      }
+      expect(rowLabels()).toContain('Close terminal')
+    })
+
+    it('shows no navigation row when none is threaded, leaving the original four', async () => {
+      renderSheet()
+      await screen.findByRole('dialog')
+
+      expect(rowLabels()).toEqual([
+        'Rename terminal',
+        'Restart terminal',
+        'Command history',
+        'Close terminal',
+        'Close'
+      ])
+    })
+
+    it('keeps the navigation rows and the divider while a rename is in progress', async () => {
+      renderSheet({ ...navigationCallbacks() })
+      await startRename()
+
+      expect(screen.getByRole('button', { name: 'Git changes' })).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: 'Close terminal' }).parentElement?.className
+      ).toContain('border-t')
+    })
   })
 
   describe('last exit code', () => {
@@ -282,11 +429,17 @@ describe('MobileTerminalActionsSheet', () => {
   })
 
   describe('focus return', () => {
+    const closeAutoFocus = sheetCloseAutoFocus('terminal-actions-sheet')
+
+    beforeEach(() => _resetSheetFocusReturnForTests())
+
+    // Mirrors MobileChatShell: ⋯ is recorded as the opener, and choosing a row
+    // sets the header title as the destination.
     function Harness({ onRename }: { onRename: () => void }): React.JSX.Element {
       const [open, setOpen] = useState(true)
       const openerRef = useRef<HTMLButtonElement>(null)
       const titleRef = useRef<HTMLHeadingElement>(null)
-      const { markItemChosen, onCloseAutoFocus } = useSheetCloseFocus(openerRef, titleRef)
+      useEffect(() => recordSheetOpener('terminal-actions-sheet', openerRef.current), [])
       return (
         <>
           <h1 ref={titleRef} tabIndex={-1}>
@@ -302,8 +455,10 @@ describe('MobileTerminalActionsSheet', () => {
             tabId="tab-1"
             name="zsh"
             lastExitCode={0}
-            onCloseAutoFocus={onCloseAutoFocus}
-            onItemChosen={markItemChosen}
+            onCloseAutoFocus={closeAutoFocus}
+            onItemChosen={() =>
+              setSheetFocusDestination('terminal-actions-sheet', titleRef.current)
+            }
             onRenameTerminal={onRename}
             onRestartTerminal={vi.fn()}
           />

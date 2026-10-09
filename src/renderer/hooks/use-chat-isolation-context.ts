@@ -18,10 +18,11 @@ export interface ChatIsolationContext {
 }
 
 /**
- * CAP-6: worktree/branch indicator shared by the composer context strip and
- * the mobile shell subtitle. Worktree chats show their `chat/*` branch (the
- * long worktree path stays on the mode tooltip). Local chats fall back to the
- * project's reactive `gitBranch`. A git project with no branch is detached.
+ * CAP-6: worktree/branch indicator shared by the composer context strip, the
+ * mobile shell subtitle and the drawer project row. Worktree chats show their
+ * `chat/*` branch (the long worktree path stays on the mode tooltip). Local
+ * chats fall back to the project's reactive `gitBranch`. A git project with no
+ * branch is detached.
  */
 export function useChatIsolationContext({
   projectId,
@@ -52,6 +53,22 @@ export interface ProjectSubtitle {
   label: string
 }
 
+/** The branch a git project shows: its own, or "Detached HEAD"; null when there is none to show. */
+function describeIsolationBranch(isolation: ChatIsolationContext): string | null {
+  return isolation.isolationBranch || (isolation.isDetachedHead ? 'Detached HEAD' : null)
+}
+
+/**
+ * The isolation detail line shown under a project name: `branch · Local|Worktree`
+ * for a git project (a detached HEAD reads "Detached HEAD"), `Worktree` alone
+ * for a worktree chat with an unknown branch, null for a non-git project.
+ */
+export function describeIsolationDetail(isolation: ChatIsolationContext): string | null {
+  const branch = describeIsolationBranch(isolation)
+  if (branch) return `${branch} · ${isolation.isolationModeLabel}`
+  return isolation.isWorktree ? 'Worktree' : null
+}
+
 /**
  * Subtitle under the mobile header title. A git project shows its branch (or
  * "Detached HEAD") and the isolation label; a worktree chat with an unknown
@@ -63,15 +80,10 @@ export function describeProjectSubtitle(
   isolation: ChatIsolationContext
 ): ProjectSubtitle {
   if (!projectName) return { text: 'No project', label: 'No project, switch project' }
-  const branch = isolation.isolationBranch || (isolation.isDetachedHead ? 'Detached HEAD' : null)
-  if (branch) {
-    return {
-      text: `${projectName} · ${branch} · ${isolation.isolationModeLabel}`,
-      label: `${projectName} · ${branch}, switch project`
-    }
-  }
+  const detail = describeIsolationDetail(isolation)
+  const branch = describeIsolationBranch(isolation)
   return {
-    text: isolation.isWorktree ? `${projectName} · Worktree` : projectName,
-    label: `${projectName}, switch project`
+    text: detail ? `${projectName} · ${detail}` : projectName,
+    label: branch ? `${projectName} · ${branch}, switch project` : `${projectName}, switch project`
   }
 }
