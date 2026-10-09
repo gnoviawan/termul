@@ -222,7 +222,7 @@ export function ChatHistoryTab({
             <button
               type="button"
               onClick={() => setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)}
-              className="w-full rounded-md py-1 text-xs tabular-nums text-muted-foreground hover:bg-sidebar-accent"
+              className="w-full rounded-md py-1 text-xs tabular-nums text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03]"
             >
               Load more ({filtered.length - visible.length} more)
             </button>

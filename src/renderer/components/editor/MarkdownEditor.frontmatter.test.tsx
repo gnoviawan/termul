@@ -62,7 +62,7 @@ describe('MarkdownEditor frontmatter strip/rejoin/flush', () => {
         replaceContent,
         flushPendingContent,
         capturePendingContent,
-        getHeadings: () => [],
+        headings: [],
         scrollToBlock: vi.fn()
       }
     })

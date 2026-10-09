@@ -1,11 +1,27 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useAcpStore } from '@/stores/acp-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import { StatusBar } from './StatusBar'
+
+const { signalsRef } = vi.hoisted(() => ({
+  signalsRef: {
+    current: {
+      attentionCounts: {} as Record<string, number>,
+      firstNeedsYouSessionId: {} as Record<string, string>,
+      runningProjectIds: new Set<string>()
+    }
+  }
+}))
+
+vi.mock('@/hooks/use-agent-chat-attention', () => ({
+  useAgentChatProjectSignals: () => signalsRef.current
+}))
 
 // Mock the terminal store
 vi.mock('@/stores/terminal-store', () => ({
@@ -160,7 +176,7 @@ describe('StatusBar', () => {
     it('should render exit code when showExitCode is true', () => {
       renderWithProviders(<StatusBar project={mockProject} />)
 
-      expect(screen.getByText('Exit: 0')).toBeDefined()
+      expect(screen.getByText('Exit 0')).toBeDefined()
     })
 
     it('should not render exit code when showExitCode is false', () => {
@@ -170,7 +186,7 @@ describe('StatusBar', () => {
 
       renderWithProviders(<StatusBar project={mockProject} />)
 
-      expect(screen.queryByText('Exit: 0')).toBeNull()
+      expect(screen.queryByText('Exit 0')).toBeNull()
     })
 
     it('should hide all optional elements when all settings are false', () => {
@@ -189,23 +205,44 @@ describe('StatusBar', () => {
       expect(screen.getByText('test-project')).toBeDefined()
       expect(screen.queryByText('feature-branch')).toBeNull()
       expect(screen.queryByText('~/project')).toBeNull()
-      expect(screen.queryByText('Exit: 0')).toBeNull()
+      expect(screen.queryByText('Exit 0')).toBeNull()
     })
   })
 
-  describe('project colour token', () => {
-    it('paints the bar with the project semantic token', () => {
+  describe('quiet bar (redesign)', () => {
+    it('uses the card surface with a top hairline, not the project fill', () => {
       const { container } = renderWithProviders(<StatusBar project={mockProject} />)
       const bar = container.querySelector('[data-status-bar]')
-      expect(bar?.className).toContain('bg-status-bar-blue')
-      expect(bar?.className).not.toContain('bg-project-blue')
-      expect(bar?.className).not.toContain('bg-blue-600')
+      expect(bar?.className).toContain('bg-card')
+      expect(bar?.className).toContain('border-t')
+      expect(bar?.className).toContain('text-muted-foreground')
+      expect(bar?.className).not.toContain('bg-status-bar')
+      expect(bar?.className).not.toContain('text-primary-foreground')
     })
 
-    it('falls back to bg-status-bar without a project', () => {
+    it('keeps the quiet surface without a project', () => {
       const { container } = renderWithProviders(<StatusBar project={undefined} />)
       const bar = container.querySelector('[data-status-bar]')
-      expect(bar?.className).toContain('bg-status-bar')
+      expect(bar?.className).toContain('bg-card')
+      expect(bar?.className).not.toContain('bg-status-bar')
+    })
+
+    it('carries the project colour in the glyph', () => {
+      const { container } = renderWithProviders(<StatusBar project={mockProject} />)
+      expect(container.querySelector('[data-project-color="blue"]')).not.toBeNull()
+    })
+
+    it('renders the project item as a static label (no hover wash)', () => {
+      renderWithProviders(<StatusBar project={mockProject} />)
+      const item = screen.getByText('test-project').parentElement
+      expect(item?.className).toContain('cursor-default')
+      expect(item?.className).not.toContain('hover:bg-foreground/[0.03]')
+    })
+
+    it('does not render a primary-foreground hover wash on any item', () => {
+      const { container } = renderWithProviders(<StatusBar project={mockProject} />)
+      expect(container.innerHTML).not.toContain('primary-foreground/10')
+      expect(container.innerHTML).not.toContain('primary-foreground/20')
     })
   })
 
@@ -266,6 +303,47 @@ describe('StatusBar', () => {
       expect(
         screen.getByRole('status', { name: 'Control channel: reconnecting' })
       ).toBeInTheDocument()
+    })
+  })
+
+  describe('needs-you pill', () => {
+    afterEach(() => {
+      signalsRef.current = {
+        attentionCounts: {},
+        firstNeedsYouSessionId: {},
+        runningProjectIds: new Set<string>()
+      }
+    })
+
+    it('is hidden when no chat needs attention', () => {
+      renderWithProviders(<StatusBar project={mockProject} />)
+      expect(screen.queryByText(/needs you/)).toBeNull()
+    })
+
+    it('names the chat and opens it on click', () => {
+      signalsRef.current = {
+        attentionCounts: { 'test-project': 1 },
+        firstNeedsYouSessionId: { 'test-project': 'session-1' },
+        runningProjectIds: new Set<string>()
+      }
+      useAcpStore.setState({
+        sessions: {
+          ...useAcpStore.getState().sessions,
+          'session-1': { title: 'Fix login' } as never
+        }
+      })
+      const addAgentChatTab = vi.fn()
+      const prevAdd = useWorkspaceStore.getState().addAgentChatTab
+      useWorkspaceStore.setState({ addAgentChatTab })
+      try {
+        renderWithProviders(<StatusBar project={mockProject} />)
+        const pill = screen.getByRole('button', { name: 'Fix login needs you' })
+        expect(pill.className).toContain('bg-warning/10')
+        fireEvent.click(pill)
+        expect(addAgentChatTab).toHaveBeenCalledWith('session-1')
+      } finally {
+        useWorkspaceStore.setState({ addAgentChatTab: prevAdd })
+      }
     })
   })
 })

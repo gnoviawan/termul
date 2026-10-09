@@ -1,9 +1,25 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { AlertCircle, ChevronDown, GitBranch, Plus, RefreshCw, Search } from '@/components/icons'
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  GitBranch,
+  Globe,
+  Plus,
+  RefreshCw
+} from '@/components/icons'
+import {
+  STATUS_BAR_HOVER_CLASS,
+  STATUS_BAR_ITEM_CLASS,
+  STATUS_BAR_OPEN_CLASS
+} from '@/components/status-bar-hit'
 import { Button } from '@/components/ui/button'
+import { FOCUS_RING_CLASS, PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import { Spinner } from '@/components/ui/spinner'
 import { gitApi } from '@/lib/git-api'
 import { cn } from '@/lib/utils'
@@ -11,8 +27,16 @@ import { worktreeApi } from '@/lib/worktree-api'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
-const statusBarTriggerClass =
-  'flex h-5 min-w-0 shrink-0 items-center gap-1.5 rounded cursor-pointer px-2 transition-colors hover:bg-primary-foreground/10'
+// Quiet status-bar item (redesign): neutral hover wash, open = popover tint.
+const statusBarTriggerClass = cn(
+  STATUS_BAR_ITEM_CLASS,
+  STATUS_BAR_HOVER_CLASS,
+  FOCUS_RING_CLASS,
+  STATUS_BAR_OPEN_CLASS
+)
+
+const branchRowClass =
+  'flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-xs text-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.06] focus-visible:bg-foreground/[0.06] focus-visible:outline-none disabled:cursor-default'
 
 function sanitizeBranchName(name: string): string {
   return name
@@ -163,6 +187,15 @@ export function GitBranchPicker({
 
   const canCreateBranch = !branchesLoading && !loadError
 
+  const localBranches = useMemo(
+    () => filteredBranches.filter((branch) => !branch.isRemote),
+    [filteredBranches]
+  )
+  const remoteBranches = useMemo(
+    () => filteredBranches.filter((branch) => branch.isRemote),
+    [filteredBranches]
+  )
+
   const resolveCheckedOutBranch = (branch: BranchInfo): string => {
     if (!branch.isRemote) return branch.name
     const slash = branch.name.indexOf('/')
@@ -224,6 +257,32 @@ export function GitBranchPicker({
 
   const displayLabel = currentBranch ?? 'detached'
 
+  const renderBranchRow = (branch: BranchInfo): React.JSX.Element => {
+    const BranchIcon = branch.isRemote ? Globe : GitBranch
+    return (
+      <button
+        key={branch.name}
+        type="button"
+        onClick={() => void handleCheckout(branch)}
+        disabled={branch.isCurrent || branch.hasOtherWorktree || isSwitching}
+        className={cn(branchRowClass, branch.hasOtherWorktree && 'opacity-50 cursor-not-allowed')}
+        title={
+          branch.hasOtherWorktree ? 'This branch is checked out in another worktree' : undefined
+        }
+        aria-current={branch.isCurrent ? 'true' : undefined}
+      >
+        <BranchIcon size={13} className="shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+        {branch.hasOtherWorktree && (
+          <span className="text-3xs text-muted-foreground">worktree</span>
+        )}
+        {branch.isCurrent && (
+          <Check size={13} className="shrink-0 text-foreground" aria-label="Current branch" />
+        )}
+      </button>
+    )
+  }
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -233,99 +292,86 @@ export function GitBranchPicker({
           aria-label="Switch git branch"
           disabled={isSwitching}
         >
-          <GitBranch size={14} className="shrink-0" />
-          <span className="min-w-0 max-w-32 truncate leading-none">{displayLabel}</span>
+          <GitBranch size={12} className="shrink-0" />
+          <span className="min-w-0 max-w-32 truncate leading-none text-secondary-foreground">
+            {displayLabel}
+          </span>
           {(ahead > 0 || behind > 0) && (
-            <span className="flex shrink-0 items-center gap-1 border-l border-primary-foreground/20 pl-1.5 tabular-nums">
+            <span className="flex shrink-0 items-center gap-1 tabular-nums text-muted-foreground/70">
               {ahead > 0 && <span className="leading-none">↑{ahead}</span>}
               {behind > 0 && <span className="leading-none">↓{behind}</span>}
             </span>
           )}
-          <ChevronDown size={12} className="shrink-0 opacity-80" />
+          {open ? (
+            <ChevronUp size={10} className="shrink-0" />
+          ) : (
+            <ChevronDown size={10} className="shrink-0" />
+          )}
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" className="w-80 p-0">
-        <div className="p-2 border-b border-border">
-          <div className="relative">
-            <Search
-              size={12}
-              className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-            />
-            <input
-              type="text"
-              value={branchSearch}
-              onChange={(e) => setBranchSearch(e.target.value)}
-              placeholder="Search branches..."
-              className="w-full bg-secondary border border-border rounded pl-7 pr-3 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary outline-none placeholder:text-muted-foreground"
-              autoFocus
-            />
-          </div>
-        </div>
+      <PopoverContent
+        side="top"
+        align="start"
+        className="w-80 overflow-hidden rounded-xl border bg-popover p-0 shadow-lg"
+      >
+        <PopoverSearchBand
+          value={branchSearch}
+          onChange={setBranchSearch}
+          placeholder="Search branches"
+          ariaLabel="Search branches"
+          autoFocus
+          inputClassName="h-full text-xs"
+        />
 
-        <div className="max-h-64 overflow-y-auto py-1">
+        <div className="max-h-64 overflow-y-auto p-1">
           {branchesLoading ? (
             <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
               <Spinner size={14} decorative />
               Loading branches...
             </div>
           ) : loadError ? (
-            <div className="px-3 py-4 text-center space-y-2">
-              <div className="flex items-start justify-center gap-1.5 text-xs text-destructive">
-                <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+            <div className="space-y-2 px-3 py-4 text-center">
+              <div className="flex items-start justify-center gap-1.5 text-xs text-muted-foreground">
+                <AlertCircle size={13} className="mt-0.5 shrink-0 text-destructive" />
                 <span className="text-left">{loadError}</span>
               </div>
               <button
                 type="button"
                 onClick={() => void loadBranches()}
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground',
+                  FOCUS_RING_CLASS
+                )}
               >
                 <RefreshCw size={12} />
                 Retry
               </button>
             </div>
           ) : emptyListMessage ? (
-            <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
               {emptyListMessage}
             </div>
           ) : (
-            filteredBranches.map((branch) => (
-              <button
-                key={branch.name}
-                type="button"
-                onClick={() => void handleCheckout(branch)}
-                disabled={branch.isCurrent || branch.hasOtherWorktree || isSwitching}
-                className={cn(
-                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors',
-                  branch.isCurrent
-                    ? 'bg-accent text-foreground'
-                    : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
-                  branch.hasOtherWorktree && 'opacity-50 cursor-not-allowed'
-                )}
-                title={
-                  branch.hasOtherWorktree
-                    ? 'This branch is checked out in another worktree'
-                    : undefined
-                }
-              >
-                <GitBranch size={10} className="flex-shrink-0" />
-                <span className="truncate flex-1">{branch.name}</span>
-                {branch.isCurrent && (
-                  <span className="text-[10px] text-muted-foreground">current</span>
-                )}
-                {branch.isRemote && (
-                  <span className="text-[10px] text-muted-foreground">remote</span>
-                )}
-                {branch.hasOtherWorktree && (
-                  <span className="text-[10px] text-muted-foreground">worktree</span>
-                )}
-              </button>
-            ))
+            <>
+              {localBranches.length > 0 && (
+                <fieldset aria-label="Local branches" className="m-0 min-w-0 border-0 p-0">
+                  <div className="label-panel px-3 pt-2 pb-1">Local</div>
+                  {localBranches.map(renderBranchRow)}
+                </fieldset>
+              )}
+              {remoteBranches.length > 0 && (
+                <fieldset aria-label="Remote branches" className="m-0 min-w-0 border-0 p-0">
+                  <div className="label-panel px-3 pt-2 pb-1">Remote</div>
+                  {remoteBranches.map(renderBranchRow)}
+                </fieldset>
+              )}
+            </>
           )}
         </div>
 
-        <div className="border-t border-border p-2">
+        <div className="border-t border-border p-1">
           {isCreatingMode ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 p-1">
               <input
                 type="text"
                 value={newBranchName}
@@ -335,7 +381,8 @@ export function GitBranchPicker({
                   if (e.key === 'Escape') setIsCreatingMode(false)
                 }}
                 placeholder="new-branch-name"
-                className="flex-1 bg-secondary border border-border rounded px-2 py-1.5 text-xs text-foreground focus:ring-1 focus:ring-primary outline-none placeholder:text-muted-foreground"
+                aria-label="New branch name"
+                className={cn(PANEL_FIELD_CLASS, 'h-8 min-w-0 flex-1 px-2.5')}
                 autoFocus
                 disabled={isSwitching}
               />
@@ -353,10 +400,13 @@ export function GitBranchPicker({
               type="button"
               onClick={() => setIsCreatingMode(true)}
               disabled={isSwitching || !canCreateBranch}
-              className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/60 rounded transition-colors"
+              className={cn(branchRowClass, 'text-muted-foreground hover:text-foreground')}
             >
-              <Plus size={12} />
-              Create and checkout new branch...
+              <Plus size={13} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">
+                Create branch from{' '}
+                <span className="text-foreground">{currentBranch ?? 'HEAD'}</span>
+              </span>
             </button>
           )}
         </div>

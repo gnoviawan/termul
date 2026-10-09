@@ -1,6 +1,5 @@
-import { renderHook } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { filterTocHeadings, parseMarkdownHeadings, useTocHeadings } from './use-toc-headings'
+import { areTocHeadingsEqual, filterTocHeadings, parseMarkdownHeadings } from './use-toc-headings'
 
 describe('use-toc-headings', () => {
   it('parses markdown headings with levels and line numbers', () => {
@@ -49,24 +48,11 @@ describe('use-toc-headings', () => {
     ])
   })
 
-  it('memoizes filtered headings in the hook', () => {
-    const { result, rerender } = renderHook(
-      ({ content, maxLevel }) => useTocHeadings({ content, maxLevel }),
-      {
-        initialProps: {
-          content: '# Title\n## Section\n### Deep',
-          maxLevel: 2
-        }
-      }
-    )
+  it('compares heading lists by id, level and text', () => {
+    const headings = parseMarkdownHeadings('# Title\n## Section')
 
-    expect(result.current.headings).toHaveLength(2)
-
-    rerender({
-      content: '# Title\n## Section\n### Deep',
-      maxLevel: 3
-    })
-
-    expect(result.current.headings).toHaveLength(3)
+    expect(areTocHeadingsEqual(headings, parseMarkdownHeadings('# Title\n## Section'))).toBe(true)
+    expect(areTocHeadingsEqual(headings, parseMarkdownHeadings('# Title\n### Section'))).toBe(false)
+    expect(areTocHeadingsEqual(headings, parseMarkdownHeadings('# Title'))).toBe(false)
   })
 })

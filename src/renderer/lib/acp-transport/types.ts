@@ -150,7 +150,9 @@ export interface AcpTransport {
     agentId: AgentId,
     requestId: string,
     action: 'accept' | 'decline' | 'cancel',
-    content?: Record<string, string | number | boolean>
+    // GH-935: `string[]` = multi-select (`multi-enum`) answers; both
+    // transports forward the map verbatim to the host.
+    content?: Record<string, string | number | boolean | string[]>
   ): Promise<void>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>

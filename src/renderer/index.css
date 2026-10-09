@@ -309,10 +309,12 @@
     background-color: oklch(var(--popover));
     color: oklch(var(--popover-foreground));
   }
+  /* Neutral, solid highlight: native popups may drop alpha, and --accent
+     is maroon in Termul Light. --input is one step above popover in both. */
   select option:checked,
   select option:hover {
-    background-color: oklch(var(--accent));
-    color: oklch(var(--accent-foreground));
+    background-color: oklch(var(--input));
+    color: oklch(var(--popover-foreground));
   }
 
   /* Custom scrollbar, app-wide — replaces the native scrollbar everywhere.
@@ -562,6 +564,43 @@
   }
 }
 
+/* Anchored menus: reduced motion is a fade, not a zoom or a slide.
+   Unlayered so it wins over tailwindcss-animate. */
+@media (prefers-reduced-motion: reduce) {
+  [data-radix-popper-content-wrapper] > [data-state="open"] {
+    animation-name: termul-popover-fade-in;
+    animation-duration: 150ms;
+  }
+
+  [data-radix-popper-content-wrapper] > [data-state="closed"] {
+    animation-name: termul-popover-fade-out;
+    animation-duration: 150ms;
+  }
+}
+
+/* The model menu drives open and close with a transition. */
+[data-radix-popper-content-wrapper] > .termul-popover-transition {
+  animation: none;
+}
+
+@keyframes termul-popover-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes termul-popover-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 /* xterm.css is unlayered and paints `.xterm-viewport` `#000` when
    `allowTransparency` is false. Keep that option off (xterm: it costs
    performance and must be set before `open`). This rule sits outside
@@ -633,6 +672,31 @@
   .label-group {
     @apply text-xs font-semibold uppercase tracking-wider;
     line-height: 1.4;
+  }
+  /* 11px panel / list-section / menu-group label (Projects, Explorer,
+     SSH, On this page, picker and menu groups). Unlike the two above it
+     carries its colour, muted; a text-* utility at the call site wins. */
+  .label-panel {
+    @apply text-2xs font-semibold uppercase tracking-wider text-muted-foreground;
+    line-height: 1.4;
+  }
+}
+
+/* ------------------------------------------------------------
+ * Keycap: the raised "you are here" surface.
+ *
+ * One look for the active tab, project, file, outline heading and
+ * rail view on bg-background / bg-card. Inside a popover use a
+ * foreground wash instead (see components/ui/menu-styles.ts):
+ * `muted` sits too close to `popover` to read there.
+ * Fill and shadow only — radius stays at the call site.
+ * ------------------------------------------------------------ */
+@layer components {
+  .keycap {
+    background-color: oklch(var(--muted));
+    box-shadow:
+      inset 0 1px 0 oklch(var(--ring) / 0.08),
+      0 1px 2px #00000040;
   }
 }
 

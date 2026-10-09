@@ -70,7 +70,7 @@ async function flushPendingEntry(
     const activeWriteResult = await entry.activeWrite
 
     if (entry.resolvers.length === 0) {
-      if (entry.timer === null) {
+      if (entry.timer === null && pendingDebounce.get(key) === entry) {
         pendingDebounce.delete(key)
       }
 
@@ -79,7 +79,7 @@ async function flushPendingEntry(
   }
 
   if (entry.resolvers.length === 0) {
-    if (entry.timer === null && entry.activeWrite === null) {
+    if (entry.timer === null && entry.activeWrite === null && pendingDebounce.get(key) === entry) {
       pendingDebounce.delete(key)
     }
 
@@ -98,7 +98,14 @@ async function flushPendingEntry(
     .finally(() => {
       entry.activeWrite = null
 
-      if (entry.resolvers.length === 0 && entry.timer === null) {
+      // A delete can drop this entry and a newer write can take the key
+      // before this flush finishes. Remove the key only when it still
+      // points at this entry.
+      if (
+        entry.resolvers.length === 0 &&
+        entry.timer === null &&
+        pendingDebounce.get(key) === entry
+      ) {
         pendingDebounce.delete(key)
       }
     })
@@ -168,9 +175,26 @@ export const tauriPersistenceApi = {
     }
   },
 
-  // Alias for remove - matches PersistenceApi interface
+  // Alias for remove - matches PersistenceApi interface.
+  // A queued writeDebounced timer must not land after the key is gone.
+  // The launcher deletes an empty draft while that timer can still be pending.
   async delete(key: string): Promise<IpcResult<void>> {
-    return this.remove(key)
+    const pending = pendingDebounce.get(key) ?? null
+    if (pending?.timer) {
+      clearTimeout(pending.timer)
+      pending.timer = null
+    }
+    if (pending) pendingDebounce.delete(key)
+    // An in-flight flush already copied its payload. Wait, then remove, so
+    // that write cannot recreate the key after this delete.
+    if (pending?.activeWrite) await pending.activeWrite
+    const result = await this.remove(key)
+    if (pending && pending.resolvers.length > 0) {
+      const resolvers = pending.resolvers
+      pending.resolvers = []
+      resolvePendingResolvers(resolvers, result)
+    }
+    return result
   },
 
   async flushPendingWrites(): Promise<IpcResult<void>> {

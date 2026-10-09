@@ -584,3 +584,117 @@ fn switch_materialization_is_deterministic() {
         "switch materialization must be deterministic"
     );
 }
+
+// --- turn_active derivation: only the LAST prompt can be open ---------------
+
+#[test]
+fn superseded_unmatched_prompt_does_not_hold_turn_active() {
+    // confirmed-hour regression: an abandoned turn (its agent died mid-turn)
+    // left an unmatched `user_prompt` at seq 3; a newer prompt under a new
+    // owner ran and completed. The dead turn can never emit `prompt_complete`
+    // — the open-turn scan must not resurrect it.
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "done"),
+        prompt_complete(2, "turn-1"),
+        user_prompt(3, Some("turn-dead"), "orphaned"),
+        chunk(4, "agent", "partial"),
+        user_prompt(5, Some("turn-2"), "new owner prompt"),
+        chunk(6, "agent", "reply"),
+        prompt_complete(7, "turn-2"),
+    ];
+    assert_eq!(open_turn_from_records(&records), None);
+    let payload = materialize_session_payload(&metadata(), &records);
+    assert!(!payload.metadata.turn_active);
+}
+
+#[test]
+fn latest_unmatched_prompt_is_the_open_turn() {
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "first"),
+        prompt_complete(2, "turn-1"),
+        user_prompt(3, Some("turn-2"), "running"),
+        chunk(4, "agent", "partial"),
+    ];
+    assert_eq!(open_turn_from_records(&records).as_deref(), Some("turn-2"));
+    let payload = materialize_session_payload(&metadata(), &records);
+    assert!(payload.metadata.turn_active);
+}
+
+#[test]
+fn stale_completion_for_other_turn_does_not_close_latest_prompt() {
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "running"),
+        prompt_complete(2, "turn-other"),
+    ];
+    assert_eq!(open_turn_from_records(&records).as_deref(), Some("turn-1"));
+}
+
+#[test]
+fn trailing_prompt_without_turn_id_is_not_a_named_open_turn() {
+    // A turn-id-less prompt (pre-1.8 record) is open but unnameable — the
+    // client derives it from the transcript tail, so the payload must not
+    // reach past it to an older unmatched turn.
+    let records = vec![
+        user_prompt(1, Some("turn-dead"), "orphaned"),
+        user_prompt(2, None, "legacy tail"),
+    ];
+    assert_eq!(open_turn_from_records(&records), None);
+}
+
+#[test]
+fn all_completed_prompts_yield_no_open_turn() {
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "one"),
+        prompt_complete(2, "turn-1"),
+        user_prompt(3, Some("turn-2"), "two"),
+        prompt_complete(4, "turn-2"),
+    ];
+    assert_eq!(open_turn_from_records(&records), None);
+}
+
+#[test]
+fn null_turn_id_prompt_is_unnameable_not_uncloseable() {
+    // Producers serialize `Option<String>` inside `json!`, so a client that
+    // omits `turnId` persists `"turnId": null` (not an absent key). Null must
+    // behave like absent: an open-but-unnameable turn, never a named turn a
+    // `prompt_complete` cannot match.
+    let records = vec![
+        user_prompt(1, Some("turn-dead"), "orphaned"),
+        record(
+            2,
+            "user_prompt",
+            json!({"agentId":"runtime-1","sessionId":"session-1","turnId":null,"content":[]}),
+        ),
+    ];
+    assert_eq!(open_turn_from_records(&records), None);
+}
+
+#[test]
+fn agent_switch_closes_abandoned_open_turn() {
+    // Ownership moved to a new session — the pending turn can never emit
+    // `prompt_complete`; the switch is its terminal boundary.
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "running"),
+        chunk(2, "agent", "partial"),
+        agent_switch(3),
+    ];
+    assert_eq!(open_turn_from_records(&records), None);
+    let payload = materialize_session_payload(&metadata(), &records);
+    assert!(!payload.metadata.turn_active);
+}
+
+#[test]
+fn closed_status_never_reports_turn_active() {
+    // `finalize_session(Closed)` mid-turn writes no terminal record, so the
+    // last prompt stays unmatched — but a closed session cannot have a live
+    // turn; the metadata must not contradict itself.
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "orphaned by close"),
+        chunk(2, "agent", "partial"),
+    ];
+    assert_eq!(open_turn_from_records(&records).as_deref(), Some("turn-1"));
+    let mut meta = metadata();
+    meta.status = PersistedSessionStatus::Closed;
+    let payload = materialize_session_payload(&meta, &records);
+    assert!(!payload.metadata.turn_active);
+}

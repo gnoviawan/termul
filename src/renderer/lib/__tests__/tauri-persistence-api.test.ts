@@ -277,6 +277,53 @@ describe('tauriPersistenceApi', () => {
 
       expect(result.success).toBe(true)
     })
+
+    it('cancels a pending debounced write so the timer cannot restore the key', async () => {
+      const pendingWrite = tauriPersistenceApi.writeDebounced('draft-key', 'sent prompt')
+
+      const deleted = await tauriPersistenceApi.delete('draft-key')
+
+      await vi.advanceTimersByTimeAsync(500)
+
+      await expect(pendingWrite).resolves.toEqual({ success: true, data: undefined })
+      expect(deleted.success).toBe(true)
+      expect(currentMockStore.set).not.toHaveBeenCalled()
+      expect(currentMockStore.delete).toHaveBeenCalledWith('draft-key')
+    })
+
+    it('keeps a write queued during delete when an older flush finishes', async () => {
+      let releaseFirstSet: (() => void) | null = null
+      currentMockStore.set.mockImplementation(async (key: string, value: unknown) => {
+        if (!releaseFirstSet) {
+          await new Promise<void>((resolve) => {
+            releaseFirstSet = resolve
+          })
+        }
+        mockData.set(key, value)
+      })
+
+      const firstWrite = tauriPersistenceApi.writeDebounced('draft-key', 'old')
+      await vi.advanceTimersByTimeAsync(500)
+      expect(releaseFirstSet).not.toBeNull()
+
+      const deleting = tauriPersistenceApi.delete('draft-key')
+      const secondWrite = tauriPersistenceApi.writeDebounced('draft-key', 'new')
+      const release = releaseFirstSet as () => void
+      release()
+
+      await deleting
+      await expect(firstWrite).resolves.toEqual({ success: true, data: undefined })
+
+      currentMockStore.set.mockClear()
+      const flushed = await tauriPersistenceApi.flushPendingWrites()
+
+      expect(flushed).toEqual({ success: true, data: undefined })
+      expect(currentMockStore.set).toHaveBeenCalledWith('draft-key', {
+        _version: 1,
+        data: 'new'
+      })
+      await expect(secondWrite).resolves.toEqual({ success: true, data: undefined })
+    })
   })
 
   describe('flushPendingWrites', () => {

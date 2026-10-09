@@ -196,18 +196,22 @@ async function readClipboardImageAttachment(): Promise<Extract<
 }
 
 /**
- * Collect File objects from a clipboard/drag payload, covering BOTH `files` and
- * `items` (screenshots often surface only as an image item, not in `files`),
- * de-duplicating the overlap.
+ * Collect File objects from a clipboard/drag payload. Prefer `files` when the
+ * browser exposes it; some clipboard implementations expose the same image in
+ * both `files` and `items`, so merging both sources can attach it twice. Some
+ * screenshots surface only as an image item, so retain that fallback.
  */
 export function dataTransferFiles(data: DataTransfer): File[] {
-  const fromItems = Array.from(data.items)
-    .filter((it) => it.kind === 'file')
-    .map((it) => it.getAsFile())
-    .filter((f): f is File => f != null)
-  const all = [...Array.from(data.files), ...fromItems]
+  const files = Array.from(data.files)
+  const candidates =
+    files.length > 0
+      ? files
+      : Array.from(data.items)
+          .filter((it) => it.kind === 'file')
+          .map((it) => it.getAsFile())
+          .filter((f): f is File => f != null)
   const seen = new Set<string>()
-  return all.filter((f) => {
+  return candidates.filter((f) => {
     const key = `${f.name}:${f.size}:${f.type}:${f.lastModified}`
     if (seen.has(key)) return false
     seen.add(key)

@@ -376,4 +376,43 @@ describe('SSHPanel', () => {
       expect(actions).not.toHaveClass('hidden')
     })
   })
+
+  describe('redesign', () => {
+    it('shows the empty state with Add host and Import buttons wired to the existing handlers', async () => {
+      profilesRef.current = []
+      renderPanel()
+
+      expect(screen.getByText('No SSH hosts yet.')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /Import ~\/\.ssh\/config/ }))
+      await waitFor(() => expect(mockImportConfig).toHaveBeenCalledTimes(1))
+
+      fireEvent.click(screen.getByRole('button', { name: /Add host/ }))
+      expect(screen.getByTestId('ssh-profile-form')).toBeInTheDocument()
+    })
+
+    it('marks the selected host with keycap instead of a primary left border', () => {
+      renderPanel({ activeProfileId: 'p1' })
+
+      const row = screen.getByTestId('ssh-host-row-p1')
+      expect(row).toHaveClass('keycap', 'h-10', 'rounded-md')
+      expect(row).not.toHaveClass('border-l-2')
+      expect(row.className).not.toContain('sidebar-accent')
+    })
+
+    it('shows a status lamp and state word for the connection state', () => {
+      connectionsRef.current = [{ ...connectedConnection, status: 'failed' }]
+      renderPanel()
+
+      expect(screen.getByTestId('ssh-host-lamp')).toHaveAttribute('data-state', 'failed')
+      expect(screen.getByText('Failed')).toHaveClass('text-destructive')
+    })
+
+    it('keeps the credentials toggle (it hides user@host, not the panel)', () => {
+      renderPanel()
+
+      expect(screen.queryByText('deploy@example.com:22')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Show credentials' }))
+      expect(screen.getByText('deploy@example.com:22')).toHaveClass('font-mono', 'text-3xs')
+    })
+  })
 })

@@ -39,7 +39,7 @@ export function ContextBarSettingsPopover(): React.JSX.Element {
           aria-label="Context bar settings"
         >
           <span className={STATUS_BAR_HIT_GLYPH}>
-            <Settings size={14} className="shrink-0" />
+            <Settings size={12} className="shrink-0" />
           </span>
         </button>
       </PopoverTrigger>
