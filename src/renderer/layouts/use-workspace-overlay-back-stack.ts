@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import {
   installOverlayBackHandler,
+  notifyOverlayRouteChange,
   type OverlayRegistrationOptions,
   pushOverlaySentinel,
   useOverlayRegistration,
@@ -22,6 +23,12 @@ interface WorkspaceOverlayBackStackArgs {
   isSshPasswordPromptOpen: boolean
   /** Clears the SSH password prompt and its input, as its Cancel button does. */
   closeSshPasswordPrompt: () => void
+  /**
+   * The router location's `key` (`useLocation().key`). A change after mount
+   * means a route was pushed or replaced, which fires no `popstate`: the overlay
+   * sentinels are reconciled so the next back still closes the open overlay.
+   */
+  locationKey: string
 }
 
 /** Registrations that only apply while the mobile web shell is active. */
@@ -60,7 +67,8 @@ export function useWorkspaceOverlayBackStack({
   isCommandHistoryOpen,
   setIsCommandHistoryOpen,
   isSshPasswordPromptOpen,
-  closeSshPasswordPrompt
+  closeSshPasswordPrompt,
+  locationKey
 }: WorkspaceOverlayBackStackArgs): void {
   const settingsModalOpen = useSettingsModalView() !== null
   const themePickerOpen = useThemePickerOpen()
@@ -142,6 +150,16 @@ export function useWorkspaceOverlayBackStack({
     }
     prevOverlayCountRef.current = overlayCount
   }, [overlayCount, isMobileWebShell])
+
+  // A route push or replace fires no popstate, so the reconciler would never
+  // look at the sentinels: tell it, so an overlay left open across the route
+  // change closes in one back press. Not on mount (the install reconciles).
+  const lastLocationKeyRef = useRef(locationKey)
+  useEffect(() => {
+    if (lastLocationKeyRef.current === locationKey) return
+    lastLocationKeyRef.current = locationKey
+    notifyOverlayRouteChange()
+  }, [locationKey])
 
   // App-root popstate listener: mounted once for the workspace surface. It is
   // the single install point for every route (`/`, `/c/:id` and `/snapshots`

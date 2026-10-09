@@ -7,7 +7,7 @@ import {
   waitFor,
   within
 } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { HashRouter, MemoryRouter, type NavigateFunction, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -1094,6 +1094,42 @@ describe('WorkspaceLayout mobile branch', () => {
         expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
       )
       expect(window.location.hash).toBe(hashBefore)
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    it('a route push with the Git sheet open re-arms the sentinel, so one back closes the sheet and keeps the route', async () => {
+      const navigateRef: { current: NavigateFunction | null } = { current: null }
+      function NavProbe(): null {
+        navigateRef.current = useNavigate()
+        return null
+      }
+      render(
+        <TooltipProvider>
+          <HashRouter>
+            <NavProbe />
+            <WorkspaceLayout />
+          </HashRouter>
+        </TooltipProvider>
+      )
+
+      await chooseMoreItem('Git changes')
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      await waitForSentinelDepth(1)
+
+      // The router pushes a route (no popstate): the layout hands its new
+      // location key to the back-stack hook, which re-arms the sentinel.
+      await act(async () => {
+        navigateRef.current?.('/snapshots')
+      })
+      await waitFor(() => expect(window.location.hash).toBe('#/snapshots'))
+      await waitForSentinelDepth(1)
+
+      await pressSystemBack()
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(window.location.hash).toBe('#/snapshots')
       expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
     })
 

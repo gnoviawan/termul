@@ -435,7 +435,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isCommandHistoryOpen,
     setIsCommandHistoryOpen,
     isSshPasswordPromptOpen: sshPasswordPrompt !== null,
-    closeSshPasswordPrompt
+    closeSshPasswordPrompt,
+    locationKey: location.key
   })
 
   const sshProfileWithPassword = activeSSHProfile
