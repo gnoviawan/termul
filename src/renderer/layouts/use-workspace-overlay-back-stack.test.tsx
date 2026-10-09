@@ -221,6 +221,50 @@ describe('useWorkspaceOverlayBackStack', () => {
       expect(pushSpy).toHaveBeenCalledWith({ termulOverlay: true }, '')
     })
 
+    it('desktop re-renders the host when the stack grows (the legacy push needs the count)', () => {
+      let renders = 0
+      const args = makeArgs({ isMobileWebShell: false })
+      renderHook(() => {
+        renders += 1
+        useWorkspaceOverlayBackStack(args)
+      })
+      const before = renders
+
+      act(() => useOverlayStackStore.getState().registerOverlay('probe', vi.fn()))
+
+      expect(renders).toBeGreaterThan(before)
+    })
+
+    it('mobile does not re-render the host on a stack change (a nested Radix layer must not be re-rendered mid-tap)', async () => {
+      let renders = 0
+      const args = makeArgs()
+      renderHook(() => {
+        renders += 1
+        useWorkspaceOverlayBackStack(args)
+      })
+      const before = renders
+
+      act(() => useOverlayStackStore.getState().registerOverlay('probe', vi.fn()))
+      act(() => useOverlayStackStore.getState().unregisterOverlay('probe'))
+      await settleOverlayBackStack()
+
+      expect(renders).toBe(before)
+    })
+
+    it('flipping mobile to desktop with an overlay open arms no extra legacy sentinel, and later growth still pushes', async () => {
+      const { args, rerender } = mountHook({ isMobileWebShell: true })
+      rerender({ ...args, gitSheetOpen: true })
+      await waitForSentinelDepth(1)
+      const pushSpy = vi.spyOn(history, 'pushState')
+
+      rerender({ ...args, gitSheetOpen: true, isMobileWebShell: false })
+      expect(pushSpy).not.toHaveBeenCalled()
+
+      rerender({ ...args, gitSheetOpen: true, isCommandPaletteOpen: true, isMobileWebShell: false })
+      expect(pushSpy).toHaveBeenCalledTimes(1)
+      expect(pushSpy).toHaveBeenCalledWith({ termulOverlay: true }, '')
+    })
+
     it('mobile arms exactly one managed sentinel per overlay (no double arm)', async () => {
       const pushSpy = vi.spyOn(history, 'pushState')
       const { args, rerender } = mountHook()

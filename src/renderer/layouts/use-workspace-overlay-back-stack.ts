@@ -119,10 +119,23 @@ export function useWorkspaceOverlayBackStack({
   // Legacy (desktop) path: the sentinel push happens when the stack grows so
   // the next back lands on a popstate we own. On the mobile shell the
   // reconciler in `installOverlayBackHandler` owns every push and traversal.
-  const overlayCount = useOverlayStackStore((s) => s.stack.length)
+  //
+  // The count is deliberately NOT subscribed to on the mobile shell: a stack
+  // change would re-render the whole layout synchronously inside the click
+  // that closed an overlay. For a nested Radix layer (the delete AlertDialog
+  // over the Files sheet) that re-render lands before Radix finishes handling
+  // the tap, so the layer underneath sees the tap as an outside press and
+  // dismisses too (Cancel closed the Files sheet as well).
+  const overlayCount = useOverlayStackStore((s) => (isMobileWebShell ? 0 : s.stack.length))
   const prevOverlayCountRef = useRef(0)
   useEffect(() => {
-    if (!isMobileWebShell && overlayCount > prevOverlayCountRef.current) {
+    if (isMobileWebShell) {
+      // Stay "caught up" while mobile, so a later flip to desktop does not
+      // push a legacy sentinel for overlays the reconciler already armed.
+      prevOverlayCountRef.current = Number.POSITIVE_INFINITY
+      return
+    }
+    if (overlayCount > prevOverlayCountRef.current) {
       // Stack grew (0 → 1, or an overlay stacked on another): arm the
       // history sentinel so back pops an overlay, not the app.
       pushOverlaySentinel()
