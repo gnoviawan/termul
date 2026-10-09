@@ -3,7 +3,8 @@ use super::*;
 use std::collections::BTreeMap;
 
 use crate::acp::legacy_models::{
-    resolve_models, send_with_legacy_models, LEGACY_MODEL_SWITCH_UNSUPPORTED,
+    advertises_model_config_option, resolve_models, send_with_legacy_models,
+    LEGACY_MODEL_SWITCH_UNSUPPORTED,
 };
 use crate::acp::session::PendingElicitation;
 
@@ -1098,8 +1099,12 @@ pub(super) async fn run_command_loop(
                                 req_state
                                     .lock()
                                     .set_model_config_id(session_id.0.clone(), id);
-                                // The agent now advertises a Model config option,
-                                // which supersedes any legacy-only model list.
+                            }
+                            // A Model `select` option supersedes a legacy-only
+                            // model list. Same rule as `resolve_models` (first
+                            // Model-category option must be a `select`), so a
+                            // non-select Model option keeps the legacy marker.
+                            if advertises_model_config_option(Some(config_options.as_slice())) {
                                 req_state.lock().clear_legacy_models(&session_id.0);
                             }
                             let event = ConfigOptionsUpdateEvent {

@@ -111,7 +111,7 @@ pub(crate) fn legacy_models_from_value(result: &Value) -> Option<SessionModelSta
 
 /// Whether the agent advertises a Model-category `select` config option
 /// (regardless of how many choices it lists).
-fn advertises_model_config_option(opts: Option<&[SessionConfigOption]>) -> bool {
+pub(crate) fn advertises_model_config_option(opts: Option<&[SessionConfigOption]>) -> bool {
     // Same selection rule as `models_from_config_options`: the first
     // Model-category option, which must be a `select`.
     opts.and_then(|opts| {
