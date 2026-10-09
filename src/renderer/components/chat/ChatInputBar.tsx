@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
 import { buttonVariants } from '@/components/ui/button'
-import { pressedToggleClass } from '@/components/ui/panel-styles'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -30,11 +29,11 @@ import {
   useSessionUsage
 } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
-import { AgentGlyph } from './AgentGlyph'
-import { ConfigChip, ModeChip } from './AgentHeader'
-import { AgentSwitchPicker } from './AgentSwitchPicker'
+import { ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
+import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
+import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -46,7 +45,6 @@ import {
 import { CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { iconPop } from './chat-motion'
 import { ChatComposerEditor } from './composer/ChatComposerEditor'
-import { FastModeToggle } from './FastModeToggle'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
@@ -141,7 +139,6 @@ export function ChatInputBar({
   const usableConfigOptions = configOptions.filter(
     (option) => option.type === 'boolean' || (option.options?.length ?? 0) > 0
   )
-  const hasConfigOptions = usableConfigOptions.length > 0
   // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
   // branch (the long worktree path stays on the mode tooltip). Local chats fall
   // back to the project's reactive `gitBranch`. Switching chats re-renders via
@@ -180,9 +177,15 @@ export function ChatInputBar({
   // options (armedOptions overlay in AgentChatPanel), so the glyph must too —
   // resolving by the session's live `agentId` keeps the OLD agent's icon
   // (Devin) while the model list already shows the target's (OpenCode).
-  // Read `switching` from the store (not the prop) — the same field
-  // AgentSwitchPicker reads — so the icon flips the moment the arm lands.
+  // Read `switching` from the store (not the prop) — the same field the
+  // model selector reads — so the icon flips the moment the arm lands.
   const armedConfigId = useAcpStore((s) => s.sessions?.[session.id]?.switching?.toConfigId)
+  // Names the mode menu's "Let <agent> act" group: the armed target while a
+  // switch is armed (the menu then lists the target's modes), else this chat's agent.
+  const currentAgentConfigId = useCurrentAgentConfigId(session.id)
+  const modeAgentName = useAcpStore(
+    (s) => s.agentConfigs?.find((c) => c.id === (armedConfigId ?? currentAgentConfigId))?.name
+  )
   const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
   const agentIcon = useAgentIcon(session.agentId, armedConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
@@ -555,91 +558,6 @@ export function ChatInputBar({
     }
   }, [osk.isOskOpen, isMobileShell])
 
-  const modelChip = modelOption ? (
-    <ConfigChip
-      key={modelOption.id}
-      option={modelOption}
-      disabled={disabled}
-      searchable
-      maxVisibleOptions={5}
-      leading={
-        <AgentGlyph
-          templateId={agentTemplateId}
-          icon={agentIcon}
-          size={13}
-          className="text-muted-foreground"
-        />
-      }
-      onSelect={(valueId) =>
-        modelSource === 'models' ? onSetModel(valueId) : onSetConfig(modelOption.id, valueId)
-      }
-    />
-  ) : null
-
-  const thoughtChip = thoughtLevel ? (
-    <ConfigChip
-      key={thoughtLevel.id}
-      option={thoughtLevel}
-      disabled={disabled}
-      promoted
-      onSelect={(valueId) => onSetConfig(thoughtLevel.id, valueId)}
-    />
-  ) : null
-
-  const modelConfigChips = modelConfig
-    .filter((option) => option.type !== 'boolean')
-    .map((option) => (
-      <ConfigChip
-        key={option.id}
-        option={option}
-        disabled={disabled}
-        onSelect={(valueId) => onSetConfig(option.id, valueId)}
-      />
-    ))
-
-  const booleanChips = [...modelConfig, ...nonFastGenericOptions]
-    .filter((option) => option.type === 'boolean')
-    .map((option) => {
-      const on = option.currentValue === true
-      return (
-        <button
-          key={option.id}
-          type="button"
-          disabled={disabled}
-          aria-pressed={on}
-          className={cn('shrink-0 rounded-full border px-2.5 py-1 text-xs', pressedToggleClass(on))}
-          onClick={() => {
-            void Promise.resolve(onSetConfig(option.id, !on)).catch(() => {})
-          }}
-        >
-          {option.name}
-        </button>
-      )
-    })
-
-  const fastModeToggle = fastMode ? (
-    <FastModeToggle
-      key={fastMode.id}
-      option={fastMode}
-      disabled={disabled}
-      onSelect={(valueId) => onSetConfig(fastMode.id, valueId)}
-    />
-  ) : null
-
-  const genericChips =
-    nonFastGenericOptions.filter((option) => option.type !== 'boolean').length > 0
-      ? nonFastGenericOptions
-          .filter((option) => option.type !== 'boolean')
-          .map((option) => (
-            <ConfigChip
-              key={option.id}
-              option={option}
-              disabled={disabled}
-              onSelect={(valueId) => onSetConfig(option.id, valueId)}
-            />
-          ))
-      : null
-
   // Story 4 (spec-in-chat-agent-switch): the in-chat agent control joins the
   // right chip cluster (CAP-1). Reads the store itself (session.switching,
   // current-agent resolution, resolved entries); only the busy/disabled
@@ -657,20 +575,41 @@ export function ChatInputBar({
     (s) => s.sessionIndex?.find((e) => e.id === session.id)?.agentConfigId
   )
   const agentControlMounted = Boolean(session.agentId) || Boolean(indexedAgentConfigId)
-  // Presence is cleanup-only now (row 1 no longer reads it) — keep the
-  // callback stable so the picker's effect doesn't re-fire every render.
-  const onAgentSwitchPresence = useCallback(() => {}, [])
-  const agentSwitchChip = (
-    <AgentSwitchPicker
+  const selectorMounted =
+    agentControlMounted ||
+    Boolean(modelOption) ||
+    Boolean(thoughtLevel) ||
+    Boolean(fastMode) ||
+    modelConfig.length > 0 ||
+    nonFastGenericOptions.length > 0 ||
+    (sessionUsage != null && Number.isFinite(sessionUsage.size) && sessionUsage.size > 0)
+  const modelSelector = selectorMounted ? (
+    <AgentModelSelector
       sessionId={session.id}
       busy={busy}
       disabled={disabled}
-      onPresenceChange={onAgentSwitchPresence}
+      modelOption={modelOption}
+      modelSource={modelSource}
+      thoughtLevel={thoughtLevel}
+      fastMode={fastMode}
+      genericOptions={[...modelConfig, ...nonFastGenericOptions]}
+      usage={sessionUsage}
+      messages={messages}
+      agentTemplateId={agentTemplateId}
+      agentIcon={agentIcon}
+      onSetConfig={onSetConfig}
+      onSetModel={onSetModel}
     />
-  )
+  ) : null
 
   const agentModeChip = (
-    <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
+    <ModeChip
+      session={session}
+      disabled={disabled}
+      onSelect={onSetMode}
+      label="Agent"
+      agentName={modeAgentName}
+    />
   )
   const mcpBadge = (
     <McpBadge
@@ -752,7 +691,7 @@ export function ChatInputBar({
             )}
             {permission && <PermissionPrompt permission={permission} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
-            <div className="px-4 pb-1.5 pt-3.5">
+            <div className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
                   DOM node (a Tiptap `NodeView`), so the caret sits flush
                   against the pill's right edge by construction. No transparent
@@ -761,6 +700,7 @@ export function ChatInputBar({
                   the shared model the wire builder + draft persistence +
                   timeline consume (byte-identical wire payload). */}
               <ChatComposerEditor
+                className="min-w-0 flex-1"
                 value={value}
                 onValueChange={setValue}
                 onCaretChange={mentions.update}
@@ -780,13 +720,22 @@ export function ChatInputBar({
                       : 'Ask anything… (/ for commands, @ for files)'
                 }
               />
+              {/* Context usage ring: top right, centered on the first line. */}
+              <ContextUsageIndicator
+                usage={sessionUsage}
+                messages={messages}
+                className="-mr-2 -my-[3px]"
+              />
             </div>
             <div
               className="flex items-center justify-between gap-3 px-2 pb-2"
               data-composer-toolbar={toolbarMode}
             >
               <div className="flex min-w-0 items-center gap-3">
-                {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
+                {/* Disabled (not hidden) while the composer is inert — the
+                    toolbar row stays put and the status banner explains why.
+                    Same treatment as the launcher toolbar. */}
+                <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
                 {mcpBadge}
               </div>
               <div
@@ -809,17 +758,8 @@ export function ChatInputBar({
                       // agent id (cheap, non-circular): the picker renders null
                       // itself when the agent resolves to nothing, so row 1
                       // never renders an empty container for it.
-                      const hasRow1 =
-                        agentModesAvailable ||
-                        Boolean(modelChip) ||
-                        modelConfig.length > 0 ||
-                        booleanChips.length > 0 ||
-                        agentControlMounted
-                      const hasRow2 =
-                        Boolean(thoughtChip) ||
-                        Boolean(fastModeToggle) ||
-                        (genericChips?.length ?? 0) > 0
-                      if (!hasRow1 && !hasRow2) return null
+                      const hasRow1 = agentModesAvailable || selectorMounted
+                      if (!hasRow1) return null
                       return (
                         <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
                           {/* #859: rows scroll horizontally instead of wrapping
@@ -831,46 +771,23 @@ export function ChatInputBar({
                               className="flex min-w-0 max-w-full items-center justify-end gap-2 overflow-x-auto scrollbar-hide"
                               data-composer-toolbar-row="1"
                             >
-                              {agentSwitchChip}
-                              {modelChip}
-                              {modelConfigChips}
-                              {booleanChips}
+                              {modelSelector}
                               {agentModeChip}
-                            </div>
-                          )}
-                          {hasRow2 && (
-                            <div
-                              className="flex min-w-0 max-w-full items-center justify-end gap-2 overflow-x-auto scrollbar-hide"
-                              data-composer-toolbar-row="2"
-                            >
-                              {thoughtChip}
-                              {fastModeToggle}
-                              {genericChips}
                             </div>
                           )}
                         </div>
                       )
                     })()
-                  ) : agentModesAvailable ||
-                    modelChip ||
-                    agentControlMounted ||
-                    hasConfigOptions ? (
+                  ) : agentModesAvailable || selectorMounted ? (
                     <div
                       className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
                       data-composer-toolbar-row="single"
                     >
-                      {agentSwitchChip}
-                      {modelChip}
-                      {modelConfigChips}
-                      {booleanChips}
-                      {thoughtChip}
-                      {fastModeToggle}
-                      {genericChips}
+                      {modelSelector}
                       {agentModeChip}
                     </div>
                   ) : null
                 })()}
-                <ContextUsageIndicator usage={sessionUsage} messages={messages} />
                 <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (

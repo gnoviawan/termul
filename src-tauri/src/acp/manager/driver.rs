@@ -600,9 +600,13 @@ pub(super) async fn drive_connection(
                     return Ok(());
                 }
                 elicit_state.lock().signal_idle(&session_string);
-                let (mode, url, fields) = match &request.mode {
+                let allow_other = events::elicitation_allow_other(request.meta.as_ref());
+                let (mode, url, fields, dropped_fields) = match &request.mode {
                     ElicitationMode::Form(form) => {
-                        let Some(fields) = events::elicitation_fields(&form.requested_schema) else {
+                        let Some(fields) = events::elicitation_fields(
+                            &form.requested_schema,
+                            allow_other,
+                        ) else {
                             log::warn!(
                                 "[acp] elicitation form drops a required field; cancelling"
                             );
@@ -611,10 +615,15 @@ pub(super) async fn drive_connection(
                             ));
                             return Ok(());
                         };
-                        ("form".to_string(), None, fields)
+                        let dropped = form
+                            .requested_schema
+                            .properties
+                            .len()
+                            .saturating_sub(fields.len());
+                        ("form".to_string(), None, fields, dropped)
                     }
                     ElicitationMode::Url(url_mode) => {
-                        ("url".to_string(), Some(url_mode.url.clone()), Vec::new())
+                        ("url".to_string(), Some(url_mode.url.clone()), Vec::new(), 0)
                     }
                     ElicitationMode::Other(_) | _ => {
                         let _ = responder
@@ -626,6 +635,15 @@ pub(super) async fn drive_connection(
                 let request_id = elicit_state
                     .lock()
                     .register_elicitation(session_string.clone(), responder);
+                // Boundary log: counts/kinds only — field names/values and the
+                // message text are user-visible payload, never logged.
+                let kinds: Vec<&str> = fields.iter().map(|field| field.kind.as_str()).collect();
+                log::info!(
+                    "[acp] elicitation request {request_id}: \
+                     {} field(s) ({dropped_fields} dropped), allowOther={allow_other}, \
+                     kinds={kinds:?}",
+                    fields.len()
+                );
                 let event = events::ElicitationRequestEvent {
                     agent_id: elicit_agent_id.clone(),
                     session_id: SessionId::new(session_string),
@@ -634,6 +652,7 @@ pub(super) async fn drive_connection(
                     message,
                     url,
                     fields,
+                    allow_other,
                 };
                 events::fan_out(
                     &elicit_sinks,

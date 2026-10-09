@@ -2,7 +2,7 @@ import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import * as React from 'react'
-import { ChevronDown } from '@/components/icons'
+import { ChevronDown, ChevronUp } from '@/components/icons'
 
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -44,6 +44,8 @@ export interface ComposerPillProps
   disabled?: boolean
   /** Append the standardized trailing chevron used by popover-trigger controls. */
   chevron?: boolean
+  /** Menus that open upward use an up chevron. Default is down. */
+  chevronDirection?: 'up' | 'down'
   /**
    * When true with `chevron`, swap the trailing chevron for a spinner while an
    * async selection is in flight (model / reasoning / Fast / mode switches).
@@ -53,10 +55,12 @@ export interface ComposerPillProps
 
 function TrailingAffordance({
   chevron,
-  pending
+  pending,
+  chevronDirection = 'down'
 }: {
   chevron?: boolean
   pending?: boolean
+  chevronDirection?: 'up' | 'down'
 }): React.JSX.Element | null {
   const reduced = useReducedMotion() ?? false
   if (!chevron) return null
@@ -85,7 +89,15 @@ function TrailingAffordance({
             exit={pop.exit}
             transition={pop.transition}
           >
-            <ChevronDown size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+            {chevronDirection === 'up' ? (
+              <ChevronUp size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+            ) : (
+              <ChevronDown
+                size={12}
+                className="shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
+            )}
           </motion.span>
         )}
       </AnimatePresence>
@@ -103,6 +115,7 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
       type,
       disabled,
       chevron,
+      chevronDirection,
       pending,
       children,
       ...props
@@ -110,7 +123,9 @@ export const ComposerPill = React.forwardRef<HTMLButtonElement, ComposerPillProp
     ref
   ) => {
     const classes = cn(composerPillVariants({ interactive }), className)
-    const trailing = <TrailingAffordance chevron={chevron} pending={pending} />
+    const trailing = (
+      <TrailingAffordance chevron={chevron} chevronDirection={chevronDirection} pending={pending} />
+    )
 
     if (asChild) {
       return (

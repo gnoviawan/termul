@@ -850,7 +850,8 @@ export class WsAcpTransport implements AcpTransport {
     agentId: AgentId,
     requestId: string,
     action: 'accept' | 'decline' | 'cancel',
-    content?: Record<string, string | number | boolean>
+    // GH-935: `string[]` = multi-select (`multi-enum`) answers.
+    content?: Record<string, string | number | boolean | string[]>
   ): Promise<void> {
     await this.request('respond_elicitation', { agentId, requestId, action, content })
   }
