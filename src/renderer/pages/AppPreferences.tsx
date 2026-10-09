@@ -285,7 +285,11 @@ export function AppPreferencesModal(): React.JSX.Element {
         subtitle="Configure global application settings"
       >
         {/* Content */}
-        <SettingsLayout categories={APP_PREF_CATEGORIES} searchIndex={APP_PREF_SEARCH_INDEX}>
+        <SettingsLayout
+          title="Preferences"
+          categories={APP_PREF_CATEGORIES}
+          searchIndex={APP_PREF_SEARCH_INDEX}
+        >
           {/* Terminal Appearance Section */}
           <AppearanceSection
             fontFamily={fontFamily}

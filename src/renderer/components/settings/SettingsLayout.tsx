@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Search, X } from '@/components/icons'
+import {
+  FOCUS_RING_CLASS,
+  PANEL_FIELD_CLASS,
+  PANEL_FIELD_ICON_CLASS,
+  QUIET_ICON_BUTTON_CLASS
+} from '@/components/ui/panel-styles'
 import { type SettingsSearchEntry, searchSettings } from '@/lib/settings-search'
 import { cn } from '@/lib/utils'
 
@@ -25,7 +31,14 @@ interface SettingsLayoutProps {
   children: React.ReactNode
   /** Optional extra content rendered at the bottom of the sidebar. */
   sidebarFooter?: React.ReactNode
+  /** Sidebar header label (`.label-panel`). */
+  title: string
 }
+
+/** Category ids set apart at the end of the list with a top hairline. */
+const SET_APART_CATEGORY_IDS = new Set(['reset'])
+
+const ROW_CLASS = `flex flex-shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors duration-150 ease-out md:w-full ${FOCUS_RING_CLASS}`
 
 /**
  * Wrapper for a single settings section. Tags the section with its category id
@@ -67,7 +80,8 @@ export function SettingsLayout({
   categories,
   searchIndex,
   children,
-  sidebarFooter
+  sidebarFooter,
+  title
 }: SettingsLayoutProps): React.JSX.Element {
   const contentRef = useRef<HTMLDivElement | null>(null)
   const [activeId, setActiveId] = useState<string | undefined>(categories[0]?.id)
@@ -178,29 +192,32 @@ export function SettingsLayout({
   return (
     <div className="flex flex-1 min-h-0 flex-col overflow-hidden md:flex-row">
       {/* Sidebar — top bar on mobile, left sidebar on desktop */}
-      <aside className="flex flex-shrink-0 flex-col border-b border-border bg-card/50 md:w-60 md:border-b-0 md:border-r">
-        <div className="border-b border-border p-3 md:border-b">
+      <aside className="flex flex-shrink-0 flex-col border-b border-border bg-background md:w-60 md:border-b-0 md:border-r">
+        <div className="hidden h-10 items-center pl-4 md:flex">
+          <span className="label-panel truncate">{title}</span>
+        </div>
+        <div className="px-2 pb-2 pt-2 md:pt-0">
           <div className="relative">
-            <Search
-              size={14}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-            />
+            <Search size={13} aria-hidden className={PANEL_FIELD_ICON_CLASS} />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search settings..."
+              placeholder="Search settings"
               aria-label="Search settings"
-              className="w-full rounded-md border border-border bg-secondary/50 py-1.5 pl-8 pr-8 text-sm text-foreground outline-none transition-shadow focus:ring-2 focus:ring-primary focus:border-transparent"
+              className={cn(PANEL_FIELD_CLASS, 'h-8 w-full pl-7 pr-7')}
             />
             {query && (
               <button
                 type="button"
                 onClick={() => setQuery('')}
                 aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                className={cn(
+                  QUIET_ICON_BUTTON_CLASS,
+                  'absolute right-1 top-1/2 flex size-6 -translate-y-1/2'
+                )}
               >
-                <X size={14} />
+                <X size={13} />
               </button>
             )}
           </div>
@@ -208,11 +225,11 @@ export function SettingsLayout({
 
         <nav
           aria-label="Settings categories"
-          className="flex flex-1 space-y-0.5 overflow-x-auto p-2 md:flex-col md:overflow-y-auto"
+          className="flex flex-1 gap-0.5 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-y-auto"
         >
           {isSearching ? (
             results.length === 0 ? (
-              <p className="px-3 py-4 text-xs text-muted-foreground">
+              <p className="px-2.5 py-4 text-xs text-muted-foreground">
                 No settings match "{query.trim()}".
               </p>
             ) : (
@@ -221,11 +238,16 @@ export function SettingsLayout({
                   key={`${result.categoryId}-${result.label}`}
                   type="button"
                   onClick={() => scrollToSection(result.categoryId, result.anchorId)}
-                  className="flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  className={cn(
+                    ROW_CLASS,
+                    'min-h-8 py-1.5 text-secondary-foreground hover:bg-foreground/[0.03] hover:text-foreground'
+                  )}
                 >
-                  <span className="font-medium">{result.label}</span>
-                  <span className="text-2xs text-muted-foreground">
-                    {categories.find((c) => c.id === result.categoryId)?.label}
+                  <span className="flex min-w-0 flex-col items-start gap-0.5">
+                    <span className="max-w-full truncate">{result.label}</span>
+                    <span className="max-w-full truncate text-2xs text-muted-foreground">
+                      {categories.find((c) => c.id === result.categoryId)?.label}
+                    </span>
                   </span>
                 </button>
               ))
@@ -233,26 +255,36 @@ export function SettingsLayout({
           ) : (
             categories.map((category, index) => {
               const isActive = category.id === activeId
+              const setApart = index > 0 && SET_APART_CATEGORY_IDS.has(category.id)
               return (
-                <button
-                  key={category.id}
-                  type="button"
-                  data-category-button
-                  aria-current={isActive ? 'true' : undefined}
-                  onClick={() => scrollToSection(category.id)}
-                  onKeyDown={(e) => handleCategoryKeyDown(e, index)}
-                  className={cn(
-                    'flex flex-shrink-0 items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary md:w-full',
-                    isActive
-                      ? 'bg-primary/10 font-medium text-primary'
-                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                <Fragment key={category.id}>
+                  {setApart && (
+                    <div
+                      aria-hidden
+                      data-testid="settings-category-divider"
+                      className="hidden h-px shrink-0 bg-border md:my-1.5 md:block"
+                    />
                   )}
-                >
-                  {category.icon && (
-                    <span className="flex flex-shrink-0 items-center">{category.icon}</span>
-                  )}
-                  <span className="truncate">{category.label}</span>
-                </button>
+                  <button
+                    type="button"
+                    data-category-button
+                    aria-current={isActive ? 'true' : undefined}
+                    onClick={() => scrollToSection(category.id)}
+                    onKeyDown={(e) => handleCategoryKeyDown(e, index)}
+                    className={cn(
+                      ROW_CLASS,
+                      'h-8 [&_svg]:size-3.5',
+                      isActive
+                        ? 'keycap text-foreground'
+                        : 'text-secondary-foreground hover:bg-foreground/[0.03] hover:text-foreground'
+                    )}
+                  >
+                    {category.icon && (
+                      <span className="flex flex-shrink-0 items-center">{category.icon}</span>
+                    )}
+                    <span className="truncate">{category.label}</span>
+                  </button>
+                </Fragment>
               )
             })
           )}

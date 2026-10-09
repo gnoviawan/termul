@@ -1,5 +1,5 @@
 import type { GitStashInfo } from '@shared/types/ipc.types'
-import { SectionHeader } from '@/components/git/rows'
+import { RowAction, SectionHeader } from '@/components/git/rows'
 import { ArchiveRestore, ClipboardPaste, Trash2 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -9,6 +9,8 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
+import { cn } from '@/lib/utils'
 
 interface StashSectionProps {
   /** Story 10 (QA F4/F7): `mobile` renders always-visible `touch` buttons
@@ -21,6 +23,22 @@ interface StashSectionProps {
   onPop: (index: number) => void
   onDrop: (index: number) => void
 }
+
+/** Desktop rows are dense with hover-gated actions; mobile lifts text to 12px. */
+const STASH_ROW_CHROME = {
+  desktop: {
+    row: 'group gap-2 py-1 pl-2 pr-1 transition-colors duration-150 ease-out hover:bg-foreground/[0.03]',
+    text: 'pr-1.5',
+    ref: 'text-3xs',
+    message: 'text-2xs'
+  },
+  mobile: {
+    row: 'gap-2 px-2 py-1.5',
+    text: '',
+    ref: 'text-xs',
+    message: 'text-xs'
+  }
+} as const
 
 export function StashSection({
   variant,
@@ -35,111 +53,89 @@ export function StashSection({
     return null
   }
   const isMobile = variant === 'mobile'
+  const chrome = STASH_ROW_CHROME[variant ?? 'desktop']
   return (
-    <div className="space-y-1 pt-2 border-t border-border/30 w-full min-w-0">
+    <div className="w-full min-w-0 border-t border-border pt-2">
       <SectionHeader label="Stashes" count={stashes.length} selectionCount={0} />
       <div className="space-y-0.5 w-full min-w-0">
-        {stashes.map((s) =>
-          isMobile ? (
+        {stashes.map((s) => {
+          const actions = [
+            {
+              label: 'Apply stash (keeps stash entry)',
+              Icon: ClipboardPaste,
+              onClick: () => onApply(s.index)
+            },
+            {
+              label: 'Pop stash (applies and drops)',
+              Icon: ArchiveRestore,
+              onClick: () => onPop(s.index)
+            },
+            {
+              label: 'Drop stash',
+              Icon: Trash2,
+              onClick: () => onDrop(s.index),
+              variant: 'danger' as const
+            }
+          ]
+          return (
             <div
               key={s.index}
-              className="flex w-full min-w-0 items-center justify-between gap-2 rounded px-2 py-1.5 text-xs text-foreground cursor-default transition-all"
+              className={cn(
+                'flex w-full min-w-0 items-center justify-between rounded-md text-xs text-foreground cursor-default',
+                chrome.row
+              )}
             >
-              <div className="flex flex-col min-w-0 flex-1">
-                <span className="font-semibold text-muted-foreground text-xs">{`stash@{${s.index}}`}</span>
+              <div className={cn('flex flex-col min-w-0 flex-1', chrome.text)}>
                 <span
-                  className="truncate text-muted-foreground text-xs leading-tight"
+                  className={cn('font-semibold text-muted-foreground', chrome.ref)}
+                >{`stash@{${s.index}}`}</span>
+                <span
+                  className={cn('truncate text-muted-foreground leading-tight', chrome.message)}
                   title={s.message}
                 >
                   {s.message || 'No message'}
                 </span>
               </div>
-              {/* Story 10 (QA F4/F7): hover-only stash actions are
-                  invisible and untappable on touch — the mobile
-                  block renders always-visible `touch` buttons
-                  (44px floor via hit-slop). Drop is destructive. */}
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="touch"
-                  className="w-11 text-muted-foreground"
-                  aria-label="Apply stash (keeps stash entry)"
-                  title="Apply stash (keeps stash entry)"
-                  disabled={isMutating || isGenerating}
-                  onClick={() => onApply(s.index)}
-                >
-                  <ClipboardPaste size={16} />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="touch"
-                  className="w-11 text-muted-foreground"
-                  aria-label="Pop stash (applies and drops)"
-                  title="Pop stash (applies and drops)"
-                  disabled={isMutating || isGenerating}
-                  onClick={() => onPop(s.index)}
-                >
-                  <ArchiveRestore size={16} />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="touch"
-                  className="w-11 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  aria-label="Drop stash"
-                  title="Drop stash"
-                  disabled={isMutating || isGenerating}
-                  onClick={() => onDrop(s.index)}
-                >
-                  <Trash2 size={16} />
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div
-              key={s.index}
-              className="group flex w-full min-w-0 items-center justify-between px-2 py-1.5 rounded hover:bg-secondary/40 text-xs text-foreground cursor-default transition-all"
-            >
-              <div className="flex flex-col min-w-0 flex-1 pr-1.5">
-                <span className="font-semibold text-muted-foreground text-3xs">{`stash@{${s.index}}`}</span>
-                <span
-                  className="truncate text-muted-foreground text-2xs leading-tight"
-                  title={s.message}
-                >
-                  {s.message || 'No message'}
-                </span>
-              </div>
-              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                <button
-                  type="button"
-                  title="Apply stash (keeps stash entry)"
-                  onClick={() => onApply(s.index)}
-                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
-                >
-                  <ClipboardPaste size={11} />
-                </button>
-                <button
-                  type="button"
-                  title="Pop stash (applies and drops)"
-                  onClick={() => onPop(s.index)}
-                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
-                >
-                  <ArchiveRestore size={11} />
-                </button>
-                <button
-                  type="button"
-                  title="Drop stash"
-                  onClick={() => onDrop(s.index)}
-                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <Trash2 size={11} />
-                </button>
-              </div>
+              {isMobile ? (
+                // Story 10 (QA F4/F7): hover-only stash actions are invisible
+                // and untappable on touch — mobile renders always-visible
+                // `touch` buttons (44px floor). Drop is destructive.
+                <div className="flex shrink-0 items-center gap-1">
+                  {actions.map(({ label, Icon, onClick, variant: tone }) => (
+                    <Button
+                      key={label}
+                      type="button"
+                      variant="ghost"
+                      size="touch"
+                      className={cn(
+                        'w-11 text-muted-foreground',
+                        tone === 'danger' && 'hover:bg-destructive/10 hover:text-destructive'
+                      )}
+                      aria-label={label}
+                      title={label}
+                      disabled={isMutating || isGenerating}
+                      onClick={onClick}
+                    >
+                      <Icon size={16} />
+                    </Button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-150 ease-out shrink-0">
+                  {actions.map(({ label, Icon, onClick, variant: tone }) => (
+                    <RowAction
+                      key={label}
+                      icon={<Icon size={13} />}
+                      label={label}
+                      variant={tone}
+                      onClick={onClick}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )
-        )}
+        })}
       </div>
     </div>
   )
@@ -182,7 +178,7 @@ export function StashDialog({
             <label className="text-muted-foreground">Message (optional)</label>
             <input
               type="text"
-              className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+              className={cn(PANEL_FIELD_CLASS, 'w-full rounded-md px-3 py-1.5')}
               placeholder="WIP on current branch..."
               value={message}
               onChange={(e) => onMessageChange(e.target.value)}
