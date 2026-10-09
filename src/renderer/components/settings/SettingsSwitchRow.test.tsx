@@ -16,6 +16,11 @@ describe('SettingsSwitchRow', () => {
     expect(screen.getByText('Save after typing stops')).toBeInTheDocument()
     const toggle = screen.getByRole('switch', { name: 'Enable auto save' })
     expect(toggle).toHaveAttribute('aria-checked', 'false')
+    const descriptionId = toggle.getAttribute('aria-describedby')
+    expect(descriptionId).toBeTruthy()
+    expect(document.getElementById(descriptionId ?? '')).toHaveTextContent(
+      'Save after typing stops'
+    )
     fireEvent.click(toggle)
     expect(onToggle).toHaveBeenCalledWith(true)
   })

@@ -128,6 +128,7 @@ export function StashSection({
                       icon={<Icon size={13} />}
                       label={label}
                       variant={tone}
+                      disabled={isMutating || isGenerating}
                       onClick={onClick}
                     />
                   ))}
