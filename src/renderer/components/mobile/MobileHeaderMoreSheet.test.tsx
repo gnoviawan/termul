@@ -80,6 +80,9 @@ describe('MobileHeaderMoreSheet', () => {
     const closeChat = screen.getByRole('button', { name: 'Close chat' })
     expect(closeChat.className).toContain('text-destructive')
     expect(closeChat.parentElement?.className).toContain('border-t')
+    expect(closeChat.parentElement?.className).toContain('border-border/60')
+    expect(closeChat.parentElement?.className).toContain('mt-1')
+    expect(closeChat.parentElement?.className).toContain('pt-1')
     for (const name of [
       'Git changes',
       'Files',
