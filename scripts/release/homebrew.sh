@@ -149,7 +149,6 @@ cask "termul" do
   homepage "https://github.com/gnoviawan/termul"
 
   auto_updates true
-  depends_on macos: :catalina
 
   app "Termul Manager.app"
 EOF

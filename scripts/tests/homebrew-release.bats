@@ -234,3 +234,15 @@ NAMES
   [ "$status" -ne 0 ]
   [[ "$output" == *"No binary release assets"* ]]
 }
+
+@test "generated cask does not declare a depends_on macos requirement" {
+  local cask="$TERMUL_TEST_TMP_DIR/termul-0.4.9.rb"
+  local arm_sha="6be298c2c2c8562b340b069357e8b5d6c3838791ac77c089114004db6a663e69"
+  local intel_sha="72b1d5ab617dcc72c021ec4524ec90a8607870d2011fa83686c4ccda185854c8"
+
+  write_homebrew_cask "$cask" "0.4.9" "$arm_sha" "$intel_sha"
+
+  run grep -E '^[[:space:]]*depends_on[[:space:]]' "$cask"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}

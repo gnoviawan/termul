@@ -389,3 +389,31 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   ! grep -q "^cp " "$TERMUL_TEST_LOG"
   ! grep -q "xattr" "$TERMUL_TEST_LOG"
 }
+
+@test "piping the script to bash runs main without an unbound BASH_SOURCE error" {
+  stub_uname Plan9 x86_64
+
+  run bash -c 'cat "$1" | bash' _ "$TERMUL_TEST_REPO_ROOT/scripts/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unsupported operating system"* ]]
+  [[ "$output" != *"unbound variable"* ]]
+}
+
+@test "executing the script directly runs main" {
+  stub_uname Plan9 x86_64
+
+  run bash "$TERMUL_TEST_REPO_ROOT/scripts/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unsupported operating system"* ]]
+}
+
+@test "sourcing the script does not run main" {
+  stub_uname Plan9 x86_64
+
+  run bash -c 'source "$1"; declare -F main >/dev/null && echo defined' _ "$TERMUL_TEST_REPO_ROOT/scripts/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "defined" ]
+}
