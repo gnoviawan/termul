@@ -201,7 +201,9 @@ async function openMobileWorkspace(page: Page, projectName: string): Promise<voi
   // The empty pane's launcher, with its agent loaded, is the last piece of the
   // project's hydration. Acting earlier races the workspace restore, which can
   // replace a tab the test just opened.
-  await expect(page.getByRole('button', { name: 'Select ACP agent: Fake Longrun' })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: 'Agent and model. Currently Fake Longrun' })
+  ).toBeVisible()
 }
 
 /**
@@ -251,7 +253,7 @@ async function startChatFromLauncher(
   await headerButton(page, 'New chat').tap()
   const launcher = page.getByRole('dialog', { name: 'Agent launcher' })
   await expect(
-    launcher.getByRole('button', { name: 'Select ACP agent: Fake Longrun' })
+    launcher.getByRole('button', { name: 'Agent and model. Currently Fake Longrun' })
   ).toBeVisible()
   if (local) {
     const isolation = launcher.getByRole('combobox', { name: 'Isolation mode' })
