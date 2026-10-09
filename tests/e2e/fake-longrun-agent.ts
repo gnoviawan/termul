@@ -755,7 +755,13 @@ function handle(msg: JsonRpcMessage): void {
       if (asked) {
         const askDelaySec = askDelaySeconds(p.prompt)
         if (askDelaySec === 0) ask(sessionId, asked)
-        else setTimeout(() => ask(sessionId, asked), askDelaySec * 1000)
+        else {
+          // A delayed request belongs to this turn: a cancel or the turn
+          // ending first must not leave a stale request for the next one.
+          setTimeout(() => {
+            if (inFlightBySession.get(sessionId)?.id === id) ask(sessionId, asked)
+          }, askDelaySec * 1000)
+        }
       }
       break
     }

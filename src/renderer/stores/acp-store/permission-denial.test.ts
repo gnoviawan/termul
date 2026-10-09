@@ -302,6 +302,21 @@ describe('permission denial tracking (L-09)', () => {
 
       expect(notices().s1).toEqual({ requestId: 'r2', tool: 'second tool' })
     })
+
+    it('keeps a permission still pending at recovery tracked, so a turn end replayed after recovery raises the notice', () => {
+      seedSession('s1', 'agent-1')
+      requestPermission('r1')
+      loseTransport()
+      // The server's denial reaches the renderer as the replayed turn end, which
+      // can land after the transport flag already went false: the request is
+      // still pending at recovery and must stay tracked.
+      recoverTransport()
+      expect(_trackedPermissionIdsForTesting()).toEqual(['r1'])
+
+      completeTurn()
+
+      expect(notices()).toEqual({ s1: { requestId: 'r1', tool: TOOL } })
+    })
   })
 
   describe('the notice ends', () => {
