@@ -251,7 +251,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <div className="flex h-full w-full bg-background overflow-hidden">
         {selectedFile ? (
           <div className="flex w-full flex-col min-w-0 bg-card/30">
-            <div className="border-b border-border bg-background p-2 flex items-center justify-between gap-2">
+            {/* pr-14 reserves the sheet close target (absolute, top-right, 44px on
+                coarse pointers) so it never covers the header's right edge. */}
+            <div className="border-b border-border bg-background p-2 pr-14 flex items-center justify-between gap-2">
               <Button
                 type="button"
                 variant="ghost"
@@ -337,7 +339,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           </div>
         ) : (
           <div className="flex w-full flex-col shrink-0">
-            <div className="p-2 border-b border-border flex flex-col gap-2 bg-muted/20">
+            {/* pr-14 reserves the sheet close target so it does not overlap the
+                Stash changes button at the right edge of the first row. */}
+            <div className="p-2 pr-14 border-b border-border flex flex-col gap-2 bg-muted/20">
               <div className="flex items-center justify-between">
                 <BranchSection
                   variant="mobile"

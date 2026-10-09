@@ -2,7 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { _resetSheetFocusReturnForTests, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
+import {
+  _resetShellAnnouncerForTests,
+  useShellAnnouncerStore
+} from '@/stores/shell-announcer-store'
 import { MobileChatShell } from './MobileChatShell'
 import type { MobileShellDrawer } from './MobileShellDrawer'
 
@@ -24,7 +29,8 @@ const {
   sessionIndexRef,
   mockAttentionCount,
   mockRequestCloseAgentChat,
-  drawerPropsRef
+  drawerPropsRef,
+  drawerModalRef
 } = vi.hoisted(() => ({
   // Mutable so individual tests can flip the active project (name, path, git
   // branch) and the shell into web/remote mode (where the project sheet, Files
@@ -73,7 +79,10 @@ const {
   mockAttentionCount: vi.fn(),
   mockRequestCloseAgentChat: vi.fn(),
   // The last props the shell handed to the (stubbed) drawer.
-  drawerPropsRef: { current: null as null | ComponentProps<typeof MobileShellDrawer> }
+  drawerPropsRef: { current: null as null | ComponentProps<typeof MobileShellDrawer> },
+  // Opt-in: render the stubbed drawer as a real modal Radix sheet, for the one
+  // test that needs Radix `hideOthers` to run (the shell live region).
+  drawerModalRef: { current: false }
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -130,23 +139,41 @@ vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
 // Stub the drawer so the shell test focuses on the opener wiring and the props
 // threaded through (☰ and the pill → drawerOpen → `open`; `onOpenChange` closes
 // it). The drawer's own layout, focus handling and rows are covered in
-// MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx.
-vi.mock('./MobileShellDrawer', () => ({
-  MobileShellDrawer: (props: ComponentProps<typeof MobileShellDrawer>) => {
-    drawerPropsRef.current = props
-    return props.open ? (
-      <div>
-        <span>shell-drawer</span>
-        <button type="button" onClick={() => props.onOpenChange(false)}>
-          close-shell-drawer
-        </button>
-        <button type="button" onClick={props.onOpenProjects}>
-          stub-open-projects
-        </button>
-      </div>
-    ) : null
+// MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx. With
+// `drawerModalRef` set it wraps the same content in a real modal Sheet.
+vi.mock('./MobileShellDrawer', async () => {
+  const { Sheet, SheetContent, SheetDescription, SheetTitle } = await import(
+    '@/components/ui/sheet'
+  )
+  return {
+    MobileShellDrawer: (props: ComponentProps<typeof MobileShellDrawer>) => {
+      drawerPropsRef.current = props
+      const content = (
+        <>
+          <span>shell-drawer</span>
+          <button type="button" onClick={() => props.onOpenChange(false)}>
+            close-shell-drawer
+          </button>
+          <button type="button" onClick={props.onOpenProjects}>
+            stub-open-projects
+          </button>
+        </>
+      )
+      if (drawerModalRef.current) {
+        return (
+          <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+            <SheetContent side="left">
+              <SheetTitle>Chats</SheetTitle>
+              <SheetDescription className="sr-only">Stub drawer</SheetDescription>
+              {content}
+            </SheetContent>
+          </Sheet>
+        )
+      }
+      return props.open ? <div>{content}</div> : null
+    }
   }
-}))
+})
 
 // Stub the project sheet so the shell test focuses on the trigger wiring
 // (subtitle → projectsOpen → sheet `open` prop → onOpenChange close) and on the
@@ -204,14 +231,17 @@ vi.mock('@/components/chat/ProjectSwitcherDrawer', async () => {
 // Stub the file-explorer drawer so the shell test focuses on the trigger
 // wiring (button → filesOpen → drawer `open` prop → onOpenChange close).
 // The drawer's own open/close + file-management is covered in
-// MobileFileExplorer.test.tsx.
+// MobileFileExplorer.test.tsx. "open-file" mirrors a successful file open:
+// `onFileOpened` first, then the close.
 vi.mock('./MobileFileExplorer', () => ({
   MobileFileExplorer: ({
     open,
-    onOpenChange
+    onOpenChange,
+    onFileOpened
   }: {
     open: boolean
     onOpenChange: (open: boolean) => void
+    onFileOpened?: () => void
   }) =>
     open ? (
       <div>
@@ -219,9 +249,32 @@ vi.mock('./MobileFileExplorer', () => ({
         <button type="button" onClick={() => onOpenChange(false)}>
           close-files
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            onFileOpened?.()
+            onOpenChange(false)
+          }}
+        >
+          open-file
+        </button>
       </div>
     ) : null
 }))
+
+// The real hook subscribes to the acp and connection stores, and this file
+// mocks `@/stores/acp-store` with a selector-only stub (no `subscribe`). Keep
+// the part the shell render needs, registering the live region so `announce`
+// works, and leave the subscriptions to use-shell-announcements.test.tsx.
+vi.mock('@/hooks/use-shell-announcements', async () => {
+  const { useEffect } = await import('react')
+  const { useShellAnnouncerStore } = await import('@/stores/shell-announcer-store')
+  return {
+    useShellAnnouncements: () => {
+      useEffect(() => useShellAnnouncerStore.getState().registerRegion(), [])
+    }
+  }
+})
 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => tauriRef.current
@@ -298,6 +351,9 @@ async function openHeaderSheet(): Promise<HTMLElement> {
 
 describe('MobileChatShell', () => {
   beforeEach(() => {
+    _resetShellAnnouncerForTests()
+    _resetSheetFocusReturnForTests()
+    drawerModalRef.current = false
     mockAttentionCount.mockReset()
     mockAttentionCount.mockReturnValue(0)
     mockRequestCloseAgentChat.mockReset()
@@ -1362,6 +1418,185 @@ describe('MobileChatShell', () => {
       renderShell({ canNewChat: undefined })
 
       expect(drawerProps().canNewChat).toBe(false)
+    })
+  })
+
+  // ── a11y floor: shell live region ───────────────────────────────────────
+
+  describe('shell live region', () => {
+    function liveRegion(): HTMLElement {
+      const regions = document.querySelectorAll<HTMLElement>('[data-shell-live-region]')
+      expect(regions).toHaveLength(1)
+      return regions[0]
+    }
+
+    async function announceAndWait(text: string): Promise<void> {
+      act(() => {
+        useShellAnnouncerStore.getState().announce(text)
+      })
+      await waitFor(() => expect(liveRegion().textContent).toBe(text))
+    }
+
+    it('mounts exactly one empty polite status region as a direct child of the shell root', () => {
+      renderShell()
+      const region = liveRegion()
+
+      expect(region).toHaveAttribute('role', 'status')
+      expect(region).toHaveAttribute('aria-live', 'polite')
+      expect(region).toHaveAttribute('aria-atomic', 'true')
+      expect(region.classList.contains('sr-only')).toBe(true)
+      expect(region.textContent).toBe('')
+      expect(region.parentElement).toBe(document.querySelector('[data-mobile-chat-shell]'))
+    })
+
+    it('renders the announced text once the delay elapses', async () => {
+      renderShell()
+      await announceAndWait('Turn finished')
+      expect(screen.getByRole('status', { name: '' })).toBe(liveRegion())
+    })
+
+    it('keeps the same node through a drawer open and close, outside Radix hideOthers', async () => {
+      drawerModalRef.current = true
+      renderShell()
+      const region = liveRegion()
+      await announceAndWait('Turn finished')
+
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      expect(await screen.findByText('shell-drawer')).toBeInTheDocument()
+
+      // The modal sheet ran hideOthers: the shell body is aria-hidden now ...
+      expect(screen.getByText('chat body').closest('[aria-hidden="true"]')).not.toBeNull()
+      // ... but the region is not, and is still the very same node.
+      expect(liveRegion()).toBe(region)
+      expect(region.closest('[aria-hidden="true"]')).toBeNull()
+      expect(region.textContent).toBe('Turn finished')
+
+      // It still announces while the drawer is open.
+      await announceAndWait('Approval needed')
+
+      fireEvent.click(screen.getByText('close-shell-drawer'))
+      expect(screen.queryByText('shell-drawer')).not.toBeInTheDocument()
+      expect(liveRegion()).toBe(region)
+      expect(region.textContent).toBe('Approval needed')
+    })
+
+    it('is never mounted holding text: a remount starts empty', async () => {
+      const { unmount } = renderShell()
+      await announceAndWait('Turn finished')
+
+      unmount()
+      expect(useShellAnnouncerStore.getState().message).toBe('')
+
+      renderShell()
+      expect(liveRegion().textContent).toBe('')
+    })
+
+    it('replaces the old message with the newest one', async () => {
+      renderShell()
+      await announceAndWait('Turn finished')
+      await announceAndWait('Approval needed')
+      expect(liveRegion().textContent).toBe('Approval needed')
+    })
+  })
+
+  // ── a11y floor: focus return wiring ─────────────────────────────────────
+  //
+  // The Files and Git sheets open from the header ⋯ sheet, so ⋯ is the control
+  // each one returns focus to. The Files sheet is stubbed (it owns no focus
+  // handling in this file) and the Git sheet lives in WorkspaceLayout, so the
+  // tests call the same `sheetCloseAutoFocus(id)` handler those sheets pass to
+  // `onCloseAutoFocus`.
+
+  describe('focus return wiring', () => {
+    function closeEvent(): Event {
+      return new Event('focusScope.autoFocusOnUnmount', { cancelable: true })
+    }
+
+    /**
+     * Lets the ⋯ sheet finish its own close (it hands focus to the title when a
+     * row was chosen), then drops focus to `<body>` the way a closing Files or
+     * Git sheet leaves it once its content unmounts.
+     */
+    async function settleAfterMoreSheetCloses(): Promise<void> {
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      await waitFor(() =>
+        expect(document.activeElement).toBe(document.getElementById('mobile-shell-title'))
+      )
+      act(() => {
+        ;(document.activeElement as HTMLElement | null)?.blur()
+      })
+      expect(document.activeElement).toBe(document.body)
+    }
+
+    it('makes the header title programmatically focusable without a visual change', () => {
+      tauriRef.current = false
+      renderShell()
+      const heading = screen.getByRole('heading', { level: 1 })
+
+      expect(heading).toHaveAttribute('tabindex', '-1')
+      // The programmatic focus must not draw the browser's default focus ring.
+      expect(heading.className).toContain('focus:outline-none')
+      expect(heading.textContent).toBe('Hello chat')
+    })
+
+    it('records ⋯ as the files sheet opener', async () => {
+      tauriRef.current = false
+      renderShell()
+      const more = screen.getByLabelText('More')
+      await openHeaderSheet()
+      fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+      expect(await screen.findByText('files-drawer')).toBeInTheDocument()
+      await settleAfterMoreSheetCloses()
+
+      const event = closeEvent()
+      sheetCloseAutoFocus('files-sheet')(event)
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(document.activeElement).toBe(more)
+    })
+
+    it('records ⋯ as the git sheet opener and still opens it', async () => {
+      tauriRef.current = false
+      const onOpenGitChanges = vi.fn()
+      renderShell({ onOpenGitChanges })
+      const more = screen.getByLabelText('More')
+      await openHeaderSheet()
+      fireEvent.click(screen.getByRole('button', { name: 'Git changes' }))
+
+      expect(onOpenGitChanges).toHaveBeenCalledTimes(1)
+      await settleAfterMoreSheetCloses()
+      sheetCloseAutoFocus('git-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(more)
+    })
+
+    it('sends focus to the header title, not ⋯, when a file opened', async () => {
+      tauriRef.current = false
+      renderShell()
+      await openHeaderSheet()
+      fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+      fireEvent.click(await screen.findByText('open-file'))
+      expect(screen.queryByText('files-drawer')).not.toBeInTheDocument()
+      await settleAfterMoreSheetCloses()
+
+      sheetCloseAutoFocus('files-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 }))
+      expect(document.activeElement).not.toBe(screen.getByLabelText('More'))
+    })
+
+    it('returns to ⋯ when the files sheet closes without opening a file', async () => {
+      tauriRef.current = false
+      renderShell()
+      const more = screen.getByLabelText('More')
+      await openHeaderSheet()
+      fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+      fireEvent.click(await screen.findByText('close-files'))
+      await settleAfterMoreSheetCloses()
+
+      sheetCloseAutoFocus('files-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(more)
     })
   })
 })

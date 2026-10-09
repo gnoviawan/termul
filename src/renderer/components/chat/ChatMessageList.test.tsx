@@ -1,8 +1,31 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 import { ChatMessageList } from './ChatMessageList'
 import type { TimelineItem } from './chat-timeline'
+
+const { mobileShellRef, virtualizerOverride } = vi.hoisted(() => ({
+  mobileShellRef: { current: false as boolean },
+  virtualizerOverride: { current: null as null | ((options: unknown) => unknown) }
+}))
+
+vi.mock('@/hooks/use-mobile-web-shell', () => ({
+  useMobileWebShell: () => mobileShellRef.current
+}))
+
+// Lets one suite force the windowed render path (jsdom has no layout, so the
+// real virtualizer yields no items and the list falls back to normal flow).
+vi.mock('@tanstack/react-virtual', async (importActual) => {
+  const actual = await importActual<typeof import('@tanstack/react-virtual')>()
+  return {
+    ...actual,
+    useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => {
+      // Always run the real hook so the hook order never depends on the override.
+      const real = actual.useVirtualizer(options)
+      return virtualizerOverride.current ? virtualizerOverride.current(options) : real
+    }
+  }
+})
 
 vi.mock('./ChatMessage', () => ({
   AgentProse: ({ text }: { text: string }) => <div data-testid="agent-prose">{text}</div>,
@@ -101,6 +124,11 @@ const thoughtItem: TimelineItem = {
 }
 
 describe('ChatMessageList', () => {
+  beforeEach(() => {
+    mobileShellRef.current = false
+    virtualizerOverride.current = null
+  })
+
   it.each([
     ['before content arrives', [userItem]],
     ['while a thought streams', [userItem, thoughtItem]],
@@ -322,5 +350,100 @@ describe('ChatMessageList worktree progress row', () => {
     // agent activity (never inside the turn-activity disclosure).
     const userEl = screen.getByTestId('message-user-1')
     expect(userEl.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('ChatMessageList log live semantics', () => {
+  beforeEach(() => {
+    mobileShellRef.current = false
+    virtualizerOverride.current = null
+  })
+
+  afterEach(() => {
+    mobileShellRef.current = false
+    virtualizerOverride.current = null
+  })
+
+  const items = [userItem, finalAgentItem]
+
+  function renderList(): void {
+    render(
+      <ChatMessageList
+        items={items}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+  }
+
+  it('keeps the polite log with additions relevance outside the mobile shell', () => {
+    mobileShellRef.current = false
+    renderList()
+
+    const log = screen.getByRole('log')
+    expect(log).toHaveAttribute('aria-live', 'polite')
+    expect(log).toHaveAttribute('aria-relevant', 'additions')
+  })
+
+  it('turns the log off on the mobile shell: role stays, aria-live is off, no aria-relevant', () => {
+    mobileShellRef.current = true
+    renderList()
+
+    const log = screen.getByRole('log')
+    expect(log).toHaveAttribute('role', 'log')
+    expect(log).toHaveAttribute('aria-live', 'off')
+    expect(log).not.toHaveAttribute('aria-relevant')
+    // The rows are still all there; only the announcements stopped.
+    expect(screen.getByTestId('message-user-1')).toBeInTheDocument()
+    expect(screen.getByTestId('message-agent-final')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['mobile shell', true, 'off', null],
+    ['desktop', false, 'polite', 'additions']
+  ])('applies the same semantics on the windowed path (%s)', (_, mobile, live, relevant) => {
+    mobileShellRef.current = mobile
+    virtualizerOverride.current = () => ({
+      getVirtualItems: () => [
+        { index: 0, key: 'user-1', start: 0, end: 100, size: 100, lane: 0 },
+        { index: 1, key: 'agent-final', start: 100, end: 200, size: 100, lane: 0 }
+      ],
+      getTotalSize: () => 200,
+      measureElement: () => undefined,
+      scrollToIndex: () => undefined,
+      range: { startIndex: 0, endIndex: 1 }
+    })
+    renderList()
+
+    const log = screen.getByRole('log')
+    // The windowed branch positions rows absolutely inside a fixed-height log.
+    expect(log.style.position).toBe('relative')
+    expect(log).toHaveAttribute('aria-live', live)
+    if (relevant === null) expect(log).not.toHaveAttribute('aria-relevant')
+    else expect(log).toHaveAttribute('aria-relevant', relevant)
+  })
+
+  it('still renders the empty state without a log (hook order is stable across the early return)', () => {
+    mobileShellRef.current = true
+    const { rerender } = render(
+      <ChatMessageList
+        items={[]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+    expect(screen.queryByRole('log')).not.toBeInTheDocument()
+
+    rerender(
+      <ChatMessageList
+        items={items}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+    expect(screen.getByRole('log')).toHaveAttribute('aria-live', 'off')
   })
 })

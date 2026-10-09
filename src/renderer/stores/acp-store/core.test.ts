@@ -505,6 +505,118 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().queuedProjectSwitchId).toBe('p2')
   })
 
+  describe('switchProject in-flight marker (switchingProjectId)', () => {
+    it('starts null', () => {
+      expect(useAcpStore.getState().switchingProjectId).toBeNull()
+    })
+
+    it('equals the target id while the transport call is pending, then clears on completion', async () => {
+      seedSession('s-old', 'agent-1', false)
+      useAcpStore.setState({ activeSessionId: 's-old' })
+      const pending = deferred<{
+        status: 'completed'
+        projectId: string
+        sessionId: string
+        cwd: string
+        mcpServerCount: number
+      }>()
+      const switchProject = vi.fn(() => pending.promise)
+      _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+      const call = useAcpStore.getState().switchProject('p2')
+      expect(useAcpStore.getState().switchingProjectId).toBe('p2')
+
+      pending.resolve({
+        status: 'completed',
+        projectId: 'p2',
+        sessionId: 's-new',
+        cwd: '/work/p2',
+        mcpServerCount: 0
+      })
+      await call
+      expect(useAcpStore.getState().switchingProjectId).toBeNull()
+    })
+
+    it('clears after a queued outcome', async () => {
+      seedSession('s-old', 'agent-1', true)
+      useAcpStore.setState({ activeSessionId: 's-old' })
+      const pending = deferred<{
+        status: 'queued'
+        projectId: string
+        currentSessionId: string
+      }>()
+      _setAcpTransportForTests({
+        switchProject: vi.fn(() => pending.promise),
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      const call = useAcpStore.getState().switchProject('p2')
+      expect(useAcpStore.getState().switchingProjectId).toBe('p2')
+      pending.resolve({ status: 'queued', projectId: 'p2', currentSessionId: 's-old' })
+      await call
+      expect(useAcpStore.getState().switchingProjectId).toBeNull()
+      expect(useAcpStore.getState().queuedProjectSwitchId).toBe('p2')
+    })
+
+    it('clears after a selected (cold tab) outcome', async () => {
+      const pending = deferred<{ status: 'selected'; projectId: string }>()
+      _setAcpTransportForTests({
+        switchProject: vi.fn(() => pending.promise),
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      const call = useAcpStore.getState().switchProject('p2')
+      expect(useAcpStore.getState().switchingProjectId).toBe('p2')
+      pending.resolve({ status: 'selected', projectId: 'p2' })
+      await call
+      expect(useAcpStore.getState().switchingProjectId).toBeNull()
+    })
+
+    it('clears when the transport rejects', async () => {
+      const pending = deferred<never>()
+      _setAcpTransportForTests({
+        switchProject: vi.fn(() => pending.promise),
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      const call = useAcpStore.getState().switchProject('p2')
+      expect(useAcpStore.getState().switchingProjectId).toBe('p2')
+      pending.reject(new Error('no_agent'))
+      await expect(call).rejects.toThrow('no_agent')
+      expect(useAcpStore.getState().switchingProjectId).toBeNull()
+    })
+
+    it('never sets the marker when the transport has no switchProject', async () => {
+      _setAcpTransportForTests({ dispose: vi.fn() } as unknown as AcpTransport)
+      await expect(useAcpStore.getState().switchProject('p2')).rejects.toThrow(
+        'only available in web/remote mode'
+      )
+      expect(useAcpStore.getState().switchingProjectId).toBeNull()
+    })
+
+    it('leaves an overlapping switch to another project in charge of the marker', async () => {
+      const first = deferred<{ status: 'selected'; projectId: string }>()
+      const second = deferred<{ status: 'selected'; projectId: string }>()
+      const switchProject = vi
+        .fn()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise)
+      _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+      const callA = useAcpStore.getState().switchProject('pa')
+      const callB = useAcpStore.getState().switchProject('pb')
+      expect(useAcpStore.getState().switchingProjectId).toBe('pb')
+
+      first.resolve({ status: 'selected', projectId: 'pa' })
+      await callA
+      expect(useAcpStore.getState().switchingProjectId).toBe('pb')
+
+      second.resolve({ status: 'selected', projectId: 'pb' })
+      await callB
+      expect(useAcpStore.getState().switchingProjectId).toBeNull()
+    })
+  })
+
   it('switchProject reopens an existing session from the history index (REOPEN branch)', async () => {
     seedSession('s-old', 'agent-1', false)
     useAcpStore.setState({ activeSessionId: 's-old' })

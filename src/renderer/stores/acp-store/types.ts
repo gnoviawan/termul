@@ -455,6 +455,12 @@ export interface AcpState {
   queuedProjectSwitchId: string | null
   /** Target project whose switch just failed (transient inline indicator). */
   failedProjectSwitchId: string | null
+  /**
+   * Target project of a `switchProject` call that is awaiting the transport.
+   * Null otherwise. The only store-visible signal for an in-flight switch;
+   * the mobile shell announcer derives "Switching to {project}…" from it.
+   */
+  switchingProjectId: string | null
 
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>

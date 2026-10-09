@@ -7,11 +7,14 @@ import {
 } from '@/hooks/use-chat-isolation-context'
 import { useMobileAttentionCount } from '@/hooks/use-mobile-attention-count'
 import { useSheetCloseFocus } from '@/hooks/use-sheet-close-focus'
+import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
+import { recordSheetOpener, setSheetFocusDestination } from '@/lib/sheet-focus-return'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
+import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import { MobileFileExplorer } from './MobileFileExplorer'
@@ -116,6 +119,12 @@ export function MobileChatShell({
   const moreFocus = useSheetCloseFocus(moreButtonRef, titleRef)
   const terminalFocus = useSheetCloseFocus(moreButtonRef, titleRef)
   const projectFocus = useSheetCloseFocus(subtitleRef)
+
+  // One persistent, visually hidden live region for the whole shell (rendered
+  // below as a direct child of the root). The hook registers it and feeds it
+  // from store transitions; sheets and menus never own announcements.
+  useShellAnnouncements()
+  const announcement = useShellAnnouncerStore((s) => s.message)
 
   // Story 6: the mobile drawer is the mobile tab strip. Register the shell's
   // sheets in the overlay stack so hardware back (popstate) closes the
@@ -244,6 +253,21 @@ export function MobileChatShell({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-mobile-chat-shell="">
+      {/* Shell live region. Mounted once at the root, outside the header, the
+          body and every Sheet or Portal, and never unmounted while the shell
+          lives, so announcements fire whether or not the drawer is open. The
+          explicit aria-live keeps it out of Radix hideOthers (aria-hidden
+          skips [aria-live] nodes). Never mounted holding text: the announcer
+          store clears it before every new message. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-shell-live-region=""
+      >
+        {announcement}
+      </div>
       <MobileShellHeader
         title={headerTitle}
         subtitleText={subtitle.text}
@@ -301,7 +325,13 @@ export function MobileChatShell({
         />
       )}
 
-      {!isTauriContext() && <MobileFileExplorer open={filesOpen} onOpenChange={setFilesOpen} />}
+      {!isTauriContext() && (
+        <MobileFileExplorer
+          open={filesOpen}
+          onOpenChange={setFilesOpen}
+          onFileOpened={() => setSheetFocusDestination('files-sheet', titleRef.current)}
+        />
+      )}
 
       <MobileHeaderMoreSheet
         open={moreOpen}
@@ -310,8 +340,22 @@ export function MobileChatShell({
         subtitle={subtitle.text}
         onCloseAutoFocus={moreFocus.onCloseAutoFocus}
         onItemChosen={moreFocus.markItemChosen}
-        onOpenGitChanges={!isTauriContext() && activeProject?.path ? onOpenGitChanges : undefined}
-        onOpenFiles={!isTauriContext() ? () => setFilesOpen(true) : undefined}
+        onOpenGitChanges={
+          !isTauriContext() && activeProject?.path && onOpenGitChanges
+            ? () => {
+                recordSheetOpener('git-sheet', moreButtonRef.current)
+                onOpenGitChanges()
+              }
+            : undefined
+        }
+        onOpenFiles={
+          !isTauriContext()
+            ? () => {
+                recordSheetOpener('files-sheet', moreButtonRef.current)
+                setFilesOpen(true)
+              }
+            : undefined
+        }
         onOpenCommandPalette={!isTauriContext() ? onOpenCommandPalette : undefined}
         onNewTerminal={onNewTerminal}
         onOpenProjectSettings={activeProject ? onOpenProjectSettings : undefined}

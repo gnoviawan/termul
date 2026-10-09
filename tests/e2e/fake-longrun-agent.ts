@@ -238,13 +238,43 @@ function replyRichTurn(id: number | string | undefined, sessionId: string): void
   respond(id, { stopReason: 'end_turn' })
 }
 
-/** True when the prompt text carries the `[PERMISSION]` marker. */
-function wantsPermission(prompt: JsonValue | undefined): boolean {
-  return promptText(prompt).includes('[PERMISSION]')
+/**
+ * Delay (seconds) before the permission request when the prompt text carries a
+ * `[PERMISSION[:n]]` marker (0 without a number), else null.
+ */
+function permissionDelaySeconds(prompt: JsonValue | undefined): number | null {
+  const match = /\[PERMISSION(?::(\d+(?:\.\d+)?))?\]/.exec(promptText(prompt))
+  if (!match) return null
+  return match[1] ? Number(match[1]) : 0
 }
 
 /** Ids of the permission requests this agent sent: the host's replies carry no method. */
 const permissionRequestIds = new Set<string>()
+
+function requestPermission(sessionId: string): void {
+  const requestId = `perm-${randomUUID().slice(0, 8)}`
+  permissionRequestIds.add(requestId)
+  write(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: requestId,
+      method: 'session/request_permission',
+      params: {
+        sessionId,
+        toolCall: {
+          toolCallId: `call-${requestId}`,
+          title: 'Run the e2e tool',
+          kind: 'execute',
+          status: 'pending'
+        },
+        options: [
+          { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+          { optionId: 'reject', name: 'Reject', kind: 'reject_once' }
+        ]
+      }
+    })
+  )
+}
 
 /** A `session/new` cwd carrying this marker gets the composer fixture below. */
 const COMPOSER_CWD_MARKER = 'composer-row-e2e'
@@ -670,29 +700,10 @@ function handle(msg: JsonRpcMessage): void {
         write(line)
       }
       if (promptText(p.prompt).includes('[USAGE]')) reportUsage(sessionId)
-      if (wantsPermission(p.prompt)) {
-        const requestId = `perm-${randomUUID().slice(0, 8)}`
-        permissionRequestIds.add(requestId)
-        write(
-          JSON.stringify({
-            jsonrpc: '2.0',
-            id: requestId,
-            method: 'session/request_permission',
-            params: {
-              sessionId,
-              toolCall: {
-                toolCallId: `call-${requestId}`,
-                title: 'Run the e2e tool',
-                kind: 'execute',
-                status: 'pending'
-              },
-              options: [
-                { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
-                { optionId: 'reject', name: 'Reject', kind: 'reject_once' }
-              ]
-            }
-          })
-        )
+      const permissionDelaySec = permissionDelaySeconds(p.prompt)
+      if (permissionDelaySec !== null) {
+        if (permissionDelaySec === 0) requestPermission(sessionId)
+        else setTimeout(() => requestPermission(sessionId), permissionDelaySec * 1000)
       }
       // Crash only when armed AND the marker is present: the host re-sends
       // the persisted open user turn verbatim on reopen (possibly on a

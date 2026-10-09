@@ -1309,6 +1309,7 @@ type SessionSliceState = Pick<
   | 'discoveredReopenContexts'
   | 'queuedProjectSwitchId'
   | 'failedProjectSwitchId'
+  | 'switchingProjectId'
   | 'createSession'
   | 'switchProject'
   | 'setFailedProjectSwitch'
@@ -1343,6 +1344,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
   sessionUsage: {},
   queuedProjectSwitchId: null,
   failedProjectSwitchId: null,
+  switchingProjectId: null,
 
   createSession: async (agentId, cwd, mcpServers, projectId, opts) => {
     try {
@@ -1470,77 +1472,86 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     if (!transport.switchProject) {
       throw new Error('Project switching is only available in web/remote mode')
     }
-    // Starting a new switch clears any prior transient failure indicator so a
-    // retry doesn't keep a stale "Failed" badge while the new attempt runs.
-    set({ failedProjectSwitchId: null })
-    const focusedSessionId = getTabFocusedSessionId() ?? get().activeSessionId
-    const currentSession = focusedSessionId ? get().sessions[focusedSessionId] : null
-    const outcome = await transport.switchProject(projectId)
-    if (outcome.status === 'queued') {
-      set({ queuedProjectSwitchId: outcome.projectId })
-      return outcome
-    }
-    if (outcome.status === 'selected') {
-      // Cold tab: the server updated the shared active project but created no
-      // session (no agent spawned). Mirror desktop's local select + clear the
-      // transient switch badges; the agent spawns lazily when a chat starts.
-      set({ queuedProjectSwitchId: null, failedProjectSwitchId: null })
-      useProjectStore.getState().selectProject(outcome.projectId)
-      return outcome
-    }
-    const agentId = currentSession?.agentId
-    if (!agentId) throw new Error('Completed project switch has no tracked agent')
+    // Published before the first await so the shell announcer sees the switch
+    // begin; cleared on every exit (completed, selected, queued, rejected).
+    set({ switchingProjectId: projectId })
+    try {
+      // Starting a new switch clears any prior transient failure indicator so a
+      // retry doesn't keep a stale "Failed" badge while the new attempt runs.
+      set({ failedProjectSwitchId: null })
+      const focusedSessionId = getTabFocusedSessionId() ?? get().activeSessionId
+      const currentSession = focusedSessionId ? get().sessions[focusedSessionId] : null
+      const outcome = await transport.switchProject(projectId)
+      if (outcome.status === 'queued') {
+        set({ queuedProjectSwitchId: outcome.projectId })
+        return outcome
+      }
+      if (outcome.status === 'selected') {
+        // Cold tab: the server updated the shared active project but created no
+        // session (no agent spawned). Mirror desktop's local select + clear the
+        // transient switch badges; the agent spawns lazily when a chat starts.
+        set({ queuedProjectSwitchId: null, failedProjectSwitchId: null })
+        useProjectStore.getState().selectProject(outcome.projectId)
+        return outcome
+      }
+      const agentId = currentSession?.agentId
+      if (!agentId) throw new Error('Completed project switch has no tracked agent')
 
-    // Switch-back restore (Epic-4 bridge): if the server reopened an existing
-    // session (detected via the server history index), fetch its transcript via
-    // `openHistorySession` + focus the workspace tab (`addAgentChatTab`) —
-    // mirrors desktop's "restore the last tab." Else the server minted a new
-    // session → current blank-chat path below.
-    if (get().sessionIndex.some((e) => e.id === outcome.sessionId)) {
-      // Parity with the new-session branch: set activeSessionId + clear the
-      // queued id so the reopened session is the active chat (not just tab
-      // focus).
-      set({ queuedProjectSwitchId: null, activeSessionId: outcome.sessionId })
-      const opening = get().openHistorySession(outcome.sessionId)
-      useWorkspaceStore.getState().addAgentChatTab(outcome.sessionId)
+      // Switch-back restore (Epic-4 bridge): if the server reopened an existing
+      // session (detected via the server history index), fetch its transcript via
+      // `openHistorySession` + focus the workspace tab (`addAgentChatTab`) —
+      // mirrors desktop's "restore the last tab." Else the server minted a new
+      // session → current blank-chat path below.
+      if (get().sessionIndex.some((e) => e.id === outcome.sessionId)) {
+        // Parity with the new-session branch: set activeSessionId + clear the
+        // queued id so the reopened session is the active chat (not just tab
+        // focus).
+        set({ queuedProjectSwitchId: null, activeSessionId: outcome.sessionId })
+        const opening = get().openHistorySession(outcome.sessionId)
+        useWorkspaceStore.getState().addAgentChatTab(outcome.sessionId)
+        setTabFocusedSessionId(outcome.sessionId)
+        useProjectStore.getState().selectProject(outcome.projectId)
+        await opening
+        return outcome
+      }
+
+      set((s) => {
+        const existing = s.sessions[outcome.sessionId]
+        return {
+          queuedProjectSwitchId: null,
+          failedProjectSwitchId: null,
+          activeSessionId: outcome.sessionId,
+          sessions: {
+            ...s.sessions,
+            [outcome.sessionId]: {
+              id: outcome.sessionId,
+              agentId,
+              cwd: outcome.cwd,
+              projectId: outcome.projectId,
+              status: 'active',
+              title: existing?.title ?? currentSession.title,
+              activeTurn: false,
+              mcpServerCount: outcome.mcpServerCount,
+              openTurnId: null,
+              modes: existing?.modes ?? currentSession.modes,
+              models: existing?.models ?? currentSession.models ?? null,
+              configOptions: existing?.configOptions ?? currentSession.configOptions,
+              lastError: existing?.lastError ?? null,
+              createdAt: existing?.createdAt ?? Date.now(),
+              replaying: null
+            }
+          },
+          messages: { ...s.messages, [outcome.sessionId]: s.messages[outcome.sessionId] ?? [] }
+        }
+      })
       setTabFocusedSessionId(outcome.sessionId)
       useProjectStore.getState().selectProject(outcome.projectId)
-      await opening
       return outcome
+    } finally {
+      // Only clear our own marker: an overlapping call for another project
+      // owns the field until it settles.
+      if (get().switchingProjectId === projectId) set({ switchingProjectId: null })
     }
-
-    set((s) => {
-      const existing = s.sessions[outcome.sessionId]
-      return {
-        queuedProjectSwitchId: null,
-        failedProjectSwitchId: null,
-        activeSessionId: outcome.sessionId,
-        sessions: {
-          ...s.sessions,
-          [outcome.sessionId]: {
-            id: outcome.sessionId,
-            agentId,
-            cwd: outcome.cwd,
-            projectId: outcome.projectId,
-            status: 'active',
-            title: existing?.title ?? currentSession.title,
-            activeTurn: false,
-            mcpServerCount: outcome.mcpServerCount,
-            openTurnId: null,
-            modes: existing?.modes ?? currentSession.modes,
-            models: existing?.models ?? currentSession.models ?? null,
-            configOptions: existing?.configOptions ?? currentSession.configOptions,
-            lastError: existing?.lastError ?? null,
-            createdAt: existing?.createdAt ?? Date.now(),
-            replaying: null
-          }
-        },
-        messages: { ...s.messages, [outcome.sessionId]: s.messages[outcome.sessionId] ?? [] }
-      }
-    })
-    setTabFocusedSessionId(outcome.sessionId)
-    useProjectStore.getState().selectProject(outcome.projectId)
-    return outcome
   },
 
   setFailedProjectSwitch: (projectId) => set({ failedProjectSwitchId: projectId }),
