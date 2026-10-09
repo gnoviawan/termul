@@ -40,7 +40,7 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
-import { CHAT_GUTTER_X, CHAT_COMPACT_LABEL, useComposerToolbarMode } from './chat-layout'
+import { CHAT_COMPACT_LABEL, CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
 import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
