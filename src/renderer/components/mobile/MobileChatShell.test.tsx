@@ -29,7 +29,8 @@ const {
   sessionIndexRef,
   mockAttentionCount,
   mockRequestCloseAgentChat,
-  drawerPropsRef
+  drawerPropsRef,
+  drawerModalRef
 } = vi.hoisted(() => ({
   // Mutable so individual tests can flip the active project (name, path, git
   // branch) and the shell into web/remote mode (where the project sheet, Files
