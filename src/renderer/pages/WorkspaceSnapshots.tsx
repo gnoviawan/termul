@@ -506,7 +506,7 @@ function MobileSnapshotCard({
                   if (e.key === 'Escape') onCancelRename()
                 }}
                 aria-label="Rename snapshot"
-                className="h-11 min-w-0 flex-1 rounded border border-border bg-background px-2 text-sm"
+                className="h-11 min-w-0 flex-1 rounded border border-border bg-background px-2 text-sm pointer-coarse:text-base"
                 autoFocus
               />
             ) : (

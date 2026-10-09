@@ -439,7 +439,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                     value={path}
                     onChange={(e) => handlePathChange(e.target.value)}
                     placeholder="No directory selected"
-                    className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+                    className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                   />
                   <button
                     onClick={handleBrowse}
@@ -459,7 +459,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="My Project"
-                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
+                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
                 {nameWarning && (
                   <p
@@ -492,7 +492,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                           const tpl = BUILT_IN_TEMPLATES.find((t) => t.id === e.target.value)
                           if (tpl) handleSelectTemplate(tpl)
                         }}
-                        className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                        className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
                       >
                         {BUILT_IN_TEMPLATES.map((tpl) => (
                           <option key={tpl.id} value={tpl.id}>
@@ -561,7 +561,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                         <select
                           value={selectedShell}
                           onChange={(e) => setSelectedShell(e.target.value)}
-                          className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                          className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
                         >
                           {shells?.available && shells.available.length > 0 ? (
                             shells.available.map((shell) => (

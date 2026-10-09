@@ -192,7 +192,7 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
                         />
                       ) : field.kind === 'enum' ? (
                         <select
-                          className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
+                          className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm pointer-coarse:text-base"
                           value={
                             typeof values[field.name] === 'string' ? String(values[field.name]) : ''
                           }

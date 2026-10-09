@@ -257,7 +257,7 @@ export function QuestionStepper({
               onChange={(event) => onOtherChange?.(event.target.value)}
               placeholder="Or write your own response"
               aria-label={otherLabel}
-              className="h-8 w-full min-w-0 rounded-lg bg-transparent pl-8 pr-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none pointer-coarse:h-11"
+              className="h-8 w-full min-w-0 rounded-lg bg-transparent pl-8 pr-2 text-sm pointer-coarse:text-base text-foreground placeholder:text-muted-foreground focus:outline-none pointer-coarse:h-11"
               data-testid={otherTestId}
             />
           </div>

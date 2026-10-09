@@ -535,7 +535,7 @@ export function MobileChatShell({
                           if (e.key === 'Enter') confirmRename()
                           if (e.key === 'Escape') setRenamingId(null)
                         }}
-                        className="h-8 w-24 rounded border border-border bg-background px-2 text-xs"
+                        className="h-8 w-24 rounded border border-border bg-background px-2 text-xs pointer-coarse:text-base"
                         autoFocus
                       />
                     ) : (

@@ -146,6 +146,12 @@ describe('GitPanel mobile branch', () => {
     expect(container.querySelector('.w-80')).toBeNull()
   })
 
+  it('keeps the filter field at 16px on a coarse pointer so iOS does not zoom', () => {
+    render(<GitPanel cwd="/work" isVisible />)
+
+    expect(screen.getByPlaceholderText('Filter changes...')).toHaveClass('pointer-coarse:text-base')
+  })
+
   it('swaps to the diff view with a back button when a file is selected', () => {
     gitState.selectedFile = 'a.ts'
     render(<GitPanel cwd="/work" isVisible />)
@@ -316,7 +322,11 @@ describe('GitPanel desktop branch (regression — byte-identical layout)', () =>
     // Desktop keeps the `w-80` file-list sidebar AND the diff view side-by-side.
     expect(container.querySelector('.w-80')).not.toBeNull()
     expect(screen.getByTestId('git-diff-view')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    // The desktop twin keeps its 12px size for a fine pointer and still takes the coarse token.
+    expect(screen.getByPlaceholderText('Filter changes...')).toHaveClass(
+      'text-xs',
+      'pointer-coarse:text-base'
+    )
     // Desktop never renders the mobile back button.
     expect(screen.queryByLabelText('Back to file list')).not.toBeInTheDocument()
   })

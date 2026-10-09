@@ -115,7 +115,7 @@ export function CreateBranchDialog({
             <label className="text-muted-foreground">Branch name</label>
             <input
               type="text"
-              className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+              className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs pointer-coarse:text-base"
               placeholder="e.g. feature/new-login"
               value={branchName}
               onChange={(e) => onBranchNameChange(e.target.value)}

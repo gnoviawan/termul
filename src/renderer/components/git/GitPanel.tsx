@@ -367,7 +367,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 <input
                   type="text"
                   placeholder="Filter changes..."
-                  className="w-full bg-secondary/50 border-none rounded-md py-2.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+                  className="w-full bg-secondary/50 border-none rounded-md py-2.5 pl-8 pr-3 text-xs pointer-coarse:text-base focus:ring-1 focus:ring-primary outline-none"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -606,7 +606,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             <input
               type="text"
               placeholder="Filter changes..."
-              className="w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+              className="w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs pointer-coarse:text-base focus:ring-1 focus:ring-primary outline-none"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
