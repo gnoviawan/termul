@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileChatShell } from './MobileChatShell'
 
 const {
@@ -30,8 +30,10 @@ const {
         activeTabId: string | null
       }>,
       activePaneId: 'pane-1',
+      fullscreenPaneId: null as string | null,
       removeTab: vi.fn(),
-      setActiveTab: vi.fn()
+      setActiveTab: vi.fn(),
+      clearFullscreenPane: vi.fn()
     }
   },
   editorRef: {
@@ -169,6 +171,7 @@ describe('MobileChatShell', () => {
     mockRemoveBrowserTab.mockReset()
     workspaceRef.current.removeTab.mockReset()
     workspaceRef.current.setActiveTab.mockReset()
+    workspaceRef.current.clearFullscreenPane.mockReset()
     tauriRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo' }
     // Default leaf: one agent-chat tab (the pre-Story-6 drawer shape).
@@ -182,7 +185,8 @@ describe('MobileChatShell', () => {
           activeTabId: 'tab-1'
         }
       ],
-      activePaneId: 'pane-1'
+      activePaneId: 'pane-1',
+      fullscreenPaneId: null
     }
     editorRef.current.openFiles = new Map()
     browserTabsRef.current = new Map()
@@ -670,6 +674,222 @@ describe('MobileChatShell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
 
     expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('edit-/proj/a.ts')
+  })
+
+  // ── FIX 10: choosing a tab from /snapshots returns to the workspace ──────
+
+  function renderShellAt(path: string): void {
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+  }
+
+  const NON_CHAT_ROWS = [
+    { label: 'terminal', rowName: 'Terminal', tabId: 'term-t1' },
+    { label: 'editor', rowName: 'a.ts', tabId: 'edit-/proj/a.ts' },
+    { label: 'git', rowName: 'Git Changes', tabId: 'git-/proj' },
+    { label: 'git-history', rowName: 'Git History', tabId: 'git-history-/proj' },
+    { label: 'browser', rowName: 'Example Site', tabId: 'browser-b1' }
+  ]
+
+  it.each(
+    NON_CHAT_ROWS
+  )('on /snapshots, tapping the $label row activates the tab, closes the drawer and returns to /', ({
+    rowName,
+    tabId
+  }) => {
+    seedAllTabTypes()
+    renderShellAt('/snapshots')
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: rowName }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', tabId)
+    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+    expect(mockNavigate).toHaveBeenCalledTimes(1)
+    expect(mockNavigate).toHaveBeenCalledWith('/')
+  })
+
+  it('on /snapshots, an agent-chat row does not navigate to / (setActiveTab owns /c/<id>)', () => {
+    seedAllTabTypes()
+    renderShellAt('/snapshots')
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Hello chat' }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'tab-1')
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '/',
+    '/c/s1'
+  ])('on the workspace route %s, tapping any drawer row never navigates', (path) => {
+    seedAllTabTypes()
+    renderShellAt(path)
+
+    for (const { rowName } of NON_CHAT_ROWS) {
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name: rowName }))
+    }
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Hello chat' }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledTimes(NON_CHAT_ROWS.length + 1)
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  describe('a row in another pane on /snapshots', () => {
+    let pendingFrames: FrameRequestCallback[]
+    let raf: { mockRestore: () => void }
+
+    beforeEach(() => {
+      // Capture the deferred activation instead of running it, so each test
+      // decides when the frame fires. Restored in afterEach so a failing
+      // assertion cannot leak the stub into later tests.
+      pendingFrames = []
+      raf = vi
+        .spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((callback: FrameRequestCallback) => {
+          pendingFrames.push(callback)
+          return pendingFrames.length
+        })
+      workspaceRef.current = {
+        ...workspaceRef.current,
+        leaves: [
+          { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+          {
+            type: 'leaf',
+            id: 'pane-2',
+            tabs: [{ type: 'git', id: 'git-/proj', cwd: '/proj' }],
+            activeTabId: null
+          }
+        ],
+        activePaneId: 'pane-1'
+      }
+    })
+
+    afterEach(() => {
+      raf.mockRestore()
+    })
+
+    it('still returns to / after its deferred activation', () => {
+      renderShellAt('/snapshots')
+
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
+      for (const frame of pendingFrames) frame(0)
+
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-/proj')
+      expect(mockNavigate).toHaveBeenCalledTimes(1)
+      expect(mockNavigate).toHaveBeenCalledWith('/')
+    })
+
+    it('navigates only after the tab is active, never before the frame fires', () => {
+      renderShellAt('/snapshots')
+
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
+
+      // The drawer closes at once, but neither the activation nor the route
+      // change has happened yet: the workspace route must not paint the
+      // previously active leaf while the activation is still pending.
+      expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      expect(pendingFrames).toHaveLength(1)
+      expect(workspaceRef.current.setActiveTab).not.toHaveBeenCalled()
+      expect(mockNavigate).not.toHaveBeenCalled()
+
+      for (const frame of pendingFrames) frame(0)
+
+      const [activation] = workspaceRef.current.setActiveTab.mock.invocationCallOrder
+      const [navigation] = mockNavigate.mock.invocationCallOrder
+      expect(activation).toBeLessThan(navigation)
+    })
+  })
+
+  describe('while a pane is fullscreen', () => {
+    let raf: { mockRestore: () => void }
+
+    beforeEach(() => {
+      // Run the deferred cross-pane activation at once; restored in afterEach
+      // so a failing assertion cannot leak the stub into later tests.
+      raf = vi
+        .spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((callback: FrameRequestCallback) => {
+          callback(0)
+          return 1
+        })
+      workspaceRef.current = {
+        ...workspaceRef.current,
+        leaves: [
+          {
+            type: 'leaf',
+            id: 'pane-1',
+            tabs: [{ type: 'git', id: 'git-/a', cwd: '/a' }],
+            activeTabId: 'git-/a'
+          },
+          {
+            type: 'leaf',
+            id: 'pane-2',
+            tabs: [{ type: 'git-history', id: 'git-history-/b', cwd: '/b' }],
+            activeTabId: 'git-history-/b'
+          }
+        ],
+        activePaneId: 'pane-1',
+        fullscreenPaneId: 'pane-1'
+      }
+    })
+
+    afterEach(() => {
+      raf.mockRestore()
+    })
+
+    function tapRow(name: string): void {
+      renderShellAt('/')
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name }))
+    }
+
+    it('leaves fullscreen before activating a tab in another leaf, so the view follows it', () => {
+      tapRow('Git History')
+
+      expect(workspaceRef.current.clearFullscreenPane).toHaveBeenCalledTimes(1)
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-history-/b')
+      // Cleared first: with fullscreen still set, setActiveTab would keep
+      // activePaneId on the fullscreen leaf.
+      const [clearing] = workspaceRef.current.clearFullscreenPane.mock.invocationCallOrder
+      const [activation] = workspaceRef.current.setActiveTab.mock.invocationCallOrder
+      expect(clearing).toBeLessThan(activation)
+    })
+
+    it('keeps fullscreen when the row belongs to the fullscreen leaf', () => {
+      tapRow('Git Changes')
+
+      expect(workspaceRef.current.clearFullscreenPane).not.toHaveBeenCalled()
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'git-/a')
+    })
+
+    it('leaves a fullscreen leaf that is not the active one, even for a row in the active leaf', () => {
+      // `loadProjectWorkspace` can keep a stale fullscreenPaneId, which would
+      // otherwise hand activePaneId back to the fullscreen leaf.
+      workspaceRef.current.fullscreenPaneId = 'pane-2'
+      tapRow('Git Changes')
+
+      expect(workspaceRef.current.clearFullscreenPane).toHaveBeenCalledTimes(1)
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'git-/a')
+    })
+
+    it('never touches fullscreen when no pane is fullscreen', () => {
+      workspaceRef.current.fullscreenPaneId = null
+      tapRow('Git History')
+
+      expect(workspaceRef.current.clearFullscreenPane).not.toHaveBeenCalled()
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-history-/b')
+    })
   })
 
   // ── Story 11 (QA F9): header title never collapses to ~0 width ──────────
