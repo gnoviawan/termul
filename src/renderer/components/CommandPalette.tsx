@@ -23,9 +23,9 @@ import {
   CommandGroup,
   CommandInput,
   CommandItem,
-  CommandList,
-  CommandShortcut
+  CommandList
 } from '@/components/ui/command'
+import { Kbd } from '@/components/ui/kbd'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
@@ -440,12 +440,12 @@ export function CommandPalette({
         key={keyPrefix ? `${keyPrefix}:${cmd.id}` : cmd.id}
         value={keyPrefix ? `${keyPrefix}:${getSearchableValue(cmd)}` : getSearchableValue(cmd)}
         onSelect={() => executeCommand(cmd)}
-        className="group flex items-center justify-between gap-3 px-2.5 py-1.5 cursor-pointer rounded-md data-[selected='true']:bg-background data-[selected=true]:text-foreground"
+        className="group flex cursor-pointer items-center justify-between gap-3 rounded-lg px-2.5 py-2 data-[selected='true']:bg-foreground/[0.06] data-[selected=true]:text-foreground"
       >
         <div className="flex min-w-0 items-center gap-2.5">
           <span
             className={cn(
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-secondary/70',
+              'flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-foreground/[0.03]',
               cmd.projectColor
                 ? getColorClasses(cmd.projectColor).text
                 : 'text-muted-foreground group-data-[selected=true]:text-foreground'
@@ -454,20 +454,16 @@ export function CommandPalette({
             {cmd.icon}
           </span>
           <span className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-medium leading-5">{cmd.label}</span>
+            <span className="truncate text-xs font-medium leading-5">{cmd.label}</span>
             {cmd.description && (
-              <span className="truncate text-xs leading-4 text-muted-foreground">
+              <span className="truncate text-2xs leading-4 text-muted-foreground">
                 {cmd.description}
               </span>
             )}
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {cmd.shortcut && (
-            <CommandShortcut className="rounded border border-border bg-secondary/70 px-1.5 py-0.5 font-mono text-3xs tracking-normal text-muted-foreground">
-              {cmd.shortcut}
-            </CommandShortcut>
-          )}
+          {cmd.shortcut && <Kbd className="px-1.5 py-0.5 font-mono">{cmd.shortcut}</Kbd>}
           <button
             type="button"
             aria-label={isPinned ? `Unpin ${cmd.label}` : `Pin ${cmd.label}`}
@@ -483,7 +479,7 @@ export function CommandPalette({
               void togglePin(cmd.id)
             }}
             className={cn(
-              'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-secondary hover:text-foreground group-data-[selected=true]:text-foreground',
+              'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-opacity hover:bg-foreground/[0.06] hover:text-foreground group-data-[selected=true]:text-foreground',
               isPinned
                 ? 'text-foreground opacity-100'
                 : 'opacity-0 group-data-[selected=true]:opacity-100 group-hover:opacity-100'
@@ -517,11 +513,11 @@ export function CommandPalette({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: isMobile ? 8 : -8 }}
             transition={{ duration: 0.15 }}
-            className="w-full max-w-[100vw] overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:max-w-xl"
+            className="w-full max-w-[100vw] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl md:max-w-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Command
-              className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-3xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
+              className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
               shouldFilter={true}
             >
               <div className="relative">
@@ -530,7 +526,7 @@ export function CommandPalette({
                   placeholder="Search commands, projects, settings..."
                   value={query}
                   onValueChange={setQuery}
-                  className={cn('h-10 py-2 text-sm', isMobile && 'h-11')}
+                  className="h-12 py-2 text-sm"
                 />
                 {/* Story 11 (QA F5): visible touch-sized close — Escape is
                     dead on phones and the backdrop tap target is not
@@ -576,21 +572,10 @@ export function CommandPalette({
                   on touch (no hardware keyboard) — hide them on the mobile
                   shell. Desktop keeps them byte-identical. */}
               {!isMobile && (
-                <div className="label-group flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-muted-foreground">
-                  <span className="flex items-center gap-3">
-                    <span className="flex items-center">
-                      <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>
-                      Navigate
-                    </span>
-                    <span className="flex items-center">
-                      <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↵</kbd>
-                      Select
-                    </span>
-                    <span className="flex items-center">
-                      <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">Esc</kbd>
-                      Close
-                    </span>
-                  </span>
+                <div className="flex h-9 items-center justify-end gap-3.5 border-t border-border px-3.5">
+                  <PaletteHint keys="↑↓" label="Move" />
+                  <PaletteHint keys="↵" label="Run" />
+                  <PaletteHint keys="Esc" label="Close" />
                 </div>
               )}
             </Command>
@@ -598,5 +583,15 @@ export function CommandPalette({
         </motion.div>
       )}
     </AnimatePresence>
+  )
+}
+
+/** Footer key hint: a hairline Kbd and a short muted label. */
+function PaletteHint({ keys, label }: { keys: string; label: string }): React.JSX.Element {
+  return (
+    <span className="flex items-center gap-1.5 text-2xs text-muted-foreground">
+      <Kbd className="px-1.5">{keys}</Kbd>
+      {label}
+    </span>
   )
 }

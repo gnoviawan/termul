@@ -1,5 +1,3 @@
-import { useMemo } from 'react'
-
 export interface TocHeading {
   id: string
   level: number
@@ -120,19 +118,15 @@ export function filterTocHeadings(headings: TocHeading[], maxLevel: number): Toc
   return headings.filter((heading) => heading.level <= maxLevel)
 }
 
-interface UseTocHeadingsOptions {
-  content: string
-  maxLevel: number
-}
-
-interface UseTocHeadingsResult {
-  headings: TocHeading[]
-}
-
-export function useTocHeadings({ content, maxLevel }: UseTocHeadingsOptions): UseTocHeadingsResult {
-  const headings = useMemo(() => {
-    return filterTocHeadings(parseMarkdownHeadings(content), maxLevel)
-  }, [content, maxLevel])
-
-  return { headings }
+/** True when both lists have the same ids, levels and text, in order. */
+export function areTocHeadingsEqual(a: TocHeading[], b: TocHeading[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (heading, index) =>
+        heading.id === b[index].id &&
+        heading.level === b[index].level &&
+        heading.text === b[index].text
+    )
+  )
 }

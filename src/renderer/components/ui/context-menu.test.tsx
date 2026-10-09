@@ -69,10 +69,11 @@ describe('ContextMenuItem destructive variant (F5)', () => {
 })
 
 /**
- * Touch floor and reduced motion. Items grow to 44px on coarse pointers only
- * (`CHAT_ROW_MIN_H`), and the entry animation is skipped under reduced motion.
- * The important modifier is deliberate: `data-[state=open]:animate-in` outranks
- * a bare `motion-reduce:animate-none`.
+ * Touch floor and reduced motion. Items keep the shared 32px menu row and grow
+ * to 44px on coarse pointers only (`pointer-coarse:min-h-11`), and the entry
+ * animation is skipped under reduced motion. The important modifier is
+ * deliberate: `data-[state=open]:animate-in` outranks a bare
+ * `motion-reduce:animate-none`.
  */
 describe('ContextMenu touch floor and reduced motion', () => {
   function renderMenu(): void {
@@ -102,14 +103,14 @@ describe('ContextMenu touch floor and reduced motion', () => {
     fireEvent.contextMenu(screen.getByText('trigger'))
   }
 
-  it('gives every item row a 28px minimum that grows to 44px on coarse pointers', async () => {
+  it('keeps the shared 32px menu row and grows it to 44px on coarse pointers', async () => {
     renderMenu()
     await screen.findAllByRole('menuitem')
 
     // Plain, destructive, checkbox, radio and sub-trigger rows, plus a nested item.
     for (const label of ['Copy', 'Delete', 'Pinned', 'Sort by name', 'More', 'Nested']) {
       const classes = screen.getByText(label).className.split(/\s+/)
-      expect(classes, label).toContain('min-h-7')
+      expect(classes, label).toContain('min-h-8')
       expect(classes, label).toContain('pointer-coarse:min-h-11')
     }
   })

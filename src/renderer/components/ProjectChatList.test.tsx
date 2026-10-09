@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
 import { useAcpStore } from '@/stores/acp-store'
@@ -465,5 +465,84 @@ describe('ProjectChatList agent sequence (story 5 / CAP-8)', () => {
 
     expect(screen.getByText('Plain chat')).toBeInTheDocument()
     expect(screen.queryByLabelText(/^Conversation agents/)).not.toBeInTheDocument()
+  })
+})
+
+describe('ProjectChatList redesign: rail, active chat, live state', () => {
+  const initialAcp = useAcpStore.getState()
+  const initialWorkspace = useWorkspaceStore.getState()
+
+  afterEach(() => {
+    useAcpStore.setState({
+      sessions: initialAcp.sessions,
+      pendingPermissions: initialAcp.pendingPermissions,
+      pendingQuestions: initialAcp.pendingQuestions
+    })
+    useWorkspaceStore.setState({ root: initialWorkspace.root })
+  })
+
+  const rowFor = (title: string) =>
+    screen.getByText(title).closest('[data-active], .group') as HTMLElement
+
+  it('draws a 1px rail and marks the focused chat with a subtle fill + marker', () => {
+    useAcpStore.setState({
+      sessionIndex: [
+        entry({ id: 'c-active', title: 'Active chat', lastActivityAt: 2000 }),
+        entry({ id: 'c-idle', title: 'Idle chat', lastActivityAt: 1000 })
+      ]
+    })
+    useWorkspaceStore.setState({
+      activePaneId: 'pane-1',
+      root: {
+        type: 'leaf',
+        id: 'pane-1',
+        activeTabId: 'chat-c-active',
+        tabs: [
+          {
+            type: 'agent-chat',
+            id: 'chat-c-active',
+            sessionId: 'c-active',
+            mountKey: 'chat-c-active'
+          }
+        ]
+      }
+    })
+    const { container } = render(<ProjectChatList projectId="p1" />)
+
+    expect(container.querySelector('.w-px.bg-border')).not.toBeNull()
+    const active = rowFor('Active chat')
+    expect(active).toHaveAttribute('data-active', 'true')
+    expect(active).toHaveClass('bg-foreground/[0.05]')
+    expect(active).not.toHaveClass('keycap')
+    expect(screen.getAllByTestId('project-chat-active-marker')).toHaveLength(1)
+    expect(rowFor('Idle chat')).not.toHaveAttribute('data-active')
+  })
+
+  it('shows a running spinner for a live turn and "Needs you" for a pending permission', () => {
+    useAcpStore.setState({
+      sessionIndex: [
+        entry({ id: 'c-run', title: 'Running chat', lastActivityAt: 3000 }),
+        entry({ id: 'c-wait', title: 'Waiting chat', lastActivityAt: 2000 }),
+        entry({ id: 'c-done', title: 'Done chat', lastActivityAt: 1000 })
+      ],
+      sessions: { 'c-run': { activeTurn: true } } as never,
+      pendingPermissions: { r1: { sessionId: 'c-wait' } } as never,
+      pendingQuestions: {}
+    })
+    render(<ProjectChatList projectId="p1" />)
+
+    expect(screen.getByRole('status', { name: 'Running' })).toBeInTheDocument()
+    expect(screen.getAllByText('Needs you')).toHaveLength(1)
+    expect(screen.getByText('Waiting chat').parentElement?.textContent?.includes('Needs you')).toBe(
+      true
+    )
+  })
+
+  it('dims closed chats to 60%', () => {
+    useAcpStore.setState({
+      sessionIndex: [entry({ id: 'c-closed', title: 'Closed chat', status: 'closed' })]
+    })
+    render(<ProjectChatList projectId="p1" />)
+    expect(rowFor('Closed chat')).toHaveClass('opacity-60')
   })
 })
