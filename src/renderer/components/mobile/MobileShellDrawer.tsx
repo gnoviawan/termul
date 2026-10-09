@@ -40,7 +40,7 @@ import { MobileDrawerOpenSection } from './MobileDrawerOpenSection'
  */
 type CloseIntent = 'dismiss' | 'navigate' | 'handoff'
 
-/** Header-goal id on the shell `h1`. Absent until that goal lands: then the opener wins. */
+/** Id of the shell header's `h1`: where a navigation hands focus. Without it the opener wins. */
 const SHELL_TITLE_ID = 'mobile-shell-title'
 
 interface MobileShellDrawerProps {

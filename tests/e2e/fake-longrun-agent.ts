@@ -370,10 +370,9 @@ function handle(msg: JsonRpcMessage): void {
   // `error` but no `method`. The only outbound request this agent makes is
   // `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
   // method switch so it never falls into the `default` reply arm (replying
-  // to a response would be protocol noise).
+  // to a response would be protocol noise). The host's reply to a permission
+  // request this agent sent (`[PERMISSION]` marker) needs no answer either.
   if (method === undefined) {
-    // The host's reply to a permission request this agent sent (the
-    // `[PERMISSION]` marker flow): nothing to answer.
     if (id !== undefined && permissionRequestIds.delete(String(id))) return
     resolveElicitation(msg)
     return

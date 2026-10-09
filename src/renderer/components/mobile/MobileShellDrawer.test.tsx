@@ -125,7 +125,7 @@ function Harness({
   ...props
 }: Partial<DrawerProps> & {
   controlsRef?: MutableRefObject<HarnessControls | null>
-  /** Render the header-goal `#mobile-shell-title` focus target. */
+  /** Render the shell header's `#mobile-shell-title` focus target. */
   withTitle?: boolean
   /** Whether hand-off rows open a dialog that takes focus. */
   overlays?: boolean

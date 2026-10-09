@@ -32,7 +32,7 @@ test.use({
 
 test.setTimeout(120_000)
 
-/** The id the header goal will give the shell `h1`; absent today (the opener wins then). */
+/** The id of the shell header's `h1`: where a navigation hands focus (else the opener). */
 const SHELL_TITLE_ID = 'mobile-shell-title'
 
 function escapeRegExp(text: string): string {
@@ -251,7 +251,7 @@ async function expectTouchTarget(locator: Locator, label: string): Promise<void>
 
 /**
  * After a navigation close focus goes to the destination title when the shell
- * has one (`#mobile-shell-title`, the header goal), else to the opener.
+ * has one (`#mobile-shell-title`, the header `h1`), else to the opener.
  */
 async function expectNavigationFocus(page: Page): Promise<void> {
   await expect
