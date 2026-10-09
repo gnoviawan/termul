@@ -434,6 +434,19 @@ describe('FileExplorer', () => {
     })
   })
 
+  it('selects a folder when its row is clicked', () => {
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([
+      ['/project', [{ path: '/project/src', name: 'src', type: 'directory' }]]
+    ])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByText('src'))
+
+    expect(mockSelectPath).toHaveBeenCalledWith('/project/src')
+    expect(mockToggleDirectory).toHaveBeenCalledWith('/project/src')
+  })
+
   it('renders tree nodes once root entries are available', () => {
     mockExplorerState.rootPath = '/project'
     mockExplorerState.directoryContents = new Map([
@@ -743,46 +756,42 @@ describe('FileExplorer', () => {
     expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument()
   })
 
-  it('cancels in-flight filename and content streams on unmount with the active searchId', () => {
-    // The unmount cleanup must fire the cancel IPC for both the filename
-    // and the content stream, scoped to the searchId that was active at
-    // effect setup time (not at cleanup time, in case the store id
-    // changed via a different code path between setup and unmount).
-    mockExplorerState.rootPath = '/project'
-    mockExplorerState.directoryContents = new Map([['/project', []]])
-    mockExplorerState.searchQuery = 'term'
+  it('cancels the search this explorer started, not a newer store id', () => {
+    // The unmount cleanup cancels the id this hook issued. A later store id
+    // belongs to another search and must stay running.
+    vi.useFakeTimers()
+    try {
+      mockExplorerState.rootPath = '/project'
+      mockExplorerState.directoryContents = new Map([['/project', []]])
+      mockExplorerState.searchQuery = 'term'
 
-    // Mock getState to return searchRequestId = 5
-    vi.mocked(useFileExplorerStore.getState).mockReturnValue({
-      searchRequestId: 5,
-      expandedDirs: new Set<string>(),
-      selectedPaths: new Set<string>(),
-      loadingDirs: new Set<string>(),
-      lastClickedPath: null,
-      clearSelection: vi.fn()
-    } as unknown as FileExplorerState)
+      const { unmount } = render(<FileExplorer />)
+      act(() => {
+        vi.advanceTimersByTime(200)
+      })
+      expect(mockSearchInRoot).toHaveBeenCalledWith('term', 1)
 
-    const { unmount } = render(<FileExplorer />)
-    mockSearchFileNamesStreamCancel.mockClear()
-    mockSearchContentStreamCancel.mockClear()
+      vi.mocked(useFileExplorerStore.getState).mockReturnValue({
+        searchRequestId: 99,
+        expandedDirs: new Set<string>(),
+        selectedPaths: new Set<string>(),
+        loadingDirs: new Set<string>(),
+        lastClickedPath: null,
+        clearSelection: vi.fn()
+      } as unknown as FileExplorerState)
+      mockSearchFileNamesStreamCancel.mockClear()
+      mockSearchContentStreamCancel.mockClear()
 
-    // The id was captured at setup; even if the store value changes before
-    // unmount, the cleanup must still use the captured id.
-    vi.mocked(useFileExplorerStore.getState).mockReturnValue({
-      searchRequestId: 99, // would-be new id, but cleanup should ignore
-      expandedDirs: new Set<string>(),
-      selectedPaths: new Set<string>(),
-      loadingDirs: new Set<string>(),
-      lastClickedPath: null,
-      clearSelection: vi.fn()
-    } as unknown as FileExplorerState)
+      unmount()
 
-    unmount()
-
-    expect(mockSearchFileNamesStreamCancel).toHaveBeenCalledTimes(1)
-    expect(mockSearchFileNamesStreamCancel).toHaveBeenCalledWith('search-5')
-    expect(mockSearchContentStreamCancel).toHaveBeenCalledTimes(1)
-    expect(mockSearchContentStreamCancel).toHaveBeenCalledWith('search-5')
+      expect(mockSearchFileNamesStreamCancel).toHaveBeenCalledTimes(1)
+      expect(mockSearchFileNamesStreamCancel).toHaveBeenCalledWith('search-1')
+      expect(mockSearchContentStreamCancel).toHaveBeenCalledTimes(1)
+      expect(mockSearchContentStreamCancel).toHaveBeenCalledWith('search-1')
+      expect(mockSearchFileNamesStreamCancel).not.toHaveBeenCalledWith('search-99')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not call cancel on unmount when no search is in flight', () => {

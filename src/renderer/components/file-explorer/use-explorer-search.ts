@@ -2,11 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { filesystemApi } from '@/lib/api'
 import { useEditorStore } from '@/stores/editor-store'
-import {
-  useFileExplorer,
-  useFileExplorerActions,
-  useFileExplorerStore
-} from '@/stores/file-explorer-store'
+import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { ExplorerSearchResultsProps } from './explorer-search'
 
@@ -88,17 +84,15 @@ export function useExplorerSearch(rootPath: string | null): ExplorerSearch {
     }
   }, [rootPath, query, searchInRoot, trimmedQuery.length])
 
-  // Cancel any in-flight filename/content stream when the explorer unmounts.
-  // The store is a module-level singleton and the file explorer can be torn
-  // down while a stream is still mid-walk; without this cleanup the rg child
-  // process outlives the component and the next mount sees stale events.
-  //
-  // We capture the `searchRequestId` at effect setup time (not at cleanup
-  // time) so that a new search started via a different code path between
-  // setup and cleanup does not get cancelled by mistake.
+  // Cancel the stream this explorer started when it unmounts. The store is a
+  // module-level singleton, so a search can still be walking when the panel
+  // goes away. This effect runs once: an id captured at setup is still 0
+  // after the user searches, and the rg child keeps running. The ref is the
+  // id this hook issued. A newer id in the store belongs to another search
+  // and is left alone.
   useEffect(() => {
-    const id = useFileExplorerStore.getState().searchRequestId
     return () => {
+      const id = searchRequestIdRef.current
       if (id > 0) {
         const sid = `search-${id}`
         // Surface silent IPC failures so a stuck rg process is at least

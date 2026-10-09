@@ -222,12 +222,13 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       } else if (e.shiftKey && lastClickedPath) {
         selectPathRange(lastClickedPath, entry.path)
       } else if (entry.type === 'directory') {
+        selectPath(entry.path)
         toggleDirectory(entry.path)
       } else {
         void openFileEntry(entry.path)
       }
     },
-    [togglePathSelection, selectPathRange, toggleDirectory, openFileEntry]
+    [togglePathSelection, selectPathRange, selectPath, toggleDirectory, openFileEntry]
   )
 
   const { startCreateIn, startRename, requestDelete } = flows
