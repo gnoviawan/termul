@@ -51,6 +51,51 @@ describe('prepareServerArtifacts', () => {
     )
   })
 
+  test('emits the linux-aarch64-server fragment for the arm64 asset', async () => {
+    const dir = await fixtureDir()
+    const sigPath = join(dir, 'termul-server-linux-aarch64.sig')
+    await writeFile(sigPath, 'untrusted comment: ...\nRWSU...\ntrusted comment: ...\nfoo==\n')
+
+    const outPath = join(dir, 'server-manifest.json')
+    const manifest = await prepareServerArtifacts({
+      binaryName: 'termul-server-linux-aarch64',
+      platformKey: 'linux-aarch64-server',
+      signaturePath: sigPath,
+      tag: 'nightly',
+      version: '0.0.0-nightly.20260807.abc1234',
+      outputPath: outPath
+    })
+
+    expect(manifest.assetNames).toEqual([
+      'termul-server-linux-aarch64',
+      'termul-server-linux-aarch64.sig'
+    ])
+    expect(Object.keys(manifest.platforms)).toEqual(['linux-aarch64-server'])
+    expect(manifest.platforms['linux-aarch64-server'].url).toBe(
+      'https://github.com/gnoviawan/termul/releases/download/nightly/termul-server-linux-aarch64'
+    )
+    expect(JSON.parse(await readFile(outPath, 'utf8'))).toEqual(manifest)
+  })
+
+  test('rejects a platform key paired with the other architecture asset name', async () => {
+    const dir = await fixtureDir()
+    const sigPath = join(dir, 'termul-server.sig')
+    await writeFile(sigPath, 'RWSU...')
+
+    await expect(
+      prepareServerArtifacts({
+        binaryName: 'termul-server',
+        platformKey: 'linux-aarch64-server',
+        signaturePath: sigPath,
+        tag: 'nightly',
+        version: '0.0.0-nightly.1',
+        outputPath: join(dir, 'out.json')
+      })
+    ).rejects.toThrow(
+      'platform-key linux-aarch64-server requires binary-name termul-server-linux-aarch64'
+    )
+  })
+
   test('rejects an empty signature file', async () => {
     const dir = await fixtureDir()
     const sigPath = join(dir, 'empty.sig')

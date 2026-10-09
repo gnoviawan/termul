@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
-// Produces the per-channel `linux-x86_64-server` platform-manifest fragment
-// consumed by `merge-updater-manifests.mjs`. The standalone `termul-server`
-// binary is a plain `cargo build` artifact (not a Tauri bundle), so it is not
-// collected by `prepare-platform-artifacts.mjs` (which reads tauri-action's
-// desktop bundle output). This helper reads the binary's minisign signature
+// Produces the per-channel server platform-manifest fragment consumed by
+// `merge-updater-manifests.mjs`. It defaults to the x64 asset (`termul-server`,
+// key `linux-x86_64-server`); the arm64 build passes
+// `--binary-name termul-server-linux-aarch64 --platform-key linux-aarch64-server`.
+// The standalone `termul-server` binary is a plain `cargo build` artifact (not
+// a Tauri bundle), so it is not collected by `prepare-platform-artifacts.mjs`
+// (which reads tauri-action's desktop bundle output). This helper reads the
+// binary's minisign signature
 // (produced via `tauri signer sign`) and emits a manifest with the same shape
 // so the central merge can validate + merge it alongside the desktop entries.
 
@@ -14,6 +17,13 @@ import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
 const SERVER_PLATFORM_KEY = 'linux-x86_64-server'
+
+// Known server platform keys and the release asset each one must point at. A
+// mismatched pair would send one architecture's updater to the other's binary.
+const SERVER_ASSET_BY_PLATFORM_KEY = {
+  'linux-x86_64-server': 'termul-server',
+  'linux-aarch64-server': 'termul-server-linux-aarch64'
+}
 
 function fail(message) {
   throw new Error(message)
@@ -51,6 +61,11 @@ export async function prepareServerArtifacts({
   assertNonEmptyString(tag, 'tag')
   assertNonEmptyString(version, 'version')
   assertNonEmptyString(outputPath, 'output')
+  assertNonEmptyString(platformKey, 'platform-key')
+  const expectedAsset = SERVER_ASSET_BY_PLATFORM_KEY[platformKey]
+  if (expectedAsset !== undefined && expectedAsset !== binaryName) {
+    fail(`platform-key ${platformKey} requires binary-name ${expectedAsset}, got ${binaryName}`)
+  }
 
   const signature = (await readFile(signaturePath, 'utf8')).trim()
   assertNonEmptyString(signature, 'signature content')
