@@ -363,7 +363,17 @@ export function ProjectSidebar({
             <ContextMenuSubTrigger>
               <Plus className="mr-2 h-4 w-4" /> Add Project
             </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="w-48">
+            <ContextMenuSubContent
+              data-testid="add-project-submenu"
+              className="w-48 overscroll-contain"
+              collisionPadding={8}
+              // Radix writes this height on the menu wrapper. A long project
+              // list scrolls inside the window.
+              style={{
+                maxHeight: 'var(--radix-popper-available-height, 70vh)',
+                overflowY: 'auto'
+              }}
+            >
               {activeProjects.map((p) => {
                 const isProjectInGroup = currentGroup?.projectIds.includes(p.id) ?? false
                 return (

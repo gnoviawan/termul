@@ -182,10 +182,24 @@ vi.mock('@/components/ui/context-menu', async () => {
       </div>
     )
   }
-  const ContextMenuSubContent = ({ children }: { children: React.ReactNode }) => {
+  const ContextMenuSubContent = ({
+    children,
+    className,
+    style,
+    'data-testid': testId
+  }: {
+    children: React.ReactNode
+    className?: string
+    style?: React.CSSProperties
+    'data-testid'?: string
+  }) => {
     const { subOpen } = React.useContext(SubCtx)
     if (!subOpen) return null
-    return <div>{children}</div>
+    return (
+      <div className={className} style={style} data-testid={testId}>
+        {children}
+      </div>
+    )
   }
   const ContextMenuRadioGroup = ({
     children,
@@ -505,6 +519,31 @@ describe('ProjectSidebar context menu open regression (F1/F2)', () => {
     expect(screen.getByText('Rename Group')).toBeInTheDocument()
     expect(screen.getByText('Change Color')).toBeInTheDocument()
     expect(screen.getByText('Delete Group (Keep Projects)')).toBeInTheDocument()
+  })
+
+  it('scrolls the Add Project submenu so projects below the window stay reachable', () => {
+    const projects: Project[] = Array.from({ length: 24 }, (_, index) => ({
+      id: String(index + 1),
+      name: `Project ${index + 1}`,
+      color: 'blue',
+      gitBranch: 'main'
+    }))
+    useProjectStore.setState({
+      groups: [{ id: 'group-1', name: 'My Folder', projectIds: ['1'], isCollapsed: false }]
+    })
+    renderWithRouter({ projects })
+
+    fireEvent.contextMenu(screen.getByText('My Folder'))
+    fireEvent.mouseEnter(screen.getByText('Add Project').closest('div')!)
+
+    const submenu = screen.getByTestId('add-project-submenu')
+    expect(submenu.style.maxHeight).toBe('var(--radix-popper-available-height, 70vh)')
+    expect(submenu.style.overflowY).toBe('auto')
+    expect(submenu).toHaveClass('overscroll-contain')
+
+    const lastProject = screen.getByRole('menuitemcheckbox', { name: 'Project 24' })
+    expect(submenu).toContainElement(lastProject)
+    expect(submenu).toContainElement(screen.getByText('Import Project...'))
   })
 
   it('archived project menu opens on right-click', async () => {
