@@ -72,6 +72,14 @@
  *   agent-to-client request. When the client answers, the agent streams one
  *   chunk `[ANSWERED <kind> <outcome>]` (outcome: the chosen optionId, the
  *   chosen values, the elicitation action, or `cancelled`).
+ *
+ * Mobile approval edge states suite (additive): every `[ASK:<kind>]` accepts
+ * an optional delay, `[ASK:<kind>:<seconds>]`, so the request can reach a chat
+ * that is no longer on screen. `[ASK:elicitation-boolean]` sends a form with a
+ * REQUIRED boolean `confirm` and an optional boolean `notify`; its answer
+ * chunk lists the content the client sent, as
+ * `[ANSWERED elicitation-boolean accept confirm=false]` (`notify` is absent
+ * when the client left it out).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -321,12 +329,21 @@ function reportUsage(sessionId: string): void {
   update(70_000, { cost: { amount: 0.0421, currency: 'USD' } })
 }
 
-type AskKind = 'permission' | 'permission-none' | 'question' | 'elicitation'
+type AskKind = 'permission' | 'permission-none' | 'question' | 'elicitation' | 'elicitation-boolean'
+
+const ASK_MARKER =
+  /\[ASK:(permission-none|permission|question|elicitation-boolean|elicitation)(?::(\d+(?:\.\d+)?))?\]/
 
 /** The agent-to-client request an `[ASK:<kind>]` marker asks for, else null. */
 function askKind(prompt: JsonValue | undefined): AskKind | null {
-  const match = /\[ASK:(permission-none|permission|question|elicitation)\]/.exec(promptText(prompt))
+  const match = ASK_MARKER.exec(promptText(prompt))
   return match ? (match[1] as AskKind) : null
+}
+
+/** Seconds to wait before sending the `[ASK:<kind>:<seconds>]` request (0 without a delay). */
+function askDelaySeconds(prompt: JsonValue | undefined): number {
+  const match = ASK_MARKER.exec(promptText(prompt))
+  return match?.[2] ? Number(match[2]) : 0
 }
 
 /** Outstanding agent-to-client requests, keyed by the id this agent minted. */
@@ -370,6 +387,19 @@ function ask(sessionId: string, kind: AskKind): void {
         ]
       })
       break
+    case 'elicitation-boolean':
+      send('elicitation/create', {
+        mode: 'form',
+        sessionId,
+        message: 'Confirm the deployment',
+        // A required boolean and an optional one, both left Off by default.
+        requestedSchema: {
+          type: 'object',
+          properties: { confirm: { type: 'boolean' }, notify: { type: 'boolean' } },
+          required: ['confirm']
+        }
+      })
+      break
     case 'elicitation':
       send('elicitation/create', {
         mode: 'form',
@@ -404,7 +434,11 @@ function onAskAnswered(
   let summary = 'error'
   if (msg.error === undefined) {
     if (pending.kind === 'elicitation') summary = String(result.action ?? 'unknown')
-    else if (pending.kind === 'question') {
+    else if (pending.kind === 'elicitation-boolean') {
+      const content = (result.content ?? {}) as Record<string, JsonValue>
+      const sent = Object.entries(content).map(([name, value]) => `${name}=${String(value)}`)
+      summary = [String(result.action ?? 'unknown'), ...sent].join(' ')
+    } else if (pending.kind === 'question') {
       summary = Array.isArray(result.values) ? result.values.join(',') : 'cancelled'
     } else {
       summary = outcome?.outcome === 'selected' ? String(outcome.optionId) : 'cancelled'
@@ -718,7 +752,17 @@ function handle(msg: JsonRpcMessage): void {
       }
       if (promptText(p.prompt).includes('[DOCK]')) pushDock(sessionId)
       const asked = askKind(p.prompt)
-      if (asked) ask(sessionId, asked)
+      if (asked) {
+        const askDelaySec = askDelaySeconds(p.prompt)
+        if (askDelaySec === 0) ask(sessionId, asked)
+        else {
+          // A delayed request belongs to this turn: a cancel or the turn
+          // ending first must not leave a stale request for the next one.
+          setTimeout(() => {
+            if (inFlightBySession.get(sessionId)?.id === id) ask(sessionId, asked)
+          }, askDelaySec * 1000)
+        }
+      }
       break
     }
     case 'cancel':

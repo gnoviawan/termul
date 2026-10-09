@@ -116,7 +116,7 @@ export function CreateSnapshotModal({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Pre-deployment state"
-                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
+                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
               </div>
 
@@ -129,7 +129,7 @@ export function CreateSnapshotModal({
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Describe the state of your workspace..."
                   rows={3}
-                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground resize-none"
+                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground resize-none"
                 />
               </div>
             </div>

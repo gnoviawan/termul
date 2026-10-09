@@ -6,18 +6,20 @@ export interface AgentChatAttentionInput {
   agentStatus: string | undefined
   pendingPermission: boolean
   pendingQuestion: boolean
+  pendingElicitation: boolean
   /** An entrance warm-up is not an Agent chat. */
   ephemeral: boolean
 }
 
 /**
- * A permission, a question, or a closed Session after the Agent process
- * stopped. A finished turn, including a turn that ended in an error while the
- * process is still the chat's process, is not Attention.
+ * A permission, a question, an elicitation, or a closed Session after the
+ * Agent process stopped. A finished turn, including a turn that ended in an
+ * error while the process is still the chat's process, is not Attention. An
+ * unanswered elicitation blocks the agent exactly as a question does.
  */
 export function agentChatNeedsAttention(input: AgentChatAttentionInput): boolean {
   if (input.ephemeral || input.projectId.length === 0) return false
-  if (input.pendingPermission || input.pendingQuestion) return true
+  if (input.pendingPermission || input.pendingQuestion || input.pendingElicitation) return true
   if (input.sessionStatus === 'closed') return true
   if (input.agentStatus === 'disconnected') return true
   return false

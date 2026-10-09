@@ -43,6 +43,12 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  forgetTrackedPermission,
+  forgetTrackedPermissionsForSession,
+  retrackPermission,
+  retrackStillPending
+} from '../permission-denial'
+import {
   acceptedServerPromptTurnIds,
   commitMessageCollectors,
   inFlightPromotions,
@@ -554,7 +560,15 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
     if (!session?.activeTurn) return
-    await acpApi.cancelPrompt(session.agentId, sessionId)
+    // Stop is a user action: a permission it abandons is not a disconnect denial.
+    const forgotten = forgetTrackedPermissionsForSession(sessionId)
+    try {
+      await acpApi.cancelPrompt(session.agentId, sessionId)
+    } catch (err) {
+      // The cancel never landed, so the permission is still the server's to deny.
+      retrackStillPending(forgotten, get().pendingPermissions)
+      throw err
+    }
     // turn cleared by _onPromptComplete (cancelled) or by sendPrompt's resolution
   },
 
@@ -586,7 +600,13 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
     try {
       if (sessionTurnBusy(session)) {
-        await acpApi.cancelPrompt(session.agentId, sessionId)
+        const forgotten = forgetTrackedPermissionsForSession(sessionId)
+        try {
+          await acpApi.cancelPrompt(session.agentId, sessionId)
+        } catch (err) {
+          retrackStillPending(forgotten, get().pendingPermissions)
+          throw err
+        }
         await waitForTurnClear(sessionId, get, useAcpStore.subscribe)
       }
       await runPromptTurn(
@@ -732,6 +752,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   respondPermission: async (requestId, optionId) => {
     const pending = get().pendingPermissions[requestId]
     if (!pending) return
+    // The user is answering: leaving the store is not a disconnect denial.
+    const tracked = forgetTrackedPermission(requestId)
     // Optimistically remove so a rapid double-click can't fire a second backend
     // call for the same request (which would error as 'unknown request').
     set((s) => {
@@ -742,8 +764,10 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.respondPermission(pending.agentId, requestId, optionId)
     } catch (err) {
-      // Restore the entry so the user can retry.
+      // Restore the entry so the user can retry, then track it again (after the
+      // restore, so the restore is not read as the request vanishing).
       set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
+      if (tracked) retrackPermission(requestId, tracked)
       throw err
     }
   },
@@ -791,7 +815,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
             // toolCall verbatim — bound it at ingest like the transcript so a
             // giant write-file diff cannot park unclamped in the modal queue.
             // A call dropped as un-storable (`null`, e.g. an oversized
-            // toolCallId) still leaves the request answerable — `toolTitle`
+            // toolCallId) still leaves the request answerable — `permissionToolTitle`
             // renders a fallback for the missing card fields.
             toolCall: clampLiveToolCallFields(e.sessionId, e.toolCall) ?? null
           }

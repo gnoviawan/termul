@@ -239,7 +239,7 @@ export function ThemePicker(): React.JSX.Element | null {
                 setFocusIndex(0)
               }}
               placeholder="Search themes…"
-              className="w-full rounded-md border border-border bg-secondary/50 py-1.5 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/40"
+              className="w-full rounded-md border border-border bg-secondary/50 py-1.5 pl-8 pr-3 text-sm pointer-coarse:text-base text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/40"
               aria-label="Search themes"
             />
           </div>

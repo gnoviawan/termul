@@ -182,7 +182,7 @@ export function StashDialog({
             <label className="text-muted-foreground">Message (optional)</label>
             <input
               type="text"
-              className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+              className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs pointer-coarse:text-base"
               placeholder="WIP on current branch..."
               value={message}
               onChange={(e) => onMessageChange(e.target.value)}

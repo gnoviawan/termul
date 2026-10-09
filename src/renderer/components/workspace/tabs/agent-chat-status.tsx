@@ -15,7 +15,10 @@ import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
  */
 export interface AgentChatStatusSignals {
   session: AcpSession | undefined
-  /** Permission, question, or a closed/disconnected chat (`agentChatNeedsAttention`). */
+  /**
+   * Permission, question, elicitation, or a closed/disconnected chat
+   * (`agentChatNeedsAttention`).
+   */
   needsAttention: boolean
   /** A close is in flight (`useAgentChatLifetimeStore.closingSessionIds`). */
   closing: boolean
@@ -41,6 +44,11 @@ export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSig
   const pendingQuestion = useAcpStore((s) =>
     Object.values(s.pendingQuestions ?? {}).some((question) => question.sessionId === sessionId)
   )
+  const pendingElicitation = useAcpStore((s) =>
+    Object.values(s.pendingElicitations ?? {}).some(
+      (elicitation) => elicitation.sessionId === sessionId
+    )
+  )
   const closing = useAgentChatLifetimeStore((s) => Boolean(s.closingSessionIds[sessionId]))
   const ephemeral = session ? isEphemeralAcpSession(session.id) : false
   const needsAttention = session
@@ -50,6 +58,7 @@ export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSig
         agentStatus,
         pendingPermission,
         pendingQuestion,
+        pendingElicitation,
         ephemeral
       })
     : false

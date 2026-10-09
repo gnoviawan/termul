@@ -81,6 +81,7 @@ function acpSlicesUnchanged(next: AcpState, prev: AcpState): boolean {
     next.pendingPermissions === prev.pendingPermissions &&
     next.pendingQuestions === prev.pendingQuestions &&
     next.pendingElicitations === prev.pendingElicitations &&
+    next.permissionDenialNotices === prev.permissionDenialNotices &&
     next.switchingProjectId === prev.switchingProjectId &&
     next.failedProjectSwitchId === prev.failedProjectSwitchId
   )

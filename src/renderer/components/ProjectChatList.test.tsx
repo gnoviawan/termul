@@ -476,7 +476,8 @@ describe('ProjectChatList redesign: rail, active chat, live state', () => {
     useAcpStore.setState({
       sessions: initialAcp.sessions,
       pendingPermissions: initialAcp.pendingPermissions,
-      pendingQuestions: initialAcp.pendingQuestions
+      pendingQuestions: initialAcp.pendingQuestions,
+      pendingElicitations: initialAcp.pendingElicitations
     })
     useWorkspaceStore.setState({ root: initialWorkspace.root })
   })
@@ -535,6 +536,27 @@ describe('ProjectChatList redesign: rail, active chat, live state', () => {
     expect(screen.getAllByText('Needs you')).toHaveLength(1)
     expect(screen.getByText('Waiting chat').parentElement?.textContent?.includes('Needs you')).toBe(
       true
+    )
+  })
+
+  it('shows "Needs you" for a pending elicitation, as the tab strip does', () => {
+    useAcpStore.setState({
+      sessionIndex: [
+        entry({ id: 'c-form', title: 'Form chat', lastActivityAt: 2000 }),
+        entry({ id: 'c-done', title: 'Done chat', lastActivityAt: 1000 })
+      ],
+      pendingPermissions: {},
+      pendingQuestions: {},
+      pendingElicitations: { e1: { sessionId: 'c-form' } } as never
+    })
+    render(<ProjectChatList projectId="p1" />)
+
+    expect(screen.getAllByText('Needs you')).toHaveLength(1)
+    expect(screen.getByText('Form chat').parentElement?.textContent?.includes('Needs you')).toBe(
+      true
+    )
+    expect(screen.getByText('Done chat').parentElement?.textContent?.includes('Needs you')).toBe(
+      false
     )
   })
 

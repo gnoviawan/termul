@@ -20,7 +20,7 @@ export const PANEL_HEADER_CLASS = 'flex h-10 shrink-0 items-center justify-betwe
 
 /** Panel text field: card fill, hairline border, neutral focus border. */
 export const PANEL_FIELD_CLASS =
-  'rounded-lg border border-border bg-card text-xs text-foreground outline-none transition-colors duration-150 ease-out placeholder:text-muted-foreground focus:border-muted-foreground/60'
+  'rounded-lg border border-border bg-card text-xs pointer-coarse:text-base text-foreground outline-none transition-colors duration-150 ease-out placeholder:text-muted-foreground focus:border-muted-foreground/60'
 
 /** 13px search glyph inside a `relative` wrapper around a panel field. */
 export const PANEL_FIELD_ICON_CLASS =
