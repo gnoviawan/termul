@@ -58,6 +58,15 @@ describe('CommandHistoryModal', () => {
     expect(screen.getByText('Command History')).toBeInTheDocument()
   })
 
+  it('keeps the search field at 16px on a coarse pointer so iOS does not zoom', () => {
+    render(<CommandHistoryModal {...defaultProps} />)
+
+    expect(screen.getByPlaceholderText('Search commands...')).toHaveClass(
+      'text-sm',
+      'pointer-coarse:text-base'
+    )
+  })
+
   it('should not render when closed', () => {
     render(<CommandHistoryModal {...defaultProps} isOpen={false} />)
 

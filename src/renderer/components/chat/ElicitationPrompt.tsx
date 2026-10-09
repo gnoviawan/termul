@@ -300,7 +300,9 @@ export function ElicitationPrompt({
                               ref={registerField}
                               className={cn(
                                 'w-full rounded-md border border-border bg-background px-2 py-1',
-                                isMobileShell ? 'min-h-11 text-base' : 'text-sm'
+                                isMobileShell
+                                  ? 'min-h-11 text-base'
+                                  : 'text-sm pointer-coarse:text-base'
                               )}
                               value={value}
                               onChange={(event) => setValue(field.name, event.target.value)}

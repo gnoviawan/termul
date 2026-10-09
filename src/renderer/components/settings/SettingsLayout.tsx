@@ -191,7 +191,7 @@ export function SettingsLayout({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search settings..."
               aria-label="Search settings"
-              className="w-full rounded-md border border-border bg-secondary/50 py-1.5 pl-8 pr-8 text-sm text-foreground outline-none transition-shadow focus:ring-2 focus:ring-primary focus:border-transparent"
+              className="w-full rounded-md border border-border bg-secondary/50 py-1.5 pl-8 pr-8 text-sm pointer-coarse:text-base text-foreground outline-none transition-shadow focus:ring-2 focus:ring-primary focus:border-transparent"
             />
             {query && (
               <button

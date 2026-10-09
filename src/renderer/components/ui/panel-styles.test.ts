@@ -44,6 +44,15 @@ describe('panel-styles', () => {
     )
   })
 
+  it('panel field stays 16px on a coarse pointer, including after a caller text-sm', () => {
+    expect(classes(PANEL_FIELD_CLASS)).toEqual(
+      expect.arrayContaining(['text-xs', 'pointer-coarse:text-base'])
+    )
+    const merged = classes(cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm'))
+    expect(merged).toEqual(expect.arrayContaining(['text-sm', 'pointer-coarse:text-base']))
+    expect(merged).not.toContain('text-xs')
+  })
+
   it('segmented track uses the card fill with a 2px inset', () => {
     expect(classes(SEGMENTED_TRACK_CLASS)).toEqual(
       expect.arrayContaining(['bg-card', 'border-border', 'p-0.5'])
