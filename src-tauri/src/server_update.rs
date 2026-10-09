@@ -12,7 +12,8 @@
 //! 2. Compare the manifest `version` against `CARGO_PKG_VERSION` with full
 //!    SemVer 2.0 prerelease precedence (`0.5.0` > `0.5.0-rc.1` >
 //!    `0.0.0-nightly.*`).
-//! 3. Download the `linux-x86_64-server` binary + its minisign `.sig`.
+//! 3. Download the binary for this build's arch (`linux-x86_64-server` or
+//!    `linux-aarch64-server`, see `SERVER_PLATFORM_KEY`) + its minisign `.sig`.
 //! 4. **Verify the signature before any filesystem mutation** — on failure the
 //!    running binary is untouched (no brick).
 //! 5. Atomic swap: write `<bin>.new` → `fsync` → rename current → `<bin>.old`
@@ -74,9 +75,16 @@ impl UpdateChannel {
     }
 }
 
-/// The manifest platform key the server downloads. `linux-x86_64-server` is
-/// additive to the desktop keys (`windows-x86_64`, `darwin-*`, …) so one
-/// manifest covers both targets.
+/// The manifest platform key the server downloads, picked by the arch this
+/// binary was built for so each arch self-updates to its own binary. The
+/// `linux-*-server` keys are additive to the desktop keys (`windows-x86_64`,
+/// `darwin-*`, …) so one manifest covers every target.
+#[cfg(target_arch = "aarch64")]
+pub const SERVER_PLATFORM_KEY: &str = "linux-aarch64-server";
+
+/// See the aarch64 variant above; every non-aarch64 build keeps the original
+/// x86_64 key so deployed updaters are unaffected.
+#[cfg(not(target_arch = "aarch64"))]
 pub const SERVER_PLATFORM_KEY: &str = "linux-x86_64-server";
 
 /// Per-channel updater manifest (Tauri updater format).
@@ -585,7 +593,7 @@ pub async fn check_and_apply_update(opts: &UpdateOptions) -> Result<UpdateOutcom
 /// and re-exec the OLD binary. Exec the install path directly — it now points
 /// at the freshly-promoted new binary.
 ///
-/// Only meaningful on Unix (the server target is linux-x64); returns an error
+/// Only meaningful on Unix (the server targets are linux x64 and arm64); returns an error
 /// on other platforms without touching the process.
 pub fn restart_binary(binary_path: &Path) -> Result<()> {
     #[cfg(unix)]
@@ -607,7 +615,7 @@ pub fn restart_binary(binary_path: &Path) -> Result<()> {
 
     #[cfg(not(unix))]
     {
-        // The server target is linux-x64; reexec is unsupported elsewhere so the
+        // The server targets are linux x64/arm64; reexec is unsupported elsewhere so the
         // build still compiles on Windows/macOS dev hosts + under `cargo test`.
         let _ = binary_path;
         Err(anyhow!("self-reexec is not supported on this platform"))

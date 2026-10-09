@@ -181,6 +181,23 @@ fn validate_binary_url_accepts_github_origin() {
 }
 
 #[test]
+fn validate_binary_url_accepts_aarch64_asset() {
+    validate_binary_url(
+        "https://github.com/gnoviawan/termul/releases/download/nightly/termul-server-linux-aarch64",
+    )
+    .expect("aarch64 asset on the termul github origin accepted");
+}
+
+#[test]
+fn server_platform_key_matches_target_arch() {
+    if cfg!(target_arch = "aarch64") {
+        assert_eq!(SERVER_PLATFORM_KEY, "linux-aarch64-server");
+    } else {
+        assert_eq!(SERVER_PLATFORM_KEY, "linux-x86_64-server");
+    }
+}
+
+#[test]
 fn validate_binary_url_rejects_foreign_origin() {
     let err = validate_binary_url("https://example.com/termul-server")
         .expect_err("foreign origin rejected");

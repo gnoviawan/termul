@@ -190,6 +190,89 @@ describe('mergeUpdaterManifests', () => {
     ).rejects.toThrow('Missing required updater platforms: linux-x86_64-server')
   })
 
+  test('requires the linux-aarch64-server platform key covering the arm64 server target', async () => {
+    const dir = await fixtureDir()
+    const platforms = completePlatforms()
+    delete platforms['linux-aarch64-server']
+    const input = join(dir, 'manifest.json')
+    await writeManifest(input, platforms, version, completeAssetNames())
+
+    await expect(
+      mergeUpdaterManifests({
+        inputPaths: [input],
+        outputPath: join(dir, 'latest.json'),
+        version,
+        notes: 'notes',
+        pubDate: '2026-01-01T00:00:00.000Z'
+      })
+    ).rejects.toThrow('Missing required updater platforms: linux-aarch64-server')
+  })
+
+  test('merges separate x64 and arm64 server fragments with their real asset names', async () => {
+    const dir = await fixtureDir()
+    const serverKeys = ['linux-x86_64-server', 'linux-aarch64-server']
+    const serverAssets: Record<string, string> = {
+      'linux-x86_64-server': 'termul-server',
+      'linux-aarch64-server': 'termul-server-linux-aarch64'
+    }
+    const releaseUrl = (name: string) =>
+      `https://github.com/gnoviawan/termul/releases/download/nightly/${name}`
+    const nightlyVersion = '0.0.0-nightly.20260807.abc1234'
+
+    const desktopKeys = requiredPlatformKeys.filter((key: string) => !serverKeys.includes(key))
+    const desktopInput = join(dir, 'desktop.json')
+    await writeManifest(
+      desktopInput,
+      Object.fromEntries(
+        desktopKeys.map((key: string) => [
+          key,
+          { url: releaseUrl(assetName(key)), signature: `signature-${key}` }
+        ])
+      ),
+      nightlyVersion,
+      desktopKeys.flatMap((key: string) => [assetName(key), `${assetName(key)}.sig`])
+    )
+
+    const serverInputs = await Promise.all(
+      serverKeys.map(async (key) => {
+        const name = serverAssets[key]
+        const path = join(dir, `${name}.json`)
+        await writeManifest(
+          path,
+          { [key]: { url: releaseUrl(name), signature: `signature-${key}` } },
+          nightlyVersion,
+          [name, `${name}.sig`]
+        )
+        return path
+      })
+    )
+
+    const merged = await mergeUpdaterManifests({
+      inputPaths: [desktopInput, ...serverInputs],
+      outputPath: join(dir, 'latest-nightly.json'),
+      version: nightlyVersion,
+      notes: 'nightly notes',
+      pubDate: '2026-08-07T00:00:00.000Z',
+      channel: 'nightly'
+    })
+
+    expect(merged.platforms['linux-x86_64-server'].url).toBe(releaseUrl('termul-server'))
+    expect(merged.platforms['linux-aarch64-server'].url).toBe(
+      releaseUrl('termul-server-linux-aarch64')
+    )
+  })
+
+  test('keeps the Rust updater platform keys in sync with the required server keys', async () => {
+    const rust = await readFile(
+      join(import.meta.dirname, '../../src-tauri/src/server_update.rs'),
+      'utf8'
+    )
+    for (const key of ['linux-x86_64-server', 'linux-aarch64-server']) {
+      expect(requiredPlatformKeys).toContain(key)
+      expect(rust).toContain(`pub const SERVER_PLATFORM_KEY: &str = "${key}";`)
+    }
+  })
+
   describe('channel and release-tag selection', () => {
     test('derives the nightly moving tag for the nightly channel', async () => {
       const dir = await fixtureDir()

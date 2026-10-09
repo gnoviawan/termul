@@ -54,8 +54,8 @@ The workflow order is:
 2. Build Windows x64, Linux x64, macOS arm64, and macOS Intel locally with `tauri-action` **without** `tagName`, `releaseId`, or other upload identifiers.
 3. Verify both macOS `.app` bundles and DMGs with `codesign`, `spctl`, and `stapler`, and reject non-portable Mach-O dependency or `LC_RPATH` entries before collecting them.
 4. Convert each platform's Tauri artifact output into an isolated workflow artifact containing release assets and a platform updater manifest.
-5. Build the standalone Linux server as a workflow artifact after creating the embedded browser bundle.
-6. In one publish job, download every workflow artifact, reject conflicting asset names, deeply validate each updater `{url, signature}` record, reject conflicting duplicate platform records, require every supported Tauri updater key, and authoritatively create `latest.json`.
+5. Build the standalone Linux server as one workflow artifact per architecture (x64 on `ubuntu-22.04`, arm64 on the native `ubuntu-22.04-arm` runner) after creating the embedded browser bundle.
+6. In one publish job, download every workflow artifact, reject conflicting asset names, deeply validate each updater `{url, signature}` record, reject conflicting duplicate platform records, require every supported updater key (desktop and both server keys), and authoritatively create `latest.json`.
 7. Upload all release assets and `latest.json` once, then publish the draft.
 8. Invoke the reusable Homebrew workflow for every release channel. It always generates `SHA256SUMS.txt`; only stable releases update the tap.
 
@@ -76,6 +76,10 @@ The centralized merge validates the conventions used by Tauri and the historical
 - `darwin-aarch64-app`
 - `darwin-x86_64`
 - `darwin-x86_64-app`
+- `linux-x86_64-server` (asset `termul-server`)
+- `linux-aarch64-server` (asset `termul-server-linux-aarch64`)
+
+The two server keys come from the standalone-server job's per-architecture fragments. The aarch64 key is required, so a failed arm64 build fails the whole publish rather than shipping a release without it.
 
 Every record must have a nonempty URL and minisign signature. Missing keys, malformed records, version mismatches, and conflicting duplicate records fail before upload.
 
@@ -83,7 +87,25 @@ Every record must have a nonempty URL and minisign signature. Missing keys, malf
 
 ### Linux and Browser Bundle
 
-Linux desktop and standalone-server builds preserve the current `ubuntu-22.04` dependency setup, including WebKitGTK, appindicator, SVG, D-Bus, and `patchelf`. Both build paths create and validate `dist-web/index.html` before Rust compilation so the in-process browser client is embedded rather than relying on files outside the installation.
+Linux desktop and standalone-server builds preserve the current Ubuntu 22.04 dependency setup, including WebKitGTK, appindicator, SVG, D-Bus, and `patchelf`. The standalone server builds natively on both architectures: `ubuntu-22.04` for x64 and `ubuntu-22.04-arm` for arm64, with no cross-compilation. Both build paths create and validate `dist-web/index.html` before Rust compilation so the in-process browser client is embedded rather than relying on files outside the installation.
+
+#### Installing `termul-server`
+
+The x64 asset keeps the name `termul-server`; the arm64 asset is `termul-server-linux-aarch64`. Pick the one matching `uname -m`:
+
+```bash
+case "$(uname -m)" in
+  x86_64)          asset=termul-server ;;
+  aarch64|arm64)   asset=termul-server-linux-aarch64 ;;
+  *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+curl -fL -o termul-server "https://github.com/gnoviawan/termul/releases/latest/download/$asset"
+chmod +x termul-server
+```
+
+`releases/latest/download/` resolves to the latest stable release only. For the nightly channel use `https://github.com/gnoviawan/termul/releases/download/nightly/$asset`. Each asset has a minisign signature next to it (`$asset.sig`) and is listed in the release's `SHA256SUMS.txt`. The arm64 binary is built on Ubuntu 22.04 (glibc 2.35 or newer required), so musl-based distributions such as Alpine are not supported.
+
+The opt-in self-updater selects its manifest key from the architecture the binary was built for (`linux-x86_64-server` or `linux-aarch64-server`), so each host updates to its own binary and keeps the installed filename.
 
 ### Windows
 
@@ -196,8 +218,8 @@ Recommended release checks:
 2. Confirm version parity in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 3. Confirm updater, Apple, and stable Homebrew secrets are provisioned for the intended channel.
 4. Push the release tag.
-5. Confirm both macOS portability/signing/notarization gates pass.
-6. Confirm the centralized publish job reports every required updater platform and uploads installers, updater archives, `.sig` files, `termul-server`, and `latest.json` exactly once.
+5. Confirm both macOS portability/signing/notarization gates pass and that both `standalone-server` matrix entries (x64 and arm64) succeed.
+6. Confirm the centralized publish job reports every required updater platform and uploads installers, updater archives, `.sig` files, `termul-server`, `termul-server-linux-aarch64`, and `latest.json` exactly once.
 7. Confirm `SHA256SUMS.txt` exists; for stable releases, confirm the Homebrew cask update succeeds.
 
 ## Local Validation
