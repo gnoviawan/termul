@@ -15,6 +15,7 @@ export interface TokenSpan {
 // Each Tag's `.set` array contains itself and all parent tags in decreasing
 // specificity, so walking `.set` gives the most specific match first.
 const tagColorKeys = new Map<Tag, keyof ResolvedSyntaxColors>()
+tagColorKeys.set(tags.function(tags.definition(tags.variableName)), 'function')
 tagColorKeys.set(tags.function(tags.variableName), 'function')
 tagColorKeys.set(tags.definition(tags.variableName), 'definition')
 tagColorKeys.set(tags.variableName, 'variable')

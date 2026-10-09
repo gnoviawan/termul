@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { getLanguageForFile, isParserReady, tokenizeLine } from './diff-syntax-highlight'
+import {
+  getLanguageForFile,
+  isParserReady,
+  tokenizeLine,
+  tokenizeLineAsync
+} from './diff-syntax-highlight'
 
 describe('getLanguageForFile', () => {
   it('maps .ts to typescript', () => {
@@ -73,6 +78,22 @@ describe('tokenizeLine', () => {
     const result = tokenizeLine('const x = 1', 'typescript')
     // Without preloading, should return empty (no crash)
     expect(result).toEqual([])
+  })
+})
+
+describe('function declaration color', () => {
+  it('paints a function name as a function, and a const binding as a declaration', async () => {
+    const fn = 'function AgentIcon() {}'
+    const fnSpans = await tokenizeLineAsync(fn, 'typescript')
+    const fnName = fnSpans.find((span) => fn.slice(span.start, span.end) === 'AgentIcon')
+    expect(fnName?.color.toLowerCase()).toContain('#e6b387')
+
+    const binding = 'const AgentIcon = 1'
+    const bindingSpans = await tokenizeLineAsync(binding, 'typescript')
+    const bindingName = bindingSpans.find(
+      (span) => binding.slice(span.start, span.end) === 'AgentIcon'
+    )
+    expect(bindingName?.color.toLowerCase()).toContain('#a9a1f4')
   })
 })
 
