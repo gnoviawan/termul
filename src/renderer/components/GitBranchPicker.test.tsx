@@ -1,5 +1,5 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GitBranchPicker } from './GitBranchPicker'
 
@@ -110,7 +110,7 @@ describe('GitBranchPicker', () => {
     await openPicker()
 
     expect(screen.getByText('origin/main')).toBeDefined()
-    expect(screen.getByText('remote')).toBeDefined()
+    expect(screen.getByText('Remote')).toBeDefined()
     expect(screen.queryByText('No branches yet.')).toBeNull()
   })
 
@@ -126,7 +126,7 @@ describe('GitBranchPicker', () => {
     render(<GitBranchPicker {...defaultProps} />)
     await openPicker()
 
-    fireEvent.change(screen.getByPlaceholderText('Search branches...'), {
+    fireEvent.change(screen.getByPlaceholderText('Search branches'), {
       target: { value: 'feature' }
     })
 
@@ -155,7 +155,7 @@ describe('GitBranchPicker', () => {
     await waitFor(() => {
       expect(screen.getByText('origin/feat/git-history-graph')).toBeDefined()
     })
-    expect(screen.getByText('remote')).toBeDefined()
+    expect(screen.getByText('Remote')).toBeDefined()
     expect(screen.queryByText('No branches yet.')).toBeNull()
   })
 
@@ -227,7 +227,7 @@ describe('GitBranchPicker', () => {
     render(<GitBranchPicker {...defaultProps} />)
     await openPicker()
 
-    expect(screen.getByRole('button', { name: 'Create and checkout new branch...' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Create branch from dev' })).toBeDisabled()
   })
 
   it('disables branch creation when branch loading errors', async () => {
@@ -240,6 +240,40 @@ describe('GitBranchPicker', () => {
     render(<GitBranchPicker {...defaultProps} />)
     await openPicker()
 
-    expect(screen.getByRole('button', { name: 'Create and checkout new branch...' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Create branch from dev' })).toBeDisabled()
+  })
+
+  it('groups branches into Local and Remote and marks the current one with a check', async () => {
+    mockBranches.mockResolvedValue({
+      success: true,
+      data: [
+        { name: 'dev', isRemote: false, isCurrent: true, hasOtherWorktree: false },
+        { name: 'feature', isRemote: false, isCurrent: false, hasOtherWorktree: false },
+        { name: 'origin/release', isRemote: true, isCurrent: false, hasOtherWorktree: false }
+      ]
+    })
+
+    render(<GitBranchPicker {...defaultProps} />)
+    await openPicker()
+
+    const local = await screen.findByRole('group', { name: 'Local branches' })
+    const remote = screen.getByRole('group', { name: 'Remote branches' })
+    expect(within(local).getByText('dev')).toBeDefined()
+    expect(within(local).getByText('feature')).toBeDefined()
+    expect(within(remote).getByText('origin/release')).toBeDefined()
+
+    const current = within(local).getByText('dev').closest('button')
+    expect(current).toHaveAttribute('aria-current', 'true')
+    expect(within(current as HTMLElement).getByLabelText('Current branch')).toBeDefined()
+    expect(current?.className).not.toContain('bg-accent')
+  })
+
+  it('shows the open state on the trigger while the popover is open', async () => {
+    mockBranches.mockResolvedValue({ success: true, data: [] })
+    render(<GitBranchPicker {...defaultProps} />)
+    await openPicker()
+    const trigger = screen.getByLabelText('Switch git branch')
+    expect(trigger).toHaveAttribute('data-state', 'open')
+    expect(trigger.className).toContain('data-[state=open]:bg-foreground/[0.06]')
   })
 })
