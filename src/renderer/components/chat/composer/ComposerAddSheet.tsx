@@ -1,11 +1,11 @@
 import { useCallback, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Paperclip, Plus } from '@/components/icons'
+import { MENU_LABEL_CLASS } from '@/components/ui/menu-styles'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
-import { SELECTOR_SECTION_LABEL } from '../AgentHeader'
 import { CHAT_HIT_ICON } from '../chat-layout'
 import { McpServerList, type McpServerListProps } from '../McpBadge'
 
@@ -152,7 +152,7 @@ export function ComposerAddSheet({
         >
           <TriggerGlyph>/</TriggerGlyph> Commands
         </button>
-        <h3 className={cn(SELECTOR_SECTION_LABEL, 'mt-2')}>MCP servers</h3>
+        <h3 className={cn(MENU_LABEL_CLASS, 'mt-1')}>MCP servers</h3>
         <div className="px-2 pb-2 text-xs">
           {/* The sheet scrolls itself, so lift the popover's nested 300px scroller.
               `max-h-fit` rather than `max-h-none`: tailwind-merge 2.x does not know
