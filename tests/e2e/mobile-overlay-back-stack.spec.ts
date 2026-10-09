@@ -113,11 +113,9 @@ async function bootMobileShell(
     E2E_TOKEN
   )
   await page.goto(`${E2E_BASE_URL}/#/`)
-  // The header names the active project until a terminal or chat takes over:
-  // seeing it proves the shell booted into our fresh project.
-  await expect(
-    page.getByRole('heading', { level: 1, name: project.name, exact: true })
-  ).toBeVisible()
+  // The header subtitle names the active project: seeing it proves the shell
+  // booted into our fresh project.
+  await expect(projectSubtitle(page)).toContainText(project.name)
   const base = await historyPosition(page)
   expect(base.hash).toBe('#/')
   expect(base.sentinelDepth).toBe(0)
@@ -199,6 +197,33 @@ async function openDrawer(page: Page): Promise<void> {
 }
 
 /**
+ * The header subtitle button (project, branch, Local or Worktree): it names the
+ * active project and opens the project sheet. Its accessible name ends in
+ * "switch project".
+ */
+function projectSubtitle(page: Page): Locator {
+  return page.getByRole('button', { name: /, switch project$/ })
+}
+
+/** Choose a row of the header ⋯ sheet (chat or tab context): Files, Command palette, ... */
+async function chooseMoreRow(page: Page, row: string): Promise<void> {
+  await page.getByRole('button', { name: 'More', exact: true }).tap()
+  await page.getByRole('button', { name: row, exact: true }).tap()
+}
+
+/** Choose a row of the terminal ⋯ sheet (terminal context): Close terminal, ... */
+async function chooseTerminalRow(page: Page, row: string): Promise<void> {
+  await page.getByRole('button', { name: 'Terminal actions', exact: true }).tap()
+  await page.getByRole('button', { name: row, exact: true }).tap()
+}
+
+/** The project sheet's "Add project" row: the phone shell's entry to the New project modal. */
+async function openNewProjectModal(page: Page): Promise<void> {
+  await projectSubtitle(page).tap()
+  await page.getByRole('button', { name: 'Add project', exact: true }).tap()
+}
+
+/**
  * Start a chat from the launcher composer with the fake agent's `[RICH]`
  * marker: the turn answers at once with an external link, an image and a
  * subagent call, so the chat route is on top and its content is ready.
@@ -223,7 +248,7 @@ async function openTerminalTab(page: Page, warmedUp: Promise<void>): Promise<voi
   await warmedUp
   await openDrawer(page)
   await page.getByRole('button', { name: 'New terminal' }).tap()
-  await expect(page.getByRole('button', { name: 'Close terminal' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Terminal actions', exact: true })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeVisible()
 }
 
@@ -332,11 +357,11 @@ test('command palette to Change Color Theme and to Command History each swap one
   page
 }) => {
   const { base } = await bootMobileShell(page)
-  const palette = page.getByRole('button', { name: 'Command palette' })
   const suggestions = page.getByRole('listbox', { name: 'Suggestions' })
 
   // Change Color Theme: the palette closes and the picker opens in one tap.
-  await palette.tap()
+  // (The header ⋯ sheet hands off to the palette in one tap too: one entry.)
+  await chooseMoreRow(page, 'Command palette')
   await expect(suggestions).toBeVisible()
   await expectHistory(page, { index: base.index + 1, sentinelDepth: 1 })
   await page.getByRole('option', { name: /^Change Color Theme/ }).tap()
@@ -350,7 +375,7 @@ test('command palette to Change Color Theme and to Command History each swap one
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 
   // Command History: the same swap for the other palette sub-modal.
-  await palette.tap()
+  await chooseMoreRow(page, 'Command palette')
   await expect(suggestions).toBeVisible()
   await page.getByRole('option', { name: /^Command History/ }).tap()
   const history = page.getByPlaceholder('Search commands...')
@@ -411,14 +436,14 @@ test.describe('with a terminal tab open', () => {
   // process). Close ours so this file never starves later specs of slots.
   test.afterEach(async ({ page }) => {
     try {
-      const close = page.getByRole('button', { name: 'Close terminal' })
-      if ((await close.count()) === 0) return
-      await close.tap()
+      const actions = page.getByRole('button', { name: 'Terminal actions', exact: true })
+      if ((await actions.count()) === 0) return
+      await chooseTerminalRow(page, 'Close terminal')
       await page
         .locator('[data-sibling-dialog]')
         .getByRole('button', { name: 'Close', exact: true })
         .tap()
-      await expect(close).toBeHidden()
+      await expect(actions).toBeHidden()
     } catch {
       // The test already failed on this page; do not mask its error.
     }
@@ -501,24 +526,27 @@ test.describe('with a terminal tab open', () => {
     // ConfirmDialog carries no role; `data-sibling-dialog` is the hook the app
     // itself uses to find an open confirm.
     const confirm = page.locator('[data-sibling-dialog]')
-    const closeTerminal = page.getByRole('button', { name: 'Close terminal' })
+    const terminalActions = page.getByRole('button', { name: 'Terminal actions', exact: true })
 
-    await closeTerminal.tap()
+    // The terminal ⋯ sheet hands off to the confirm in one tap: one entry.
+    await chooseTerminalRow(page, 'Close terminal')
     await expect(confirm).toBeVisible()
     await expect(confirm.getByRole('heading', { name: 'Close Terminal' })).toBeVisible()
+    await settleBackStack(page)
     await expectHistory(page, { index: base.index + 1, sentinelDepth: 1 })
     await pressSystemBack(page)
     await expect(confirm).toBeHidden()
     // Back cancelled the confirm: the terminal is still there.
-    await expect(closeTerminal).toBeVisible()
+    await expect(terminalActions).toBeVisible()
     await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 
-    await closeTerminal.tap()
+    await chooseTerminalRow(page, 'Close terminal')
     await expect(confirm).toBeVisible()
+    await settleBackStack(page)
     await expectHistory(page, { index: base.index + 1, sentinelDepth: 1 })
     await confirm.getByRole('button', { name: 'Cancel' }).tap()
     await expect(confirm).toBeHidden()
-    await expect(closeTerminal).toBeVisible()
+    await expect(terminalActions).toBeVisible()
     await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
   })
 })
@@ -664,8 +692,10 @@ test('Files sheet, row actions, delete confirm: back unwinds one overlay per pre
   const actions = page.getByRole('dialog', { name: 'alpha.txt' })
   const confirm = page.getByRole('alertdialog', { name: 'Delete alpha.txt' })
 
-  await page.getByRole('button', { name: 'Browse files' }).tap()
+  // The header ⋯ sheet hands off to the Files sheet in one tap: one entry.
+  await chooseMoreRow(page, 'Files')
   await expect(page.getByRole('button', { name: 'Actions for alpha.txt' })).toBeVisible()
+  await settleBackStack(page)
   await expectHistory(page, { index: base.index + 1, sentinelDepth: 1 })
 
   await page.getByRole('button', { name: 'Actions for alpha.txt' }).tap()
@@ -704,7 +734,7 @@ test('Esc over the delete confirm closes only the confirm, and Cancel consumes i
   const files = page.getByRole('dialog', { name: /^proj-ovl-/ })
   const confirm = page.getByRole('alertdialog', { name: 'Delete alpha.txt' })
 
-  await page.getByRole('button', { name: 'Browse files' }).tap()
+  await chooseMoreRow(page, 'Files')
   await page.getByRole('button', { name: 'Actions for alpha.txt' }).tap()
   await page
     .getByRole('dialog', { name: 'alpha.txt' })
@@ -743,23 +773,24 @@ test('New project modal: back, Cancel and Esc each close it and give its entry b
   const { base } = await bootMobileShell(page)
   const modal = page.getByRole('heading', { name: 'Create New Project' })
 
-  // Header entry, header "New project" button: system back.
-  await page.getByRole('button', { name: 'New project' }).tap()
+  // Entry: the project sheet's "Add project" row (a swap in one tap), system back.
+  await openNewProjectModal(page)
   await expect(modal).toBeVisible()
+  await settleBackStack(page)
   await expectHistory(page, { index: base.index + 1, sentinelDepth: 1 })
   await pressSystemBack(page)
   await expect(modal).toBeHidden()
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 
   // Its own Cancel button.
-  await page.getByRole('button', { name: 'New project' }).tap()
+  await openNewProjectModal(page)
   await expect(modal).toBeVisible()
   await page.getByRole('button', { name: 'Cancel', exact: true }).tap()
   await expect(modal).toBeHidden()
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 
   // Esc.
-  await page.getByRole('button', { name: 'New project' }).tap()
+  await openNewProjectModal(page)
   await expect(modal).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(modal).toBeHidden()
@@ -773,7 +804,7 @@ test('the directory picker over New project: back closes the picker first, then 
   const modal = page.getByRole('heading', { name: 'Create New Project' })
   const picker = page.getByRole('heading', { name: 'Select Project Folder' })
 
-  await page.getByRole('button', { name: 'New project' }).tap()
+  await openNewProjectModal(page)
   await expect(modal).toBeVisible()
   await page.getByRole('button', { name: 'Browse', exact: true }).tap()
   await expect(picker).toBeVisible()
@@ -836,7 +867,7 @@ test('a reload with an overlay open lands on a stale sentinel and the shell step
   // The reloaded page has no overlay open, but the entry it reloaded on is a
   // leftover sentinel of ours: the shell traverses back to the page entry
   // instead of leaving it for a dead back press.
-  await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible()
+  await expect(projectSubtitle(page)).toContainText(name)
   await expect(page.getByRole('dialog', { name: 'Chats' })).toBeHidden()
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 })

@@ -29,7 +29,16 @@ vi.mock('react-router-dom', async () => {
 })
 
 vi.mock('@/stores/project-store', () => ({
-  useActiveProject: () => projectRef.current
+  useActiveProject: () => projectRef.current,
+  // The header subtitle reads the active project's branch through the shared
+  // chat-isolation hook.
+  useProjectStore: (selector: (s: unknown) => unknown) =>
+    selector({ projects: projectRef.current ? [projectRef.current] : [] })
+}))
+
+// The header attention pill is covered in use-mobile-attention-count.test.ts.
+vi.mock('@/hooks/use-mobile-attention-count', () => ({
+  useMobileAttentionCount: () => 0
 }))
 
 vi.mock('@/stores/workspace-store', () => ({

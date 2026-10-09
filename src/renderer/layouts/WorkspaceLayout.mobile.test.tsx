@@ -32,11 +32,19 @@ vi.mock('@/lib/tauri-runtime', async () => {
   return { ...actual, isTauriContext: () => tauriRef.current }
 })
 
-vi.mock('@/hooks/use-mobile-web-shell', () => ({
-  useMobileWebShell: () => mobileRef.current,
-  MOBILE_WEB_SHELL_MAX_PX: 767,
-  resolveMobileWebShell: (_t: boolean, m: boolean) => m
-}))
+// `subscribeMediaQuery` stays real: the mobile header subscribes its ≤360px
+// narrow query through it.
+vi.mock('@/hooks/use-mobile-web-shell', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-mobile-web-shell')>(
+    '@/hooks/use-mobile-web-shell'
+  )
+  return {
+    ...actual,
+    useMobileWebShell: () => mobileRef.current,
+    MOBILE_WEB_SHELL_MAX_PX: 767,
+    resolveMobileWebShell: (_t: boolean, m: boolean) => m
+  }
+})
 
 vi.mock('@/lib/platform', async () => {
   const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
@@ -76,7 +84,12 @@ vi.mock('@/stores/project-store', () => ({
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: vi.fn((selector) => selector({ terminals: [] })),
+  // `getState` serves the drawer's terminal rows, which render for any
+  // seeded terminal tab.
+  useTerminalStore: Object.assign(
+    vi.fn((selector) => selector({ terminals: [] })),
+    { getState: () => ({ terminals: [] }) }
+  ),
   useTerminals: () => [],
   useAllTerminals: () => [],
   useActiveTerminal: () => null,
@@ -358,6 +371,10 @@ vi.mock('@/pages/AppPreferences', () => ({
 vi.mock('@/pages/ProjectSettings', () => ({
   ProjectSettingsModal: () => <div>project-settings</div>
 }))
+vi.mock('@/components/CommandHistoryModal', () => ({
+  CommandHistoryModal: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div>command-history-modal</div> : null
+}))
 vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> }))
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
@@ -484,6 +501,7 @@ describe('WorkspaceLayout mobile branch', () => {
     gitState.commitContexts = {}
     sshProfileRef.current = null
     sshProfilesRef.current = []
+    useSettingsModalStore.getState().close()
   })
 
   afterEach(async () => {
@@ -494,13 +512,72 @@ describe('WorkspaceLayout mobile branch', () => {
     await settleOverlayBackStack()
   })
 
+  // The header keeps three icon slots; Command palette, Git changes and Files
+  // live in the header ⋯ ("More") sheet. MobileChatShell is React.lazy, so
+  // each helper waits for the ⋯ button before opening the sheet.
+  async function openMoreSheet(): Promise<void> {
+    fireEvent.click(await screen.findByLabelText('More'))
+    await screen.findByRole('dialog')
+  }
+
+  async function chooseMoreItem(name: string): Promise<void> {
+    await openMoreSheet()
+    fireEvent.click(screen.getByRole('button', { name }))
+  }
+
   it('mounts MobileChatShell and threads the command-palette + git-changes triggers', async () => {
     renderLayout()
 
     // MobileChatShell is React.lazy — wait for it to load before asserting.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
-    expect(screen.getByLabelText('Command palette')).toBeInTheDocument()
-    expect(screen.getByLabelText('Git changes')).not.toBeDisabled()
+    expect(screen.queryByLabelText('Command palette')).not.toBeInTheDocument()
+    await openMoreSheet()
+    expect(screen.getByRole('button', { name: 'Command palette' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Git changes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Project settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New terminal' })).toBeInTheDocument()
+  })
+
+  it('threads the project sheet through the header subtitle, not a header icon', async () => {
+    renderLayout()
+
+    expect(await screen.findByRole('button', { name: /switch project/ })).toHaveAttribute(
+      'aria-haspopup',
+      'dialog'
+    )
+    expect(screen.queryByLabelText('Switch project')).not.toBeInTheDocument()
+  })
+
+  it('threads "Project settings" to the Project Settings modal', async () => {
+    renderLayout()
+
+    await chooseMoreItem('Project settings')
+
+    expect(useSettingsModalStore.getState().view).toBe('project')
+    expect(await screen.findByText('project-settings')).toBeInTheDocument()
+  })
+
+  it('threads "Command history" into the terminal ⋯ sheet', async () => {
+    act(() => {
+      useWorkspaceStore.getState().addTerminalTab('t1')
+    })
+    try {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Command history' }))
+
+      expect(await screen.findByText('command-history-modal')).toBeInTheDocument()
+    } finally {
+      // The workspace store is real and shared by the tests below.
+      act(() => {
+        const { root, removeTab } = useWorkspaceStore.getState()
+        for (const leaf of getAllLeafPanes(root)) {
+          for (const tab of leaf.tabs) if (tab.type === 'terminal') removeTab(tab.id)
+        }
+      })
+    }
   })
   // Story 11 (QA F9): StatusBar (connection health) renders on the mobile
   // shell — previously `!isMobileWebShell` gated it out entirely, so mobile
@@ -526,8 +603,8 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(
       screen.queryByPlaceholderText('Search commands, projects, settings...')
     ).not.toBeInTheDocument()
-    // MobileChatShell is React.lazy — wait for the trigger button to appear.
-    fireEvent.click(await screen.findByLabelText('Command palette'))
+    // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
+    await chooseMoreItem('Command palette')
     expect(
       await screen.findByPlaceholderText('Search commands, projects, settings...')
     ).toBeInTheDocument()
@@ -538,8 +615,8 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // Sheet starts closed: the GitPanel file-list filter input is absent.
     expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
-    // MobileChatShell is React.lazy — wait for the trigger button to appear.
-    fireEvent.click(await screen.findByLabelText('Git changes'))
+    // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
+    await chooseMoreItem('Git changes')
     // GitPanel mobile branch renders the file-list filter input (full-width).
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
   })
@@ -550,10 +627,11 @@ describe('WorkspaceLayout mobile branch', () => {
   it('git Sheet wrapper renders rounded top corners with a max height, not h-full', async () => {
     renderLayout()
 
-    fireEvent.click(await screen.findByLabelText('Git changes'))
-    await screen.findByPlaceholderText('Filter changes...')
+    await chooseMoreItem('Git changes')
+    const filter = await screen.findByPlaceholderText('Filter changes...')
 
-    const sheetContent = document.querySelector('[data-sheet]')
+    // The ⋯ sheet may still be unmounting; pick the Git sheet itself.
+    const sheetContent = filter.closest('[data-sheet]')
     expect(sheetContent).not.toBeNull()
     const cls = sheetContent?.className ?? ''
     expect(cls).toContain('rounded-t-xl')
@@ -562,18 +640,20 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(cls).toContain('pb-[env(safe-area-inset-bottom)]')
   })
 
-  it('disables the Git changes trigger when no active project path', async () => {
+  it('omits the Git changes row when no active project path', async () => {
     projectRef.current = { id: 'p1', name: 'Demo' }
     renderLayout()
-    // MobileChatShell is React.lazy — wait for the trigger to appear.
-    expect(await screen.findByLabelText('Git changes')).toBeDisabled()
+    // MobileChatShell is React.lazy — wait for the ⋯ button to appear.
+    await openMoreSheet()
+    expect(screen.getByRole('button', { name: 'Command palette' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Git changes' })).not.toBeInTheDocument()
   })
 
   it('closes the Git Changes sheet if the active project loses its path while open', async () => {
     const { rerender } = renderLayout()
 
-    // MobileChatShell is React.lazy — wait for the trigger to appear.
-    fireEvent.click(await screen.findByLabelText('Git changes'))
+    // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
+    await chooseMoreItem('Git changes')
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
     // Active project switches to one without a path while the sheet is open.
@@ -598,7 +678,7 @@ describe('WorkspaceLayout mobile branch', () => {
     it('system back closes the open Git sheet and the app does not navigate away', async () => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
       // The overlay grew the stack 0 → 1: the managed reconciler arms one
@@ -617,7 +697,7 @@ describe('WorkspaceLayout mobile branch', () => {
     it('system back closes the CommandPalette overlay when it is topmost', async () => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Command palette'))
+      await chooseMoreItem('Command palette')
       expect(
         await screen.findByPlaceholderText('Search commands, projects, settings...')
       ).toBeInTheDocument()
@@ -645,7 +725,7 @@ describe('WorkspaceLayout mobile branch', () => {
       async function openLauncherOverlay(): Promise<void> {
         // Wait for the lazy shell, then open the launcher over a pane that has
         // a tab (an empty pane would render it as the pane body instead).
-        await screen.findByLabelText('Command palette')
+        await screen.findByLabelText('More')
         act(() => {
           useWorkspaceStore.getState().addGitTab('/demo')
           const paneId = useWorkspaceStore.getState().activePaneId
@@ -682,7 +762,7 @@ describe('WorkspaceLayout mobile branch', () => {
       it('palette → Command history swap keeps one sentinel, and back closes the sub-modal', async () => {
         renderLayout()
 
-        fireEvent.click(await screen.findByLabelText('Command palette'))
+        await chooseMoreItem('Command palette')
         await screen.findByPlaceholderText('Search commands, projects, settings...')
         await waitForSentinelDepth(1)
         const backSpy = vi.spyOn(window.history, 'back')
@@ -726,7 +806,7 @@ describe('WorkspaceLayout mobile branch', () => {
             }
           ]
           renderLayout()
-          fireEvent.click(await screen.findByLabelText('Command palette'))
+          await chooseMoreItem('Command palette')
           await waitForSentinelDepth(1)
 
           // The palette closes and the inline prompt opens in one batch.
@@ -761,7 +841,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
       it('system back closes App Preferences', async () => {
         renderLayout()
-        await screen.findByLabelText('Command palette')
+        await screen.findByLabelText('More')
 
         act(() => useSettingsModalStore.getState().openApp())
         await screen.findByRole('button', { name: 'Close Application Preferences' })
@@ -782,7 +862,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
       it('closing App Preferences with its close button consumes the sentinel', async () => {
         renderLayout()
-        await screen.findByLabelText('Command palette')
+        await screen.findByLabelText('More')
 
         act(() => useSettingsModalStore.getState().openApp())
         const closeBtn = await screen.findByRole('button', {
@@ -871,13 +951,23 @@ describe('WorkspaceLayout mobile branch', () => {
       expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
     })
 
+    // The header ⋯ sheet and the sheets it hands off to (Files) or the subtitle
+    // opens (project) each register once; choosing a ⋯ row swaps the registered
+    // sheet in one batch, so one sentinel serves the whole chain.
     it.each([
-      ['Browse files', 'files-sheet'],
-      ['Switch project', 'projects-sheet']
-    ])('the %s sheet registers as %s; system back closes it', async (label, id) => {
+      ['header ⋯', 'header-more-sheet', async () => openMoreSheet()],
+      ['Files', 'files-sheet', async () => chooseMoreItem('Files')],
+      [
+        'project',
+        'projects-sheet',
+        async () => {
+          fireEvent.click(await screen.findByRole('button', { name: /switch project/ }))
+        }
+      ]
+    ])('the %s sheet registers as %s; system back closes it', async (_label, id, open) => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText(label))
+      await open()
       await waitForSentinelDepth(1)
       expect(stackIds()).toEqual([id])
 
@@ -894,7 +984,8 @@ describe('WorkspaceLayout mobile branch', () => {
     it('wires New Project into the palette on the mobile shell and opens NewProjectModal', async () => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Command palette'))
+      // The header no longer carries a palette icon; the palette lives in the header ⋯ sheet.
+      await chooseMoreItem('Command palette')
       expect(
         await screen.findByPlaceholderText('Search commands, projects, settings...')
       ).toBeInTheDocument()

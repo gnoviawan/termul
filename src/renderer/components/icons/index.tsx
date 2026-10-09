@@ -63,6 +63,7 @@ import {
   GripVerticalIcon,
   HandIcon,
   HashIcon,
+  HelpCircleIcon,
   HistoryIcon,
   Home01Icon,
   Image02Icon,
@@ -252,6 +253,7 @@ export const GitCommit = hugeIcon('GitCommit', GitCommitHorizontalIcon)
 export const GitMerge = hugeIcon('GitMerge', GitMergeIcon)
 export const GripVertical = hugeIcon('GripVertical', GripVerticalIcon)
 export const Hash = hugeIcon('Hash', HashIcon)
+export const HelpCircle = hugeIcon('HelpCircle', HelpCircleIcon)
 export const History = hugeIcon('History', HistoryIcon)
 export const ImageIcon = hugeIcon('ImageIcon', Image02Icon)
 export const KeySquare = hugeIcon('KeySquare', KeySquareIcon)
