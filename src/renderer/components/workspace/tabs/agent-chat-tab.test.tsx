@@ -359,4 +359,25 @@ describe('AgentChatTabInline activity indicator', () => {
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
   })
+
+  it('reads Needs you in the tab chrome for a pending elicitation', () => {
+    seedChat()
+    useAcpStore.setState({
+      pendingElicitations: {
+        'elicit-1': {
+          requestId: 'elicit-1',
+          agentId: 'agent-1',
+          sessionId: 's1',
+          mode: 'form',
+          message: 'Pick a branch',
+          fields: []
+        }
+      }
+    })
+
+    const { container } = renderChip(false)
+
+    expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
+    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
+  })
 })

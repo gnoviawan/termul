@@ -89,6 +89,16 @@ describe('PermissionPrompt', () => {
       expect(respondPermission).toHaveBeenCalledWith('req-1', undefined)
     })
 
+    it('never guards, even when a hidden pane turns visible', () => {
+      const { rerender } = render(<PermissionPrompt permission={permission()} isVisible={false} />)
+      rerender(<PermissionPrompt permission={permission()} isVisible />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+
+      expect(respondPermission).toHaveBeenCalledTimes(1)
+      expect(logFrontendError).not.toHaveBeenCalled()
+    })
+
     it('tags the section for the dock without touching focus', () => {
       const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
       render(<PermissionPrompt permission={permission()} />)
@@ -229,6 +239,76 @@ describe('PermissionPrompt', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
       expect(respondPermission).toHaveBeenCalledTimes(1)
       expect(respondPermission).toHaveBeenCalledWith('req-2', 'allow-once')
+    })
+
+    describe('a pane that mounts hidden', () => {
+      it('starts the guard when the pane turns visible, not at mount', () => {
+        vi.useFakeTimers()
+        const { rerender } = render(
+          <PermissionPrompt permission={permission()} isVisible={false} />
+        )
+        act(() => {
+          vi.advanceTimersByTime(5000)
+        })
+
+        rerender(<PermissionPrompt permission={permission()} isVisible />)
+        fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+        expect(respondPermission).not.toHaveBeenCalled()
+        expect(logFrontendError).toHaveBeenCalledTimes(1)
+        expect(logFrontendError).toHaveBeenCalledWith(
+          expect.objectContaining({ level: 'info', message: expect.stringContaining('req-1') })
+        )
+
+        act(() => {
+          vi.advanceTimersByTime(399)
+        })
+        fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+        expect(respondPermission).not.toHaveBeenCalled()
+
+        act(() => {
+          vi.advanceTimersByTime(1)
+        })
+        fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+        expect(respondPermission).toHaveBeenCalledTimes(1)
+        expect(respondPermission).toHaveBeenCalledWith('req-1', 'allow-once')
+      })
+
+      it('stamps a request that changed while hidden when the pane shows', () => {
+        vi.useFakeTimers()
+        const { rerender } = render(
+          <PermissionPrompt permission={permission('req-1')} isVisible={false} />
+        )
+        act(() => {
+          vi.advanceTimersByTime(1000)
+        })
+        rerender(<PermissionPrompt permission={permission('req-2')} isVisible={false} />)
+        act(() => {
+          vi.advanceTimersByTime(1000)
+        })
+
+        rerender(<PermissionPrompt permission={permission('req-2')} isVisible />)
+        fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+        expect(respondPermission).not.toHaveBeenCalled()
+
+        act(() => {
+          vi.advanceTimersByTime(400)
+        })
+        fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+        expect(respondPermission).toHaveBeenCalledTimes(1)
+        expect(respondPermission).toHaveBeenCalledWith('req-2', 'allow-once')
+      })
+
+      it('does not restart the guard while it stays visible', () => {
+        vi.useFakeTimers()
+        const { rerender } = render(<PermissionPrompt permission={permission()} isVisible />)
+        act(() => {
+          vi.advanceTimersByTime(400)
+        })
+
+        rerender(<PermissionPrompt permission={permission()} isVisible />)
+        fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+        expect(respondPermission).toHaveBeenCalledTimes(1)
+      })
     })
 
     it('shows "Cancel request" at touch size and answers with no option after the guard', () => {

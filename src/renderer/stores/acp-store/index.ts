@@ -92,6 +92,7 @@ import {
   trimLiveToolCalls
 } from './helpers'
 import { setLaunchPlaceholderNotedListener, setLiveLaunchSessionLookup } from './live-turn'
+import { attachPermissionDenialTracking } from './permission-denial'
 import {
   historySeqWatermarks,
   isCurrentRecoveryGeneration,
@@ -576,6 +577,7 @@ export function initAcpEventListeners(): () => void {
     toast.error(event.message || 'Project switch failed')
   }
   teardown = [
+    attachPermissionDenialTracking(useAcpStore),
     transport.onEvent<ProjectSwitchCompletedEvent>(
       'project_switch_completed',
       applyCompletedProjectSwitch

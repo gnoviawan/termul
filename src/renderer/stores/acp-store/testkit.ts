@@ -41,6 +41,7 @@ export const FRESH = {
   pendingPermissions: {},
   pendingQuestions: {},
   pendingElicitations: {},
+  permissionDenialNotices: {},
   promptQueues: {},
   turnEndNotices: {},
   suppressQueueFlush: {},

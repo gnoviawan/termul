@@ -27,12 +27,17 @@ import type { AcpState } from '../types'
 
 type MiscSliceState = Pick<
   AcpState,
-  'transportReconnecting' | 'degradedRecoverySessions' | 'generateCommitMessage' | 'assistTerminal'
+  | 'transportReconnecting'
+  | 'degradedRecoverySessions'
+  | 'permissionDenialNotices'
+  | 'generateCommitMessage'
+  | 'assistTerminal'
 >
 
 export const createMiscSlice: StateCreator<AcpState, [], [], MiscSliceState> = (set, get) => ({
   transportReconnecting: false,
   degradedRecoverySessions: {},
+  permissionDenialNotices: {},
 
   generateCommitMessage: async (cwd, stagedDiff) => {
     const trimmedDiff = stagedDiff.trim()
