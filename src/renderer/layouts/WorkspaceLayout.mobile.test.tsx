@@ -806,6 +806,103 @@ describe('WorkspaceLayout mobile branch', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
+  // The changed-files bar's "Git" action lives in AgentChatPanel, which this
+  // file's PaneRenderer stub cannot host. A stand-in button beside the real
+  // layout is wired the way the panel wires it: the tapped button is handed to
+  // `openGitSheet(cwd, opener)` through `useGitSheetStore`. The Git sheet must
+  // return focus to it, not to <body> (and not to ⋯, which was never used).
+  describe('Git sheet opened from the changed-files Git action', () => {
+    function GitActionStandIn(): React.JSX.Element {
+      const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
+      return (
+        <button
+          type="button"
+          onClick={(event) => openGitSheet('/demo/.worktrees/chat', event.currentTarget)}
+        >
+          Open Git changes
+        </button>
+      )
+    }
+
+    function tree(showAction: boolean): React.JSX.Element {
+      return (
+        <TooltipProvider>
+          <MemoryRouter>
+            {showAction && <GitActionStandIn />}
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+    }
+
+    async function openFromGitAction(): Promise<{ action: HTMLElement; view: RenderResult }> {
+      const view = render(tree(true))
+      await screen.findByLabelText('More')
+      const action = screen.getByRole('button', { name: 'Open Git changes' })
+      fireEvent.click(action)
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(useGitSheetStore.getState().cwd).toBe('/demo/.worktrees/chat')
+      return { action, view }
+    }
+
+    it('returns focus to the Git action when Escape closes the sheet', async () => {
+      const { action } = await openFromGitAction()
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(action))
+      expect(document.activeElement).not.toBe(screen.getByLabelText('More'))
+    })
+
+    it("returns focus to the Git action when the sheet's Close button is used", async () => {
+      const { action } = await openFromGitAction()
+
+      const sheet = document.querySelector('[data-sheet]') as HTMLElement
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(action))
+    })
+
+    it('returns focus to the Git action when hardware back closes the sheet', async () => {
+      const { action } = await openFromGitAction()
+
+      await waitForSentinelDepth(1)
+      await pressSystemBack()
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(action))
+    })
+
+    it('leaves focus alone, with no throw, when the Git action is gone by the time it closes', async () => {
+      const { action, view } = await openFromGitAction()
+      // The bar unmounts while the sheet is open (a question replaced it).
+      view.rerender(tree(false))
+      expect(action.isConnected).toBe(false)
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() =>
+        expect(logFrontendError).toHaveBeenCalledWith({
+          level: 'info',
+          source: 'sheet-focus-return',
+          message: 'Sheet closed with no connected focus target: git-sheet'
+        })
+      )
+      expect(document.activeElement).toBe(document.body)
+    })
+  })
+
   // Story 10 (QA F9/F7): the git sheet is no longer a radius-0 full-screen
   // takeover — rounded top corners + max-height with the app visible behind
   // the overlay; the safe-area bottom inset from Story 7 is preserved.

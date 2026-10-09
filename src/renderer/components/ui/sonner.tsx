@@ -8,16 +8,15 @@ type ToasterProps = React.ComponentProps<typeof Sonner>
 
 /**
  * Bottom offset (px) of the toast stack on the mobile web shell: clear of the
- * dock instead of covering the composer. 160 = the one-row composer card (100:
+ * dock instead of covering the composer. 136 = the one-row composer card (100:
  * editor block 46 + toolbar row 44 + 8 bottom padding + 2 borders) + the
- * `ChatInputBar` `pb-6` (24) + the `StatusBar` `h-6` (24) that the mobile shell
- * renders below the chat pane + a 12 gap. The offset is measured from the
- * viewport bottom, so the status bar counts: without it the toast's bottom edge
- * lands 12px inside the card instead of 12px above it. It also clears the
- * terminal key bar. The variable parts of the dock (changed files, queue,
- * approval) are not counted here.
+ * `ChatInputBar` `pb-6` (24) + a 12 gap. The offset is measured from the
+ * viewport bottom, and the mobile shell renders nothing below the chat pane
+ * (the `StatusBar` is retired there). It also clears the terminal key bar. The
+ * variable parts of the dock (changed files, queue, approval) are not counted
+ * here.
  */
-const MOBILE_TOAST_BOTTOM_OFFSET_PX = 160
+const MOBILE_TOAST_BOTTOM_OFFSET_PX = 136
 const MOBILE_TOAST_OFFSET = { bottom: MOBILE_TOAST_BOTTOM_OFFSET_PX }
 
 const Toaster = ({ ...props }: ToasterProps) => {

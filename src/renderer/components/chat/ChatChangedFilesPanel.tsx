@@ -104,9 +104,11 @@ interface ChatChangedFilesPanelProps {
   toolCalls: ToolCall[]
   /**
    * Mobile dock: adds a "Git" action beside the header that opens the Git
-   * sheet. When omitted (desktop) the header renders exactly as before.
+   * sheet. It is called with the tapped button, which the Git sheet returns
+   * focus to when it closes. When omitted (desktop) the header renders exactly
+   * as before.
    */
-  onOpenGitChanges?: () => void
+  onOpenGitChanges?: (opener: HTMLElement) => void
   /**
    * Render collapsed while true (keyboard up with an approval pending). A
    * header tap during the window still flips the rendered state; afterwards
@@ -217,7 +219,7 @@ export function ChatChangedFilesPanel({
                 variant="ghost"
                 size="xs"
                 aria-label="Open Git changes"
-                onClick={onOpenGitChanges}
+                onClick={(event) => onOpenGitChanges(event.currentTarget)}
                 className="relative me-2 mt-2 shrink-0 text-muted-foreground after:absolute after:-inset-2 after:content-[''] [&_svg]:size-3"
               >
                 Git

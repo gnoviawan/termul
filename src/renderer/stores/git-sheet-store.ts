@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { logFrontendError } from '@/lib/log-api'
+import { recordSheetOpener } from '@/lib/sheet-focus-return'
 import { getActiveWorktreeRoot, getProjectRootPath } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -51,8 +52,13 @@ interface GitSheetState {
   cwd: string
   /** Active project id recorded at open ('' when unknown); a different active project closes the sheet. */
   projectId: string
-  /** Open the sheet on `cwd`, or on the cwd `resolveGitSheetCwd` finds when omitted. */
-  openGitSheet: (cwd?: string) => void
+  /**
+   * Open the sheet on `cwd`, or on the cwd `resolveGitSheetCwd` finds when
+   * omitted. `opener` is the control the sheet returns focus to on close; it is
+   * recorded only when the sheet actually opens, and an omitted one leaves the
+   * opener a caller already recorded (the header ⋯ row) in place.
+   */
+  openGitSheet: (cwd?: string, opener?: HTMLElement | null) => void
   closeGitSheet: () => void
 }
 
@@ -74,7 +80,7 @@ export const useGitSheetStore = create<GitSheetState>((set) => ({
   cwd: '',
   projectId: '',
 
-  openGitSheet: (explicitCwd): void => {
+  openGitSheet: (explicitCwd, opener): void => {
     const projectId = useProjectStore.getState().activeProjectId
     // Only read the other stores when no explicit cwd already answers.
     let resolved = resolveGitSheetCwd({ explicitCwd })
@@ -104,6 +110,7 @@ export const useGitSheetStore = create<GitSheetState>((set) => ({
       source: 'git-sheet-store',
       message: `Git sheet opened from ${resolved.source} cwd`
     })
+    recordSheetOpener('git-sheet', opener)
     set({ open: true, cwd: resolved.cwd, projectId })
   },
 

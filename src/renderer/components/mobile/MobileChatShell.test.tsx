@@ -138,9 +138,10 @@ vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
 
 // Stub the drawer so the shell test focuses on the opener wiring and the props
 // threaded through (☰ and the pill → drawerOpen → `open`; `onOpenChange` closes
-// it). The drawer's own layout, focus handling and rows are covered in
-// MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx. With
-// `drawerModalRef` set it wraps the same content in a real modal Sheet.
+// it). It carries the real drawer's id, so the `aria-controls` of ☰ and the pill
+// resolves to an element. The drawer's own layout, focus handling and rows are
+// covered in MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx.
+// With `drawerModalRef` set it wraps the same content in a real modal Sheet.
 vi.mock('./MobileShellDrawer', async () => {
   const { Sheet, SheetContent, SheetDescription, SheetTitle } = await import(
     '@/components/ui/sheet'
@@ -162,7 +163,7 @@ vi.mock('./MobileShellDrawer', async () => {
       if (drawerModalRef.current) {
         return (
           <Sheet open={props.open} onOpenChange={props.onOpenChange}>
-            <SheetContent side="left">
+            <SheetContent side="left" id="mobile-shell-drawer">
               <SheetTitle>Chats</SheetTitle>
               <SheetDescription className="sr-only">Stub drawer</SheetDescription>
               {content}
@@ -170,7 +171,7 @@ vi.mock('./MobileShellDrawer', async () => {
           </Sheet>
         )
       }
-      return props.open ? <div>{content}</div> : null
+      return props.open ? <div id="mobile-shell-drawer">{content}</div> : null
     }
   }
 })
@@ -1026,6 +1027,20 @@ describe('MobileChatShell', () => {
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     })
 
+    it('focuses the header title, not ⋯, after a row was chosen', async () => {
+      seedActiveTerminal()
+      renderTerminal()
+      await openTerminalSheet()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Restart terminal' }))
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      await waitFor(() =>
+        expect(document.activeElement).toBe(document.getElementById('mobile-shell-title'))
+      )
+      expect(document.activeElement).not.toBe(screen.getByLabelText('Terminal actions'))
+    })
+
     it('Command history calls onOpenCommandHistory() and closes', async () => {
       seedActiveTerminal()
       const { callbacks } = renderTerminal()
@@ -1412,6 +1427,20 @@ describe('MobileChatShell', () => {
       await waitFor(() => expect(document.activeElement).toBe(subtitle))
     })
 
+    it('returns focus to the subtitle when it was opened from the drawer project row', async () => {
+      tauriRef.current = false
+      renderShell()
+      const subtitle = screen.getByRole('button', { name: /switch project/ })
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByText('stub-open-projects'))
+      expect(await screen.findByText('project-drawer')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByText('close-drawer'))
+
+      expect(screen.queryByText('project-drawer')).not.toBeInTheDocument()
+      await waitFor(() => expect(document.activeElement).toBe(subtitle))
+    })
+
     it('hands onNewProject to the sheet as its Add project action', async () => {
       tauriRef.current = false
       const onNewProject = vi.fn()
@@ -1537,25 +1566,70 @@ describe('MobileChatShell', () => {
       expect(menu).toHaveAttribute('aria-controls', 'mobile-shell-drawer')
     })
 
-    it('records ☰ as the opener and as the fallback target', () => {
+    it.each([
+      ['☰', 0, 'Open menu'],
+      ['the attention pill', 2, '2 other chats need you']
+    ])('%s: aria-controls resolves to the drawer element', (_name, attentionCount, label) => {
+      mockAttentionCount.mockReturnValue(attentionCount)
       renderShell()
-      const menu = screen.getByLabelText('Open menu')
+      const control = screen.getByRole('button', { name: label })
 
-      fireEvent.click(menu)
+      fireEvent.click(control)
 
-      expect(drawerProps().returnFocusRef.current).toBe(menu)
-      expect(drawerProps().menuButtonRef.current).toBe(menu)
+      const target = document.getElementById(control.getAttribute('aria-controls') ?? '')
+      expect(target).not.toBeNull()
+      expect(target?.id).toBe('mobile-shell-drawer')
+      expect(target).toContainElement(screen.getByText('shell-drawer'))
     })
 
-    it('records the attention pill as the opener, keeping ☰ as the fallback', () => {
+    it('records ☰ as the opener: dismissing the drawer returns focus to it', () => {
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
+      fireEvent.click(menu)
+
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(menu)
+    })
+
+    it('records the attention pill as the opener when it opened the drawer', () => {
       mockAttentionCount.mockReturnValue(2)
       renderShell()
       const pill = screen.getByRole('button', { name: '2 other chats need you' })
-
       fireEvent.click(pill)
 
-      expect(drawerProps().returnFocusRef.current).toBe(pill)
-      expect(drawerProps().menuButtonRef.current).toBe(screen.getByLabelText('Open menu'))
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(pill)
+      expect(document.activeElement).not.toBe(screen.getByLabelText('Open menu'))
+    })
+
+    it('falls back to ☰ when the pill that opened the drawer is gone', () => {
+      mockAttentionCount.mockReturnValue(2)
+      const view = renderShell()
+      const pill = screen.getByRole('button', { name: '2 other chats need you' })
+      fireEvent.click(pill)
+
+      // Nothing needs the user any more, so the pill unmounts behind the drawer.
+      mockAttentionCount.mockReturnValue(0)
+      rerenderShell(view)
+      expect(pill.isConnected).toBe(false)
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(screen.getByLabelText('Open menu'))
+    })
+
+    it('records the opener again on every open', () => {
+      mockAttentionCount.mockReturnValue(2)
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
+      fireEvent.click(screen.getByRole('button', { name: '2 other chats need you' }))
+      fireEvent.click(screen.getByText('close-shell-drawer'))
+
+      fireEvent.click(menu)
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(menu)
     })
 
     it('closes the drawer when it calls onOpenChange(false)', () => {
