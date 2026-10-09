@@ -113,33 +113,36 @@ test('styled multi-question panel renders and the submitted answers round-trip t
   const questions = pane.getByTestId('elicitation-questions')
   await expect(questions).toBeVisible({ timeout: 30_000 })
 
-  // Two question cards — one per schema property.
+  // Stepper chrome: one question per step, `i of N` pager in the header.
   const q0 = pane.getByTestId('elicitation-question-q0')
-  const q1 = pane.getByTestId('elicitation-question-q1')
   await expect(q0).toBeVisible()
-  await expect(q1).toBeVisible()
+  await expect(questions).toContainText('1 of 2')
 
-  // Header chips carry the schema `title`s and the question text the
-  // `description`s — the raw `qN` property names never render as labels
+  // The step carries the schema `title` (option-group legend) and the question text
+  // (`description`) — the raw `qN` property names never render as labels
   // (the pre-fix bug this suite guards).
   await expect(q0).toContainText('Color')
   await expect(q0).toContainText('Which color should I use?')
-  await expect(q1).toContainText('Features')
-  await expect(q1).toContainText('Which features should I enable?')
   await expect(questions).not.toContainText('q0')
   await expect(questions).not.toContainText('q1')
 
-  // q0 single-select option card.
+  // q0 single-select pick auto-advances to the next question.
   await q0.getByRole('button', { name: /Red/ }).click()
+  const q1 = pane.getByTestId('elicitation-question-q1')
+  await expect(q1).toBeVisible()
+  await expect(questions).toContainText('2 of 2')
+  await expect(q1).toContainText('Features')
+  await expect(q1).toContainText('Which features should I enable?')
+
   // q1 multi-select toggles.
   await q1.getByRole('button', { name: /Logging/ }).click()
   await q1.getByRole('button', { name: /Tracing/ }).click()
-  // `_meta["cognition.ai/allowOther"]` → the per-question "Other" affordance;
-  // its free text submits as a non-option value appended to the array.
-  await pane.getByTestId('elicitation-other-toggle-q1').click()
+  // `_meta["cognition.ai/allowOther"]` → the per-question "write your own
+  // response" input; its free text submits as a non-option value appended
+  // to the array.
   await pane.getByTestId('elicitation-other-q1').fill('My custom feature')
 
-  await pane.getByRole('button', { name: 'Send answers' }).click()
+  await pane.getByRole('button', { name: 'Submit' }).click()
 
   // The agent echoes the verbatim wire response — assert the accept action
   // and the answer content (membership, not ordering).
@@ -151,21 +154,22 @@ test('styled multi-question panel renders and the submitted answers round-trip t
   expect(answer.content?.q1).toHaveLength(3)
 })
 
-test('unanswered required questions submit as skipped (Send stays enabled)', async ({ page }) => {
+test('unanswered required questions submit as skipped (Skip stays enabled)', async ({ page }) => {
   await launchChat(page, `${TITLE_B} [ELICIT]`)
 
   const pane = chatPane(page, TITLE_B)
   const questions = pane.getByTestId('elicitation-questions')
   await expect(questions).toBeVisible({ timeout: 30_000 })
 
-  const send = pane.getByRole('button', { name: 'Send answers' })
-  // Required-but-unanswered questions never block submit — the agent reads
-  // an omitted `content` key as a skipped question, not an error.
-  await expect(send).toBeEnabled()
-
+  // Answering q0's single-select auto-advances to q1's step.
   await pane.getByTestId('elicitation-question-q0').getByRole('button', { name: /Blue/ }).click()
-  await expect(send).toBeEnabled()
-  await send.click()
+  await expect(pane.getByTestId('elicitation-question-q1')).toBeVisible()
+
+  // Required-but-unanswered questions never block submit — Skip sends the
+  // elicitation with q1 omitted, which the agent reads as skipped.
+  const skip = pane.getByRole('button', { name: 'Skip' })
+  await expect(skip).toBeEnabled()
+  await skip.click()
 
   const answer = await awaitElicitAnswer(page, TITLE_B)
   expect(answer.content?.q0).toBe('Blue')
