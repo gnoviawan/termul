@@ -384,6 +384,25 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
     expect(screen.queryByLabelText(/Initialize Git repository/i)).not.toBeInTheDocument()
   })
 
+  it('keeps the path, name and advanced selects at 16px on a coarse pointer', async () => {
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    expect(screen.getByPlaceholderText('No directory selected')).toHaveClass(
+      'pointer-coarse:text-base'
+    )
+    expect(screen.getByPlaceholderText('My Project')).toHaveClass('pointer-coarse:text-base')
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Advanced options'))
+    })
+    await waitFor(() => {
+      expect(screen.getAllByRole('combobox').length).toBe(2)
+    })
+    for (const select of screen.getAllByRole('combobox')) {
+      expect(select).toHaveClass('pointer-coarse:text-base')
+    }
+  })
+
   it('shows all advanced controls when the section is expanded', async () => {
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
 

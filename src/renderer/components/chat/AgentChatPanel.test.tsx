@@ -49,7 +49,10 @@ const {
   planPanelPropsRef,
   askQuestionPropsRef,
   elicitationPropsRef,
-  openGitSheetRef
+  openGitSheetRef,
+  denialNoticesRef,
+  errorNoticeCallsRef,
+  permissionPromptPropsRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockOpenDiscovered: vi.fn(),
@@ -163,7 +166,22 @@ const {
   },
   askQuestionPropsRef: { current: [] as Array<{ autoFocusFirstOption?: boolean }> },
   elicitationPropsRef: { current: [] as Array<{ autoFocusHeading?: boolean }> },
-  openGitSheetRef: { current: vi.fn() }
+  openGitSheetRef: { current: vi.fn() },
+  // L-09: the store's denied-by-disconnect notices (keyed by session id), every
+  // ChatErrorNotice render in order (the panel mounts the denial line right
+  // before the session error line, so each panel render pushes the pair
+  // [denial, error]), and the props the morph branch hands PermissionPrompt.
+  denialNoticesRef: { current: {} as Record<string, { requestId: string; tool: string }> },
+  errorNoticeCallsRef: {
+    current: [] as Array<{
+      message: string | null
+      onRetry?: () => void
+      onDismiss: () => void
+    }>
+  },
+  permissionPromptPropsRef: {
+    current: [] as Array<{ isVisible?: boolean; embedded?: boolean }>
+  }
 }))
 
 vi.mock('@/lib/log-api', () => ({
@@ -202,6 +220,7 @@ vi.mock('@/stores/acp-store', () => {
     pendingPermissions: pendingPermissionsRef.current,
     pendingQuestions: pendingQuestionsRef.current,
     pendingElicitations: pendingElicitationsRef.current,
+    permissionDenialNotices: denialNoticesRef.current,
     pendingBrowserConsents: pendingBrowserConsentsRef.current,
     // The panel's gate selects `s.messages[sessionId]`; the legacy
     // useAcpMessages mock serves one flat list for ANY session, so the map
@@ -312,6 +331,7 @@ vi.mock('./ChatErrorNotice', () => ({
     onDismiss: () => void
   }) => {
     errorNoticePropsRef.current = props
+    errorNoticeCallsRef.current.push(props)
     return null
   }
 }))
@@ -367,7 +387,10 @@ vi.mock('./ChatMessageList', () => ({
 // The three prompt stubs render a marker each (like `composer-stub`) so the dock
 // tests can assert they sit inside the dock wrapper.
 vi.mock('./PermissionPrompt', () => ({
-  PermissionPrompt: () => <div data-testid="permission-stub" />
+  PermissionPrompt: (props: { isVisible?: boolean; embedded?: boolean }) => {
+    permissionPromptPropsRef.current.push(props)
+    return <div data-testid="permission-stub" />
+  }
 }))
 vi.mock('./AskUserQuestion', () => ({
   AskUserQuestion: (props: { autoFocusFirstOption?: boolean }) => {
@@ -759,6 +782,118 @@ describe('AgentChatPanel failed-launch retry (story 5)', () => {
     // relaunch+replay path runs, never the failed-launch path.
     expect(mockRetryCrashed).toHaveBeenCalledWith('s1')
     expect(mockRetryFailed).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentChatPanel permission denial notice (L-09)', () => {
+  const NOTICE = { requestId: 'r1', tool: 'npm test -- auth' }
+  const DENIED =
+    'Permission for npm test -- auth was denied because this device disconnected. Ask the agent to retry.'
+
+  /** The denial line is the first of the two notices each panel render mounts. */
+  const lastDenialLine = () => errorNoticeCallsRef.current.at(-2)
+  const lastErrorLine = () => errorNoticeCallsRef.current.at(-1)
+
+  beforeEach(() => {
+    mobileRef.current = true
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    sessionsMapRef.current = {}
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    discoveredContextRef.current = {}
+    messagesRef.current = []
+    pendingPermissionsRef.current = {}
+    pendingQuestionsRef.current = {}
+    pendingElicitationsRef.current = {}
+    denialNoticesRef.current = {}
+    errorNoticeCallsRef.current = []
+    errorNoticePropsRef.current = null
+  })
+
+  afterEach(() => {
+    mobileRef.current = true
+    denialNoticesRef.current = {}
+  })
+
+  it('shows the denial line for a notice of this panel session, with no Retry', () => {
+    denialNoticesRef.current = { s1: NOTICE }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    expect(lastDenialLine()?.message).toBe(DENIED)
+    expect(lastDenialLine()?.onRetry).toBeUndefined()
+    // The session error line is a separate notice and stays empty.
+    expect(lastErrorLine()?.message).toBeNull()
+  })
+
+  it('does not show the notice of another session', () => {
+    denialNoticesRef.current = { s2: NOTICE }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    expect(lastDenialLine()?.message).toBeNull()
+  })
+
+  it('shows nothing without a notice, and drops the line when the notice is removed', () => {
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(lastDenialLine()?.message).toBeNull()
+
+    denialNoticesRef.current = { s1: NOTICE }
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(lastDenialLine()?.message).toBe(DENIED)
+
+    // The store clears it when the next turn starts.
+    denialNoticesRef.current = {}
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(lastDenialLine()?.message).toBeNull()
+  })
+
+  it('keeps the line across unrelated re-renders', () => {
+    denialNoticesRef.current = { s1: NOTICE }
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    messagesRef.current = [{ id: 'm1', role: 'agent', blocks: [{ type: 'text', text: 'hi' }] }]
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
+
+    expect(lastDenialLine()?.message).toBe(DENIED)
+  })
+
+  it('hides only that notice on Dismiss, and shows a newer denial again', () => {
+    denialNoticesRef.current = { s1: NOTICE }
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    act(() => lastDenialLine()?.onDismiss())
+    expect(lastDenialLine()?.message).toBeNull()
+
+    // The same notice stays hidden through further renders.
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(lastDenialLine()?.message).toBeNull()
+
+    denialNoticesRef.current = { s1: { requestId: 'r2', tool: 'git push' } }
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(lastDenialLine()?.message).toBe(
+      'Permission for git push was denied because this device disconnected. Ask the agent to retry.'
+    )
+  })
+
+  it('does not touch the session error line when Dismiss is pressed', () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w', lastError: 'agent said no' })
+    denialNoticesRef.current = { s1: NOTICE }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(lastErrorLine()?.message).toBe('agent said no')
+
+    act(() => lastDenialLine()?.onDismiss())
+
+    expect(lastDenialLine()?.message).toBeNull()
+    expect(lastErrorLine()?.message).toBe('agent said no')
+  })
+
+  it('shows the line on the desktop layout too (the notice is shell-independent)', () => {
+    mobileRef.current = false
+    denialNoticesRef.current = { s1: NOTICE }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    expect(lastDenialLine()?.message).toBe(DENIED)
   })
 })
 
@@ -1511,6 +1646,35 @@ describe('AgentChatPanel mobile dock wiring', () => {
       seedElicitation()
       render(<AgentChatPanel sessionId="s1" isVisible />)
       expect(elicitationPropsRef.current.at(-1)?.autoFocusHeading).toBe(false)
+    })
+  })
+
+  describe('hidden-pane arrival of a stacked permission', () => {
+    it('forwards isVisible to the PermissionPrompt that stacks with an elicitation or a question', () => {
+      seedPermission()
+      seedElicitation()
+      permissionPromptPropsRef.current = []
+      const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+      expect(permissionPromptPropsRef.current.at(-1)).toMatchObject({
+        embedded: false,
+        isVisible: false
+      })
+
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(permissionPromptPropsRef.current.at(-1)).toMatchObject({
+        embedded: false,
+        isVisible: true
+      })
+    })
+
+    it('forwards isVisible to the composer, which mounts the embedded prompt', () => {
+      seedPermission()
+      chatInputBarPropsRef.current = []
+      const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+      expect(chatInputBarPropsRef.current.at(-1)?.isVisible).toBe(false)
+
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(chatInputBarPropsRef.current.at(-1)?.isVisible).toBe(true)
     })
   })
 

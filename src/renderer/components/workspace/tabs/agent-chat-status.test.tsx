@@ -150,6 +150,45 @@ describe('useAgentChatStatusSignals', () => {
     expect(result.current.needsAttention).toBe(true)
   })
 
+  it('flags a pending elicitation as Needs you', () => {
+    seedOptionsSession('s1', 'agent-1', { title: 'Chat' })
+    const { result } = renderHook(() => useAgentChatStatusSignals('s1'))
+    expect(result.current.needsAttention).toBe(false)
+
+    act(() => {
+      useAcpStore.setState({
+        pendingElicitations: {
+          e1: {
+            requestId: 'e1',
+            agentId: 'agent-1',
+            sessionId: 's1',
+            mode: 'form',
+            message: 'Pick a branch',
+            fields: []
+          }
+        }
+      })
+    })
+    expect(result.current.needsAttention).toBe(true)
+
+    // Another session's elicitation does not leak in.
+    act(() => {
+      useAcpStore.setState({
+        pendingElicitations: {
+          e1: {
+            requestId: 'e1',
+            agentId: 'agent-1',
+            sessionId: 's2',
+            mode: 'form',
+            message: 'Pick a branch',
+            fields: []
+          }
+        }
+      })
+    })
+    expect(result.current.needsAttention).toBe(false)
+  })
+
   it('treats a closed session as Needs you and not live, with stale turn flags ignored', () => {
     seedOptionsSession('s1', 'agent-1', {
       status: 'closed',

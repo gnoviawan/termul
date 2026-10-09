@@ -13,6 +13,7 @@
  */
 
 import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
+import { permissionDeniedMessage } from '@/lib/permission-denial'
 import type { SessionStatus } from '@/stores/acp-store'
 import type { ConnectionChannelState } from '@/stores/connection-status-store'
 
@@ -72,6 +73,8 @@ export interface AcpAnnouncementState {
   pendingPermissions: Readonly<Record<string, { sessionId: string }>>
   pendingQuestions: Readonly<Record<string, { sessionId: string }>>
   pendingElicitations: Readonly<Record<string, { sessionId: string }>>
+  /** Per-session denied-by-disconnect notice (L-09), keyed by session id. */
+  permissionDenialNotices: Readonly<Record<string, { requestId: string; tool: string }>>
   switchingProjectId: string | null
   failedProjectSwitchId: string | null
 }
@@ -103,6 +106,8 @@ export interface AcpAnnouncementMemory {
   needsYou: Readonly<Record<string, boolean>>
   /** `permission:`, `question:` and `elicitation:` keys currently pending. */
   approvalKeys: ReadonlySet<string>
+  /** `{sessionId}:{requestId}` of every denial notice, for any chat. */
+  denialKeys: ReadonlySet<string>
   switchingProjectId: string | null
   failedProjectSwitchId: string | null
 }
@@ -128,10 +133,14 @@ function pendingApprovals(state: AcpAnnouncementState): Map<string, string> {
   return approvals
 }
 
+function denialKey(sessionId: string, requestId: string): string {
+  return `${sessionId}:${requestId}`
+}
+
 /**
  * Needs-you per session, through the same predicate the desktop tab strip and
- * the project signals use. Elicitations are deliberately absent from it, so
- * another chat's elicitation stays silent. Every session is observed, not only
+ * the project signals use, so another chat's permission, question or
+ * elicitation reads the same everywhere. Every session is observed, not only
  * the current candidates: the candidate set (open tabs, retained chats) can
  * change without an ACP write, and the diff needs a previous value for a chat
  * that just became a candidate. Who is announced is decided later.
@@ -143,6 +152,9 @@ function observeNeedsYou(state: AcpAnnouncementState): Record<string, boolean> {
   const questionSessions = new Set(
     Object.values(state.pendingQuestions).map((item) => item.sessionId)
   )
+  const elicitationSessions = new Set(
+    Object.values(state.pendingElicitations).map((item) => item.sessionId)
+  )
   const needsYou: Record<string, boolean> = {}
   for (const [sessionId, session] of Object.entries(state.sessions)) {
     needsYou[sessionId] = agentChatNeedsAttention({
@@ -151,6 +163,7 @@ function observeNeedsYou(state: AcpAnnouncementState): Record<string, boolean> {
       agentStatus: state.agentStatus[session.agentId],
       pendingPermission: permissionSessions.has(sessionId),
       pendingQuestion: questionSessions.has(sessionId),
+      pendingElicitation: elicitationSessions.has(sessionId),
       ephemeral: false
     })
   }
@@ -160,8 +173,8 @@ function observeNeedsYou(state: AcpAnnouncementState): Record<string, boolean> {
 /**
  * Diff the previous memory against the next ACP state.
  *
- * Emission order is switch, turn finished, needs-you, approval, so that when
- * several land together `Approval needed` is the one the announcer keeps.
+ * Emission order is switch, turn finished, needs-you, denial, approval, so that
+ * when several land together `Approval needed` is the one the announcer keeps.
  * A null `prev` returns the baseline memory and no announcements.
  */
 export function deriveAcpAnnouncements(
@@ -171,6 +184,10 @@ export function deriveAcpAnnouncements(
 ): AnnouncementResult<AcpAnnouncementMemory> {
   const approvals = pendingApprovals(state)
   const needsYou = observeNeedsYou(state)
+  const denialKeys = new Set<string>()
+  for (const [sessionId, notice] of Object.entries(state.permissionDenialNotices)) {
+    denialKeys.add(denialKey(sessionId, notice.requestId))
+  }
   const activeTurn: Record<string, boolean> = {}
   for (const [sessionId, session] of Object.entries(state.sessions)) {
     activeTurn[sessionId] = session.activeTurn
@@ -180,6 +197,7 @@ export function deriveAcpAnnouncements(
     activeTurn,
     needsYou,
     approvalKeys: new Set(approvals.keys()),
+    denialKeys,
     switchingProjectId: state.switchingProjectId,
     failedProjectSwitchId: state.failedProjectSwitchId
   }
@@ -204,12 +222,18 @@ export function deriveAcpAnnouncements(
   // `closed` session is excluded: reopening a chat installs it as `closed` with
   // an optimistic live turn and clears that flag again when no agent owns the
   // turn, so true → false there is a dead turn being cleared, not one finishing.
+  // A chat showing a denial notice is excluded as well: the denied turn closes a
+  // macrotask after the notice is raised, and the region holds one message (a
+  // newer call replaces a pending one), so Turn finished would displace the
+  // denial text the user needs to hear. The notice clears when the next turn
+  // starts, so every later turn end announces as usual.
   const activeChatId = ctx.activeChatId
   if (
     activeChatId !== null &&
     prev.activeTurn[activeChatId] === true &&
     activeTurn[activeChatId] === false &&
-    state.sessions[activeChatId]?.status !== 'closed'
+    state.sessions[activeChatId]?.status !== 'closed' &&
+    state.permissionDenialNotices[activeChatId] === undefined
   ) {
     announcements.push(TURN_FINISHED)
   }
@@ -226,7 +250,18 @@ export function deriveAcpAnnouncements(
     }
   }
 
-  // 4. Approval: a new pending key for the active chat. A session first seen in
+  // 4. Denied by disconnect: a new notice for the active chat. A notice for
+  // another chat is stored silently and shows when that chat is opened, and a
+  // key the previous memory already held (switching chats) never repeats. A
+  // session first seen in this same evaluation is a baseline.
+  if (activeChatId !== null && prev.sessionIds.has(activeChatId)) {
+    const notice = state.permissionDenialNotices[activeChatId]
+    if (notice && !prev.denialKeys.has(denialKey(activeChatId, notice.requestId))) {
+      announcements.push(permissionDeniedMessage(notice.tool))
+    }
+  }
+
+  // 5. Approval: a new pending key for the active chat. A session first seen in
   // this same evaluation is a baseline, not a new request.
   if (activeChatId !== null && prev.sessionIds.has(activeChatId)) {
     for (const [key, sessionId] of approvals) {

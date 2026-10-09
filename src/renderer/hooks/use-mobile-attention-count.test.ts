@@ -16,6 +16,7 @@ const { signalsRef, storeRef, ephemeralRef } = vi.hoisted(() => ({
       agentStatus: Record<string, string>
       pendingPermissions: Record<string, { sessionId: string }>
       pendingQuestions: Record<string, { sessionId: string }>
+      pendingElicitations?: Record<string, { sessionId: string }>
     }
   },
   ephemeralRef: { current: new Set<string>() }
@@ -40,6 +41,7 @@ function seed(options: {
   agentStatus?: string
   permission?: boolean
   question?: boolean
+  elicitation?: boolean
 }): void {
   signalsRef.current = { attentionCounts: options.counts }
   storeRef.current = {
@@ -53,7 +55,8 @@ function seed(options: {
     },
     agentStatus: { a1: options.agentStatus ?? 'connected' },
     pendingPermissions: options.permission ? { r1: { sessionId: 'active' } } : {},
-    pendingQuestions: options.question ? { q1: { sessionId: 'active' } } : {}
+    pendingQuestions: options.question ? { q1: { sessionId: 'active' } } : {},
+    pendingElicitations: options.elicitation ? { e1: { sessionId: 'active' } } : {}
   }
 }
 
@@ -73,6 +76,19 @@ describe('useMobileAttentionCount', () => {
     seed({ counts: { p1: 2 }, question: true })
     const { result } = renderHook(() => useMobileAttentionCount('p1', 'active'))
     expect(result.current).toBe(1)
+  })
+
+  it('subtracts the active chat for a pending elicitation', () => {
+    seed({ counts: { p1: 2 }, elicitation: true })
+    const { result } = renderHook(() => useMobileAttentionCount('p1', 'active'))
+    expect(result.current).toBe(1)
+  })
+
+  it('tolerates a store without an elicitations map', () => {
+    seed({ counts: { p1: 2 } })
+    storeRef.current = { ...storeRef.current, pendingElicitations: undefined }
+    const { result } = renderHook(() => useMobileAttentionCount('p1', 'active'))
+    expect(result.current).toBe(2)
   })
 
   it('subtracts the active chat for a closed session or disconnected agent', () => {

@@ -177,7 +177,7 @@ export function CommandHistoryModal({
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Search commands..."
-                className="w-full px-3 py-2 text-sm bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full px-3 py-2 text-sm pointer-coarse:text-base bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
 

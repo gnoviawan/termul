@@ -253,6 +253,17 @@ export interface PendingPermission {
   toolCall: unknown
 }
 
+/**
+ * A permission the server denied because this device disconnected (L-09). The
+ * server emits no event for it, so the store infers it: a request that was
+ * pending at a transport loss and later left `pendingPermissions` without the
+ * user answering. `tool` is the request's tool title for the notice copy.
+ */
+export interface PermissionDenialNotice {
+  requestId: string
+  tool: string
+}
+
 /** A pending structured question (issue #411), keyed by `questionId`. */
 export interface PendingQuestion {
   questionId: string
@@ -437,6 +448,12 @@ export interface AcpState {
   pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
   pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
   pendingElicitations: Record<string, PendingElicitation>
+  /**
+   * Per-session notice that a permission was denied by a disconnect (see
+   * `PermissionDenialNotice`). Set by `attachPermissionDenialTracking`; cleared
+   * when the session's next turn starts or the session goes away.
+   */
+  permissionDenialNotices: Record<SessionId, PermissionDenialNotice>
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
   promptQueues: Record<SessionId, QueuedPrompt[]>
   /**

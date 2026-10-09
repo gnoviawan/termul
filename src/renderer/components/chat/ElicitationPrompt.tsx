@@ -16,10 +16,12 @@ import { ElicitationQuestions } from './ElicitationQuestions'
 interface ElicitationPromptProps {
   request: PendingElicitation
   /**
-   * Mobile: move focus into the prompt when it mounts: the "Request from the
-   * agent" heading of a generic form, or the dialog itself (named by the
-   * message) for a question batch. Read at mount only; both targets are
-   * focusable on the mobile shell alone.
+   * Mobile: move focus into the prompt while this is true: the "Request from
+   * the agent" heading of a generic form, or the dialog itself (named by the
+   * message) for a question batch. It fires at mount when true and again when
+   * it flips from false to true (a hidden pane that becomes visible); staying
+   * true never refocuses. Both targets are focusable on the mobile shell
+   * alone, so the desktop passes false.
    */
   autoFocusHeading?: boolean
 }
@@ -54,7 +56,6 @@ export function ElicitationPrompt({
   const dialogRef = useRef<HTMLDivElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const fieldRefs = useRef<Record<string, HTMLElement | null>>({})
-  const focusAtMount = useRef(autoFocusHeading)
 
   const questionShaped =
     request.mode === 'form' &&
@@ -69,12 +70,13 @@ export function ElicitationPrompt({
     !questionShaped || request.fields.every((field) => field.description !== request.message)
 
   useEffect(() => {
-    if (!focusAtMount.current)
-      return // A question batch has no "Request from the agent" heading: land on the
-      // dialog (named by the message) so the arrival still announces the prompt
-      // instead of leaving focus behind.
-    ;(headingRef.current ?? dialogRef.current)?.focus()
-  }, [])
+    if (!autoFocusHeading) return
+    // A question batch has no "Request from the agent" heading: land on the
+    // dialog (named by the message) so the arrival still announces the prompt
+    // instead of leaving focus behind.
+    const target = headingRef.current ?? dialogRef.current
+    target?.focus()
+  }, [autoFocusHeading])
 
   const setValue = (name: string, value: FieldValue): void => {
     setValues((current) => ({ ...current, [name]: value }))
@@ -98,8 +100,14 @@ export function ElicitationPrompt({
         if (field.kind === 'boolean') {
           if (raw === true || raw === false) content[field.name] = raw
           else if (field.required) {
-            fail(field, `${label} is required.`)
-            return
+            // The mobile Switch shows Off for an untouched field, so what it
+            // shows is what is sent. The desktop checkbox keeps "is required".
+            if (isMobileShell) {
+              content[field.name] = false
+            } else {
+              fail(field, `${label} is required.`)
+              return
+            }
           }
           continue
         }
@@ -292,7 +300,9 @@ export function ElicitationPrompt({
                               ref={registerField}
                               className={cn(
                                 'w-full rounded-md border border-border bg-background px-2 py-1',
-                                isMobileShell ? 'min-h-11 text-base' : 'text-sm'
+                                isMobileShell
+                                  ? 'min-h-11 text-base'
+                                  : 'text-sm pointer-coarse:text-base'
                               )}
                               value={value}
                               onChange={(event) => setValue(field.name, event.target.value)}

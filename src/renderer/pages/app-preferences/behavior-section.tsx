@@ -101,7 +101,7 @@ export function BehaviorSection({
             <select
               value={terminalUrlOpenMode}
               onChange={(e) => handleTerminalUrlOpenModeChange(e.target.value)}
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
             >
               {TERMINAL_URL_OPEN_MODE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -155,7 +155,7 @@ export function BehaviorSection({
                 handleOrphanTimeoutChange(e.target.value ? parseInt(e.target.value, 10) : null)
               }
               disabled={!orphanDetectionEnabled}
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {ORPHAN_TIMEOUT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -217,7 +217,7 @@ export function BehaviorSection({
               onChange={(e) => handleEditorAutoSaveDelayChange(parseInt(e.target.value, 10))}
               disabled={!editorAutoSave}
               aria-label="Auto save delay"
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {EDITOR_AUTO_SAVE_DELAY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>

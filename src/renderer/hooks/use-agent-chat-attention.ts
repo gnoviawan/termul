@@ -24,6 +24,11 @@ export function useAgentChatProjectSignals(): ProjectAgentChatSignals {
   const questionSessionIds = useAcpStore(
     useShallow((state) => Object.values(state.pendingQuestions ?? {}).map((item) => item.sessionId))
   )
+  const elicitationSessionIds = useAcpStore(
+    useShallow((state) =>
+      Object.values(state.pendingElicitations ?? {}).map((item) => item.sessionId)
+    )
+  )
   const root = useWorkspaceStore((state) => state.root)
   const retainedByProject = useAgentChatLifetimeStore((state) => state.retainedByProject)
 
@@ -39,6 +44,7 @@ export function useAgentChatProjectSignals(): ProjectAgentChatSignals {
     }
     const permissions = new Set(permissionSessionIds)
     const questions = new Set(questionSessionIds)
+    const elicitations = new Set(elicitationSessionIds)
     const attentionCounts: Record<string, number> = {}
     const firstNeedsYouSessionId: Record<string, string> = {}
     const runningProjectIds = new Set<string>()
@@ -52,6 +58,7 @@ export function useAgentChatProjectSignals(): ProjectAgentChatSignals {
         agentStatus: agentStatus[session.agentId],
         pendingPermission: permissions.has(sessionId),
         pendingQuestion: questions.has(sessionId),
+        pendingElicitation: elicitations.has(sessionId),
         ephemeral
       })
       if (needsAttention) {
@@ -73,5 +80,13 @@ export function useAgentChatProjectSignals(): ProjectAgentChatSignals {
       }
     }
     return { attentionCounts, firstNeedsYouSessionId, runningProjectIds }
-  }, [agentStatus, permissionSessionIds, questionSessionIds, retainedByProject, root, sessions])
+  }, [
+    agentStatus,
+    elicitationSessionIds,
+    permissionSessionIds,
+    questionSessionIds,
+    retainedByProject,
+    root,
+    sessions
+  ])
 }

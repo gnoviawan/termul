@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { permissionDeniedMessage } from './permission-denial'
 import {
   type AcpAnnouncementState,
   type AnnouncementContext,
@@ -37,6 +38,7 @@ function acpState(overrides: Partial<AcpAnnouncementState> = {}): AcpAnnouncemen
     pendingPermissions: {},
     pendingQuestions: {},
     pendingElicitations: {},
+    permissionDenialNotices: {},
     switchingProjectId: null,
     failedProjectSwitchId: null,
     ...overrides
@@ -304,15 +306,100 @@ describe('deriveAcpAnnouncements: other chat needs you', () => {
     expect(deriveAcpAnnouncements(baseline.memory, waiting, after).announcements).toEqual([])
   })
 
-  it('is silent for another chat holding an elicitation (denied-by-disconnect and elicitation notes)', () => {
+  it('announces another chat that starts holding an elicitation', () => {
     const next = { ...idle, pendingElicitations: { e1: { sessionId: 'other' } } }
-    expect(transition(idle, next)).toEqual([])
+    expect(transition(idle, next)).toEqual([needsYouAnnouncement('Chat other')])
+  })
+
+  it('is silent for a second elicitation on a chat that already needs you', () => {
+    const one = { ...idle, pendingElicitations: { e1: { sessionId: 'other' } } }
+    const two = {
+      ...idle,
+      pendingElicitations: { e1: { sessionId: 'other' }, e2: { sessionId: 'other' } }
+    }
+    expect(transition(one, two)).toEqual([])
   })
 
   it('uses the injected chat label lookup', () => {
     const next = { ...idle, pendingQuestions: { q1: { sessionId: 'other' } } }
     const ctx = context({ chatLabel: () => 'Agent Chat' })
     expect(transition(idle, next, ctx)).toEqual(['Agent Chat needs you'])
+  })
+})
+
+describe('deriveAcpAnnouncements: permission denied by a disconnect', () => {
+  const idle = acpState({ sessions: twoChats() })
+  const notice = { requestId: 'r1', tool: 'npm test -- auth' }
+  const denied = permissionDeniedMessage('npm test -- auth')
+
+  it('announces a new notice for the active chat', () => {
+    const next = { ...idle, permissionDenialNotices: { active: notice } }
+    expect(transition(idle, next)).toEqual([denied])
+  })
+
+  it('stays silent for another chat, and again when that chat becomes the active one', () => {
+    const next = { ...idle, permissionDenialNotices: { other: notice } }
+    const baseline = deriveAcpAnnouncements(null, idle, context())
+    const stored = deriveAcpAnnouncements(baseline.memory, next, context())
+    expect(stored.announcements).toEqual([])
+    expect(stored.memory.denialKeys).toEqual(new Set(['other:r1']))
+
+    const opened = deriveAcpAnnouncements(stored.memory, next, context({ activeChatId: 'other' }))
+    expect(opened.announcements).toEqual([])
+  })
+
+  it('is silent on the first observation, even with a notice already stored', () => {
+    const state = acpState({ sessions: twoChats(), permissionDenialNotices: { active: notice } })
+    const result = deriveAcpAnnouncements(null, state, context())
+    expect(result.announcements).toEqual([])
+    expect(result.memory.denialKeys).toEqual(new Set(['active:r1']))
+  })
+
+  it('is silent when the active session and its notice first appear together', () => {
+    const before = acpState({ sessions: { other: session() } })
+    const after = acpState({ sessions: twoChats(), permissionDenialNotices: { active: notice } })
+    expect(transition(before, after)).toEqual([])
+  })
+
+  it('does not repeat while the same notice stays', () => {
+    const next = { ...idle, permissionDenialNotices: { active: notice } }
+    const baseline = deriveAcpAnnouncements(null, idle, context())
+    const first = deriveAcpAnnouncements(baseline.memory, next, context())
+    expect(first.announcements).toEqual([denied])
+    const again = deriveAcpAnnouncements(
+      first.memory,
+      { ...next, sessions: twoChats({ active: { activeTurn: true } }) },
+      context()
+    )
+    expect(again.announcements).toEqual([])
+  })
+
+  it('stays silent when the notice clears', () => {
+    const shown = { ...idle, permissionDenialNotices: { active: notice } }
+    expect(transition(shown, idle)).toEqual([])
+  })
+
+  it('announces a newer denial for the same chat as its own notice', () => {
+    const first = { ...idle, permissionDenialNotices: { active: notice } }
+    const second = {
+      ...idle,
+      permissionDenialNotices: { active: { requestId: 'r2', tool: 'git push' } }
+    }
+    expect(transition(first, second)).toEqual([permissionDeniedMessage('git push')])
+  })
+
+  it('keeps Approval needed last when a denial and a new approval land together', () => {
+    const next = {
+      ...idle,
+      permissionDenialNotices: { active: notice },
+      pendingPermissions: { r9: { sessionId: 'active' } }
+    }
+    expect(transition(idle, next)).toEqual([denied, APPROVAL_NEEDED])
+  })
+
+  it('is silent when no chat is active', () => {
+    const next = { ...idle, permissionDenialNotices: { active: notice } }
+    expect(transition(idle, next, context({ activeChatId: null }))).toEqual([])
   })
 })
 
@@ -357,6 +444,40 @@ describe('deriveAcpAnnouncements: turn finished', () => {
       sessions: twoChats({ active: { status: 'active', activeTurn: false } })
     })
     expect(transition(attached, done)).toEqual([TURN_FINISHED])
+  })
+
+  it('leaves the denial text alone when the denied turn closes: no Turn finished over it', () => {
+    const notice = { requestId: 'r1', tool: 'npm test -- auth' }
+    const running = acpState({ sessions: twoChats({ active: { activeTurn: true } }) })
+    const denied = acpState({
+      sessions: twoChats({ active: { activeTurn: true } }),
+      permissionDenialNotices: { active: notice }
+    })
+    const done = acpState({
+      sessions: twoChats({ active: { activeTurn: false } }),
+      permissionDenialNotices: { active: notice }
+    })
+    const baseline = deriveAcpAnnouncements(null, running, context())
+    const raised = deriveAcpAnnouncements(baseline.memory, denied, context())
+    expect(raised.announcements).toEqual([permissionDeniedMessage('npm test -- auth')])
+    expect(deriveAcpAnnouncements(raised.memory, done, context()).announcements).toEqual([])
+  })
+
+  it('announces Turn finished again for the turn after the notice cleared', () => {
+    const notice = { requestId: 'r1', tool: 'npm test -- auth' }
+    const running = acpState({ sessions: twoChats({ active: { activeTurn: true } }) })
+    const shown = acpState({
+      sessions: twoChats({ active: { activeTurn: false } }),
+      permissionDenialNotices: { active: notice }
+    })
+    const baseline = deriveAcpAnnouncements(null, shown, context())
+    // The next turn starts (the store clears the notice), then finishes.
+    const started = deriveAcpAnnouncements(baseline.memory, running, context())
+    expect(started.announcements).toEqual([])
+    const done = acpState({ sessions: twoChats({ active: { activeTurn: false } }) })
+    expect(deriveAcpAnnouncements(started.memory, done, context()).announcements).toEqual([
+      TURN_FINISHED
+    ])
   })
 
   it('is silent when a turn starts', () => {

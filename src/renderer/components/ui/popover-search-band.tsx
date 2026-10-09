@@ -35,7 +35,7 @@ export function PopoverSearchBand({
         aria-label={ariaLabel}
         autoFocus={autoFocus}
         className={cn(
-          'min-w-0 flex-1 border-0 bg-transparent text-foreground outline-none placeholder:text-muted-foreground',
+          'min-w-0 flex-1 border-0 bg-transparent text-foreground outline-none placeholder:text-muted-foreground pointer-coarse:text-base',
           FOCUS_RING_CLASS,
           inputClassName
         )}

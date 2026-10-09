@@ -75,6 +75,37 @@ describe('ElicitationPrompt', () => {
       )
     })
 
+    it('never focuses the heading, even when the prop flips to true later', () => {
+      const { rerender } = render(
+        <ElicitationPrompt request={request(FORM)} autoFocusHeading={false} />
+      )
+      rerender(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
+
+      expect(screen.getByRole('heading', { level: 2 })).not.toHaveFocus()
+      expect(document.body).toHaveFocus()
+    })
+
+    it('still reports an untouched required boolean as required and does not submit', () => {
+      render(
+        <ElicitationPrompt request={request([field('notify', 'boolean', { required: true })])} />
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+      expect(toastError).toHaveBeenCalledWith('notify is required.')
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(respondElicitation).not.toHaveBeenCalled()
+    })
+
+    it('sends a checked required boolean on desktop', () => {
+      render(
+        <ElicitationPrompt request={request([field('notify', 'boolean', { required: true })])} />
+      )
+      fireEvent.click(screen.getByRole('checkbox'))
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+      expect(respondElicitation).toHaveBeenCalledWith('el-1', 'accept', { notify: true })
+    })
+
     it('keeps the shipped fields and small buttons without aria-required', () => {
       render(<ElicitationPrompt request={request(FORM)} />)
 
@@ -119,14 +150,37 @@ describe('ElicitationPrompt', () => {
       )
     })
 
-    it('does not focus the heading when the pane is hidden at mount, nor when the prop flips later', () => {
+    it('does not focus the heading while the pane is hidden at mount', () => {
+      render(<ElicitationPrompt request={request(FORM)} autoFocusHeading={false} />)
+
+      expect(screen.getByRole('heading', { level: 2 })).not.toHaveFocus()
+      expect(document.body).toHaveFocus()
+    })
+
+    it('focuses the heading when the pane later turns visible, and not again while it stays visible', () => {
       const { rerender } = render(
         <ElicitationPrompt request={request(FORM)} autoFocusHeading={false} />
       )
       expect(screen.getByRole('heading', { level: 2 })).not.toHaveFocus()
 
       rerender(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
-      expect(screen.getByRole('heading', { level: 2 })).not.toHaveFocus()
+      expect(screen.getByRole('heading', { level: 2 })).toHaveFocus()
+
+      // The reader moves on; a re-render with the prop still true must not pull focus back.
+      screen.getByRole('button', { name: 'Cancel' }).focus()
+      rerender(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
+      expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    })
+
+    it('takes focus again each time the pane turns visible after being hidden', () => {
+      const { rerender } = render(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
+      expect(screen.getByRole('heading', { level: 2 })).toHaveFocus()
+
+      rerender(<ElicitationPrompt request={request(FORM)} autoFocusHeading={false} />)
+      screen.getByRole('button', { name: 'Cancel' }).focus()
+      rerender(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
+
+      expect(screen.getByRole('heading', { level: 2 })).toHaveFocus()
     })
 
     it('sizes buttons and fields for touch', () => {
@@ -199,18 +253,59 @@ describe('ElicitationPrompt', () => {
       expect(screen.getByRole('textbox')).not.toHaveAttribute('aria-describedby')
     })
 
-    it('flags the Switch for a required boolean and the select for a required enum', () => {
+    it('still flags a required enum, then sends the untouched required boolean Off', () => {
       render(<ElicitationPrompt request={request(FORM.slice(1))} />)
 
       fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
       expect(screen.getByRole('alert')).toHaveTextContent('region is required.')
       expect(screen.getByRole('combobox')).toHaveFocus()
+      expect(respondElicitation).not.toHaveBeenCalled()
 
       fireEvent.change(screen.getByRole('combobox'), { target: { value: 'eu' } })
       fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
-      expect(screen.getByRole('alert')).toHaveTextContent('notify is required.')
-      expect(screen.getByRole('switch')).toHaveFocus()
-      expect(screen.getByRole('switch')).toHaveAttribute('aria-invalid', 'true')
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(respondElicitation).toHaveBeenCalledTimes(1)
+      expect(respondElicitation).toHaveBeenCalledWith('el-1', 'accept', {
+        region: 'eu',
+        notify: false
+      })
+    })
+
+    it('submits an untouched required boolean alone as false, and a toggled one as true', () => {
+      const { unmount } = render(
+        <ElicitationPrompt request={request([field('notify', 'boolean', { required: true })])} />
+      )
+      expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+      expect(toastError).not.toHaveBeenCalled()
+      expect(respondElicitation).toHaveBeenLastCalledWith('el-1', 'accept', { notify: false })
+      unmount()
+
+      render(
+        <ElicitationPrompt request={request([field('notify', 'boolean', { required: true })])} />
+      )
+      fireEvent.click(screen.getByRole('switch'))
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+      expect(respondElicitation).toHaveBeenLastCalledWith('el-1', 'accept', { notify: true })
+    })
+
+    it('sends false for a required boolean that was toggled on and off again', () => {
+      render(
+        <ElicitationPrompt request={request([field('notify', 'boolean', { required: true })])} />
+      )
+      fireEvent.click(screen.getByRole('switch'))
+      fireEvent.click(screen.getByRole('switch'))
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+      expect(respondElicitation).toHaveBeenCalledWith('el-1', 'accept', { notify: false })
+    })
+
+    it('omits an untouched optional boolean', () => {
+      render(<ElicitationPrompt request={request([field('notify', 'boolean')])} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+      expect(respondElicitation).toHaveBeenCalledWith('el-1', 'accept', {})
     })
 
     it('shows number validation inline too', () => {
@@ -373,6 +468,20 @@ describe('ElicitationPrompt', () => {
 
       expect(screen.getByRole('dialog')).not.toHaveFocus()
       expect(document.body).toHaveFocus()
+    })
+
+    it('focuses the dialog when the pane later turns visible, and not again while it stays visible', () => {
+      mobileRef.current = true
+      const batch = request(QUESTIONS, { message: 'Which color should I use?' })
+      const { rerender } = render(<ElicitationPrompt request={batch} autoFocusHeading={false} />)
+      expect(screen.getByRole('dialog')).not.toHaveFocus()
+
+      rerender(<ElicitationPrompt request={batch} autoFocusHeading />)
+      expect(screen.getByRole('dialog')).toHaveFocus()
+
+      screen.getByRole('button', { name: /Blue/ }).focus()
+      rerender(<ElicitationPrompt request={batch} autoFocusHeading />)
+      expect(screen.getByRole('button', { name: /Blue/ })).toHaveFocus()
     })
 
     it('leaves the desktop dialog unfocusable and unfocused, and the message a paragraph', () => {

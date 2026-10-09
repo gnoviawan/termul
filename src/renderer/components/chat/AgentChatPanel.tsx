@@ -57,6 +57,7 @@ import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 import { useApprovalDock } from './use-approval-dock'
+import { usePermissionDenialNotice } from './use-permission-denial-notice'
 
 /** Concatenate the text blocks of a message into a single string. */
 function messageText(blocks: ContentBlock[]): string {
@@ -634,6 +635,8 @@ export function AgentChatPanel({
     elicitationId: approvalsLive ? (pendingElicitation?.requestId ?? null) : null
   })
   const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
+  // A permission the server denied because this device disconnected (L-09).
+  const { message: denialMessage, dismiss: dismissDenial } = usePermissionDenialNotice(sessionId)
   // The mobile dock (prompts, or the changed-files bar plus the composer)
   // reports its top edge so the toast stack clears it. The wrapper is a plain
   // box on the mobile shell and `display: contents` on desktop, so desktop
@@ -811,6 +814,9 @@ export function AgentChatPanel({
           <span>Reconnecting…</span>
         </div>
       )}
+      {/* No Retry: the agent has to ask again. Cleared by the store when the
+          session's next turn starts. */}
+      <ChatErrorNotice message={denialMessage} onDismiss={dismissDenial} />
       <ChatErrorNotice
         message={activeError}
         onRetry={canOfferRetry ? handleRetry : undefined}
@@ -862,7 +868,11 @@ export function AgentChatPanel({
           {pendingPermission && (
             <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
               <div className="mx-auto w-full max-w-3xl">
-                <PermissionPrompt permission={pendingPermission} embedded={false} />
+                <PermissionPrompt
+                  permission={pendingPermission}
+                  embedded={false}
+                  isVisible={isVisible}
+                />
               </div>
             </div>
           )}

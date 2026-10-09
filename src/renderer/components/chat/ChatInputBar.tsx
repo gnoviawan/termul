@@ -638,7 +638,7 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
-            {permission && <PermissionPrompt permission={permission} />}
+            {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
