@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { isInertExemptOverlay } from '@/hooks/use-inert-behind-overlays'
 import { commandToken, fileToken, sanitizeDisplayText, skillToken } from '@/lib/skill-tokens'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
@@ -341,6 +342,11 @@ describe('ChatMessage on the mobile shell: context menu', () => {
     expect(useOverlayStackStore.getState().stack.map((entry) => entry.id)).toEqual([
       `${MENU_PREFIX}user-42`
     ])
+    // Opened mid-gesture with the finger still down on its own trigger, so the
+    // id must stay exempt from the shell body's `inert`.
+    expect(
+      useOverlayStackStore.getState().stack.every((entry) => isInertExemptOverlay(entry.id))
+    ).toBe(true)
   })
 
   it('closes on system back and leaves no message entry on the overlay stack', async () => {

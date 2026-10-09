@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { isInertExemptOverlay } from '@/hooks/use-inert-behind-overlays'
 import {
   armMobileOverlayBackStack,
   pressSystemBack,
@@ -125,6 +126,9 @@ describe('ConfirmDialog overlay back stack', () => {
       render(<Harness onCancel={onCancel} />)
 
       expect(stackIds()[0]).toMatch(/^confirm-dialog:/)
+      // The Git tab renders this dialog inside the shell body, so its id must
+      // stay exempt from the body's `inert`.
+      expect(isInertExemptOverlay(stackIds()[0])).toBe(true)
       await waitForSentinelDepth(1)
 
       await pressSystemBack()
