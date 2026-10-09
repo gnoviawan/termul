@@ -278,8 +278,8 @@ export function ThemePicker(): React.JSX.Element | null {
                         className={cn(
                           'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors duration-100 ease-[var(--ease-out)] active:scale-[0.98]',
                           isHighlighted || isFocused
-                            ? 'bg-accent/20 text-foreground'
-                            : 'text-foreground/90 hover:bg-secondary/80'
+                            ? 'bg-foreground/[0.06] text-foreground'
+                            : 'text-foreground/90 hover:bg-foreground/[0.06]'
                         )}
                         onMouseEnter={() => {
                           setFocusIndex(index)

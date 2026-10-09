@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
@@ -491,7 +491,7 @@ describe('ProjectSidebar Context Menu', () => {
 // F1/F2 regression guards: assert the menu OPENS on right-click for each
 // surface. The F2 stub (checkForDefaultPrevented) skips open if the child
 // handler calls preventDefault — so if F1's preventDefault removal is ever
-// reverted in handleContextMenu / handleGroupContextMenu, these tests fail
+// reverted in handleRowContextMenu, these tests fail
 // (the menu items vanish because Radix's open step is skipped).
 describe('ProjectSidebar context menu open regression (F1/F2)', () => {
   beforeEach(() => {
@@ -604,10 +604,43 @@ describe('ProjectSidebar', () => {
     expect(onNewProject).toHaveBeenCalled()
   })
 
-  it('should show version label at the bottom', () => {
+  it('should show version label in the footer at the bottom', () => {
     renderWithRouter({})
 
-    expect(screen.getByText(/Termul v/)).toBeInTheDocument()
+    const footer = screen.getByTestId('sidebar-footer')
+    expect(footer).toHaveTextContent(/^Termul/)
+    // The hardcoded release string is gone; the version comes from the helper.
+    expect(footer).not.toHaveTextContent('v0.4.21')
+  })
+
+  it('renders the Projects panel flat on bg-background with a label-panel header', () => {
+    const { container } = renderWithRouter({})
+
+    const aside = container.querySelector('aside')
+    expect(aside).toHaveClass('bg-background', 'w-64', 'rounded-xl')
+    expect(aside).not.toHaveClass('bg-sidebar')
+    expect(screen.getByText('Projects')).toHaveClass('label-panel')
+    expect(screen.getByTestId('header-new-project')).toHaveClass('size-7')
+  })
+
+  it('marks the active project row with keycap and idle rows with a hover wash', () => {
+    renderWithRouter({ activeProjectId: '1' })
+
+    const activeRow = screen.getByTestId('project-item-1').querySelector('[role="button"]')
+    const idleRow = screen.getByTestId('project-item-2').querySelector('[role="button"]')
+    expect(activeRow).toHaveClass('keycap', 'h-8', 'rounded-md')
+    expect(activeRow).not.toHaveClass('bg-sidebar-accent')
+    expect(idleRow).not.toHaveClass('keycap')
+    expect(idleRow).toHaveClass('hover:bg-foreground/[0.03]')
+  })
+
+  it('shows a "Crashed" mark (no pulse) on a project with a crashed terminal', () => {
+    mockUseProjectsWithErrors.mockReturnValue(new Set(['2']))
+    renderWithRouter({})
+
+    const mark = within(screen.getByTestId('project-item-2')).getByTitle('Terminal crashed')
+    expect(mark).toHaveTextContent('Crashed')
+    expect(mark.className).not.toContain('animate-pulse')
   })
 
   it('should show empty state when no projects', () => {

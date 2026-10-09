@@ -29,13 +29,11 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => tauriState.isTauri
 }))
 
-vi.mock('@/stores/project-store', () => ({
-  useActiveProject: () => projectState.activeProject
-}))
-
+// TitleStripTitle has its own tests; this stub only proves the strip places it.
 vi.mock('@/components/TitlebarPanelToggles', () => ({
   SidebarToggleButton: () => <button type="button">toggle-sidebar</button>,
   FileExplorerToggleButton: () => <button type="button">toggle-explorer</button>,
+  TitleStripTitle: () => projectState.activeProject?.name ?? null,
   titlebarNoDragStyle: { WebkitAppRegion: 'no-drag' }
 }))
 

@@ -16,7 +16,7 @@
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::service::serve_server;
 use rmcp::{tool, tool_router};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::acp::host_mcp::{
@@ -279,8 +279,30 @@ async fn forward_to_parent_inner(
 /// (normal disconnect) or the server fails to initialize.
 async fn serve_mcp_server(config: ChildConfig) -> Result<(), String> {
     let (stdin, stdout) = rmcp::transport::io::stdio();
+    serve_mcp_transport(config, stdin, stdout).await
+}
+
+/// Serve one MCP session on an already-split byte pipe.
+///
+/// Antigravity opens with `server/discover` and an empty `params` object.
+/// rmcp 3.5 accepts that method, then requires 2026-07-28 `_meta` on every
+/// request in that session. Fill the two required keys when they are absent.
+/// A session that starts with `initialize` is copied unchanged.
+async fn serve_mcp_transport<R, W>(config: ChildConfig, stdin: R, stdout: W) -> Result<(), String>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    let (server_side, shim_side) = tokio::io::duplex(1024 * 1024);
+    let (server_read, server_write) = tokio::io::split(server_side);
+    // The server writes replies on `stdout`. This half only exists because
+    // `split` yields both directions of the duplex.
+    drop(server_write);
+    tokio::spawn(async move {
+        let _ = copy_with_discover_meta(stdin, shim_side).await;
+    });
     let service = TermulPlanServer { config };
-    let running = serve_server(service, (stdin, stdout))
+    let running = serve_server(service, (server_read, stdout))
         .await
         .map_err(|e| format!("mcp server initialize failed: {e}"))?;
     // Wait until the transport closes (agent disconnect → stdin EOF).
@@ -289,6 +311,119 @@ async fn serve_mcp_server(config: ChildConfig) -> Result<(), String> {
         .await
         .map_err(|e| format!("mcp server ended with error: {e}"))?;
     Ok(())
+}
+
+const DISCOVER_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+const DISCOVER_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+
+/// Copy stdin to the rmcp server. After `server/discover`, fill missing
+/// request `_meta` so later `tools/list` and `tools/call` pass the 2026
+/// handshake. Does not log message bodies.
+async fn copy_with_discover_meta<R, W>(reader: R, mut writer: W) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut reader = BufReader::new(reader);
+    let mut discover_session = false;
+    let mut classified = false;
+    let mut logged_fill = false;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let n = reader.read_until(b'\n', &mut line).await?;
+        if n == 0 {
+            break;
+        }
+        let had_newline = line.last() == Some(&b'\n');
+        let mut body = if had_newline {
+            &line[..line.len() - 1]
+        } else {
+            &line[..]
+        };
+        if body.last() == Some(&b'\r') {
+            body = &body[..body.len() - 1];
+        }
+        let text = String::from_utf8_lossy(body);
+        if !classified {
+            classified = true;
+            discover_session = json_method_is_discover(&text);
+        }
+        let (out, filled) = if discover_session {
+            fill_discover_request_meta(&text)
+        } else {
+            (text.into_owned(), false)
+        };
+        if filled && !logged_fill {
+            eprintln!("[host-mcp-child] filled missing MCP request metadata");
+            logged_fill = true;
+        }
+        writer.write_all(out.as_bytes()).await?;
+        if had_newline {
+            writer.write_all(b"\n").await?;
+        }
+    }
+    Ok(())
+}
+
+fn json_method_is_discover(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|value| value.get("method")?.as_str().map(str::to_string))
+        .is_some_and(|method| method == "server/discover")
+}
+
+/// Return the line unchanged when it is not a JSON-RPC request, or when the
+/// required 2026-07-28 `_meta` keys are already present.
+fn fill_discover_request_meta(line: &str) -> (String, bool) {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return (line.to_string(), false);
+    };
+    let Some(obj) = value.as_object_mut() else {
+        return (line.to_string(), false);
+    };
+    let Some(method) = obj
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(str::to_string)
+    else {
+        return (line.to_string(), false);
+    };
+    if method == "initialize" || !obj.contains_key("id") {
+        return (line.to_string(), false);
+    }
+    let params = obj.entry("params").or_insert_with(|| serde_json::json!({}));
+    let Some(params_obj) = params.as_object_mut() else {
+        return (line.to_string(), false);
+    };
+    let meta = params_obj
+        .entry("_meta")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(meta_obj) = meta.as_object_mut() else {
+        return (line.to_string(), false);
+    };
+    let mut filled = false;
+    if !meta_obj.contains_key(DISCOVER_PROTOCOL_VERSION) {
+        meta_obj.insert(
+            DISCOVER_PROTOCOL_VERSION.to_string(),
+            serde_json::json!("2026-07-28"),
+        );
+        filled = true;
+    }
+    if !meta_obj.contains_key(DISCOVER_CLIENT_CAPABILITIES) {
+        meta_obj.insert(
+            DISCOVER_CLIENT_CAPABILITIES.to_string(),
+            serde_json::json!({}),
+        );
+        filled = true;
+    }
+    if !filled {
+        return (line.to_string(), false);
+    }
+    (
+        serde_json::to_string(&value).unwrap_or_else(|_| line.to_string()),
+        true,
+    )
 }
 
 #[cfg(test)]

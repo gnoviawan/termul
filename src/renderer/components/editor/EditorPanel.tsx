@@ -51,8 +51,14 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
 
   if (!fileState) {
     return (
-      <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-        Loading...
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex h-full w-full items-center justify-center bg-background"
+      >
+        <span className="text-xs text-muted-foreground animate-pulse motion-reduce:animate-none">
+          Loading...
+        </span>
       </div>
     )
   }
@@ -60,7 +66,7 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
   const isMarkdownFile = fileState.language === 'markdown'
 
   return (
-    <div className="w-full h-full flex flex-col">
+    <div className="flex h-full w-full flex-col bg-background">
       {isMarkdownFile && (
         <EditorToolbar
           viewMode={fileState.viewMode}

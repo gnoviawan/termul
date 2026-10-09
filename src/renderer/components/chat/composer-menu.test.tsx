@@ -94,8 +94,28 @@ describe('ComposerMenu touch interactions (Story 5.3)', () => {
     // are present by default and the wide-pane variants stay in the class string.
     expect(option.className).toContain('min-h-11')
     expect(option.className).toContain('py-2.5')
-    expect(option.className).toContain('@[400px]:min-h-10')
-    expect(option.className).toContain('@[400px]:py-2')
+    expect(option.className).toContain('@[400px]:min-h-8')
+    expect(option.className).toContain('@[400px]:py-1.5')
+  })
+
+  it('highlights with a foreground wash and marks selection with a check, not a fill', () => {
+    const sections = [
+      makeSection('s1', 'Commands', [
+        makeItem('a', 'Alpha'),
+        { ...makeItem('b', 'Beta'), selected: true }
+      ])
+    ]
+    const { container } = render(<ComposerMenu sections={sections} onSelect={vi.fn()} />)
+    const shell = container.querySelector('[role="listbox"]')
+    expect(shell?.className).toContain('rounded-xl')
+    const alpha = screen.getByRole('option', { name: 'Alpha' })
+    const beta = screen.getByRole('option', { name: 'Beta' })
+    // The first row is the keyboard-highlighted row by default.
+    expect(alpha.className).toContain('bg-foreground/[0.06]')
+    expect(alpha.className).not.toContain('bg-secondary')
+    expect(beta.className).not.toContain('bg-secondary')
+    expect(beta.className).not.toMatch(/(^| )bg-foreground\/\[0\.06\]/)
+    expect(beta.querySelector('svg')).not.toBeNull()
   })
 
   it('renders the narrow-pane max-h cap (max-h-[40vh]) for short mobile viewports', () => {

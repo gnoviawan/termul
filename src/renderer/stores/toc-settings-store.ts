@@ -2,12 +2,25 @@ import { create } from 'zustand'
 import type { TocSettings } from '@/types/settings'
 import { DEFAULT_TOC_SETTINGS, TOC_MAX_WIDTH, TOC_MIN_WIDTH } from '@/types/settings'
 
+/** Collapsed outline parents, keyed by file path. Session memory only. */
+export type TocCollapsedByFile = Record<string, string[]>
+
+const EMPTY_COLLAPSED: readonly string[] = Object.freeze([])
+
 interface TocSettingsState {
   settings: TocSettings
   isLoaded: boolean
   loadFailed: boolean
+  /**
+   * Not part of `settings`, so `useTocSettings` does not write it to disk.
+   * Heading ids change between sessions (BlockNote block ids, line numbers),
+   * so the collapse state lives for the app session only.
+   */
+  collapsedByFile: TocCollapsedByFile
   setSettings: (settings: TocSettings) => void
   toggleVisibility: () => void
+  setCollapsedKeys: (filePath: string, keys: string[]) => void
+  toggleCollapsedKey: (filePath: string, key: string) => void
   setMaxHeadingLevel: (level: number) => void
   setWidth: (width: number) => void
   setLoaded: (loaded: boolean) => void
@@ -33,10 +46,26 @@ function normalizeVisibility(isVisible: boolean): boolean {
   return typeof isVisible === 'boolean' ? isVisible : DEFAULT_TOC_SETTINGS.isVisible
 }
 
+/** Copy of `byFile` with `keys` for `filePath`; an empty list drops the file. */
+function withCollapsedKeys(
+  byFile: TocCollapsedByFile,
+  filePath: string,
+  keys: string[]
+): TocCollapsedByFile {
+  const next = { ...byFile }
+  if (keys.length === 0) {
+    delete next[filePath]
+  } else {
+    next[filePath] = keys
+  }
+  return next
+}
+
 export const useTocSettingsStore = create<TocSettingsState>((set) => ({
   settings: { ...DEFAULT_TOC_SETTINGS },
   isLoaded: false,
   loadFailed: false,
+  collapsedByFile: {},
 
   setSettings: (settings) =>
     set({
@@ -71,6 +100,20 @@ export const useTocSettingsStore = create<TocSettingsState>((set) => ({
       }
     })),
 
+  setCollapsedKeys: (filePath, keys) =>
+    set((state) => ({
+      collapsedByFile: withCollapsedKeys(state.collapsedByFile, filePath, Array.from(new Set(keys)))
+    })),
+
+  toggleCollapsedKey: (filePath, key) =>
+    set((state) => {
+      const current = state.collapsedByFile[filePath] ?? []
+      const keys = current.includes(key)
+        ? current.filter((existing) => existing !== key)
+        : [...current, key]
+      return { collapsedByFile: withCollapsedKeys(state.collapsedByFile, filePath, keys) }
+    }),
+
   setLoaded: (loaded) => set({ isLoaded: loaded }),
   setLoadFailed: (failed) => set({ loadFailed: failed })
 }))
@@ -89,3 +132,7 @@ export const useTocSettingsLoaded = (): boolean => useTocSettingsStore((state) =
 
 export const useTocSettingsHydrated = (): boolean =>
   useTocSettingsStore((state) => state.isLoaded || state.loadFailed)
+
+/** Collapsed outline keys for one file. Returns a stable empty array when none. */
+export const useTocCollapsedKeys = (filePath: string): readonly string[] =>
+  useTocSettingsStore((state) => state.collapsedByFile[filePath] ?? EMPTY_COLLAPSED)

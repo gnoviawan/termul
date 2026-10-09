@@ -16,7 +16,9 @@ import { StatusBar } from '@/components/StatusBar'
 import { TitleBar } from '@/components/TitleBar'
 import {
   FileExplorerToggleButton,
+  panelEdgeToggleButtonClass,
   SidebarToggleButton,
+  TitleStripTitle,
   titlebarNoDragStyle
 } from '@/components/TitlebarPanelToggles'
 import { Button } from '@/components/ui/button'
@@ -38,6 +40,7 @@ import {
 } from '@/hooks/use-command-history'
 import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { useFileWatcher } from '@/hooks/use-file-watcher'
+import { useMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
@@ -73,6 +76,7 @@ import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { checkWebAuthGate, getWebAuthGateState, useWebAuthGate } from '@/lib/web-auth-gate'
+import { isWorkspaceRoutePath } from '@/lib/workspace-route'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -276,8 +280,6 @@ function getShortcutTargetContext(target: EventTarget | null): {
 const macOsTrafficLightClearance = 'w-[80px] shrink-0'
 
 function MacOsTitlebarStrip(): React.JSX.Element | null {
-  const activeProject = useActiveProject()
-
   // macOS desktop only — native traffic lights + drag region. Web (even on
   // a Mac browser) falls through to the web TitleBar path instead.
   if (!isMac || !isTauriContext()) return null
@@ -297,11 +299,7 @@ function MacOsTitlebarStrip(): React.JSX.Element | null {
         <SidebarToggleButton />
       </div>
 
-      {activeProject && (
-        <span className="absolute left-1/2 -translate-x-1/2 text-sm text-muted-foreground pointer-events-none select-none truncate max-w-[50%]">
-          {activeProject.name}
-        </span>
-      )}
+      <TitleStripTitle />
 
       <div className="flex-1 h-full" data-tauri-drag-region />
 
@@ -561,6 +559,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const pane = findPaneById(paneRoot, fullscreenPaneId)
     return pane?.type === 'leaf' ? pane : null
   }, [fullscreenPaneId, paneRoot])
+  // Mobile shell only: a split synced from desktop collapses to the active
+  // leaf (read-only; null on desktop so the desktop node is unchanged).
+  const mobileActiveLeaf = useMobileActiveLeaf(isMobileWebShell)
   const prevProjectIdRef = useRef<string>('')
   const watchedRootPathRef = useRef<string | null>(null)
   const projectSwitchRequestIdRef = useRef(0)
@@ -1117,7 +1118,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   )
 
   // Determine if we should show the terminal area (only on workspace dashboard)
-  const isWorkspaceRoute = location.pathname === '/' || location.pathname.startsWith('/c/')
+  const isWorkspaceRoute = isWorkspaceRoutePath(location.pathname)
 
   // Unified tab cycling - cycles through ALL workspace tabs in active pane
   const cycleTab = useCallback(
@@ -2084,7 +2085,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 className="h-full min-h-0 flex-1 overflow-hidden"
               >
                 <PaneRenderer
-                  node={fullscreenPane ?? paneRoot}
+                  key={mobileActiveLeaf?.id}
+                  node={mobileActiveLeaf ?? fullscreenPane ?? paneRoot}
                   onAddTerminal={handleAddTerminal}
                   onAddBrowserTab={handleNewBrowserTab}
                   onCloseTerminal={handleCloseTerminal}
@@ -2145,6 +2147,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onLaunchAgent={handleLaunchAgent}
             onNewBrowserTab={handleNewBrowserTab}
             onOpenCanvas={handleOpenCanvas}
+            onNewProject={isMobileWebShell ? () => setIsNewProjectModalOpen(true) : undefined}
             onSaveSnapshot={handleOpenSnapshotModal}
             onOpenProjectSettings={handleOpenProjectSettings}
             onOpenAppPreferences={handleOpenAppPreferences}
@@ -2383,7 +2386,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               {/* flex-1 (not h-full): percentage heights against the
                   flex-sized wrapper do not resolve in every engine, which
                   collapses the workspace to 0 height. */}
-              <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+              <main className="flex min-h-0 flex-1 flex-col overflow-clip bg-background">
                 {workspaceMain}
               </main>
             </PaneDndProvider>
@@ -2448,7 +2451,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
           <div className="flex-1 flex flex-col min-w-0">
             <TitleBar />
 
-            <div className="flex-1 flex overflow-hidden min-h-0 h-full py-2">
+            {/* Shell row: sidebar | main card | explorer. gap-2 between the
+                columns, pr-2 on the right edge; the side panels are flat and
+                set their own surface, so the wrappers here add no fill. */}
+            <div className="flex-1 flex gap-2 overflow-hidden min-h-0 h-full py-2 pr-2">
               {/* Sidebar — width reveal: the motion wrapper tweens 0↔auto and
                   clips overflow; the fixed w-64 aside inside never squishes. */}
               <AnimatePresence initial={false}>
@@ -2486,7 +2492,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                       className="flex items-start pt-0 overflow-hidden"
                       {...edgeToggleMotion(reducedMotion)}
                     >
-                      <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                      <SidebarToggleButton className={panelEdgeToggleButtonClass} />
                     </motion.div>
                   )
                 )}
@@ -2494,9 +2500,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
               {/* Main Content and File Explorer Container */}
               <PaneDndProvider>
-                <div className="flex-1 flex min-h-0 h-full overflow-hidden min-w-0">
+                <div className="flex-1 flex gap-2 min-h-0 h-full overflow-hidden min-w-0">
                   {/* Main Content Area */}
-                  <main className="flex-1 flex flex-col min-w-0 rounded-xl border border-border bg-card overflow-hidden">
+                  <main className="flex-1 flex flex-col min-w-0 rounded-xl border border-border bg-card overflow-clip">
                     <WorkspaceConflictBanner />
                     {workspaceMain}
                   </main>
@@ -2583,7 +2589,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                           className="flex-shrink-0 flex items-start overflow-hidden"
                           {...edgeToggleMotion(reducedMotion)}
                         >
-                          <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                          <FileExplorerToggleButton className={panelEdgeToggleButtonClass} />
                         </motion.div>
                       )
                     )}

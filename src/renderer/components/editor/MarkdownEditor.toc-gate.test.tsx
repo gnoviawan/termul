@@ -61,7 +61,9 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
 }))
 
 vi.mock('./TocPanel', () => ({
-  TocPanel: () => <div data-toc-panel="toc" />
+  TocPanel: ({ variant }: { variant?: 'panel' | 'strip' }) => (
+    <div data-toc-panel={variant ?? 'panel'} />
+  )
 }))
 
 vi.mock('@/stores/toc-settings-store', () => ({
@@ -93,7 +95,7 @@ describe('MarkdownEditor mobile TOC gate', () => {
       replaceContent: vi.fn(),
       flushPendingContent: vi.fn(),
       capturePendingContent: vi.fn(async () => null),
-      getHeadings: () => [],
+      headings: [],
       scrollToBlock: vi.fn()
     })
   })
@@ -106,7 +108,9 @@ describe('MarkdownEditor mobile TOC gate', () => {
       <MarkdownEditor filePath="/docs/spec.md" content={CONTENT} isVisible onChange={vi.fn()} />
     )
 
-    expect(container.querySelector('[data-toc-panel]')).toBeNull()
+    expect(container.querySelector('[data-toc-panel="panel"]')).toBeNull()
+    // The outline folds into the narrow tick strip instead of the side panel.
+    expect(container.querySelector('[data-toc-panel="strip"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="blocknote-view"]')).not.toBeNull()
   })
 
@@ -119,6 +123,7 @@ describe('MarkdownEditor mobile TOC gate', () => {
       <MarkdownEditor filePath="/docs/spec.md" content={CONTENT} isVisible onChange={vi.fn()} />
     )
 
-    expect(container.querySelector('[data-toc-panel]')).not.toBeNull()
+    expect(container.querySelector('[data-toc-panel="panel"]')).not.toBeNull()
+    expect(container.querySelector('[data-toc-panel="strip"]')).toBeNull()
   })
 })

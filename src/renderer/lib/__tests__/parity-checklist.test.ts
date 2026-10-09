@@ -1652,33 +1652,24 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/browserTabOpenDevtools/)
     })
 
-    it('ProjectSidebar.tsx handleContextMenu calls stopPropagation so the global trigger does not fire', () => {
+    it('ProjectSidebar.tsx handleRowContextMenu calls stopPropagation so the global trigger does not fire', () => {
       const sidebar = join(LIB_DIR, '..', 'components', 'ProjectSidebar.tsx')
       expect(existsSync(sidebar), 'ProjectSidebar.tsx should exist').toBe(true)
       const content = readFileSync(sidebar, 'utf-8')
-      // The handleContextMenu callback must call both preventDefault and
-      // stopPropagation so the global Radix trigger doesn't double-fire.
-      const handlerMatch = content.match(
-        /handleContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[\]\)/
-      )
-      expect(handlerMatch, 'handleContextMenu callback should exist').not.toBeNull()
+      // One handler serves project and group rows. It must stopPropagation so
+      // the global Radix trigger doesn't double-fire over the sidebar menus.
+      // It must NOT call preventDefault (F1): Radix would skip opening the menu.
+      const handlerMatch = content.match(/handleRowContextMenu = useCallback\(([\s\S]*?),\s*\[\]\)/)
+      expect(handlerMatch, 'handleRowContextMenu callback should exist').not.toBeNull()
       const handler = handlerMatch![1]
-      expect(handler).toMatch(/preventDefault/)
-      expect(handler).toMatch(/stopPropagation/)
+      expect(handler).toMatch(/e\.stopPropagation\(\)/)
+      expect(handler).not.toMatch(/e\.preventDefault\(\)/)
     })
 
-    it('ProjectSidebar.tsx handleGroupContextMenu calls stopPropagation (parity with handleContextMenu)', () => {
+    it('ProjectSidebar.tsx routes project and group rows through handleRowContextMenu', () => {
       const sidebar = join(LIB_DIR, '..', 'components', 'ProjectSidebar.tsx')
       const content = readFileSync(sidebar, 'utf-8')
-      // The group context menu handler must also stopPropagation so the global
-      // Radix trigger doesn't double-fire over the sidebar's group menu.
-      const handlerMatch = content.match(
-        /handleGroupContextMenu[\s\S]*?useCallback\(([\s\S]*?),\s*\[/
-      )
-      expect(handlerMatch, 'handleGroupContextMenu callback should exist').not.toBeNull()
-      const handler = handlerMatch![1]
-      expect(handler).toMatch(/preventDefault/)
-      expect(handler).toMatch(/stopPropagation/)
+      expect(content).toMatch(/onRowContextMenu=\{handleRowContextMenu\}/)
     })
 
     it('FileExplorer.tsx handleContextMenu calls stopPropagation (pre-existing pattern)', () => {

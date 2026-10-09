@@ -2,6 +2,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from '@/components/icons'
+import { STATUS_BAR_HIT_GLYPH, STATUS_BAR_HIT_TARGET } from '@/components/status-bar-hit'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { toProjectSummaries } from '@/hooks/use-projects-persistence'
@@ -9,12 +10,6 @@ import { remoteServerApi, syncProjects } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
-
-// 20px visual slot + invisible ~36px tap target (#859) — the status bar is
-// only 24px tall, so the vertical expansion is capped by the bar itself and
-// neighbors tile without overlap at inset-2.
-const statusBarTriggerClass =
-  "relative flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer transition-colors hover:bg-primary-foreground/10 after:absolute after:-inset-2 after:content-['']"
 
 /**
  * StatusBar popover for remote agent access.
@@ -97,11 +92,13 @@ export function RemoteAccessPopover(): React.JSX.Element {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className={statusBarTriggerClass}
+          className={STATUS_BAR_HIT_TARGET}
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
         >
-          <Monitor size={14} className={cn('shrink-0', isRunning && 'text-connection')} />
+          <span className={STATUS_BAR_HIT_GLYPH}>
+            <Monitor size={12} className={cn('shrink-0', isRunning && 'text-connection')} />
+          </span>
           {isRunning && <span className="sr-only">Remote access enabled</span>}
         </button>
       </PopoverTrigger>
