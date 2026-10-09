@@ -74,6 +74,11 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `file-explorer/FileTreeContextMenu.tsx` — context actions for files and directories
 - `file-explorer/file-icon-map.ts` — icon mapping support
 
+### Git Components
+
+- `git/GitPanel.tsx` — Git changes tab: staged and unstaged file lists, diff view, commit composer, branch switching and stashes. The mobile web shell stacks the file list and the diff view as one panel
+- `git/GitHistoryPanel.tsx` — Git History tab: commit list with a lane graph, a filter field and a refresh button. The mobile web shell has its own branch in the same component: 44px two-line rows (subject over refs, author, time, short hash), 12px lanes, a full-width `text-base` filter and a 44px refresh button, with no commit-detail view
+
 ### Workspace Actions / Modal Components
 
 - `CommandPalette.tsx` — global command launcher for project switching and workspace actions
