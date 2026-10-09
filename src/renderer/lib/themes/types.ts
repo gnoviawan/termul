@@ -26,6 +26,10 @@ export type ThemeSyntaxOverrides = Partial<{
   'syntax-constant': string
   'syntax-operator': string
   'syntax-punctuation': string
+  /** JSX and HTML tag names. Defaults to the keyword color. */
+  'syntax-tag': string
+  /** Attribute names. Defaults to the property color, then the info hue. */
+  'syntax-attribute': string
 }>
 
 /**

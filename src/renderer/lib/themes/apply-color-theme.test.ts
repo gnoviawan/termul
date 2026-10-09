@@ -44,8 +44,9 @@ describe('apply-color-theme', () => {
 
   it('separates termul function color from keyword', () => {
     const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES.termul)
-    expect(syntax.keyword).toBe('#c586c0')
-    expect(syntax.function).toBe('#dcdcaa')
+    expect(syntax.keyword).toBe('#d5b2ff')
+    expect(syntax.function).toBe('#9dc7fe')
+    expect(syntax.comment).toBe('#999fa8')
   })
 
   it('maps palette to xterm theme', () => {

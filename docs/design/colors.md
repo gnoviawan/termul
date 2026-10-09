@@ -75,6 +75,14 @@ On background / card / popover?
 
 The StatusBar is quiet: `bg-card`, `border-t border-border`, ink `text-muted-foreground`. Labels use `text-secondary-foreground`. The project colour is in the project glyph (`ProjectIcon`), not in the bar fill. Never `text-white` or `text-primary-foreground` on the bar.
 
+## Syntax
+
+Code color is not a UI token. The editor, chat fences, and diffs share one map: `resolveSyntaxColors`. Termul's map is `termul-syntax.ts`. Other families keep their own overrides.
+
+Use few hues. Put keywords, strings, functions, types, and numbers on separate hues at a similar lightness. Keep chroma high on those roles so the color stays clean. Keep comments a neutral gray. Keep variables, properties, and tag names on the foreground so the file is not painted.
+
+Do not use the olive, brown, and khaki set from VS Code Dark+ (`#6a9955`, `#ce9178`, `#dcdcaa`). Do not use the UI blue (`primary`) as a syntax hue. Each syntax color must clear WCAG AA (4.5:1) on the theme background and on the card.
+
 ## Incorrect
 
 ```tsx

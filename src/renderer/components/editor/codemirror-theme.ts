@@ -2,26 +2,14 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import type { Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
+import { BUNDLED_COLOR_THEMES } from '@/lib/themes/bundled-themes'
+import { resolveSyntaxColors } from '@/lib/themes/resolve-syntax'
 import type { ResolvedSyntaxColors } from '@/lib/themes/types'
 
-const defaultDarkSyntax: ResolvedSyntaxColors = {
-  keyword: '#c586c0',
-  comment: '#6a9955',
-  string: '#ce9178',
-  number: '#b5cea8',
-  bool: '#569cd6',
-  variable: '#9cdcfe',
-  function: '#dcdcaa',
-  type: '#4ec9b0',
-  property: '#9cdcfe',
-  operator: '#d4d4d4',
-  punctuation: '#d4d4d4',
-  tag: '#569cd6',
-  attributeName: '#9cdcfe',
-  attributeValue: '#ce9178',
-  heading: '#569cd6',
-  link: '#9cdcfe'
-}
+const defaultDarkSyntax: ResolvedSyntaxColors = resolveSyntaxColors(BUNDLED_COLOR_THEMES.termul)
+const defaultLightSyntax: ResolvedSyntaxColors = resolveSyntaxColors(
+  BUNDLED_COLOR_THEMES['termul-light']
+)
 
 function buildHighlightStyle(colors: ResolvedSyntaxColors): HighlightStyle {
   return HighlightStyle.define([
@@ -58,7 +46,7 @@ export function createTermulTheme(
   isDark: boolean,
   syntaxColors?: ResolvedSyntaxColors | null
 ): Extension[] {
-  const colors = syntaxColors ?? defaultDarkSyntax
+  const colors = syntaxColors ?? (isDark ? defaultDarkSyntax : defaultLightSyntax)
   const highlightStyle = buildHighlightStyle(colors)
 
   return [

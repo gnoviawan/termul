@@ -1,8 +1,7 @@
 import { type BundledLanguage, bundledLanguages, codeToTokensWithThemes } from 'shiki'
 import { logFrontendError } from '@/lib/log-api'
-
-/** Shiki theme pair shared with chat code blocks (ChatMessage shikiTheme). */
-const DIFF_THEMES = { light: 'github-light', dark: 'github-dark' } as const
+import { getLastAppliedColorThemeId } from '@/lib/themes/apply-color-theme'
+import { syntaxShikiPair } from '@/lib/themes/syntax-shiki'
 
 /** Skip highlighting beyond these bounds; the diff renders plain instead. */
 export const DIFF_HIGHLIGHT_MAX_LINES = 2000
@@ -114,7 +113,8 @@ export function resolveDiffLanguage(filePath: string): BundledLanguage | 'plaint
  */
 export async function highlightDiffText(
   text: string,
-  lang: string
+  lang: string,
+  themeId: string = getLastAppliedColorThemeId()
 ): Promise<DiffTokenLine[] | null> {
   if (text.length > DIFF_HIGHLIGHT_MAX_CHARS) return null
   if (text.split('\n').length > DIFF_HIGHLIGHT_MAX_LINES) return null
@@ -123,9 +123,10 @@ export async function highlightDiffText(
   // trailing CR per line). Line count is unchanged by this.
   const clean = text.replace(/\r/g, '')
   try {
+    const [light, dark] = syntaxShikiPair(themeId)
     const lines = await codeToTokensWithThemes(clean, {
       lang,
-      themes: DIFF_THEMES
+      themes: { light, dark }
     })
     return lines.map((tokens) =>
       tokens.map((token) => {

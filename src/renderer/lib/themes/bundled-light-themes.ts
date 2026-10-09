@@ -1,9 +1,10 @@
 import { TERMUL_LIGHT_CHROME } from './termul-light-chrome'
+import { TERMUL_LIGHT_SYNTAX } from './termul-syntax'
 import type { ColorThemeDefinition } from './types'
 
 /** Light appearance twins (`{family}-light`). Syntax: opencode light + vscode fallback. */
 export const BUNDLED_LIGHT_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
-  // syntax: VS Code Light+ fallback
+  // syntax: bright Termul palette (see termul-syntax.ts)
   'termul-light': {
     id: 'termul-light',
     name: 'Termul Light',
@@ -20,16 +21,7 @@ export const BUNDLED_LIGHT_COLOR_THEMES: Record<string, ColorThemeDefinition> = 
         error: '#cd3131',
         info: '#0598bc'
       },
-      overrides: {
-        'syntax-comment': '#008000',
-        'syntax-keyword': '#0000ff',
-        'syntax-string': '#a31515',
-        'syntax-type': '#267f99',
-        'syntax-constant': '#098658',
-        'syntax-variable': '#001080',
-        'syntax-property': '#001080',
-        'syntax-function': '#795e26'
-      },
+      overrides: TERMUL_LIGHT_SYNTAX,
       chrome: TERMUL_LIGHT_CHROME
     }
   },

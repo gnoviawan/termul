@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { BUNDLED_COLOR_THEMES, COLOR_THEME_LIST, getColorThemeDefinition } from './bundled-themes'
-import { shouldOverrideToken } from './color-utils'
+import { contrastRatio, hexToOklch, shouldOverrideToken, TEXT_CONTRAST_MIN } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
+import { TERMUL_DARK_CHROME } from './termul-dark-chrome'
+import { TERMUL_LIGHT_CHROME } from './termul-light-chrome'
 
 const EXPECTED_SYNTAX: Record<
   string,
@@ -15,10 +17,11 @@ const EXPECTED_SYNTAX: Record<
   }>
 > = {
   termul: {
-    keyword: '#c586c0',
-    string: '#ce9178',
-    function: '#dcdcaa',
-    variable: '#9cdcfe'
+    keyword: '#d5b2ff',
+    string: '#7fe4a5',
+    function: '#9dc7fe',
+    variable: '#e5e5e6',
+    type: '#72dee4'
   },
   cursor: {
     keyword: '#82d2ce',
@@ -76,10 +79,11 @@ const EXPECTED_SYNTAX: Record<
     property: '#39c5cf'
   },
   'termul-light': {
-    keyword: '#0000ff',
-    string: '#a31515',
-    function: '#795e26',
-    variable: '#001080'
+    keyword: '#753ba8',
+    string: '#036a34',
+    function: '#0256a9',
+    variable: '#0d0d0d',
+    type: '#03758e'
   },
   'github-light': {
     keyword: '#cf222e',
@@ -105,6 +109,45 @@ describe('resolveSyntaxColors', () => {
   it('maps tags from keyword color', () => {
     const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES.dracula)
     expect(syntax.tag).toBe(syntax.keyword)
+  })
+
+  it('keeps termul tags on the foreground, not the keyword hue', () => {
+    const dark = resolveSyntaxColors(BUNDLED_COLOR_THEMES.termul)
+    const light = resolveSyntaxColors(BUNDLED_COLOR_THEMES['termul-light'])
+    expect(dark.tag).toBe(dark.variable)
+    expect(dark.attributeName).toBe(dark.variable)
+    expect(light.tag).toBe(light.variable)
+    expect(light.attributeName).toBe(light.variable)
+  })
+
+  it('keeps termul syntax bright, with gray comments', () => {
+    const cases = [
+      {
+        themeId: 'termul',
+        surfaces: [TERMUL_DARK_CHROME.background, TERMUL_DARK_CHROME.card]
+      },
+      {
+        themeId: 'termul-light',
+        surfaces: [TERMUL_LIGHT_CHROME.background, TERMUL_LIGHT_CHROME.card]
+      }
+    ] as const
+    const colored = ['keyword', 'string', 'function', 'type', 'number'] as const
+    const readable = [...colored, 'comment', 'variable', 'punctuation'] as const
+
+    for (const { themeId, surfaces } of cases) {
+      const syntax = resolveSyntaxColors(BUNDLED_COLOR_THEMES[themeId])
+      for (const key of readable) {
+        for (const surface of surfaces) {
+          expect(contrastRatio(syntax[key], surface), `${themeId} ${key}`).toBeGreaterThanOrEqual(
+            TEXT_CONTRAST_MIN
+          )
+        }
+      }
+      for (const key of colored) {
+        expect(hexToOklch(syntax[key]).c, `${themeId} ${key}`).toBeGreaterThanOrEqual(0.09)
+      }
+      expect(hexToOklch(syntax.comment).c, themeId).toBeLessThan(0.03)
+    }
   })
 
   it('falls back to accent for function when no override', () => {

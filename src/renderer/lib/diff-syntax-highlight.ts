@@ -1,5 +1,9 @@
 import type { Highlighter, Tag } from '@lezer/highlight'
 import { highlightTree, tags } from '@lezer/highlight'
+import { getLastAppliedColorThemeId } from '@/lib/themes/apply-color-theme'
+import { getColorThemeDefinition } from '@/lib/themes/bundled-themes'
+import { resolveSyntaxColors } from '@/lib/themes/resolve-syntax'
+import type { ResolvedSyntaxColors } from '@/lib/themes/types'
 import { detectLanguage } from '@/stores/editor-store'
 
 export interface TokenSpan {
@@ -8,62 +12,59 @@ export interface TokenSpan {
   color: string
 }
 
-const diffSyntaxColors: Record<string, string> = {
-  keyword: '#c586c0',
-  comment: '#6a9955',
-  string: '#ce9178',
-  number: '#b5cea8',
-  bool: '#569cd6',
-  variable: '#9cdcfe',
-  function: '#dcdcaa',
-  type: '#4ec9b0',
-  property: '#9cdcfe',
-  operator: '#d4d4d4',
-  punctuation: '#d4d4d4',
-  tag: '#569cd6',
-  attributeName: '#9cdcfe',
-  attributeValue: '#ce9178',
-  heading: '#569cd6',
-  link: '#9cdcfe'
-}
+// Each Tag's `.set` array contains itself and all parent tags in decreasing
+// specificity, so walking `.set` gives the most specific match first.
+const tagColorKeys = new Map<Tag, keyof ResolvedSyntaxColors>()
+tagColorKeys.set(tags.function(tags.variableName), 'function')
+tagColorKeys.set(tags.definition(tags.variableName), 'variable')
+tagColorKeys.set(tags.variableName, 'variable')
+tagColorKeys.set(tags.keyword, 'keyword')
+tagColorKeys.set(tags.comment, 'comment')
+tagColorKeys.set(tags.lineComment, 'comment')
+tagColorKeys.set(tags.blockComment, 'comment')
+tagColorKeys.set(tags.string, 'string')
+tagColorKeys.set(tags.special(tags.string), 'string')
+tagColorKeys.set(tags.number, 'number')
+tagColorKeys.set(tags.integer, 'number')
+tagColorKeys.set(tags.float, 'number')
+tagColorKeys.set(tags.bool, 'bool')
+tagColorKeys.set(tags.null, 'bool')
+tagColorKeys.set(tags.typeName, 'type')
+tagColorKeys.set(tags.className, 'type')
+tagColorKeys.set(tags.propertyName, 'property')
+tagColorKeys.set(tags.operator, 'operator')
+tagColorKeys.set(tags.punctuation, 'punctuation')
+tagColorKeys.set(tags.meta, 'keyword')
+tagColorKeys.set(tags.regexp, 'string')
+tagColorKeys.set(tags.tagName, 'tag')
+tagColorKeys.set(tags.attributeName, 'attributeName')
+tagColorKeys.set(tags.attributeValue, 'attributeValue')
+tagColorKeys.set(tags.heading, 'heading')
+tagColorKeys.set(tags.link, 'link')
 
-// Build a tag-to-color lookup map. Each Tag's `.set` array contains itself
-// and all parent tags in decreasing specificity, so walking `.set` gives
-// the most specific match first.
-const tagColorMap = new Map<Tag, string>()
-tagColorMap.set(tags.function(tags.variableName), diffSyntaxColors.function)
-tagColorMap.set(tags.definition(tags.variableName), diffSyntaxColors.variable)
-tagColorMap.set(tags.variableName, diffSyntaxColors.variable)
-tagColorMap.set(tags.keyword, diffSyntaxColors.keyword)
-tagColorMap.set(tags.comment, diffSyntaxColors.comment)
-tagColorMap.set(tags.lineComment, diffSyntaxColors.comment)
-tagColorMap.set(tags.blockComment, diffSyntaxColors.comment)
-tagColorMap.set(tags.string, diffSyntaxColors.string)
-tagColorMap.set(tags.special(tags.string), diffSyntaxColors.string)
-tagColorMap.set(tags.number, diffSyntaxColors.number)
-tagColorMap.set(tags.integer, diffSyntaxColors.number)
-tagColorMap.set(tags.float, diffSyntaxColors.number)
-tagColorMap.set(tags.bool, diffSyntaxColors.bool)
-tagColorMap.set(tags.null, diffSyntaxColors.bool)
-tagColorMap.set(tags.typeName, diffSyntaxColors.type)
-tagColorMap.set(tags.className, diffSyntaxColors.type)
-tagColorMap.set(tags.propertyName, diffSyntaxColors.property)
-tagColorMap.set(tags.operator, diffSyntaxColors.operator)
-tagColorMap.set(tags.punctuation, diffSyntaxColors.punctuation)
-tagColorMap.set(tags.meta, diffSyntaxColors.keyword)
-tagColorMap.set(tags.regexp, diffSyntaxColors.string)
-tagColorMap.set(tags.tagName, diffSyntaxColors.tag)
-tagColorMap.set(tags.attributeName, diffSyntaxColors.attributeName)
-tagColorMap.set(tags.attributeValue, diffSyntaxColors.attributeValue)
-tagColorMap.set(tags.heading, diffSyntaxColors.heading)
-tagColorMap.set(tags.link, diffSyntaxColors.link)
+const tokenCache = new Map<string, TokenSpan[]>()
+const TOKEN_CACHE_LIMIT = 2000
+
+let cachedThemeId = getLastAppliedColorThemeId()
+let cachedSyntax: ResolvedSyntaxColors = resolveSyntaxColors(getColorThemeDefinition(cachedThemeId))
+
+function activeSyntaxColors(): ResolvedSyntaxColors {
+  const themeId = getLastAppliedColorThemeId()
+  if (themeId !== cachedThemeId) {
+    cachedThemeId = themeId
+    cachedSyntax = resolveSyntaxColors(getColorThemeDefinition(themeId))
+    tokenCache.clear()
+  }
+  return cachedSyntax
+}
 
 const diffHighlighter: Highlighter = {
   style(tagSet: readonly Tag[]): string | null {
+    const colors = activeSyntaxColors()
     for (const t of tagSet) {
       for (const ancestor of t.set) {
-        const color = tagColorMap.get(ancestor)
-        if (color) return `color:${color}`
+        const key = tagColorKeys.get(ancestor)
+        if (key) return `color:${colors[key]}`
       }
     }
     return null
@@ -179,9 +180,6 @@ export function getLanguageForFile(filePath: string): string {
   return detectLanguage(filePath)
 }
 
-const tokenCache = new Map<string, TokenSpan[]>()
-const TOKEN_CACHE_LIMIT = 2000
-
 function getCachedTokens(cacheKey: string): TokenSpan[] | undefined {
   return tokenCache.get(cacheKey)
 }
@@ -229,7 +227,7 @@ function computeTokenSpans(text: string, parser: ParserEntry['parser']): TokenSp
 export function tokenizeLine(text: string, language: string): TokenSpan[] {
   if (!language || !text) return []
 
-  const cacheKey = `${language}\0${text}`
+  const cacheKey = `${getLastAppliedColorThemeId()}\0${language}\0${text}`
   const cached = getCachedTokens(cacheKey)
   if (cached) return cached
 
@@ -255,7 +253,7 @@ export function tokenizeLine(text: string, language: string): TokenSpan[] {
 export async function tokenizeLineAsync(text: string, language: string): Promise<TokenSpan[]> {
   if (!language || !text) return []
 
-  const cacheKey = `${language}\0${text}`
+  const cacheKey = `${getLastAppliedColorThemeId()}\0${language}\0${text}`
   const cached = getCachedTokens(cacheKey)
   if (cached) return cached
 

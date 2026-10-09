@@ -40,8 +40,10 @@ import {
 } from '@/lib/skill-tokens'
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { syntaxShikiPair } from '@/lib/themes/syntax-shiki'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { useColorTheme } from '@/stores/app-settings-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 import {
   blockData,
@@ -318,8 +320,8 @@ export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.E
 }
 
 /**
- * Shiki syntax-highlighting for fenced code blocks. Themes track the app's
- * light/dark mode via Streamdown's dual-theme output (github-light/dark).
+ * Shiki syntax-highlighting for fenced code blocks. The theme pair matches
+ * the active color theme (light twin, then dark twin).
  */
 const CODE_PLUGIN = codePlugin
 /** Live Mermaid diagram rendering for ```mermaid fences. */
@@ -572,6 +574,8 @@ export function AgentProse({
   // Streamdown commits at 10 Hz trailing-edge while streaming; the turn-end
   // render commits the exact final text immediately.
   const text = useThrottledStreamingText(rawText, streaming)
+  const colorTheme = useColorTheme()
+  const shikiTheme = useMemo(() => syntaxShikiPair(colorTheme), [colorTheme])
   const [externalUrl, setExternalUrl] = useState<string | null>(null)
   const components = useMemo<Components>(() => {
     const merged: Components = {
@@ -632,7 +636,7 @@ export function AgentProse({
         components={components}
         lineNumbers={false}
         linkSafety={LINK_SAFETY}
-        shikiTheme={['github-light', 'github-dark']}
+        shikiTheme={shikiTheme}
       >
         {text}
       </Streamdown>
