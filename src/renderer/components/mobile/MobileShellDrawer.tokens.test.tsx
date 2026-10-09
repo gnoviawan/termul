@@ -24,7 +24,11 @@ const { tauriRef, workspaceRef } = vi.hoisted(() => ({
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
-  return { ...actual, useNavigate: () => vi.fn() }
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+    useLocation: () => ({ pathname: '/', search: '', hash: '', state: null, key: 'test' })
+  }
 })
 
 vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({

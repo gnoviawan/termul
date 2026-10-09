@@ -14,6 +14,7 @@ import { MobileShellDrawer } from './MobileShellDrawer'
 
 const {
   mockNavigate,
+  locationRef,
   tauriRef,
   workspaceRef,
   mockAddAgentChatTab,
@@ -23,6 +24,7 @@ const {
   browserTabsRef
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
+  locationRef: { current: { pathname: '/' } },
   tauriRef: { current: false as boolean },
   workspaceRef: {
     current: {
@@ -48,7 +50,11 @@ const mockDeleteHistorySession = vi.fn()
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
-  return { ...actual, useNavigate: () => mockNavigate }
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+    useLocation: () => ({ ...locationRef.current, search: '', hash: '', state: null, key: 'test' })
+  }
 })
 
 vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
@@ -253,6 +259,7 @@ async function settle(ms = 30): Promise<void> {
 
 beforeEach(() => {
   mockNavigate.mockReset()
+  locationRef.current = { pathname: '/' }
   mockAddAgentChatTab.mockReset()
   mockOpenHistorySession.mockReset().mockResolvedValue(undefined)
   mockDeleteHistorySession.mockReset().mockResolvedValue(undefined)
@@ -506,6 +513,29 @@ describe('MobileShellDrawer footer', () => {
 
     expect(mockNavigate).toHaveBeenCalledWith('/snapshots')
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+  })
+
+  it('returns to the workspace after a terminal row is chosen off the workspace route', async () => {
+    locationRef.current = { pathname: '/snapshots' }
+    seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+    const { dialog } = await openDrawer()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'zsh' }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'term-t1')
+    expect(mockNavigate).toHaveBeenCalledWith('/')
+  })
+
+  it('stays on the workspace route when a terminal row is chosen there', async () => {
+    seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+    const { dialog } = await openDrawer()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'zsh' }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'term-t1')
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 
   it('mounts the Git history trigger in web mode and invokes onOpenGitHistory', async () => {
