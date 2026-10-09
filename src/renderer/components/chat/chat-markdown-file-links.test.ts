@@ -219,6 +219,8 @@ describe('chat markdown file links', () => {
       'https://example.com/a.md',
       'http://example.com/a.md',
       'mailto:a@b.c',
+      'tel:123',
+      'sms:5551234',
       'javascript:alert(1)',
       '%6Aavascript:alert(1)',
       '#sec',

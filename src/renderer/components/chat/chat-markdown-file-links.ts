@@ -32,7 +32,9 @@ const URI_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/
 const FILE_URL_RE = /^file:/i
 const LINE_FRAGMENT_RE = /^L(\d+)(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$/i
-const PATH_LINE_RE = /^[^:/\\]+:\d+(?::\d+)?$/
+// `name.ext:42` is a file with a line suffix. The extension is required so
+// numeric URI schemes such as `tel:123` / `sms:555` stay ordinary links.
+const PATH_LINE_RE = /^[^:/\\]*\.[^:/\\.]+:\d+(?::\d+)?$/
 const UNC_PREFIX_RE = /^[\\/]{2}/
 const LINE_SUFFIX_RE = /:\d+(?::\d+)?$/
 
