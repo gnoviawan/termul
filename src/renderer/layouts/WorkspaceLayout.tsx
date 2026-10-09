@@ -40,6 +40,7 @@ import {
 } from '@/hooks/use-command-history'
 import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { useFileWatcher } from '@/hooks/use-file-watcher'
+import { useMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
@@ -76,6 +77,7 @@ import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { checkWebAuthGate, getWebAuthGateState, useWebAuthGate } from '@/lib/web-auth-gate'
+import { isWorkspaceRoutePath } from '@/lib/workspace-route'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -542,6 +544,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const pane = findPaneById(paneRoot, fullscreenPaneId)
     return pane?.type === 'leaf' ? pane : null
   }, [fullscreenPaneId, paneRoot])
+  // Mobile shell only: a split synced from desktop collapses to the active
+  // leaf (read-only; null on desktop so the desktop node is unchanged).
+  const mobileActiveLeaf = useMobileActiveLeaf(isMobileWebShell)
   const prevProjectIdRef = useRef<string>('')
   const watchedRootPathRef = useRef<string | null>(null)
   const projectSwitchRequestIdRef = useRef(0)
@@ -1098,7 +1103,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   )
 
   // Determine if we should show the terminal area (only on workspace dashboard)
-  const isWorkspaceRoute = location.pathname === '/' || location.pathname.startsWith('/c/')
+  const isWorkspaceRoute = isWorkspaceRoutePath(location.pathname)
 
   // Unified tab cycling - cycles through ALL workspace tabs in active pane
   const cycleTab = useCallback(
@@ -2065,7 +2070,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 className="h-full min-h-0 flex-1 overflow-hidden"
               >
                 <PaneRenderer
-                  node={fullscreenPane ?? paneRoot}
+                  key={mobileActiveLeaf?.id}
+                  node={mobileActiveLeaf ?? fullscreenPane ?? paneRoot}
                   onAddTerminal={handleAddTerminal}
                   onAddBrowserTab={handleNewBrowserTab}
                   onCloseTerminal={handleCloseTerminal}
@@ -2126,6 +2132,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onLaunchAgent={handleLaunchAgent}
             onNewBrowserTab={handleNewBrowserTab}
             onOpenCanvas={handleOpenCanvas}
+            onNewProject={isMobileWebShell ? () => setIsNewProjectModalOpen(true) : undefined}
             onSaveSnapshot={handleOpenSnapshotModal}
             onOpenProjectSettings={handleOpenProjectSettings}
             onOpenAppPreferences={handleOpenAppPreferences}

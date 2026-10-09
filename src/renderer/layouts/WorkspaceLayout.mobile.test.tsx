@@ -1,6 +1,7 @@
 import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { logFrontendError } from '@/lib/log-api'
 import {
   pressSystemBack,
   settleOverlayBackStack,
@@ -9,6 +10,7 @@ import {
 import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
+import type { LeafNode, SplitNode } from '@/types/workspace.types'
 
 const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
   // Mutable: mobile branch requires isTauriContext() === false.
@@ -152,6 +154,15 @@ vi.mock('@/hooks/use-editor-persistence', () => ({
   persistState: vi.fn()
 }))
 
+// Persistence restore replaces the whole pane tree (resetLayout /
+// loadProjectWorkspace) when it finds nothing for the project. The pane-tree
+// rows below seed a specific tree, so keep the restore out of the way, as the
+// other WorkspaceLayout suites do.
+vi.mock('@/hooks/use-editor-persistence', () => ({
+  useEditorPersistence: vi.fn(),
+  persistState: vi.fn()
+}))
+
 vi.mock('@/hooks/use-snapshots', () => ({
   useCreateSnapshot: vi.fn(() => vi.fn().mockResolvedValue(undefined)),
   useSnapshotLoader: vi.fn()
@@ -179,21 +190,25 @@ vi.mock('@/hooks/use-command-history', () => ({
 // Stub CommandPalette to a marker so the mobile-branch threading test can
 // assert the trigger flips `isCommandPaletteOpen` → `isOpen` without dragging
 // in `cmdk` (whose scrollIntoView call is not implemented in jsdom). The real
-// overlay rendering is covered in CommandPalette.test.tsx.
+// overlay rendering is covered in CommandPalette.test.tsx. The stub exposes
+// whether the layout wired `onNewProject`, and runs it the way the real
+// palette's `executeCommand` does (close first, then execute).
 vi.mock('@/components/CommandPalette', () => ({
   CommandPalette: ({
     isOpen,
     onClose,
     onOpenCommandHistory,
-    onSSHConnect
+    onSSHConnect,
+    onNewProject
   }: {
     isOpen: boolean
     onClose: () => void
     onOpenCommandHistory?: () => void
     onSSHConnect?: (profileId: string) => void
+    onNewProject?: () => void
   }) =>
     isOpen ? (
-      <div>
+      <div data-palette-new-project={onNewProject ? 'wired' : 'absent'}>
         <input placeholder="Search commands, projects, settings..." readOnly />
         <button type="button" onClick={onOpenCommandHistory}>
           Open command history
@@ -208,8 +223,26 @@ vi.mock('@/components/CommandPalette', () => ({
         >
           Connect SSH profile
         </button>
+        {onNewProject && (
+          <button
+            type="button"
+            onClick={() => {
+              onClose()
+              onNewProject()
+            }}
+          >
+            Palette: New Project
+          </button>
+        )}
       </div>
     ) : null
+}))
+
+// NewProjectModal drags in project templates, shell detection and
+// filesystem APIs; the layout test only needs to see that it opens.
+vi.mock('@/components/NewProjectModal', () => ({
+  NewProjectModal: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="new-project-modal-stub" /> : null
 }))
 
 // GitPanel dependencies (rendered inside the mobile git Sheet).
@@ -252,10 +285,19 @@ vi.mock('@/stores/git-status-store', () => ({
   useGitStatusStore: (selector: (s: Record<string, unknown>) => unknown) => selector(gitState)
 }))
 
+// A spy on the PTY kill path. PaneRenderer is stubbed below and the seeded
+// leaves hold no terminal tabs, so this only proves the layout and drawer
+// wiring never reach terminalApi.kill while the visible leaf changes. That
+// unmounting a terminal view leaves its PTY alone is pinned where it is owned:
+// ConnectedTerminal.test.tsx ('should not kill PTY process on unmount').
+const { terminalKill } = vi.hoisted(() => ({
+  terminalKill: vi.fn(() => Promise.resolve({ success: true }))
+}))
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
   return {
     ...actual,
+    terminalApi: { ...actual.terminalApi, kill: terminalKill },
     remoteServerApi: { start: vi.fn(), stop: vi.fn(), status: vi.fn() },
     openerApi: { openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true })) }
   }
@@ -263,9 +305,25 @@ vi.mock('@/lib/api', async () => {
 
 // Stub heavy child components so the mobile shell renders without dragging in
 // CodeMirror / xterm / page implementations.
-vi.mock('@/components/workspace/PaneRenderer', () => ({
-  PaneRenderer: () => <div data-pane-renderer-stub />
-}))
+// The stub exposes the node it was handed (so tests can see whether a split
+// was collapsed to a leaf) and a mount counter (so tests can see a remount).
+const { paneRendererState } = vi.hoisted(() => ({ paneRendererState: { mounts: 0 } }))
+vi.mock('@/components/workspace/PaneRenderer', async () => {
+  const React = await import('react')
+  return {
+    PaneRenderer: ({ node }: { node: { id: string; type: string } }) => {
+      const [mountId] = React.useState(() => ++paneRendererState.mounts)
+      return (
+        <div
+          data-pane-renderer-stub
+          data-node-id={node.id}
+          data-node-type={node.type}
+          data-mount={mountId}
+        />
+      )
+    }
+  }
+})
 
 // P17: shared canonical mock shape for the Story 6 sync hook + banner —
 // identical inline factories across the three WorkspaceLayout suites.
@@ -827,6 +885,238 @@ describe('WorkspaceLayout mobile branch', () => {
 
       await waitFor(() => expect(stackIds()).toEqual([]))
       expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+  })
+
+  // ── Mobile shell fixes (UX FIX 6 and 11) ─────────────────────────────────
+
+  describe('palette New Project (FIX 6)', () => {
+    it('wires New Project into the palette on the mobile shell and opens NewProjectModal', async () => {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Command palette'))
+      expect(
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+      ).toBeInTheDocument()
+      expect(document.querySelector('[data-palette-new-project]')).toHaveAttribute(
+        'data-palette-new-project',
+        'wired'
+      )
+      expect(screen.queryByTestId('new-project-modal-stub')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Palette: New Project' }))
+
+      // Selecting it closes the palette, then opens the modal.
+      await waitFor(() =>
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+      )
+      expect(await screen.findByTestId('new-project-modal-stub')).toBeInTheDocument()
+    })
+  })
+
+  describe('split collapse to the active leaf (FIX 11)', () => {
+    const leafA: LeafNode = {
+      type: 'leaf',
+      id: 'pane-a',
+      tabs: [{ type: 'git', id: 'git-a', cwd: '/demo' }],
+      activeTabId: 'git-a'
+    }
+    const leafB: LeafNode = {
+      type: 'leaf',
+      id: 'pane-b',
+      tabs: [{ type: 'git-history', id: 'git-history-b', cwd: '/demo' }],
+      activeTabId: 'git-history-b'
+    }
+    const splitRoot: SplitNode = {
+      type: 'split',
+      id: 'split-1',
+      direction: 'horizontal',
+      children: [leafA, leafB],
+      sizes: [50, 50]
+    }
+
+    const seed = (activePaneId: string, fullscreenPaneId: string | null = null): void => {
+      useWorkspaceStore.setState({
+        root: splitRoot,
+        activePaneId,
+        fullscreenPaneId,
+        agentLauncherPaneId: null
+      })
+    }
+    const paneStubs = (): NodeListOf<Element> =>
+      document.querySelectorAll('[data-pane-renderer-stub]')
+    const unresolvedWarnings = (): unknown[][] =>
+      vi
+        .mocked(logFrontendError)
+        .mock.calls.filter(([payload]) => payload.source === 'useMobileActiveLeaf')
+
+    afterEach(() => {
+      useWorkspaceStore.getState().resetLayout()
+    })
+
+    it('renders only the active leaf of a synced split and leaves the shared tree untouched', async () => {
+      seed('pane-b')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      const stub = paneStubs()[0]
+      expect(stub).toHaveAttribute('data-node-id', 'pane-b')
+      expect(stub).toHaveAttribute('data-node-type', 'leaf')
+
+      // The collapse is a read-only view: the tree, the active pane and the
+      // fullscreen pane are exactly what desktop synced.
+      const state = useWorkspaceStore.getState()
+      expect(state.root).toBe(splitRoot)
+      expect(getAllLeafPanes(state.root)).toHaveLength(2)
+      expect(state.activePaneId).toBe('pane-b')
+      expect(state.fullscreenPaneId).toBeNull()
+      expect(unresolvedWarnings()).toHaveLength(0)
+      // The collapse path itself never calls the PTY kill API (see the spy).
+      expect(terminalKill).not.toHaveBeenCalled()
+    })
+
+    it('shows the other leaf alone, remounted, when a drawer row for its tab is tapped', async () => {
+      seed('pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      const firstMount = paneStubs()[0].getAttribute('data-mount')
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      // The Git Changes row belongs to leaf A, the inactive leaf.
+      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
+
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
+      expect(paneStubs()).toHaveLength(1)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-type', 'leaf')
+      // Keyed by the leaf id: a pane switch remounts instead of reusing state.
+      expect(paneStubs()[0].getAttribute('data-mount')).not.toBe(firstMount)
+
+      // Nothing was closed or merged: both leaves are still in the tree.
+      const state = useWorkspaceStore.getState()
+      expect(state.root.type).toBe('split')
+      expect(getAllLeafPanes(state.root).map((leaf) => leaf.id)).toEqual(['pane-a', 'pane-b'])
+      expect(state.activePaneId).toBe('pane-a')
+      expect(state.fullscreenPaneId).toBeNull()
+      // Switching the visible leaf never calls the PTY kill API (see the spy).
+      expect(terminalKill).not.toHaveBeenCalled()
+    })
+
+    it('leaves fullscreen and shows the other leaf when a drawer row for its tab is tapped', async () => {
+      seed('pane-b', 'pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      // The Git Changes row belongs to leaf A, not the fullscreen leaf B.
+      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
+
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
+      expect(paneStubs()).toHaveLength(1)
+
+      const state = useWorkspaceStore.getState()
+      expect(state.fullscreenPaneId).toBeNull()
+      expect(state.activePaneId).toBe('pane-a')
+      // Nothing was closed or merged: both leaves are still in the tree, and
+      // no PTY died.
+      expect(state.root.type).toBe('split')
+      expect(getAllLeafPanes(state.root).map((leaf) => leaf.id)).toEqual(['pane-a', 'pane-b'])
+      expect(terminalKill).not.toHaveBeenCalled()
+    })
+
+    it('keeps fullscreen when the tapped drawer row belongs to the fullscreen leaf', async () => {
+      seed('pane-b', 'pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Git History' }))
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      )
+      expect(paneStubs()).toHaveLength(1)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      const state = useWorkspaceStore.getState()
+      expect(state.fullscreenPaneId).toBe('pane-b')
+      expect(state.activePaneId).toBe('pane-b')
+    })
+
+    it('keeps the same leaf mounted across re-renders while it stays active', async () => {
+      seed('pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      const firstMount = paneStubs()[0].getAttribute('data-mount')
+
+      // Opening and closing the drawer re-renders the shell around the pane.
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Git History' }))
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      )
+      expect(paneStubs()).toHaveLength(1)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      expect(paneStubs()[0].getAttribute('data-mount')).toBe(firstMount)
+    })
+
+    it('falls back to the first leaf and warns once when activePaneId matches no leaf', async () => {
+      seed('ghost-pane')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a')
+      expect(unresolvedWarnings()).toHaveLength(1)
+      expect(unresolvedWarnings()[0][0]).toEqual(
+        expect.objectContaining({ level: 'warn', source: 'useMobileActiveLeaf' })
+      )
+
+      // A re-render with the same unresolved id does not log again, and the
+      // store is not repaired by the view.
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      expect(unresolvedWarnings()).toHaveLength(1)
+      expect(useWorkspaceStore.getState().activePaneId).toBe('ghost-pane')
+      expect(useWorkspaceStore.getState().root).toBe(splitRoot)
+    })
+
+    it('renders a fullscreen leaf as the single pane without clearing fullscreen', async () => {
+      seed('pane-a', 'pane-a')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a')
+      expect(useWorkspaceStore.getState().fullscreenPaneId).toBe('pane-a')
+      expect(useWorkspaceStore.getState().root).toBe(splitRoot)
+    })
+
+    it('renders the active leaf, not a different fullscreen leaf, so the pane matches the drawer and header', async () => {
+      // `loadProjectWorkspace` can restore an activePaneId while keeping the
+      // previous fullscreenPaneId, so "fullscreen A, active B" is reachable.
+      // The mobile shell follows activePaneId (the leaf its drawer and header
+      // describe); the fullscreen leaf only wins on desktop.
+      seed('pane-b', 'pane-a')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      expect(paneStubs()[0]).toHaveAttribute('data-node-type', 'leaf')
+
+      const state = useWorkspaceStore.getState()
+      expect(state.root).toBe(splitRoot)
+      expect(state.activePaneId).toBe('pane-b')
+      expect(state.fullscreenPaneId).toBe('pane-a')
+    })
+
+    it('hands a single-leaf workspace to PaneRenderer unchanged', async () => {
+      useWorkspaceStore.getState().resetLayout()
+      const only = useWorkspaceStore.getState().root
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', only.id)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-type', 'leaf')
+      expect(unresolvedWarnings()).toHaveLength(0)
     })
   })
 

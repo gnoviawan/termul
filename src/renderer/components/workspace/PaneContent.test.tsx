@@ -63,21 +63,36 @@ vi.mock('@/stores/terminal-store', () => ({
   useTerminalActions: vi.fn(() => ({ setTerminalPtyId: vi.fn() }))
 }))
 
+// Mutable so the pane-ring tests can seed a multi-leaf tree, a fullscreen pane
+// and the mobile shell. Defaults match the single-leaf desktop workspace the
+// other suites in this file assume.
+const { paneStateRef, mobileRef } = vi.hoisted(() => ({
+  paneStateRef: {
+    current: {
+      activePaneId: 'pane-1',
+      fullscreenPaneId: null as string | null,
+      leafCount: 1
+    }
+  },
+  mobileRef: { current: false as boolean }
+}))
+
 vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
-      activePaneId: 'pane-1',
-      fullscreenPaneId: null,
+      activePaneId: paneStateRef.current.activePaneId,
+      fullscreenPaneId: paneStateRef.current.fullscreenPaneId,
       agentLauncherPaneId: null,
       setActivePane: vi.fn()
     })
   ),
-  getAllLeafPanes: () => []
+  getAllLeafPanes: () =>
+    Array.from({ length: paneStateRef.current.leafCount }, (_, index) => ({ id: `leaf-${index}` }))
 }))
 
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
-  useMobileWebShell: () => false
+  useMobileWebShell: () => mobileRef.current
 }))
 
 // Mutable so the drop-abort test can flip isDragging mid-render.
@@ -371,5 +386,78 @@ describe('PaneContent — agent-chat remap mount continuity', () => {
 
     const stubAfter = await screen.findByTestId('chat-panel-stub')
     expect(stubAfter.getAttribute('data-mount')).not.toBe(mountId)
+  })
+})
+
+describe('PaneContent — active-pane and fullscreen rings', () => {
+  const pane: LeafNode = { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null }
+
+  const renderPane = (): HTMLElement => {
+    const { container } = render(<PaneContent pane={pane} />)
+    const root = container.querySelector('[data-pane-content="pane-1"]')
+    if (!root) throw new Error('pane root not rendered')
+    return root as HTMLElement
+  }
+
+  beforeEach(() => {
+    resetFramerMotionTestState()
+    mobileRef.current = false
+    paneStateRef.current = { activePaneId: 'pane-1', fullscreenPaneId: null, leafCount: 1 }
+  })
+
+  afterEach(() => {
+    mobileRef.current = false
+    paneStateRef.current = { activePaneId: 'pane-1', fullscreenPaneId: null, leafCount: 1 }
+  })
+
+  it('desktop: the active pane of a multi-leaf tree keeps its ring', () => {
+    paneStateRef.current = { activePaneId: 'pane-1', fullscreenPaneId: null, leafCount: 2 }
+
+    const root = renderPane()
+
+    expect(root.className).toContain('ring-1')
+    expect(root.className).toContain('ring-primary/30')
+    expect(root.className).not.toContain('rounded-xl')
+  })
+
+  it('desktop: a single-leaf workspace has no ring', () => {
+    const root = renderPane()
+
+    expect(root.className).not.toContain('ring-1')
+  })
+
+  it('desktop: a fullscreen pane keeps its ring and rounded clip', () => {
+    paneStateRef.current = { activePaneId: 'pane-1', fullscreenPaneId: 'pane-1', leafCount: 2 }
+
+    const root = renderPane()
+
+    expect(root.className).toContain('ring-1')
+    expect(root.className).toContain('ring-primary/30')
+    expect(root.className).toContain('rounded-xl')
+    expect(root.className).toContain('overflow-hidden')
+  })
+
+  it('mobile: the collapsed active leaf of a multi-leaf tree shows no ring', () => {
+    mobileRef.current = true
+    paneStateRef.current = { activePaneId: 'pane-1', fullscreenPaneId: null, leafCount: 2 }
+
+    const root = renderPane()
+
+    expect(root.className).not.toContain('ring-1')
+    expect(root.className).not.toContain('ring-primary')
+    // The leaf keeps the base chrome of a single-leaf workspace.
+    expect(root.className).toContain('flex-col')
+    expect(root.className).toContain('h-full')
+  })
+
+  it('mobile: a fullscreen pane shows no fullscreen ring or clip', () => {
+    mobileRef.current = true
+    paneStateRef.current = { activePaneId: 'pane-1', fullscreenPaneId: 'pane-1', leafCount: 2 }
+
+    const root = renderPane()
+
+    expect(root.className).not.toContain('ring-1')
+    expect(root.className).not.toContain('ring-primary')
+    expect(root.className).not.toContain('rounded-xl')
   })
 })
