@@ -183,16 +183,17 @@ pub fn resolved_turn_timeout() -> Option<Duration> {
 /// a deadline is `None` (the unlimited default for idle and/or hard), it imposes
 /// no bound — a fully-unlimited turn (both `None`) is ended only by completion or
 /// cancel, so a wedged agent is NOT killed by default.
-pub(super) async fn race_turn<P>(
+pub(super) async fn race_turn<P, E>(
     prompt: P,
     mut cancel_rx: oneshot::Receiver<()>,
     idle_rx: &mut watch::Receiver<()>,
     on_timeout_cancel: impl Fn(),
     idle: Option<Duration>,
     hard: Option<Duration>,
-) -> Result<StopReason, String>
+) -> Result<StopReason, E>
 where
-    P: Future<Output = Result<StopReason, String>>,
+    P: Future<Output = Result<StopReason, E>>,
+    E: From<String>,
 {
     tokio::pin!(prompt);
     let hard_deadline = hard.map(|d| tokio::time::Instant::now() + d);
@@ -216,13 +217,13 @@ where
                     Ok(result) => result,
                     Err(_) if idle_deadline == Some(nd) => {
                         let idle_dur = idle.unwrap_or(Duration::ZERO);
-                        Err(format!(
+                        Err(E::from(format!(
                             "turn idle timeout: no agent activity for {idle_dur:?}"
-                        ))
+                        )))
                     }
                     Err(_) => {
                         let hard_dur = hard.unwrap_or(Duration::ZERO);
-                        Err(format!("turn hard timeout: exceeded {hard_dur:?}"))
+                        Err(E::from(format!("turn hard timeout: exceeded {hard_dur:?}")))
                     }
                 };
             }

@@ -519,6 +519,11 @@ export interface AgentErrorEvent {
   agentId: AgentId
   sessionId?: SessionId | null
   message: string
+  /** gh-821: JSON-RPC error code when the failure was an agent RPC error.
+   * Absent for non-RPC failures (timeouts, flush failures) and older hosts. */
+  code?: number
+  /** gh-821: JSON-RPC error `data` (structured; also folded into `message`). */
+  data?: unknown
 }
 /** Story 1.9 FR26: the agent subprocess crashed mid-turn (a typed event
  * distinct from `agent_error` (non-fatal) + `agent_disconnected` (always)).
@@ -527,6 +532,30 @@ export interface AgentCrashedEvent {
   agentId: AgentId
   sessionId?: SessionId | null
   message: string
+  /** gh-821: JSON-RPC code of the connection-ending error, when it was one. */
+  code?: number
+  /** gh-821: JSON-RPC `data` of the connection-ending error, when present. */
+  data?: unknown
+}
+
+/** gh-821: structured JSON-RPC detail of an `agent_error` / `agent_crashed`. */
+export interface AcpErrorDetail {
+  code?: number
+  data?: unknown
+}
+
+/**
+ * Tolerantly extract the JSON-RPC `code` / `data` from an `agent_error` or
+ * `agent_crashed` payload. Old payloads (`{ agentId, message }`) yield `{}`; a
+ * non-integer `code` is ignored; `data` passes through verbatim when present.
+ */
+export function parseAcpErrorDetail(payload: unknown): AcpErrorDetail {
+  if (typeof payload !== 'object' || payload === null) return {}
+  const { code, data } = payload as { code?: unknown; data?: unknown }
+  const detail: AcpErrorDetail = {}
+  if (typeof code === 'number' && Number.isInteger(code)) detail.code = code
+  if (data !== undefined && data !== null) detail.data = data
+  return detail
 }
 export interface AgentDisconnectedEvent {
   agentId: AgentId

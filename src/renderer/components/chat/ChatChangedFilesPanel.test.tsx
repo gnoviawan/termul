@@ -295,6 +295,8 @@ describe('ChatChangedFilesPanel on the mobile dock', () => {
 
     fireEvent.click(git)
     expect(onOpenGitChanges).toHaveBeenCalledTimes(1)
+    // The tapped button is handed over, so the Git sheet can return focus to it.
+    expect(onOpenGitChanges).toHaveBeenCalledWith(git)
     // The Git action is its own control: tapping it does not toggle the panel.
     expect(screen.getByRole('button', { name: /^Changed files/ })).toHaveAttribute(
       'aria-expanded',

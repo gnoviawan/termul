@@ -288,6 +288,50 @@ describe('acp-store multi-project isolation', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
+  // gh-821: JSON-RPC code/data from the agent_error / agent_crashed payload.
+  it('agent_error stores code + data; an old payload leaves them null/undefined', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'auth',
+      code: -32000,
+      data: { reason: 'login' }
+    })
+    let session = useAcpStore.getState().sessions['s1']
+    expect(session.lastErrorCode).toBe(-32000)
+    expect(session.lastErrorData).toEqual({ reason: 'login' })
+
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'turn idle timeout'
+    })
+    session = useAcpStore.getState().sessions['s1']
+    expect(session.lastErrorCode).toBeNull()
+    expect(session.lastErrorData).toBeUndefined()
+  })
+
+  it('agent_crashed stores code + data on the session', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'gone',
+      code: -32603,
+      data: { detail: 'x' }
+    })
+    const session = useAcpStore.getState().sessions['s1']
+    expect(session.lastErrorCode).toBe(-32603)
+    expect(session.lastErrorData).toEqual({ detail: 'x' })
+  })
+
+  it('agent_crashed without session_id stores code on every session of the agent', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentCrashed({ agentId: 'agent-1', message: 'gone', code: -32603 })
+    expect(useAcpStore.getState().sessions['s1'].lastErrorCode).toBe(-32603)
+  })
+
   // Story 1.9 FR26: the typed AgentCrashed event → status: 'error' + lastError.
   it('agent_crashed with session_id sets status error + lastError on that session', () => {
     seedSession('s1', 'agent-1')

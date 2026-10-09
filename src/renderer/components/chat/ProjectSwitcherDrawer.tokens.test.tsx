@@ -6,33 +6,36 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 //   - header p-2 family (no px-4 py-3 drift)
 //   - no "desktop" wording in the accessible description
 
-const { mockSwitchProject, queuedRef, failedRef, setFailedProjectSwitch } = vi.hoisted(() => ({
-  mockSwitchProject: vi.fn(),
-  queuedRef: { current: null as string | null },
-  failedRef: { current: null as string | null },
-  setFailedProjectSwitch: vi.fn()
+const { acpState, projectState } = vi.hoisted(() => ({
+  acpState: {
+    switchProject: vi.fn(),
+    queuedProjectSwitchId: null as string | null,
+    failedProjectSwitchId: null as string | null,
+    switchingProjectId: null as string | null,
+    setFailedProjectSwitch: vi.fn()
+  },
+  projectState: {
+    projects: [
+      { id: 'p1', name: 'Alpha', path: '/a', color: 'blue' },
+      { id: 'p3', name: 'Gamma', path: '/g', color: 'cyan' }
+    ],
+    activeProjectId: 'p1',
+    selectProject: vi.fn()
+  }
 }))
 
+// The sheet reads the switch markers through selectors and the shared switch
+// hook reads them through `getState()`, so each mock serves both.
 vi.mock('@/stores/acp-store', () => ({
-  useAcpStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      switchProject: mockSwitchProject,
-      queuedProjectSwitchId: queuedRef.current,
-      failedProjectSwitchId: failedRef.current,
-      setFailedProjectSwitch
-    })
+  useAcpStore: Object.assign((selector: (state: unknown) => unknown) => selector(acpState), {
+    getState: () => acpState
+  })
 }))
 
 vi.mock('@/stores/project-store', () => ({
-  useProjectStore: (selector: (s: unknown) => unknown) =>
-    selector({
-      projects: [
-        { id: 'p1', name: 'Alpha', path: '/a', color: 'blue' },
-        { id: 'p3', name: 'Gamma', path: '/g', color: 'cyan' }
-      ],
-      activeProjectId: 'p1',
-      selectProject: vi.fn()
-    })
+  useProjectStore: Object.assign((selector: (s: unknown) => unknown) => selector(projectState), {
+    getState: () => projectState
+  })
 }))
 
 vi.mock('@/lib/tauri-remote-api', () => ({
@@ -51,9 +54,10 @@ import { ProjectSwitcherDrawer } from './ProjectSwitcherDrawer'
 
 describe('ProjectSwitcherDrawer token sweep (story 12)', () => {
   beforeEach(() => {
-    mockSwitchProject.mockReset()
-    queuedRef.current = null
-    failedRef.current = null
+    acpState.switchProject.mockReset()
+    acpState.queuedProjectSwitchId = null
+    acpState.failedProjectSwitchId = null
+    acpState.switchingProjectId = null
   })
 
   it('drawer width is ~70-75% of the viewport and the header uses the p-2 family', async () => {

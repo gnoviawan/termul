@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  _resetSheetFocusReturnForTests,
+  recordSheetOpener,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { Project } from '@/types/project'
 
@@ -95,6 +100,7 @@ describe('resolveGitSheetCwd', () => {
 describe('useGitSheetStore', () => {
   beforeEach(() => {
     logFrontendError.mockClear()
+    _resetSheetFocusReturnForTests()
     sessionsRef.current = {}
     useGitSheetStore.setState({ open: false, cwd: '', projectId: '' })
     useProjectStore.setState({ projects: [project()], activeProjectId: 'p1' })
@@ -171,6 +177,65 @@ describe('useGitSheetStore', () => {
     expect(useGitSheetStore.getState().open).toBe(false)
     expect(logFrontendError).toHaveBeenCalledTimes(1)
     expect(logFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
+  })
+
+  describe('focus-return opener', () => {
+    const closeEvent = (): Event => new Event('focusScope.autoFocusOnUnmount', { cancelable: true })
+    const mountButton = (): HTMLButtonElement => {
+      const button = document.createElement('button')
+      document.body.append(button)
+      return button
+    }
+
+    afterEach(() => {
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      document.body.innerHTML = ''
+    })
+
+    it('records the opener when the sheet opens, so closing returns focus to it', () => {
+      const gitAction = mountButton()
+      useGitSheetStore.getState().openGitSheet('/repo/.worktrees/a', gitAction)
+      expect(useGitSheetStore.getState().open).toBe(true)
+
+      sheetCloseAutoFocus('git-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(gitAction)
+    })
+
+    it('keeps an opener a caller already recorded (the header ⋯ row) when none is passed', () => {
+      const more = mountButton()
+      recordSheetOpener('git-sheet', more)
+
+      useGitSheetStore.getState().openGitSheet()
+      expect(useGitSheetStore.getState().open).toBe(true)
+      sheetCloseAutoFocus('git-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(more)
+    })
+
+    it('replaces an earlier opener with the one passed', () => {
+      const more = mountButton()
+      const gitAction = mountButton()
+      recordSheetOpener('git-sheet', more)
+
+      useGitSheetStore.getState().openGitSheet('/repo', gitAction)
+      sheetCloseAutoFocus('git-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(gitAction)
+    })
+
+    it('records nothing when the sheet does not open', () => {
+      const more = mountButton()
+      const gitAction = mountButton()
+      recordSheetOpener('git-sheet', more)
+      useProjectStore.setState({ projects: [project({ path: undefined })] })
+
+      useGitSheetStore.getState().openGitSheet(undefined, gitAction)
+      expect(useGitSheetStore.getState().open).toBe(false)
+      sheetCloseAutoFocus('git-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(more)
+    })
   })
 
   it('closes without dropping the cwd, so the exit animation keeps its content', () => {

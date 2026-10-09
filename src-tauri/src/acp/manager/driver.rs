@@ -118,8 +118,8 @@ pub(super) fn run_agent(
     // must run regardless of `was_spawned`/`intentional_kill` (those gate only
     // the renderer-facing lifecycle events).
     if !was_spawned {
-        if let Err(message) = &result {
-            *start_error.lock() = Some(message.clone());
+        if let Err(detail) = &result {
+            *start_error.lock() = Some(detail.message.clone());
         }
     }
 
@@ -198,7 +198,7 @@ pub(super) fn run_agent(
             );
         }
 
-        if let Err(message) = result {
+        if let Err(detail) = result {
             // Story 1.9 FR26: emit the typed `AgentCrashed` event BEFORE
             // `agent_error` (back-compat) + `agent_disconnected`. The renderer
             // distinguishes "crash" (→ `status: 'error'` + manual restart) from
@@ -206,25 +206,18 @@ pub(super) fn run_agent(
             if profile.mask_failure_details {
                 // The renderer gets the generic message (agents may echo env
                 // values); the host log keeps the specific detail.
-                log::warn!("[acp] Factory Droid connection failed: {message}");
+                log::warn!("[acp] Factory Droid connection failed: {}", detail.message);
             }
-            let message = if profile.mask_failure_details {
-                "Factory Droid connection failed".to_string()
+            // Masking hides details: drop the structured code/data too.
+            let detail = if profile.mask_failure_details {
+                detail.masked("Factory Droid connection failed")
             } else {
-                message
+                detail
             };
-            let crashed = AgentCrashedEvent {
-                agent_id: agent_id.clone(),
-                session_id: None,
-                message: message.clone(),
-            };
+            let crashed = detail.clone().into_agent_crashed(agent_id.clone(), None);
             events::fan_out(&sinks, None, events::EVENT_AGENT_CRASHED, &crashed);
 
-            let event = AgentErrorEvent {
-                agent_id: agent_id.clone(),
-                session_id: None,
-                message,
-            };
+            let event = detail.into_agent_error(agent_id.clone(), None);
             // Teardown error is agent-level (no session) → sid = None.
             events::fan_out(&sinks, None, events::EVENT_AGENT_ERROR, &event);
         }
@@ -330,7 +323,7 @@ pub(super) async fn drive_connection(
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
     profile: AgentRuntimeProfile,
-) -> Result<(), String> {
+) -> Result<(), events::AcpErrorDetail> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
     // errors, so it is logged verbatim. stdin/stdout carry the JSON-RPC protocol
@@ -905,5 +898,5 @@ pub(super) async fn drive_connection(
         crate::acp::browser_shim::remove_shim(&agent_id);
     }
 
-    connection_result.map_err(|e| e.to_string())
+    connection_result.map_err(events::AcpErrorDetail::from)
 }

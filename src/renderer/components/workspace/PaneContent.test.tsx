@@ -387,6 +387,34 @@ describe('PaneContent — agent-chat remap mount continuity', () => {
     const stubAfter = await screen.findByTestId('chat-panel-stub')
     expect(stubAfter.getAttribute('data-mount')).not.toBe(mountId)
   })
+
+  // The mobile drawer (`findVisibleQuestionFocusTarget`) and the launcher read
+  // this attribute to tell the chat on screen from the ones kept mounted behind it.
+  it('marks only the active chat tab data-chat-tab-state="visible" and keeps the others mounted as "hidden"', async () => {
+    const twoChats: LeafNode = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-a',
+      tabs: [
+        { type: 'agent-chat', id: 'chat-a', sessionId: 'a', mountKey: 'chat-a' },
+        { type: 'agent-chat', id: 'chat-b', sessionId: 'b', mountKey: 'chat-b' }
+      ]
+    }
+    const stateOf = (container: HTMLElement, session: string): string | null =>
+      container
+        .querySelector(`[data-testid="chat-panel-stub"][data-session="${session}"]`)
+        ?.closest('[data-chat-tab-state]')
+        ?.getAttribute('data-chat-tab-state') ?? null
+
+    const { container, rerender } = render(<PaneContent pane={twoChats} />)
+    await screen.findAllByTestId('chat-panel-stub')
+    expect(stateOf(container, 'a')).toBe('visible')
+    expect(stateOf(container, 'b')).toBe('hidden')
+
+    rerender(<PaneContent pane={{ ...twoChats, activeTabId: 'chat-b' }} />)
+    expect(stateOf(container, 'a')).toBe('hidden')
+    expect(stateOf(container, 'b')).toBe('visible')
+  })
 })
 
 describe('PaneContent — active-pane and fullscreen rings', () => {

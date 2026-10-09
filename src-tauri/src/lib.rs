@@ -37,6 +37,8 @@ mod ssh;
 mod trackers;
 mod updater_api;
 pub mod web;
+// Main-window show safety net + Wayland detection (gh-719).
+mod window_visibility;
 mod worktree;
 
 #[cfg(target_os = "windows")]
@@ -1637,6 +1639,9 @@ pub fn run() {
             }
             // ── End Tray ────────────────────────────────────────────────────
 
+            // gh-719: show the main window if the renderer never does.
+            window_visibility::spawn_show_fallback(&handle);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1646,6 +1651,7 @@ pub fn run() {
             detect_shells,
             get_default_shell,
             get_home_directory,
+            window_visibility::is_wayland_session,
             suspend_app_menu,
             restore_app_menu,
             reveal_log_dir_command,
