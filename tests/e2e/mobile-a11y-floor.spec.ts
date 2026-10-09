@@ -212,6 +212,25 @@ async function boxOf(locator: Locator): Promise<Box> {
   return box
 }
 
+/**
+ * Open the centred "Create New Branch" Dialog on the mobile shell: Git changes,
+ * the branch menu, then "Create new branch...". It is the Dialog (with the
+ * built-in Close) a phone can reach. The launcher's agent selector used to be a
+ * Dialog, but the combined agent / model / effort selector opens a bottom sheet
+ * on the mobile shell. The project needs a git repository (`registerProject({ git: true })`).
+ */
+async function openCreateBranchDialog(page: Page): Promise<Locator> {
+  await page.getByRole('button', { name: 'Git changes' }).tap()
+  const gitSheet = page.getByRole('dialog', { name: 'Git changes' })
+  await expect(gitSheet).toBeVisible()
+  // The branch picker: a repo with no commit yet reads "Detached HEAD".
+  await gitSheet.getByRole('button', { name: /^(main|Detached HEAD)$/ }).tap()
+  await page.getByRole('menuitem', { name: 'Create new branch...' }).tap()
+  const dialog = page.getByRole('dialog', { name: 'Create New Branch' })
+  await expect(dialog).toBeVisible()
+  return dialog
+}
+
 // ---------------------------------------------------------------------------
 // The shell live region
 // ---------------------------------------------------------------------------
@@ -622,12 +641,10 @@ test.describe('touch targets and reduced motion', () => {
   })
 
   test('the dialog close is a 44px box whose glyph has not moved', async ({ page }) => {
-    await bootShell(page, await registerProject())
+    await bootShell(page, await registerProject({ git: true }))
 
-    // The launcher's agent selector is a centred Dialog on the mobile shell.
-    await page.getByRole('button', { name: /^Select ACP agent/ }).tap()
-    const dialog = page.getByRole('dialog', { name: 'ACP Agent' })
-    await expect(dialog).toBeVisible()
+    // A centred Dialog on the mobile shell (opened over the Git sheet).
+    const dialog = await openCreateBranchDialog(page)
     await settled(dialog)
 
     const close = await boxOf(dialog.getByRole('button', { name: 'Close', exact: true }))
@@ -658,13 +675,15 @@ test.describe('touch targets and reduced motion', () => {
   test('sheet, dialog and context menu animate normally, and not at all under reduced motion', async ({
     page
   }) => {
-    const project = await registerProject({ files: true })
+    const project = await registerProject({ files: true, git: true })
     await bootShell(page, project)
 
     const surfaces: Array<{
       name: string
       open: () => Promise<void>
       content: Locator
+      /** Closes whatever `open` left behind once the surface itself is gone. */
+      cleanup?: () => Promise<void>
     }> = [
       {
         name: 'sheet',
@@ -673,8 +692,22 @@ test.describe('touch targets and reduced motion', () => {
       },
       {
         name: 'dialog',
-        open: () => page.getByRole('button', { name: /^Select ACP agent/ }).tap(),
-        content: page.getByRole('dialog', { name: 'ACP Agent' })
+        open: async () => {
+          await openCreateBranchDialog(page)
+        },
+        content: page.getByRole('dialog', { name: 'Create New Branch' }),
+        // The Dialog opens over the Git sheet: Escape closed the Dialog only.
+        // The sheet is aria-hidden until the Dialog's `hideOthers` is undone, and
+        // under reduced motion the Dialog is gone at once: wait for the sheet to
+        // be exposed again before dismissing it (a role query skips aria-hidden
+        // nodes, so `toBeHidden` alone would pass at once).
+        cleanup: async () => {
+          const gitSheet = page.getByRole('dialog', { name: 'Git changes' })
+          await expect(gitSheet).toBeVisible()
+          await page.keyboard.press('Escape')
+          await expect(gitSheet).toBeHidden()
+          await expect(page.getByRole('banner')).toBeVisible()
+        }
       },
       {
         name: 'context menu',
@@ -708,6 +741,7 @@ test.describe('touch targets and reduced motion', () => {
         }
         await page.keyboard.press('Escape')
         await expect(surface.content).toBeHidden()
+        await surface.cleanup?.()
       }
     }
   })
