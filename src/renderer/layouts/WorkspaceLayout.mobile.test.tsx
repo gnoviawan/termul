@@ -656,6 +656,7 @@ describe('WorkspaceLayout mobile branch', () => {
     it('wires New Project into the palette on the mobile shell and opens NewProjectModal', async () => {
       renderLayout()
 
+      // The header no longer carries a palette icon; the palette lives in the header ⋯ sheet.
       await chooseMoreItem('Command palette')
       expect(
         await screen.findByPlaceholderText('Search commands, projects, settings...')
