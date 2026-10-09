@@ -19,7 +19,7 @@ import { iconPop } from './chat-motion'
  * triggers; non-interactive containers opt out via `interactive={false}`.
  */
 const composerPillVariants = cva(
-  "relative inline-flex h-8 min-h-8 min-w-0 items-center gap-1 px-2 text-xs text-muted-foreground after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
+  "relative inline-flex h-8 min-h-8 min-w-0 items-center gap-1 px-2 text-xs text-muted-foreground after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1 pointer-coarse:@[400px]:after:-inset-y-1.5",
   {
     variants: {
       interactive: {

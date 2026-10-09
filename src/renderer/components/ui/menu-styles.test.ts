@@ -4,6 +4,7 @@ import {
   MENU_CONTENT_CLASS,
   MENU_ITEM_CLASS,
   MENU_LABEL_CLASS,
+  MENU_MOTION_CLASS,
   MENU_OPTION_ROW_CLASS,
   menuOptionRowClass,
   pickerSearchTextClass
@@ -35,6 +36,20 @@ describe('menu-styles', () => {
   it('picker search text is 16px on touch so iOS does not zoom', () => {
     expect(pickerSearchTextClass(true)).toBe('text-base')
     expect(pickerSearchTextClass(false)).toBe('text-xs')
+  })
+
+  it('menu motion skips the animation under reduced motion, beside the unchanged classes', () => {
+    const list = classes(MENU_MOTION_CLASS)
+    // Important: a bare `motion-reduce:animate-none` loses to `data-[state=open]:animate-in`.
+    expect(list).toContain('motion-reduce:animate-none!')
+    expect(list).toEqual(
+      expect.arrayContaining([
+        'data-[state=open]:animate-in',
+        'data-[state=closed]:animate-out',
+        'data-[state=open]:zoom-in-95',
+        'data-[side=bottom]:slide-in-from-top-2'
+      ])
+    )
   })
 
   it('a select shell can drop the shell padding onto its viewport', () => {

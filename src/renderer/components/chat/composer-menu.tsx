@@ -190,12 +190,14 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                     // Story 5.3 (T4.1): raise the touch hit-target height on
                     // narrow panes (mobile) to ≥44px. The `@[400px]:` variant
                     // restores `py-1.5` on wider panes (desktop
-                    // non-regression). Pure CSS variant — no JS two-branch
+                    // non-regression); `pointer-coarse:@[400px]:` keeps the
+                    // 44px row for a touch pointer in a wide pane (a landscape
+                    // phone). Pure CSS variant — no JS two-branch
                     // render (Story 5.1 threshold-remount lesson).
                     // Rows are rounded-lg (8px), concentric with the
                     // rounded-xl (12px) shell and its 4px padding.
                     MENU_OPTION_ROW_CLASS,
-                    'min-h-11 py-2.5 @[400px]:min-h-8 @[400px]:py-1.5',
+                    'min-h-11 py-2.5 @[400px]:min-h-8 @[400px]:py-1.5 pointer-coarse:@[400px]:min-h-11 pointer-coarse:@[400px]:py-2.5',
                     item.wrap ? 'flex-wrap items-start' : 'items-center',
                     isHighlighted && MENU_ACTIVE_ROW_CLASS,
                     item.dimmed && 'text-disabled-foreground'

@@ -98,6 +98,21 @@ describe('ComposerMenu touch interactions (Story 5.3)', () => {
     expect(option.className).toContain('@[400px]:py-1.5')
   })
 
+  it('keeps the 44px row on a coarse pointer in a wide pane, and 32px for a fine one', () => {
+    const sections = [makeSection('s1', 'Commands', [makeItem('a', 'Alpha')])]
+    render(<ComposerMenu sections={sections} onSelect={vi.fn()} />)
+    const classes = screen.getByRole('option', { name: 'Alpha' }).className.split(/\s+/)
+
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        '@[400px]:min-h-8',
+        '@[400px]:py-1.5',
+        'pointer-coarse:@[400px]:min-h-11',
+        'pointer-coarse:@[400px]:py-2.5'
+      ])
+    )
+  })
+
   it('highlights with a foreground wash and marks selection with a check, not a fill', () => {
     const sections = [
       makeSection('s1', 'Commands', [

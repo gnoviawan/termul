@@ -38,6 +38,11 @@ Default → Dialog
 - Selected or checked: a `Check` icon. No fill. Radio items also use `Check`.
 - Group label: 11px, semibold, uppercase, tracked, `text-muted-foreground`.
 - Destructive item: last, after a separator, `variant="destructive"`.
+- Motion: every animated Radix overlay carries `motion-reduce:animate-none!` (important, because `data-[state=open]:animate-in` outranks a bare utility). Menus get it from `MENU_MOTION_CLASS`, so a new menu inherits it. A new animated primitive must add the token itself.
+
+## Shell body
+
+On the mobile shell, `MobileChatShell` sets `inert` on its body wrapper while a blocking overlay is registered in `overlay-stack-store`, so a screen reader cannot reach the chat log behind a sheet. An overlay that renders inside the shell body (the agent launcher, `ConfirmDialog` instances, the snapshot and new-project modals that the Snapshots page opens, the message actions menu) is exempt, or it would go inert with the rest and could not be tapped. Add the id to `isInertExemptOverlay` in `hooks/use-inert-behind-overlays.ts` when adding one, and assert it in the owner's registration test.
 
 ## Correct
 

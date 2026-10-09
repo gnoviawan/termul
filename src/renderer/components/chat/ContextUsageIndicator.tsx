@@ -109,7 +109,7 @@ export function ContextUsageIndicator({
       aria-label={`Context ${Math.round(percent)} percent used`}
       className={cn(
         'relative inline-flex size-8 shrink-0 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
-        "after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
+        "after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1 pointer-coarse:@[400px]:after:-inset-y-1.5",
         'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         className
       )}

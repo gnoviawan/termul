@@ -231,7 +231,7 @@ function MessageScrollerButton({
               size="icon-sm"
               onClick={() => scrollToEnd('smooth')}
               className={cn(
-                'relative size-11 rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted @[400px]:size-10',
+                'relative size-11 rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted @[400px]:size-10 pointer-coarse:@[400px]:size-11',
                 hasNew && 'border-foreground/40',
                 className
               )}

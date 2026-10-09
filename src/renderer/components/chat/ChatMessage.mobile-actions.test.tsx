@@ -173,12 +173,15 @@ describe('ChatMessage on the mobile shell: focus-revealed row', () => {
     expect(message).toHaveAttribute('tabindex', '0')
     expect(message).toHaveClass(
       'rounded-lg',
-      'outline-none',
+      'focus-visible:outline-hidden',
+      'focus-visible:-outline-offset-2',
       'focus-visible:ring-2',
       'focus-visible:ring-inset',
       'focus-visible:ring-ring',
       'pointer-coarse:select-none'
     )
+    // A bare `outline-none` would leave nothing for forced-colors mode to paint.
+    expect(message).not.toHaveClass('outline-none')
     // The trigger owns the long-press, so Radix's iOS callout opt-out applies.
     expect(touchCallout(message)).toBe('none')
 
@@ -201,12 +204,15 @@ describe('ChatMessage on the mobile shell: focus-revealed row', () => {
     expect(message).toHaveAttribute('tabindex', '0')
     expect(message).toHaveClass(
       'rounded-lg',
-      'outline-none',
+      'focus-visible:outline-hidden',
+      'focus-visible:-outline-offset-2',
       'focus-visible:ring-2',
       'focus-visible:ring-inset',
       'focus-visible:ring-ring',
       'pointer-coarse:select-none'
     )
+    // A bare `outline-none` would leave nothing for forced-colors mode to paint.
+    expect(message).not.toHaveClass('outline-none')
     expect(actionsRow()).toHaveClass('opacity-0', 'pointer-events-none')
     expect(actionsRow()).not.toHaveClass('opacity-100')
   })
@@ -710,7 +716,13 @@ describe('ChatMessage on the mobile shell without long-press support (fallback)'
     const container = renderMessage(ui())
     const message = messageElement(container)
 
-    expect(message).toHaveClass('rounded-lg', 'outline-none', 'focus-visible:ring-2')
+    expect(message).toHaveClass(
+      'rounded-lg',
+      'focus-visible:outline-hidden',
+      'focus-visible:-outline-offset-2',
+      'focus-visible:ring-2'
+    )
+    expect(message).not.toHaveClass('outline-none')
     expect(message).not.toHaveClass('pointer-coarse:select-none')
   })
 

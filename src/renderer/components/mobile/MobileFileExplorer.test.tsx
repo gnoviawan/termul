@@ -1,5 +1,5 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -1062,6 +1062,10 @@ describe('MobileFileExplorer focus return', () => {
     mockReducedMotion = false
     mockOpenFile.mockResolvedValue(true)
     mockCopyFile.mockResolvedValue({ success: true, data: undefined })
+    mockDeletePath.mockResolvedValue({ success: true, data: undefined })
+    mockRenameFile.mockResolvedValue({ success: true, data: undefined })
+    mockRefreshDirectory.mockReset()
+    mockRefreshDirectory.mockResolvedValue(undefined)
     mockEditorStore.openFiles.clear()
     ;(document.activeElement as HTMLElement | null)?.blur()
   })
@@ -1189,6 +1193,261 @@ describe('MobileFileExplorer focus return', () => {
       // that the autofocused input kept focus.
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(document.activeElement).toBe(input)
+    })
+  })
+
+  describe('delete confirm', () => {
+    async function openConfirm(
+      name: string
+    ): Promise<{ actions: HTMLElement; confirm: HTMLElement }> {
+      await openFiles()
+      const actions = await screen.findByLabelText(`Actions for ${name}`)
+      fireEvent.click(actions)
+      fireEvent.click(await screen.findByText('Delete'))
+      const confirm = await screen.findByRole('alertdialog')
+      // Radix fires the actions sheet's own onCloseAutoFocus in a setTimeout(0).
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return { actions, confirm }
+    }
+
+    it('returns focus to the row Actions button when Cancel is pressed', async () => {
+      setRoot([entry('doomed.txt', 'file')])
+      render(<Harness />)
+      const { actions } = await openConfirm('doomed.txt')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      await waitFor(() => expect(document.activeElement).toBe(actions))
+      expect(document.activeElement).not.toBe(document.body)
+      // The Files sheet stays open underneath, and nothing was deleted.
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(mockDeletePath).not.toHaveBeenCalled()
+    })
+
+    it('returns focus to the row Actions button when Escape dismisses it', async () => {
+      setRoot([entry('doomed.txt', 'file')])
+      render(<Harness />)
+      const { actions } = await openConfirm('doomed.txt')
+
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      await waitFor(() => expect(document.activeElement).toBe(actions))
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(mockDeletePath).not.toHaveBeenCalled()
+    })
+
+    it('deletes once and returns focus to the connected Actions button, never to body', async () => {
+      setRoot([entry('doomed.txt', 'file')])
+      render(<Harness />)
+      const { actions } = await openConfirm('doomed.txt')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      await waitFor(() => expect(document.activeElement).toBe(actions))
+      expect(mockDeletePath).toHaveBeenCalledTimes(1)
+      expect(mockDeletePath).toHaveBeenCalledWith('/proj/doomed.txt', { recursive: false })
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('leaves focus alone and logs at info when no opener is connected', async () => {
+      setRoot([entry('doomed.txt', 'file')])
+      render(<Harness />)
+      await openConfirm('doomed.txt')
+      // Nothing is recorded for the actions sheet any more.
+      _resetSheetFocusReturnForTests()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      await waitFor(() =>
+        expect(mockLogFrontendError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            level: 'info',
+            source: 'sheet-focus-return',
+            message: 'Sheet closed with no connected focus target: file-actions-sheet'
+          })
+        )
+      )
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+  })
+
+  describe('rename end', () => {
+    async function startRename(name: string): Promise<HTMLInputElement> {
+      await openFiles()
+      fireEvent.click(await screen.findByLabelText(`Actions for ${name}`))
+      fireEvent.click(await screen.findByText('Rename'))
+      const input = (await screen.findByLabelText(`Rename ${name}`)) as HTMLInputElement
+      await waitFor(() => expect(screen.queryByText('Duplicate')).not.toBeInTheDocument())
+      // Radix fires the actions sheet's onCloseAutoFocus in a setTimeout(0).
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(document.activeElement).toBe(input)
+      return input
+    }
+
+    function actionsFor(name: string): HTMLElement {
+      return screen.getByLabelText(`Actions for ${name}`)
+    }
+
+    it('returns focus to the row Actions button when Escape ends the rename', async () => {
+      setRoot([entry('note.txt', 'file'), entry('other.txt', 'file')])
+      render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.keyDown(input, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(screen.queryByLabelText('Rename note.txt')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+      // Escape cancels the rename only: the Files sheet stays open.
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(mockRenameFile).not.toHaveBeenCalled()
+    })
+
+    it('returns focus to the row Actions button when Enter leaves the name unchanged', async () => {
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.keyDown(input, { key: 'Enter' })
+
+      await waitFor(() =>
+        expect(screen.queryByLabelText('Rename note.txt')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+      expect(mockRenameFile).not.toHaveBeenCalled()
+    })
+
+    it('returns focus to the row Actions button when Enter leaves the name empty', async () => {
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.change(input, { target: { value: '   ' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+
+      await waitFor(() =>
+        expect(screen.queryByLabelText('Rename note.txt')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+      expect(mockRenameFile).not.toHaveBeenCalled()
+    })
+
+    it('returns focus to the row Actions button when the input blurs with no change', async () => {
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.blur(input)
+
+      await waitFor(() =>
+        expect(screen.queryByLabelText('Rename note.txt')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+    })
+
+    it('focuses the renamed row Actions button once the refreshed listing shows it', async () => {
+      setRoot([entry('note.txt', 'file')])
+      mockRefreshDirectory.mockImplementation(async () => {
+        setRoot([entry('renamed.txt', 'file')])
+      })
+      const view = render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.change(input, { target: { value: 'renamed.txt' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+
+      await waitFor(() =>
+        expect(mockRenameFile).toHaveBeenCalledWith('/proj/note.txt', '/proj/renamed.txt')
+      )
+      await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+      // Until the listing shows the renamed row, the stale row never takes focus.
+      expect(document.activeElement).not.toBe(actionsFor('note.txt'))
+
+      view.rerender(<Harness />)
+
+      await waitFor(() => expect(document.activeElement).toBe(actionsFor('renamed.txt')))
+    })
+
+    it('returns focus to the original row Actions button when the rename fails', async () => {
+      setRoot([entry('note.txt', 'file')])
+      mockRenameFile.mockResolvedValue({ success: false, error: 'exists' })
+      render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.change(input, { target: { value: 'taken.txt' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith('Failed to rename', { description: 'exists' })
+      )
+      await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+    })
+
+    it('leaves focus on the control the user moved it to', async () => {
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      await startRename('note.txt')
+      const refresh = screen.getByLabelText('Refresh current folder')
+
+      act(() => refresh.focus())
+
+      await waitFor(() =>
+        expect(screen.queryByLabelText('Rename note.txt')).not.toBeInTheDocument()
+      )
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(document.activeElement).toBe(refresh)
+    })
+
+    it('does not take focus the user moved while the renamed row was pending', async () => {
+      setRoot([entry('note.txt', 'file')])
+      mockRefreshDirectory.mockImplementation(async () => {
+        setRoot([entry('renamed.txt', 'file')])
+      })
+      const view = render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.change(input, { target: { value: 'renamed.txt' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+      const refresh = screen.getByLabelText('Refresh current folder')
+      act(() => refresh.focus())
+
+      view.rerender(<Harness />)
+
+      await screen.findByLabelText('Actions for renamed.txt')
+      expect(document.activeElement).toBe(refresh)
+    })
+
+    it('drops a pending return when the folder changes before the renamed row shows', async () => {
+      setRoot([entry('note.txt', 'file'), entry('sub', 'directory')])
+      mockExplorerState.directoryContents.set('/proj/sub', [
+        entry('inner.txt', 'file', '/proj/sub/inner.txt')
+      ])
+      mockRefreshDirectory.mockImplementation(async () => {
+        mockExplorerState.directoryContents.set('/proj', [
+          entry('renamed.txt', 'file'),
+          entry('sub', 'directory')
+        ])
+      })
+      const view = render(<Harness />)
+      const input = await startRename('note.txt')
+
+      fireEvent.change(input, { target: { value: 'renamed.txt' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj'))
+      // The user goes into a folder, then back to the root where the renamed row now shows.
+      fireEvent.click(screen.getByLabelText('Open folder sub'))
+      await screen.findByLabelText('Actions for inner.txt')
+      fireEvent.click(screen.getByLabelText('Back to parent folder'))
+      view.rerender(<Harness />)
+
+      await screen.findByLabelText('Actions for renamed.txt')
+      expect(document.activeElement).not.toBe(actionsFor('renamed.txt'))
     })
   })
 })
