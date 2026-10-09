@@ -10,6 +10,8 @@ const {
   failedRef,
   setFailedProjectSwitch,
   toastError,
+  toastSuccess,
+  mockSetDefaultProject,
   mockLogFrontendError
 } = vi.hoisted(() => ({
   mockSwitchProject: vi.fn(),
@@ -19,6 +21,8 @@ const {
     failedRef.current = projectId
   }),
   toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+  mockSetDefaultProject: vi.fn(),
   mockLogFrontendError: vi.fn()
 }))
 
@@ -37,7 +41,18 @@ vi.mock('@/stores/acp-store', () => ({
 }))
 
 vi.mock('sonner', () => ({
-  toast: { error: toastError }
+  toast: { error: toastError, success: toastSuccess }
+}))
+
+// "Set as host default" goes through the web route on a browser client.
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tauri-runtime')>()),
+  isTauriContext: () => false
+}))
+
+vi.mock('@/lib/web-server-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/web-server-api')>()),
+  webServerProjects: { setDefaultProject: mockSetDefaultProject }
 }))
 
 const projects = [
@@ -76,8 +91,15 @@ const projects = [
   }
 ]
 
+// A plain selector function plus the `setState` the success path of "Set as host
+// default" calls (it flips the `isDefault` flags locally); the updater is run
+// against the shared `state` below.
 vi.mock('@/stores/project-store', () => ({
-  useProjectStore: (sel: (s: typeof state) => unknown) => sel(state)
+  useProjectStore: Object.assign((sel: (s: typeof state) => unknown) => sel(state), {
+    setState: (updater: (s: typeof state) => Partial<typeof state>) => {
+      Object.assign(state, updater(state))
+    }
+  })
 }))
 
 const state = {
@@ -420,6 +442,123 @@ describe('ProjectSwitcherDrawer', () => {
       await waitFor(() =>
         expect(document.activeElement).toBe(screen.getByRole('button', { name: 'subtitle' }))
       )
+    })
+  })
+
+  describe('Set as host default (bottom project sheet)', () => {
+    const base = {
+      color: 'blue',
+      isArchived: false,
+      isActive: false,
+      envVars: [],
+      worktrees: [],
+      activeWorktreeId: null
+    }
+    const sheetProjects = [
+      { ...base, id: 'p1', name: 'Alpha', path: '/a', isActive: true, isDefault: true },
+      { ...base, id: 'p2', name: 'Beta', path: null, isArchived: true },
+      { ...base, id: 'p3', name: 'Gamma', path: '/g' },
+      { ...base, id: 'p4', name: 'Delta', path: '' },
+      { ...base, id: 'p5', name: 'Epsilon', path: undefined }
+    ]
+    const control = (name: string): HTMLElement | null =>
+      screen.queryByRole('button', { name: `Set "${name}" as host default` })
+
+    function renderSheet(): ReturnType<typeof render> {
+      return render(
+        <ProjectSwitcherDrawer
+          open
+          onOpenChange={vi.fn()}
+          side="bottom"
+          id="mobile-project-sheet"
+        />
+      )
+    }
+
+    it('renders the 44px control for a non-default project with a path, and not for the others', async () => {
+      const original = state.projects
+      state.projects = sheetProjects as unknown as typeof state.projects
+      try {
+        renderSheet()
+        await screen.findByText('Gamma')
+
+        expect(control('Gamma')).toBeInTheDocument()
+        expect(control('Gamma')).toHaveClass('size-11')
+        expect(control('Gamma')).toHaveAttribute('title', 'Set as host default')
+        // The host default, an archived project and the two pathless ones get none.
+        for (const name of ['Alpha', 'Beta', 'Delta', 'Epsilon']) {
+          expect(control(name), name).not.toBeInTheDocument()
+        }
+      } finally {
+        state.projects = original
+      }
+    })
+
+    it('calls the default-project route once for that project and confirms it', async () => {
+      mockSetDefaultProject.mockResolvedValue({ success: true })
+      const original = state.projects
+      state.projects = sheetProjects.map((p) => ({ ...p })) as unknown as typeof state.projects
+      try {
+        renderSheet()
+        await screen.findByText('Gamma')
+
+        fireEvent.click(control('Gamma') as HTMLElement)
+
+        await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1))
+        expect(mockSetDefaultProject).toHaveBeenCalledTimes(1)
+        expect(mockSetDefaultProject).toHaveBeenCalledWith('p3')
+        expect(toastSuccess).toHaveBeenCalledWith('"Gamma" is now the host default')
+        expect(toastError).not.toHaveBeenCalled()
+        // The flags flip locally so the badge refreshes at once.
+        expect(
+          (state.projects as unknown as Array<{ id: string; isDefault?: boolean }>)
+            .filter((p) => p.isDefault)
+            .map((p) => p.id)
+        ).toEqual(['p3'])
+      } finally {
+        state.projects = original
+      }
+    })
+
+    it('does not switch the session when the control is tapped', async () => {
+      mockSetDefaultProject.mockResolvedValue({ success: true })
+      const original = state.projects
+      state.projects = sheetProjects.map((p) => ({ ...p })) as unknown as typeof state.projects
+      try {
+        renderSheet()
+        await screen.findByText('Gamma')
+
+        fireEvent.click(control('Gamma') as HTMLElement)
+
+        await waitFor(() => expect(mockSetDefaultProject).toHaveBeenCalledTimes(1))
+        expect(mockSwitchProject).not.toHaveBeenCalled()
+      } finally {
+        state.projects = original
+      }
+    })
+
+    it('reports a refused change without flipping the flags', async () => {
+      mockSetDefaultProject.mockResolvedValue({ success: false, error: 'NOT_FOUND' })
+      const original = state.projects
+      state.projects = sheetProjects.map((p) => ({ ...p })) as unknown as typeof state.projects
+      try {
+        renderSheet()
+        await screen.findByText('Gamma')
+
+        fireEvent.click(control('Gamma') as HTMLElement)
+
+        await waitFor(() =>
+          expect(toastError).toHaveBeenCalledWith('Failed to set host default: NOT_FOUND')
+        )
+        expect(toastSuccess).not.toHaveBeenCalled()
+        expect(
+          (state.projects as unknown as Array<{ id: string; isDefault?: boolean }>)
+            .filter((p) => p.isDefault)
+            .map((p) => p.id)
+        ).toEqual(['p1'])
+      } finally {
+        state.projects = original
+      }
     })
   })
 })

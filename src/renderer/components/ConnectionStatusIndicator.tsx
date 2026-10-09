@@ -16,6 +16,16 @@ const SEVERITY: Record<ConnectionChannelState, number> = {
   disconnected: 3
 }
 
+/**
+ * The connected summary of the labelled (drawer footer) indicator: "Connected ·
+ * host:port", naming the host this client talks to. An empty host (no
+ * `window.location.host`) reads plain "Connected".
+ */
+export function formatConnectedSummary(host: string): string {
+  const trimmed = host.trim()
+  return trimmed ? `Connected · ${trimmed}` : 'Connected'
+}
+
 interface ConnectionStatusIndicatorProps {
   /**
    * Render the summary as visible text beside a decorative lamp (the mobile
@@ -51,6 +61,9 @@ export function ConnectionStatusIndicator({
   const summary = degraded.length > 0 ? degraded.join('; ') : 'Connected'
 
   if (showLabel) {
+    // Degraded text is unchanged; only the connected reading names the host.
+    const labelSummary =
+      degraded.length > 0 ? summary : formatConnectedSummary(window.location.host)
     return (
       <span
         role="status"
@@ -63,7 +76,7 @@ export function ConnectionStatusIndicator({
           decorative
           size={8}
         />
-        <span className="min-w-0">{summary}</span>
+        <span className="min-w-0 break-words">{labelSummary}</span>
       </span>
     )
   }

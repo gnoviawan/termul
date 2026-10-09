@@ -22,6 +22,7 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { useAgentChatUnreadTracker } from '@/hooks/use-agent-chat-unread-tracker'
+import { returnFocusAfterConfirm } from '@/lib/confirm-focus-return'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -54,9 +55,11 @@ interface MobileShellDrawerProps {
   canNewChat: boolean
   onNewChat: () => void
   onNewTerminal?: () => void
-  onCloseTerminal?: (terminalId: string, tabId: string) => void
+  /** Returns `true` only when the close opened the confirm (the drawer then hands off to it). */
+  onCloseTerminal?: (terminalId: string, tabId: string) => boolean
   onRenameTerminal?: (terminalId: string, name: string) => void
-  onCloseEditorTab?: (filePath: string) => void
+  /** Returns `true` only when the close opened the dirty-file confirm. */
+  onCloseEditorTab?: (filePath: string) => boolean
   /** Opens a git history tab in the active pane (desktop entry mirrors this). */
   onOpenGitHistory?: () => void
   /** Opens the project sheet (web only). */
@@ -165,6 +168,9 @@ export function MobileShellDrawer({
   const titleRef = useRef<HTMLHeadingElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const closeIntentRef = useRef<CloseIntent>('dismiss')
+  // The pending focus return of a hand-off to a close confirm; cancelled when
+  // the drawer unmounts first, or when a newer hand-off replaces it.
+  const cancelFocusReturnRef = useRef<(() => void) | null>(null)
   const searchId = useId()
   const openHeadingId = useId()
   const historyHeadingId = useId()
@@ -179,16 +185,30 @@ export function MobileShellDrawer({
     if (!open) setQuery('')
   }, [open])
 
+  useEffect(() => () => cancelFocusReturnRef.current?.(), [])
+
   const closeWith = (intent: CloseIntent): void => {
     closeIntentRef.current = intent
     onOpenChange(false)
   }
   const closeForNavigation = (): void => closeWith('navigate')
 
-  const focusOpener = (): void => {
+  /** Focus the recorded opener, else ☰. True when focus landed on it. */
+  const focusOpener = (): boolean => {
     const opener = returnFocusRef.current
     const target = opener?.isConnected ? opener : menuButtonRef.current
     target?.focus()
+    return Boolean(target) && document.activeElement === target
+  }
+
+  // A row close that raised a confirm (a terminal, a dirty file): the confirm
+  // would render under this drawer's overlay, so the drawer gets out of its
+  // way (a hand-off, like New chat). The confirm never takes or returns focus,
+  // so once it is gone focus goes back to the opener.
+  const onConfirmOpened = (): void => {
+    closeWith('handoff')
+    cancelFocusReturnRef.current?.()
+    cancelFocusReturnRef.current = returnFocusAfterConfirm(focusOpener)
   }
 
   return (
@@ -287,7 +307,11 @@ export function MobileShellDrawer({
         </div>
 
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <h2 id={openHeadingId} className="label-group px-3 pb-1 pt-3 text-muted-foreground">
+          <h2
+            id={openHeadingId}
+            tabIndex={-1}
+            className="label-group px-3 pb-1 pt-3 text-muted-foreground"
+          >
             Open
           </h2>
           <MobileDrawerOpenSection
@@ -298,6 +322,7 @@ export function MobileShellDrawer({
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
+            onConfirmOpened={onConfirmOpened}
           />
 
           <h2

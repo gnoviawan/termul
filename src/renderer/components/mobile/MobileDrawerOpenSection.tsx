@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react'
+import { useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/shallow'
 import { ChatEntryIcon } from '@/components/chat/ChatHistoryEntryRow'
@@ -19,11 +19,13 @@ import {
   useAgentChatStatusSignals
 } from '@/components/workspace/tabs/agent-chat-status'
 import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
+import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
-import { isWorkspaceRoutePath } from '@/lib/workspace-route'
+import { returnToWorkspaceRoute } from '@/lib/workspace-route'
 import { useAcpStore } from '@/stores/acp-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
@@ -45,6 +47,45 @@ function rowButtonClass(isActive: boolean): string {
 
 function basename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath
+}
+
+/** Which Open group a row belongs to: each has its own "next row, else heading" focus rule. */
+type RowGroup = 'chats' | 'terminals' | 'tabs'
+
+/**
+ * Where focus goes once the control the user pressed is gone (L-18). A closed
+ * row takes its X with it, and a rename input takes itself, so without this
+ * focus falls to `<body>` inside the drawer's focus trap. Registered before the
+ * action, resolved in a layout effect once the row (or the input) is gone.
+ */
+type PendingFocus =
+  | { kind: 'removal'; group: RowGroup; rowId: string; nextRowId: string | null }
+  | { kind: 'rename'; terminalId: string }
+
+/** True when focus has fallen to `<body>` (or to something no longer attached). */
+function focusIsLost(): boolean {
+  const active = document.activeElement
+  return !active || active === document.body || !active.isConnected
+}
+
+/** Focus the first candidate that really takes it (a hidden or non-focusable one does not). */
+function focusFirst(candidates: Array<HTMLElement | null | undefined>): boolean {
+  for (const element of candidates) {
+    if (!element?.isConnected) continue
+    element.focus()
+    if (document.activeElement === element) return true
+  }
+  return false
+}
+
+/** The `[attribute]` element of `root` whose attribute value is exactly `value`. */
+function findByDataValue(
+  root: HTMLElement | null,
+  attribute: string,
+  value: string
+): HTMLElement | null {
+  const matches = root?.querySelectorAll<HTMLElement>(`[${attribute}]`) ?? []
+  return Array.from(matches).find((element) => element.getAttribute(attribute) === value) ?? null
 }
 
 /** Every tab the Tabs group lists: all but terminals and chats, which have their own groups. */
@@ -81,14 +122,21 @@ interface MobileDrawerOpenSectionProps {
   /** A row navigated: the drawer closes (and moves focus to the destination). */
   onNavigate: () => void
   onNewTerminal?: () => void
-  onCloseTerminal?: (terminalId: string, tabId: string) => void
+  /** Returns `true` only when the close opened a confirm (see `onConfirmOpened`). */
+  onCloseTerminal?: (terminalId: string, tabId: string) => boolean
   onRenameTerminal?: (terminalId: string, name: string) => void
   /**
    * Close an editor tab through the dirty-file guard (WorkspaceLayout
    * `handleCloseEditorTab` semantics) so drawer closes never silently
-   * discard unsaved changes.
+   * discard unsaved changes. Returns `true` only when it opened the confirm.
    */
-  onCloseEditorTab?: (filePath: string) => void
+  onCloseEditorTab?: (filePath: string) => boolean
+  /**
+   * `onCloseTerminal` or `onCloseEditorTab` opened a confirm (they return
+   * `true` only then). The drawer hands off to it: it closes, so the confirm is
+   * not covered by the drawer's overlay.
+   */
+  onConfirmOpened?: () => void
 }
 
 interface OpenChatRowProps {
@@ -133,6 +181,7 @@ function OpenChatRow({ tab, isActive, onSelect, onClose }: OpenChatRowProps): Re
         className={rowButtonClass(isActive)}
         aria-current={isActive ? 'page' : undefined}
         aria-label={statusText ? `${title}, ${statusText}` : title}
+        data-open-row-select={tab.id}
         onClick={onSelect}
       >
         <span className="flex min-w-3.5 shrink-0 items-center gap-1">
@@ -188,10 +237,16 @@ export function MobileDrawerOpenSection({
   onNewTerminal,
   onCloseTerminal,
   onRenameTerminal,
-  onCloseEditorTab
+  onCloseEditorTab,
+  onConfirmOpened
 }: MobileDrawerOpenSectionProps): React.JSX.Element {
   const terminalsHeadingId = useId()
   const tabsHeadingId = useId()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const pendingFocusRef = useRef<PendingFocus | null>(null)
+  // Set when a rename ends; the input's own blur (fired when it unmounts) must
+  // not commit a second time, nor undo an Escape.
+  const renameEndedRef = useRef(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const navigate = useNavigate()
@@ -237,6 +292,11 @@ export function MobileDrawerOpenSection({
   const openFiles = useEditorStore((s) => s.openFiles)
   const isEditorFileDirty = (filePath: string): boolean => openFiles.get(filePath)?.isDirty ?? false
 
+  // Canvas dirty state, the same way: one canvas session per project, so a row
+  // resolves its own by project id.
+  const canvasSessions = useCanvasStore((s) => s.sessions)
+  const isCanvasDirty = (projectId: string): boolean => canvasSessions[projectId]?.dirty ?? false
+
   // Browser tab labels (title → host → 'Browser'), mirroring WorkspaceTabBar.
   const browserTabs = useBrowserSessionStore((s) => s.tabs)
   const browserLabel = (browserTabId: string): string => {
@@ -253,6 +313,61 @@ export function MobileDrawerOpenSection({
     return 'Browser'
   }
 
+  const groupRowIds = (group: RowGroup): string[] =>
+    (group === 'chats' ? chatTabs : group === 'terminals' ? terminalTabs : otherTabs).map(
+      ({ tab }) => tab.id
+    )
+  const groupHeadingId = (group: RowGroup): string =>
+    group === 'chats' ? openHeadingId : group === 'terminals' ? terminalsHeadingId : tabsHeadingId
+
+  // L-18: after a row is gone (or a rename ends) focus would fall to <body>
+  // inside the drawer's focus trap. Mirrors the History delete rule: the next
+  // row's select button in the same group, else that group's heading, else this
+  // section's root, which stays mounted and programmatically focusable. Only
+  // when focus really was lost: a user who moved focus meanwhile keeps it, and a
+  // close that has not completed (a chat still Closing, a kill that failed)
+  // leaves the row, and focus, alone.
+  useLayoutEffect(() => {
+    const pending = pendingFocusRef.current
+    if (!pending) return
+    if (pending.kind === 'removal') {
+      if (groupRowIds(pending.group).includes(pending.rowId)) return
+    } else if (renamingId === pending.terminalId) {
+      return
+    }
+    pendingFocusRef.current = null
+    if (!focusIsLost()) return
+    const root = rootRef.current
+    const candidates =
+      pending.kind === 'rename'
+        ? [findByDataValue(root, 'data-open-rename', pending.terminalId)]
+        : [
+            pending.nextRowId
+              ? findByDataValue(root, 'data-open-row-select', pending.nextRowId)
+              : null,
+            document.getElementById(groupHeadingId(pending.group)),
+            root
+          ]
+    if (!focusFirst(candidates)) {
+      void logFrontendError({
+        level: 'info',
+        source: 'MobileDrawerOpenSection.focus',
+        message: `Open row ${pending.kind === 'rename' ? 'rename ended' : 'closed'} with no connected focus target`
+      })
+    }
+  })
+
+  const registerRemovalFocus = (group: RowGroup, rowId: string): void => {
+    const ids = groupRowIds(group)
+    const index = ids.indexOf(rowId)
+    pendingFocusRef.current = {
+      kind: 'removal',
+      group,
+      rowId,
+      nextRowId: (index >= 0 ? ids[index + 1] : undefined) ?? null
+    }
+  }
+
   // Select any pane tab from a drawer row (generalized selectTerminal) and
   // close the drawer. Agent-chat selection routes through setActiveTab which
   // also navigates to the chat session.
@@ -264,7 +379,7 @@ export function MobileDrawerOpenSection({
     // return to the workspace once the tab is active. Chat rows already land
     // on /c/<id> through setActiveTab.
     const selectedType = paneTabs.find(({ tab }) => tab.id === tabId)?.tab.type
-    const returnToWorkspace = !isWorkspaceRoutePath(pathname) && selectedType !== 'agent-chat'
+    const isChatRow = selectedType === 'agent-chat'
     const activate = (): void => {
       const current = useWorkspaceStore.getState()
       // Fullscreen pins activePaneId to its own leaf (resolveActivePaneId), so
@@ -276,7 +391,7 @@ export function MobileDrawerOpenSection({
         current.clearFullscreenPane()
       }
       current.setActiveTab(paneId, tabId)
-      if (returnToWorkspace) navigate('/')
+      if (!isChatRow) returnToWorkspaceRoute(pathname, navigate)
     }
     if (workspace.activePaneId !== paneId) {
       // Defer tab activation until pane is active. The return navigation
@@ -294,11 +409,20 @@ export function MobileDrawerOpenSection({
   //   editor → dirty guard (threaded from WorkspaceLayout)
   //   terminal → existing confirm flow (threaded as onCloseTerminal)
   //   browser → session-tab teardown + tab removal
-  //   git / git-history / agent-chat / canvas → plain removeTab
-  const closePaneTab = (tab: WorkspaceTab): void => {
+  //   canvas → daemon eviction (closeCanvas) + tab removal
+  //   git / git-history / agent-chat → plain removeTab
+  // The editor and terminal guards report whether they opened a confirm; then
+  // the drawer hands off to it instead of staying open underneath.
+  const closePaneTab = (tab: WorkspaceTab, group: RowGroup): void => {
+    registerRemovalFocus(group, tab.id)
+    const handedOffToConfirm = (): void => {
+      // The drawer closes under the confirm: nothing left here to focus.
+      pendingFocusRef.current = null
+      onConfirmOpened?.()
+    }
     if (tab.type === 'editor') {
       if (onCloseEditorTab) {
-        onCloseEditorTab(tab.filePath)
+        if (onCloseEditorTab(tab.filePath)) handedOffToConfirm()
       } else {
         // No guard threaded: fall back to direct close (still not silent
         // data loss in practice — the editor auto-save policy owns unsaved
@@ -308,7 +432,7 @@ export function MobileDrawerOpenSection({
       return
     }
     if (tab.type === 'terminal') {
-      onCloseTerminal?.(tab.terminalId, tab.id)
+      if (onCloseTerminal?.(tab.terminalId, tab.id)) handedOffToConfirm()
       return
     }
     if (tab.type === 'browser') {
@@ -322,16 +446,31 @@ export function MobileDrawerOpenSection({
       })
       return
     }
+    if (tab.type === 'canvas') {
+      // Canvas disposal, as the desktop tab bar does it: the daemon is evicted
+      // (daemon lifetime = canvas lifetime) and this is the only teardown path.
+      void useCanvasStore.getState().closeCanvas(tab.projectId)
+      useWorkspaceStore.getState().removeTab(tab.id)
+      return
+    }
     useWorkspaceStore.getState().removeTab(tab.id)
   }
 
   const startRename = (terminalId: string, currentName: string): void => {
+    renameEndedRef.current = false
     setRenamingId(terminalId)
     setRenameValue(currentName)
   }
 
-  const confirmRename = (): void => {
-    if (renamingId && renameValue.trim() && onRenameTerminal) {
+  // Enter and Escape end a rename on purpose, so focus returns to that row's
+  // Rename button; a blur (the user moved on) commits without moving focus.
+  const endRename = (outcome: 'commit' | 'cancel', focus: 'rename-button' | 'leave'): void => {
+    if (renameEndedRef.current) return
+    renameEndedRef.current = true
+    if (focus === 'rename-button' && renamingId) {
+      pendingFocusRef.current = { kind: 'rename', terminalId: renamingId }
+    }
+    if (outcome === 'commit' && renamingId && renameValue.trim() && onRenameTerminal) {
       onRenameTerminal(renamingId, renameValue.trim())
     }
     setRenamingId(null)
@@ -339,7 +478,7 @@ export function MobileDrawerOpenSection({
   }
 
   return (
-    <div className="px-1 pb-2">
+    <div ref={rootRef} tabIndex={-1} className="px-1 pb-2 outline-none">
       {chatTabs.length > 0 && (
         <div role="group" aria-labelledby={openHeadingId} className="flex flex-col gap-0.5">
           {chatTabs.map(({ tab, paneId }) => (
@@ -348,7 +487,7 @@ export function MobileDrawerOpenSection({
               tab={tab}
               isActive={tab.id === activeTabId}
               onSelect={() => selectTab(paneId, tab.id)}
-              onClose={() => closePaneTab(tab)}
+              onClose={() => closePaneTab(tab, 'chats')}
             />
           ))}
         </div>
@@ -356,7 +495,11 @@ export function MobileDrawerOpenSection({
 
       <div className="mt-1">
         <div className="flex items-center justify-between pl-2">
-          <h3 id={terminalsHeadingId} className="label-group text-muted-foreground">
+          <h3
+            id={terminalsHeadingId}
+            tabIndex={-1}
+            className="label-group text-muted-foreground outline-none"
+          >
             Terminals
           </h3>
           <Button
@@ -389,6 +532,7 @@ export function MobileDrawerOpenSection({
                     variant={isActive ? 'secondary' : 'ghost'}
                     className={rowButtonClass(isActive)}
                     aria-current={isActive ? 'page' : undefined}
+                    data-open-row-select={tab.id}
                     onClick={() => selectTab(paneId, tab.id)}
                   >
                     <TerminalSquare size={16} />
@@ -400,10 +544,10 @@ export function MobileDrawerOpenSection({
                       value={renameValue}
                       aria-label={`Rename ${name}`}
                       onChange={(e) => setRenameValue(e.target.value)}
-                      onBlur={confirmRename}
+                      onBlur={() => endRename('commit', 'leave')}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') confirmRename()
-                        if (e.key === 'Escape') setRenamingId(null)
+                        if (e.key === 'Enter') endRename('commit', 'rename-button')
+                        if (e.key === 'Escape') endRename('cancel', 'rename-button')
                       }}
                       className="min-h-11 w-28 rounded border border-border bg-background px-2 text-base"
                       autoFocus
@@ -416,6 +560,7 @@ export function MobileDrawerOpenSection({
                         size="icon"
                         className={INLINE_ACTION_BUTTON}
                         aria-label={`Rename ${name}`}
+                        data-open-rename={tab.terminalId}
                         onClick={() => startRename(tab.terminalId, terminalName ?? 'Terminal')}
                       >
                         <Pencil size={14} />
@@ -428,7 +573,7 @@ export function MobileDrawerOpenSection({
                     size="icon"
                     className={INLINE_ACTION_BUTTON}
                     aria-label={`Close ${name}`}
-                    onClick={() => closePaneTab(tab)}
+                    onClick={() => closePaneTab(tab, 'terminals')}
                   >
                     <X size={14} />
                   </Button>
@@ -441,7 +586,11 @@ export function MobileDrawerOpenSection({
 
       {otherTabs.length > 0 && (
         <div className="mt-1">
-          <h3 id={tabsHeadingId} className="label-group py-1 pl-2 text-muted-foreground">
+          <h3
+            id={tabsHeadingId}
+            tabIndex={-1}
+            className="label-group py-1 pl-2 text-muted-foreground outline-none"
+          >
             Tabs
           </h3>
           <div role="group" aria-labelledby={tabsHeadingId} className="flex flex-col gap-0.5">
@@ -455,6 +604,7 @@ export function MobileDrawerOpenSection({
                     variant={isActive ? 'secondary' : 'ghost'}
                     className={rowButtonClass(isActive)}
                     aria-current={isActive ? 'page' : undefined}
+                    data-open-row-select={tab.id}
                     onClick={() => selectTab(paneId, tab.id)}
                   >
                     {tab.type === 'editor' && <Pencil size={16} />}
@@ -473,6 +623,16 @@ export function MobileDrawerOpenSection({
                         <span className="sr-only">, unsaved changes</span>
                       </>
                     )}
+                    {tab.type === 'canvas' && isCanvasDirty(tab.projectId) && (
+                      <>
+                        <span
+                          data-testid="canvas-dirty-dot"
+                          aria-hidden="true"
+                          className="ml-1 size-1.5 shrink-0 rounded-full bg-primary-fill"
+                        />
+                        <span className="sr-only">, unsaved changes</span>
+                      </>
+                    )}
                   </Button>
                   <Button
                     type="button"
@@ -480,7 +640,7 @@ export function MobileDrawerOpenSection({
                     size="icon"
                     className={INLINE_ACTION_BUTTON}
                     aria-label={`Close ${rowLabel}`}
-                    onClick={() => closePaneTab(tab)}
+                    onClick={() => closePaneTab(tab, 'tabs')}
                   >
                     <X size={14} />
                   </Button>

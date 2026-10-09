@@ -44,6 +44,22 @@ const {
   mockRequestCloseAgentChat: vi.fn()
 }))
 
+const { canvasRef, mockCloseCanvas, mockLogFrontendError } = vi.hoisted(() => ({
+  // Canvas runtime sessions by project id (only `dirty` is read by the section).
+  canvasRef: { current: {} as Record<string, { dirty: boolean }> },
+  mockCloseCanvas: vi.fn(),
+  mockLogFrontendError: vi.fn()
+}))
+
+vi.mock('@/stores/canvas-store', () => ({
+  useCanvasStore: Object.assign(
+    vi.fn((sel: (s: unknown) => unknown) => sel({ sessions: canvasRef.current })),
+    { getState: () => ({ sessions: canvasRef.current, closeCanvas: mockCloseCanvas }) }
+  )
+}))
+
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return {
@@ -106,7 +122,9 @@ function renderSection(props: Partial<SectionProps> = {}, path = '/') {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <div>
-        <h2 id="open-heading">Open</h2>
+        <h2 id="open-heading" tabIndex={-1}>
+          Open
+        </h2>
         <MobileDrawerOpenSection
           activeTabId={null}
           openHeadingId="open-heading"
@@ -191,6 +209,9 @@ beforeEach(() => {
   mockNavigate.mockReset()
   mockRemoveBrowserTab.mockReset()
   mockRequestCloseAgentChat.mockReset()
+  mockCloseCanvas.mockReset().mockResolvedValue(undefined)
+  mockLogFrontendError.mockReset()
+  canvasRef.current = {}
   // Closing a chat completes immediately, like an idle chat does.
   mockRequestCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) =>
     closeTab()
@@ -696,13 +717,20 @@ describe('MobileDrawerOpenSection close routing', () => {
     expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('browser-b1')
   })
 
-  it('keeps a canvas close a plain removeTab', () => {
+  it('closes a canvas through closeCanvas once, before the plain removeTab', () => {
     seedAllTabTypes()
     renderSection()
 
     fireEvent.click(screen.getByRole('button', { name: 'Close Plan.op' }))
 
+    expect(mockCloseCanvas).toHaveBeenCalledTimes(1)
+    expect(mockCloseCanvas).toHaveBeenCalledWith('p1')
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledTimes(1)
     expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('canvas-p1')
+    expect(mockCloseCanvas.mock.invocationCallOrder[0]).toBeLessThan(
+      workspaceRef.current.removeTab.mock.invocationCallOrder[0]
+    )
+    // Not the browser teardown.
     expect(mockRemoveBrowserTab).not.toHaveBeenCalled()
   })
 
@@ -952,5 +980,509 @@ describe('MobileDrawerOpenSection returning to the workspace', () => {
       expect(workspaceRef.current.clearFullscreenPane).not.toHaveBeenCalled()
       expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-history-/b')
     })
+  })
+})
+
+describe('MobileDrawerOpenSection canvas rows', () => {
+  beforeEach(() => {
+    seedTabs([{ type: 'canvas', id: 'canvas-p1', projectId: 'p1', docPath: '/proj/Plan.op' }], null)
+  })
+
+  it('shows an aria-hidden dot and sr-only ", unsaved changes" for a dirty session', () => {
+    canvasRef.current = { p1: { dirty: true } }
+    renderSection()
+
+    const dot = screen.getByTestId('canvas-dirty-dot')
+    expect(dot).toHaveAttribute('aria-hidden', 'true')
+    expect(dot).not.toHaveAttribute('aria-label')
+    const row = screen.getByRole('button', { name: /^Plan\.op/ })
+    expect(within(row).getByText(', unsaved changes')).toHaveClass('sr-only')
+    expect(row).toHaveAccessibleName('Plan.op, unsaved changes')
+  })
+
+  it('draws the same dot as an unsaved editor row', () => {
+    canvasRef.current = { p1: { dirty: true } }
+    editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: true }]])
+    seedTabs(
+      [
+        { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' },
+        { type: 'canvas', id: 'canvas-p1', projectId: 'p1', docPath: '/proj/Plan.op' }
+      ],
+      null
+    )
+    renderSection()
+
+    expect(screen.getByTestId('canvas-dirty-dot').className).toBe(
+      screen.getByTestId('editor-dirty-dot').className
+    )
+  })
+
+  it.each([
+    ['a clean session', { p1: { dirty: false } }],
+    ['no session', {}],
+    ["another project's dirty session", { p2: { dirty: true } }]
+  ])('shows neither the dot nor the text for %s', (_label, sessions) => {
+    canvasRef.current = sessions
+    renderSection()
+
+    expect(screen.queryByTestId('canvas-dirty-dot')).not.toBeInTheDocument()
+    expect(screen.queryByText(', unsaved changes')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Plan.op' })).toBeInTheDocument()
+  })
+
+  it('does not evict a canvas for any other tab kind', () => {
+    seedTabs(
+      [
+        { type: 'git', id: 'git-/proj', cwd: '/proj' },
+        { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' }
+      ],
+      null
+    )
+    renderSection()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close Git Changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
+
+    expect(mockCloseCanvas).not.toHaveBeenCalled()
+  })
+})
+
+describe('MobileDrawerOpenSection confirm hand-off', () => {
+  function seedCloseables(): void {
+    seedTabs(
+      [
+        { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+        { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' }
+      ],
+      null
+    )
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+  }
+
+  it('hands off once when closing a terminal opened the confirm', () => {
+    seedCloseables()
+    const onCloseTerminal = vi.fn(() => true)
+    const onConfirmOpened = vi.fn()
+    renderSection({ onCloseTerminal, onConfirmOpened })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close zsh' }))
+
+    expect(onCloseTerminal).toHaveBeenCalledWith('t1', 'term-t1')
+    expect(onConfirmOpened).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays put when closing a terminal needed no confirm', () => {
+    seedCloseables()
+    const onCloseTerminal = vi.fn(() => false)
+    const onConfirmOpened = vi.fn()
+    renderSection({ onCloseTerminal, onConfirmOpened })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close zsh' }))
+
+    expect(onCloseTerminal).toHaveBeenCalledTimes(1)
+    expect(onConfirmOpened).not.toHaveBeenCalled()
+  })
+
+  it('hands off once when a dirty editor tab opened its confirm', () => {
+    seedCloseables()
+    const onCloseEditorTab = vi.fn(() => true)
+    const onConfirmOpened = vi.fn()
+    renderSection({ onCloseEditorTab, onConfirmOpened })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
+
+    expect(onCloseEditorTab).toHaveBeenCalledWith('/proj/a.ts')
+    expect(onConfirmOpened).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays put for a clean editor tab, a refused close or a missing handler', () => {
+    seedCloseables()
+    const onConfirmOpened = vi.fn()
+    renderSection({ onCloseEditorTab: vi.fn(() => false), onConfirmOpened })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
+    // No terminal handler is threaded at all.
+    fireEvent.click(screen.getByRole('button', { name: 'Close zsh' }))
+
+    expect(onConfirmOpened).not.toHaveBeenCalled()
+  })
+
+  it('never hands off for rows that close without a confirm', () => {
+    seedTabs(
+      [
+        { type: 'git', id: 'git-/proj', cwd: '/proj' },
+        { type: 'canvas', id: 'canvas-p1', projectId: 'p1', docPath: '/proj/Plan.op' },
+        { type: 'browser', id: 'browser-b1', browserTabId: 'b1' },
+        CHAT_TAB
+      ],
+      null
+    )
+    const onConfirmOpened = vi.fn()
+    renderSection({ onConfirmOpened, onCloseTerminal: vi.fn(() => true) })
+
+    for (const name of [
+      'Close Git Changes',
+      'Close Plan.op',
+      'Close Browser',
+      'Close Hello chat'
+    ]) {
+      fireEvent.click(screen.getByRole('button', { name }))
+    }
+
+    expect(onConfirmOpened).not.toHaveBeenCalled()
+  })
+})
+
+describe('MobileDrawerOpenSection focus after a row closes', () => {
+  const TERMINAL_TABS = [
+    { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+    { type: 'terminal', id: 'term-t2', terminalId: 't2' },
+    { type: 'terminal', id: 'term-t3', terminalId: 't3' }
+  ]
+
+  beforeEach(() => {
+    terminalsRef.current = [
+      { id: 't1', name: 'alpha' },
+      { id: 't2', name: 'beta' },
+      { id: 't3', name: 'gamma' }
+    ]
+    // Closing drops the tab from the (mocked) workspace tree, as the store would.
+    workspaceRef.current.removeTab.mockImplementation((tabId: string) => {
+      const leaf = workspaceRef.current.leaves[0]
+      seedTabs(
+        leaf.tabs.filter((tab) => tab.id !== tabId),
+        leaf.activeTabId
+      )
+    })
+  })
+
+  /** The terminal close flow without a confirm: the layout removes the tab. */
+  const closeTerminalNow = (_terminalId: string, tabId: string): boolean => {
+    workspaceRef.current.removeTab(tabId)
+    return false
+  }
+
+  /**
+   * The mocked stores do not re-render the section, so the test re-renders it
+   * after each close; `headingFocusable: false` renders an Open heading that
+   * cannot take focus, to reach the section-root fallback.
+   */
+  function setup(
+    tabs: Array<Record<string, unknown>>,
+    props: Partial<SectionProps> = {},
+    headingFocusable = true
+  ) {
+    seedTabs(tabs, null)
+    const ui = (): React.JSX.Element => (
+      <MemoryRouter>
+        <div>
+          <h2 id="open-heading" tabIndex={headingFocusable ? -1 : undefined}>
+            Open
+          </h2>
+          <button type="button">elsewhere</button>
+          <MobileDrawerOpenSection
+            activeTabId={null}
+            openHeadingId="open-heading"
+            onNavigate={onNavigate}
+            {...props}
+          />
+        </div>
+      </MemoryRouter>
+    )
+    const view = render(ui())
+    return { ...view, update: () => view.rerender(ui()) }
+  }
+
+  /** Focus a row's close button, press it, and re-render the section. */
+  function closeFocused(name: string, update: () => void): void {
+    const close = screen.getByRole('button', { name })
+    close.focus()
+    expect(close).toHaveFocus()
+    fireEvent.click(close)
+    update()
+    expect(close.isConnected).toBe(false)
+  }
+
+  const sectionRoot = (): HTMLElement | null =>
+    screen.getByRole('button', { name: 'New terminal' }).closest('[tabindex="-1"]')
+
+  it('makes the section root and both group headings programmatically focusable', () => {
+    seedTabs([...TERMINAL_TABS, { type: 'git', id: 'git-/proj', cwd: '/proj' }], null)
+    renderSection()
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Terminals' })).toHaveAttribute(
+      'tabindex',
+      '-1'
+    )
+    expect(screen.getByRole('heading', { level: 3, name: 'Tabs' })).toHaveAttribute(
+      'tabindex',
+      '-1'
+    )
+    expect(sectionRoot()).toHaveClass('outline-none')
+  })
+
+  it('moves focus to the next terminal row, not the previous one', () => {
+    const { update } = setup(TERMINAL_TABS, { onCloseTerminal: closeTerminalNow })
+
+    closeFocused('Close beta', update)
+
+    expect(screen.getByRole('button', { name: 'gamma' })).toHaveFocus()
+  })
+
+  it('moves focus to the next row from the first terminal too', () => {
+    const { update } = setup(TERMINAL_TABS, { onCloseTerminal: closeTerminalNow })
+
+    closeFocused('Close alpha', update)
+
+    expect(screen.getByRole('button', { name: 'beta' })).toHaveFocus()
+  })
+
+  it('falls back to the Terminals heading when the last terminal row closes', () => {
+    const { update } = setup(TERMINAL_TABS, { onCloseTerminal: closeTerminalNow })
+
+    closeFocused('Close gamma', update)
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Terminals' })).toHaveFocus()
+  })
+
+  it('falls back to the Terminals heading when the only terminal closes', () => {
+    const { update } = setup([TERMINAL_TABS[0]], { onCloseTerminal: closeTerminalNow })
+
+    closeFocused('Close alpha', update)
+
+    expect(screen.getByRole('heading', { level: 3, name: 'Terminals' })).toHaveFocus()
+    expect(screen.getByText('No open terminals')).toBeInTheDocument()
+  })
+
+  it('does not cross groups: the next row is in the same group', () => {
+    const { update } = setup([TERMINAL_TABS[0], { type: 'git', id: 'git-/proj', cwd: '/proj' }], {
+      onCloseTerminal: closeTerminalNow
+    })
+
+    closeFocused('Close alpha', update)
+
+    // The Git row is in another group: the Terminals heading takes focus.
+    expect(screen.getByRole('heading', { level: 3, name: 'Terminals' })).toHaveFocus()
+  })
+
+  it('moves focus to the next Tabs row, then to the section root once the group is gone', () => {
+    const { update } = setup([
+      { type: 'git', id: 'git-/proj', cwd: '/proj' },
+      { type: 'git-history', id: 'git-history-/proj', cwd: '/proj' }
+    ])
+
+    closeFocused('Close Git Changes', update)
+    expect(screen.getByRole('button', { name: 'Git History' })).toHaveFocus()
+
+    closeFocused('Close Git History', update)
+    expect(screen.queryByRole('heading', { name: 'Tabs' })).not.toBeInTheDocument()
+    expect(sectionRoot()).toHaveFocus()
+  })
+
+  it('follows the same rule for an editor row closed through the dirty guard', () => {
+    editorRef.current.openFiles = new Map()
+    const onCloseEditorTab = vi.fn((filePath: string) => {
+      workspaceRef.current.removeTab(`edit-${filePath}`)
+      return false
+    })
+    const { update } = setup(
+      [
+        { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' },
+        { type: 'editor', id: 'edit-/proj/b.ts', filePath: '/proj/b.ts' }
+      ],
+      { onCloseEditorTab }
+    )
+
+    closeFocused('Close a.ts', update)
+
+    expect(screen.getByRole('button', { name: 'b.ts' })).toHaveFocus()
+  })
+
+  it('moves focus to the next chat row, then to the Open heading', () => {
+    seedOptionsSession('s2', 'agent-1', { title: 'Second chat' })
+    const { update } = setup([CHAT_TAB, { type: 'agent-chat', id: 'tab-2', sessionId: 's2' }])
+
+    closeFocused('Close Hello chat', update)
+    expect(screen.getByRole('button', { name: 'Second chat' })).toHaveFocus()
+
+    closeFocused('Close Second chat', update)
+    expect(screen.getByRole('heading', { level: 2, name: 'Open' })).toHaveFocus()
+  })
+
+  it('falls back to the section root when the group heading cannot take focus', () => {
+    const { update } = setup([CHAT_TAB], {}, false)
+
+    closeFocused('Close Hello chat', update)
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Open' })).not.toHaveFocus()
+    expect(sectionRoot()).toHaveFocus()
+  })
+
+  it('does not steal focus the user already moved elsewhere', () => {
+    const { update } = setup(TERMINAL_TABS, { onCloseTerminal: closeTerminalNow })
+    const close = screen.getByRole('button', { name: 'Close alpha' })
+    close.focus()
+
+    fireEvent.click(close)
+    screen.getByRole('button', { name: 'elsewhere' }).focus()
+    update()
+
+    expect(screen.getByRole('button', { name: 'elsewhere' })).toHaveFocus()
+  })
+
+  it('leaves focus alone while a close has not completed, and lands it when it does', () => {
+    const deferred: { finish: (() => void) | null } = { finish: null }
+    mockRequestCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) => {
+      deferred.finish = closeTab
+    })
+    seedOptionsSession('s2', 'agent-1', { title: 'Second chat' })
+    const { update } = setup([CHAT_TAB, { type: 'agent-chat', id: 'tab-2', sessionId: 's2' }])
+    const close = screen.getByRole('button', { name: 'Close Hello chat' })
+    close.focus()
+
+    fireEvent.click(close)
+    update()
+
+    // Still Closing: the row, and focus on its close button, stay.
+    expect(close.isConnected).toBe(true)
+    expect(close).toHaveFocus()
+    expect(mockLogFrontendError).not.toHaveBeenCalled()
+
+    act(() => deferred.finish?.())
+    update()
+
+    expect(close.isConnected).toBe(false)
+    expect(screen.getByRole('button', { name: 'Second chat' })).toHaveFocus()
+  })
+
+  it('leaves focus alone when a terminal close is refused (kill failed)', () => {
+    const { update } = setup(TERMINAL_TABS, { onCloseTerminal: vi.fn(() => false) })
+    const close = screen.getByRole('button', { name: 'Close alpha' })
+    close.focus()
+
+    fireEvent.click(close)
+    update()
+
+    expect(close.isConnected).toBe(true)
+    expect(close).toHaveFocus()
+  })
+
+  it('registers nothing when the close opened a confirm: the drawer is closing', () => {
+    const onConfirmOpened = vi.fn()
+    const { update } = setup(TERMINAL_TABS, {
+      onCloseTerminal: vi.fn(() => true),
+      onConfirmOpened
+    })
+    const close = screen.getByRole('button', { name: 'Close alpha' })
+    close.focus()
+
+    fireEvent.click(close)
+    expect(onConfirmOpened).toHaveBeenCalledTimes(1)
+    // The confirmed close lands later, after the drawer is gone from view.
+    workspaceRef.current.removeTab('term-t1')
+    update()
+
+    expect(document.body).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'beta' })).not.toHaveFocus()
+  })
+
+  it('logs at info when no focus target takes focus', () => {
+    const { update } = setup(TERMINAL_TABS, { onCloseTerminal: closeTerminalNow })
+    const close = screen.getByRole('button', { name: 'Close alpha' })
+    close.focus()
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(() => {})
+
+    fireEvent.click(close)
+    update()
+    focusSpy.mockRestore()
+
+    expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
+    expect(mockLogFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'info' }))
+  })
+})
+
+describe('MobileDrawerOpenSection focus after a rename ends', () => {
+  beforeEach(() => {
+    seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+  })
+
+  function startRenaming(onRenameTerminal: SectionProps['onRenameTerminal']): HTMLElement {
+    renderSection({ onRenameTerminal })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename zsh' }))
+    return screen.getByRole('textbox', { name: 'Rename zsh' })
+  }
+
+  it('Enter commits and returns focus to that row’s Rename button', () => {
+    const onRenameTerminal = vi.fn()
+    const input = startRenaming(onRenameTerminal)
+
+    fireEvent.change(input, { target: { value: 'dev server' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onRenameTerminal).toHaveBeenCalledTimes(1)
+    expect(onRenameTerminal).toHaveBeenCalledWith('t1', 'dev server')
+    expect(screen.getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
+  })
+
+  it('Escape cancels without renaming and returns focus to the Rename button', () => {
+    const onRenameTerminal = vi.fn()
+    const input = startRenaming(onRenameTerminal)
+
+    fireEvent.change(input, { target: { value: 'dev server' } })
+    fireEvent.keyDown(input, { key: 'Escape' })
+
+    expect(onRenameTerminal).not.toHaveBeenCalled()
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
+  })
+
+  it('Enter with an empty name still ends the rename and returns focus', () => {
+    const onRenameTerminal = vi.fn()
+    const input = startRenaming(onRenameTerminal)
+
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(onRenameTerminal).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
+  })
+
+  it('a blur commits but does not move focus', () => {
+    const onRenameTerminal = vi.fn()
+    const input = startRenaming(onRenameTerminal)
+
+    fireEvent.change(input, { target: { value: 'dev server' } })
+    fireEvent.blur(input)
+
+    expect(onRenameTerminal).toHaveBeenCalledWith('t1', 'dev server')
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rename zsh' })).not.toHaveFocus()
+    expect(document.body).toHaveFocus()
+  })
+
+  it('a blur after the user moved on leaves their focus where it is', () => {
+    const onRenameTerminal = vi.fn()
+    startRenaming(onRenameTerminal)
+    const close = screen.getByRole('button', { name: 'Close zsh' })
+
+    // Moving focus blurs the input: the unchanged name commits, focus stays put.
+    act(() => close.focus())
+
+    expect(onRenameTerminal).toHaveBeenCalledTimes(1)
+    expect(onRenameTerminal).toHaveBeenCalledWith('t1', 'zsh')
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(close).toHaveFocus()
+  })
+
+  it('commits once even when Enter is followed by a blur', () => {
+    const onRenameTerminal = vi.fn()
+    const input = startRenaming(onRenameTerminal)
+
+    fireEvent.change(input, { target: { value: 'dev server' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
+
+    expect(onRenameTerminal).toHaveBeenCalledTimes(1)
   })
 })

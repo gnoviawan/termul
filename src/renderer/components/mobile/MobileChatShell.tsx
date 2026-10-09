@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
 import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import {
@@ -10,6 +11,7 @@ import { useSheetCloseFocus } from '@/hooks/use-sheet-close-focus'
 import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
 import { recordSheetOpener, setSheetFocusDestination } from '@/lib/sheet-focus-return'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { returnToWorkspaceRoute } from '@/lib/workspace-route'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
@@ -53,7 +55,12 @@ interface MobileChatShellProps {
   /** Opens a git history tab in the active pane (desktop entry mirrors this). */
   onOpenGitHistory?: () => void
   onNewTerminal?: () => void
-  onCloseTerminal?: (terminalId: string, tabId: string) => void
+  /**
+   * Close a terminal tab. Returns `true` only when it opened the close confirm
+   * (so the drawer hands off to it); closing at once, or refusing, returns
+   * `false`.
+   */
+  onCloseTerminal?: (terminalId: string, tabId: string) => boolean
   onRenameTerminal?: (terminalId: string, name: string) => void
   onRestartTerminal?: (terminalId: string) => void
   /** Opens Project settings (header ⋯ sheet). */
@@ -70,9 +77,10 @@ interface MobileChatShellProps {
   /**
    * Close an editor tab through the dirty-file guard (WorkspaceLayout
    * `handleCloseEditorTab` semantics) so drawer closes never silently
-   * discard unsaved changes.
+   * discard unsaved changes. Returns `true` only when it opened the dirty-file
+   * confirm.
    */
-  onCloseEditorTab?: (filePath: string) => void
+  onCloseEditorTab?: (filePath: string) => boolean
 }
 
 /**
@@ -102,6 +110,8 @@ export function MobileChatShell({
   const [moreOpen, setMoreOpen] = useState(false)
   const [terminalActionsOpen, setTerminalActionsOpen] = useState(false)
   const activeProject = useActiveProject()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   const moreButtonRef = useRef<HTMLButtonElement>(null)
   const subtitleRef = useRef<HTMLButtonElement>(null)
@@ -241,6 +251,27 @@ export function MobileChatShell({
     setTerminalActionsOpen(false)
   }, [activeTabId])
 
+  // This shell's entry points that create or activate a tab (drawer, header ✎,
+  // both ⋯ sheets, the Files sheet) leave /snapshots (or any other non-workspace
+  // route) for the workspace, so the new tab is actually visible. Wrapped here,
+  // once, so they agree; a missing handler stays missing so the controls keep
+  // their gating.
+  const returnToWorkspace = (): void => {
+    returnToWorkspaceRoute(pathname, navigate)
+  }
+  const newTerminal = onNewTerminal
+    ? (): void => {
+        onNewTerminal()
+        returnToWorkspace()
+      }
+    : undefined
+  const openGitHistory = onOpenGitHistory
+    ? (): void => {
+        onOpenGitHistory()
+        returnToWorkspace()
+      }
+    : undefined
+
   // Header ⋯ "Close chat": the same teardown the drawer's Open rows use, which
   // asks the idle-shutdown guard before the tab goes.
   const closeActiveChat = (): void => {
@@ -281,7 +312,7 @@ export function MobileChatShell({
         isTerminal={isTerminalTab}
         canNewChat={canNewChat}
         onNewChat={onNewChat}
-        onNewTerminal={onNewTerminal}
+        onNewTerminal={newTerminal}
         moreOpen={isTerminalTab ? terminalSheetOpen : moreOpen}
         onOpenMore={() => (isTerminalTab ? setTerminalActionsOpen(true) : setMoreOpen(true))}
         moreButtonRef={moreButtonRef}
@@ -304,11 +335,11 @@ export function MobileChatShell({
         activeSessionId={activeSessionId}
         canNewChat={canNewChat}
         onNewChat={onNewChat}
-        onNewTerminal={onNewTerminal}
+        onNewTerminal={newTerminal}
         onCloseTerminal={onCloseTerminal}
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
-        onOpenGitHistory={onOpenGitHistory}
+        onOpenGitHistory={openGitHistory}
         onOpenProjects={() => setProjectsOpen(true)}
         returnFocusRef={drawerOpenerRef}
         menuButtonRef={menuButtonRef}
@@ -329,7 +360,10 @@ export function MobileChatShell({
         <MobileFileExplorer
           open={filesOpen}
           onOpenChange={setFilesOpen}
-          onFileOpened={() => setSheetFocusDestination('files-sheet', titleRef.current)}
+          onFileOpened={() => {
+            setSheetFocusDestination('files-sheet', titleRef.current)
+            returnToWorkspace()
+          }}
         />
       )}
 
@@ -357,7 +391,7 @@ export function MobileChatShell({
             : undefined
         }
         onOpenCommandPalette={!isTauriContext() ? onOpenCommandPalette : undefined}
-        onNewTerminal={onNewTerminal}
+        onNewTerminal={newTerminal}
         onOpenProjectSettings={activeProject ? onOpenProjectSettings : undefined}
         onCloseChat={activeTab?.type === 'agent-chat' ? closeActiveChat : undefined}
       />
