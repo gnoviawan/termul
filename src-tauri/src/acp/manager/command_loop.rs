@@ -576,14 +576,14 @@ pub(super) async fn run_command_loop(
                     let cancel_state = turn_state.clone();
                     let cancel_session = session_id.clone();
                     let cancel_cx = turn_cx.clone();
-                    let outcome: Result<StopReason, String> = race_turn(
+                    let outcome: Result<StopReason, events::AcpErrorDetail> = race_turn(
                         async {
                             turn_cx
                                 .send_request(PromptRequest::new(&session_id, content))
                                 .block_task()
                                 .await
                                 .map(|r| r.stop_reason)
-                                .map_err(|e| e.to_string())
+                                .map_err(events::AcpErrorDetail::from)
                         },
                         cancel_rx,
                         &mut idle_rx,
@@ -677,12 +677,9 @@ pub(super) async fn run_command_loop(
                             }
                             send_reply(&task_slot, Ok(stop_reason));
                         }
-                        Err(message) => {
-                            let event = AgentErrorEvent {
-                                agent_id: turn_agent_id,
-                                session_id: Some(session_id),
-                                message: message.clone(),
-                            };
+                        Err(detail) => {
+                            let message = detail.message.clone();
+                            let event = detail.into_agent_error(turn_agent_id, Some(session_id));
                             // Turn-scoped error → sid is the session id.
                             events::fan_out(
                                 &turn_sinks,
