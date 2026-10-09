@@ -1,4 +1,5 @@
 import { cleanup, render } from '@testing-library/react'
+import type { Terminal } from '@xterm/xterm'
 import { act } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -263,6 +264,7 @@ import { openFilePathFromTerminal } from '@/lib/file-path-links'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { ConnectedTerminal } from './ConnectedTerminal'
+import { cacheTerminal, clearTerminalCache } from './terminal-cache'
 
 const { mockRecordTerminalContinuityEvent, mockGetOrCreateProjectContinuityCorrelation } =
   vi.hoisted(() => ({
@@ -306,7 +308,8 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontFamily: vi.fn(() => 'Menlo, Monaco, "Courier New", monospace'),
   useTerminalFontSize: vi.fn(() => 14),
   useTerminalBufferSize: vi.fn(() => 10000),
-  useTerminalRenderer: vi.fn(() => 'auto')
+  useTerminalRenderer: vi.fn(() => 'auto'),
+  useTerminalScreenReaderMode: vi.fn(() => false)
 }))
 
 import { useTerminalRenderer } from '@/stores/app-settings-store'
@@ -361,6 +364,7 @@ vi.mock('@/lib/tauri-terminal-api', () => ({
 
 describe('ConnectedTerminal', () => {
   let rendererPreferenceSpy: ReturnType<typeof vi.spyOn>
+  let screenReaderModeSpy: ReturnType<typeof vi.spyOn>
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
@@ -371,6 +375,10 @@ describe('ConnectedTerminal', () => {
     rendererPreferenceSpy = vi
       .spyOn(appSettingsStore, 'useTerminalRenderer')
       .mockReturnValue('auto')
+    // L-28: off unless a test turns it on (the default for every other test).
+    screenReaderModeSpy = vi
+      .spyOn(appSettingsStore, 'useTerminalScreenReaderMode')
+      .mockReturnValue(false)
     webglAddonCreateCount = 0
     capturedContextLossCallback = null
     capturedPowerResumeCallback = null
@@ -456,6 +464,7 @@ describe('ConnectedTerminal', () => {
   afterEach(() => {
     getBoundingClientRectSpy.mockRestore()
     rendererPreferenceSpy.mockRestore()
+    screenReaderModeSpy.mockRestore()
     // The Ctrl+R app-owned test pins a custom commandHistory binding
     // (#858): restore the context-aware defaults between tests so later
     // assertions see the real (web-unbound) state.
@@ -984,6 +993,110 @@ describe('ConnectedTerminal', () => {
       // Verify Terminal was NOT called with windowsPty options
       const callArgs = mockTerminalConstructor.mock.calls[0][0]
       expect(callArgs.windowsPty).toBeUndefined()
+    })
+  })
+
+  // L-28: AppSettings.terminalScreenReaderMode is read once, when the terminal
+  // is constructed ("Changes apply to new terminals").
+  describe('screen reader mode (L-28)', () => {
+    it('constructs xterm with screenReaderMode false when the setting is off', async () => {
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalConstructor).toHaveBeenCalled()
+      })
+
+      expect(mockTerminalConstructor).toHaveBeenCalledWith(
+        expect.objectContaining({ screenReaderMode: false })
+      )
+    })
+
+    it('constructs xterm with screenReaderMode true when the setting is on', async () => {
+      screenReaderModeSpy.mockReturnValue(true)
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalConstructor).toHaveBeenCalled()
+      })
+
+      expect(mockTerminalConstructor).toHaveBeenCalledWith(
+        expect.objectContaining({ screenReaderMode: true })
+      )
+    })
+
+    it('keeps windowsPty on Windows when the setting is on', async () => {
+      const originalPlatform = navigator.platform
+      Object.defineProperty(navigator, 'platform', { value: 'Win32', configurable: true })
+      screenReaderModeSpy.mockReturnValue(true)
+
+      try {
+        render(<ConnectedTerminal />)
+
+        await vi.waitFor(() => {
+          expect(mockTerminalConstructor).toHaveBeenCalled()
+        })
+
+        expect(mockTerminalConstructor).toHaveBeenCalledWith(
+          expect.objectContaining({
+            screenReaderMode: true,
+            windowsPty: expect.objectContaining({ backend: 'conpty' })
+          })
+        )
+      } finally {
+        Object.defineProperty(navigator, 'platform', {
+          value: originalPlatform,
+          configurable: true
+        })
+      }
+    })
+
+    it('does not rebuild or re-option a mounted terminal when the setting flips', async () => {
+      // The mock terminal's options object is shared across tests: start clean so
+      // an absent key proves the live instance was never touched.
+      delete mockTerminalInstance.options.screenReaderMode
+
+      const { rerender } = render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
+      })
+      expect(mockTerminalConstructor).toHaveBeenLastCalledWith(
+        expect.objectContaining({ screenReaderMode: false })
+      )
+      const disposeCalls = mockTerminalInstance.dispose.mock.calls.length
+
+      screenReaderModeSpy.mockReturnValue(true)
+      // ConnectedTerminal is memo()'d: a changed prop forces the re-render, so the
+      // component really reads the flipped value (an identical prop set would be
+      // skipped and make this test vacuous).
+      rerender(<ConnectedTerminal className="after-flip" />)
+
+      expect(screenReaderModeSpy).toHaveLastReturnedWith(true)
+      expect(mockTerminalConstructor).toHaveBeenCalledTimes(1)
+      expect(mockTerminalInstance.dispose.mock.calls.length).toBe(disposeCalls)
+      expect(mockTerminalInstance.options).not.toHaveProperty('screenReaderMode')
+    })
+
+    it('does not apply the setting to a terminal restored from the project-switch cache', async () => {
+      clearTerminalCache()
+      delete mockTerminalInstance.options.screenReaderMode
+      cacheTerminal('cached-pty-l28', mockTerminalInstance as unknown as Terminal)
+      screenReaderModeSpy.mockReturnValue(true)
+
+      try {
+        render(<ConnectedTerminal terminalId="cached-pty-l28" />)
+
+        // Restored from the cache: no new xterm, and the old instance keeps its
+        // construction-time options ("Changes apply to new terminals").
+        await vi.waitFor(() => {
+          expect(mockTerminalInstance.loadAddon).toHaveBeenCalled()
+        })
+        expect(mockTerminalConstructor).not.toHaveBeenCalled()
+        expect(mockTerminalInstance.options).not.toHaveProperty('screenReaderMode')
+      } finally {
+        clearTerminalCache()
+      }
     })
   })
 

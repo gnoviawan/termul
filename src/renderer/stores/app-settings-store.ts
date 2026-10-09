@@ -44,6 +44,9 @@ export const useTerminalBufferSize = () =>
   useAppSettingsStore((state) => state.settings.terminalBufferSize)
 export const useTerminalRenderer = () =>
   useAppSettingsStore((state) => state.settings.terminalRenderer)
+// Strict `=== true` guards a corrupt or missing persisted value.
+export const useTerminalScreenReaderMode = () =>
+  useAppSettingsStore((state) => state.settings.terminalScreenReaderMode === true)
 export const useMaxTerminalsPerProject = () =>
   useAppSettingsStore((state) => state.settings.maxTerminalsPerProject)
 export const useOrphanDetectionEnabled = () =>

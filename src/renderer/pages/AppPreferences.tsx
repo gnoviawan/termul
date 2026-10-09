@@ -11,6 +11,7 @@ import {
 } from '@/hooks/use-keyboard-shortcuts'
 import { acpApi, shellApi, terminalApi } from '@/lib/api'
 import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
+import { logFrontendError } from '@/lib/log-api'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import {
   useAcpSessionNewTimeout,
@@ -32,6 +33,7 @@ import {
   useTerminalFontFamily,
   useTerminalFontSize,
   useTerminalRenderer,
+  useTerminalScreenReaderMode,
   useTerminalUrlOpenMode,
   useUiZoomLevel
 } from '@/stores/app-settings-store'
@@ -65,6 +67,7 @@ export function AppPreferencesModal(): React.JSX.Element {
   const uiZoomLevel = useUiZoomLevel()
   const bufferSize = useTerminalBufferSize()
   const terminalRenderer = useTerminalRenderer()
+  const terminalScreenReaderMode = useTerminalScreenReaderMode()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const maxTerminals = useMaxTerminalsPerProject()
@@ -148,6 +151,17 @@ export function AppPreferencesModal(): React.JSX.Element {
     if (value === 'auto' || value === 'webgl' || value === 'dom') {
       updateSetting('terminalRenderer', value)
     }
+  }
+
+  const handleScreenReaderModeChange = async (enabled: boolean) => {
+    await updateSetting('terminalScreenReaderMode', enabled)
+    // Boundary log (not a failure): the setting only reaches terminals created
+    // after the toggle, and xterm.js #3467 / repo #267 can double typed bytes.
+    void logFrontendError({
+      level: 'info',
+      source: 'AppPreferences.terminalScreenReaderMode',
+      message: `Terminal screen reader mode ${enabled ? 'enabled' : 'disabled'}; applies to new terminals only (can repeat typed characters, xterm.js #3467 / repo #267)`
+    })
   }
 
   const handleDefaultShellChange = (value: string) => {
@@ -293,6 +307,7 @@ export function AppPreferencesModal(): React.JSX.Element {
             uiZoomLevel={uiZoomLevel}
             bufferSize={bufferSize}
             terminalRenderer={terminalRenderer}
+            screenReaderMode={terminalScreenReaderMode}
             maxTerminals={maxTerminals}
             handleFontFamilyChange={handleFontFamilyChange}
             handleFontSizeChange={handleFontSizeChange}
@@ -300,6 +315,7 @@ export function AppPreferencesModal(): React.JSX.Element {
             handleUiZoomReset={handleUiZoomReset}
             handleBufferSizeChange={handleBufferSizeChange}
             handleRendererChange={handleRendererChange}
+            handleScreenReaderModeChange={handleScreenReaderModeChange}
             handleMaxTerminalsChange={handleMaxTerminalsChange}
           />
           {/* Default Shell Section */}

@@ -200,7 +200,8 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontFamily: vi.fn(() => 'JetBrains Mono, monospace'),
   useTerminalFontSize: vi.fn(() => 14),
   useTerminalBufferSize: vi.fn(() => 10000),
-  useTerminalRenderer: vi.fn(() => 'auto')
+  useTerminalRenderer: vi.fn(() => 'auto'),
+  useTerminalScreenReaderMode: vi.fn(() => false)
 }))
 
 // The vi.mock factory below replaces this module's exports; importing the

@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
-import { DEFAULT_APP_SETTINGS } from '@/types/settings'
+import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { AppPreferencesModal } from './AppPreferences'
 
 /**
@@ -13,9 +13,16 @@ import { AppPreferencesModal } from './AppPreferences'
  */
 
 const mockWriteDebounced = vi.fn().mockResolvedValue(undefined)
+const mockWrite = vi.fn().mockResolvedValue({ success: true, data: undefined })
+const mockLogFrontendError = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('@/lib/api', () => ({
-  acpApi: { setTurnTimeout: vi.fn().mockResolvedValue({ success: true }) },
+  acpApi: {
+    setTurnTimeout: vi.fn().mockResolvedValue({ success: true }),
+    setTurnIdleTimeout: vi.fn().mockResolvedValue({ success: true }),
+    setSessionNewTimeout: vi.fn().mockResolvedValue({ success: true }),
+    setSessionReopenTimeout: vi.fn().mockResolvedValue({ success: true })
+  },
   logApi: {
     revealLogDir: vi.fn(),
     exportLogFile: vi.fn(),
@@ -31,9 +38,15 @@ vi.mock('@/lib/api', () => ({
   terminalApi: { updateOrphanDetection: vi.fn().mockResolvedValue({ success: true }) },
   persistenceApi: {
     read: vi.fn().mockResolvedValue({ success: true, data: null }),
-    write: vi.fn(),
+    write: (...args: unknown[]) => mockWrite(...args),
     writeDebounced: (...args: unknown[]) => mockWriteDebounced(...args)
   }
+}))
+
+// L-28: the screen reader toggle writes one `info` boundary entry; the real
+// facade would invoke Tauri or POST to the server.
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: (...args: unknown[]) => mockLogFrontendError(...args)
 }))
 
 vi.mock('@/lib/tauri-updater-api', () => ({
@@ -278,5 +291,141 @@ describe('AppPreferences web honesty gates (Story 8)', () => {
     const reveal = screen.getByRole('button', { name: /Reveal Log Folder/ })
     expect(reveal).toBeEnabled()
     expect(reveal).not.toHaveAttribute('title')
+  })
+})
+
+// L-28 (spec-mobile-terminal-screen-reader-mode): a Switch in Terminal
+// Appearance, between Terminal Renderer and Preview. The row is shared by the
+// desktop and web roots (the same modal), so every behaviour runs on both.
+describe.each([
+  ['desktop', true],
+  ['web', false]
+])('AppPreferences screen reader mode (L-28) on %s', (_name, isTauri) => {
+  beforeEach(() => {
+    tauriRef.current = isTauri
+    vi.clearAllMocks()
+    useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+  })
+
+  async function findSwitch(): Promise<HTMLElement> {
+    return screen.findByRole('switch', { name: 'Screen reader mode' })
+  }
+
+  it('renders an unchecked switch that explains it applies to new terminals', async () => {
+    renderPage()
+
+    const toggle = await findSwitch()
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(toggle).toHaveAttribute('data-state', 'unchecked')
+
+    const describedBy = toggle.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    const description = document.getElementById(describedBy as string)
+    expect(description).not.toBeNull()
+    expect(description).toHaveTextContent('Changes apply to new terminals.')
+    expect(description).toHaveTextContent(/repeat typed characters/i)
+  })
+
+  it('sits after the Terminal Renderer control and before Preview', async () => {
+    renderPage()
+
+    const toggle = await findSwitch()
+    const rendererLabel = screen.getByText('Terminal Renderer', { selector: 'label' })
+    const renderer = within(rendererLabel.parentElement as HTMLElement).getByRole('combobox')
+    const preview = screen.getByText('Preview', { selector: 'label' })
+
+    expect(renderer.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(toggle.compareDocumentPosition(preview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('toggles through the label as well as the switch', async () => {
+    renderPage()
+
+    await findSwitch()
+    fireEvent.click(screen.getByText('Screen reader mode', { selector: 'label' }))
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(true)
+    })
+  })
+
+  it('persists the setting and writes one info boundary log per toggle', async () => {
+    renderPage()
+
+    const toggle = await findSwitch()
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(true)
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(mockWriteDebounced).toHaveBeenCalledWith(
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ terminalScreenReaderMode: true })
+    )
+    await waitFor(() => {
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
+    })
+    expect(mockLogFrontendError).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'AppPreferences.terminalScreenReaderMode',
+        message: expect.stringMatching(/enabled.*new terminals.*3467/i)
+      })
+    )
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(mockWriteDebounced).toHaveBeenLastCalledWith(
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ terminalScreenReaderMode: false })
+    )
+    await waitFor(() => {
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(2)
+    })
+    expect(mockLogFrontendError).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'AppPreferences.terminalScreenReaderMode',
+        message: expect.stringMatching(/disabled/i)
+      })
+    )
+  })
+
+  it('renders checked when the setting is already on', async () => {
+    useAppSettingsStore.setState({
+      settings: { ...DEFAULT_APP_SETTINGS, terminalScreenReaderMode: true },
+      isLoaded: true
+    })
+    renderPage()
+
+    expect(await findSwitch()).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('returns to off after Reset Settings', async () => {
+    useAppSettingsStore.setState({
+      settings: { ...DEFAULT_APP_SETTINGS, terminalScreenReaderMode: true },
+      isLoaded: true
+    })
+    renderPage()
+
+    const toggle = await findSwitch()
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: /Reset to Defaults/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset' }))
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(mockWrite).toHaveBeenCalledWith(
+      APP_SETTINGS_KEY,
+      expect.objectContaining({ terminalScreenReaderMode: false })
+    )
   })
 })
