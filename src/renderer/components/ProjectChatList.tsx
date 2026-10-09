@@ -1,26 +1,51 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { useShallow } from 'zustand/shallow'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { ChatEntryIcon, type ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
-import { Copy, FolderOpen, Search, Terminal, Trash2, X } from '@/components/icons'
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger
-} from '@/components/ui/context-menu'
+  type ProjectChatEntry,
+  type ProjectChatLiveState,
+  ProjectChatRow
+} from '@/components/sidebar/project-chat-row'
+import { SidebarSearchField } from '@/components/sidebar/sidebar-search-field'
 import { clipboardApi, openerApi } from '@/lib/api'
-import { formatRelativeTimeFromMs } from '@/lib/git-time'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
-import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 
 /** Hard cap of rendered chat rows per project before lazy pagination kicks in. */
 const PAGE_SIZE = 10
 
-type ProjectChatEntry = ChatHistorySidebarEntry
+/** Session id of the agent chat tab focused in the active pane, if any. */
+function useActiveChatSessionId(): string | null {
+  return useWorkspaceStore((s) => {
+    const pane = findPaneById(s.root, s.activePaneId)
+    if (pane?.type !== 'leaf') return null
+    const tab = pane.tabs.find((t) => t.id === pane.activeTabId)
+    return tab?.type === 'agent-chat' ? tab.sessionId : null
+  })
+}
+
+/**
+ * Session ids with a live turn, and session ids that wait on a permission or
+ * question. Primitive arrays so `useShallow` keeps re-renders cheap.
+ */
+function useChatLiveSessionIds(): { running: string[]; needsYou: string[] } {
+  const running = useAcpStore(
+    useShallow((s) =>
+      Object.entries(s.sessions ?? {})
+        .filter(([, session]) => session.activeTurn)
+        .map(([id]) => id)
+    )
+  )
+  const needsYou = useAcpStore(
+    useShallow((s) => [
+      ...Object.values(s.pendingPermissions ?? {}).map((item) => item.sessionId),
+      ...Object.values(s.pendingQuestions ?? {}).map((item) => item.sessionId)
+    ])
+  )
+  return { running, needsYou }
+}
 
 interface ProjectChatListProps {
   projectId: string
@@ -41,6 +66,13 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const deleteHistorySession = useAcpStore((s) => s.deleteHistorySession)
   const addAgentChatTab = useWorkspaceStore((s) => s.addAgentChatTab)
+  const activeChatSessionId = useActiveChatSessionId()
+  const live = useChatLiveSessionIds()
+  const liveStateFor = useCallback(
+    (id: string): ProjectChatLiveState =>
+      live.running.includes(id) ? 'running' : live.needsYou.includes(id) ? 'needs-you' : 'idle',
+    [live.running, live.needsYou]
+  )
 
   // Scope by projectId only (all of the project's chats, regardless of cwd),
   // Termul-created sessions only (discovered !== true), newest-first.
@@ -182,42 +214,19 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
   )
 
   return (
-    <div className="flex flex-col">
+    <div className="relative ml-5 flex flex-col">
+      {/* Tree rail: 1px line that ties the chats to their project row. */}
+      <span aria-hidden="true" className="absolute inset-y-0 left-0 w-px bg-border" />
       {/* Per-project chat search — scoped to this project's chats only. */}
       <div className="pl-1 pr-2 py-1">
-        <div className="relative">
-          <Search
-            size={12}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <input
-            type="search"
-            placeholder="Search chats…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape' && query) {
-                e.preventDefault()
-                e.stopPropagation()
-                setQuery('')
-              }
-            }}
-            className="w-full rounded-none border-0 bg-transparent py-1 pl-7 pr-7 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus:ring-0 [&::-webkit-search-cancel-button]:hidden"
-            aria-label="Search chats"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery('')}
-              className="absolute right-0 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
-              title="Clear search"
-              aria-label="Clear chat search"
-            >
-              <X size={11} />
-            </button>
-          )}
-        </div>
+        <SidebarSearchField
+          size="sm"
+          value={query}
+          onChange={setQuery}
+          placeholder="Search chats…"
+          ariaLabel="Search chats"
+          clearLabel="Clear chat search"
+        />
       </div>
 
       {/*
@@ -226,7 +235,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
         keeps the rendered count capped at PAGE_SIZE until the sentinel loads
         the next page.
       */}
-      <div ref={scrollRef} className="overflow-y-auto max-h-80">
+      <div ref={scrollRef} className="flex max-h-80 flex-col gap-0.5 overflow-y-auto pl-1 pr-0.5">
         {entries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-4 text-center text-xs text-muted-foreground opacity-70">
             No chats yet. Start one with the New chat button.
@@ -238,6 +247,8 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
             <ProjectChatRow
               key={entry.id}
               entry={entry}
+              isActive={entry.id === activeChatSessionId}
+              liveState={liveStateFor(entry.id)}
               onOpen={handleOpen}
               onOpenTerminal={handleOpenTerminal}
               onOpenInFileExplorer={handleOpenInFileExplorer}
@@ -251,7 +262,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
             <button
               type="button"
               onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-              className="w-full rounded-md py-1 text-3xs text-muted-foreground hover:bg-sidebar-accent"
+              className="w-full rounded-md py-1 text-3xs tabular-nums text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03]"
             >
               Load more ({filtered.length - visible.length} more)
             </button>
@@ -278,107 +289,5 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
         onCancel={() => setDeleteConfirm(null)}
       />
     </div>
-  )
-}
-
-interface ProjectChatRowProps {
-  entry: ProjectChatEntry
-  onOpen: (entry: ProjectChatEntry) => void
-  onOpenTerminal: (entry: ProjectChatEntry) => void
-  onOpenInFileExplorer: (cwd: string) => void
-  onCopyPath: (cwd: string) => void
-  onDelete: (entry: ProjectChatEntry) => void
-}
-/**
- * A single per-project chat row: title + relative last-activity time, with a
- * context menu (open terminal / file explorer / copy path / delete).
- */
-function ProjectChatRow({
-  entry,
-  onOpen,
-  onOpenTerminal,
-  onOpenInFileExplorer,
-  onCopyPath,
-  onDelete
-}: ProjectChatRowProps): React.JSX.Element {
-  const hasCwd = Boolean(entry.cwd)
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          className={cn(
-            'group flex w-full items-center pr-2 hover:bg-sidebar-accent',
-            entry.status === 'closed' && 'opacity-70'
-          )}
-        >
-          <button
-            type="button"
-            onClick={() => onOpen(entry)}
-            title={entry.title}
-            className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs"
-          >
-            <ChatEntryIcon
-              agentId={entry.agentId}
-              agentConfigId={entry.agentConfigId}
-              agents={entry.agents}
-            />
-            <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
-            {entry.status === 'error' && (
-              <span className="shrink-0 rounded-sm bg-destructive/15 px-1 py-px text-3xs font-medium text-destructive">
-                Failed
-              </span>
-            )}
-            <span className="text-3xs tabular-nums text-muted-foreground">
-              {formatRelativeTimeFromMs(entry.lastActivityAt)}
-            </span>
-          </button>
-          <button
-            type="button"
-            aria-label={`Open terminal for chat ${entry.title}`}
-            title={hasCwd ? `Open terminal at ${entry.cwd}` : 'No working directory for this chat'}
-            disabled={!hasCwd}
-            onClick={(e) => {
-              e.stopPropagation()
-              onOpenTerminal(entry)
-            }}
-            onKeyDown={(e) => e.stopPropagation()}
-            className={cn(
-              'relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground',
-              "after:absolute after:-inset-1.5 after:content-['']",
-              'transition-colors hover:bg-sidebar-accent hover:text-foreground',
-              'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100',
-              !hasCwd && 'cursor-not-allowed'
-            )}
-          >
-            <Terminal size={12} aria-hidden="true" />
-          </button>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
-        <ContextMenuItem disabled={!hasCwd} onSelect={() => void onOpenTerminal(entry)}>
-          <Terminal className="mr-2 h-4 w-4" /> Open Terminal Here
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={!hasCwd}
-          onSelect={() => {
-            if (entry.cwd) void onOpenInFileExplorer(entry.cwd)
-          }}
-        >
-          <FolderOpen className="mr-2 h-4 w-4" /> Open in File Explorer
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={!hasCwd}
-          onSelect={() => {
-            if (entry.cwd) void onCopyPath(entry.cwd)
-          }}
-        >
-          <Copy className="mr-2 h-4 w-4" /> Copy Path
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onSelect={() => onDelete(entry)}>
-          <Trash2 className="mr-2 h-4 w-4" /> Delete Chat
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   )
 }

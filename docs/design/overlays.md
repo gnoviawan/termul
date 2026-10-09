@@ -29,6 +29,16 @@ Is it the app settings window?
 Default → Dialog
 ```
 
+## Menus
+
+`DropdownMenu`, `ContextMenu` and `Select` share `components/ui/menu-styles.ts`. Do not restyle rows at the call site.
+
+- Shell: `rounded-xl border bg-popover p-1`. Rows: `min-h-8 rounded-lg px-2 text-xs`.
+- Highlight (pointer or keyboard): `bg-foreground/[0.06]`. Never `bg-secondary` — in Termul Dark it equals `bg-popover`, so the highlight disappears.
+- Selected or checked: a `Check` icon. No fill. Radio items also use `Check`.
+- Group label: 11px, semibold, uppercase, tracked, `text-muted-foreground`.
+- Destructive item: last, after a separator, `variant="destructive"`.
+
 ## Correct
 
 ```tsx

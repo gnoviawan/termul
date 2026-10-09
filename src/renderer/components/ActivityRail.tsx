@@ -11,14 +11,31 @@ import {
 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
+import { CountBadge } from '@/components/ui/count-badge'
+import { QUIET_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { useAgentChatProjectSignals } from '@/hooks/use-agent-chat-attention'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { isMac } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { cn } from '@/lib/utils'
+import { selectChangedFileCount, useGitStatusStore } from '@/stores/git-status-store'
+import { useActiveProject } from '@/stores/project-store'
 import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 
-const railButtonClass =
-  'w-12 h-11 flex items-center justify-center hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset'
+/**
+ * 36px rail action. Rest = muted icon; hover = 3% foreground wash; the
+ * pressed / open view takes the `.keycap` surface. Disabled icons sit at 40%
+ * with no hover.
+ */
+function railButtonClass(active: boolean): string {
+  return cn(
+    QUIET_ICON_BUTTON_CLASS,
+    'relative flex size-9 shrink-0 rounded-lg disabled:pointer-events-none disabled:opacity-40',
+    active && 'keycap text-foreground'
+  )
+}
 
 interface ActivityRailProps {
   isShortcutsOpen?: boolean
@@ -84,8 +101,7 @@ export function ActivityRail({
   const updatePanelVisibility = useUpdatePanelVisibility()
   const settingsView = useSettingsModalView()
 
-  const handleToggleSSHPanel = async (e: React.MouseEvent<HTMLButtonElement>): Promise<void> => {
-    e.stopPropagation()
+  const handleToggleSSHPanel = async (): Promise<void> => {
     try {
       await updatePanelVisibility('sshPanelVisible', !isSSHPanelVisible)
     } catch (error) {
@@ -93,171 +109,197 @@ export function ActivityRail({
     }
   }
 
+  const activeProject = useActiveProject()
+  const gitCwd = activeProject?.path
+  const gitChangeCount = useGitStatusStore(selectChangedFileCount(gitCwd))
+  const { runningProjectIds } = useAgentChatProjectSignals()
+  const isAgentRunning = activeProject ? runningProjectIds.has(activeProject.id) : false
+  const needProject = 'Open a project first'
+
   return (
-    <nav
-      className="w-12 flex flex-col items-center bg-background select-none shrink-0"
-      aria-label="Global actions"
-    >
-      {/* Brand mark */}
-      <div
-        className="w-12 h-11 flex items-center justify-center text-foreground shrink-0"
-        data-tauri-drag-region={isMac ? true : undefined}
+    <TooltipProvider delayDuration={400}>
+      <nav
+        className="w-12 flex flex-col items-center gap-1 bg-background select-none shrink-0"
+        aria-label="Global actions"
       >
-        <TermulMark size={22} className="pointer-events-none" />
-      </div>
-
-      <div className="w-6 h-px bg-border/60 my-1" aria-hidden="true" />
-
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenCommandPalette?.()
-        }}
-        className={railButtonClass}
-        title="Projects"
-        aria-label="Open projects"
-        disabled={!onOpenCommandPalette}
-      >
-        <FolderKanban size={18} className="text-muted-foreground" />
-      </button>
-
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenGitChanges?.()
-        }}
-        className={railButtonClass}
-        title={canOpenGitChanges ? 'Git changes' : 'Git changes (open a project first)'}
-        aria-label="Open git changes"
-        disabled={!onOpenGitChanges || !canOpenGitChanges}
-      >
-        <GitBranch
-          size={18}
-          className={canOpenGitChanges ? 'text-muted-foreground' : 'text-muted-foreground/40'}
-        />
-      </button>
-
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenAgentChat?.()
-        }}
-        className={railButtonClass}
-        title={canOpenAgentChat ? 'New agent chat' : 'New agent chat (open a project first)'}
-        aria-label="New agent chat"
-        disabled={!onOpenAgentChat || !canOpenAgentChat}
-      >
-        <MessageSquarePlus
-          size={18}
-          className={canOpenAgentChat ? 'text-muted-foreground' : 'text-muted-foreground/40'}
-        />
-      </button>
-
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenCanvas?.()
-        }}
-        className={railButtonClass}
-        title={canOpenCanvas ? 'Open canvas' : 'Open canvas (open a project first)'}
-        aria-label="Open canvas"
-        disabled={!onOpenCanvas || !canOpenCanvas}
-      >
-        <Edit2
-          size={18}
-          className={canOpenCanvas ? 'text-muted-foreground' : 'text-muted-foreground/40'}
-        />
-      </button>
-
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenGitHistory?.()
-        }}
-        className={railButtonClass}
-        title={canOpenGitHistory ? 'Git history' : 'Git history (open a project first)'}
-        aria-label="Open git history"
-        disabled={!onOpenGitHistory || !canOpenGitHistory}
-      >
-        <History
-          size={18}
-          className={canOpenGitHistory ? 'text-muted-foreground' : 'text-muted-foreground/40'}
-        />
-      </button>
-
-      {/* SSH panel toggle — desktop only (issue #843): hidden on web rather
-          than disabled-with-title, since the whole SSH panel is a
-          desktop-only surface there. */}
-      {isTauriContext() && (
-        <button
-          type="button"
-          onClick={(e) => {
-            void handleToggleSSHPanel(e)
-          }}
-          className={railButtonClass}
-          title="Toggle SSH panel"
-          aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
-          aria-pressed={isSSHPanelVisible}
+        {/* Brand mark */}
+        <div
+          className="w-12 h-11 flex items-center justify-center text-foreground shrink-0"
+          data-tauri-drag-region={isMac ? true : undefined}
         >
-          <Network
-            size={18}
-            className={isSSHPanelVisible ? 'text-foreground' : 'text-muted-foreground'}
-          />
-        </button>
-      )}
+          <TermulMark size={22} className="pointer-events-none" />
+        </div>
 
-      <div className="mt-auto flex flex-col items-center pb-1">
-        <TitleBarShortcutsPopover
-          buttonClassName={railButtonClass}
-          open={isShortcutsOpen}
-          onOpenChange={onShortcutsOpenChange}
-        />
+        <div className="w-6 h-px bg-border/60" aria-hidden="true" />
 
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            useSettingsModalStore.getState().openApp()
-          }}
-          className={railButtonClass}
-          title="Preferences"
-          aria-label="Open preferences"
-          aria-pressed={settingsView === 'app'}
+        <RailButton
+          label="Projects"
+          aria-label="Open projects"
+          disabled={!onOpenCommandPalette}
+          onClick={() => onOpenCommandPalette?.()}
         >
-          <SlidersHorizontal
-            size={18}
-            className={settingsView === 'app' ? 'text-foreground' : 'text-muted-foreground'}
-          />
-        </button>
+          <FolderKanban size={16} />
+        </RailButton>
 
-        <button
-          type="button"
-          onClick={
-            onToggleThemePicker
-              ? (e) => {
-                  e.stopPropagation()
-                  onToggleThemePicker()
-                }
-              : undefined
+        <RailButton
+          label="Git changes"
+          hint={canOpenGitChanges ? undefined : needProject}
+          aria-label="Open git changes"
+          disabled={!onOpenGitChanges || !canOpenGitChanges}
+          onClick={() => onOpenGitChanges?.()}
+          badge={
+            canOpenGitChanges && gitChangeCount > 0 ? (
+              <CountBadge
+                count={gitChangeCount}
+                max={99}
+                data-testid="rail-git-badge"
+                className="pointer-events-none absolute -top-0.5 -right-1 h-3.5 min-w-3.5 text-4xs ring-2 ring-background"
+              />
+            ) : null
           }
-          className={railButtonClass}
-          title="Color themes"
-          aria-label="Color themes"
-          aria-pressed={onToggleThemePicker ? isThemePickerOpen : undefined}
-          aria-disabled={!onToggleThemePicker}
-          disabled={!onToggleThemePicker}
         >
-          <Palette
-            size={18}
-            className={isThemePickerOpen ? 'text-foreground' : 'text-muted-foreground'}
+          <GitBranch size={16} />
+        </RailButton>
+
+        <RailButton
+          label="New agent chat"
+          hint={canOpenAgentChat ? undefined : needProject}
+          aria-label="New agent chat"
+          disabled={!onOpenAgentChat || !canOpenAgentChat}
+          onClick={() => onOpenAgentChat?.()}
+          badge={
+            isAgentRunning ? (
+              <span
+                data-testid="rail-agent-live-dot"
+                className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+              />
+            ) : null
+          }
+        >
+          <MessageSquarePlus size={16} />
+        </RailButton>
+
+        <RailButton
+          label="Open canvas"
+          hint={canOpenCanvas ? undefined : needProject}
+          aria-label="Open canvas"
+          disabled={!onOpenCanvas || !canOpenCanvas}
+          onClick={() => onOpenCanvas?.()}
+        >
+          <Edit2 size={16} />
+        </RailButton>
+
+        <RailButton
+          label="Git history"
+          hint={canOpenGitHistory ? undefined : needProject}
+          aria-label="Open git history"
+          disabled={!onOpenGitHistory || !canOpenGitHistory}
+          onClick={() => onOpenGitHistory?.()}
+        >
+          <History size={16} />
+        </RailButton>
+
+        {/* SSH panel toggle — desktop only (issue #843): hidden on web rather
+            than disabled-with-title, since the whole SSH panel is a
+            desktop-only surface there. */}
+        {isTauriContext() && (
+          <RailButton
+            label="Toggle SSH panel"
+            aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
+            pressed={isSSHPanelVisible}
+            onClick={() => {
+              void handleToggleSSHPanel()
+            }}
+          >
+            <Network size={16} />
+          </RailButton>
+        )}
+
+        <div className="mt-auto flex flex-col items-center gap-1 pb-1">
+          <TitleBarShortcutsPopover
+            buttonClassName={railButtonClass(Boolean(isShortcutsOpen))}
+            open={isShortcutsOpen}
+            onOpenChange={onShortcutsOpenChange}
           />
-        </button>
-      </div>
-    </nav>
+
+          <RailButton
+            label="Preferences"
+            aria-label="Open preferences"
+            pressed={settingsView === 'app'}
+            onClick={() => useSettingsModalStore.getState().openApp()}
+          >
+            <SlidersHorizontal size={16} />
+          </RailButton>
+
+          <RailButton
+            label="Color themes"
+            aria-label="Color themes"
+            pressed={onToggleThemePicker ? isThemePickerOpen : undefined}
+            disabled={!onToggleThemePicker}
+            onClick={() => onToggleThemePicker?.()}
+          >
+            <Palette size={16} />
+          </RailButton>
+        </div>
+      </nav>
+    </TooltipProvider>
+  )
+}
+
+/** Number of distinct changed paths (a staged + unstaged `MM` file counts once). */
+interface RailButtonProps {
+  label: string
+  /** Muted second line in the tooltip (e.g. why the action is disabled). */
+  hint?: string
+  'aria-label': string
+  disabled?: boolean
+  /** Sets `aria-pressed` and the keycap "you are here" surface. */
+  pressed?: boolean
+  badge?: React.ReactNode
+  /** Runs after the click stops propagating. */
+  onClick: () => void
+  children: React.ReactNode
+}
+
+function RailButton({
+  label,
+  hint,
+  'aria-label': ariaLabel,
+  disabled = false,
+  pressed,
+  badge,
+  onClick,
+  children
+}: RailButtonProps): React.JSX.Element {
+  const button = (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      className={railButtonClass(pressed ?? false)}
+      aria-label={ariaLabel}
+      aria-pressed={pressed}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
+    >
+      {children}
+      {badge}
+    </button>
+  )
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* A disabled button gets no pointer events, so the wrapper carries
+            the tooltip that explains why the action is off. */}
+        {disabled ? <span className="inline-flex">{button}</span> : button}
+      </TooltipTrigger>
+      <TooltipContent side="right" className="flex flex-col gap-0.5 px-2.5 py-1.5 text-xs">
+        <span className="text-popover-foreground">{label}</span>
+        {hint && <span className="text-muted-foreground">{hint}</span>}
+      </TooltipContent>
+    </Tooltip>
   )
 }

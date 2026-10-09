@@ -48,7 +48,7 @@ function TabKeycap({ active }: { active: boolean }): React.JSX.Element | null {
       // is spatial continuity, never a gate on the action itself.
       transition={reducedMotion ? { duration: 0 } : { layout: { duration: 0.18, ease: EASE_OUT } }}
       aria-hidden
-      className="pointer-events-none absolute inset-0 rounded-lg bg-muted [box-shadow:inset_0_1px_0_oklch(var(--ring)/0.08),0_1px_2px_#00000040]"
+      className="keycap pointer-events-none absolute inset-0 rounded-lg"
     />
   )
 }

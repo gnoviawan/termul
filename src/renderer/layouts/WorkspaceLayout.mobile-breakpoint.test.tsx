@@ -215,7 +215,9 @@ const { gitState } = vi.hoisted(() => ({
     branchCreate: vi.fn()
   }
 }))
-vi.mock('@/stores/git-status-store', () => ({
+vi.mock('@/stores/git-status-store', async (importOriginal) => ({
+  selectChangedFileCount: (await importOriginal<typeof import('@/stores/git-status-store')>())
+    .selectChangedFileCount,
   diffKey: (cwd: string, path: string, staged: boolean) => `${cwd}:${path}:${staged}`,
   useGitStatusStore: (selector: (s: Record<string, unknown>) => unknown) => selector(gitState)
 }))

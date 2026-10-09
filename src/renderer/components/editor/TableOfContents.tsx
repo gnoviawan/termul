@@ -1,97 +1,101 @@
-import { List, Settings2 } from '@/components/icons'
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
+import { useMemo } from 'react'
+import { PANEL_HEADER_CLASS } from '@/components/ui/panel-styles'
 import type { TocHeading } from '@/hooks/use-toc-headings'
 import { cn } from '@/lib/utils'
+import { OutlineDepthMenu } from './outline/OutlineDepthMenu'
+import { OutlineFooter } from './outline/OutlineFooter'
+import { OutlineList } from './outline/OutlineList'
+import { OutlineEmpty, OutlineHidden, OutlineSkeleton } from './outline/OutlineStates'
+import { buildOutlineModel } from './outline/outline-rows'
+import type { ScrollProgress } from './outline/use-scroll-progress'
 
-const HEADING_LEVEL_OPTIONS = [1, 2, 3, 4, 5, 6]
+const EMPTY_KEYS: readonly string[] = []
 
 interface TableOfContentsProps {
+  /** Headings at or above `maxHeadingLevel`. */
   headings: TocHeading[]
+  /** Headings deeper than `maxHeadingLevel` (they do not show). */
+  hiddenCount?: number
+  /** True while the editor has not parsed the document yet. */
+  isLoading?: boolean
   activeHeadingId?: string
   maxHeadingLevel: number
+  collapsedKeys?: readonly string[]
+  progress?: ScrollProgress
   onHeadingClick: (heading: TocHeading) => void
   onMaxHeadingLevelChange: (level: number) => void
+  onToggleCollapsed: (key: string) => void
+  onCollapsedKeysChange: (keys: string[]) => void
+  onHide: () => void
+  onScrollToTop: () => void
 }
 
 export function TableOfContents({
   headings,
+  hiddenCount = 0,
+  isLoading = false,
   activeHeadingId,
   maxHeadingLevel,
+  collapsedKeys = EMPTY_KEYS,
+  progress,
   onHeadingClick,
-  onMaxHeadingLevelChange
+  onMaxHeadingLevelChange,
+  onToggleCollapsed,
+  onCollapsedKeysChange,
+  onHide,
+  onScrollToTop
 }: TableOfContentsProps): React.JSX.Element {
-  return (
-    <div className="flex h-full min-h-0 flex-col border-l border-border bg-card">
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-        <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <List className="h-4 w-4" />
-          <span>Contents</span>
-        </div>
+  const model = useMemo(
+    () => buildOutlineModel(headings, new Set(collapsedKeys)),
+    [headings, collapsedKeys]
+  )
+  const collapsedParentCount = model.parentKeys.filter((key) => collapsedKeys.includes(key)).length
+  const activeRowId = activeHeadingId ? model.visibleIdFor.get(activeHeadingId) : undefined
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              title="TOC settings"
-              aria-label="TOC settings"
-            >
-              <Settings2 className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuRadioGroup
-              value={String(maxHeadingLevel)}
-              onValueChange={(value) => onMaxHeadingLevelChange(Number(value))}
-            >
-              {HEADING_LEVEL_OPTIONS.map((level) => (
-                <DropdownMenuRadioItem key={level} value={String(level)}>
-                  {`H1-H${level}`}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+  const renderBody = (): React.JSX.Element => {
+    if (isLoading) {
+      return <OutlineSkeleton />
+    }
+    if (headings.length === 0) {
+      return hiddenCount > 0 ? (
+        <OutlineHidden
+          hiddenCount={hiddenCount}
+          maxHeadingLevel={maxHeadingLevel}
+          onShowAll={() => onMaxHeadingLevelChange(6)}
+        />
+      ) : (
+        <OutlineEmpty />
+      )
+    }
+    return (
+      <OutlineList
+        rows={model.rows}
+        activeRowId={activeRowId}
+        onHeadingClick={onHeadingClick}
+        onToggleCollapsed={onToggleCollapsed}
+      />
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className={cn(PANEL_HEADER_CLASS, 'pr-2')}>
+        <span className="label-panel">On this page</span>
+        <OutlineDepthMenu
+          maxHeadingLevel={maxHeadingLevel}
+          onMaxHeadingLevelChange={onMaxHeadingLevelChange}
+          canCollapseAll={collapsedParentCount < model.parentKeys.length}
+          canExpandAll={collapsedParentCount > 0}
+          onCollapseAll={() => onCollapsedKeysChange(model.parentKeys)}
+          onExpandAll={() => onCollapsedKeysChange([])}
+          onHide={onHide}
+        />
       </div>
 
-      {headings.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">
-          No headings found
-        </div>
-      ) : (
-        <nav className="flex-1 overflow-auto py-2" aria-label="Table of contents">
-          <ul className="space-y-1 px-2">
-            {headings.map((heading) => {
-              const isActive = heading.id === activeHeadingId
+      {renderBody()}
 
-              return (
-                <li key={heading.id}>
-                  <button
-                    type="button"
-                    className={cn(
-                      'w-full rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground',
-                      isActive && 'bg-accent text-accent-foreground'
-                    )}
-                    style={{ paddingLeft: (heading.level - 1) * 12 + 8 }}
-                    onClick={() => onHeadingClick(heading)}
-                    title={heading.text}
-                    aria-current={isActive ? 'location' : undefined}
-                  >
-                    <span className="block truncate">{heading.text}</span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
-        </nav>
+      {!isLoading && headings.length > 0 && progress?.canScroll && (
+        <OutlineFooter percent={progress.percent} onScrollToTop={onScrollToTop} />
       )}
     </div>
   )
