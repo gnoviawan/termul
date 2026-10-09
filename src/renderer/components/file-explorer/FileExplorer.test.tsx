@@ -146,23 +146,69 @@ vi.mock('@/stores/workspace-store', () => ({
   editorTabId: (path: string) => `edit-${path}`
 }))
 
-vi.mock('./FileTreeNode', () => ({
-  FileTreeNodeWrapper: ({
+vi.mock('./FileTreeNode', async () => {
+  // The real tree renders the in-place create row at the top of the target
+  // folder's children (nested nodes). This flat mock stands in for that
+  // subtree: a root folder renders the create row for any target inside it.
+  const { InlineCreateRow, useExplorerInlineInput } = await import('./explorer-inline-input')
+  type MockEntry = { name: string; path: string; type: 'file' | 'directory' }
+  function MockTreeNode({
     entry,
-    onSelect
+    onClick
   }: {
-    entry: { name: string; path: string; type: 'file' | 'directory' }
-    onSelect?: (path: string) => void
+    entry: MockEntry
+    onClick: (e: React.MouseEvent, entry: MockEntry) => void
+  }) {
+    const { inlineInput } = useExplorerInlineInput()
+    const createParent = inlineInput?.mode === 'create' ? inlineInput.parentPath : null
+    const ownsCreate =
+      entry.type === 'directory' &&
+      createParent !== null &&
+      (createParent === entry.path || createParent.startsWith(`${entry.path}/`))
+    return (
+      <>
+        <div
+          data-testid="tree-node"
+          data-entry-type={entry.type}
+          onClick={(e) => onClick(e, entry)}
+        >
+          {entry.name}
+        </div>
+        {ownsCreate && createParent && <InlineCreateRow parentPath={createParent} depth={1} />}
+      </>
+    )
+  }
+  return { FileTreeNodeWrapper: MockTreeNode }
+})
+
+vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    disabled
+  }: {
+    children: React.ReactNode
+    onSelect?: () => void
+    disabled?: boolean
   }) => (
-    <div
-      data-testid="tree-node"
-      data-entry-type={entry.type}
-      onClick={() => onSelect?.(entry.path)}
-    >
-      {entry.name}
-    </div>
+    <button type="button" role="menuitem" disabled={disabled} onClick={() => onSelect?.()}>
+      {children}
+    </button>
   )
 }))
+
+vi.mock('@/stores/git-status-store', () => {
+  const state = { statuses: {}, refreshStatus: vi.fn().mockResolvedValue(undefined) }
+  return {
+    useGitStatusStore: Object.assign((selector: (s: typeof state) => unknown) => selector(state), {
+      getState: () => state
+    })
+  }
+})
 
 vi.mock('./FileTreeContextMenu', () => ({
   FileTreeContextMenuContent: () => null
@@ -238,7 +284,7 @@ describe('FileExplorer', () => {
 
     render(<FileExplorer />)
 
-    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    expect(screen.getByText('Loading files…')).toBeInTheDocument()
   })
 
   it('still renders the panel when the store reports isVisible: false', () => {
@@ -252,7 +298,7 @@ describe('FileExplorer', () => {
     const { container } = render(<FileExplorer />)
 
     expect(container.querySelector('#file-explorer-panel')).toBeInTheDocument()
-    expect(screen.getByText('Loading...')).toBeInTheDocument()
+    expect(screen.getByText('Loading files…')).toBeInTheDocument()
   })
 
   it('shows root error state and retry action', () => {
@@ -261,9 +307,9 @@ describe('FileExplorer', () => {
 
     render(<FileExplorer />)
 
-    expect(screen.getByText('Failed to load project files.')).toBeInTheDocument()
+    expect(screen.getByText('Couldn’t read this folder')).toBeInTheDocument()
     expect(screen.getByText('Permission denied')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
   })
 
   it('retries root loading when retry is clicked', () => {
@@ -272,7 +318,7 @@ describe('FileExplorer', () => {
 
     render(<FileExplorer />)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
 
     // Story 10: the manual Retry reuses the store's guard-bypassing
     // retryRootLoad (a hung fetch strands a stale loadingDirs entry that
@@ -404,7 +450,7 @@ describe('FileExplorer', () => {
 
     expect(screen.getAllByText('src')).not.toHaveLength(0)
     expect(screen.getAllByText('index.ts')).not.toHaveLength(0)
-    expect(screen.queryByText('Loading...')).not.toBeInTheDocument()
+    expect(screen.queryByText('Loading files…')).not.toBeInTheDocument()
   })
 
   it('renders the refreshed search helper state for short queries while keeping the tree visible', () => {
@@ -417,7 +463,7 @@ describe('FileExplorer', () => {
     render(<FileExplorer />)
 
     expect(screen.getByLabelText('Search files and content')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Search files and content…')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Search files and content')).toBeInTheDocument()
     expect(screen.getByText('Keep typing to start searching')).toBeInTheDocument()
     expect(
       screen.getByText('Type at least 2 characters to search file names and content.')
@@ -444,7 +490,7 @@ describe('FileExplorer', () => {
     expect(screen.getByRole('tab', { name: /Content 1/i })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: /Files 1/i })).toBeInTheDocument()
     expect(screen.getByText('FileExplorer.tsx')).toBeInTheDocument()
-    expect(screen.getByText('src/FileExplorer.tsx')).toBeInTheDocument()
+    expect(screen.getByTitle('/project/src/FileExplorer.tsx')).toHaveTextContent('src')
     expect(screen.getByText(/createExplorerSearch\(\)/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: /Files 1/i }))
@@ -792,13 +838,16 @@ describe('FileExplorer header toolbar (GH-540)', () => {
 
     render(<FileExplorer />)
 
-    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+    for (const name of ['New File', 'New Folder', 'Collapse All']) {
       const button = screen.getByRole('button', { name })
       expect(button).toBeEnabled()
       expect(button).toHaveAttribute('title', name)
     }
-    // Web (jsdom has no Tauri internals) also shows the file-explorer toggle.
-    expect(screen.getByRole('button', { name: 'Hide file explorer' })).toBeInTheDocument()
+    // Refresh lives in the More menu. On web (jsdom has no Tauri internals)
+    // the menu also holds the file-explorer hide action.
+    expect(screen.getByRole('button', { name: 'More explorer actions' })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: 'Refresh' })).toBeEnabled()
+    expect(screen.getByRole('menuitem', { name: 'Hide file explorer' })).toBeInTheDocument()
   })
 
   it('disables every action when no project is open', () => {
@@ -806,9 +855,10 @@ describe('FileExplorer header toolbar (GH-540)', () => {
 
     render(<FileExplorer />)
 
-    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+    for (const name of ['New File', 'New Folder', 'Collapse All']) {
       expect(screen.getByRole('button', { name })).toBeDisabled()
     }
+    expect(screen.getByRole('menuitem', { name: 'Refresh' })).toBeDisabled()
   })
 
   it('starts creation in the project root when nothing is selected', async () => {
@@ -824,6 +874,17 @@ describe('FileExplorer header toolbar (GH-540)', () => {
     await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/project/notes.txt'))
     await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/project'))
     await waitFor(() => expect(mockSelectPath).toHaveBeenCalledWith('/project/notes.txt'))
+  })
+
+  it('shows the root create row in place, above the first tree row', async () => {
+    openProjectWithRootEntries([{ path: '/project/a.ts', name: 'a.ts', type: 'file' }])
+
+    render(<FileExplorer />)
+    fireEvent.click(screen.getByRole('button', { name: 'New File' }))
+
+    const input = await screen.findByPlaceholderText('File name...')
+    const firstRow = screen.getAllByTestId('tree-node')[0]
+    expect(input.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('creates a folder in the project root when nothing is selected', async () => {
@@ -858,7 +919,7 @@ describe('FileExplorer header toolbar (GH-540)', () => {
   it('targets the parent directory of the selected file', async () => {
     setProjectRoot('/project')
     mockExplorerState.directoryContents = new Map([
-      ['/project', []],
+      ['/project', [{ path: '/project/src', name: 'src', type: 'directory' as const }]],
       ['/project/src', [{ path: '/project/src/app.ts', name: 'app.ts', type: 'file' as const }]]
     ])
     mockExplorerState.selectedPaths = new Set(['/project/src/app.ts'])
@@ -1101,7 +1162,7 @@ describe('FileExplorer header toolbar (GH-540)', () => {
     openProjectWithRootEntries([{ path: '/project/src', name: 'src', type: 'directory' }])
 
     render(<FileExplorer />)
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh' }))
 
     await waitFor(() => expect(mockRefreshTree).toHaveBeenCalledTimes(1))
     expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
@@ -1113,9 +1174,10 @@ describe('FileExplorer header toolbar (GH-540)', () => {
 
     render(<FileExplorer />)
 
-    for (const name of ['New File', 'New Folder', 'Refresh', 'Collapse All']) {
+    for (const name of ['New File', 'New Folder', 'Collapse All']) {
       expect(screen.getByRole('button', { name })).toBeDisabled()
     }
+    expect(screen.getByRole('menuitem', { name: 'Refresh' })).toBeDisabled()
   })
 
   it('does not start a collapse or create action when disabled without a project', () => {

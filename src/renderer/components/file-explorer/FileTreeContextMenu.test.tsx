@@ -56,8 +56,10 @@ vi.mock('@/components/ui/context-menu', async () => {
       return <div onContextMenu={merged}>{children}</div>
     },
     ContextMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-    ContextMenuItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-    ContextMenuSeparator: () => null
+    ContextMenuItem: ({ children }: { children: React.ReactNode }) => (
+      <div data-testid="menu-item">{children}</div>
+    ),
+    ContextMenuSeparator: () => <hr data-testid="menu-separator" />
   }
 })
 
@@ -127,5 +129,49 @@ describe('FileTreeContextMenu capability gating', () => {
     expect(screen.queryByText('Show in File Manager')).not.toBeInTheDocument()
     // Open in Terminal works on web (server-side PTY).
     expect(screen.getByText('Open in Terminal')).toBeInTheDocument()
+  })
+})
+
+describe('FileTreeContextMenu grouping', () => {
+  it('orders folder items as create | clipboard | rename | external | delete', () => {
+    mockIsTauriContext.mockReturnValue(true)
+    const { container } = render(
+      <FileTreeContextMenuContent
+        entry={dirEntry}
+        onNewFile={vi.fn()}
+        onNewFolder={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+        onCopyPath={vi.fn()}
+        onCopy={vi.fn()}
+        onCut={vi.fn()}
+        onPaste={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenInTerminal={vi.fn()}
+        onOpenWithExternal={vi.fn()}
+        onShowInFileManager={vi.fn()}
+        hasClipboardContent
+      />
+    )
+    const sequence = Array.from(container.querySelectorAll('[data-testid]')).map((node) =>
+      node.getAttribute('data-testid') === 'menu-separator' ? '|' : (node.textContent ?? '').trim()
+    )
+    expect(sequence).toEqual([
+      'New File',
+      'New Folder',
+      '|',
+      'Copy',
+      'Cut',
+      'Paste',
+      'Duplicate',
+      '|',
+      'Rename',
+      'Copy Path',
+      '|',
+      'Open in Terminal',
+      'Show in File Manager',
+      '|',
+      'Delete…'
+    ])
   })
 })
