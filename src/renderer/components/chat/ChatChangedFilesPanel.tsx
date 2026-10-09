@@ -167,7 +167,11 @@ export function ChatChangedFilesPanel({
         'flex w-full items-center gap-2 rounded-t-2xl px-3 text-left',
         CHAT_HIT_MIN_H,
         onOpenGitChanges && 'min-w-0 flex-1',
-        expanded ? 'py-2' : 'pt-2 pb-8',
+        // The composer covers the bottom 24px of the collapsed bar (-mb-6), so
+        // the strip left to tap is `pt + line + pb - 24px`. With the Git action
+        // that strip must reach 44px for its hit area (the card clips its
+        // slop above): pt-4 + pb-9 leaves ~45px; without it, 32px as before.
+        expanded ? 'py-2' : onOpenGitChanges ? 'pt-4 pb-9' : 'pt-2 pb-8',
         'cursor-pointer text-xs text-muted-foreground',
         'select-none appearance-none transition-[background-color,color] duration-150 ease-out',
         'hover:bg-secondary/60 hover:text-foreground',
@@ -214,10 +218,7 @@ export function ChatChangedFilesPanel({
                 size="xs"
                 aria-label="Open Git changes"
                 onClick={onOpenGitChanges}
-                className={cn(
-                  "relative me-2 shrink-0 text-muted-foreground after:absolute after:-inset-2 after:content-[''] [&_svg]:size-3",
-                  expanded ? 'mt-2' : 'mt-1'
-                )}
+                className="relative me-2 mt-2 shrink-0 text-muted-foreground after:absolute after:-inset-2 after:content-[''] [&_svg]:size-3"
               >
                 Git
                 <ChevronRight size={12} aria-hidden="true" />

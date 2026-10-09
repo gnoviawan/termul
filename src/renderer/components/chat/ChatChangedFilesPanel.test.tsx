@@ -302,6 +302,31 @@ describe('ChatChangedFilesPanel on the mobile dock', () => {
     )
   })
 
+  // jsdom has no layout, so this pins the class tokens that give the collapsed
+  // bar a 44px strip (measured in tests/e2e/mobile-chat-dock-approvals.spec.ts:
+  // 33px with `pt-2 pb-8`, which left the Git hit area short of 44px).
+  it('gives the collapsed bar a taller tap strip only when the Git action is shown', () => {
+    const { unmount } = render(
+      <ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} onOpenGitChanges={vi.fn()} />
+    )
+    const withGit = screen.getByRole('button', { name: /^Changed files/ })
+    expect(withGit.className).toContain('pt-4')
+    expect(withGit.className).toContain('pb-9')
+    expect(withGit.className).not.toContain('pb-8')
+    expect(screen.getByRole('button', { name: 'Open Git changes' }).className).toContain('mt-2')
+
+    // Expanded: the header is back to plain vertical padding.
+    fireEvent.click(withGit)
+    expect(withGit.className).toContain('py-2')
+    expect(withGit.className).not.toContain('pb-9')
+    unmount()
+
+    render(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} />)
+    const withoutGit = screen.getByRole('button', { name: /^Changed files/ })
+    expect(withoutGit.className).toContain('pb-8')
+    expect(withoutGit.className).not.toContain('pb-9')
+  })
+
   it('does not nest the Git action inside the header toggle', () => {
     render(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} onOpenGitChanges={vi.fn()} />)
     const header = screen.getByRole('button', { name: /^Changed files/ })
