@@ -7,6 +7,7 @@ import {
   settleOverlayBackStack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
@@ -23,6 +24,8 @@ const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
       path?: string
       name?: string
       id?: string
+      activeWorktreeId?: string | null
+      worktrees?: Array<{ id: string; name: string; path: string }>
     }
   }
 }))
@@ -161,13 +164,6 @@ vi.mock('@/stores/keyboard-shortcuts-store', () => {
     matchesShortcut: () => false
   }
 })
-
-// The persistence restore replaces the pane tree asynchronously; the overlay
-// tests seed tabs into the real workspace store, so keep that out of the way.
-vi.mock('@/hooks/use-editor-persistence', () => ({
-  useEditorPersistence: vi.fn(),
-  persistState: vi.fn()
-}))
 
 // Persistence restore replaces the whole pane tree (resetLayout /
 // loadProjectWorkspace) when it finds nothing for the project. The pane-tree
@@ -493,6 +489,7 @@ const initialWorkspace = useWorkspaceStore.getState()
 describe('WorkspaceLayout mobile branch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useGitSheetStore.setState({ open: false, cwd: '', projectId: '' })
     // Clear any sentinel a previous test left on the current history entry.
     window.history.replaceState(null, '', '#/')
     tauriRef.current = false
@@ -664,6 +661,125 @@ describe('WorkspaceLayout mobile branch', () => {
     await waitFor(() =>
       expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
     )
+  })
+
+  describe('Git sheet cwd and lifecycle (store-backed)', () => {
+    const worktreeProject = {
+      id: 'p1',
+      name: 'Demo',
+      path: '/demo',
+      color: 'blue',
+      gitBranch: 'main',
+      activeWorktreeId: 'w1',
+      worktrees: [{ id: 'w1', name: 'a', path: '/demo/.worktrees/a' }]
+    }
+
+    it('opens the header Git sheet on the project path when there is no active worktree', async () => {
+      renderLayout()
+
+      await chooseMoreItem('Git changes')
+      await screen.findByPlaceholderText('Filter changes...')
+
+      expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo')
+      expect(useGitSheetStore.getState()).toMatchObject({
+        open: true,
+        cwd: '/demo',
+        projectId: 'p1'
+      })
+    })
+
+    it("opens the header Git sheet on the project's active worktree, not the project path", async () => {
+      projectRef.current = worktreeProject
+      renderLayout()
+
+      await chooseMoreItem('Git changes')
+      await screen.findByPlaceholderText('Filter changes...')
+
+      expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo/.worktrees/a')
+      expect(gitState.refreshStatus).not.toHaveBeenCalledWith('/demo')
+    })
+
+    it("opens on a chat's own worktree cwd when the dock's Git action passes it", async () => {
+      renderLayout()
+      await screen.findByLabelText('More')
+
+      act(() => useGitSheetStore.getState().openGitSheet('/demo/.worktrees/chat'))
+
+      await screen.findByPlaceholderText('Filter changes...')
+      expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo/.worktrees/chat')
+    })
+
+    it('stays closed and warns when no cwd resolves', async () => {
+      projectRef.current = { id: 'p1', name: 'Demo' }
+      renderLayout()
+      await screen.findByLabelText('More')
+
+      act(() => useGitSheetStore.getState().openGitSheet())
+
+      expect(useGitSheetStore.getState().open).toBe(false)
+      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      expect(logFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
+    })
+
+    it('closes the sheet when the active project changes from the one it opened on', async () => {
+      const { rerender } = renderLayout()
+      await chooseMoreItem('Git changes')
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+
+      // Another project with a path becomes active: the snapshotted cwd would
+      // be stale, so the sheet closes instead of re-pointing.
+      projectRef.current = { id: 'p2', name: 'Other', path: '/other' }
+      rerender(
+        <TooltipProvider>
+          <MemoryRouter>
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
+
+    it('closes the sheet and the store when Escape dismisses it', async () => {
+      renderLayout()
+      await chooseMoreItem('Git changes')
+      await screen.findByPlaceholderText('Filter changes...')
+      expect(useGitSheetStore.getState().open).toBe(true)
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
+
+    it("closes the sheet and the store from the sheet's own Close button", async () => {
+      renderLayout()
+      await chooseMoreItem('Git changes')
+      await screen.findByPlaceholderText('Filter changes...')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
+
+    it('closes the store when the layout unmounts, so a remount starts cold', async () => {
+      const { unmount } = renderLayout()
+      await chooseMoreItem('Git changes')
+      await screen.findByPlaceholderText('Filter changes...')
+      expect(useGitSheetStore.getState().open).toBe(true)
+
+      unmount()
+
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
   })
 
   // ── Story 6: trap-free mobile navigation ────────────────────────────────

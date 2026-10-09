@@ -216,3 +216,87 @@ describe('TermulPlanRenderer (termul-plan fence renderer)', () => {
     expect(screen.queryByRole('region', { name: 'Execution plan' })).toBeNull()
   })
 })
+
+describe('PlanPanel dock collapse (mobile dock)', () => {
+  const entries = [
+    { content: 'One', status: 'completed' },
+    { content: 'Two', status: 'completed' },
+    { content: 'Three', status: 'completed' },
+    { content: 'Four', status: 'in_progress' },
+    { content: 'Five', status: 'pending' }
+  ]
+  const bar = (): HTMLElement => screen.getByRole('button', { name: /^Plan, 3 of 5 tasks/ })
+
+  it('starts as a collapsed "Plan 3/5" bar with defaultCollapsed, and a tap expands it in place', async () => {
+    render(<PlanPanel entries={entries} defaultCollapsed />)
+
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+    expect(bar()).toHaveTextContent('Plan')
+    expect(bar()).toHaveTextContent('3/5')
+    expect(screen.queryByText('One')).toBeNull()
+
+    fireEvent.click(bar())
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+    expect(await screen.findByText('One')).toBeInTheDocument()
+  })
+
+  it('stays expanded by default (desktop and the inline plan fence)', () => {
+    render(<PlanPanel entries={entries} />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('renders collapsed while forceCollapsed, then returns to the user state', () => {
+    const { rerender } = render(<PlanPanel entries={entries} />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+
+    rerender(<PlanPanel entries={entries} forceCollapsed />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+
+    rerender(<PlanPanel entries={entries} forceCollapsed={false} />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('lets a header tap flip the rendered state during the force window', () => {
+    const { rerender } = render(<PlanPanel entries={entries} defaultCollapsed forceCollapsed />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+
+    // Tapping a force-collapsed bar expands it, and that sticks while forced.
+    fireEvent.click(bar())
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+    rerender(<PlanPanel entries={entries} defaultCollapsed forceCollapsed />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+
+    // Tapping again collapses it.
+    fireEvent.click(bar())
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+
+    // The window ends: the bar shows the user's last own state (collapsed).
+    rerender(<PlanPanel entries={entries} defaultCollapsed forceCollapsed={false} />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it("keeps the user's tap after the window ends and re-forces on the next window", () => {
+    const { rerender } = render(<PlanPanel entries={entries} defaultCollapsed forceCollapsed />)
+    fireEvent.click(bar())
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+
+    rerender(<PlanPanel entries={entries} defaultCollapsed forceCollapsed={false} />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+
+    // The mark reset when the window ended, so a new window collapses again.
+    rerender(<PlanPanel entries={entries} defaultCollapsed forceCollapsed />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('does not record a tap made outside the force window', () => {
+    const { rerender } = render(<PlanPanel entries={entries} />)
+    fireEvent.click(bar())
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(bar())
+    expect(bar()).toHaveAttribute('aria-expanded', 'true')
+
+    // Had that tap been marked as made during a window, this would not force.
+    rerender(<PlanPanel entries={entries} forceCollapsed />)
+    expect(bar()).toHaveAttribute('aria-expanded', 'false')
+  })
+})

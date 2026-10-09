@@ -2,11 +2,18 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
 
-const { openFileRef, addEditorTabRef, logFrontendErrorRef, toastErrorRef } = vi.hoisted(() => ({
-  openFileRef: { current: vi.fn(async () => {}) },
-  addEditorTabRef: { current: vi.fn() },
-  logFrontendErrorRef: { current: vi.fn(async () => {}) },
-  toastErrorRef: { current: vi.fn() }
+const { openFileRef, addEditorTabRef, logFrontendErrorRef, toastErrorRef, mobileRef } = vi.hoisted(
+  () => ({
+    openFileRef: { current: vi.fn(async () => {}) },
+    addEditorTabRef: { current: vi.fn() },
+    logFrontendErrorRef: { current: vi.fn(async () => {}) },
+    toastErrorRef: { current: vi.fn() },
+    mobileRef: { current: false }
+  })
+)
+
+vi.mock('@/hooks/use-mobile-web-shell', () => ({
+  useMobileWebShell: () => mobileRef.current
 }))
 
 vi.mock('@/stores/editor-store', () => {
@@ -54,8 +61,15 @@ function renderPanel(toolCalls: ToolCall[] = [], cwd: string = '/work') {
   return render(<ChatChangedFilesPanel cwd={cwd} toolCalls={toolCalls} />)
 }
 
+const THREE_EDITS = [
+  makeToolCall({ toolCallId: 'e1', path: 'src/a.ts' }),
+  makeToolCall({ toolCallId: 'e2', path: 'src/b.ts' }),
+  makeToolCall({ toolCallId: 'e3', path: 'src/c.ts' })
+]
+
 describe('ChatChangedFilesPanel', () => {
   beforeEach(() => {
+    mobileRef.current = false
     openFileRef.current = vi.fn(async () => {})
     addEditorTabRef.current = vi.fn()
     logFrontendErrorRef.current = vi.fn(async () => {})
@@ -224,5 +238,137 @@ describe('ChatChangedFilesPanel', () => {
       })
     ])
     expect(screen.getByText('Changed files')).toBeInTheDocument()
+  })
+})
+
+describe('ChatChangedFilesPanel on the desktop shell', () => {
+  beforeEach(() => {
+    mobileRef.current = false
+  })
+
+  it('keeps the Expand/Collapse names and renders no Git action without onOpenGitChanges', () => {
+    renderPanel(THREE_EDITS)
+    const header = screen.getByRole('button', { name: 'Expand changed files' })
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: 'Open Git changes' })).not.toBeInTheDocument()
+
+    fireEvent.click(header)
+    expect(screen.getByRole('button', { name: 'Collapse changed files' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+  })
+})
+
+describe('ChatChangedFilesPanel on the mobile dock', () => {
+  beforeEach(() => {
+    mobileRef.current = true
+    openFileRef.current = vi.fn(async () => {})
+    addEditorTabRef.current = vi.fn()
+  })
+
+  it('names the header by its visible text plus aria-expanded (no overriding aria-label)', () => {
+    renderPanel(THREE_EDITS)
+    const header = screen.getByRole('button', { name: 'Changed files 3 +3 −3' })
+    expect(header).not.toHaveAttribute('aria-label')
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(header)
+    expect(header).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('adds a ghost xs "Git" action named "Open Git changes" with a 44px hit area', () => {
+    const onOpenGitChanges = vi.fn()
+    render(
+      <ChatChangedFilesPanel
+        cwd="/work"
+        toolCalls={THREE_EDITS}
+        onOpenGitChanges={onOpenGitChanges}
+      />
+    )
+    const git = screen.getByRole('button', { name: 'Open Git changes' })
+    expect(git).toHaveTextContent('Git')
+    expect(git.className).toContain('h-7')
+    expect(git.className).toContain('after:-inset-2')
+    expect(git.className).toContain('relative')
+    expect(git.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+
+    fireEvent.click(git)
+    expect(onOpenGitChanges).toHaveBeenCalledTimes(1)
+    // The Git action is its own control: tapping it does not toggle the panel.
+    expect(screen.getByRole('button', { name: /^Changed files/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+  })
+
+  // jsdom has no layout, so this pins the class tokens that give the collapsed
+  // bar a 44px strip (measured in tests/e2e/mobile-chat-dock-approvals.spec.ts:
+  // 33px with `pt-2 pb-8`, which left the Git hit area short of 44px).
+  it('gives the collapsed bar a taller tap strip only when the Git action is shown', () => {
+    const { unmount } = render(
+      <ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} onOpenGitChanges={vi.fn()} />
+    )
+    const withGit = screen.getByRole('button', { name: /^Changed files/ })
+    expect(withGit.className).toContain('pt-4')
+    expect(withGit.className).toContain('pb-9')
+    expect(withGit.className).not.toContain('pb-8')
+    expect(screen.getByRole('button', { name: 'Open Git changes' }).className).toContain('mt-2')
+
+    // Expanded: the header is back to plain vertical padding.
+    fireEvent.click(withGit)
+    expect(withGit.className).toContain('py-2')
+    expect(withGit.className).not.toContain('pb-9')
+    unmount()
+
+    render(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} />)
+    const withoutGit = screen.getByRole('button', { name: /^Changed files/ })
+    expect(withoutGit.className).toContain('pb-8')
+    expect(withoutGit.className).not.toContain('pb-9')
+  })
+
+  it('does not nest the Git action inside the header toggle', () => {
+    render(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} onOpenGitChanges={vi.fn()} />)
+    const header = screen.getByRole('button', { name: /^Changed files/ })
+    expect(header.querySelector('button')).toBeNull()
+    expect(header).not.toContainElement(screen.getByRole('button', { name: 'Open Git changes' }))
+  })
+
+  it('still opens a file in the editor tab from an expanded row', async () => {
+    render(
+      <ChatChangedFilesPanel
+        cwd="/work"
+        toolCalls={[makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })]}
+        onOpenGitChanges={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Changed files/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /foo\.ts/i }))
+    await waitFor(() => {
+      expect(openFileRef.current).toHaveBeenCalledWith('/work/src/foo.ts')
+      expect(addEditorTabRef.current).toHaveBeenCalledWith('/work/src/foo.ts')
+    })
+  })
+
+  it('renders collapsed while forceCollapsed, flips on a header tap, then shows the user state', async () => {
+    const { rerender } = render(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} />)
+    const header = (): HTMLElement => screen.getByRole('button', { name: /^Changed files/ })
+    fireEvent.click(header())
+    expect(header()).toHaveAttribute('aria-expanded', 'true')
+
+    rerender(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} forceCollapsed />)
+    expect(header()).toHaveAttribute('aria-expanded', 'false')
+
+    // A header tap during the window flips the rendered state (to expanded).
+    fireEvent.click(header())
+    expect(header()).toHaveAttribute('aria-expanded', 'true')
+
+    // And back: tapping again collapses it for the rest of the window.
+    fireEvent.click(header())
+    expect(header()).toHaveAttribute('aria-expanded', 'false')
+
+    // Window over: the bar shows the user's last own state (collapsed).
+    rerender(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} forceCollapsed={false} />)
+    expect(header()).toHaveAttribute('aria-expanded', 'false')
   })
 })

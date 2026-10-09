@@ -1,8 +1,10 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import { ShieldAlert, ShieldCheck } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { PermissionOption } from '@/lib/acp-api'
+import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { type PendingPermission, useAcpStore } from '@/stores/acp-store'
 import {
@@ -11,6 +13,13 @@ import {
   pickPrimaryAllowOption,
   pickRejectOption
 } from './tool-call-format'
+
+/**
+ * Mobile only: taps this soon after a request first renders are ignored, so a
+ * tap aimed at the editor (or a scroll) cannot land on Allow as the prompt
+ * appears under the thumb.
+ */
+const APPROVAL_ACTIVATION_GUARD_MS = 400
 
 interface PermissionPromptProps {
   permission: PendingPermission
@@ -37,14 +46,30 @@ export function PermissionPrompt({
   embedded = true
 }: PermissionPromptProps): React.JSX.Element {
   const respond = useAcpStore((s) => s.respondPermission)
+  const isMobileShell = useMobileWebShell()
+  // When this request first rendered: set at mount and again whenever the
+  // requestId changes (the prompt is not re-keyed per request). Monotonic
+  // clock: a wall-clock step backwards must not keep the guard closed.
+  const shownRef = useRef({ requestId: permission.requestId, at: performance.now() })
+  useLayoutEffect(() => {
+    shownRef.current = { requestId: permission.requestId, at: performance.now() }
+  }, [permission.requestId])
 
   const choose = useCallback(
     (optionId?: string) => {
+      if (isMobileShell && performance.now() - shownRef.current.at < APPROVAL_ACTIVATION_GUARD_MS) {
+        void logFrontendError({
+          level: 'info',
+          source: 'PermissionPrompt.activationGuard',
+          message: `Ignored early tap on permission request ${permission.requestId}`
+        })
+        return
+      }
       void respond(permission.requestId, optionId).catch(() => {
         toast.error('Could not send the permission response. Try again.')
       })
     },
-    [respond, permission.requestId]
+    [respond, permission.requestId, isMobileShell]
   )
 
   const { allows, others, rejects, primaryAllowId } = useMemo(() => {
@@ -69,9 +94,10 @@ export function PermissionPrompt({
       <Button
         key={option.optionId}
         variant={primary ? 'default' : 'outline'}
-        size="sm"
+        size={isMobileShell ? 'touch' : 'sm'}
         className={cn(
-          'h-8 min-w-0 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition-[transform,color,background-color,border-color] duration-150 active:scale-[0.96]',
+          'min-w-0 rounded-lg px-3 font-medium whitespace-nowrap transition-[transform,color,background-color,border-color] duration-150 active:scale-[0.96]',
+          !isMobileShell && 'h-8 text-xs',
           primary && 'shadow-2xs',
           !primary &&
             !reject &&
@@ -97,7 +123,11 @@ export function PermissionPrompt({
   return (
     <section
       aria-labelledby={`permission-title-${permission.requestId}`}
-      aria-live="polite"
+      // Mobile: drops its own live region; the shell live region that will
+      // announce approvals ships with the a11y-floor goal. Until it lands, a new
+      // request is not announced on mobile (this section never takes focus).
+      aria-live={isMobileShell ? undefined : 'polite'}
+      data-approval-prompt={`permission:${permission.requestId}`}
       className={cn(
         'px-3.5 py-3 sm:px-4',
         embedded
@@ -133,7 +163,9 @@ export function PermissionPrompt({
         </p>
       )}
 
-      <fieldset className="mt-2.5 flex flex-wrap items-center gap-2">
+      <fieldset
+        className={cn('mt-2.5 flex flex-wrap items-center', isMobileShell ? 'gap-3' : 'gap-2')}
+      >
         <legend className="sr-only">Permission options</legend>
         {allows.map(renderOption)}
         {others.map(renderOption)}
@@ -142,8 +174,11 @@ export function PermissionPrompt({
         ) : (
           <Button
             variant="ghost"
-            size="sm"
-            className="h-8 rounded-lg px-2.5 text-xs text-muted-foreground transition-[transform,color,background-color] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]"
+            size={isMobileShell ? 'touch' : 'sm'}
+            className={cn(
+              'rounded-lg px-2.5 text-muted-foreground transition-[transform,color,background-color] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]',
+              !isMobileShell && 'h-8 text-xs'
+            )}
             onClick={() => choose(undefined)}
           >
             <ShieldAlert size={14} className="shrink-0" aria-hidden="true" />
@@ -152,7 +187,14 @@ export function PermissionPrompt({
         )}
       </fieldset>
       {rejectOnCancel && (
-        <p className="mt-2 text-[11px] leading-tight text-muted-foreground/70">
+        <p
+          className={cn(
+            'mt-2 leading-tight',
+            isMobileShell
+              ? 'text-2xs text-muted-foreground'
+              : 'text-[11px] text-muted-foreground/70'
+          )}
+        >
           Choose an option to resume the agent. This request stays here until you respond.
         </p>
       )}

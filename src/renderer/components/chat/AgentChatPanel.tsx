@@ -35,6 +35,7 @@ import {
 import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
+import { useGitSheetStore } from '@/stores/git-sheet-store'
 import {
   isAgentDeadError,
   isSendPromptOutcomeUnknownError
@@ -54,6 +55,7 @@ import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
+import { useApprovalDock } from './use-approval-dock'
 
 /** Concatenate the text blocks of a message into a single string. */
 function messageText(blocks: ContentBlock[]): string {
@@ -616,6 +618,22 @@ export function AgentChatPanel({
   // view (T2.2).
   const rootRef = useRef<HTMLDivElement>(null)
 
+  // Mobile dock around approvals: compact the plan / changed-files bars while
+  // the keyboard is up with an approval pending, and return focus to the
+  // composer card when a prompt that held focus resolves. The ids mirror the
+  // render gates below (a closed session renders no prompt). Above the early
+  // returns so the hook order never changes.
+  const approvalsLive = session != null && session.status !== 'closed'
+  const { compactDock, onFocus, onBlur } = useApprovalDock({
+    rootRef,
+    enabled: isMobileShell && isVisible,
+    oskOpen: osk.isOskOpen,
+    permissionId: approvalsLive ? (pendingPermission?.requestId ?? null) : null,
+    questionId: approvalsLive ? (pendingQuestion?.questionId ?? null) : null,
+    elicitationId: approvalsLive ? (pendingElicitation?.requestId ?? null) : null
+  })
+  const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
+
   if (isRestoringChat) return <ChatRestorePreload />
 
   if (!session) {
@@ -701,8 +719,11 @@ export function AgentChatPanel({
   }
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: onFocus / onBlur only observe bubbled focus to track approval prompts; the root is not itself interactive
     <div
       ref={rootRef}
+      onFocus={onFocus}
+      onBlur={onBlur}
       className="@container flex h-full flex-col bg-terminal-bg"
       // Story 5.3 (T2.1): apply OSK spacer as bottom padding so the sticky
       // composer card stays visible above the on-screen keyboard. iOS Safari
@@ -792,7 +813,12 @@ export function AgentChatPanel({
         }
         onDismiss={() => setDismissedError(session.lastError)}
       />
-      <PlanPanel key={`plan-${session.id}`} entries={plan} />
+      <PlanPanel
+        key={`plan-${session.id}`}
+        entries={plan}
+        defaultCollapsed={isMobileShell}
+        forceCollapsed={compactDock}
+      />
       <ChatMessageList
         items={timeline}
         sessionId={session.id}
@@ -819,7 +845,11 @@ export function AgentChatPanel({
       {!isClosed && (pendingElicitation || pendingQuestion) ? (
         <>
           {pendingElicitation && (
-            <ElicitationPrompt key={pendingElicitation.requestId} request={pendingElicitation} />
+            <ElicitationPrompt
+              key={pendingElicitation.requestId}
+              request={pendingElicitation}
+              autoFocusHeading={isMobileShell && isVisible}
+            />
           )}
           {pendingPermission && (
             <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
@@ -829,12 +859,21 @@ export function AgentChatPanel({
             </div>
           )}
           {pendingQuestion && (
-            <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+            <AskUserQuestion
+              key={pendingQuestion.questionId}
+              question={pendingQuestion}
+              autoFocusFirstOption={isMobileShell && isVisible}
+            />
           )}
         </>
       ) : (
         <>
-          <ChatChangedFilesPanel cwd={session.cwd} toolCalls={toolCalls} />
+          <ChatChangedFilesPanel
+            cwd={session.cwd}
+            toolCalls={toolCalls}
+            forceCollapsed={compactDock}
+            onOpenGitChanges={isMobileShell ? () => openGitSheet(session.cwd) : undefined}
+          />
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}

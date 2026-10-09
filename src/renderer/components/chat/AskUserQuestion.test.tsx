@@ -148,3 +148,51 @@ describe('AskUserQuestion (issue #411)', () => {
     expect(mockAnswer).toHaveBeenCalledWith('q-1', undefined)
   })
 })
+
+describe('AskUserQuestion arrival focus (mobile dock)', () => {
+  beforeEach(() => {
+    mockAnswer.mockReset().mockResolvedValue(undefined)
+  })
+
+  it('tags the root as an approval prompt with its question id', () => {
+    render(<AskUserQuestion question={question} />)
+    expect(screen.getByTestId('ask-user-question')).toHaveAttribute(
+      'data-approval-prompt',
+      'question:q-1'
+    )
+  })
+
+  it('does not move focus unless asked to', () => {
+    render(<AskUserQuestion question={question} />)
+    expect(document.body).toHaveFocus()
+  })
+
+  it('focuses the first option on mount when autoFocusFirstOption is set', () => {
+    render(<AskUserQuestion question={question} autoFocusFirstOption />)
+    expect(screen.getByRole('button', { name: /Plan A/ })).toHaveFocus()
+  })
+
+  it('focuses "Cancel" when the question has no options', () => {
+    render(<AskUserQuestion question={{ ...question, options: [] }} autoFocusFirstOption />)
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+  })
+
+  it('focuses the first option when the pane becomes visible with the question open', () => {
+    const { rerender } = render(
+      <AskUserQuestion question={question} autoFocusFirstOption={false} />
+    )
+    expect(document.body).toHaveFocus()
+
+    rerender(<AskUserQuestion question={question} autoFocusFirstOption />)
+    expect(screen.getByRole('button', { name: /Plan A/ })).toHaveFocus()
+  })
+
+  it('does not steal focus again on an unrelated re-render while the prop stays true', () => {
+    const { rerender } = render(<AskUserQuestion question={question} autoFocusFirstOption />)
+    const planB = screen.getByRole('button', { name: /Plan B/ })
+    planB.focus()
+
+    rerender(<AskUserQuestion question={{ ...question }} autoFocusFirstOption />)
+    expect(planB).toHaveFocus()
+  })
+})

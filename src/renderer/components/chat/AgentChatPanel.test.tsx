@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { commandToken } from '@/lib/skill-tokens'
@@ -40,7 +40,16 @@ const {
   timelineCallCountRef,
   chatMessageListPropsRef,
   pendingBrowserConsentsRef,
-  browserConsentCardPropsRef
+  browserConsentCardPropsRef,
+  mobileRef,
+  pendingPermissionsRef,
+  pendingQuestionsRef,
+  pendingElicitationsRef,
+  plansRef,
+  planPanelPropsRef,
+  askQuestionPropsRef,
+  elicitationPropsRef,
+  openGitSheetRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockOpenDiscovered: vi.fn(),
@@ -98,7 +107,14 @@ const {
   // Story 5.3 (AC1/AC3): test seams for OSK + reconnect overlay.
   oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
   transportReconnectingRef: { current: false },
-  changedFilesPanelPropsRef: { current: [] as Array<{ cwd: string; toolCalls: unknown[] }> },
+  changedFilesPanelPropsRef: {
+    current: [] as Array<{
+      cwd: string
+      toolCalls: unknown[]
+      forceCollapsed?: boolean
+      onOpenGitChanges?: () => void
+    }>
+  },
   discoveredContextRef: {
     current: {} as Record<string, { agentId: string; cwd: string; projectId: string }>
   },
@@ -134,7 +150,20 @@ const {
   // CAP-5: latest BrowserConsentCard props per render.
   browserConsentCardPropsRef: {
     current: null as { consent?: { requestId: string; sessionId: string } } | null
-  }
+  },
+  // Mobile dock: `useMobileWebShell()` answer (default true, as before) and
+  // seedable approval / plan state + captured child props for the wiring tests.
+  mobileRef: { current: true },
+  pendingPermissionsRef: { current: {} as Record<string, object> },
+  pendingQuestionsRef: { current: {} as Record<string, object> },
+  pendingElicitationsRef: { current: {} as Record<string, object> },
+  plansRef: { current: {} as Record<string, object[]> },
+  planPanelPropsRef: {
+    current: [] as Array<{ defaultCollapsed?: boolean; forceCollapsed?: boolean }>
+  },
+  askQuestionPropsRef: { current: [] as Array<{ autoFocusFirstOption?: boolean }> },
+  elicitationPropsRef: { current: [] as Array<{ autoFocusHeading?: boolean }> },
+  openGitSheetRef: { current: vi.fn() }
 }))
 
 vi.mock('@/lib/log-api', () => ({
@@ -169,10 +198,10 @@ vi.mock('@/stores/acp-store', () => {
     agentSwitches: agentSwitchesRef.current,
     agentConfigs: agentConfigsRef.current,
     toolCalls: toolCallsRef.current,
-    plans: {},
-    pendingPermissions: {},
-    pendingQuestions: {},
-    pendingElicitations: {},
+    plans: plansRef.current,
+    pendingPermissions: pendingPermissionsRef.current,
+    pendingQuestions: pendingQuestionsRef.current,
+    pendingElicitations: pendingElicitationsRef.current,
     pendingBrowserConsents: pendingBrowserConsentsRef.current,
     // The panel's gate selects `s.messages[sessionId]`; the legacy
     // useAcpMessages mock serves one flat list for ANY session, so the map
@@ -265,7 +294,11 @@ vi.mock('@/hooks/use-osk-viewport', () => ({
   useOskViewport: () => oskRef.current
 }))
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
-  useMobileWebShell: () => true
+  useMobileWebShell: () => mobileRef.current
+}))
+vi.mock('@/stores/git-sheet-store', () => ({
+  useGitSheetStore: (sel: (s: { openGitSheet: (cwd?: string) => void }) => unknown) =>
+    sel({ openGitSheet: (cwd) => openGitSheetRef.current(cwd) })
 }))
 
 // Child components pull in heavy chat rendering; the states under test render
@@ -282,7 +315,12 @@ vi.mock('./ChatErrorNotice', () => ({
   }
 }))
 vi.mock('./ChatChangedFilesPanel', () => ({
-  ChatChangedFilesPanel: (props: { cwd: string; toolCalls: unknown[] }) => {
+  ChatChangedFilesPanel: (props: {
+    cwd: string
+    toolCalls: unknown[]
+    forceCollapsed?: boolean
+    onOpenGitChanges?: () => void
+  }) => {
     changedFilesPanelPropsRef.current.push(props)
     return null
   }
@@ -300,10 +338,22 @@ const { chatInputBarPropsRef } = vi.hoisted(() => ({
     }>
   }
 }))
+// The stub keeps the real composer-card contract the dock relies on
+// (`data-chat-composer`, `tabIndex=-1`) and renders the embedded permission
+// prompt marker + button, so focus return can be asserted through the panel.
 vi.mock('./ChatInputBar', () => ({
-  ChatInputBar: (props: { isVisible?: boolean }) => {
+  ChatInputBar: (props: { isVisible?: boolean; permission?: { requestId: string } | null }) => {
     chatInputBarPropsRef.current.push(props)
-    return null
+    return (
+      <div data-chat-composer="true" tabIndex={-1} data-testid="composer-stub">
+        {props.permission ? (
+          <section data-approval-prompt={`permission:${props.permission.requestId}`}>
+            <button type="button">Allow once</button>
+          </section>
+        ) : null}
+        <input aria-label="editor" />
+      </div>
+    )
   }
 }))
 vi.mock('./ChatMessageList', () => ({
@@ -313,14 +363,30 @@ vi.mock('./ChatMessageList', () => ({
   }
 }))
 vi.mock('./PermissionPrompt', () => ({ PermissionPrompt: () => null }))
-vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
+vi.mock('./AskUserQuestion', () => ({
+  AskUserQuestion: (props: { autoFocusFirstOption?: boolean }) => {
+    askQuestionPropsRef.current.push(props)
+    return null
+  }
+}))
+vi.mock('./ElicitationPrompt', () => ({
+  ElicitationPrompt: (props: { autoFocusHeading?: boolean }) => {
+    elicitationPropsRef.current.push(props)
+    return null
+  }
+}))
 vi.mock('./BrowserConsentCard', () => ({
   BrowserConsentCard: (props: { consent?: { requestId: string; sessionId: string } }) => {
     browserConsentCardPropsRef.current = props
     return null
   }
 }))
-vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
+vi.mock('./PlanPanel', () => ({
+  PlanPanel: (props: { defaultCollapsed?: boolean; forceCollapsed?: boolean }) => {
+    planPanelPropsRef.current.push(props)
+    return null
+  }
+}))
 vi.mock('./chat-timeline', () => {
   return {
     buildTimeline: (
@@ -1269,5 +1335,241 @@ describe('AgentChatPanel browser consent card mounting (CAP-5)', () => {
     }
     render(<AgentChatPanel sessionId="s1" isVisible={false} />)
     expect(useConsentCardHost.getState().hostedSessionIds.has('s1')).toBe(false)
+  })
+})
+
+// Mobile chat dock: plan bar, changed-files Git action, approval compaction,
+// arrival focus and focus return, all gated on `useMobileWebShell()`.
+describe('AgentChatPanel mobile dock wiring', () => {
+  const OSK_OPEN = { isOskOpen: true, keyboardHeight: 300, height: 500, offsetTop: 300 }
+
+  const seedPermission = (requestId = 'r1'): void => {
+    pendingPermissionsRef.current = {
+      [requestId]: { requestId, sessionId: 's1', agentId: 'agent-1', options: [], toolCall: {} }
+    }
+  }
+  const seedQuestion = (): void => {
+    pendingQuestionsRef.current = {
+      q1: { questionId: 'q1', sessionId: 's1', agentId: 'agent-1', question: 'Which?', options: [] }
+    }
+  }
+  const seedElicitation = (): void => {
+    pendingElicitationsRef.current = {
+      el1: {
+        requestId: 'el1',
+        sessionId: 's1',
+        agentId: 'agent-1',
+        mode: 'form',
+        message: 'Configure',
+        fields: []
+      }
+    }
+  }
+  const lastPlan = () => planPanelPropsRef.current.at(-1)
+  const lastChangedFiles = () => changedFilesPanelPropsRef.current.at(-1)
+
+  beforeEach(() => {
+    mobileRef.current = true
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/repo/.worktrees/a' })
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    discoveredContextRef.current = {}
+    messagesRef.current = []
+    oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
+    pendingPermissionsRef.current = {}
+    pendingQuestionsRef.current = {}
+    pendingElicitationsRef.current = {}
+    plansRef.current = {}
+    planPanelPropsRef.current = []
+    changedFilesPanelPropsRef.current = []
+    askQuestionPropsRef.current = []
+    elicitationPropsRef.current = []
+    chatInputBarPropsRef.current = []
+    openGitSheetRef.current = vi.fn()
+  })
+
+  afterEach(() => {
+    mobileRef.current = true
+    pendingPermissionsRef.current = {}
+    pendingQuestionsRef.current = {}
+    pendingElicitationsRef.current = {}
+    oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
+  })
+
+  describe('plan bar and Git action', () => {
+    it('starts the plan collapsed and wires the changed-files Git action to the chat cwd', () => {
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+
+      expect(lastPlan()).toMatchObject({ defaultCollapsed: true, forceCollapsed: false })
+      expect(lastChangedFiles()).toMatchObject({ cwd: '/repo/.worktrees/a', forceCollapsed: false })
+      expect(typeof lastChangedFiles()?.onOpenGitChanges).toBe('function')
+
+      lastChangedFiles()?.onOpenGitChanges?.()
+      expect(openGitSheetRef.current).toHaveBeenCalledTimes(1)
+      expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a')
+    })
+
+    it('keeps the baseline props on the desktop shell', () => {
+      mobileRef.current = false
+      oskRef.current = OSK_OPEN
+      seedPermission()
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+
+      expect(lastPlan()).toMatchObject({ defaultCollapsed: false, forceCollapsed: false })
+      expect(lastChangedFiles()?.forceCollapsed).toBe(false)
+      expect(lastChangedFiles()?.onOpenGitChanges).toBeUndefined()
+    })
+  })
+
+  describe('collapsing the dock bars while the keyboard is up with an approval pending', () => {
+    it.each([
+      ['a permission', seedPermission],
+      ['an elicitation', seedElicitation],
+      ['a question', seedQuestion]
+    ])('forces the plan bar collapsed for %s', (_label, seed) => {
+      oskRef.current = OSK_OPEN
+      seed()
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(lastPlan()?.forceCollapsed).toBe(true)
+    })
+
+    it('forces the changed-files bar collapsed too', () => {
+      oskRef.current = OSK_OPEN
+      seedPermission()
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(lastChangedFiles()?.forceCollapsed).toBe(true)
+    })
+
+    it('does not collapse without the keyboard, without an approval, or for a closed session', () => {
+      seedPermission()
+      const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(lastPlan()?.forceCollapsed).toBe(false)
+
+      pendingPermissionsRef.current = {}
+      oskRef.current = OSK_OPEN
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(lastPlan()?.forceCollapsed).toBe(false)
+
+      seedPermission()
+      sessionRef.current = mockAcpSession({
+        id: 's1',
+        cwd: '/repo/.worktrees/a',
+        status: 'closed'
+      })
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(lastPlan()?.forceCollapsed).toBe(false)
+    })
+
+    it('does not collapse a hidden pane', () => {
+      oskRef.current = OSK_OPEN
+      seedPermission()
+      render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+      expect(lastPlan()?.forceCollapsed).toBe(false)
+    })
+  })
+
+  describe('arrival focus', () => {
+    it('asks a visible mobile question to focus its first option', () => {
+      seedQuestion()
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(askQuestionPropsRef.current.at(-1)?.autoFocusFirstOption).toBe(true)
+    })
+
+    it('does not ask a hidden pane, or the desktop shell, to focus a question', () => {
+      seedQuestion()
+      const hidden = render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+      expect(askQuestionPropsRef.current.at(-1)?.autoFocusFirstOption).toBe(false)
+      hidden.unmount()
+
+      mobileRef.current = false
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(askQuestionPropsRef.current.at(-1)?.autoFocusFirstOption).toBe(false)
+    })
+
+    it('asks a visible mobile elicitation to focus its heading, and nothing else', () => {
+      seedElicitation()
+      const visible = render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(elicitationPropsRef.current.at(-1)?.autoFocusHeading).toBe(true)
+      visible.unmount()
+
+      render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+      expect(elicitationPropsRef.current.at(-1)?.autoFocusHeading).toBe(false)
+    })
+
+    it('does not ask the desktop shell to focus an elicitation heading', () => {
+      mobileRef.current = false
+      seedElicitation()
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(elicitationPropsRef.current.at(-1)?.autoFocusHeading).toBe(false)
+    })
+  })
+
+  describe('focus return when a permission resolves', () => {
+    it('moves focus from the resolved prompt to the composer card on the mobile shell', () => {
+      seedPermission()
+      const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+      const allow = screen.getByRole('button', { name: 'Allow once' })
+      act(() => allow.focus())
+      expect(allow).toHaveFocus()
+
+      pendingPermissionsRef.current = {}
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+
+      expect(screen.getByTestId('composer-stub')).toHaveFocus()
+      expect(screen.getByLabelText('editor')).not.toHaveFocus()
+    })
+
+    it('leaves focus in the editor when the user was typing there', () => {
+      seedPermission()
+      const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+      act(() => screen.getByRole('button', { name: 'Allow once' }).focus())
+      act(() => screen.getByLabelText('editor').focus())
+
+      pendingPermissionsRef.current = {}
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+
+      expect(screen.getByLabelText('editor')).toHaveFocus()
+    })
+
+    it('leaves focus alone when the user tapped away from the prompt before it resolved', () => {
+      // The panel root's onBlur (from useApprovalDock) forgets the prompt focus;
+      // its frame check runs synchronously here.
+      const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        cb(0)
+        return 1
+      })
+      try {
+        seedPermission()
+        const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+        const allow = screen.getByRole('button', { name: 'Allow once' })
+        act(() => allow.focus())
+        // Tapping a non-focusable area drops focus to <body> with no new target.
+        act(() => allow.blur())
+        expect(document.body).toHaveFocus()
+
+        pendingPermissionsRef.current = {}
+        rerender(<AgentChatPanel sessionId="s1" isVisible />)
+
+        expect(document.body).toHaveFocus()
+        expect(screen.getByTestId('composer-stub')).not.toHaveFocus()
+      } finally {
+        raf.mockRestore()
+      }
+    })
+
+    it('moves no focus on the desktop shell', () => {
+      mobileRef.current = false
+      seedPermission()
+      const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+      act(() => screen.getByRole('button', { name: 'Allow once' }).focus())
+
+      pendingPermissionsRef.current = {}
+      rerender(<AgentChatPanel sessionId="s1" isVisible />)
+
+      expect(screen.getByTestId('composer-stub')).not.toHaveFocus()
+      expect(document.body).toHaveFocus()
+    })
   })
 })

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { type PendingQuestion, useAcpStore } from '@/stores/acp-store'
@@ -7,6 +7,12 @@ import { QuestionStepper } from './QuestionStepper'
 
 interface AskUserQuestionProps {
   question: PendingQuestion
+  /**
+   * Move focus to the first option (or the `×` Cancel button when there are none) whenever
+   * this becomes true: on mount in a visible mobile chat, and when the pane
+   * becomes visible with the question open.
+   */
+  autoFocusFirstOption?: boolean
 }
 
 /** True when any option declares `cardinality: "multi"` (multi-select). */
@@ -27,10 +33,21 @@ function isMulti(question: PendingQuestion): boolean {
  * `answerQuestion(questionId, values)` exactly once (optimistic delete; a
  * racing second answer is a no-op).
  */
-export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.Element {
+export function AskUserQuestion({
+  question,
+  autoFocusFirstOption = false
+}: AskUserQuestionProps): React.JSX.Element {
   const answer = useAcpStore((s) => s.answerQuestion)
   const multi = useMemo(() => isMulti(question), [question])
   const [selected, setSelected] = useState<string[]>([])
+  const firstOptionRef = useRef<HTMLButtonElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!autoFocusFirstOption) return
+    const target = firstOptionRef.current ?? closeRef.current
+    target?.focus()
+  }, [autoFocusFirstOption])
 
   const toggle = useCallback(
     (value: string) => {
@@ -68,6 +85,7 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
       aria-label={question.question}
       className={cn(CHAT_GUTTER_X, 'pb-6 pt-3')}
       data-testid="ask-user-question"
+      data-approval-prompt={`question:${question.questionId}`}
     >
       {/* Composer-surface chrome (rounded-2xl border bg-card, max-w-3xl): the
           composer morphs into the question dialog rather than surfacing a
@@ -93,6 +111,8 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
           isLast
           onPrimary={sendAnswer}
           onClose={cancel}
+          firstOptionRef={firstOptionRef}
+          closeRef={closeRef}
         />
       </section>
     </div>

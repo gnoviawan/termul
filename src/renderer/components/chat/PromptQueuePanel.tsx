@@ -16,6 +16,7 @@ import {
 } from '@/components/ai-elements/queue'
 import { ArrowUp, Trash2 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { QueuedPrompt } from '@/stores/acp-store'
 import { previewQueuedPrompt } from './prompt-queue-utils'
 
@@ -23,68 +24,78 @@ interface PromptQueuePanelProps {
   items: QueuedPrompt[]
   onRemove: (queueId: string) => void
   onSendNow: (queueId: string) => void
+  /** Whether the queue starts expanded. Seeds local state at mount; defaults to true. */
+  defaultOpen?: boolean
 }
 
 interface QueueMessageActionsProps {
   queueId: string
   onRemove: (id: string) => void
   onSendNow: (id: string) => void
+  /** When set (mobile), the actions name their row: "Send now: {summary}". */
+  summary?: string
 }
 
-const QueueMessageActions = memo(({ queueId, onRemove, onSendNow }: QueueMessageActionsProps) => {
-  const handleRemove = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      onRemove(queueId)
-    },
-    [onRemove, queueId]
-  )
-  const handleSendNow = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      onSendNow(queueId)
-    },
-    [onSendNow, queueId]
-  )
+const QueueMessageActions = memo(
+  ({ queueId, onRemove, onSendNow, summary }: QueueMessageActionsProps) => {
+    const handleRemove = useCallback(
+      (e: React.MouseEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onRemove(queueId)
+      },
+      [onRemove, queueId]
+    )
+    const handleSendNow = useCallback(
+      (e: React.MouseEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onSendNow(queueId)
+      },
+      [onSendNow, queueId]
+    )
+    const sendNowLabel = summary ? `Send now: ${summary}` : 'Send now'
+    const removeLabel = summary ? `Remove from queue: ${summary}` : 'Remove from queue'
 
-  return (
-    <QueueItemActions className="items-center gap-1">
-      <QueueItemAction
-        aria-label="Send now"
-        title="Send now"
-        onClick={handleSendNow}
-        className="text-foreground hover:bg-foreground/10"
-      >
-        <ArrowUp size={13} />
-      </QueueItemAction>
-      <QueueItemAction
-        aria-label="Remove from queue"
-        title="Remove from queue"
-        onClick={handleRemove}
-        className="text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
-      >
-        <Trash2 size={11} />
-      </QueueItemAction>
-    </QueueItemActions>
-  )
-})
+    return (
+      <QueueItemActions className="items-center gap-1">
+        <QueueItemAction
+          aria-label={sendNowLabel}
+          title={sendNowLabel}
+          onClick={handleSendNow}
+          className="text-foreground hover:bg-foreground/10"
+        >
+          <ArrowUp size={13} />
+        </QueueItemAction>
+        <QueueItemAction
+          aria-label={removeLabel}
+          title={removeLabel}
+          onClick={handleRemove}
+          className="text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
+        >
+          <Trash2 size={11} />
+        </QueueItemAction>
+      </QueueItemActions>
+    )
+  }
+)
 QueueMessageActions.displayName = 'QueueMessageActions'
 
 /** Collapsible pending-prompt queue above the composer (AI Elements Queue pattern). */
 export function PromptQueuePanel({
   items,
   onRemove,
-  onSendNow
+  onSendNow,
+  defaultOpen = true
 }: PromptQueuePanelProps): React.JSX.Element | null {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(defaultOpen)
+  const isMobileShell = useMobileWebShell()
   if (items.length === 0) return null
 
   return (
     <Queue className="-mb-6">
       <QueueSection open={open} onOpenChange={setOpen}>
-        <QueueSectionTrigger>
+        <QueueSectionTrigger className={isMobileShell ? 'min-h-11' : undefined}>
           <QueueSectionLabel count={items.length} label="Queued" className="tabular-nums" />
         </QueueSectionTrigger>
         <QueueSectionContent forceMount>
@@ -106,6 +117,7 @@ export function PromptQueuePanel({
                         queueId={item.id}
                         onRemove={onRemove}
                         onSendNow={onSendNow}
+                        summary={isMobileShell ? summary : undefined}
                       />
                     </div>
                     {hasAttachments && (
