@@ -1059,6 +1059,59 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['unknown']).toBeUndefined()
   })
 
+  it('_onSessionInfoUpdate keeps the title and shows compaction, then clears it', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions['s1'], title: 'Keep me' } }
+    }))
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      compaction: { status: 'started', messageId: 'msg_1', reason: 'auto' }
+    })
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Keep me')
+    expect(useAcpStore.getState().sessions['s1'].opencodeNotice).toEqual({
+      compaction: 'started',
+      retryAttempt: null
+    })
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      compaction: { status: 'completed' },
+      retry: { attempt: 1, errorMessage: 'slow down' }
+    })
+    expect(useAcpStore.getState().sessions['s1'].opencodeNotice).toEqual({
+      compaction: null,
+      retryAttempt: 1
+    })
+    useAcpStore.getState()._onSessionInfoUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      retry: null
+    })
+    expect(useAcpStore.getState().sessions['s1'].opencodeNotice).toBeUndefined()
+    expect(useAcpStore.getState().sessions['s1'].title).toBe('Keep me')
+  })
+
+  it('_onPromptComplete clears the OpenCode status line', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          opencodeNotice: { compaction: 'started', retryAttempt: 2 }
+        }
+      }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    expect(useAcpStore.getState().sessions['s1'].opencodeNotice).toBeUndefined()
+  })
+
   it('_onSessionInfoUpdate leaves the title untouched when the field is omitted', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.setState((s) => ({

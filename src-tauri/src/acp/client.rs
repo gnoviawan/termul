@@ -367,36 +367,29 @@ pub fn emit_session_update(
             );
         }
         SessionUpdate::SessionInfoUpdate(update) => {
-            // `title` is `MaybeUndefined<String>`: Undefined = not sent (skip),
-            // Null = explicitly cleared (emit None), Value = set (emit Some).
-            match update.title.as_opt_ref() {
-                None => {} // Undefined — no title field sent, skip
-                Some(None) => {
-                    let event = SessionInfoUpdateEvent {
-                        agent_id: agent_id.clone(),
-                        session_id,
-                        title: None,
-                    };
-                    events::fan_out(
-                        sinks,
-                        Some(event.session_id.0.as_str()),
-                        events::EVENT_SESSION_INFO_UPDATE,
-                        &event,
-                    );
-                }
-                Some(Some(t)) => {
-                    let event = SessionInfoUpdateEvent {
-                        agent_id: agent_id.clone(),
-                        session_id,
-                        title: Some(t.clone()),
-                    };
-                    events::fan_out(
-                        sinks,
-                        Some(event.session_id.0.as_str()),
-                        events::EVENT_SESSION_INFO_UPDATE,
-                        &event,
-                    );
-                }
+            // `title` is `MaybeUndefined<String>`: Undefined = omit the field,
+            // Null = explicitly cleared, Value = set. OpenCode 2 compaction
+            // and retry markers arrive on `_meta` with no title.
+            let title = match update.title.as_opt_ref() {
+                None => None,
+                Some(None) => Some(None),
+                Some(Some(title)) => Some(Some(title.clone())),
+            };
+            let notices = events::opencode_notices(update.meta.as_ref());
+            if title.is_some() || notices.compaction.is_some() || notices.retry.is_some() {
+                let event = SessionInfoUpdateEvent {
+                    agent_id: agent_id.clone(),
+                    session_id,
+                    title,
+                    compaction: notices.compaction,
+                    retry: notices.retry,
+                };
+                events::fan_out(
+                    sinks,
+                    Some(event.session_id.0.as_str()),
+                    events::EVENT_SESSION_INFO_UPDATE,
+                    &event,
+                );
             }
         }
         SessionUpdate::UsageUpdate(update) => {

@@ -8,6 +8,7 @@ import { applyTerminalStream, type TerminalStreamFields } from '@/components/cha
 import type {
   ContentBlock,
   SessionId,
+  SessionInfoUpdateEvent,
   SessionMode,
   SessionUsage,
   ToolCall,
@@ -58,7 +59,42 @@ import {
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
-import type { AcpState, ChatMessage, MessageRole } from '../types'
+import type { AcpState, ChatMessage, MessageRole, OpenCodeSessionNotice } from '../types'
+
+function sameOpencodeNotice(
+  left: OpenCodeSessionNotice | undefined,
+  right: OpenCodeSessionNotice | undefined
+): boolean {
+  if (left == null && right == null) return true
+  if (left == null || right == null) return false
+  return left.compaction === right.compaction && left.retryAttempt === right.retryAttempt
+}
+
+/** Apply one session-info marker. Absent fields keep the previous notice. */
+export function nextOpencodeNotice(
+  prev: OpenCodeSessionNotice | undefined,
+  event: Pick<SessionInfoUpdateEvent, 'compaction' | 'retry'>
+): OpenCodeSessionNotice | undefined {
+  let compaction = prev?.compaction ?? null
+  let retryAttempt = prev?.retryAttempt ?? null
+  let changed = false
+  if (event.compaction) {
+    changed = true
+    if (event.compaction.status === 'completed') compaction = null
+    else if (event.compaction.status === 'started') compaction = 'started'
+    else if (event.compaction.status === 'failed') compaction = 'failed'
+  }
+  if (event.retry === null) {
+    changed = true
+    retryAttempt = null
+  } else if (event.retry) {
+    changed = true
+    retryAttempt = event.retry.attempt
+  }
+  if (!changed) return prev
+  if (compaction == null && retryAttempt == null) return undefined
+  return { compaction, retryAttempt }
+}
 
 /**
  * Slack (in messages) for the streaming-prefix twin rule, measured as
@@ -1466,19 +1502,32 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
     // `title` is `undefined` when the field is absent (no change), `null` when
     // the agent explicitly cleared it, or a string when set. An omitted title
     // must leave the existing title (and the persisted index) untouched.
-    if (e.title === undefined) return
-    const nextTitle = e.title
+    // OpenCode compaction / retry markers can arrive with no title.
+    const session = get().sessions[e.sessionId]
+    if (!session) return
+    const titleUpdate = e.title !== undefined
+    const nextNotice = nextOpencodeNotice(session.opencodeNotice, e)
+    const noticeChanged = !sameOpencodeNotice(session.opencodeNotice, nextNotice)
+    if (!titleUpdate && !noticeChanged) return
     set((s) => {
-      const session = s.sessions[e.sessionId]
-      if (!session) return {}
+      const current = s.sessions[e.sessionId]
+      if (!current) return {}
       return {
-        sessions: { ...s.sessions, [e.sessionId]: { ...session, title: nextTitle } }
+        sessions: {
+          ...s.sessions,
+          [e.sessionId]: {
+            ...current,
+            title: titleUpdate ? (e.title ?? null) : current.title,
+            opencodeNotice: nextNotice
+          }
+        }
       }
     })
     // Gate on sessionIndex membership so an un-promoted (ephemeral) pooled
     // session is never persisted by an event before `startChat` promotes it
-    // (matches the prompt/error reducers).
+    // (matches the prompt/error reducers). Notice-only updates stay in memory.
     if (
+      titleUpdate &&
       get().sessions[e.sessionId] &&
       get().sessionIndex.some((entry) => entry.id === e.sessionId)
     ) {

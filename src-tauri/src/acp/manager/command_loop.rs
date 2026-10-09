@@ -774,11 +774,11 @@ pub(super) async fn run_command_loop(
                                 &req_sinks,
                                 Some(session_id.0.as_str()),
                                 events::EVENT_SESSION_INFO_UPDATE,
-                                &events::SessionInfoUpdateEvent {
-                                    agent_id: req_agent_id.clone(),
-                                    session_id: session_id.clone(),
-                                    title: outcome.title.clone(),
-                                },
+                                &events::SessionInfoUpdateEvent::title_only(
+                                    req_agent_id.clone(),
+                                    session_id.clone(),
+                                    outcome.title.clone(),
+                                ),
                             );
                         }
                     }

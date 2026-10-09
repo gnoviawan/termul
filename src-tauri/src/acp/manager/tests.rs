@@ -1259,6 +1259,85 @@ fn plan_notification(session_id: &str) -> agent_client_protocol::schema::v1::Ses
     )
 }
 
+/// A protected title still drops an agent title, but OpenCode compaction and
+/// retry markers on the same `session_info_update` reach the renderer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn protected_title_forwards_opencode_markers_without_title() {
+    use agent_client_protocol::schema::v1 as acp;
+
+    let (root, cwd) = temp_dir_with_cwd("oc-notice");
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(SessionRegistration {
+            session_id: "sess-1".to_string(),
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    persistence
+        .append_local_title("sess-1", "Background title".to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        persistence.metadata("sess-1").unwrap().title_source,
+        Some(crate::acp::session_persistence::TitleSource::BackgroundGenerated)
+    );
+
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    let marked = acp::SessionNotification::new(
+        acp::SessionId::new("sess-1"),
+        acp::SessionUpdate::SessionInfoUpdate(
+            acp::SessionInfoUpdate::new()
+                .title("Agent title")
+                .meta(acp::Meta::from_iter([(
+                    "opencode/compaction".to_string(),
+                    serde_json::json!({
+                        "status": "started",
+                        "messageId": "msg_1",
+                        "reason": "auto"
+                    }),
+                )])),
+        ),
+    );
+    handle_session_notification(&state, Some(&persistence), &sinks, &AgentId::new(), marked)
+        .await
+        .expect("marker update");
+    {
+        let seen = sink.seen.lock();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].type_, crate::acp::events::EVENT_SESSION_INFO_UPDATE);
+        assert!(seen[0].payload.get("title").is_none());
+        assert_eq!(seen[0].payload["compaction"]["status"], "started");
+    }
+
+    sink.seen.lock().clear();
+    let title_only = acp::SessionNotification::new(
+        acp::SessionId::new("sess-1"),
+        acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new().title("Agent title")),
+    );
+    handle_session_notification(
+        &state,
+        Some(&persistence),
+        &sinks,
+        &AgentId::new(),
+        title_only,
+    )
+    .await
+    .expect("title-only update");
+    assert!(
+        sink.seen.lock().is_empty(),
+        "a protected title-only update stays suppressed"
+    );
+
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// History chunks stay suppressed during reopen. Plan (and other session
 /// state) still fans out so slash commands, modes, and config are not lost.
 #[tokio::test]
@@ -2013,7 +2092,10 @@ fn delete_logout_and_extra_roots_follow_advertised_capabilities() {
 fn elicitation_response_maps_string_arrays() {
     let content = serde_json::Map::from_iter([
         ("q0".to_string(), serde_json::json!("Red")),
-        ("q1".to_string(), serde_json::json!(["Logging", "My custom feature"])),
+        (
+            "q1".to_string(),
+            serde_json::json!(["Logging", "My custom feature"]),
+        ),
     ]);
     let response = elicitation_response("accept", Some(content));
     let ElicitationAction::Accept(accept) = response.action else {

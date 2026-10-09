@@ -76,6 +76,7 @@ pub async fn list(
                 let installed = install.installed_agents();
                 crate::acp::overlay_installed(&mut catalog, &installed);
             }
+            service.apply_external_opencode(&mut catalog).await;
             debug!(
                 target: "termul::web::catalog_api",
                 agents = catalog.agents.len(),

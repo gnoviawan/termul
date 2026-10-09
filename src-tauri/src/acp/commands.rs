@@ -743,6 +743,7 @@ pub async fn acp_list_catalog(
                 let installed = install.installed_agents();
                 crate::acp::overlay_installed(&mut catalog, &installed);
             }
+            service.apply_external_opencode(&mut catalog).await;
             log::info!("[acp-catalog] list success agents={}", catalog.agents.len());
             Ok(crate::commands::IpcResult::success(catalog))
         }

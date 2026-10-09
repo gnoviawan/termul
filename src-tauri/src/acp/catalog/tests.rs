@@ -501,6 +501,77 @@ fn overlay_installed_marks_installed_agents_ready_with_command() {
     assert!(other.installed.is_none());
 }
 
+fn opencode_agent(version: &str, installed: Option<InstalledCatalogInfo>) -> CatalogAgent {
+    CatalogAgent {
+        id: "opencode".to_string(),
+        name: "OpenCode".to_string(),
+        version: version.to_string(),
+        description: "d".to_string(),
+        source: CatalogSource::Bundled,
+        distribution: serde_json::json!({
+            "binary": { "linux-x86_64": {
+                "cmd": "./package/bin/opencode",
+                "archive": "https://example.com/opencode.tgz",
+                "args": ["acp"]
+            }}
+        }),
+        runtime_requirements: Vec::new(),
+        status: SupportedAcpAgentStatus::InstallRequired,
+        platform_targets: Vec::new(),
+        installed,
+    }
+}
+
+#[test]
+fn external_opencode_v2_binary_marks_the_row_ready() {
+    let mut catalog = AcpCatalog {
+        host: host_with_runtimes(false, false),
+        agents: vec![opencode_agent("2.0.25", None)],
+    };
+    apply_external_opencode_binary(&mut catalog, Some(Path::new("/usr/local/bin/opencode")));
+    let agent = &catalog.agents[0];
+    assert_eq!(agent.status, SupportedAcpAgentStatus::Ready);
+    let info = agent.installed.as_ref().expect("installed block");
+    assert_eq!(info.command, "/usr/local/bin/opencode");
+    assert_eq!(info.args, vec!["acp".to_string()]);
+    // Catalog pin, so a newer PATH binary does not look like a downgrade.
+    assert_eq!(info.version, "2.0.25");
+}
+
+#[test]
+fn external_opencode_miss_leaves_install_required() {
+    let mut catalog = AcpCatalog {
+        host: host_with_runtimes(false, false),
+        agents: vec![opencode_agent("2.0.25", None)],
+    };
+    apply_external_opencode_binary(&mut catalog, None);
+    assert_eq!(
+        catalog.agents[0].status,
+        SupportedAcpAgentStatus::InstallRequired
+    );
+    assert!(catalog.agents[0].installed.is_none());
+}
+
+#[test]
+fn managed_opencode_install_wins_over_external_binary() {
+    let managed = InstalledCatalogInfo {
+        command: "/managed/opencode".to_string(),
+        args: vec!["acp".to_string()],
+        version: "1.18.30".to_string(),
+    };
+    let mut catalog = AcpCatalog {
+        host: host_with_runtimes(false, false),
+        agents: vec![opencode_agent("2.0.25", Some(managed))],
+    };
+    apply_external_opencode_binary(&mut catalog, Some(Path::new("/usr/local/bin/opencode")));
+    let info = catalog.agents[0]
+        .installed
+        .as_ref()
+        .expect("managed install");
+    assert_eq!(info.command, "/managed/opencode");
+    assert_eq!(info.version, "1.18.30");
+}
+
 #[test]
 fn overlay_installed_no_op_when_empty() {
     let mut catalog = AcpCatalog {
@@ -520,6 +591,7 @@ fn service_with_fetcher(root: PathBuf, fetcher: SnapshotFetcher) -> Arc<AcpCatal
         cache: RwLock::new(None),
         snapshot_fetch: fetcher,
         snapshot_fetch_gate: Mutex::new(None),
+        opencode_probe: Mutex::new(None),
     })
 }
 

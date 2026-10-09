@@ -281,27 +281,62 @@ pub(super) async fn handle_session_notification(
     // AD-8: gate native `session_info_update` fan-out. When the host already
     // owns a higher-precedence title (`BackgroundGenerated` from a prior
     // background-gen flow, or a future `LocalAlias`), suppress the agent's
-    // `session_info_update` so the background title survives in the renderer.
-    // The durable defense in `append_record` is the second layer; this is the
-    // fan-out defense.
-    let is_protected_info_update = matches!(
-        &notification.update,
-        agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(_)
-    ) && is_protected_title_source(
+    // title so the background title survives in the renderer. OpenCode
+    // compaction and retry markers travel on the same notification; those
+    // still fan out, with the title field omitted. The durable defense in
+    // `append_record` is the second layer; this is the fan-out defense.
+    let protected_title = is_protected_title_source(
         persistence
             .and_then(|p| p.metadata(&session_id).ok())
             .and_then(|m| m.title_source)
             .as_ref(),
     );
-    if is_protected_info_update {
+    if protected_title
+        && matches!(
+            &notification.update,
+            agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(_)
+        )
+    {
+        let notices = session_info_notices(&notification.update);
+        if notices.compaction.is_none() && notices.retry.is_none() {
+            log::debug!(
+                "[acp] session {}: suppressed native session_info_update (title_source is BackgroundGenerated/LocalAlias)",
+                crate::logging::redact_session_id(&session_id)
+            );
+            return Ok(());
+        }
         log::debug!(
-            "[acp] session {}: suppressed native session_info_update (title_source is BackgroundGenerated/LocalAlias)",
+            "[acp] session {}: forwarded opencode markers without the protected title",
             crate::logging::redact_session_id(&session_id)
+        );
+        let event = crate::acp::events::SessionInfoUpdateEvent {
+            agent_id: agent_id.clone(),
+            session_id: crate::acp::SessionId::new(session_id.clone()),
+            title: None,
+            compaction: notices.compaction,
+            retry: notices.retry,
+        };
+        crate::acp::events::fan_out(
+            sinks,
+            Some(event.session_id.0.as_str()),
+            crate::acp::events::EVENT_SESSION_INFO_UPDATE,
+            &event,
         );
         return Ok(());
     }
     client::emit_session_update(sinks, agent_id, notification);
     Ok(())
+}
+
+fn session_info_notices(
+    update: &agent_client_protocol::schema::v1::SessionUpdate,
+) -> crate::acp::events::OpenCodeNotices {
+    match update {
+        agent_client_protocol::schema::v1::SessionUpdate::SessionInfoUpdate(info) => {
+            crate::acp::events::opencode_notices(info.meta.as_ref())
+        }
+        _ => crate::acp::events::OpenCodeNotices::default(),
+    }
 }
 
 /// History variants replayed by `session/load` (and sometimes, incorrectly,

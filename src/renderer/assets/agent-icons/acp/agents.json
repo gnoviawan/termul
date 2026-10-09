@@ -723,38 +723,38 @@
   {
     "id": "opencode",
     "name": "OpenCode",
-    "version": "1.18.30",
+    "version": "2.0.25",
     "description": "The open source coding agent",
     "distribution": {
       "binary": {
         "darwin-aarch64": {
-          "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-darwin-arm64.zip",
+          "cmd": "./package/bin/opencode",
+          "archive": "https://registry.npmjs.org/@opencode/cli-darwin-arm64/-/cli-darwin-arm64-2.0.25.tgz",
           "args": ["acp"]
         },
         "darwin-x86_64": {
-          "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-darwin-x64.zip",
+          "cmd": "./package/bin/opencode",
+          "archive": "https://registry.npmjs.org/@opencode/cli-darwin-x64/-/cli-darwin-x64-2.0.25.tgz",
           "args": ["acp"]
         },
         "linux-aarch64": {
-          "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-linux-arm64.tar.gz",
+          "cmd": "./package/bin/opencode",
+          "archive": "https://registry.npmjs.org/@opencode/cli-linux-arm64/-/cli-linux-arm64-2.0.25.tgz",
           "args": ["acp"]
         },
         "linux-x86_64": {
-          "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-linux-x64.tar.gz",
+          "cmd": "./package/bin/opencode",
+          "archive": "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-2.0.25.tgz",
           "args": ["acp"]
         },
         "windows-aarch64": {
-          "cmd": "./opencode",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-arm64.zip",
+          "cmd": "./package/bin/opencode.exe",
+          "archive": "https://registry.npmjs.org/@opencode/cli-windows-arm64/-/cli-windows-arm64-2.0.25.tgz",
           "args": ["acp"]
         },
         "windows-x86_64": {
-          "cmd": "./opencode.exe",
-          "archive": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64.zip",
+          "cmd": "./package/bin/opencode.exe",
+          "archive": "https://registry.npmjs.org/@opencode/cli-windows-x64/-/cli-windows-x64-2.0.25.tgz",
           "args": ["acp"]
         }
       }
