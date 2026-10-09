@@ -6,7 +6,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 
 1. Semantic roles: `background`, `foreground`, `card`, `popover`, `primary`, `primary-fill`, `secondary`, `muted`, `accent`, `destructive`, `destructive-fill`, `success`, `success-fill`, `warning`, `connection`, `border`, `input`, `ring`, `overlay`.
 2. Product identity: `project-{blue,purple,green,yellow,red,cyan,pink,orange,gray}` — chips, graph lanes, pickers only.
-3. Chrome bar: `status-bar` and `status-bar-{color}` — StatusBar fill only. Same hue as project, L ~0.47 so `primary-foreground` meets WCAG AA 4.5:1.
+3. Chrome bar (legacy): `status-bar` and `status-bar-{color}`. The StatusBar does not use them now. The tokens stay for back-compat (`statusBarColors` in `lib/colors.ts`). Do not use them in new UI.
 4. Diff: `diff-added`, `diff-modified` (changed files, not a warning). Deletions use `destructive`.
 5. Terminal grid: `terminal-bg` / `terminal-fg`. `terminal-bg` equals `background`. xterm `theme.background` must use the same hex. Do not leave the xterm viewport at `#000`.
 
@@ -38,7 +38,18 @@ The default light theme (`termul-light`) uses the paper ramp. Page, card, and po
 | `secondary-foreground` | Secondary labels | Mid ash `#5d5d5d` |
 | `muted-foreground` | Muted copy | Hollow `#8f8f8f`, lifted if it misses AA |
 
-`--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. `--accent` is a selected-row fill (`bg-accent` + `text-accent-foreground`), not body text. Fill L is ≤ 0.55 so near-white ink meets AA. Washes stay on the text token (`bg-primary/10 text-primary`).
+`--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. Do not use `--accent` for new state. It is maroon in Termul Light. Selection, hover and focus are neutral (see State). Washes stay on the text token (`bg-primary/10 text-primary`).
+
+## State
+
+| State | On `background` / `card` | On `popover` |
+| --- | --- | --- |
+| Hover | `bg-foreground/[0.03]` | `bg-foreground/[0.06]` |
+| Selected / you are here | `.keycap` (index.css) | `Check` icon, no fill |
+| Active segment in a track | `.keycap` | `bg-foreground/10` |
+| Focus | neutral `ring` | neutral `ring` |
+
+Blue (`primary`, `primary-fill`) has three jobs only: live work (a running agent, a working spinner, a drop target), the one primary button in a view, and count badges that ask for attention (`CountBadge` in `components/ui/count-badge.tsx`: the Git change count on the activity rail and the Git Changes tab, `bg-primary-fill text-primary-foreground`). Focus, selection and hover stay neutral.
 
 ## Background
 
@@ -62,7 +73,7 @@ On background / card / popover?
  └── On a solid primary / destructive / success fill → matching *-foreground
 ```
 
-On a project StatusBar, ink is `text-primary-foreground`, never `text-white`. Git counts, exit code, and lamps on the bar use that ink plus icon shape — not `text-success` / `text-warning`.
+The StatusBar is quiet: `bg-card`, `border-t border-border`, ink `text-muted-foreground`. Labels use `text-secondary-foreground`. The project colour is in the project glyph (`ProjectIcon`), not in the bar fill. Never `text-white` or `text-primary-foreground` on the bar.
 
 ## Incorrect
 
