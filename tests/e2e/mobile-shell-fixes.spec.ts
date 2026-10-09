@@ -369,7 +369,11 @@ test('palette lists New Project, never Open Shortcut Menu, and New Project opens
 // Editor toolbar
 // ---------------------------------------------------------------------------
 
-test('the editor toolbar has no TOC button on a phone, while Source/Preview and Save stay', async ({
+// FIX 7 (a TOC button on a phone where the TOC is disabled) is superseded by
+// the editor redesign (#943): the outline now renders on the mobile shell as a
+// tick strip, so the toolbar's outline toggle drives something real there. The
+// toggle stays and this row pins that it is not a dead control.
+test('the editor toolbar keeps Source/Preview, Save and a live outline toggle on a phone', async ({
   page
 }) => {
   const project = await createProject({ 'notes.md': '# Notes\n\nmobile toolbar content' })
@@ -378,18 +382,33 @@ test('the editor toolbar has no TOC button on a phone, while Source/Preview and 
   await openFileFromFiles(page, 'notes.md')
 
   const save = page.getByRole('button', { name: 'Save notes.md', exact: true })
-  const sourceToggle = page.getByRole('button', { name: 'Source', exact: true })
+  const sourceToggle = page.getByRole('radio', { name: 'Source', exact: true })
+  const outlineToggle = page.getByRole('button', { name: 'Outline', exact: true })
+  const strip = page.locator('[data-outline-strip]')
   await expect(save).toBeVisible()
   await expect(sourceToggle).toBeVisible()
-  // The panel never renders on mobile, so there is no dead toggle for it.
-  await expect(page.getByRole('button', { name: 'TOC', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /Table of Contents/ })).toHaveCount(0)
+  await expect(outlineToggle).toBeVisible()
 
-  // Switching the view mode keeps the toolbar free of the TOC button.
+  // The outline preference is host-wide (shared server store): the toggle is
+  // driven both ways and put back, so no other test sees the change.
+  const wasPressed = (await outlineToggle.getAttribute('aria-pressed')) === 'true'
+  try {
+    await expect(strip).toHaveCount(wasPressed ? 1 : 0)
+    await outlineToggle.tap()
+    await expect(outlineToggle).toHaveAttribute('aria-pressed', String(!wasPressed))
+    await expect(strip).toHaveCount(wasPressed ? 0 : 1)
+  } finally {
+    if (((await outlineToggle.getAttribute('aria-pressed')) === 'true') !== wasPressed) {
+      await outlineToggle.tap()
+    }
+  }
+  await expect(outlineToggle).toHaveAttribute('aria-pressed', String(wasPressed))
+
+  // Switching the view mode keeps the toolbar intact.
   await sourceToggle.tap()
-  await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeVisible()
+  await expect(page.getByRole('radio', { name: 'Preview', exact: true })).toBeVisible()
   await expect(save).toBeVisible()
-  await expect(page.getByRole('button', { name: 'TOC', exact: true })).toHaveCount(0)
+  await expect(outlineToggle).toBeVisible()
 })
 
 // ---------------------------------------------------------------------------
@@ -687,7 +706,7 @@ test('a long path clips from the left and keeps the current folder visible', asy
 // ---------------------------------------------------------------------------
 
 test.describe('desktop layout is unchanged', () => {
-  test('palette, TOC and the split tree render as before at 1440px', async ({ browser }) => {
+  test('palette, outline and the split tree render as before at 1440px', async ({ browser }) => {
     const project = await createProject({
       'a.md': 'LEAF-A-CONTENT',
       'b.md': 'LEAF-B-CONTENT'
@@ -704,12 +723,12 @@ test.describe('desktop layout is unchanged', () => {
       const page = await context.newPage()
       await openWorkspace(page)
 
-      // Both leaves render, the active one carries its ring, each has its TOC.
+      // Both leaves render, the active one carries its ring, each has its outline toggle.
       await expect(page.getByText('LEAF-A-CONTENT')).toBeVisible()
       await expect(page.getByText('LEAF-B-CONTENT')).toBeVisible()
       await expect(page.locator('[data-pane-content]')).toHaveCount(2)
       await expect(page.locator('[data-pane-content="leaf-b"]')).toHaveClass(/ring-1/)
-      await expect(page.getByRole('button', { name: 'TOC', exact: true })).toHaveCount(2)
+      await expect(page.getByRole('button', { name: 'Outline', exact: true })).toHaveCount(2)
 
       // The palette keeps "Open Shortcut Menu" and has no "New Project".
       await page.keyboard.press('ControlOrMeta+k')
