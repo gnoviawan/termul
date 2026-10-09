@@ -453,10 +453,14 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     expect(screen.queryByTestId('header-new-project')).toBeNull()
     expect(screen.queryByText('demo')).toBeNull()
 
-    // The mobile header affordances are present.
+    // The mobile header affordances are present: ☰, the subtitle that opens
+    // the project sheet, and ⋯ whose sheet reaches Files.
     expect(screen.getByLabelText('Open menu')).toBeInTheDocument()
-    expect(screen.getByLabelText('Switch project')).toBeInTheDocument()
-    expect(screen.getByLabelText('Browse files')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /switch project/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Switch project')).toBeNull()
+    expect(screen.queryByLabelText('Browse files')).toBeNull()
+    fireEvent.click(screen.getByLabelText('More'))
+    expect(await screen.findByRole('button', { name: 'Files' })).toBeInTheDocument()
     // Pin the flex sizing contract that keeps the workspace visible (this
     // story's production fix — jsdom performs no layout, so the class
     // contract is asserted directly): the workspace <main> sizes via flex-1

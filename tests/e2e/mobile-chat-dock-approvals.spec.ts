@@ -739,15 +739,18 @@ test('a question takes focus on its first option, answers with the choice and ha
   for (const button of [
     unit,
     question.getByRole('button', { name: /^End-to-end tests/ }),
-    question.getByRole('button', { name: 'Cancel' }),
-    question.getByRole('button', { name: 'Send answer' })
+    question.getByRole('button', { name: 'Submit' })
   ]) {
     expect((await boxOf(button)).height).toBeGreaterThanOrEqual(44)
   }
+  // The stepper's header × is a compact icon control (36px on a coarse pointer).
+  expect(
+    (await boxOf(question.getByRole('button', { name: 'Cancel' }))).height
+  ).toBeGreaterThanOrEqual(36)
 
   await unit.tap()
   await expect(unit).toHaveAttribute('aria-pressed', 'true')
-  await question.getByRole('button', { name: 'Send answer' }).tap()
+  await question.getByRole('button', { name: 'Submit' }).tap()
 
   await expect(question).toBeHidden()
   await expect.poll(() => answeredCount(page, 'question unit')).toBe(1)
@@ -758,7 +761,7 @@ test('an elicitation takes heading focus, shows an inline error beside its toast
   page
 }) => {
   await launchChat(page, `[ASK:elicitation] ${LONG} elicitation`)
-  const heading = page.getByRole('heading', { level: 2, name: 'Name the branch to test' })
+  const heading = page.getByRole('heading', { level: 2, name: 'Request from the agent' })
   await expect(heading).toBeVisible()
   await expect(heading).toBeFocused()
 

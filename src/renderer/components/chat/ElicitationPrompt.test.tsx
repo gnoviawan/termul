@@ -60,11 +60,14 @@ describe('ElicitationPrompt', () => {
   })
 
   describe('desktop baseline', () => {
-    it('renders the message as plain text and never moves focus', () => {
+    it('renders the message as plain text, keeps the heading unfocusable and never moves focus', () => {
       render(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
 
-      expect(screen.queryByRole('heading')).not.toBeInTheDocument()
+      const heading = screen.getByRole('heading', { level: 2, name: 'Request from the agent' })
+      expect(heading).not.toHaveAttribute('tabindex')
+      expect(heading).not.toHaveClass('outline-none')
       expect(screen.getByText('Configure the deploy').tagName).toBe('P')
+      expect(screen.getByRole('dialog')).not.toHaveAttribute('tabindex')
       expect(document.body).toHaveFocus()
       expect(screen.getByTestId('elicitation-prompt')).toHaveAttribute(
         'data-approval-prompt',
@@ -103,10 +106,10 @@ describe('ElicitationPrompt', () => {
       mobileRef.current = true
     })
 
-    it('renders the message as a focusable h2 and focuses it at mount', () => {
+    it('renders the request heading as a focusable h2 and focuses it at mount', () => {
       render(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
 
-      const heading = screen.getByRole('heading', { level: 2, name: 'Configure the deploy' })
+      const heading = screen.getByRole('heading', { level: 2, name: 'Request from the agent' })
       expect(heading).toHaveAttribute('tabindex', '-1')
       expect(heading).toHaveClass('outline-none')
       expect(heading).toHaveFocus()
@@ -331,7 +334,7 @@ describe('ElicitationPrompt', () => {
       })
     ]
 
-    it('keeps the message as a focused h2 on mobile when it is not a repeat', () => {
+    it('focuses the dialog on mobile and shows a non-repeat message as the stepper note', () => {
       mobileRef.current = true
       render(
         <ElicitationPrompt
@@ -340,8 +343,9 @@ describe('ElicitationPrompt', () => {
         />
       )
 
-      const heading = screen.getByRole('heading', { level: 2, name: 'A quick batch of questions' })
-      expect(heading).toHaveFocus()
+      const dialog = screen.getByRole('dialog', { name: 'A quick batch of questions' })
+      expect(dialog).toHaveFocus()
+      expect(screen.getByText('A quick batch of questions').tagName).toBe('P')
       expect(screen.getByTestId('elicitation-questions')).toBeInTheDocument()
     })
 
@@ -354,7 +358,7 @@ describe('ElicitationPrompt', () => {
         />
       )
 
-      expect(screen.queryByRole('heading')).not.toBeInTheDocument()
+      expect(screen.queryByText('Which color should I use?', { selector: 'p' })).toBeNull()
       const dialog = screen.getByRole('dialog', { name: 'Which color should I use?' })
       expect(dialog).toHaveAttribute('tabindex', '-1')
       expect(dialog).toHaveClass('outline-none')
@@ -389,7 +393,7 @@ describe('ElicitationPrompt', () => {
       render(<ElicitationPrompt request={request(QUESTIONS)} />)
 
       fireEvent.click(screen.getByRole('button', { name: /Blue/ }))
-      fireEvent.click(screen.getByRole('button', { name: 'Send answers' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
 
       expect(respondElicitation).toHaveBeenCalledWith('el-1', 'accept', { q0: 'Blue' })
     })

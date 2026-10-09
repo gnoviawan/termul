@@ -3,7 +3,12 @@ import { logFrontendError } from '@/lib/log-api'
 
 const PROMPT_SELECTOR = '[data-approval-prompt]'
 const COMPOSER_SELECTOR = '[data-chat-composer="true"]'
-const QUESTION_FIRST_BUTTON_SELECTOR = '[data-approval-prompt^="question:"] button'
+const QUESTION_PROMPT_SELECTOR = '[data-approval-prompt^="question:"]'
+// The stepper's pager and × buttons precede the options, so name the options
+// first (`aria-pressed` toggles) and fall back to the first enabled button
+// (× Cancel) for a question with no options.
+const QUESTION_FIRST_OPTION_SELECTOR = `${QUESTION_PROMPT_SELECTOR} button[aria-pressed]`
+const QUESTION_FIRST_BUTTON_SELECTOR = `${QUESTION_PROMPT_SELECTOR} button:not(:disabled)`
 
 interface UseApprovalDockOptions {
   /** The chat panel root: scopes focus tracking and the composer / question lookups. */
@@ -144,6 +149,7 @@ export function useApprovalDock({
     const root = rootRef.current
     const target =
       root?.querySelector<HTMLElement>(COMPOSER_SELECTOR) ??
+      root?.querySelector<HTMLElement>(QUESTION_FIRST_OPTION_SELECTOR) ??
       root?.querySelector<HTMLElement>(QUESTION_FIRST_BUTTON_SELECTOR)
     if (!target) {
       void logFrontendError({

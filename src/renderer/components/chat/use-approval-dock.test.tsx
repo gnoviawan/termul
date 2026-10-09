@@ -54,15 +54,16 @@ interface HarnessProps {
   question?: PendingQuestion | null
   /** A bare stand-in for ElicitationPrompt: only its prompt marker matters here. */
   elicitationId?: string | null
-  /** Whether the composer card is mounted (AskUserQuestion replaces it in the app). */
+  /** Whether the composer card is mounted (a question or elicitation replaces it in the app). */
   composer?: boolean
   autoFocusQuestion?: boolean
 }
 
 /**
- * Mirrors AgentChatPanel's dock: a root carrying the hook's `onFocus`, an
- * elicitation above, then either the composer card (with the permission prompt
- * embedded at its top) or the question (with a standalone permission prompt).
+ * Mirrors AgentChatPanel's dock: a root carrying the hook's `onFocus`, then
+ * either the composer card (with the permission prompt embedded at its top) or,
+ * while an elicitation or question is pending, that prompt in its place (the
+ * question with a standalone permission prompt).
  */
 function Harness({
   enabled = true,
@@ -105,7 +106,8 @@ function Harness({
           <AskUserQuestion question={ask} autoFocusFirstOption={autoFocusQuestion} />
         </>
       ) : (
-        composer && (
+        composer &&
+        !elicitationId && (
           <div data-chat-composer="true" tabIndex={-1} data-testid="composer">
             {perm && <PermissionPrompt permission={perm} />}
             <input data-testid="editor" aria-label="editor" />

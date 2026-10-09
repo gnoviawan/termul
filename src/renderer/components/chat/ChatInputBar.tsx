@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Folder, FolderGit2, GitBranch, Paperclip } from '@/components/icons'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
+import { useChatIsolationContext } from '@/hooks/use-chat-isolation-context'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -25,7 +26,6 @@ import {
   useAgentTemplateId,
   useSessionUsage
 } from '@/stores/acp-store'
-import { useProjectStore } from '@/stores/project-store'
 import { ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
@@ -140,23 +140,13 @@ export function ChatInputBar({
   const usableConfigOptions = configOptions.filter(
     (option) => option.type === 'boolean' || (option.options?.length ?? 0) > 0
   )
-  // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
-  // branch (the long worktree path stays on the mode tooltip). Local chats fall
-  // back to the project's reactive `gitBranch`. Switching chats re-renders via
-  // `session`.
-  const projectGitBranch = useProjectStore(
-    (s) => s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? null
-  )
-  const projectIsGitRepo = useProjectStore(
-    (s) => s.projects.find((p) => p.id === session.projectId)?.isGitRepo ?? false
-  )
-  const isWorktree = Boolean(session.worktreePath)
-  const isolationModeLabel = isWorktree ? 'Worktree' : 'Local'
-  const isolationModeTitle = isWorktree
-    ? `Agent works in a separate git worktree: ${session.worktreePath}`
-    : 'Agent edits files in your project folder directly'
-  const isolationBranch = session.worktreeBranch ?? projectGitBranch
-  const isDetachedHead = !isolationBranch && !isWorktree && projectIsGitRepo
+  // CAP-6: worktree/branch indicator, shared with the mobile shell subtitle.
+  const { isWorktree, isolationModeLabel, isolationModeTitle, isolationBranch, isDetachedHead } =
+    useChatIsolationContext({
+      projectId: session.projectId,
+      worktreePath: session.worktreePath,
+      worktreeBranch: session.worktreeBranch
+    })
   const {
     model,
     thoughtLevel,
