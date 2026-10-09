@@ -15,6 +15,8 @@ import {
   settleOverlayBackStack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import { useConfirmTerminalClose } from '@/stores/app-settings-store'
+import { useEditorStore } from '@/stores/editor-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
@@ -1653,6 +1655,155 @@ describe('WorkspaceLayout mobile branch', () => {
         leaf.tabs.some((t) => t.id === historyTabs[0].id)
       )
       expect(containingPane?.activeTabId).toBe(historyTabs[0].id)
+    })
+  })
+
+  describe('drawer row close and its confirm (L-16)', () => {
+    const leafWith = (tabs: LeafNode['tabs'], activeTabId: string): LeafNode => ({
+      type: 'leaf',
+      id: 'pane-t',
+      tabs,
+      activeTabId
+    })
+    const seedLeaf = (leaf: LeafNode): void => {
+      useWorkspaceStore.setState({
+        root: leaf,
+        activePaneId: leaf.id,
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      })
+    }
+    const tabIds = (): string[] =>
+      getAllLeafPanes(useWorkspaceStore.getState().root).flatMap((leaf) =>
+        leaf.tabs.map((tab) => tab.id)
+      )
+
+    afterEach(() => {
+      useWorkspaceStore.getState().resetLayout()
+      useEditorStore.setState({ openFiles: new Map(), activeFilePath: null })
+      vi.mocked(useConfirmTerminalClose).mockReturnValue(true)
+    })
+
+    it('hands the drawer off to the Close Terminal confirm, and Cancel keeps the tab with focus on ☰', async () => {
+      seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
+      renderLayout()
+      const menu = await screen.findByLabelText('Open menu')
+      fireEvent.click(menu)
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
+
+      // The drawer is gone, so its overlay no longer covers the confirm.
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      expect(await screen.findByText('Close Terminal')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible()
+      expect(tabIds()).toEqual(['term-t1'])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => expect(screen.queryByText('Close Terminal')).toBeNull())
+      expect(tabIds()).toEqual(['term-t1'])
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('Escape on the Close Terminal confirm also leaves focus on ☰', async () => {
+      seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
+      renderLayout()
+      const menu = await screen.findByLabelText('Open menu')
+      fireEvent.click(menu)
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
+      await screen.findByText('Close Terminal')
+
+      fireEvent.keyDown(window, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByText('Close Terminal')).toBeNull())
+      expect(tabIds()).toEqual(['term-t1'])
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('hands the drawer off to the Unsaved Changes confirm for a dirty editor row', async () => {
+      useEditorStore.setState({
+        openFiles: new Map([['/demo/a.ts', { isDirty: true }]]) as never
+      })
+      seedLeaf(
+        leafWith(
+          [{ type: 'editor', id: 'edit-/demo/a.ts', filePath: '/demo/a.ts' }],
+          'edit-/demo/a.ts'
+        )
+      )
+      renderLayout()
+      const menu = await screen.findByLabelText('Open menu')
+      fireEvent.click(menu)
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      expect(await screen.findByText('Unsaved Changes')).toBeVisible()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await waitFor(() => expect(screen.queryByText('Unsaved Changes')).toBeNull())
+      expect(tabIds()).toEqual(['edit-/demo/a.ts'])
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('keeps the drawer open, with no confirm, when confirm-before-close is off', async () => {
+      vi.mocked(useConfirmTerminalClose).mockReturnValue(false)
+      seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
+
+      await settleOverlayBackStack()
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.queryByText('Close Terminal')).not.toBeInTheDocument()
+    })
+
+    it('keeps the drawer open, with no confirm, for a file that is still saving', async () => {
+      useEditorStore.setState({
+        openFiles: new Map([['/demo/a.ts', { isDirty: true, operationStatus: 'saving' }]]) as never
+      })
+      seedLeaf(
+        leafWith(
+          [{ type: 'editor', id: 'edit-/demo/a.ts', filePath: '/demo/a.ts' }],
+          'edit-/demo/a.ts'
+        )
+      )
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
+
+      await settleOverlayBackStack()
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
+      expect(tabIds()).toEqual(['edit-/demo/a.ts'])
+    })
+
+    it('keeps the drawer open when a clean editor row closes, and moves focus inside it', async () => {
+      seedLeaf(
+        leafWith(
+          [{ type: 'editor', id: 'edit-/demo/a.ts', filePath: '/demo/a.ts' }],
+          'edit-/demo/a.ts'
+        )
+      )
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const close = within(drawer).getByRole('button', { name: 'Close a.ts' })
+      close.focus()
+
+      fireEvent.click(close)
+
+      await waitFor(() => expect(tabIds()).toEqual([]))
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
+      // The row (and its ✕) is gone; focus did not fall to <body> inside the trap.
+      expect(drawer.contains(document.activeElement)).toBe(true)
+      expect(document.activeElement).not.toBe(document.body)
     })
   })
 

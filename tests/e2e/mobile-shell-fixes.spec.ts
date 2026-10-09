@@ -173,27 +173,6 @@ async function readManifest(project: Project): Promise<ServerManifest | null> {
 }
 
 /**
- * A termul-server on Windows lists directory entries with the canonical
- * verbatim prefix (`\\?\C:\...`) while the project root is the plain
- * `C:\...`, so the Files sheet cannot place an entry under its root there.
- * That is a pre-existing server path-format quirk outside these fixes (a
- * POSIX server never emits it); strip the prefix from listings so the same
- * assertions hold on every host.
- */
-async function normalizeListingPaths(page: Page): Promise<void> {
-  await page.route(/\/fs\/ls(\?|$)/, async (route) => {
-    const response = await route.fetch()
-    const body = (await response.json()) as { success?: boolean; data?: Array<{ path?: string }> }
-    if (body.success && Array.isArray(body.data)) {
-      for (const entry of body.data) {
-        if (typeof entry.path === 'string') entry.path = entry.path.replace(/^\\\\\?\\/, '')
-      }
-    }
-    await route.fulfill({ response, json: body })
-  })
-}
-
-/**
  * Resolves once the app's boot-time agent warm-up has settled: the empty
  * launcher spawns the agent and creates a draft session, and that session
  * creation re-activates the pane. A tab opened BEFORE it lands is swapped out
@@ -244,7 +223,6 @@ async function openShell(
   options: { settleAgentWarmup?: boolean } = {}
 ): Promise<void> {
   const warmedUp = watchAgentWarmup(page)
-  await normalizeListingPaths(page)
   await page.goto(`${E2E_BASE_URL}/#token=${E2E_TOKEN}`)
   await page.waitForFunction(
     (token) => localStorage.getItem('termul.webAuthToken') === token,
@@ -277,9 +255,19 @@ async function tapDrawerRow(page: Page, name: string | RegExp): Promise<void> {
   await expect(drawer).toBeHidden()
 }
 
-/** Open a file from the header's Files sheet (the sheet closes on open). */
+/** Open the Files sheet: the header has no Files button of its own, the ⋯ sheet lists it. */
+async function openFilesSheet(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'More', exact: true }).tap()
+  await page
+    .locator('#mobile-header-more-sheet')
+    .getByRole('button', { name: 'Files', exact: true })
+    .tap()
+  await expect(page.getByRole('button', { name: 'Back to parent folder' })).toBeVisible()
+}
+
+/** Open a file from the Files sheet (the sheet closes on open). */
 async function openFileFromFiles(page: Page, fileName: string): Promise<void> {
-  await page.getByRole('button', { name: 'Browse files' }).tap()
+  await openFilesSheet(page)
   await page.getByRole('button', { name: `Open ${fileName}`, exact: true }).tap()
 }
 
@@ -291,13 +279,17 @@ async function goToSnapshots(page: Page): Promise<void> {
 }
 
 /**
- * Close the shell's terminal through the header control (every test that opens
- * one frees its PTY slot). The drawer's own close button is not used: the
- * confirm dialog it raises renders under the drawer's overlay.
+ * Close the first terminal through its drawer row's ✕ (every test that opens
+ * one frees its PTY slot). The confirm it raises takes over from the drawer:
+ * the drawer closes first, so the dialog is not under its overlay.
  */
 async function closeTerminal(page: Page): Promise<void> {
-  await tapDrawerRow(page, /^Terminal \d+$/)
-  await page.getByRole('button', { name: 'Close terminal', exact: true }).tap()
+  const drawer = await openDrawer(page)
+  await drawer
+    .getByRole('button', { name: /^Close Terminal \d+$/ })
+    .first()
+    .tap()
+  await expect(drawer).toBeHidden()
   // The confirm dialog is the one holding the "Don't ask again" checkbox.
   const confirm = page
     .getByText("Don't ask again when closing terminals")
@@ -484,6 +476,79 @@ test('a drawer row for a chat returns from /snapshots to that chat route, not to
   await expect(page.getByRole('heading', { level: 1, name: 'Workspace Snapshots' })).toBeHidden()
 })
 
+test('footer Git history, New terminal and a file from Files leave /snapshots for the workspace', async ({
+  page
+}) => {
+  const project = await createProject({ 'notes.md': 'snapshots entry content' })
+  await openShell(page, project, { settleAgentWarmup: true })
+  const snapshotsHeading = page.getByRole('heading', { level: 1, name: 'Workspace Snapshots' })
+
+  // A file opened from the Files sheet: the editor tab is active and the route is `/`.
+  await goToSnapshots(page)
+  await openFileFromFiles(page, 'notes.md')
+  await expect(page).toHaveURL(/#\/$/)
+  await expect(snapshotsHeading).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Save notes.md', exact: true })).toBeVisible()
+
+  // The drawer footer's Git history: the history tab is shown, not Snapshots.
+  await goToSnapshots(page)
+  const drawer = await openDrawer(page)
+  await drawer.getByRole('button', { name: 'Git history', exact: true }).tap()
+  await expect(drawer).toBeHidden()
+  await expect(page).toHaveURL(/#\/$/)
+  await expect(snapshotsHeading).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Refresh history' })).toBeVisible()
+
+  // The Terminals ＋ New terminal: the new terminal is shown, not Snapshots.
+  await goToSnapshots(page)
+  const drawerAgain = await openDrawer(page)
+  await drawerAgain.getByRole('button', { name: 'New terminal', exact: true }).tap()
+  await expect(drawerAgain).toBeHidden()
+  await expect(page).toHaveURL(/#\/$/)
+  await expect(snapshotsHeading).toBeHidden()
+  await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeVisible()
+
+  await closeTerminal(page)
+})
+
+// ---------------------------------------------------------------------------
+// Drawer close confirm
+// ---------------------------------------------------------------------------
+
+test('closing a terminal from the drawer hands off to its confirm; Cancel keeps it and Close frees it, both with focus on the menu button', async ({
+  page
+}) => {
+  const project = await createProject()
+  await openShell(page, project, { settleAgentWarmup: true })
+  const menu = page.getByRole('button', { name: 'Open menu' })
+  const terminalInput = page.getByRole('textbox', { name: 'Terminal input' })
+
+  const drawer = await openDrawer(page)
+  await drawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
+  await expect(terminalInput).toBeVisible()
+
+  // ✕ on the terminal row: the drawer closes and the confirm is on top of
+  // the page, visible and tappable (it used to render under the drawer's overlay).
+  const drawerAgain = await openDrawer(page)
+  await drawerAgain.getByRole('button', { name: /^Close Terminal \d+$/ }).tap()
+  await expect(drawerAgain).toBeHidden()
+  const dialogTitle = page.getByText('Close Terminal', { exact: true })
+  await expect(dialogTitle).toBeVisible()
+  const cancel = page.getByRole('button', { name: 'Cancel', exact: true })
+  await expect(cancel).toBeVisible()
+
+  // Cancel keeps the terminal; focus returns to the opener, the menu button.
+  await cancel.tap()
+  await expect(dialogTitle).toBeHidden()
+  await expect(terminalInput).toBeVisible()
+  await expect(menu).toBeFocused()
+
+  // Close removes it; focus is on the menu button again.
+  await closeTerminal(page)
+  await expect(terminalInput).toHaveCount(0)
+  await expect(menu).toBeFocused()
+})
+
 // ---------------------------------------------------------------------------
 // Split collapse
 // ---------------------------------------------------------------------------
@@ -558,7 +623,7 @@ test('the Files header path is tappable below the root: segments, back slide, pe
   const project = await createProject({ [`${DEEP_FOLDERS}/deep.md`]: 'deep content' })
   await openShell(page, project)
 
-  await page.getByRole('button', { name: 'Browse files' }).tap()
+  await openFilesSheet(page)
   // At the root the path is the plain "Project files" text, no segments.
   await expect(page.getByText('Project files', { exact: true })).toBeVisible()
   await expect(folderPath(page)).toHaveCount(0)
@@ -605,7 +670,7 @@ test('the Files header path is tappable below the root: segments, back slide, pe
   await expect(
     page.getByRole('heading', { level: 1, name: project.name, exact: true })
   ).toBeVisible()
-  await page.getByRole('button', { name: 'Browse files' }).tap()
+  await openFilesSheet(page)
   await expect(folderPath(page).locator('[aria-current="page"]')).toHaveText('src')
 
   // The first segment is the project root: tapping it ends the breadcrumb.
@@ -621,7 +686,7 @@ test('breadcrumb segments have a 44px vertical hit area without growing the head
   const project = await createProject({ [`${DEEP_FOLDERS}/deep.md`]: 'deep content' })
   await openShell(page, project)
 
-  await page.getByRole('button', { name: 'Browse files' }).tap()
+  await openFilesSheet(page)
   const refresh = page.getByRole('button', { name: 'Refresh current folder' })
   await expect(refresh).toBeVisible()
   const rootToolbarY = (await refresh.boundingBox())?.y
@@ -671,7 +736,7 @@ test('a long path clips from the left and keeps the current folder visible', asy
   const project = await createProject({ [`${longFolders.join('/')}/x.md`]: 'long path' })
   await openShell(page, project)
 
-  await page.getByRole('button', { name: 'Browse files' }).tap()
+  await openFilesSheet(page)
   for (const folder of longFolders) {
     await page.getByRole('button', { name: `Open folder ${folder}`, exact: true }).tap()
   }

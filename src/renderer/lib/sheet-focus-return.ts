@@ -151,6 +151,26 @@ export function sheetCloseAutoFocus(id: string): (event: Event) => void {
   }
 }
 
+/**
+ * Snapshot sheet `id`'s recorded opener and fallback without consuming them,
+ * and return a function that focuses the first of them that is still connected
+ * and takes focus (it returns whether one did). For a flow that closes the sheet
+ * to hand off to another overlay and wants focus back only once that overlay is
+ * gone: the close consumes the record, so it has to be read before the close.
+ * Like the close handler, it never lands on an editor or terminal surface.
+ */
+export function holdSheetReturnTargets(id: string): () => boolean {
+  const targets = [openers.get(id), fallbacks.get(id)]
+  return () => {
+    for (const target of targets) {
+      if (!isFocusReturnTarget(target)) continue
+      target.focus()
+      if (document.activeElement === target) return true
+    }
+    return false
+  }
+}
+
 /** @internal test helper: forget every recorded opener, fallback and destination. */
 export function _resetSheetFocusReturnForTests(): void {
   openers.clear()

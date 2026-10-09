@@ -35,6 +35,9 @@ test.setTimeout(120_000)
 /** The id of the shell header's `h1`: where a navigation hands focus (else the opener). */
 const SHELL_TITLE_ID = 'mobile-shell-title'
 
+/** The footer's healthy reading: the status and the host this client talks to (V-12). */
+const CONNECTED_TEXT = `Connected · ${new URL(E2E_BASE_URL).host}`
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -338,7 +341,7 @@ test('the drawer is the home: Menu, project row, search, New chat, Open, History
   await expectTouchTarget(snapshots, 'Snapshots')
   await expectTouchTarget(gitHistory, 'Git history')
   await expectTouchTarget(drawer.getByRole('button', { name: 'New terminal' }), 'New terminal')
-  await expect(connection).toHaveText('Connected')
+  await expect(connection).toHaveText(CONNECTED_TEXT)
 
   // A non-git project shows its name only: no "{branch} · {Local|Worktree}" line.
   await expect(projectRow).toContainText(project.name)
@@ -814,7 +817,7 @@ test('New chat opens the launcher and Snapshots keeps the shell and its menu', a
   await expect.poll(() => page.url()).toContain('/snapshots')
   await expectNavigationFocus(page)
   drawer = await openDrawer(page)
-  await expect(drawer.getByRole('status')).toHaveText('Connected')
+  await expect(drawer.getByRole('status')).toHaveText(CONNECTED_TEXT)
 })
 
 test('a degraded control channel reads as text with a warning lamp in the footer', async ({
@@ -839,7 +842,7 @@ test('a degraded control channel reads as text with a warning lamp in the footer
   const drawer = await openDrawer(page)
   const status = drawer.getByRole('status')
   const lamp = status.locator('svg')
-  await expect(status).toHaveText('Connected')
+  await expect(status).toHaveText(CONNECTED_TEXT)
   const connectedColour = await lamp.evaluate((el) => getComputedStyle(el).color)
 
   channelDown = true

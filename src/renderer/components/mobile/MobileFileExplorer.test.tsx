@@ -1,5 +1,5 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -932,6 +932,209 @@ describe('MobileFileExplorer', () => {
     // Semantic tokens only.
     expect(nav.className).toContain('text-muted-foreground')
     expect(within(nav).getByText('lib').className).toContain('text-foreground')
+  })
+
+  describe('a Windows-hosted termul-server (verbatim paths, L-20)', () => {
+    it('shows real segments for a persisted verbatim folder under a plain drive root', async () => {
+      const nav = await openAtFolder('C:/proj', '//?/C:/proj/src/lib', [['C:/proj/src/lib', []]])
+
+      expect(crumbLabels(nav)).toEqual(['proj', 'src'])
+      expect(within(nav).getByText('lib')).toHaveAttribute('aria-current', 'page')
+      expect(nav.textContent).toBe('projsrclib')
+      expect(screen.getByRole('heading', { name: 'lib' })).toBeInTheDocument()
+      expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+    })
+
+    it('drills through verbatim entries, taps an ancestor and steps Back one level at a time', async () => {
+      mockExplorerState.rootPath = 'C:/proj'
+      mockExplorerState.directoryContents = new Map([
+        ['C:/proj', [entry('src', 'directory', '//?/C:/proj/src')]],
+        ['C:/proj/src', [entry('lib', 'directory', '//?/C:/proj/src/lib')]],
+        ['C:/proj/src/lib', [entry('deep', 'directory', '//?/C:/proj/src/lib/deep')]],
+        ['C:/proj/src/lib/deep', []]
+      ])
+      mockProjectId = 'proj-1'
+      mockPersistenceRead.mockResolvedValue({ success: false })
+      render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+      fireEvent.click(await screen.findByText('src'))
+      fireEvent.click(await screen.findByText('lib'))
+      fireEvent.click(await screen.findByText('deep'))
+
+      // The breadcrumb is real segments, not the garbled fallback path.
+      const nav = await screen.findByRole('navigation', { name: 'Folder path' })
+      expect(crumbLabels(nav)).toEqual(['proj', 'src', 'lib'])
+      expect(within(nav).getByText('deep')).toHaveAttribute('aria-current', 'page')
+      expect(mockPersistenceWrite).toHaveBeenLastCalledWith(
+        'mobile-file-explorer/proj-1',
+        'C:/proj/src/lib/deep'
+      )
+
+      // Back goes up exactly one level, not to the root.
+      fireEvent.click(screen.getByLabelText('Back to parent folder'))
+      expect(await screen.findByRole('heading', { name: 'lib' })).toBeInTheDocument()
+      expect(mockPersistenceWrite).toHaveBeenLastCalledWith(
+        'mobile-file-explorer/proj-1',
+        'C:/proj/src/lib'
+      )
+      expect(crumbLabels(screen.getByRole('navigation', { name: 'Folder path' }))).toEqual([
+        'proj',
+        'src'
+      ])
+
+      // Tapping an ancestor navigates there.
+      fireEvent.click(
+        within(screen.getByRole('navigation', { name: 'Folder path' })).getByRole('button', {
+          name: 'src'
+        })
+      )
+      expect(await screen.findByRole('heading', { name: 'src' })).toBeInTheDocument()
+      expect(mockPersistenceWrite).toHaveBeenLastCalledWith(
+        'mobile-file-explorer/proj-1',
+        'C:/proj/src'
+      )
+
+      // And Back from there lands on the root.
+      fireEvent.click(screen.getByLabelText('Back to parent folder'))
+      expect(await screen.findByText('Project files')).toBeInTheDocument()
+      expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+    })
+
+    it('maps a verbatim UNC folder onto a plain UNC root', async () => {
+      const nav = await openAtFolder('//srv/share', '//?/UNC/srv/share/p/q', [
+        ['//srv/share/p/q', []]
+      ])
+
+      expect(crumbLabels(nav)).toEqual(['share', 'p'])
+      expect(within(nav).getByText('q')).toHaveAttribute('aria-current', 'page')
+    })
+
+    it('hands the raw listing path, unchanged, to file operations', async () => {
+      mockExplorerState.rootPath = 'C:/proj'
+      mockExplorerState.directoryContents = new Map([
+        ['C:/proj', [entry('a.txt', 'file', '//?/C:/proj/a.txt')]]
+      ])
+      render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+      fireEvent.click(await screen.findByText('a.txt'))
+
+      await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('//?/C:/proj/a.txt'))
+      expect(mockSelectPath).toHaveBeenCalledWith('//?/C:/proj/a.txt')
+      expect(mockAddEditorTab).toHaveBeenCalledWith('//?/C:/proj/a.txt')
+    })
+
+    it('still groups plain paths exactly as before', async () => {
+      const nav = await openAtFolder('/proj', '/proj/src/lib', [['/proj/src/lib', []]])
+
+      expect(crumbLabels(nav)).toEqual(['proj', 'src'])
+    })
+  })
+
+  describe('a breadcrumb wider than the header (clipped ancestors, L-35)', () => {
+    type Report = Array<{ target: Element; isIntersecting: boolean }>
+
+    class FakeObserver {
+      static instances: FakeObserver[] = []
+      observed: Element[] = []
+      disconnected = false
+
+      constructor(
+        readonly callback: (entries: Report) => void,
+        readonly options: IntersectionObserverInit
+      ) {
+        FakeObserver.instances.push(this)
+      }
+
+      observe(element: Element): void {
+        this.observed.push(element)
+      }
+
+      disconnect(): void {
+        this.disconnected = true
+      }
+    }
+
+    const latest = (): FakeObserver => {
+      const observer = FakeObserver.instances.at(-1)
+      if (!observer) throw new Error('no observer was created')
+      return observer
+    }
+
+    beforeEach(() => {
+      FakeObserver.instances = []
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('observes every ancestor against the path row; all start tabbable', async () => {
+      vi.stubGlobal('IntersectionObserver', FakeObserver)
+      const nav = await openAtFolder('/proj', '/proj/src/lib/deep', [['/proj/src/lib/deep', []]])
+
+      await waitFor(() => expect(FakeObserver.instances.length).toBeGreaterThan(0))
+      const buttons = within(nav).getAllByRole('button')
+      expect(latest().options.root).toBe(nav)
+      expect(latest().observed).toEqual(buttons)
+      for (const button of buttons) expect(button).not.toHaveAttribute('tabindex')
+    })
+
+    it('takes a fully clipped ancestor out of the tab order, and puts it back once visible', async () => {
+      vi.stubGlobal('IntersectionObserver', FakeObserver)
+      const nav = await openAtFolder('/proj', '/proj/src/lib/deep', [['/proj/src/lib/deep', []]])
+      await waitFor(() => expect(FakeObserver.instances.length).toBeGreaterThan(0))
+      const [root, src, lib] = within(nav).getAllByRole('button')
+
+      act(() =>
+        latest().callback([
+          { target: root, isIntersecting: false },
+          { target: src, isIntersecting: false },
+          { target: lib, isIntersecting: true }
+        ])
+      )
+      expect(root).toHaveAttribute('tabindex', '-1')
+      expect(src).toHaveAttribute('tabindex', '-1')
+      expect(lib).not.toHaveAttribute('tabindex')
+      // The Back button still steps up a level, so nothing is unreachable.
+      expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
+
+      act(() => latest().callback([{ target: src, isIntersecting: true }]))
+      expect(src).not.toHaveAttribute('tabindex')
+      expect(root).toHaveAttribute('tabindex', '-1')
+    })
+
+    it('observes the new ancestors after navigating, and drops a segment that left', async () => {
+      vi.stubGlobal('IntersectionObserver', FakeObserver)
+      const nav = await openAtFolder('/proj', '/proj/src/lib/deep', [
+        ['/proj/src/lib/deep', []],
+        ['/proj/src', []]
+      ])
+      await waitFor(() => expect(FakeObserver.instances.length).toBeGreaterThan(0))
+      const lib = within(nav).getByRole('button', { name: 'lib' })
+      act(() => latest().callback([{ target: lib, isIntersecting: false }]))
+      expect(lib).toHaveAttribute('tabindex', '-1')
+
+      fireEvent.click(within(nav).getByRole('button', { name: 'src' }))
+      expect(await screen.findByRole('heading', { name: 'src' })).toBeInTheDocument()
+
+      const updated = screen.getByRole('navigation', { name: 'Folder path' })
+      await waitFor(() => expect(latest().options.root).toBe(updated))
+      expect(latest().observed).toEqual(within(updated).getAllByRole('button'))
+      for (const button of within(updated).getAllByRole('button')) {
+        expect(button).not.toHaveAttribute('tabindex')
+      }
+    })
+
+    it('without IntersectionObserver every segment stays tabbable', async () => {
+      vi.stubGlobal('IntersectionObserver', undefined)
+      const nav = await openAtFolder('/proj', '/proj/src/lib/deep', [['/proj/src/lib/deep', []]])
+
+      expect(within(nav).getAllByRole('button')).toHaveLength(3)
+      for (const button of within(nav).getAllByRole('button')) {
+        expect(button).not.toHaveAttribute('tabindex')
+      }
+      expect(FakeObserver.instances).toHaveLength(0)
+    })
   })
 
   describe('navigateTo guard', () => {
