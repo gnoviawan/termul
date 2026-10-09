@@ -1,8 +1,78 @@
 import type { GitFileStatus } from '@shared/types/ipc.types'
 import type React from 'react'
-import { GitStatusBadge } from '@/components/git/git-status-badge'
-import { ChevronDown } from '@/components/icons'
+import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
+import { GIT_STATUS_LABELS } from '@/components/git/git-status-badge'
+import { ChevronDown, Search } from '@/components/icons'
+import {
+  FOCUS_RING_CLASS,
+  PANEL_FIELD_CLASS,
+  PANEL_FIELD_ICON_CLASS,
+  QUIET_ICON_BUTTON_CLASS
+} from '@/components/ui/panel-styles'
+import { GIT_STATUS_LETTER, GIT_STATUS_TEXT_CLASS } from '@/lib/git-status-display'
 import { cn } from '@/lib/utils'
+
+/** Icon-button chrome for section and row actions. `danger` swaps the hover tone. */
+function actionButtonClass(variant?: 'danger') {
+  return cn(
+    QUIET_ICON_BUTTON_CLASS,
+    'disabled:opacity-40 disabled:cursor-not-allowed',
+    variant === 'danger' && 'hover:bg-destructive/10 hover:text-destructive'
+  )
+}
+
+/** Split a repo-relative path into its file name and parent dir ('' at the root). */
+export function splitGitPath(path: string): { fileName: string; dirName: string } {
+  const slash = path.lastIndexOf('/')
+  return slash < 0
+    ? { fileName: path, dirName: '' }
+    : { fileName: path.slice(slash + 1) || path, dirName: path.slice(0, slash) }
+}
+
+/** 14px file-type icon for a file name in the Git panel. */
+export function GitFileIcon({ fileName }: { fileName: string }) {
+  const dot = fileName.lastIndexOf('.')
+  return (
+    <MaterialFileIcon
+      name={fileName}
+      extension={dot > 0 ? fileName.slice(dot) : null}
+      isDirectory={false}
+      isExpanded={false}
+      depth={0}
+      size={14}
+    />
+  )
+}
+
+/** Shared "Filter changes" field at the top of the changes list. */
+export function ChangesFilter({
+  value,
+  onChange,
+  variant
+}: {
+  value: string
+  onChange: (value: string) => void
+  /** Story 10: `mobile` grows the field to the touch floor. */
+  variant?: 'mobile'
+}) {
+  return (
+    <div className="relative">
+      <Search size={13} aria-hidden className={PANEL_FIELD_ICON_CLASS} />
+      <input
+        type="text"
+        aria-label="Filter changes"
+        placeholder="Filter changes"
+        className={cn(
+          PANEL_FIELD_CLASS,
+          'w-full pl-7 pr-2.5',
+          variant === 'mobile' ? 'h-11' : 'h-8'
+        )}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  )
+}
 
 export function SectionHeader({
   label,
@@ -16,17 +86,16 @@ export function SectionHeader({
   children?: React.ReactNode
 }) {
   return (
-    <div className="group/section flex items-center justify-between px-2 py-1">
-      <div className="label-group text-muted-foreground flex items-center gap-2 tabular-nums">
-        <ChevronDown size={12} />
-        {label} ({count})
-        {selectionCount > 1 && (
-          <span className="text-primary normal-case font-medium">· {selectionCount} selected</span>
-        )}
-      </div>
-      <div className="flex items-center gap-0.5 opacity-60 group-hover/section:opacity-100 focus-within:opacity-100 transition-opacity">
-        {children}
-      </div>
+    <div className="group/section flex h-8 items-center gap-1.5 pl-2 pr-1">
+      <ChevronDown size={11} className="shrink-0 text-muted-foreground" aria-hidden />
+      <span className="label-panel truncate">{label}</span>
+      <span className="text-2xs tabular-nums text-muted-foreground">{count}</span>
+      {selectionCount > 1 && (
+        <span className="truncate text-2xs tabular-nums text-muted-foreground">
+          · {selectionCount} selected
+        </span>
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">{children}</div>
     </div>
   )
 }
@@ -51,12 +120,7 @@ export function SectionAction({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
-        variant === 'danger'
-          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-      )}
+      className={cn(actionButtonClass(variant), 'size-6')}
     >
       {icon}
     </button>
@@ -95,17 +159,51 @@ export function RowAction({
       disabled={disabled}
       onClick={handleClick}
       className={cn(
-        'flex items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
-        touch ? 'relative size-8' : 'h-6 w-6',
-        touch && "after:absolute after:-inset-1.5 after:content-['']",
-        variant === 'danger'
-          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+        actionButtonClass(variant),
+        touch ? "relative size-8 after:absolute after:-inset-1.5 after:content-['']" : 'h-6 w-6'
       )}
     >
       {icon}
     </button>
   )
+}
+
+/**
+ * Git status letter (M / A / U / D / R), from the file explorer's tables so
+ * both surfaces stay in sync. `staged` is a legacy value the backend no longer
+ * sends; it reads as modified, as in the explorer.
+ */
+export function GitStatusLetter({
+  status,
+  className
+}: {
+  status: GitFileStatus
+  className?: string
+}) {
+  const letterStatus = status === 'staged' ? 'modified' : status
+  const label = GIT_STATUS_LABELS[status]
+  return (
+    <span
+      role="img"
+      title={label}
+      aria-label={label}
+      className={cn(
+        'w-3 shrink-0 text-center font-mono text-2xs font-semibold',
+        GIT_STATUS_TEXT_CLASS[letterStatus],
+        className
+      )}
+    >
+      {GIT_STATUS_LETTER[letterStatus]}
+    </span>
+  )
+}
+
+/** File row look per state; the name inherits the row's text colour. */
+const ROW_STATE_CLASS: Record<'active' | 'selected' | 'idle', string> = {
+  /** The row whose diff is open: the "you are here" keycap. */
+  active: 'keycap text-foreground',
+  selected: 'bg-foreground/[0.06] text-foreground',
+  idle: 'text-secondary-foreground hover:bg-foreground/[0.03]'
 }
 
 export function FileItem({
@@ -117,16 +215,17 @@ export function FileItem({
   children
 }: {
   file: { path: string; status: GitFileStatus }
+  /** The row whose diff is open — the "you are here" keycap. */
   isActive: boolean
+  /** Part of the multi-selection. */
   isSelected: boolean
   onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
-  /** Story 10: `mobile` lifts the filename/dir text to the 12px floor;
-      desktop keeps its denser text-2xs/text-4xs scale. */
+  /** Story 10: `mobile` lifts the dir text to the 12px floor and grows the
+      row to the touch floor; desktop keeps the dense 28px row. */
   variant?: 'mobile'
   children?: React.ReactNode
 }) {
-  const fileName = file.path.split('/').pop() || file.path
-  const dirName = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : ''
+  const { fileName, dirName } = splitGitPath(file.path)
   const isMobile = variant === 'mobile'
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -145,26 +244,23 @@ export function FileItem({
       tabIndex={0}
       onClick={onClick}
       onKeyDown={handleKeyDown}
-      aria-selected={isSelected || isActive}
+      aria-selected={isActive || isSelected}
       className={cn(
-        'group/row flex w-full items-center gap-3 px-3 py-2 rounded-md text-left cursor-pointer transition-colors select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60',
-        isSelected
-          ? 'bg-primary/15 text-foreground'
-          : isActive
-            ? 'bg-primary/10 text-primary'
-            : 'hover:bg-secondary/80 text-muted-foreground hover:text-foreground'
+        'group/row flex w-full min-w-0 items-center gap-2 rounded-md pl-2 pr-1 text-left text-xs cursor-pointer select-none transition-colors duration-150 ease-out',
+        FOCUS_RING_CLASS,
+        isMobile ? 'min-h-11 py-1' : 'h-7',
+        ROW_STATE_CLASS[isActive ? 'active' : isSelected ? 'selected' : 'idle']
       )}
     >
-      <GitStatusBadge status={file.status} />
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <span
-          className={cn('font-medium truncate leading-tight', isMobile ? 'text-xs' : 'text-2xs')}
-        >
-          {fileName}
-        </span>
+      <GitFileIcon fileName={fileName} />
+      <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
+        <span className="shrink-0 truncate max-w-full text-xs">{fileName}</span>
         {dirName && (
           <span
-            className={cn('truncate opacity-50 leading-tight', isMobile ? 'text-xs' : 'text-4xs')}
+            className={cn(
+              'min-w-0 truncate text-muted-foreground',
+              isMobile ? 'text-xs' : 'text-2xs'
+            )}
           >
             {dirName}
           </span>
@@ -172,13 +268,13 @@ export function FileItem({
       </div>
       <div
         className={cn(
-          'flex shrink-0 items-center gap-0.5 transition-opacity focus-within:opacity-100',
-          isSelected || isActive ? 'opacity-100' : 'opacity-60 group-hover/row:opacity-100',
-          isMobile && 'opacity-100'
+          'flex shrink-0 items-center gap-0.5 transition-opacity duration-150 ease-out focus-within:opacity-100',
+          isMobile ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100'
         )}
       >
         {children}
       </div>
+      <GitStatusLetter status={file.status} />
     </div>
   )
 }

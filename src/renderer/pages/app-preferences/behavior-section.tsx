@@ -1,4 +1,6 @@
 import { SettingsSection } from '@/components/settings/SettingsLayout'
+import { SettingsSwitchRow } from '@/components/settings/SettingsSwitchRow'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import {
   DEFAULT_APP_SETTINGS,
@@ -25,45 +27,6 @@ interface BehaviorSectionProps {
   handleNotifyOnTerminalIdleToggle: (enabled: boolean) => void
   handleNotifyOnAgentChatTurnFinishedToggle: (enabled: boolean) => void
   handleNotifyOnAgentChatNeedsYouToggle: (enabled: boolean) => void
-}
-
-function NotifySwitch({
-  label,
-  description,
-  checked,
-  onToggle
-}: {
-  label: string
-  description: string
-  checked: boolean
-  onToggle: (enabled: boolean) => void
-}): React.JSX.Element {
-  return (
-    <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
-      <div className="flex-1">
-        <div className="text-sm text-foreground">{label}</div>
-        <div className="text-xs text-muted-foreground mt-0.5">{description}</div>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        onClick={() => onToggle(!checked)}
-        className={cn(
-          'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-          checked ? 'bg-primary-fill' : 'bg-input'
-        )}
-      >
-        <span
-          className={cn(
-            'inline-block h-4 w-4 transform rounded-full bg-primary-foreground transition-transform',
-            checked ? 'translate-x-6' : 'translate-x-1'
-          )}
-        />
-      </button>
-    </div>
-  )
 }
 
 export function BehaviorSection({
@@ -101,7 +64,7 @@ export function BehaviorSection({
             <select
               value={terminalUrlOpenMode}
               onChange={(e) => handleTerminalUrlOpenModeChange(e.target.value)}
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+              className={cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm')}
             >
               {TERMINAL_URL_OPEN_MODE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -120,28 +83,12 @@ export function BehaviorSection({
             <label className="block text-sm font-medium text-secondary-foreground mb-2">
               Orphan Detection
             </label>
-            <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
-              <div className="flex-1">
-                <div className="text-sm text-foreground">Enable orphan detection</div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  Automatically clean up terminals that have been inactive
-                </div>
-              </div>
-              <button
-                onClick={() => handleOrphanDetectionToggle(!orphanDetectionEnabled)}
-                className={cn(
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-                  orphanDetectionEnabled ? 'bg-primary-fill' : 'bg-input'
-                )}
-              >
-                <span
-                  className={cn(
-                    'inline-block h-4 w-4 transform rounded-full bg-primary-foreground transition-transform',
-                    orphanDetectionEnabled ? 'translate-x-6' : 'translate-x-1'
-                  )}
-                />
-              </button>
-            </div>
+            <SettingsSwitchRow
+              label="Enable orphan detection"
+              description="Automatically clean up terminals that have been inactive"
+              checked={orphanDetectionEnabled}
+              onToggle={handleOrphanDetectionToggle}
+            />
           </div>
 
           {/* Timeout Dropdown */}
@@ -155,7 +102,10 @@ export function BehaviorSection({
                 handleOrphanTimeoutChange(e.target.value ? parseInt(e.target.value, 10) : null)
               }
               disabled={!orphanDetectionEnabled}
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              className={cn(
+                PANEL_FIELD_CLASS,
+                'w-full px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50'
+              )}
             >
               {ORPHAN_TIMEOUT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -173,32 +123,12 @@ export function BehaviorSection({
             <label className="block text-sm font-medium text-secondary-foreground mb-2">
               Editor Auto Save
             </label>
-            <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
-              <div className="flex-1">
-                <div className="text-sm text-foreground">Enable auto save</div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  Automatically save editor files after you stop typing
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={editorAutoSave}
-                aria-label="Enable auto save"
-                onClick={() => handleEditorAutoSaveToggle(!editorAutoSave)}
-                className={cn(
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-                  editorAutoSave ? 'bg-primary-fill' : 'bg-input'
-                )}
-              >
-                <span
-                  className={cn(
-                    'inline-block h-4 w-4 transform rounded-full bg-primary-foreground transition-transform',
-                    editorAutoSave ? 'translate-x-6' : 'translate-x-1'
-                  )}
-                />
-              </button>
-            </div>
+            <SettingsSwitchRow
+              label="Enable auto save"
+              description="Automatically save editor files after you stop typing"
+              checked={editorAutoSave}
+              onToggle={handleEditorAutoSaveToggle}
+            />
           </div>
 
           {/* Auto Save Delay Dropdown (GH-539) */}
@@ -217,7 +147,10 @@ export function BehaviorSection({
               onChange={(e) => handleEditorAutoSaveDelayChange(parseInt(e.target.value, 10))}
               disabled={!editorAutoSave}
               aria-label="Auto save delay"
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              className={cn(
+                PANEL_FIELD_CLASS,
+                'w-full px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50'
+              )}
             >
               {EDITOR_AUTO_SAVE_DELAY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -235,19 +168,19 @@ export function BehaviorSection({
               Notifications
             </div>
             <div className="space-y-3">
-              <NotifySwitch
+              <SettingsSwitchRow
                 label="Notify when a terminal agent finishes"
                 description="Ping when a long-running terminal tab goes quiet."
                 checked={notifyOnTerminalIdle}
                 onToggle={handleNotifyOnTerminalIdleToggle}
               />
-              <NotifySwitch
+              <SettingsSwitchRow
                 label="Notify when an agent chat turn finishes"
                 description="Ping when an Agent Chat turn ends and nothing is queued."
                 checked={notifyOnAgentChatTurnFinished}
                 onToggle={handleNotifyOnAgentChatTurnFinishedToggle}
               />
-              <NotifySwitch
+              <SettingsSwitchRow
                 label="Notify when an agent chat needs you"
                 description="Ping when an Agent Chat waits for approval or an answer."
                 checked={notifyOnAgentChatNeedsYou}

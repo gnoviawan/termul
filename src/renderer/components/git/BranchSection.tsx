@@ -14,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 
 interface BranchSectionProps {
@@ -42,7 +43,7 @@ export function BranchSection({
           variant="ghost"
           size={isMobile ? 'touch' : 'sm'}
           className={cn(
-            'px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary',
+            'px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-foreground/[0.03]',
             isMobile ? 'min-h-11' : 'h-8'
           )}
         >
@@ -67,13 +68,10 @@ export function BranchSection({
             <DropdownMenuItem
               key={b}
               onClick={() => onSwitchBranch(b)}
-              className={cn(
-                'flex items-center justify-between text-xs cursor-pointer',
-                b === currentBranch && 'bg-accent font-semibold'
-              )}
+              className="flex items-center justify-between text-xs cursor-pointer"
             >
               <span className="truncate">{b}</span>
-              {b === currentBranch && <Check size={12} className="text-primary" />}
+              {b === currentBranch && <Check size={12} className="shrink-0 text-foreground" />}
             </DropdownMenuItem>
           ))
         )}
@@ -115,7 +113,7 @@ export function CreateBranchDialog({
             <label className="text-muted-foreground">Branch name</label>
             <input
               type="text"
-              className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 focus:ring-1 focus:ring-primary outline-none text-xs"
+              className={cn(PANEL_FIELD_CLASS, 'w-full rounded-md px-3 py-1.5')}
               placeholder="e.g. feature/new-login"
               value={branchName}
               onChange={(e) => onBranchNameChange(e.target.value)}

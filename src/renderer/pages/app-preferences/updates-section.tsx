@@ -1,6 +1,8 @@
 import { AlertCircle, CheckCircle2, Download, ExternalLink } from '@/components/icons'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
+import { SettingsSwitchRow } from '@/components/settings/SettingsSwitchRow'
 import { Button } from '@/components/ui/button'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import type { UpdateChannel } from '@/lib/tauri-updater-api'
 import { cn } from '@/lib/utils'
@@ -145,20 +147,14 @@ export function UpdatesSection({
                         aria-pressed={active}
                         disabled={isChecking}
                         className={cn(
-                          'flex flex-col items-start gap-0.5 px-3 py-2.5 border rounded-lg text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                          'flex flex-col items-start gap-0.5 rounded-lg border border-border px-3 py-2.5 text-left transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-50',
+                          FOCUS_RING_CLASS,
                           active
-                            ? 'bg-primary/10 border-primary'
-                            : 'bg-secondary/30 border-border hover:bg-secondary/60'
+                            ? 'keycap text-foreground'
+                            : 'text-secondary-foreground hover:bg-foreground/[0.03]'
                         )}
                       >
-                        <span
-                          className={cn(
-                            'text-sm font-medium',
-                            active ? 'text-primary' : 'text-foreground'
-                          )}
-                        >
-                          {option.label}
-                        </span>
+                        <span className="text-sm font-medium">{option.label}</span>
                         <span className="text-3xs text-muted-foreground font-normal">
                           {option.description}
                         </span>
@@ -264,28 +260,12 @@ export function UpdatesSection({
             <label className="block text-sm font-medium text-secondary-foreground mb-2">
               Auto-update
             </label>
-            <div className="flex items-center justify-between bg-secondary/30 border border-border rounded-md px-4 py-3">
-              <div className="flex-1">
-                <div className="text-sm text-foreground">Automatically check for updates</div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  When enabled, the app will periodically check for new versions
-                </div>
-              </div>
-              <button
-                onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
-                className={cn(
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-                  autoUpdateEnabled ? 'bg-primary-fill' : 'bg-input'
-                )}
-              >
-                <span
-                  className={cn(
-                    'inline-block h-4 w-4 transform rounded-full bg-primary-foreground transition-transform',
-                    autoUpdateEnabled ? 'translate-x-6' : 'translate-x-1'
-                  )}
-                />
-              </button>
-            </div>
+            <SettingsSwitchRow
+              label="Automatically check for updates"
+              description="When enabled, the app will periodically check for new versions"
+              checked={autoUpdateEnabled}
+              onToggle={handleAutoUpdateToggle}
+            />
           </div>
 
           {/* Skipped Version */}

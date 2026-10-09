@@ -1,6 +1,6 @@
 import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { logFrontendError } from '@/lib/log-api'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
@@ -258,7 +258,9 @@ const { gitState } = vi.hoisted(() => ({
     branchCreate: vi.fn()
   }
 }))
-vi.mock('@/stores/git-status-store', () => ({
+vi.mock('@/stores/git-status-store', async (importOriginal) => ({
+  selectChangedFileCount: (await importOriginal<typeof import('@/stores/git-status-store')>())
+    .selectChangedFileCount,
   diffKey: (cwd: string, path: string, staged: boolean) => `${cwd}:${path}:${staged}`,
   useGitStatusStore: (selector: (s: Record<string, unknown>) => unknown) => selector(gitState)
 }))
@@ -441,6 +443,12 @@ function renderLayout(): RenderResult {
 }
 
 describe('WorkspaceLayout mobile branch', () => {
+  // GitPanel is React.lazy. Under full-suite load the first cold transform of
+  // its chunk can outlast findBy timeouts, so load it once up front.
+  beforeAll(async () => {
+    await import('@/components/git/GitPanel')
+  }, 60000)
+
   beforeEach(() => {
     vi.clearAllMocks()
     tauriRef.current = false
@@ -555,11 +563,14 @@ describe('WorkspaceLayout mobile branch', () => {
     renderLayout()
 
     // Sheet starts closed: the GitPanel file-list filter input is absent.
-    expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
     // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
     await chooseMoreItem('Git changes')
     // GitPanel mobile branch renders the file-list filter input (full-width).
-    expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    // First test to load the lazy GitPanel chunk: a cold transform can pass 1s.
+    expect(
+      await screen.findByPlaceholderText('Filter changes', {}, { timeout: 5000 })
+    ).toBeInTheDocument()
   })
 
   // Story 10 (QA F9/F7): the git sheet is no longer a radius-0 full-screen
@@ -569,7 +580,7 @@ describe('WorkspaceLayout mobile branch', () => {
     renderLayout()
 
     await chooseMoreItem('Git changes')
-    const filter = await screen.findByPlaceholderText('Filter changes...')
+    const filter = await screen.findByPlaceholderText('Filter changes', {}, { timeout: 5000 })
 
     // The ⋯ sheet may still be unmounting; pick the Git sheet itself.
     const sheetContent = filter.closest('[data-sheet]')
@@ -595,7 +606,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
     await chooseMoreItem('Git changes')
-    expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
 
     // Active project switches to one without a path while the sheet is open.
     projectRef.current = { id: 'p2', name: 'NoPath' }
@@ -609,7 +620,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // The guard effect closes the sheet → GitPanel file list unmounts.
     await waitFor(() =>
-      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
     )
   })
 
@@ -620,7 +631,7 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
 
       await chooseMoreItem('Git changes')
-      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
 
       // The overlay grew the stack 0 → 1, arming the history sentinel; a
       // hardware back pops it. jsdom fires popstate only via real history
@@ -628,7 +639,7 @@ describe('WorkspaceLayout mobile branch', () => {
       window.dispatchEvent(new Event('popstate'))
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
     })
 

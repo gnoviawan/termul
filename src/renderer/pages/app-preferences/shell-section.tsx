@@ -1,5 +1,7 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
+import { cn } from '@/lib/utils'
 
 interface ShellSectionProps {
   defaultShell: string
@@ -43,7 +45,7 @@ export function ShellSection({
                 return match?.path ?? defaultShell
               })()}
               onChange={(e) => handleDefaultShellChange(e.target.value)}
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+              className={cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm')}
             >
               <option value="">System Default</option>
               {availableShells?.available?.map((shell) => (

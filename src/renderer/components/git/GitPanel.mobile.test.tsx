@@ -137,7 +137,7 @@ describe('GitPanel mobile branch', () => {
     const { container } = render(<GitPanel cwd="/work" isVisible />)
 
     // File list is present: the branch dropdown + the filter input.
-    expect(screen.getByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Filter changes')).toBeInTheDocument()
     // No back button (only shown when a file is selected).
     expect(screen.queryByLabelText('Back to file list')).not.toBeInTheDocument()
     // No diff view rendered (mobile hides the diff panel until a file is picked).
@@ -153,7 +153,7 @@ describe('GitPanel mobile branch', () => {
     // Diff view + back button render; file list is hidden.
     expect(screen.getByTestId('git-diff-view')).toBeInTheDocument()
     expect(screen.getByLabelText('Back to file list')).toBeInTheDocument()
-    expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
   })
 
   it('clears selectedFile when the back button is tapped', () => {
@@ -316,13 +316,13 @@ describe('GitPanel desktop branch (regression — byte-identical layout)', () =>
     // Desktop keeps the `w-80` file-list sidebar AND the diff view side-by-side.
     expect(container.querySelector('.w-80')).not.toBeNull()
     expect(screen.getByTestId('git-diff-view')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Filter changes')).toBeInTheDocument()
     // Desktop never renders the mobile back button.
     expect(screen.queryByLabelText('Back to file list')).not.toBeInTheDocument()
   })
 
   // Matrix row 8: desktop unchanged — dense sizing + hover idioms preserved.
-  it('desktop keeps dense row actions, sub-12px text, and hover-gated stash actions', () => {
+  it('desktop keeps dense row actions, 28px rows, and hover-gated stash actions', () => {
     gitState.selectedFile = null
     gitState.statuses['/work'] = [{ path: 'src/a.ts', staged: false, status: 'modified' }]
     gitState.stashes['/work'] = [{ index: 0, message: 'wip on dev' }]
@@ -334,9 +334,10 @@ describe('GitPanel desktop branch (regression — byte-identical layout)', () =>
     expect(stage.className).not.toContain('size-8')
     expect(stage.className).not.toContain('after:-inset-1.5')
 
-    // Desktop filename keeps the dense text-2xs / dir text-4xs scale.
-    expect(screen.getByText('a.ts').className).toContain('text-2xs')
-    expect(screen.getByText('src').className).toContain('text-4xs')
+    // Desktop row: 28px row, 12px file name, 11px muted dir.
+    expect(screen.getByText('a.ts').className).toContain('text-xs')
+    expect(screen.getByText('src').className).toContain('text-2xs')
+    expect(screen.getByText('a.ts').closest('[role="option"]')?.className).toContain('h-7')
 
     // Desktop stash actions keep the hover-only opacity-0 group idiom and the
     // destructive token swap (token-equivalent, no layout change).
