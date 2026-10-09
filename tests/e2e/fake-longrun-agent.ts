@@ -43,6 +43,12 @@
  * `ELICIT_ANSWER=<json>` in an `agent_message_chunk` so specs parse the
  * real wire response back, and the prompt resolves `end_turn`.
  *
+ * `[PERMISSION]` (mobile shell suites): right after accepting the prompt the
+ * agent asks the host for a tool permission (`session/request_permission`)
+ * and leaves it unanswered, so the chat shows a pending approval — "needs
+ * you" — for as long as a client is connected (the host denies it only after
+ * its disconnect grace). The turn keeps streaming.
+ *
  * Composer fixture (mobile-composer-row suite, additive): a `session/new`
  * whose cwd contains `composer-row-e2e` advertises two modes plus a model and
  * a thought-level config option (so the composer toolbar has every chip), and
@@ -181,6 +187,14 @@ const ELICIT_SCHEMA: JsonValue = {
     }
   }
 }
+
+/** True when the prompt text carries the `[PERMISSION]` marker. */
+function wantsPermission(prompt: JsonValue | undefined): boolean {
+  return promptText(prompt).includes('[PERMISSION]')
+}
+
+/** Ids of the permission requests this agent sent: the host's replies carry no method. */
+const permissionRequestIds = new Set<string>()
 
 /** A `session/new` cwd carrying this marker gets the composer fixture below. */
 const COMPOSER_CWD_MARKER = 'composer-row-e2e'
@@ -356,8 +370,10 @@ function handle(msg: JsonRpcMessage): void {
   // `error` but no `method`. The only outbound request this agent makes is
   // `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
   // method switch so it never falls into the `default` reply arm (replying
-  // to a response would be protocol noise).
+  // to a response would be protocol noise). The host's reply to a permission
+  // request this agent sent (`[PERMISSION]` marker) needs no answer either.
   if (method === undefined) {
+    if (id !== undefined && permissionRequestIds.delete(String(id))) return
     resolveElicitation(msg)
     return
   }
@@ -455,6 +471,30 @@ function handle(msg: JsonRpcMessage): void {
         write(line)
       }
       if (promptText(p.prompt).includes('[USAGE]')) reportUsage(sessionId)
+      if (wantsPermission(p.prompt)) {
+        const requestId = `perm-${randomUUID().slice(0, 8)}`
+        permissionRequestIds.add(requestId)
+        write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: requestId,
+            method: 'session/request_permission',
+            params: {
+              sessionId,
+              toolCall: {
+                toolCallId: `call-${requestId}`,
+                title: 'Run the e2e tool',
+                kind: 'execute',
+                status: 'pending'
+              },
+              options: [
+                { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+                { optionId: 'reject', name: 'Reject', kind: 'reject_once' }
+              ]
+            }
+          })
+        )
+      }
       // Crash only when armed AND the marker is present: the host re-sends
       // the persisted open user turn verbatim on reopen (possibly on a
       // different session id), and a real crash is a one-time process

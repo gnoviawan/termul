@@ -38,6 +38,9 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `terminal/TerminalSearchBar.tsx` — terminal text search UI
 - `terminal/ActivityIndicator.tsx` — recent terminal activity indicator
 - `mobile/MobileChatShell.tsx` — narrow web shell with terminal creation, selection, and close navigation alongside chat history
+- `mobile/MobileShellHeader.tsx` — shell header: ☰, title block (heading plus the project subtitle button), attention pill, ✎ and ⋯
+- `mobile/MobileHeaderMoreSheet.tsx` — header ⋯ bottom sheet for chats and tabs (Git changes, Files, Command palette, New terminal, Project settings, Close chat)
+- `mobile/MobileTerminalActionsSheet.tsx` — terminal ⋯ bottom sheet (last exit code, rename, restart, command history, close)
 - `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences
 - `TerminalTabBar.tsx` / `TerminalView.tsx` — legacy or transitional terminal view helpers retained in repository
 
