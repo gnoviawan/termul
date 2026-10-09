@@ -605,9 +605,14 @@ test.describe('desktop shell', () => {
     page
   }) => {
     // The desktop shell has no launcher-in-the-pane flow: use the sidebar.
+    // Prompt text typed before the boot-time agent warm-up lands is discarded
+    // with the old composer, so wait for it like `openChat` does (a loaded
+    // server, e.g. after the mobile tests, makes the race visible here too).
+    const warmedUp = watchAgentWarmup(page)
     const projectName = await registerActiveProject()
     await openWorkspace(page)
     await selectProject(page, projectName)
+    await warmedUp
     const prompt = quickPrompt('desktop')
     await launchChat(page, prompt)
     const chat = chatFor(page, prompt)
