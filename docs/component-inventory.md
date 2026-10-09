@@ -43,7 +43,7 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `mobile/MobileDrawerOpenSection.tsx` — the drawer's Open body: agent chats with live status (shared with the desktop `agent-chat-tab` via `workspace/tabs/agent-chat-status.tsx`), then Terminals (create, rename, close), then the remaining tabs, each with a guarded close
 - `mobile/MobileHeaderMoreSheet.tsx` — header ⋯ bottom sheet for chats and tabs (Git changes, Files, Command palette, New terminal, Project settings, Close chat)
 - `mobile/MobileTerminalActionsSheet.tsx` — terminal ⋯ bottom sheet (last exit code, rename, restart, command history, close)
-- `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences
+- `mobile/MobileTerminalControls.tsx` — touch-sized Esc/Tab/Ctrl+C/arrows/PgUp/PgDn and clipboard-paste accessory that writes standard terminal sequences. It also reports its top edge to the toast stack through `useDockClearance` (`hooks/use-dock-clearance.ts`), which publishes `--mobile-dock-height` so toasts clear the bar
 - `TerminalTabBar.tsx` / `TerminalView.tsx` — legacy or transitional terminal view helpers retained in repository
 
 ### Editor Components

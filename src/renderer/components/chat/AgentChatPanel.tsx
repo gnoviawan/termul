@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
+import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
@@ -633,6 +634,13 @@ export function AgentChatPanel({
     elicitationId: approvalsLive ? (pendingElicitation?.requestId ?? null) : null
   })
   const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
+  // The mobile dock (prompts, or the changed-files bar plus the composer)
+  // reports its top edge so the toast stack clears it. The wrapper is a plain
+  // box on the mobile shell and `display: contents` on desktop, so desktop
+  // layout (the starters' `flex-1`) is unchanged. The hook is also above the
+  // early returns: the wrapper may mount long after the first render.
+  const dockRef = useDockClearance(isMobileShell && isVisible)
+  const dockClassName = isMobileShell ? 'flex shrink-0 flex-col' : 'contents'
 
   if (isRestoringChat) return <ChatRestorePreload />
 
@@ -843,7 +851,7 @@ export function AgentChatPanel({
           dialog — the composer, changed-files strip, and queued prompts all
           hide until the prompt resolves. */}
       {!isClosed && (pendingElicitation || pendingQuestion) ? (
-        <>
+        <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
           {pendingElicitation && (
             <ElicitationPrompt
               key={pendingElicitation.requestId}
@@ -865,9 +873,9 @@ export function AgentChatPanel({
               autoFocusFirstOption={isMobileShell && isVisible}
             />
           )}
-        </>
+        </div>
       ) : (
-        <>
+        <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
           <ChatChangedFilesPanel
             cwd={session.cwd}
             toolCalls={toolCalls}
@@ -907,7 +915,7 @@ export function AgentChatPanel({
               <ChatStarters onPick={seedComposer} />
             </div>
           ) : null}
-        </>
+        </div>
       )}
     </div>
   )
