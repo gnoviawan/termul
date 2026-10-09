@@ -1,7 +1,7 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectTemplate } from '@shared/types/project-template.types'
 import { AnimatePresence, motion } from 'framer-motion'
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { basename } from '@/components/chat/chat-attachments'
 import { ChevronDown, ChevronRight, X } from '@/components/icons'
@@ -15,6 +15,7 @@ import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useProjectStore, useProjects } from '@/stores/project-store'
 import type { EnvVariable, Project, ProjectColor } from '@/types/project'
 
@@ -43,6 +44,9 @@ interface NewProjectModalProps {
 const DOUBLED_NAME_RE = /^(.{2,}?)\1$/
 
 export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProjectModalProps) {
+  // Mobile web shell: system back closes this modal (inert on desktop).
+  const overlayId = `new-project-modal:${useId()}`
+  useOverlayRegistration(overlayId, isOpen, onClose, { mobileShellOnly: true })
   const defaultColor = useDefaultProjectColor() as ProjectColor
   // Simple defaults (empty template, app default color, detected default shell,
   // no git init) with the full set of controls back under an Advanced section.

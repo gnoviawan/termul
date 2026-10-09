@@ -3,8 +3,26 @@ import * as React from 'react'
 import { X } from '@/components/icons'
 
 import { cn } from '@/lib/utils'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 
-const Dialog = DialogPrimitive.Root
+/**
+ * Radix `Root` that also registers itself in the overlay back stack while
+ * open on the mobile web shell, so system back closes the topmost dialog and
+ * a close by X, Esc or scrim consumes its history sentinel. Every call site is
+ * controlled (`open` + `onOpenChange`); the close routes through the owner's
+ * own `onOpenChange(false)`, so its guards still run. Inert on desktop.
+ */
+function Dialog({
+  open,
+  onOpenChange,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>): React.JSX.Element {
+  const id = `dialog:${React.useId()}`
+  useOverlayRegistration(id, open === true, () => onOpenChange?.(false), {
+    mobileShellOnly: true
+  })
+  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} {...props} />
+}
 
 const DialogTrigger = DialogPrimitive.Trigger
 

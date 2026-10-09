@@ -50,6 +50,7 @@ import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorkspaceManifestSync } from '@/hooks/use-workspace-manifest-sync'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
+import { useWorkspaceOverlayBackStack } from '@/layouts/use-workspace-overlay-back-stack'
 import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
@@ -95,12 +96,6 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
-import {
-  installOverlayBackHandler,
-  pushOverlaySentinel,
-  useOverlayRegistration,
-  useOverlayStackStore
-} from '@/stores/overlay-stack-store'
 import {
   useActiveProject,
   useActiveProjectId,
@@ -348,34 +343,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const { openGitSheet, closeGitSheet } = useGitSheetStore.getState()
   const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
-  // ── Story 6: overlay stack + hardware back ─────────────────────────────
-  // Every overlay visible on this layout registers itself (id + close) so
-  // the app-root popstate handler can dismiss the topmost one on Android
-  // hardware back instead of the browser exiting the app (QA F5). The
-  // sentinel push happens when the stack transitions 0 → 1 so the next back
-  // lands on a popstate we own.
-  const settingsModalOpen = settingsModalView !== null
-  useOverlayRegistration('git-sheet', gitSheetOpen, closeGitSheet)
-  useOverlayRegistration('command-palette', isCommandPaletteOpen, () =>
-    setIsCommandPaletteOpen(false)
-  )
-  useOverlayRegistration('settings-modal', settingsModalOpen, () =>
-    useSettingsModalStore.getState().close()
-  )
-  const overlayCount = useOverlayStackStore((s) => s.stack.length)
-  const prevOverlayCountRef = useRef(0)
-  useEffect(() => {
-    if (overlayCount > prevOverlayCountRef.current) {
-      // Stack grew (0 → 1, or an overlay stacked on another): arm the
-      // history sentinel so back pops an overlay, not the app.
-      pushOverlaySentinel()
-    }
-    prevOverlayCountRef.current = overlayCount
-  }, [overlayCount])
-  // App-root popstate listener: mounted once for the workspace surface.
-  // (The desktop Tauri shell mounts its own instance — TauriApp parity.)
-  useEffect(() => installOverlayBackHandler(), [])
-
   const isLoaded = useProjectsLoaded()
 
   // #854: probe the web auth gate at boot. On a token-gated server a
@@ -440,6 +407,33 @@ export default function WorkspaceLayout(): React.JSX.Element {
   } | null>(null)
   const [sshPasswordInput, setSSHPasswordInput] = useState('')
   const [sshPromptPasswords, setSSHPromptPasswords] = useState<Record<string, string>>({})
+  const closeSshPasswordPrompt = useCallback(() => {
+    setSSHPasswordPrompt(null)
+    setSSHPasswordInput('')
+  }, [])
+
+  // The Git sheet's open state lives in `useGitSheetStore` (so the chat dock's
+  // changed-files bar can open it); the back stack only ever closes it.
+  const setGitSheetOpen = useCallback(
+    (open: boolean) => {
+      if (!open) closeGitSheet()
+    },
+    [closeGitSheet]
+  )
+
+  // Story 6 + mobile overlay back stack: overlay registrations, the mobile
+  // shell flag and the app-root popstate handler live in one hook.
+  useWorkspaceOverlayBackStack({
+    isMobileWebShell,
+    gitSheetOpen,
+    setGitSheetOpen,
+    isCommandPaletteOpen,
+    setIsCommandPaletteOpen,
+    isCommandHistoryOpen,
+    setIsCommandHistoryOpen,
+    isSshPasswordPromptOpen: sshPasswordPrompt !== null,
+    closeSshPasswordPrompt
+  })
 
   const sshProfileWithPassword = activeSSHProfile
     ? {

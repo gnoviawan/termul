@@ -43,6 +43,11 @@
  * `ELICIT_ANSWER=<json>` in an `agent_message_chunk` so specs parse the
  * real wire response back, and the prompt resolves `end_turn`.
  *
+ * Prompt marker (mobile-overlay-back-stack suite): `[RICH]` answers with one
+ * short turn that carries the content the chat's own overlays hang off — an
+ * external markdown link (link-safety confirm), an inline image (lightbox)
+ * and a subagent tool call (details dialog) — then ends it at once.
+ *
  * `[PERMISSION]` (mobile shell suites): right after accepting the prompt the
  * agent asks the host for a tool permission (`session/request_permission`)
  * and leaves it unanswered, so the chat shows a pending approval — "needs
@@ -198,6 +203,39 @@ const ELICIT_SCHEMA: JsonValue = {
       }
     }
   }
+}
+
+/** A 1x1 PNG: small enough to inline, real enough for the browser to decode. */
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+/**
+ * The `[RICH]` turn: a link, an image and a subagent call, then `end_turn`.
+ * Nothing is registered in `inFlightBySession`, so no timer streams after it.
+ */
+function replyRichTurn(id: number | string | undefined, sessionId: string): void {
+  const update = (body: JsonValue): void => notify('session/update', { sessionId, update: body })
+  update({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: 'Docs: [Example docs](https://example.com/docs)\n\n' }
+  })
+  update({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' }
+  })
+  update({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'rich-subagent-1',
+    title: 'Delegate review',
+    kind: 'other',
+    status: 'completed',
+    rawInput: {
+      subagent_type: 'reviewer',
+      description: 'Review the overlay change',
+      prompt: 'Review the overlay change for dead back presses.'
+    }
+  })
+  respond(id, { stopReason: 'end_turn' })
 }
 
 /** True when the prompt text carries the `[PERMISSION]` marker. */
@@ -595,6 +633,10 @@ function handle(msg: JsonRpcMessage): void {
       const sessionId = String(p.sessionId ?? 'unknown')
       if (inFlightBySession.has(sessionId)) {
         respondError(id, -32000, 'turn already in progress for this session')
+        return
+      }
+      if (/\[RICH\]/.test(promptText(p.prompt))) {
+        replyRichTurn(id, sessionId)
         return
       }
       const elicit = elicitationRequested(p.prompt)
