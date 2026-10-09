@@ -45,6 +45,8 @@ interface QuestionStepperProps {
   /** Header × — cancels the whole prompt. */
   onClose: () => void
   firstOptionRef?: Ref<HTMLButtonElement>
+  /** Ref to the header × button, for callers that move focus to it when there are no options. */
+  closeRef?: Ref<HTMLButtonElement>
   /** data-testid for the stepper root (e.g. `elicitation-questions`). */
   testId?: string
   /** data-testid for the current question's fieldset (e.g. `elicitation-question-q0`). */
@@ -87,6 +89,7 @@ export function QuestionStepper({
   onPrimary,
   onClose,
   firstOptionRef,
+  closeRef,
   testId,
   questionTestId
 }: QuestionStepperProps): React.JSX.Element {
@@ -175,6 +178,7 @@ export function QuestionStepper({
             <ChevronRight size={14} />
           </Button>
           <Button
+            ref={closeRef}
             type="button"
             variant="ghost"
             size="icon-xs"

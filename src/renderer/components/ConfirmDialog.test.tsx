@@ -1,6 +1,16 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  armMobileOverlayBackStack,
+  pressSystemBack,
+  settleOverlayBackStack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
+import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { ConfirmDialog } from './ConfirmDialog'
+
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
 describe('ConfirmDialog', () => {
   const defaultProps = {
@@ -75,5 +85,103 @@ describe('ConfirmDialog', () => {
     }
 
     expect(onCancel).toHaveBeenCalled()
+  })
+})
+
+describe('ConfirmDialog overlay back stack', () => {
+  let cleanup: () => void
+
+  function Harness({ onCancel }: { onCancel: () => void }): React.JSX.Element {
+    const [open, setOpen] = useState(true)
+    return (
+      <ConfirmDialog
+        isOpen={open}
+        title="Confirm Action"
+        message="Are you sure?"
+        onConfirm={() => setOpen(false)}
+        onCancel={() => {
+          onCancel()
+          setOpen(false)
+        }}
+      />
+    )
+  }
+
+  const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  beforeEach(() => {
+    window.history.replaceState(null, '', '#/base')
+    cleanup = armMobileOverlayBackStack()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  describe('mobile shell', () => {
+    it('registers while open and system back cancels it and consumes the sentinel', async () => {
+      const onCancel = vi.fn()
+      render(<Harness onCancel={onCancel} />)
+
+      expect(stackIds()[0]).toMatch(/^confirm-dialog:/)
+      await waitForSentinelDepth(1)
+
+      await pressSystemBack()
+
+      expect(onCancel).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(screen.queryByText('Confirm Action')).not.toBeInTheDocument(), {
+        timeout: 3000
+      })
+      expect(location.hash).toBe('#/base')
+      expect(readOverlaySentinelDepth(history.state)).toBe(0)
+      expect(stackIds()).toEqual([])
+    })
+
+    it('a close by Esc cancels exactly once and consumes the sentinel', async () => {
+      const onCancel = vi.fn()
+      render(<Harness onCancel={onCancel} />)
+      await waitForSentinelDepth(1)
+
+      fireEvent.keyDown(window, { key: 'Escape' })
+      await waitForSentinelDepth(0)
+      await settleOverlayBackStack()
+
+      // ConfirmDialog owns Esc (preventDefault): the fallback must not double it.
+      expect(onCancel).toHaveBeenCalledTimes(1)
+    })
+
+    it('a close by the scrim consumes the sentinel', async () => {
+      const onCancel = vi.fn()
+      const { container } = render(<Harness onCancel={onCancel} />)
+      await waitForSentinelDepth(1)
+
+      const scrim = container.querySelector('.fixed.inset-0')
+      expect(scrim).not.toBeNull()
+      if (scrim) fireEvent.click(scrim)
+
+      await waitForSentinelDepth(0)
+      expect(onCancel).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('desktop shell', () => {
+    it('is inert: no registration, no history push and no traversal', async () => {
+      useOverlayStackStore.getState().setMobileShell(false)
+      const pushSpy = vi.spyOn(history, 'pushState')
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+      const onCancel = vi.fn()
+      render(<Harness onCancel={onCancel} />)
+
+      expect(stackIds()).toEqual([])
+      fireEvent.keyDown(window, { key: 'Escape' })
+      await settleOverlayBackStack()
+
+      expect(onCancel).toHaveBeenCalledTimes(1)
+      expect(pushSpy).not.toHaveBeenCalled()
+      expect(backSpy).not.toHaveBeenCalled()
+      expect(goSpy).not.toHaveBeenCalled()
+    })
   })
 })

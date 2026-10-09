@@ -73,6 +73,12 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['webgl', 'dom', 'gpu']
   },
   {
+    categoryId: 'appearance',
+    label: 'Screen reader mode',
+    description: 'Make terminal output readable by screen readers.',
+    keywords: ['accessibility', 'a11y', 'talkback', 'voiceover', 'nvda']
+  },
+  {
     categoryId: 'shell',
     label: 'Default Shell',
     description: 'Set the default shell for new terminals.',

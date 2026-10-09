@@ -66,8 +66,23 @@ test.use({
 
 test.setTimeout(120_000)
 
-/** The drawer's ☰ and pill both point `aria-controls` here (drawer goal renames the id). */
+/** The drawer's ☰ and pill both point `aria-controls` here. */
 const DRAWER_ID = 'mobile-shell-drawer'
+
+/** The drawer is the left sheet titled "Menu". */
+function drawerOf(page: Page): Locator {
+  return page.getByRole('dialog', { name: 'Menu' })
+}
+
+/**
+ * One open-chat row in the drawer. Its name is the chat title, followed by
+ * ", <status>" while a status shows (Working, Needs you, New activity), so a
+ * plain exact match on the title would miss a chat with a live status.
+ */
+function chatRow(drawer: Locator, chatTitle: string): Locator {
+  const escaped = chatTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return drawer.getByRole('button', { name: new RegExp(`^${escaped}(, .+)?$`) })
+}
 
 /** Server store key holding the web client's last selected project (issue #855). */
 const ACTIVE_PROJECT_KEY = 'web-active-project'
@@ -488,12 +503,12 @@ test('header is three 44px icon slots plus the title block, with no sideways scr
   // ☰ opens the drawer and reports it.
   await expect(menu).toHaveAttribute('aria-expanded', 'false')
   await menu.tap()
-  await expect(page.getByRole('dialog', { name: 'Chats' })).toBeVisible()
+  await expect(drawerOf(page)).toBeVisible()
   const openMenu = headerButton(page, 'Open menu')
   await expect(openMenu).toHaveAttribute('aria-expanded', 'true')
   await expect(openMenu).toHaveAttribute('aria-controls', DRAWER_ID)
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: 'Chats' })).toBeHidden()
+  await expect(drawerOf(page)).toBeHidden()
 
   // At 360px with no chat asking for attention there is no dot: the name stays
   // plain and the header still fits.
@@ -684,8 +699,8 @@ test('a worktree chat shows its chat/ branch and Worktree; another chat shows Lo
 
   // Back to the worktree chat through the drawer: the subtitle follows the chat.
   await headerButton(page, 'Open menu').tap()
-  const drawer = page.getByRole('dialog', { name: 'Chats' })
-  await drawer.getByRole('button', { name: worktreePrompt, exact: true }).tap()
+  const drawer = drawerOf(page)
+  await chatRow(drawer, worktreePrompt).tap()
   await expect(drawer).toBeHidden()
   await expect(title(page)).toHaveText(worktreePrompt)
   await expect(subtitle(page)).toHaveText(/^shdr-tree · chat\/[0-9a-f]+ · Worktree$/)
@@ -737,10 +752,7 @@ test('an editor tab is titled by its file, keeps the project subtitle and has no
 
   // A Git History tab (drawer action) is titled "Git History".
   await headerButton(page, 'Open menu').tap()
-  await page
-    .getByRole('dialog', { name: 'Chats' })
-    .getByRole('button', { name: 'Git history', exact: true })
-    .tap()
+  await drawerOf(page).getByRole('button', { name: 'Git history', exact: true }).tap()
   await expect(title(page)).toHaveText('Git History')
 })
 
@@ -1109,7 +1121,7 @@ test('attention pill counts the other chats that need you, opens the drawer, and
     expect(await buttonAt(page, pillCenterX, y)).toBe('2 other chats need you')
   }
   await plural.tap()
-  const drawer = page.getByRole('dialog', { name: 'Chats' })
+  const drawer = drawerOf(page)
   await expect(drawer).toBeVisible()
   for (const control of [plural, headerButton(page, 'Open menu')]) {
     await expect(control).toHaveAttribute('aria-expanded', 'true')
@@ -1137,7 +1149,7 @@ test('attention pill counts the other chats that need you, opens the drawer, and
 
   // Landing in chat A drops A from the count and keeps B: the pill reads 1 again.
   await menu.tap()
-  await drawer.getByRole('button', { name: alpha, exact: true }).tap()
+  await chatRow(drawer, alpha).tap()
   await expect(drawer).toBeHidden()
   await expect(title(page)).toHaveText(alpha)
   await expect(pillIn('1 other chat needs you')).toHaveText('1')

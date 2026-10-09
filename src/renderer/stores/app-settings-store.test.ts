@@ -1,10 +1,11 @@
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import {
   useAppearanceMode,
   useAppSettingsStore,
   useColorTheme,
+  useTerminalScreenReaderMode,
   useTerminalUrlOpenMode
 } from './app-settings-store'
 
@@ -196,6 +197,52 @@ describe('app-settings-store', () => {
 
       const { settings } = useAppSettingsStore.getState()
       expect(settings).toEqual(DEFAULT_APP_SETTINGS)
+    })
+  })
+
+  describe('terminal screen reader mode (L-28)', () => {
+    it('defaults to off', () => {
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
+      expect(DEFAULT_APP_SETTINGS.terminalScreenReaderMode).toBe(false)
+
+      const { result } = renderHook(() => useTerminalScreenReaderMode())
+      expect(result.current).toBe(false)
+    })
+
+    it('selects true only after the setting is turned on', () => {
+      const { result } = renderHook(() => useTerminalScreenReaderMode())
+      expect(result.current).toBe(false)
+
+      act(() => {
+        useAppSettingsStore.getState().updateSetting('terminalScreenReaderMode', true)
+      })
+      expect(result.current).toBe(true)
+
+      act(() => {
+        useAppSettingsStore.getState().updateSetting('terminalScreenReaderMode', false)
+      })
+      expect(result.current).toBe(false)
+    })
+
+    it('treats a corrupt persisted value as off (strict true only)', () => {
+      const { result } = renderHook(() => useTerminalScreenReaderMode())
+      act(() => {
+        useAppSettingsStore.setState((state) => ({
+          settings: {
+            ...state.settings,
+            terminalScreenReaderMode: 'true' as unknown as boolean
+          }
+        }))
+      })
+      expect(result.current).toBe(false)
+    })
+
+    it('resetToDefaults returns it to false', () => {
+      useAppSettingsStore.getState().updateSetting('terminalScreenReaderMode', true)
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(true)
+
+      useAppSettingsStore.getState().resetToDefaults()
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
     })
   })
 

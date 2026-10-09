@@ -23,11 +23,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hoisted mutable refs — read by module mocks, set per test.
-const { mobileRef, rendererRef, tauriRef, fontRef } = vi.hoisted(() => ({
+const { mobileRef, rendererRef, tauriRef, fontRef, screenReaderRef } = vi.hoisted(() => ({
   mobileRef: { current: false as boolean },
   rendererRef: { current: 'auto' as 'auto' | 'webgl' | 'dom' | 'canvas' },
   tauriRef: { current: false as boolean },
-  fontRef: { current: 'monospace' as string }
+  fontRef: { current: 'monospace' as string },
+  screenReaderRef: { current: false as boolean }
 }))
 
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
@@ -40,7 +41,8 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontFamily: () => fontRef.current,
   useTerminalFontSize: () => 14,
   useTerminalBufferSize: () => 10000,
-  useTerminalRenderer: () => rendererRef.current
+  useTerminalRenderer: () => rendererRef.current,
+  useTerminalScreenReaderMode: () => screenReaderRef.current
 }))
 
 // --- xterm + addon mocks (construction counters drive assertions) ---
@@ -300,6 +302,7 @@ beforeEach(() => {
   rendererRef.current = 'auto'
   tauriRef.current = false
   fontRef.current = 'monospace'
+  screenReaderRef.current = false
 })
 
 afterEach(() => {
@@ -514,5 +517,38 @@ describe('canvas renderer migration contract (row 4, unchanged)', () => {
     await vi.waitFor(() => {
       expect(webglAddonCreateCount).toBe(0)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// L-28: screen reader mode reaches the xterm constructor on every surface
+// ---------------------------------------------------------------------------
+
+describe('terminal screen reader mode (L-28, no surface gating)', () => {
+  it.each([
+    ['mobile web shell', true, false],
+    ['desktop browser', false, false],
+    ['Tauri desktop', false, true]
+  ])('setting on: xterm is constructed with screenReaderMode true on the %s', (_surface, isMobile, isTauri) => {
+    mobileRef.current = isMobile
+    tauriRef.current = isTauri
+    screenReaderRef.current = true
+
+    render(React.createElement(ConnectedTerminal))
+
+    expect(terminalConstructorOptions).toMatchObject({ screenReaderMode: true })
+  })
+
+  it.each([
+    ['mobile web shell', true, false],
+    ['Tauri desktop', false, true]
+  ])('setting off: xterm is constructed with screenReaderMode false on the %s', (_surface, isMobile, isTauri) => {
+    mobileRef.current = isMobile
+    tauriRef.current = isTauri
+    screenReaderRef.current = false
+
+    render(React.createElement(ConnectedTerminal))
+
+    expect(terminalConstructorOptions).toMatchObject({ screenReaderMode: false })
   })
 })

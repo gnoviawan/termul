@@ -44,7 +44,8 @@ import {
   useTerminalBufferSize,
   useTerminalFontFamily,
   useTerminalFontSize,
-  useTerminalRenderer
+  useTerminalRenderer,
+  useTerminalScreenReaderMode
 } from '@/stores/app-settings-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
@@ -142,6 +143,10 @@ function ConnectedTerminalComponent({
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
   const rendererPreference = useTerminalRenderer()
+  // Read at construction only (both terminalOptions merges below): a live
+  // terminal never gets `options.screenReaderMode` toggled, so a flip applies
+  // to new terminals only.
+  const screenReaderMode = useTerminalScreenReaderMode()
   // Story 2 mobile stopgap: on the mobile web shell (browser, viewport
   // <= MOBILE_WEB_SHELL_MAX_PX) the 'auto' renderer default resolves to the
   // DOM renderer — WebGL paints zero pixels at DPR >= 3 (QA repro). Explicit
@@ -518,7 +523,8 @@ function ConnectedTerminalComponent({
       ...getTerminalOptions(navigator.platform),
       fontFamily,
       fontSize,
-      scrollback: bufferSize
+      scrollback: bufferSize,
+      screenReaderMode
     }
 
     // Check for a cached terminal preserved across project switches.
@@ -1350,7 +1356,8 @@ function ConnectedTerminalComponent({
       ...getTerminalOptions(navigator.platform),
       fontFamily,
       fontSize,
-      scrollback: bufferSize
+      scrollback: bufferSize,
+      screenReaderMode
     }
     const terminal = new Terminal(terminalOptions)
     terminalRef.current = terminal

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useId, useRef, useState } from 'react'
 import { AgentGlyph } from '@/components/chat/AgentGlyph'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { isFastModeEnabled, oppositeFastModeValue } from '@/components/chat/chat-input-bar-config'
@@ -17,6 +17,7 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { shouldShowSessionUsage } from '../context-usage-utils'
 import { SelectorPanel } from './SelectorPanel'
 import { type SelectorSource, useSessionSelectorSource } from './selector-source'
@@ -181,6 +182,11 @@ export function AgentModelSelector({
     setOpen(next)
   }, [])
   const close = useCallback(() => setOpen(false), [])
+  // The mobile sheet is an overlay like any other: system back closes it (and
+  // its own X / scrim / Esc close consumes the history sentinel). The desktop
+  // popover is inert here.
+  const overlayId = `agent-model-selector:${useId()}`
+  useOverlayRegistration(overlayId, open && isMobile, close, { mobileShellOnly: true })
   const onEscapeKeyDown = (event: KeyboardEvent): void => {
     if (escapeRef.current?.()) event.preventDefault()
   }

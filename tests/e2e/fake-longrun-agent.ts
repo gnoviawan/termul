@@ -43,6 +43,11 @@
  * `ELICIT_ANSWER=<json>` in an `agent_message_chunk` so specs parse the
  * real wire response back, and the prompt resolves `end_turn`.
  *
+ * Prompt marker (mobile-overlay-back-stack suite): `[RICH]` answers with one
+ * short turn that carries the content the chat's own overlays hang off — an
+ * external markdown link (link-safety confirm), an inline image (lightbox)
+ * and a subagent tool call (details dialog) — then ends it at once.
+ *
  * `[PERMISSION]` (mobile shell suites): right after accepting the prompt the
  * agent asks the host for a tool permission (`session/request_permission`)
  * and leaves it unanswered, so the chat shows a pending approval — "needs
@@ -55,6 +60,18 @@
  * answers `session/set_config_option` for them. A `[USAGE]` prompt marker
  * reports a baseline and a grown context-window snapshot (with a reported
  * cost) so the context ring appears. Any other cwd or prompt behaves as before.
+ *
+ * Prompt markers (mobile chat dock suite), both applied right after the
+ * prompt is accepted; the turn then streams as usual:
+ * - `[DOCK]` pushes a 5-entry plan (3 completed) and three completed edit
+ *   tool calls (src/auth.ts +10, src/session.ts +4, src/token.ts +3 -2:
+ *   +17 -2 in total): the content of the chat dock's plan and
+ *   changed-files bars.
+ * - `[ASK:permission]`, `[ASK:permission-none]` (a request with no
+ *   options), `[ASK:question]` or `[ASK:elicitation]` sends the matching
+ *   agent-to-client request. When the client answers, the agent streams one
+ *   chunk `[ANSWERED <kind> <outcome>]` (outcome: the chosen optionId, the
+ *   chosen values, the elicitation action, or `cancelled`).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -188,6 +205,39 @@ const ELICIT_SCHEMA: JsonValue = {
   }
 }
 
+/** A 1x1 PNG: small enough to inline, real enough for the browser to decode. */
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+/**
+ * The `[RICH]` turn: a link, an image and a subagent call, then `end_turn`.
+ * Nothing is registered in `inFlightBySession`, so no timer streams after it.
+ */
+function replyRichTurn(id: number | string | undefined, sessionId: string): void {
+  const update = (body: JsonValue): void => notify('session/update', { sessionId, update: body })
+  update({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: 'Docs: [Example docs](https://example.com/docs)\n\n' }
+  })
+  update({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' }
+  })
+  update({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'rich-subagent-1',
+    title: 'Delegate review',
+    kind: 'other',
+    status: 'completed',
+    rawInput: {
+      subagent_type: 'reviewer',
+      description: 'Review the overlay change',
+      prompt: 'Review the overlay change for dead back presses.'
+    }
+  })
+  respond(id, { stopReason: 'end_turn' })
+}
+
 /** True when the prompt text carries the `[PERMISSION]` marker. */
 function wantsPermission(prompt: JsonValue | undefined): boolean {
   return promptText(prompt).includes('[PERMISSION]')
@@ -239,6 +289,146 @@ function reportUsage(sessionId: string): void {
     })
   update(20_000)
   update(70_000, { cost: { amount: 0.0421, currency: 'USD' } })
+}
+
+type AskKind = 'permission' | 'permission-none' | 'question' | 'elicitation'
+
+/** The agent-to-client request an `[ASK:<kind>]` marker asks for, else null. */
+function askKind(prompt: JsonValue | undefined): AskKind | null {
+  const match = /\[ASK:(permission-none|permission|question|elicitation)\]/.exec(promptText(prompt))
+  return match ? (match[1] as AskKind) : null
+}
+
+/** Outstanding agent-to-client requests, keyed by the id this agent minted. */
+const pendingAsks = new Map<string, { sessionId: string; kind: AskKind }>()
+let nextAskId = 1
+
+function ask(sessionId: string, kind: AskKind): void {
+  const id = `fake-ask-${nextAskId++}`
+  pendingAsks.set(id, { sessionId, kind })
+  const send = (method: string, params: JsonValue): void =>
+    write(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
+  switch (kind) {
+    case 'permission':
+    case 'permission-none':
+      send('session/request_permission', {
+        sessionId,
+        toolCall: {
+          toolCallId: `fake-perm-${id}`,
+          title: 'npm test -- auth',
+          kind: 'execute',
+          status: 'pending'
+        },
+        // Reject first on purpose: the prompt orders allows before rejects.
+        options:
+          kind === 'permission-none'
+            ? []
+            : [
+                { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+                { optionId: 'allow-always', name: 'Always allow', kind: 'allow_always' },
+                { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }
+              ]
+      })
+      break
+    case 'question':
+      send('_session/question', {
+        sessionId,
+        question: 'Which test suite should run?',
+        options: [
+          { value: 'unit', label: 'Unit tests', description: 'Fast, no network' },
+          { value: 'e2e', label: 'End-to-end tests' }
+        ]
+      })
+      break
+    case 'elicitation':
+      send('elicitation/create', {
+        mode: 'form',
+        sessionId,
+        message: 'Name the branch to test',
+        // One field per kind the prompt renders differently: a required text
+        // input, an optional enum (select) and an optional boolean (switch).
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            branch: { type: 'string' },
+            env: { type: 'string', enum: ['staging', 'production'] },
+            verbose: { type: 'boolean' }
+          },
+          required: ['branch']
+        }
+      })
+      break
+  }
+}
+
+/** The client answered one of our requests: report the outcome in the transcript. */
+function onAskAnswered(
+  id: string,
+  msg: JsonRpcMessage & { result?: JsonValue; error?: JsonValue }
+): void {
+  const pending = pendingAsks.get(id)
+  if (!pending) return
+  pendingAsks.delete(id)
+  const result = (msg.result ?? {}) as Record<string, JsonValue>
+  const outcome = result.outcome as Record<string, JsonValue> | undefined
+  let summary = 'error'
+  if (msg.error === undefined) {
+    if (pending.kind === 'elicitation') summary = String(result.action ?? 'unknown')
+    else if (pending.kind === 'question') {
+      summary = Array.isArray(result.values) ? result.values.join(',') : 'cancelled'
+    } else {
+      summary = outcome?.outcome === 'selected' ? String(outcome.optionId) : 'cancelled'
+    }
+  }
+  notify('session/update', {
+    sessionId: pending.sessionId,
+    update: {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: `[ANSWERED ${pending.kind} ${summary}]` }
+    }
+  })
+}
+
+/** `[DOCK]`: the plan and changed-files content of the mobile chat dock. */
+function pushDock(sessionId: string): void {
+  notify('session/update', {
+    sessionId,
+    update: {
+      sessionUpdate: 'plan',
+      entries: [
+        { content: 'Read the auth module', priority: 'high', status: 'completed' },
+        { content: 'Add the token store', priority: 'high', status: 'completed' },
+        { content: 'Wire the session refresh', priority: 'medium', status: 'completed' },
+        { content: 'Cover login with tests', priority: 'medium', status: 'in_progress' },
+        { content: 'Update the changelog', priority: 'low', status: 'pending' }
+      ]
+    }
+  })
+  const lines = (count: number, tag: string): string =>
+    Array.from({ length: count }, (_, i) => `${tag}${i + 1}`).join('\n')
+  const edits: Array<{ path: string; oldText: string | null; newText: string }> = [
+    { path: 'src/auth.ts', oldText: null, newText: lines(10, 'auth') },
+    { path: 'src/session.ts', oldText: 'a\nb', newText: `a\nb\n${lines(4, 'z')}` },
+    {
+      path: 'src/token.ts',
+      oldText: 'keep\nold1\nold2\nend',
+      newText: 'keep\nnew1\nnew2\nnew3\nend'
+    }
+  ]
+  edits.forEach((edit, i) => {
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: `fake-edit-${i + 1}`,
+        title: `Edit ${edit.path}`,
+        kind: 'edit',
+        status: 'completed',
+        locations: [{ path: edit.path }],
+        content: [{ type: 'diff', path: edit.path, oldText: edit.oldText, newText: edit.newText }]
+      }
+    })
+  })
 }
 
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
@@ -367,14 +557,19 @@ setInterval(tick, Math.max(100, Math.floor(1000 / RATE)))
 function handle(msg: JsonRpcMessage): void {
   const { id, method, params } = msg
   // A RESPONSE to one of our outbound requests carries `id` + `result`/
-  // `error` but no `method`. The only outbound request this agent makes is
-  // `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
-  // method switch so it never falls into the `default` reply arm (replying
-  // to a response would be protocol noise). The host's reply to a permission
-  // request this agent sent (`[PERMISSION]` marker) needs no answer either.
+  // `error` but no `method`. Route it before the method switch so it never
+  // falls into the `default` reply arm (replying to a response would be
+  // protocol noise). The host's reply to a permission request sent by the
+  // `[PERMISSION]` marker flow needs no answer; `[ASK:*]` requests (mobile
+  // chat dock suite) are tracked in `pendingAsks`; everything else is the
+  // `[ELICIT]` flow.
   if (method === undefined) {
     if (id !== undefined && permissionRequestIds.delete(String(id))) return
-    resolveElicitation(msg)
+    if (typeof id === 'string' && pendingAsks.has(id)) {
+      onAskAnswered(id, msg as JsonRpcMessage & { result?: JsonValue; error?: JsonValue })
+    } else {
+      resolveElicitation(msg)
+    }
     return
   }
   const p = (params ?? {}) as Record<string, JsonValue>
@@ -438,6 +633,10 @@ function handle(msg: JsonRpcMessage): void {
       const sessionId = String(p.sessionId ?? 'unknown')
       if (inFlightBySession.has(sessionId)) {
         respondError(id, -32000, 'turn already in progress for this session')
+        return
+      }
+      if (/\[RICH\]/.test(promptText(p.prompt))) {
+        replyRichTurn(id, sessionId)
         return
       }
       const elicit = elicitationRequested(p.prompt)
@@ -506,6 +705,9 @@ function handle(msg: JsonRpcMessage): void {
         // observes a dead child with an in-flight turn, same as a real crash.
         setTimeout(() => process.exit(1), Math.max(0, crashAfterSec * 1000))
       }
+      if (promptText(p.prompt).includes('[DOCK]')) pushDock(sessionId)
+      const asked = askKind(p.prompt)
+      if (asked) ask(sessionId, asked)
       break
     }
     case 'cancel':

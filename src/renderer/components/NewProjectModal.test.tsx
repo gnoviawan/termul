@@ -22,7 +22,15 @@
  */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  armMobileOverlayBackStack,
+  pressSystemBack,
+  settleOverlayBackStack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
+import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { NewProjectModal } from './NewProjectModal'
 
 const {
@@ -55,6 +63,12 @@ const {
 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
+}))
+
+// Overlay back-stack boundary logs must not POST through the mocked fetch.
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: vi.fn()
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -607,5 +621,107 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
       fireEvent.change(nameInput, { target: { value: 'aa' } })
     })
     expect(screen.queryByTestId('new-project-name-warning')).not.toBeInTheDocument()
+  })
+})
+
+describe('NewProjectModal overlay back stack', () => {
+  let cleanup: () => void
+
+  function Harness({ onClose }: { onClose: () => void }): React.JSX.Element {
+    const [open, setOpen] = useState(true)
+    return (
+      <NewProjectModal
+        isOpen={open}
+        onClose={() => {
+          onClose()
+          setOpen(false)
+        }}
+        onCreateProject={vi.fn()}
+      />
+    )
+  }
+
+  const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(false)
+    mockFetch.mockReset()
+    vi.stubGlobal('fetch', mockFetch)
+    existingProjectsRef.current = []
+    mockFetch.mockImplementation(async (url: string) =>
+      String(url).includes('/shells')
+        ? jsonResponse({
+            success: true,
+            data: {
+              default: { name: 'bash', path: '/bin/bash', displayName: 'Bash' },
+              available: [{ name: 'bash', path: '/bin/bash', displayName: 'Bash' }]
+            }
+          })
+        : jsonResponse({ success: true, data: [] })
+    )
+    window.history.replaceState(null, '', '#/base')
+    cleanup = armMobileOverlayBackStack()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  describe('mobile shell', () => {
+    it('registers while open and system back closes it and consumes the sentinel', async () => {
+      const onClose = vi.fn()
+      render(<Harness onClose={onClose} />)
+
+      expect(stackIds()[0]).toMatch(/^new-project-modal:/)
+      await waitForSentinelDepth(1)
+
+      await pressSystemBack()
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+      await waitFor(
+        () => expect(screen.queryByPlaceholderText('My Project')).not.toBeInTheDocument(),
+        {
+          timeout: 3000
+        }
+      )
+      expect(location.hash).toBe('#/base')
+      expect(readOverlaySentinelDepth(history.state)).toBe(0)
+      expect(stackIds()).toEqual([])
+    })
+
+    it('a close by Esc closes exactly once and consumes the sentinel', async () => {
+      const onClose = vi.fn()
+      render(<Harness onClose={onClose} />)
+      await waitForSentinelDepth(1)
+
+      fireEvent.keyDown(window, { key: 'Escape' })
+      await waitForSentinelDepth(0)
+      await settleOverlayBackStack()
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('desktop shell', () => {
+    it('is inert: no registration, no history push and no traversal', async () => {
+      useOverlayStackStore.getState().setMobileShell(false)
+      const pushSpy = vi.spyOn(history, 'pushState')
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+      const onClose = vi.fn()
+      render(<Harness onClose={onClose} />)
+
+      expect(stackIds()).toEqual([])
+      fireEvent.keyDown(window, { key: 'Escape' })
+      await settleOverlayBackStack()
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(pushSpy).not.toHaveBeenCalled()
+      expect(backSpy).not.toHaveBeenCalled()
+      expect(goSpy).not.toHaveBeenCalled()
+    })
   })
 })

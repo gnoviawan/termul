@@ -13,10 +13,8 @@ import { MOBILE_TERMINAL_ACTIONS_SHEET_ID } from './MobileTerminalActionsSheet'
 const HEADER_ICON_BUTTON = 'size-11 shrink-0'
 
 /**
- * Target of the ☰ and pill `aria-controls`: the id the shell drawer's
- * `SheetContent` takes in its rework. That `SheetContent` still carries
- * `mobile-chat-drawer`, so the reference resolves only once the drawer is
- * renamed. `aria-controls` is emitted only while the drawer is open.
+ * Target of the ☰ and pill `aria-controls`: the id of the shell drawer's
+ * `SheetContent`. `aria-controls` is emitted only while the drawer is open.
  */
 const DRAWER_ID = 'mobile-shell-drawer'
 const PROJECT_SHEET_ID = 'mobile-project-sheet'
@@ -49,7 +47,13 @@ interface MobileShellHeaderProps {
   /** Accessible name of the subtitle button. */
   subtitleLabel: string
   drawerOpen: boolean
-  onOpenDrawer: () => void
+  /**
+   * Opens the drawer. The control that was activated (☰ or the pill) is passed
+   * so the drawer can return focus to it on dismiss.
+   */
+  onOpenDrawer: (opener: HTMLElement) => void
+  /** The ☰ button: the drawer's focus fallback when the pill is gone. */
+  menuButtonRef?: RefObject<HTMLButtonElement>
   projectSheetOpen: boolean
   onOpenProjectSheet: () => void
   /** Other chats in the active project that need the user; the pill hides at 0. */
@@ -78,6 +82,7 @@ export function MobileShellHeader({
   subtitleLabel,
   drawerOpen,
   onOpenDrawer,
+  menuButtonRef,
   projectSheetOpen,
   onOpenProjectSheet,
   attentionCount,
@@ -104,6 +109,7 @@ export function MobileShellHeader({
   return (
     <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-border/60 px-2">
       <Button
+        ref={menuButtonRef}
         type="button"
         variant="ghost"
         size="icon"
@@ -111,7 +117,7 @@ export function MobileShellHeader({
         aria-label={foldedIntoMenu ? `Open menu, ${chatsNeedYou(attentionCount)}` : 'Open menu'}
         aria-expanded={drawerOpen}
         aria-controls={drawerOpen ? DRAWER_ID : undefined}
-        onClick={onOpenDrawer}
+        onClick={(event) => onOpenDrawer(event.currentTarget)}
       >
         <Menu size={20} />
         {foldedIntoMenu && (
@@ -165,7 +171,7 @@ export function MobileShellHeader({
           aria-label={pillLabel}
           aria-expanded={drawerOpen}
           aria-controls={drawerOpen ? DRAWER_ID : undefined}
-          onClick={onOpenDrawer}
+          onClick={(event) => onOpenDrawer(event.currentTarget)}
         >
           <span aria-hidden="true" className="size-2 rounded-full bg-warning" />
           {attentionCount > 9 ? '9+' : attentionCount}

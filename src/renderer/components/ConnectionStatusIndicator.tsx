@@ -15,6 +15,17 @@ const SEVERITY: Record<ConnectionChannelState, number> = {
   reconnecting: 2,
   disconnected: 3
 }
+
+interface ConnectionStatusIndicatorProps {
+  /**
+   * Render the summary as visible text beside a decorative lamp (the mobile
+   * drawer footer, where the tooltip is unreachable by touch). The status
+   * region's content is that text, so there is no `aria-label` and no tooltip
+   * button. Default false keeps the StatusBar render unchanged.
+   */
+  showLabel?: boolean
+}
+
 /**
  * Story 10 (F1): global connection-health indicator for the web client — a
  * StatusBar lamp showing the worst of the control (`/ws`) and terminal
@@ -22,7 +33,9 @@ const SEVERITY: Record<ConnectionChannelState, number> = {
  * destructive) plus pulse encode state. Hidden on Tauri desktop: both
  * channels are direct IPC there, so an indicator would be noise.
  */
-export function ConnectionStatusIndicator(): ReactNode {
+export function ConnectionStatusIndicator({
+  showLabel = false
+}: ConnectionStatusIndicatorProps): ReactNode {
   const controlChannel = useConnectionStatusStore((state) => state.controlChannel)
   const terminalChannel = useConnectionStatusStore((state) => state.terminalChannel)
 
@@ -36,6 +49,24 @@ export function ConnectionStatusIndicator(): ReactNode {
   if (controlChannel !== 'connected') degraded.push(`Control channel: ${controlChannel}`)
   if (terminalChannel !== 'connected') degraded.push(`Terminal channel: ${terminalChannel}`)
   const summary = degraded.length > 0 ? degraded.join('; ') : 'Connected'
+
+  if (showLabel) {
+    return (
+      <span
+        role="status"
+        aria-live="polite"
+        className="inline-flex min-w-0 items-center gap-2 text-2xs text-muted-foreground"
+      >
+        <AgentConnectionLamp
+          connected={worst === 'connected'}
+          reconnecting={worst === 'connecting' || worst === 'reconnecting'}
+          decorative
+          size={8}
+        />
+        <span className="min-w-0">{summary}</span>
+      </span>
+    )
+  }
 
   return (
     // role="status" announces state changes politely; the inner button is the

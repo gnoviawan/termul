@@ -1,14 +1,17 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { CHAT_GUTTER_X, CHAT_HIT_MIN_H } from '@/components/chat/chat-layout'
 import { describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
-import { ChevronDown, FileDiff } from '@/components/icons'
+import { ChevronDown, ChevronRight, FileDiff } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+import { useForcedCollapse } from './use-forced-collapse'
 
 /** A file touched by an ACP tool call in this session. */
 interface ChangedFile {
@@ -99,6 +102,17 @@ function FileRow({
 interface ChatChangedFilesPanelProps {
   cwd: string
   toolCalls: ToolCall[]
+  /**
+   * Mobile dock: adds a "Git" action beside the header that opens the Git
+   * sheet. When omitted (desktop) the header renders exactly as before.
+   */
+  onOpenGitChanges?: () => void
+  /**
+   * Render collapsed while true (keyboard up with an approval pending). A
+   * header tap during the window still flips the rendered state; afterwards
+   * the panel shows the user's last own state.
+   */
+  forceCollapsed?: boolean
 }
 
 /**
@@ -114,9 +128,13 @@ interface ChatChangedFilesPanelProps {
  */
 export function ChatChangedFilesPanel({
   cwd,
-  toolCalls
+  toolCalls,
+  onOpenGitChanges,
+  forceCollapsed = false
 }: ChatChangedFilesPanelProps): React.JSX.Element | null {
-  const [expanded, setExpanded] = useState(false)
+  const isMobileShell = useMobileWebShell()
+  const { collapsed, toggle } = useForcedCollapse(true, forceCollapsed)
+  const expanded = !collapsed
 
   const files = useMemo(() => extractChangedFiles(toolCalls), [toolCalls])
   const count = files.length
@@ -140,46 +158,75 @@ export function ChatChangedFilesPanel({
 
   if (count === 0) return null
 
+  const toggleButton = (
+    <button
+      type="button"
+      data-press-feedback="off"
+      onClick={toggle}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-t-2xl px-3 text-left',
+        CHAT_HIT_MIN_H,
+        onOpenGitChanges && 'min-w-0 flex-1',
+        // The composer covers the bottom 24px of the collapsed bar (-mb-6), so
+        // the strip left to tap is `pt + line + pb - 24px`. With the Git action
+        // that strip must reach 44px for its hit area (the card clips its
+        // slop above): pt-4 + pb-9 leaves ~45px; without it, 32px as before.
+        expanded ? 'py-2' : onOpenGitChanges ? 'pt-4 pb-9' : 'pt-2 pb-8',
+        'cursor-pointer text-xs text-muted-foreground',
+        'select-none appearance-none transition-[background-color,color] duration-150 ease-out',
+        'hover:bg-secondary/60 hover:text-foreground',
+        'active:bg-secondary/80',
+        'focus-visible:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none'
+      )}
+      aria-expanded={expanded}
+      // On mobile the visible text names the button ("Changed files 3 +17 −2").
+      aria-label={
+        isMobileShell ? undefined : expanded ? 'Collapse changed files' : 'Expand changed files'
+      }
+    >
+      <ChevronDown
+        size={14}
+        className={cn(
+          'shrink-0 transition-transform duration-[var(--acc-chevron)] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+          expanded ? 'rotate-180' : 'rotate-0'
+        )}
+      />
+      <FileDiff size={13} className="shrink-0 text-muted-foreground/70" />
+      <span className="font-medium">Changed files</span>{' '}
+      <span className="rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold tabular-nums">
+        {count}
+      </span>{' '}
+      {hasTotalCounts && (
+        <span className="ms-auto shrink-0 font-mono text-2xs tabular-nums">
+          <span className="text-success">+{totalAdded}</span>{' '}
+          <span className="text-destructive">−{totalRemoved}</span>
+        </span>
+      )}
+    </button>
+  )
+
   return (
     <div className={cn(CHAT_GUTTER_X, '-mb-6 pt-0')}>
       <div className="relative mx-auto w-full max-w-3xl">
         <div className="relative z-0 overflow-hidden rounded-t-2xl border border-b-0 border-border/60 bg-card/60 select-none">
-          <button
-            type="button"
-            data-press-feedback="off"
-            onClick={() => setExpanded((v) => !v)}
-            className={cn(
-              'flex w-full items-center gap-2 rounded-t-2xl px-3 text-left',
-              CHAT_HIT_MIN_H,
-              expanded ? 'py-2' : 'pt-2 pb-8',
-              'cursor-pointer text-xs text-muted-foreground',
-              'select-none appearance-none transition-[background-color,color] duration-150 ease-out',
-              'hover:bg-secondary/60 hover:text-foreground',
-              'active:bg-secondary/80',
-              'focus-visible:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none'
-            )}
-            aria-expanded={expanded}
-            aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
-          >
-            <ChevronDown
-              size={14}
-              className={cn(
-                'shrink-0 transition-transform duration-[var(--acc-chevron)] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
-                expanded ? 'rotate-180' : 'rotate-0'
-              )}
-            />
-            <FileDiff size={13} className="shrink-0 text-muted-foreground/70" />
-            <span className="font-medium">Changed files</span>
-            <span className="rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold tabular-nums">
-              {count}
-            </span>
-            {hasTotalCounts && (
-              <span className="ms-auto shrink-0 font-mono text-2xs tabular-nums">
-                <span className="text-success">+{totalAdded}</span>{' '}
-                <span className="text-destructive">−{totalRemoved}</span>
-              </span>
-            )}
-          </button>
+          {onOpenGitChanges ? (
+            <div className="flex items-start">
+              {toggleButton}
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                aria-label="Open Git changes"
+                onClick={onOpenGitChanges}
+                className="relative me-2 mt-2 shrink-0 text-muted-foreground after:absolute after:-inset-2 after:content-[''] [&_svg]:size-3"
+              >
+                Git
+                <ChevronRight size={12} aria-hidden="true" />
+              </Button>
+            </div>
+          ) : (
+            toggleButton
+          )}
           <CollapseExpandMotion open={expanded} motion="chat">
             <div className="pb-6">
               <div className="scroller-thin max-h-48 overflow-y-auto">

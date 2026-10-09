@@ -1,4 +1,6 @@
 import { SettingsSection } from '@/components/settings/SettingsLayout'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   type AppSettings,
@@ -18,6 +20,7 @@ interface AppearanceSectionProps {
   uiZoomLevel: number
   bufferSize: number
   terminalRenderer: AppSettings['terminalRenderer']
+  screenReaderMode: boolean
   maxTerminals: number
   handleFontFamilyChange: (value: string) => void
   handleFontSizeChange: (value: number) => void
@@ -25,6 +28,7 @@ interface AppearanceSectionProps {
   handleUiZoomReset: () => void
   handleBufferSizeChange: (value: number) => void
   handleRendererChange: (value: string) => void
+  handleScreenReaderModeChange: (enabled: boolean) => void
   handleMaxTerminalsChange: (value: number) => void
 }
 
@@ -34,6 +38,7 @@ export function AppearanceSection({
   uiZoomLevel,
   bufferSize,
   terminalRenderer,
+  screenReaderMode,
   maxTerminals,
   handleFontFamilyChange,
   handleFontSizeChange,
@@ -41,6 +46,7 @@ export function AppearanceSection({
   handleUiZoomReset,
   handleBufferSizeChange,
   handleRendererChange,
+  handleScreenReaderModeChange,
   handleMaxTerminalsChange
 }: AppearanceSectionProps): React.JSX.Element {
   return (
@@ -196,6 +202,26 @@ export function AppearanceSection({
               GPU-accelerated rendering for terminal output. WebGL provides best performance.
               Changes apply to new terminals.
             </p>
+          </div>
+
+          {/* Screen reader mode */}
+          <div className="flex min-h-11 items-center justify-between gap-4 rounded-md border border-border bg-secondary/30 px-4 py-3">
+            <div className="flex-1">
+              <Label htmlFor="terminal-screen-reader-mode">Screen reader mode</Label>
+              <p
+                id="terminal-screen-reader-mode-help"
+                className="mt-0.5 text-xs text-muted-foreground"
+              >
+                Makes terminal output readable by screen readers. Can repeat typed characters in
+                some setups. Changes apply to new terminals.
+              </p>
+            </div>
+            <Switch
+              id="terminal-screen-reader-mode"
+              aria-describedby="terminal-screen-reader-mode-help"
+              checked={screenReaderMode}
+              onCheckedChange={handleScreenReaderModeChange}
+            />
           </div>
 
           {/* Preview */}

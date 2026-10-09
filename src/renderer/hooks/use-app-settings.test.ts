@@ -371,6 +371,66 @@ describe('use-app-settings', () => {
     )
   })
 
+  describe('terminal screen reader mode (L-28)', () => {
+    it('loads as false when the persisted blob lacks the key', async () => {
+      const { terminalScreenReaderMode: _screenReader, ...legacySettings } = DEFAULT_APP_SETTINGS
+      mockPersistenceRead.mockResolvedValueOnce({ success: true, data: legacySettings })
+
+      renderHook(() => useAppSettingsLoader())
+
+      await waitFor(() => {
+        expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+      })
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
+    })
+
+    it('loads a persisted true as true', async () => {
+      mockPersistenceRead.mockResolvedValueOnce({
+        success: true,
+        data: { ...DEFAULT_APP_SETTINGS, terminalScreenReaderMode: true }
+      })
+
+      renderHook(() => useAppSettingsLoader())
+
+      await waitFor(() => {
+        expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+      })
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(true)
+    })
+
+    it('writes the whole blob through the shared persistence facade when turned on', async () => {
+      const { result } = renderHook(() => useUpdateAppSetting())
+
+      await result.current('terminalScreenReaderMode', true)
+
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(true)
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledTimes(1)
+      // The whole settings object, not a patch: every other key rides along.
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(APP_SETTINGS_KEY, {
+        ...DEFAULT_APP_SETTINGS,
+        terminalScreenReaderMode: true
+      })
+      expect(mockPersistenceWrite).not.toHaveBeenCalled()
+    })
+
+    it('persists false again when Reset Settings runs', async () => {
+      useAppSettingsStore.setState({
+        settings: { ...DEFAULT_APP_SETTINGS, terminalScreenReaderMode: true },
+        isLoaded: true
+      })
+
+      const { result } = renderHook(() => useResetAppSettings())
+
+      await result.current()
+
+      expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
+      expect(mockPersistenceWrite).toHaveBeenCalledWith(
+        APP_SETTINGS_KEY,
+        expect.objectContaining({ terminalScreenReaderMode: false })
+      )
+    })
+  })
+
   it('writes one snapshot when updating multiple app settings', async () => {
     const { result } = renderHook(() => useUpdateAppSettings())
 
