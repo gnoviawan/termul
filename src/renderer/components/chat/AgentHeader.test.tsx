@@ -349,7 +349,37 @@ describe('mobile modal selection', () => {
     // never bleeds edge-to-edge on mobile, unlike the desktop w-56 popover.
     expect(dialog.className).toContain('w-[calc(100%-2rem)]')
     expect(dialog.className).toContain('max-w-md')
-    expect(dialog.className).toContain('max-h-[80vh]')
+    // `dvh`, not `vh`: the static unit ignores the dynamic viewport on a phone.
+    expect(dialog.className).toContain('max-h-[80dvh]')
+    expect(dialog.className).not.toContain('max-h-[80vh]')
+  })
+
+  it('caps every selector modal at 80dvh (config chip, promoted chip, mode chip)', () => {
+    const { unmount } = render(
+      <ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+    expect(screen.getByRole('dialog').className).toContain('max-h-[80dvh]')
+    unmount()
+
+    const promoted = render(
+      <ConfigChip
+        option={{ ...option('a'), category: 'thought_level' }}
+        disabled={false}
+        promoted
+        onSelect={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByRole('dialog').className).toContain('max-h-[80dvh]')
+    promoted.unmount()
+
+    render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    expect(screen.getByRole('dialog').className).toContain('max-h-[80dvh]')
+    expect(screen.getByRole('dialog').className).not.toContain('max-h-[80vh]')
   })
 
   it('closes the modal without firing onSelect on dismiss (Escape)', () => {
@@ -589,5 +619,45 @@ describe('composer menus share the dropdown motion', () => {
       'data-menu-motion',
       'dropdown'
     )
+  })
+})
+
+describe('composer chip presentation props', () => {
+  it('leaves the ModeChip DOM unchanged when the optional props are omitted', () => {
+    const base = render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+    const baseHtml = base.container.innerHTML
+    base.unmount()
+    const explicit = render(
+      <ModeChip
+        session={session('agent')}
+        disabled={false}
+        onSelect={vi.fn()}
+        label="Agent"
+        className={undefined}
+        labelClassName={undefined}
+      />
+    )
+    expect(explicit.container.innerHTML).toBe(baseHtml)
+  })
+
+  it('merges className and wraps the ModeChip label so it can go sr-only', () => {
+    render(
+      <ModeChip
+        session={session('plan')}
+        disabled={false}
+        onSelect={vi.fn()}
+        label="Agent"
+        className="shrink-0"
+        labelClassName="@max-[361px]:sr-only"
+      />
+    )
+    // The accessible name keeps the label even when it is visually hidden.
+    const button = screen.getByRole('button', { name: 'Plan' })
+    expect(button).toHaveClass('shrink-0', 'min-w-0')
+    const label = within(button).getByText('Plan')
+    expect(label.tagName).toBe('SPAN')
+    expect(label).toHaveClass('@max-[361px]:sr-only')
   })
 })
