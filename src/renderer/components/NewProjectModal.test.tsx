@@ -24,6 +24,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { claimEscape } from '@/lib/escape-claim'
 import {
   armMobileOverlayBackStack,
   pressSystemBack,
@@ -625,11 +626,14 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
       expect(onClose).toHaveBeenCalledTimes(1)
     })
 
-    it('closes nothing on an Esc a layer above already prevented (window handler)', async () => {
+    it('closes nothing on an Esc a layer above already claimed (window handler)', async () => {
       const onClose = vi.fn()
       render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
       await screen.findByPlaceholderText('No directory selected')
-      const layerAbove = (event: KeyboardEvent): void => event.preventDefault()
+      const layerAbove = (event: KeyboardEvent): void => {
+        event.preventDefault()
+        claimEscape(event)
+      }
       window.addEventListener('keydown', layerAbove, true)
 
       fireEvent.keyDown(document.body, { key: 'Escape' })
@@ -638,17 +642,49 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
       expect(onClose).not.toHaveBeenCalled()
     })
 
-    it('closes nothing on a prevented Esc with focus inside the panel (panel onKeyDown)', async () => {
+    it('closes nothing on a claimed Esc with focus inside the panel (panel onKeyDown)', async () => {
       const onClose = vi.fn()
       render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
       const pathInput = await screen.findByPlaceholderText('No directory selected')
-      const layerAbove = (event: KeyboardEvent): void => event.preventDefault()
+      const layerAbove = (event: KeyboardEvent): void => {
+        event.preventDefault()
+        claimEscape(event)
+      }
       window.addEventListener('keydown', layerAbove, true)
 
       fireEvent.keyDown(pathInput, { key: 'Escape' })
       window.removeEventListener('keydown', layerAbove, true)
 
       expect(onClose).not.toHaveBeenCalled()
+    })
+
+    // A Radix layer still animating out (the project sheet this modal was swapped
+    // in from) prevents the Esc it receives although it sits above nothing: that
+    // Esc is the modal's own. The phone shell's Esc after "Add project" needs it.
+    it('closes on an Esc that only a closing layer prevented, without claiming it (window handler)', async () => {
+      const onClose = vi.fn()
+      render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
+      await screen.findByPlaceholderText('No directory selected')
+      const closingLayer = (event: KeyboardEvent): void => event.preventDefault()
+      document.addEventListener('keydown', closingLayer, true)
+
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      document.removeEventListener('keydown', closingLayer, true)
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it('closes once on an Esc that only a closing layer prevented, with focus inside the panel (panel onKeyDown)', async () => {
+      const onClose = vi.fn()
+      render(<NewProjectModal isOpen onClose={onClose} onCreateProject={vi.fn()} />)
+      const pathInput = await screen.findByPlaceholderText('No directory selected')
+      const closingLayer = (event: KeyboardEvent): void => event.preventDefault()
+      document.addEventListener('keydown', closingLayer, true)
+
+      fireEvent.keyDown(pathInput, { key: 'Escape' })
+      document.removeEventListener('keydown', closingLayer, true)
+
+      expect(onClose).toHaveBeenCalledTimes(1)
     })
   })
 })

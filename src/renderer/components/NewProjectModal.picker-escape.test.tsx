@@ -1,8 +1,8 @@
 /**
  * L-32: one Esc closes one layer. The REAL DirectoryPicker opens above the REAL
  * NewProjectModal (Browse); the picker takes the Esc in the capture phase and
- * its preventDefault() makes the modal's window handler and panel `onKeyDown`
- * ignore it. A second Esc closes the modal.
+ * claims it, so the modal's window handler and panel `onKeyDown` ignore it.
+ * A second Esc closes the modal.
  *
  * Mocks mirror NewProjectModal.test.tsx; `@/lib/dialog-api` is the real one, so
  * Browse reaches the picker's registered opener the way it does in the web app.

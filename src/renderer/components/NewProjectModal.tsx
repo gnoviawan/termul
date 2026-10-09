@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
+import { claimEscape, isEscapeClaimed } from '@/lib/escape-claim'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
@@ -217,9 +218,12 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     if (!isOpen) return
 
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
-      // A layer above this modal (the DirectoryPicker) already took this Esc.
-      if (e.key === 'Escape' && !e.defaultPrevented) {
+      // A layer above this modal (the DirectoryPicker) already claimed this Esc.
+      // Not `defaultPrevented`: the project sheet this modal was swapped in from
+      // prevents the Esc it still receives while it animates out.
+      if (e.key === 'Escape' && !isEscapeClaimed(e)) {
         e.preventDefault()
+        claimEscape(e)
         onClose()
       }
     }
@@ -394,9 +398,11 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       if (e.key === 'Enter' && name.trim() && path.trim()) {
         e.preventDefault()
         handleCreate()
-      } else if (e.key === 'Escape' && !e.defaultPrevented) {
-        // Focus can stay on Browse while the picker is open above this panel.
+      } else if (e.key === 'Escape' && !isEscapeClaimed(e.nativeEvent)) {
+        // Focus can stay on Browse while the picker is open above this panel. Claiming
+        // the Esc here also keeps the window handler from closing the modal a second time.
         e.preventDefault()
+        claimEscape(e.nativeEvent)
         onClose()
       }
     },

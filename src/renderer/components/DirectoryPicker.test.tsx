@@ -37,6 +37,7 @@ vi.mock('@/lib/dialog-api', () => ({
 // Overlay back-stack boundary logs must not POST through the mocked fetch.
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
+import { isEscapeClaimed } from '@/lib/escape-claim'
 import {
   armMobileOverlayBackStack,
   pressSystemBack,
@@ -379,14 +380,17 @@ describe('DirectoryPicker', () => {
       vi.restoreAllMocks()
     })
 
-    it('takes Esc in the capture phase: a window bubble listener registered earlier sees it prevented', async () => {
+    it('takes Esc in the capture phase: a window bubble listener registered earlier sees it prevented and claimed', async () => {
       mockFetch.mockResolvedValue(jsonResponse({ success: true, data: [] }))
       // Registered before the picker opens, like NewProjectModal's window
       // handler: a bubble-phase picker handler would run after it and the
-      // `defaultPrevented` guard could not tell the picker already took the Esc.
+      // modal could not tell the picker already took the Esc.
       const seen: boolean[] = []
+      const claimed: boolean[] = []
       const earlier = (event: KeyboardEvent): void => {
-        if (event.key === 'Escape') seen.push(event.defaultPrevented)
+        if (event.key !== 'Escape') return
+        seen.push(event.defaultPrevented)
+        claimed.push(isEscapeClaimed(event))
       }
       window.addEventListener('keydown', earlier)
       try {
@@ -405,11 +409,13 @@ describe('DirectoryPicker', () => {
           code: 'CANCELLED'
         })
         expect(seen).toEqual([true])
+        expect(claimed).toEqual([true])
 
         // Closed: the picker's capture listener is gone, so a later Esc stays
-        // unprevented for the modal underneath.
+        // unprevented and unclaimed for the modal underneath.
         fireEvent.keyDown(document.body, { key: 'Escape' })
         expect(seen).toEqual([true, false])
+        expect(claimed).toEqual([true, false])
       } finally {
         window.removeEventListener('keydown', earlier)
       }

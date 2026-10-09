@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import { _resetWebDirectoryPickerForTesting, registerWebDirectoryPicker } from '@/lib/dialog-api'
+import { claimEscape } from '@/lib/escape-claim'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { webServerDialog } from '@/lib/web-server-api'
@@ -331,14 +332,15 @@ export function DirectoryPicker(): React.JSX.Element {
   }, [currentPath, loadPath])
 
   // Escape to cancel (matches NewProjectModal / ConfirmDialog convention).
-  // Capture phase, so the picker (the topmost layer) takes the Esc first and its
-  // preventDefault() makes the NewProjectModal underneath ignore it: one Esc
-  // closes one layer.
+  // Capture phase, so the picker (the topmost layer) takes the Esc first and
+  // claims it: the NewProjectModal underneath ignores a claimed Esc (one Esc
+  // closes one layer), and preventDefault() keeps Radix layers under it out too.
   useEffect(() => {
     if (!isOpen) return
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.preventDefault()
+        claimEscape(e)
         handleCancel()
       }
     }
