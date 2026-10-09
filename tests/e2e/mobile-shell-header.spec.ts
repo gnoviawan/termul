@@ -977,10 +977,17 @@ test('terminal context swaps ✎ to New terminal and ⋯ to the terminal actions
   await expect(sheet.getByText('Last exit code 0')).toBeVisible()
   await expect(sheet).toHaveAccessibleDescription('Last exit code 0')
   const rows = sheet.getByRole('button').filter({ hasNotText: /^Close$/ })
+  // The project has a path, so the header sheet's navigation rows sit between
+  // Command history and the destructive Close terminal (no New terminal: the
+  // header ✎ is New terminal in a terminal).
   await expect(rows).toHaveText([
     'Rename terminal',
     'Restart terminal',
     'Command history',
+    'Git changes',
+    'Files',
+    'Command palette',
+    'Project settings',
     'Close terminal'
   ])
   await expectRowsAtLeast44(rows)

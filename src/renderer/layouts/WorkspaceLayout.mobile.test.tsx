@@ -40,6 +40,24 @@ const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
   }
 }))
 
+// The palette's project picks: `selectProject` is the desktop path, and the
+// shared `useProjectSwitch` routine (its own tests live in
+// use-project-switch.test.tsx) is the phone shell's.
+const { selectProjectSpy, switchToSpy, useProjectSwitchSpy } = vi.hoisted(() => {
+  const switchTo = vi.fn(async () => 'completed' as const)
+  const projectSwitch = { switchTo, clearFailed: vi.fn() }
+  return {
+    selectProjectSpy: vi.fn(),
+    switchToSpy: switchTo,
+    useProjectSwitchSpy: vi.fn((_source: string) => projectSwitch)
+  }
+})
+
+vi.mock('@/hooks/use-project-switch', () => ({
+  useProjectSwitch: useProjectSwitchSpy,
+  useProjectSwitchState: () => ({ switchingId: null, queuedId: null, failedId: null, busy: false })
+}))
+
 vi.mock('@/lib/tauri-runtime', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
   return { ...actual, isTauriContext: () => tauriRef.current }
@@ -77,7 +95,7 @@ vi.mock('@/stores/project-store', () => ({
   useActiveProject: () => projectRef.current,
   useActiveProjectId: () => 'p1',
   useProjectActions: () => ({
-    selectProject: vi.fn(),
+    selectProject: selectProjectSpy,
     addProject: vi.fn(),
     updateProject: vi.fn(),
     deleteProject: vi.fn(),
@@ -221,13 +239,15 @@ vi.mock('@/components/CommandPalette', () => ({
     onClose,
     onOpenCommandHistory,
     onSSHConnect,
-    onNewProject
+    onNewProject,
+    onSwitchProject
   }: {
     isOpen: boolean
     onClose: () => void
     onOpenCommandHistory?: () => void
     onSSHConnect?: (profileId: string) => void
     onNewProject?: () => void
+    onSwitchProject?: (projectId: string) => void
   }) =>
     isOpen ? (
       <div data-palette-new-project={onNewProject ? 'wired' : 'absent'}>
@@ -244,6 +264,16 @@ vi.mock('@/components/CommandPalette', () => ({
           }}
         >
           Connect SSH profile
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // A project entry: close first, then execute, as `executeCommand` does.
+            onClose()
+            onSwitchProject?.('p2')
+          }}
+        >
+          Palette: switch to Beta
         </button>
         {onNewProject && (
           <button
@@ -599,6 +629,119 @@ describe('WorkspaceLayout mobile branch', () => {
   // The mobile revamp retires the desktop StatusBar on the phone shell:
   // connection health moved to the drawer footer and ContextBarSettingsPopover
   // (a StatusBar child) is not mounted. Desktop keeps it (see the breakpoint suite).
+  describe('terminal ⋯ sheet navigation rows (L-14)', () => {
+    beforeEach(() => {
+      act(() => {
+        useWorkspaceStore.getState().addTerminalTab('t1')
+      })
+    })
+
+    afterEach(() => {
+      // The workspace store is real and shared by the tests below.
+      act(() => {
+        const { root, removeTab } = useWorkspaceStore.getState()
+        for (const leaf of getAllLeafPanes(root)) {
+          for (const tab of leaf.tabs) if (tab.type === 'terminal') removeTab(tab.id)
+        }
+      })
+    })
+
+    async function chooseTerminalItem(name: string): Promise<void> {
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      fireEvent.click(await screen.findByRole('button', { name }))
+    }
+
+    it('offers Git changes, Files, Command palette and Project settings, but not New terminal', async () => {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      await screen.findByRole('dialog')
+
+      const sheet = document.getElementById('mobile-terminal-actions-sheet')
+      const labels = Array.from(sheet?.querySelectorAll('button') ?? [])
+        .map((button) => button.textContent?.trim() ?? '')
+        .filter((text) => text.length > 0 && text !== 'Close')
+      expect(labels).toEqual([
+        'Rename terminal',
+        'Restart terminal',
+        'Command history',
+        'Git changes',
+        'Files',
+        'Command palette',
+        'Project settings',
+        'Close terminal'
+      ])
+    })
+
+    it('threads "Git changes" to the Git Changes sheet', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Git changes')
+
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    })
+
+    it('threads "Command palette" to the palette overlay', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Command palette')
+
+      expect(
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+      ).toBeInTheDocument()
+    })
+
+    it('threads "Project settings" to the Project Settings modal', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Project settings')
+
+      expect(useSettingsModalStore.getState().view).toBe('project')
+      expect(await screen.findByText('project-settings')).toBeInTheDocument()
+    })
+
+    it('threads "Files" and closes the terminal sheet', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Files')
+
+      await waitFor(() =>
+        expect(document.getElementById('mobile-terminal-actions-sheet')).not.toBeInTheDocument()
+      )
+    })
+
+    it('omits the Git changes row when there is no active project path', async () => {
+      projectRef.current = { id: 'p1', name: 'Demo' }
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      await screen.findByRole('dialog')
+
+      expect(screen.queryByRole('button', { name: 'Git changes' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Project settings' })).toBeInTheDocument()
+    })
+  })
+
+  describe('palette project switch (L-13)', () => {
+    it('sends a palette project pick through the shared switch routine, not selectProject', async () => {
+      renderLayout()
+
+      await chooseMoreItem('Command palette')
+      fireEvent.click(await screen.findByRole('button', { name: 'Palette: switch to Beta' }))
+
+      expect(useProjectSwitchSpy).toHaveBeenCalledWith('CommandPalette')
+      expect(switchToSpy).toHaveBeenCalledTimes(1)
+      expect(switchToSpy).toHaveBeenCalledWith('p2')
+      expect(selectProjectSpy).not.toHaveBeenCalled()
+      // The palette still closes on select; the project sheet is where badges show.
+      await waitFor(() =>
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+      )
+    })
+  })
+
   it('does not render the StatusBar on the mobile shell', async () => {
     renderLayout()
 

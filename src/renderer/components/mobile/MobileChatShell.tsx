@@ -282,6 +282,25 @@ export function MobileChatShell({
     })
   }
 
+  // The navigation rows both ⋯ sheets offer, gated once: the header sheet for a
+  // chat or tab, the terminal sheet for a terminal. Git and Files record ⋯ as
+  // the opener so focus returns there when their sheet closes.
+  const openGitChangesFromSheet =
+    !isTauriContext() && activeProject?.path && onOpenGitChanges
+      ? () => {
+          recordSheetOpener('git-sheet', moreButtonRef.current)
+          onOpenGitChanges()
+        }
+      : undefined
+  const openFilesFromSheet = !isTauriContext()
+    ? () => {
+        recordSheetOpener('files-sheet', moreButtonRef.current)
+        setFilesOpen(true)
+      }
+    : undefined
+  const openCommandPalette = !isTauriContext() ? onOpenCommandPalette : undefined
+  const openProjectSettings = activeProject ? onOpenProjectSettings : undefined
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-mobile-chat-shell="">
       {/* Shell live region. Mounted once at the root, outside the header, the
@@ -374,25 +393,11 @@ export function MobileChatShell({
         subtitle={subtitle.text}
         onCloseAutoFocus={moreFocus.onCloseAutoFocus}
         onItemChosen={moreFocus.markItemChosen}
-        onOpenGitChanges={
-          !isTauriContext() && activeProject?.path && onOpenGitChanges
-            ? () => {
-                recordSheetOpener('git-sheet', moreButtonRef.current)
-                onOpenGitChanges()
-              }
-            : undefined
-        }
-        onOpenFiles={
-          !isTauriContext()
-            ? () => {
-                recordSheetOpener('files-sheet', moreButtonRef.current)
-                setFilesOpen(true)
-              }
-            : undefined
-        }
-        onOpenCommandPalette={!isTauriContext() ? onOpenCommandPalette : undefined}
+        onOpenGitChanges={openGitChangesFromSheet}
+        onOpenFiles={openFilesFromSheet}
+        onOpenCommandPalette={openCommandPalette}
         onNewTerminal={newTerminal}
-        onOpenProjectSettings={activeProject ? onOpenProjectSettings : undefined}
+        onOpenProjectSettings={openProjectSettings}
         onCloseChat={activeTab?.type === 'agent-chat' ? closeActiveChat : undefined}
       />
 
@@ -409,6 +414,10 @@ export function MobileChatShell({
           onRenameTerminal={onRenameTerminal}
           onRestartTerminal={onRestartTerminal}
           onOpenCommandHistory={onOpenCommandHistory}
+          onOpenGitChanges={openGitChangesFromSheet}
+          onOpenFiles={openFilesFromSheet}
+          onOpenCommandPalette={openCommandPalette}
+          onOpenProjectSettings={openProjectSettings}
           onCloseTerminal={onCloseTerminal}
         />
       )}

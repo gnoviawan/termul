@@ -1,4 +1,4 @@
-import { FolderTree, GitBranch, Search, Settings, TerminalSquare, X } from '@/components/icons'
+import { X } from '@/components/icons'
 import {
   Sheet,
   SheetContent,
@@ -6,12 +6,16 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
+import {
+  SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME,
+  SHEET_ROW_CLASS_NAME,
+  type ShellNavigationActions,
+  visibleNavigationRows
+} from './mobile-sheet-rows'
 
 export const MOBILE_HEADER_MORE_SHEET_ID = 'mobile-header-more-sheet'
 
-const ROW_CLASS_NAME = 'flex min-h-11 w-full items-center gap-2 rounded-md px-2 text-sm'
-
-interface MobileHeaderMoreSheetProps {
+interface MobileHeaderMoreSheetProps extends ShellNavigationActions {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** The header title, so the sheet makes sense on its own. */
@@ -22,12 +26,6 @@ interface MobileHeaderMoreSheetProps {
   onCloseAutoFocus: (event: Event) => void
   /** Marks that a row was chosen, so focus lands on the destination title. */
   onItemChosen: () => void
-  /** Each row renders only when its callback is given. */
-  onOpenGitChanges?: () => void
-  onOpenFiles?: () => void
-  onOpenCommandPalette?: () => void
-  onNewTerminal?: () => void
-  onOpenProjectSettings?: () => void
   /** Agent-chat tabs only. */
   onCloseChat?: () => void
 }
@@ -44,12 +42,8 @@ export function MobileHeaderMoreSheet({
   subtitle,
   onCloseAutoFocus,
   onItemChosen,
-  onOpenGitChanges,
-  onOpenFiles,
-  onOpenCommandPalette,
-  onNewTerminal,
-  onOpenProjectSettings,
-  onCloseChat
+  onCloseChat,
+  ...navigation
 }: MobileHeaderMoreSheetProps): React.JSX.Element {
   const choose = (run: () => void) => (): void => {
     onItemChosen()
@@ -57,14 +51,8 @@ export function MobileHeaderMoreSheet({
     run()
   }
 
-  const rows = [
-    { label: 'Git changes', Icon: GitBranch, run: onOpenGitChanges },
-    { label: 'Files', Icon: FolderTree, run: onOpenFiles },
-    { label: 'Command palette', Icon: Search, run: onOpenCommandPalette },
-    { label: 'New terminal', Icon: TerminalSquare, run: onNewTerminal },
-    { label: 'Project settings', Icon: Settings, run: onOpenProjectSettings }
-  ]
-  const visibleRows = rows.flatMap(({ label, Icon, run }) => (run ? [{ label, Icon, run }] : []))
+  // Each row renders only when its callback is given.
+  const visibleRows = visibleNavigationRows(navigation)
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -84,7 +72,7 @@ export function MobileHeaderMoreSheet({
           <button
             key={label}
             type="button"
-            className={`${ROW_CLASS_NAME} hover:bg-accent`}
+            className={`${SHEET_ROW_CLASS_NAME} hover:bg-accent`}
             onClick={choose(run)}
           >
             <Icon size={16} />
@@ -93,11 +81,11 @@ export function MobileHeaderMoreSheet({
         ))}
         {onCloseChat && (
           <div
-            className={visibleRows.length > 0 ? 'mt-1 border-t border-border/60 pt-1' : undefined}
+            className={visibleRows.length > 0 ? SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME : undefined}
           >
             <button
               type="button"
-              className={`${ROW_CLASS_NAME} text-destructive hover:bg-destructive/10`}
+              className={`${SHEET_ROW_CLASS_NAME} text-destructive hover:bg-destructive/10`}
               onClick={choose(onCloseChat)}
             >
               <X size={16} />

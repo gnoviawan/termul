@@ -1,5 +1,24 @@
 use std::path::Path;
 
+/// Cfg set when a release-profile build would compile with Tauri's `cfg(dev)`
+/// on (no `custom-protocol`). The desktop entry point (`src/main.rs`) turns it
+/// into a `compile_error!`, so only the desktop binary is blocked: a build
+/// script cannot see which `--bin` targets Cargo selected, but the guard then
+/// fires exactly when the desktop binary compiles, whatever features are on.
+/// The `termul-server` binary (`server_main.rs`) and the library never trip it.
+const RELEASE_WITHOUT_CUSTOM_PROTOCOL_CFG: &str = "termul_release_without_custom_protocol";
+
+/// Whether a release-profile build lacks `custom-protocol`, which makes the
+/// desktop binary load `devUrl` and show "Could not connect to localhost".
+///
+/// `dev` is `tauri_build::is_dev()` (the `DEP_TAURI_DEV` value emitted by the
+/// `tauri` crate's build script, `true` whenever `tauri/custom-protocol` is
+/// off). The escape hatch `1` / `true` disables the guard.
+fn release_without_custom_protocol(profile: &str, dev: bool, allow_override: &str) -> bool {
+    let allowed = matches!(allow_override.trim(), "1" | "true");
+    profile == "release" && dev && !allowed
+}
+
 fn main() {
     // The Vite web build output (`../dist-web/`) is embedded into BOTH the
     // standalone `termul-server` binary and the desktop app (the desktop's
@@ -46,6 +65,18 @@ fn main() {
         .any(|file| !Path::new("../dist-web").join(file).is_file())
     {
         println!("cargo:rustc-cfg=web_embed_missing");
+    }
+
+    // Block a raw release desktop build without `custom-protocol` (enforced by
+    // the `compile_error!` in `src/main.rs`).
+    println!("cargo:rustc-check-cfg=cfg({RELEASE_WITHOUT_CUSTOM_PROTOCOL_CFG})");
+    println!("cargo:rerun-if-env-changed=TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL");
+    if release_without_custom_protocol(
+        &std::env::var("PROFILE").unwrap_or_default(),
+        tauri_build::is_dev(),
+        &std::env::var("TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL").unwrap_or_default(),
+    ) {
+        println!("cargo:rustc-cfg={RELEASE_WITHOUT_CUSTOM_PROTOCOL_CFG}");
     }
 
     tauri_build::build()

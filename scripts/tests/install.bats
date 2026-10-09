@@ -166,6 +166,10 @@ command chmod \"\$@\"
 @test "require_tools fails early and names missing tools before download" {
   stub_uname Darwin arm64
   load_install
+  # Stubs are `#!/usr/bin/env bash` scripts, so bash must stay resolvable
+  # once PATH is narrowed to the stub dir; nothing else from the system leaks in.
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v bash)" >"$TERMUL_TEST_STUB_BIN/bash"
+  chmod +x "$TERMUL_TEST_STUB_BIN/bash"
   local saved_path="$PATH"
   PATH="$TERMUL_TEST_STUB_BIN"
 
@@ -388,4 +392,32 @@ printf '%s\\n' 'https://github.com/gnoviawan/termul/releases/tag/v1.2.3'
   ! grep -q "hdiutil" "$TERMUL_TEST_LOG"
   ! grep -q "^cp " "$TERMUL_TEST_LOG"
   ! grep -q "xattr" "$TERMUL_TEST_LOG"
+}
+
+@test "piping the script to bash runs main without an unbound BASH_SOURCE error" {
+  stub_uname Plan9 x86_64
+
+  run bash -c 'cat "$1" | bash' _ "$TERMUL_TEST_REPO_ROOT/scripts/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unsupported operating system"* ]]
+  [[ "$output" != *"unbound variable"* ]]
+}
+
+@test "executing the script directly runs main" {
+  stub_uname Plan9 x86_64
+
+  run bash "$TERMUL_TEST_REPO_ROOT/scripts/install.sh"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Unsupported operating system"* ]]
+}
+
+@test "sourcing the script does not run main" {
+  stub_uname Plan9 x86_64
+
+  run bash -c 'source "$1"; declare -F main >/dev/null && echo defined' _ "$TERMUL_TEST_REPO_ROOT/scripts/install.sh"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "defined" ]
 }
