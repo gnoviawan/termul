@@ -200,12 +200,16 @@ export function deriveAcpAnnouncements(
   }
 
   // 2. Turn finished: the active chat's own turn going true → false. Switching
-  // between chats changes nothing here, because the diff is per session.
+  // between chats changes nothing here, because the diff is per session. A
+  // `closed` session is excluded: reopening a chat installs it as `closed` with
+  // an optimistic live turn and clears that flag again when no agent owns the
+  // turn, so true → false there is a dead turn being cleared, not one finishing.
   const activeChatId = ctx.activeChatId
   if (
     activeChatId !== null &&
     prev.activeTurn[activeChatId] === true &&
-    activeTurn[activeChatId] === false
+    activeTurn[activeChatId] === false &&
+    state.sessions[activeChatId]?.status !== 'closed'
   ) {
     announcements.push(TURN_FINISHED)
   }

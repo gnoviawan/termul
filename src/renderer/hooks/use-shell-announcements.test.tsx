@@ -572,6 +572,16 @@ describe('useShellAnnouncements', () => {
       expect(region()).toBe('Turn finished')
     })
 
+    it('is silent when a reopened chat clears its dead turn while still closed', () => {
+      seedSessions({ active: { status: 'closed', activeTurn: true, openTurnId: 't1' } })
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        seedSessions({ active: { status: 'closed', activeTurn: false, openTurnId: null } })
+      })
+      settle()
+      expect(region()).toBe('')
+    })
+
     it('is silent when a turn ends in a chat that is not active', () => {
       seedSessions({ other: { activeTurn: true, openTurnId: 't1' } })
       renderHook(() => useShellAnnouncements())

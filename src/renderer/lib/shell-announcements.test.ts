@@ -329,6 +329,36 @@ describe('deriveAcpAnnouncements: turn finished', () => {
     expect(transition(running, done)).toEqual([])
   })
 
+  it('is silent when a dead turn is cleared on a closed session (reopen, no owning agent)', () => {
+    // openHistorySession installs the chat `closed` with an optimistic live turn,
+    // then clears the flag when no connected agent owns the turn.
+    const reopened = acpState({
+      sessions: twoChats({ active: { status: 'closed', activeTurn: true } })
+    })
+    const cleared = acpState({
+      sessions: twoChats({ active: { status: 'closed', activeTurn: false } })
+    })
+    expect(transition(reopened, cleared)).toEqual([])
+  })
+
+  it('is silent when the active chat is closed mid-turn', () => {
+    const running = acpState({ sessions: twoChats({ active: { activeTurn: true } }) })
+    const closed = acpState({
+      sessions: twoChats({ active: { status: 'closed', activeTurn: false } })
+    })
+    expect(transition(running, closed)).toEqual([])
+  })
+
+  it('still announces when a turn that attached to a reopened chat finishes', () => {
+    const attached = acpState({
+      sessions: twoChats({ active: { status: 'active', activeTurn: true } })
+    })
+    const done = acpState({
+      sessions: twoChats({ active: { status: 'active', activeTurn: false } })
+    })
+    expect(transition(attached, done)).toEqual([TURN_FINISHED])
+  })
+
   it('is silent when a turn starts', () => {
     const idle = acpState({ sessions: twoChats() })
     const running = acpState({ sessions: twoChats({ active: { activeTurn: true } }) })
