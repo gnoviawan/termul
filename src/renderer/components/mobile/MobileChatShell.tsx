@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
 import {
@@ -31,6 +31,7 @@ import {
 import { useMobileAttentionCount } from '@/hooks/use-mobile-attention-count'
 import { useSheetCloseFocus } from '@/hooks/use-sheet-close-focus'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { isWorkspaceRoutePath } from '@/lib/workspace-route'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -110,6 +111,7 @@ export function MobileChatShell({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const activeProject = useActiveProject()
   const moreButtonRef = useRef<HTMLButtonElement>(null)
   const subtitleRef = useRef<HTMLButtonElement>(null)
@@ -286,13 +288,33 @@ export function MobileChatShell({
   // also navigates to the chat session.
   const selectTab = (paneId: string, tabId: string): void => {
     const workspace = useWorkspaceStore.getState()
+    // Drawer rows are the tab chooser on /snapshots (no picker of its own).
+    // Off the workspace route (the same test WorkspaceLayout uses to decide
+    // whether to mount the panes) a non-chat tab has no route of its own, so
+    // return to the workspace once the tab is active. Chat rows already land
+    // on /c/<id> through setActiveTab.
+    const selectedType = paneTabs.find(({ tab }) => tab.id === tabId)?.tab.type
+    const returnToWorkspace = !isWorkspaceRoutePath(pathname) && selectedType !== 'agent-chat'
+    const activate = (): void => {
+      const current = useWorkspaceStore.getState()
+      // Fullscreen pins activePaneId to its own leaf (resolveActivePaneId), so
+      // a tab chosen in any other leaf would update that leaf's active tab yet
+      // leave the mobile view on the fullscreen one (a dead tap). Fullscreen is
+      // per-client view state, so leave it (existing store action) when the row
+      // belongs to a different leaf; a row in the fullscreen leaf keeps it.
+      if (current.fullscreenPaneId && current.fullscreenPaneId !== paneId) {
+        current.clearFullscreenPane()
+      }
+      current.setActiveTab(paneId, tabId)
+      if (returnToWorkspace) navigate('/')
+    }
     if (workspace.activePaneId !== paneId) {
-      // Defer tab activation until pane is active.
-      requestAnimationFrame(() => {
-        useWorkspaceStore.getState().setActiveTab(paneId, tabId)
-      })
+      // Defer tab activation until pane is active. The return navigation
+      // follows the activation inside the same frame callback, so the
+      // workspace route never paints the previously active leaf first.
+      requestAnimationFrame(activate)
     } else {
-      workspace.setActiveTab(paneId, tabId)
+      activate()
     }
     closeDrawer()
   }

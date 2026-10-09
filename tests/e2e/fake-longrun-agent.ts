@@ -48,6 +48,13 @@
  * and leaves it unanswered, so the chat shows a pending approval — "needs
  * you" — for as long as a client is connected (the host denies it only after
  * its disconnect grace). The turn keeps streaming.
+ *
+ * Composer fixture (mobile-composer-row suite, additive): a `session/new`
+ * whose cwd contains `composer-row-e2e` advertises two modes plus a model and
+ * a thought-level config option (so the composer toolbar has every chip), and
+ * answers `session/set_config_option` for them. A `[USAGE]` prompt marker
+ * reports a baseline and a grown context-window snapshot (with a reported
+ * cost) so the context ring appears. Any other cwd or prompt behaves as before.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -188,6 +195,51 @@ function wantsPermission(prompt: JsonValue | undefined): boolean {
 
 /** Ids of the permission requests this agent sent: the host's replies carry no method. */
 const permissionRequestIds = new Set<string>()
+
+/** A `session/new` cwd carrying this marker gets the composer fixture below. */
+const COMPOSER_CWD_MARKER = 'composer-row-e2e'
+
+type ComposerOptionValues = Record<string, string>
+const composerValuesBySession = new Map<string, ComposerOptionValues>()
+
+function composerConfigOptions(values: ComposerOptionValues): JsonValue[] {
+  return [
+    {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: values.model ?? 'opus-5-5',
+      options: [
+        { value: 'opus-5-5', name: 'Opus 5.5' },
+        { value: 'sonnet-5-5', name: 'Sonnet 5.5' }
+      ]
+    },
+    {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: values.thought_level ?? 'medium',
+      options: [
+        { value: 'low', name: 'Low' },
+        { value: 'medium', name: 'Medium' },
+        { value: 'high', name: 'High' }
+      ]
+    }
+  ]
+}
+
+/** Report a baseline then a grown context window, so the ring clears its 1% floor. */
+function reportUsage(sessionId: string): void {
+  const update = (used: number, extra: Record<string, JsonValue> = {}): void =>
+    notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'usage_update', used, size: 200_000, ...extra }
+    })
+  update(20_000)
+  update(70_000, { cost: { amount: 0.0421, currency: 'USD' } })
+}
 
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
 const inFlightBySession = new Map<string, InFlight>()
@@ -340,7 +392,35 @@ function handle(msg: JsonRpcMessage): void {
     case 'newSession':
     case 'session/new': {
       const sid = `sess-${randomUUID().slice(0, 8)}`
+      if (String(p.cwd ?? '').includes(COMPOSER_CWD_MARKER)) {
+        composerValuesBySession.set(sid, {})
+        respond(id, {
+          sessionId: sid,
+          modes: {
+            currentModeId: 'default',
+            availableModes: [
+              { id: 'default', name: 'Default' },
+              { id: 'plan', name: 'Plan' }
+            ]
+          },
+          models: [],
+          configOptions: composerConfigOptions({})
+        })
+        break
+      }
       respond(id, { sessionId: sid, modes: [], models: [] })
+      break
+    }
+    case 'setSessionConfigOption':
+    case 'session/set_config_option': {
+      const sid = String(p.sessionId ?? 'unknown')
+      const values = composerValuesBySession.get(sid)
+      if (!values) {
+        respond(id, {})
+        break
+      }
+      values[String(p.configId)] = String(p.value)
+      respond(id, { configOptions: composerConfigOptions(values) })
       break
     }
     case 'loadSession':
@@ -390,6 +470,7 @@ function handle(msg: JsonRpcMessage): void {
         wireLog(`OUT: ${line}`)
         write(line)
       }
+      if (promptText(p.prompt).includes('[USAGE]')) reportUsage(sessionId)
       if (wantsPermission(p.prompt)) {
         const requestId = `perm-${randomUUID().slice(0, 8)}`
         permissionRequestIds.add(requestId)
