@@ -120,4 +120,124 @@ describe('chat markdown file links', () => {
     expect(htmlNode.type).toBe('html')
     expect(dataPathOf(htmlNode.value ?? '')).toBe('docs/a&b.md:1')
   })
+
+  describe('markdown link rewriting', () => {
+    function rewriteLink(
+      url: string,
+      text = 'label'
+    ): { type: string; value?: string; url?: string } {
+      const tree = {
+        type: 'root',
+        children: [
+          {
+            type: 'paragraph',
+            children: [{ type: 'link', url, children: [{ type: 'text', value: text }] }]
+          }
+        ]
+      }
+      remarkFilePathLinks()(tree)
+      return tree.children[0].children[0] as { type: string; value?: string; url?: string }
+    }
+
+    it.each([
+      ['file:///C:/proj/DESIGN.md', 'C:/proj/DESIGN.md'],
+      ['file:///home/u/a.ts', '/home/u/a.ts'],
+      ['file://localhost/home/u/a.ts', '/home/u/a.ts'],
+      ['DESIGN.md', 'DESIGN.md'],
+      ['./docs/a%20b.md', './docs/a b.md'],
+      ['/abs/path/file.md', '/abs/path/file.md'],
+      ['C:/proj/a.md', 'C:/proj/a.md'],
+      ['C:\\proj\\a.md', 'C:\\proj\\a.md'],
+      ['src/a.ts#L42', 'src/a.ts:42'],
+      ['src/a.ts#section', 'src/a.ts'],
+      ['src/a.ts#L10-L20', 'src/a.ts:10'],
+      ['src/a.ts:10#L42', 'src/a.ts:10'],
+      ['src/a.md?plain=1', 'src/a.md'],
+      ['DESIGN.md:42', 'DESIGN.md:42']
+    ])('rewrites %s to a file button for %s', (url, path) => {
+      const node = rewriteLink(url)
+      expect(node.type).toBe('html')
+      expect(dataPathOf(node.value ?? '')).toBe(path)
+    })
+
+    it('uses the link text as the label and escapes it', () => {
+      const node = rewriteLink('a.md', 'A <b> & "c"')
+      expect(node.value).toBe(termulFilePathTag('a.md', 'A <b> & "c"'))
+      expect(node.value).toContain('>A &lt;b&gt; &amp; &quot;c&quot;</termul-file-path>')
+    })
+
+    it('flattens inline code and emphasis in the link text into the label', () => {
+      const tree = {
+        type: 'root',
+        children: [
+          {
+            type: 'paragraph',
+            children: [
+              {
+                type: 'link',
+                url: 'src/a.ts#L10',
+                children: [
+                  { type: 'inlineCode', value: 'foo()' },
+                  { type: 'text', value: ' in ' },
+                  { type: 'strong', children: [{ type: 'text', value: 'a' }] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+      remarkFilePathLinks()(tree)
+      const node = tree.children[0].children[0] as { value?: string }
+      expect(node.value).toBe(termulFilePathTag('src/a.ts:10', 'foo() in a'))
+    })
+
+    it('keeps image links (badges) as normal links', () => {
+      const tree = {
+        type: 'root',
+        children: [
+          {
+            type: 'paragraph',
+            children: [
+              {
+                type: 'link',
+                url: 'a.md',
+                children: [{ type: 'image', url: 'b.png', alt: 'badge' }]
+              }
+            ]
+          }
+        ]
+      }
+      remarkFilePathLinks()(tree)
+      expect(tree.children[0].children[0].type).toBe('link')
+    })
+
+    it('falls back to the path when the link text is empty', () => {
+      expect(rewriteLink('a.md', '').value).toBe(termulFilePathTag('a.md'))
+    })
+
+    it.each([
+      'https://example.com/a.md',
+      'http://example.com/a.md',
+      'mailto:a@b.c',
+      'javascript:alert(1)',
+      '%6Aavascript:alert(1)',
+      '#sec',
+      '//host/a.md',
+      'file://server/share/a.md',
+      'file:////server/share/a.md',
+      'file://///server/share/a.md',
+      'file:///%2Fserver/a.md',
+      'file:///',
+      'file:///a%00b.md',
+      '\\\\server\\share\\a.md',
+      '/\\server/a.md',
+      'file:///%zz',
+      '%zz',
+      ''
+    ])('leaves %j untouched', (url) => {
+      const node = rewriteLink(url)
+      expect(node.type).toBe('link')
+      expect(node.url).toBe(url)
+    })
+  })
 })
