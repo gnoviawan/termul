@@ -160,7 +160,7 @@ export function ChatHistoryEntryRow({
     <div
       data-history-entry-id={entry.id}
       className={cn(
-        'group flex w-full items-center gap-2 pr-2 hover:bg-sidebar-accent',
+        'group flex w-full items-center gap-2 rounded-md pr-2 transition-colors duration-150 ease-out hover:bg-foreground/[0.03]',
         dimmed && 'text-disabled-foreground'
       )}
     >
@@ -222,7 +222,7 @@ export function ChatHistoryEntryRow({
           onClick={() => onDelete(entry.id)}
           className={cn(
             'relative inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground @[400px]:size-10',
-            'opacity-100 transition-colors hover:bg-background/50 hover:text-foreground',
+            'opacity-100 transition-colors hover:bg-foreground/[0.03] hover:text-foreground',
             'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100'
           )}
         >

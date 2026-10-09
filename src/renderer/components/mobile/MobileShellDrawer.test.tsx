@@ -533,7 +533,7 @@ describe('MobileShellDrawer footer', () => {
     expect(within(dialog).getByRole('button', { name: 'Git history' })).toBeDisabled()
   })
 
-  it('shows the connection summary as visible text under tone="status"', async () => {
+  it('shows the connection summary as visible text in the footer', async () => {
     const { dialog } = await openDrawer()
 
     const status = within(dialog).getByRole('status')

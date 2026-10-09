@@ -18,11 +18,6 @@ const SEVERITY: Record<ConnectionChannelState, number> = {
 
 interface ConnectionStatusIndicatorProps {
   /**
-   * `chrome` (default) is the StatusBar's `primary-foreground` ink. `status`
-   * uses the connection / warning / destructive lamp colours on card surfaces.
-   */
-  tone?: 'chrome' | 'status'
-  /**
    * Render the summary as visible text beside a decorative lamp (the mobile
    * drawer footer, where the tooltip is unreachable by touch). The status
    * region's content is that text, so there is no `aria-label` and no tooltip
@@ -34,12 +29,11 @@ interface ConnectionStatusIndicatorProps {
 /**
  * Story 10 (F1): global connection-health indicator for the web client — a
  * StatusBar lamp showing the worst of the control (`/ws`) and terminal
- * (`/terminal/ws`) channels. Chrome ink (`primary-foreground`); shape and
- * pulse encode state. Hidden on Tauri desktop: both
+ * (`/terminal/ws`) channels. Status tone (connection / warning /
+ * destructive) plus pulse encode state. Hidden on Tauri desktop: both
  * channels are direct IPC there, so an indicator would be noise.
  */
 export function ConnectionStatusIndicator({
-  tone = 'chrome',
   showLabel = false
 }: ConnectionStatusIndicatorProps): ReactNode {
   const controlChannel = useConnectionStatusStore((state) => state.controlChannel)
@@ -68,7 +62,6 @@ export function ConnectionStatusIndicator({
           reconnecting={worst === 'connecting' || worst === 'reconnecting'}
           decorative
           size={8}
-          tone={tone}
         />
         <span className="min-w-0">{summary}</span>
       </span>
@@ -79,8 +72,8 @@ export function ConnectionStatusIndicator({
     // role="status" announces state changes politely; the inner button is the
     // keyboard-focusable tooltip trigger (natively focusable — no tabIndex),
     // so the degraded-channel summary is reachable without a mouse. The
-    // trigger keeps an 8px lamp: desktop pads a 20px slot with ::after, and
-    // coarse pointers use a 44px border box that does not grow the 24px bar
+    // trigger keeps an 8px lamp: desktop pads a 24px slot with ::after, and
+    // coarse pointers use a 44px border box that does not grow the 28px bar
     // (#881, see status-bar-hit).
     <span
       role="status"
@@ -97,7 +90,6 @@ export function ConnectionStatusIndicator({
                 reconnecting={worst === 'connecting' || worst === 'reconnecting'}
                 decorative
                 size={8}
-                tone={tone}
               />
             </span>
           </button>

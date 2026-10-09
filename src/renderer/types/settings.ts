@@ -24,13 +24,15 @@ export interface TocSettings {
   width: number
 }
 
-export const TOC_MIN_WIDTH = 150
-export const TOC_MAX_WIDTH = 350
+export const TOC_MIN_WIDTH = 180
+export const TOC_MAX_WIDTH = 360
+/** Below this editor-pane width the outline folds into a tick strip. */
+export const TOC_NARROW_PANE_WIDTH = 720
 
 export const DEFAULT_TOC_SETTINGS: TocSettings = {
   isVisible: true,
   maxHeadingLevel: 3,
-  width: 220
+  width: 240
 }
 
 export const TOC_SETTINGS_KEY = 'settings/toc'

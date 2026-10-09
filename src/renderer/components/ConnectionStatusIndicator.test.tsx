@@ -47,9 +47,8 @@ describe('ConnectionStatusIndicator', () => {
     const button = screen.getByRole('button', { name: 'Connected' })
     // The element's own box is what layout measurement sees (a ::after slop
     // does not change getBoundingClientRect). A fine pointer, including a
-    // narrow desktop window, stays a 20px slot.
-    expect(button.className).toContain('h-5')
-    expect(button.className).toContain('w-5')
+    // narrow desktop window, stays a 24px slot.
+    expect(button.className).toContain('size-6')
     expect(button.className).not.toContain('max-md:')
     expect(button.className).toContain('pointer-coarse:size-11')
     expect(button.className).toContain('pointer-coarse:-my-2.5')
@@ -62,7 +61,8 @@ describe('ConnectionStatusIndicator', () => {
   it('shows a filled Connected lamp when both channels are connected', () => {
     renderIndicator()
     expect(screen.getByRole('status', { name: 'Connected' })).toBeInTheDocument()
-    expect(lampClass()).toContain('text-primary-foreground')
+    // Quiet bar (card surface): the lamp uses the status tone.
+    expect(lampClass()).toContain('text-connection')
     expect(lampClass()).toContain('fill-current')
   })
 
@@ -72,7 +72,7 @@ describe('ConnectionStatusIndicator', () => {
     expect(
       screen.getByRole('status', { name: 'Terminal channel: reconnecting' })
     ).toBeInTheDocument()
-    expect(lampClass()).toContain('text-primary-foreground')
+    expect(lampClass()).toContain('text-warning')
     expect(lampClass()).toContain('animate-pulse')
   })
 
@@ -89,13 +89,13 @@ describe('ConnectionStatusIndicator', () => {
       terminalChannel: 'disconnected'
     })
     renderIndicator()
-    // The tooltip/label names BOTH degraded channels; the lamp is hollow (worst).
+    // The tooltip/label names BOTH degraded channels; the lamp shows the worst.
     expect(
       screen.getByRole('status', {
         name: 'Control channel: reconnecting; Terminal channel: disconnected'
       })
     ).toBeInTheDocument()
-    expect(lampClass()).toContain('fill-none')
+    expect(lampClass()).toContain('text-destructive')
   })
 
   it('recovers to a filled lamp when the degraded channel reconnects', () => {
@@ -123,7 +123,7 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
   function renderLabelled(): ReturnType<typeof render> {
     return render(
       <TooltipProvider>
-        <ConnectionStatusIndicator tone="status" showLabel />
+        <ConnectionStatusIndicator showLabel />
       </TooltipProvider>
     )
   }
@@ -135,13 +135,13 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
 
     const explicit = render(
       <TooltipProvider>
-        <ConnectionStatusIndicator tone="chrome" showLabel={false} />
+        <ConnectionStatusIndicator showLabel={false} />
       </TooltipProvider>
     )
     expect(explicit.container.innerHTML).toBe(plainHtml)
     // Still the tooltip-trigger button with the summary as its aria-label.
     expect(screen.getByRole('button', { name: 'Connected' })).toBeInTheDocument()
-    expect(lampClass()).toContain('text-primary-foreground')
+    expect(lampClass()).toContain('text-connection')
   })
 
   it('shows the summary as visible text content of the status region', () => {
@@ -171,7 +171,6 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
     renderLabelled()
 
     expect(lampClass()).toContain('text-connection')
-    expect(lampClass()).not.toContain('text-primary-foreground')
     expect(lampClass()).toContain('fill-current')
   })
 

@@ -113,9 +113,23 @@ describe('CommandPalette', () => {
       screen.getByText('Show the agent launcher prompt in the active pane')
     ).toBeInTheDocument()
     expect(screen.getByText('Ctrl+T')).toBeInTheDocument()
-    expect(screen.getByText('Navigate')).toBeInTheDocument()
-    expect(screen.getByText('Select')).toBeInTheDocument()
+    expect(screen.getByText('Move')).toBeInTheDocument()
+    expect(screen.getByText('Run')).toBeInTheDocument()
     expect(screen.getByText('Close')).toBeInTheDocument()
+  })
+
+  it('uses neutral popover chrome: foreground-wash selection and hairline kbd hints', () => {
+    const { container } = renderPalette()
+
+    const item = container.querySelector('[cmdk-item]')
+    expect(item?.className).toContain("data-[selected='true']:bg-foreground/[0.06]")
+    expect(item?.className).not.toContain('bg-background')
+    expect(item?.className).not.toContain('bg-accent')
+    const shortcut = screen.getByText('Ctrl+T')
+    expect(shortcut.className).not.toContain('bg-secondary')
+    const kbd = screen.getByText('Esc')
+    expect(kbd.tagName).toBe('KBD')
+    expect(kbd.className).not.toContain('bg-secondary')
   })
 
   it('orders the Projects group above Workspace, Navigation, and Tools', () => {
@@ -421,8 +435,8 @@ describe('CommandPalette', () => {
       const { props } = renderPalette()
 
       // Dead keyboard affordances are gone on touch.
-      expect(screen.queryByText('Navigate')).not.toBeInTheDocument()
-      expect(screen.queryByText('Select')).not.toBeInTheDocument()
+      expect(screen.queryByText('Move')).not.toBeInTheDocument()
+      expect(screen.queryByText('Run')).not.toBeInTheDocument()
       // The visible close button meets the 44px floor (size-11).
       const closeBtn = screen.getByRole('button', { name: 'Close command palette' })
       expect(closeBtn.className).toContain('size-11')
@@ -438,8 +452,8 @@ describe('CommandPalette', () => {
       expect(backdrop?.className).toContain('pt-[7vh]')
       expect(backdrop?.className).not.toContain('justify-end')
       // Desktop keeps the kbd hints + has no mobile close button.
-      expect(screen.getByText('Navigate')).toBeInTheDocument()
-      expect(screen.getByText('Select')).toBeInTheDocument()
+      expect(screen.getByText('Move')).toBeInTheDocument()
+      expect(screen.getByText('Run')).toBeInTheDocument()
       expect(
         screen.queryByRole('button', { name: 'Close command palette' })
       ).not.toBeInTheDocument()

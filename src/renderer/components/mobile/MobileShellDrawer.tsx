@@ -361,7 +361,7 @@ export function MobileShellDrawer({
             )}
           </div>
           <div className="px-3 pb-1">
-            <ConnectionStatusIndicator tone="status" showLabel />
+            <ConnectionStatusIndicator showLabel />
           </div>
         </div>
       </SheetContent>

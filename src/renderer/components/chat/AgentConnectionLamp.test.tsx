@@ -7,27 +7,19 @@ function lampClass(): string {
 }
 
 describe('AgentConnectionLamp motion', () => {
-  it('stops pulsing under reduced motion in the status tone', () => {
-    render(<AgentConnectionLamp connected={false} reconnecting tone="status" decorative />)
+  it('stops pulsing under reduced motion while reconnecting', () => {
+    render(<AgentConnectionLamp connected={false} reconnecting decorative />)
 
     expect(lampClass()).toContain('animate-pulse')
     expect(lampClass()).toContain('motion-reduce:animate-none')
     expect(lampClass()).toContain('text-warning')
   })
 
-  it('stops pulsing under reduced motion in the chrome tone', () => {
-    render(<AgentConnectionLamp connected={false} reconnecting tone="chrome" decorative />)
-
-    expect(lampClass()).toContain('animate-pulse')
-    expect(lampClass()).toContain('motion-reduce:animate-none')
-    expect(lampClass()).toContain('text-primary-foreground')
-  })
-
   it.each([
-    'status',
-    'chrome'
-  ] as const)('does not pulse at all when not reconnecting (%s)', (tone) => {
-    render(<AgentConnectionLamp connected tone={tone} decorative />)
+    true,
+    false
+  ])('does not pulse at all when not reconnecting (connected=%s)', (connected) => {
+    render(<AgentConnectionLamp connected={connected} decorative />)
 
     expect(lampClass()).not.toContain('animate-pulse')
     expect(lampClass()).not.toContain('motion-reduce:animate-none')

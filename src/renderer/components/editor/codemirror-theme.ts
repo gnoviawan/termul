@@ -59,7 +59,7 @@ export function createTermulTheme(
   syntaxColors?: ResolvedSyntaxColors | null
 ): Extension[] {
   const colors = syntaxColors ?? defaultDarkSyntax
-  const highlightStyle = buildHighlightStyle(isDark ? colors : colors)
+  const highlightStyle = buildHighlightStyle(colors)
 
   return [
     EditorView.theme(
@@ -81,8 +81,10 @@ export function createTermulTheme(
         '.cm-cursor, .cm-dropCursor': {
           borderLeftColor: 'oklch(var(--primary))'
         },
+        /* Selection and highlights are neutral foreground washes, not the accent hue:
+           see docs/design/colors.md. Search uses the warning hue. */
         '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-          backgroundColor: 'oklch(var(--accent))'
+          backgroundColor: 'oklch(var(--foreground) / 0.14)'
         },
         '.cm-panels': {
           backgroundColor: 'oklch(var(--card))',
@@ -95,21 +97,21 @@ export function createTermulTheme(
           borderTop: '1px solid oklch(var(--border))'
         },
         '.cm-searchMatch': {
-          backgroundColor: 'oklch(var(--accent) / 0.3)',
-          outline: '1px solid oklch(var(--accent))'
+          backgroundColor: 'oklch(var(--warning) / 0.15)'
         },
         '.cm-searchMatch.cm-searchMatch-selected': {
-          backgroundColor: 'oklch(var(--primary) / 0.3)'
+          backgroundColor: 'oklch(var(--warning) / 0.4)',
+          outline: '1px solid oklch(var(--warning))'
         },
         '.cm-activeLine': {
-          backgroundColor: 'oklch(var(--accent) / 0.15)'
+          backgroundColor: 'oklch(var(--foreground) / 0.03)'
         },
         '.cm-selectionMatch': {
-          backgroundColor: 'oklch(var(--accent) / 0.2)'
+          backgroundColor: 'oklch(var(--foreground) / 0.08)'
         },
         '.cm-matchingBracket, .cm-nonmatchingBracket': {
-          backgroundColor: 'oklch(var(--accent) / 0.3)',
-          outline: '1px solid oklch(var(--accent) / 0.5)'
+          backgroundColor: 'transparent',
+          outline: '1px solid oklch(var(--foreground) / 0.4)'
         },
         '.cm-gutters': {
           backgroundColor: 'oklch(var(--card))',
@@ -117,7 +119,7 @@ export function createTermulTheme(
           borderRight: '1px solid oklch(var(--border))'
         },
         '.cm-activeLineGutter': {
-          backgroundColor: 'oklch(var(--accent) / 0.15)',
+          backgroundColor: 'transparent',
           color: 'oklch(var(--foreground))'
         },
         '.cm-foldPlaceholder': {
@@ -138,11 +140,21 @@ export function createTermulTheme(
           borderTopColor: 'oklch(var(--popover))',
           borderBottomColor: 'oklch(var(--popover))'
         },
-        '.cm-tooltip-autocomplete': {
+        '.cm-tooltip.cm-tooltip-autocomplete': {
+          borderRadius: '10px',
+          padding: '4px',
+          '& > ul > li': {
+            padding: '4px 8px',
+            borderRadius: '6px'
+          },
           '& > ul > li[aria-selected]': {
-            backgroundColor: 'oklch(var(--accent))',
-            color: 'oklch(var(--accent-foreground))'
+            backgroundColor: 'oklch(var(--foreground) / 0.06)',
+            color: 'oklch(var(--foreground))'
           }
+        },
+        '.cm-completionMatchedText': {
+          fontWeight: '700',
+          textDecoration: 'none'
         },
         '.cm-scroller': {
           overflow: 'auto'

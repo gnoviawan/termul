@@ -143,10 +143,10 @@ export function SSHResizableSection({
       {/* Drag handle */}
       <div
         onMouseDown={handleMouseDown}
-        className="h-[3px] border-t border-sidebar-border cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors group flex items-center justify-center"
+        className="group flex h-0.75 cursor-row-resize items-center justify-center border-t border-border transition-colors duration-150 ease-out hover:bg-foreground/[0.06] active:bg-foreground/[0.1]"
         title="Drag to resize"
       >
-        <div className="w-8 h-[2px] rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/30 transition-colors" />
+        <div className="h-0.5 w-8 rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/30 transition-colors" />
       </div>
       {/* SSH Panel content */}
       <div className="flex-1 overflow-hidden">
