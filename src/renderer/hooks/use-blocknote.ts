@@ -6,9 +6,9 @@ import {
   createExtension,
   defaultBlockSpecs
 } from '@blocknote/core'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { mermaidBlockSpec } from '@/components/editor/mermaid-block-spec'
-import type { TocHeading } from '@/hooks/use-toc-headings'
+import { areTocHeadingsEqual, type TocHeading } from '@/hooks/use-toc-headings'
 import { requestSaveEditorFile } from '@/lib/editor-save'
 
 function convertMermaidBlocks(
@@ -57,8 +57,22 @@ interface UseBlockNoteResult {
   flushPendingContent: () => Promise<void>
   /** Capture current body markdown without calling onChange (clears debounce). */
   capturePendingContent: () => Promise<string | null>
-  getHeadings: () => TocHeading[]
+  /** Heading blocks. Keeps the same array while ids, levels and text stay the same. */
+  headings: TocHeading[]
   scrollToBlock: (blockId: string) => void
+}
+
+/** Nearest ancestor whose overflow-y lets the user scroll it and that overflows. */
+function findScrollContainer(element: HTMLElement): HTMLElement | null {
+  let node = element.parentElement
+  while (node) {
+    const { overflowY } = getComputedStyle(node)
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) {
+      return node
+    }
+    node = node.parentElement
+  }
+  return null
 }
 
 export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
@@ -102,6 +116,42 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     })
   }, [saveShortcutExtension])
 
+  const [headings, setHeadings] = useState<TocHeading[]>([])
+  const refreshHeadings = useCallback((): void => {
+    // Non-empty heading blocks at the top level of the document.
+    const next: TocHeading[] = editor.document.flatMap((block) => {
+      if (block.type !== 'heading') {
+        return []
+      }
+
+      const level = typeof block.props.level === 'number' ? block.props.level : 1
+      const text = block.content
+        .flatMap((inlineContent) => {
+          if (inlineContent.type === 'text') {
+            return [inlineContent.text]
+          }
+
+          return []
+        })
+        .join('')
+        .trim()
+
+      if (!text) {
+        return []
+      }
+
+      return [
+        {
+          id: block.id,
+          blockId: block.id,
+          level,
+          text
+        }
+      ]
+    })
+    setHeadings((previous) => (areTocHeadingsEqual(previous, next) ? previous : next))
+  }, [editor])
+
   const runReplace = useCallback(
     async (markdown: string, token: number): Promise<void> => {
       try {
@@ -111,6 +161,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
         const processedBlocks = convertMermaidBlocks(blocks as Array<Record<string, unknown>>)
         if (token !== replaceTokenRef.current) return
         editor.replaceBlocks(editor.document, processedBlocks)
+        refreshHeadings()
       } catch {
         // Failed to parse markdown
       } finally {
@@ -121,7 +172,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
         }
       }
     },
-    [editor]
+    [editor, refreshHeadings]
   )
 
   // Load initial markdown content
@@ -134,6 +185,8 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
   // Set up change listener
   useEffect(() => {
     const unsubscribe = editor.onChange(async () => {
+      // The outline follows every edit; `runReplace` refreshes it after a replace.
+      refreshHeadings()
       // Skip onChange events triggered by programmatic content replacement
       if (isReplacingRef.current) return
 
@@ -159,7 +212,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
         unsubscribe()
       }
     }
-  }, [editor])
+  }, [editor, refreshHeadings])
 
   const replaceContent = useCallback(
     async (markdown: string) => {
@@ -191,39 +244,6 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     onChangeRef.current(markdown)
   }, [capturePendingContent])
 
-  const getHeadings = useCallback((): TocHeading[] => {
-    return editor.document.flatMap((block) => {
-      if (block.type !== 'heading') {
-        return []
-      }
-
-      const level = typeof block.props.level === 'number' ? block.props.level : 1
-      const text = block.content
-        .flatMap((inlineContent) => {
-          if (inlineContent.type === 'text') {
-            return [inlineContent.text]
-          }
-
-          return []
-        })
-        .join('')
-        .trim()
-
-      if (!text) {
-        return []
-      }
-
-      return [
-        {
-          id: block.id,
-          blockId: block.id,
-          level,
-          text
-        }
-      ]
-    })
-  }, [editor])
-
   const scrollToBlock = useCallback(
     (blockId: string): void => {
       const targetElement = editor.domElement?.querySelector<HTMLElement>(
@@ -240,10 +260,17 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
 
         requestAnimationFrame(() => {
           try {
-            targetElement.scrollIntoView({
-              block: 'start',
-              behavior: 'smooth'
-            })
+            // Scroll only the editor's own scroller. `scrollIntoView` also
+            // scrolls every clipping ancestor, and an `overflow-hidden`
+            // shell (the workspace <main> card) then shifts up and crops
+            // the tab bar with no way for the user to scroll it back.
+            const scroller = findScrollContainer(targetElement)
+            if (!scroller) {
+              return
+            }
+            const offset =
+              targetElement.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+            scroller.scrollTo({ top: scroller.scrollTop + offset, behavior: 'smooth' })
           } catch {
             console.error('Failed to scroll TOC heading into view')
           }
@@ -260,7 +287,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
     replaceContent,
     flushPendingContent,
     capturePendingContent,
-    getHeadings,
+    headings,
     scrollToBlock
   }
 }
