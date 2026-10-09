@@ -44,6 +44,7 @@ import { useMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
+import { useProjectSwitch } from '@/hooks/use-project-switch'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
@@ -395,6 +396,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isExplorerVisible = useFileExplorerVisible()
   const isSidebarVisible = useSidebarVisible()
   const isMobileWebShell = useMobileWebShell()
+  const { switchTo: switchProjectFromPalette } = useProjectSwitch('CommandPalette')
   const reducedMotion = useReducedMotion() ?? false
 
   // SSH state
@@ -2136,7 +2138,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
             isOpen={isCommandPaletteOpen}
             onClose={() => setIsCommandPaletteOpen(false)}
             projects={projects}
-            onSwitchProject={selectProject}
+            onSwitchProject={
+              isMobileWebShell ? (id) => void switchProjectFromPalette(id) : selectProject
+            }
             onAddTerminal={() => handleAddTerminal(undefined)}
             onShowAgentLauncher={() => {
               const paneId = useWorkspaceStore.getState().activePaneId

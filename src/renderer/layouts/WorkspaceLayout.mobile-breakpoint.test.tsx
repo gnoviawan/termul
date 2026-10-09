@@ -42,6 +42,24 @@ const { tauriRef, projectRef, viewportWidthRef, viewportHeightRef } = vi.hoisted
   viewportHeightRef: { current: 900 as number }
 }))
 
+// The palette's project picks: `selectProject` is the desktop path, and the
+// shared `useProjectSwitch` routine (its own tests live in
+// use-project-switch.test.tsx) is the phone shell's.
+const { selectProjectSpy, switchToSpy, useProjectSwitchSpy } = vi.hoisted(() => {
+  const switchTo = vi.fn(async () => 'completed' as const)
+  const projectSwitch = { switchTo, clearFailed: vi.fn() }
+  return {
+    selectProjectSpy: vi.fn(),
+    switchToSpy: switchTo,
+    useProjectSwitchSpy: vi.fn((_source: string) => projectSwitch)
+  }
+})
+
+vi.mock('@/hooks/use-project-switch', () => ({
+  useProjectSwitch: useProjectSwitchSpy,
+  useProjectSwitchState: () => ({ switchingId: null, queuedId: null, failedId: null, busy: false })
+}))
+
 vi.mock('@/lib/tauri-runtime', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
   return { ...actual, isTauriContext: () => tauriRef.current }
@@ -66,7 +84,7 @@ vi.mock('@/stores/project-store', () => ({
   useActiveProject: () => projectRef.current,
   useActiveProjectId: () => 'p1',
   useProjectActions: () => ({
-    selectProject: vi.fn(),
+    selectProject: selectProjectSpy,
     addProject: vi.fn(),
     updateProject: vi.fn(),
     deleteProject: vi.fn(),
@@ -181,12 +199,16 @@ vi.mock('@/hooks/use-command-history', () => ({
 vi.mock('@/components/CommandPalette', () => ({
   CommandPalette: ({
     isOpen,
+    onClose,
     onNewProject,
-    onOpenShortcutMenu
+    onOpenShortcutMenu,
+    onSwitchProject
   }: {
     isOpen: boolean
+    onClose: () => void
     onNewProject?: () => void
     onOpenShortcutMenu?: () => void
+    onSwitchProject: (projectId: string) => void
   }) =>
     isOpen ? (
       <div
@@ -194,6 +216,16 @@ vi.mock('@/components/CommandPalette', () => ({
         data-palette-shortcut-menu={onOpenShortcutMenu ? 'wired' : 'absent'}
       >
         <input placeholder="Search commands, projects, settings..." readOnly />
+        <button
+          type="button"
+          onClick={() => {
+            // A project entry: close first, then execute, as `executeCommand` does.
+            onClose()
+            onSwitchProject('p2')
+          }}
+        >
+          Palette: switch to Beta
+        </button>
       </div>
     ) : null
 }))
@@ -494,6 +526,26 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     expect(header).toHaveClass('shrink-0')
   })
 
+  it('sends palette project picks through the shared switch routine at 390px, not selectProject', async () => {
+    viewportWidthRef.current = 390
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+
+    fireEvent.click(await screen.findByLabelText('More'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Command palette' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Palette: switch to Beta' }))
+
+    expect(useProjectSwitchSpy).toHaveBeenCalledWith('CommandPalette')
+    expect(switchToSpy).toHaveBeenCalledTimes(1)
+    expect(switchToSpy).toHaveBeenCalledWith('p2')
+    expect(selectProjectSpy).not.toHaveBeenCalled()
+  })
+
   it('renders the desktop chrome — and NOT the mobile shell — at 1024px', async () => {
     viewportWidthRef.current = 1024
     render(
@@ -627,6 +679,17 @@ describe('WorkspaceLayout desktop parity for the mobile shell fixes', () => {
     const stub = document.querySelector('[data-pane-renderer-stub]')
     expect(stub).toHaveAttribute('data-node-id', 'pane-a')
     expect(stub).toHaveAttribute('data-node-type', 'leaf')
+  })
+
+  it('keeps selectProject for palette project picks and never calls the shared switch routine', async () => {
+    renderDesktop()
+
+    fireEvent.click(await screen.findByLabelText('Open projects'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Palette: switch to Beta' }))
+
+    expect(selectProjectSpy).toHaveBeenCalledTimes(1)
+    expect(selectProjectSpy).toHaveBeenCalledWith('p2')
+    expect(switchToSpy).not.toHaveBeenCalled()
   })
 
   it('keeps Open Shortcut Menu wired and New Project off the desktop palette', async () => {
