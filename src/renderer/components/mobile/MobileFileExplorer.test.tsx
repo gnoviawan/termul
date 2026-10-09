@@ -24,8 +24,6 @@ import {
   resolveBreadcrumbTarget
 } from './MobileFileExplorer'
 
-vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
-
 let mockReducedMotion = false
 
 vi.mock('framer-motion', async () => {
