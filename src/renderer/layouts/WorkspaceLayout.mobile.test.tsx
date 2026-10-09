@@ -582,14 +582,15 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
   })
 
-  // a11y floor: the header "Git changes" button is a plain button that sets
-  // state in another component, so Radix has no trigger to return focus to.
-  // Closing the sheet must hand focus back to the button, not <body>.
-  it('returns focus to the Git changes button when Escape closes the Git sheet', async () => {
+  // a11y floor: the header ⋯ row that opens the Git sheet is a plain button that
+  // sets state in another component, so Radix has no trigger to return focus
+  // to. Closing the sheet must hand focus back to the header ⋯ button (the row
+  // unmounts with its sheet), not <body>.
+  it('returns focus to the header ⋯ button when Escape closes the Git sheet', async () => {
     renderLayout()
 
-    const trigger = await screen.findByLabelText('Git changes')
-    fireEvent.click(trigger)
+    const trigger = await screen.findByLabelText('More')
+    await chooseMoreItem('Git changes')
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: 'Escape' })
@@ -600,11 +601,11 @@ describe('WorkspaceLayout mobile branch', () => {
     await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
-  it('returns focus to the Git changes button when the sheet Close button is used', async () => {
+  it('returns focus to the header ⋯ button when the sheet Close button is used', async () => {
     renderLayout()
 
-    const trigger = await screen.findByLabelText('Git changes')
-    fireEvent.click(trigger)
+    const trigger = await screen.findByLabelText('More')
+    await chooseMoreItem('Git changes')
     await screen.findByPlaceholderText('Filter changes...')
 
     const sheet = document.querySelector('[data-sheet]') as HTMLElement
@@ -686,11 +687,11 @@ describe('WorkspaceLayout mobile branch', () => {
       )
     })
 
-    it('returns focus to the Git changes button when hardware back closes the sheet', async () => {
+    it('returns focus to the header ⋯ button when hardware back closes the sheet', async () => {
       renderLayout()
 
-      const trigger = await screen.findByLabelText('Git changes')
-      fireEvent.click(trigger)
+      const trigger = await screen.findByLabelText('More')
+      await chooseMoreItem('Git changes')
       expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
       window.dispatchEvent(new Event('popstate'))
