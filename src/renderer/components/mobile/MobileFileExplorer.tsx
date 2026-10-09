@@ -1,7 +1,7 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import {
@@ -36,8 +36,10 @@ import {
 } from '@/components/ui/sheet'
 import { filesystemApi, persistenceApi } from '@/lib/api'
 import { sortDirectoryEntries } from '@/lib/filesystem-sort'
+import { logFrontendError } from '@/lib/log-api'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useActiveProjectId } from '@/stores/project-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -58,8 +60,26 @@ interface RenameState {
 
 type NavigationDirection = -1 | 0 | 1
 
+const DOT_SEGMENT = /(^|\/)\.\.?(\/|$)/
+
+/** Resolves `.` and `..` segments, keeping a UNC (`//`), posix (`/`) or drive
+ * (`C:/`) root; `..` cannot climb above a root. Paths without a dot segment
+ * are returned untouched, so every ordinary path normalizes exactly as before. */
+function resolveDotSegments(path: string): string {
+  if (!DOT_SEGMENT.test(path)) return path
+  const root = /^(?:\/\/|[A-Za-z]:\/|\/)/.exec(path)?.[0] ?? ''
+  const kept: string[] = []
+  for (const segment of path.slice(root.length).split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment !== '..') kept.push(segment)
+    else if (kept.length > 0 && kept[kept.length - 1] !== '..') kept.pop()
+    else if (!root) kept.push('..')
+  }
+  return root + kept.join('/')
+}
+
 function normalizePath(path: string): string {
-  const normalized = path.replace(/\\/g, '/')
+  const normalized = resolveDotSegments(path.replace(/\\/g, '/'))
   if (normalized === '/' || /^[A-Za-z]:\/$/.test(normalized)) return normalized
   return normalized.replace(/\/+$/, '') || '/'
 }
@@ -95,6 +115,60 @@ function isWithinRoot(path: string, root: string): boolean {
   return p.startsWith(`${r}/`)
 }
 
+interface FolderCrumb {
+  label: string
+  path: string
+}
+
+/** Header breadcrumb for a folder below the project root; null at (or outside)
+ * the root. Ancestor paths are case-preserving prefixes of `current`; the first
+ * segment targets the normalized root itself, so a tap lands on the same path
+ * `parentOf` / `navigateBack` reach. Both inputs are `normalizePath` output. */
+export function buildFolderCrumbs(
+  root: string,
+  current: string
+): { ancestors: FolderCrumb[]; currentLabel: string } | null {
+  if (comparePath(current) === comparePath(root) || !isWithinRoot(current, root)) return null
+  // Roots ending in a separator (`/`, `C:/`) already include it.
+  const prefixLength = root.endsWith('/') ? root.length : root.length + 1
+  const parts = current.slice(prefixLength).split('/').filter(Boolean)
+  const currentLabel = parts.pop()
+  if (currentLabel === undefined) return null
+  const ancestors: FolderCrumb[] = [
+    { label: root.split('/').filter(Boolean).at(-1) || root, path: root }
+  ]
+  let prefix = current.slice(0, prefixLength)
+  for (const part of parts) {
+    prefix += part
+    ancestors.push({ label: part, path: prefix })
+    prefix += '/'
+  }
+  return { ancestors, currentLabel }
+}
+
+/** Guard for a breadcrumb tap. Returns the normalized target, or null when the
+ * tap must change nothing: a target outside the root (or with no root) is
+ * logged as a warning, a tap on the folder already shown is silent. */
+export function resolveBreadcrumbTarget(
+  path: string,
+  rootPath: string | null,
+  currentPath: string | null
+): string | null {
+  const target = normalizePath(path)
+  if (!rootPath || !isWithinRoot(target, rootPath)) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'MobileFileExplorer.navigateTo',
+      message: rootPath
+        ? 'breadcrumb target is outside the project root; ignored'
+        : 'breadcrumb tapped without a project root; ignored'
+    })
+    return null
+  }
+  if (currentPath && comparePath(currentPath) === comparePath(target)) return null
+  return target
+}
+
 /** Lean touch-first file explorer drawer for the web/mobile view. Directory
  * rows drill into a single folder at a time, while files reuse the desktop
  * open-file wiring. Native desktop keeps its existing tree explorer. */
@@ -110,6 +184,15 @@ export function MobileFileExplorer({
   const [currentPath, setCurrentPath] = useState<string | null>(null)
   const [navigationDirection, setNavigationDirection] = useState<NavigationDirection>(0)
   const [actionEntry, setActionEntry] = useState<DirectoryEntry | null>(null)
+  // Mobile web shell: system back closes the row-actions sheet (inert on desktop).
+  // The sheet is nested in the Files sheet, so it is only an overlay while that
+  // sheet is open: `actionEntry` survives a close until the next open resets it.
+  useOverlayRegistration(
+    'mobile-file-actions',
+    open && actionEntry !== null,
+    () => setActionEntry(null),
+    { mobileShellOnly: true }
+  )
   const [renaming, setRenaming] = useState<RenameState | null>(null)
   const [creating, setCreating] = useState<CreateState | null>(null)
   const [createSubmitting, setCreateSubmitting] = useState(false)
@@ -158,7 +241,9 @@ export function MobileFileExplorer({
       .read<string>(PersistenceKeys.mobileFileExplorerFolder(projectId))
       .then((res) => {
         if (cancelled) return
-        const persisted = res.success ? res.data : null
+        // Normalize before the containment check so a persisted `..` path
+        // that lexically escapes the root is dropped, never restored.
+        const persisted = res.success && res.data ? normalizePath(res.data) : null
         setCurrentPath(persisted && isWithinRoot(persisted, rootPath) ? persisted : normalizedRoot)
       })
       .catch(() => {
@@ -233,6 +318,18 @@ export function MobileFileExplorer({
     const next = parentOf(currentPath)
     setCurrentPath(next)
     persistFolder(next)
+  }
+
+  /** Breadcrumb tap: jump to an ancestor folder. Mirrors `navigateBack` (clears
+   * the inline create/rename state, slides back, persists the folder). */
+  function navigateTo(path: string): void {
+    const target = resolveBreadcrumbTarget(path, rootPath, currentPath)
+    if (!target) return
+    setCreating(null)
+    setRenaming(null)
+    setNavigationDirection(-1)
+    setCurrentPath(target)
+    persistFolder(target)
   }
 
   function handleRowTap(entry: DirectoryEntry): void {
@@ -408,6 +505,10 @@ export function MobileFileExplorer({
         ? normalizedRoot.split('/').filter(Boolean).at(-1) || normalizedRoot
         : normalizedCurrent.split('/').filter(Boolean).at(-1) || normalizedCurrent
       : 'Files'
+  const folderCrumbs =
+    normalizedRoot && normalizedCurrent
+      ? buildFolderCrumbs(normalizedRoot, normalizedCurrent)
+      : null
   const currentEntries = currentPath
     ? sortDirectoryEntries(directoryContents.get(currentPath) ?? [])
     : []
@@ -435,12 +536,48 @@ export function MobileFileExplorer({
             </Button>
             <div className="min-w-0">
               <SheetTitle className="truncate text-base">{currentName}</SheetTitle>
-              <p
-                className="truncate text-xs text-muted-foreground"
-                title={normalizedCurrent ?? undefined}
-              >
-                {isAtRoot ? 'Project files' : normalizedCurrent?.slice(rootPrefixLength)}
-              </p>
+              {folderCrumbs ? (
+                // Below the root the path is tappable segments; on narrow
+                // widths it clips from the left (end-aligned) so the current
+                // folder always stays visible. Clip the x axis only
+                // (`overflow-x-clip`, y stays visible): `overflow-hidden`
+                // would also clip the segments' vertical hit-slop below and
+                // shrink every tap target to the 16px row.
+                <nav
+                  aria-label="Folder path"
+                  title={normalizedCurrent ?? undefined}
+                  className="flex w-fit max-w-full items-center justify-end gap-0.5 overflow-x-clip whitespace-nowrap text-xs text-muted-foreground"
+                >
+                  {folderCrumbs.ancestors.map((crumb) => (
+                    <Fragment key={crumb.path}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        // Vertical-only hit-slop (16px row + 14px each side =
+                        // 44px tall): the header does not grow and neighbouring
+                        // segments never overlap horizontally.
+                        className="relative h-4 shrink-0 px-1 font-normal text-muted-foreground after:absolute after:inset-x-0 after:-inset-y-3.5 after:content-['']"
+                        disabled={createSubmitting}
+                        onClick={() => navigateTo(crumb.path)}
+                      >
+                        {crumb.label}
+                      </Button>
+                      <ChevronRight aria-hidden="true" size={12} className="shrink-0" />
+                    </Fragment>
+                  ))}
+                  <span aria-current="page" className="shrink-0 px-1 text-foreground">
+                    {folderCrumbs.currentLabel}
+                  </span>
+                </nav>
+              ) : (
+                <p
+                  className="truncate text-xs text-muted-foreground"
+                  title={normalizedCurrent ?? undefined}
+                >
+                  {isAtRoot ? 'Project files' : normalizedCurrent?.slice(rootPrefixLength)}
+                </p>
+              )}
             </div>
           </div>
           <SheetDescription className="sr-only">Browse project files</SheetDescription>

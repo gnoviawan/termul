@@ -34,6 +34,15 @@ export const CHAT_HIT_ICON =
   'relative inline-flex shrink-0 items-center justify-center size-11 @[400px]:size-10'
 
 /**
+ * Visually hides a composer control's text label while keeping it in the
+ * accessible name. Applies at a pane width of 360px or less: Tailwind v4
+ * `@max-[N]` means container width < N, so 361px is the first width that keeps
+ * the label. On the mobile web shell the pane equals the viewport, so this is
+ * the "ModeChip goes icon-only" truncation step of the one-row composer.
+ */
+export const CHAT_COMPACT_LABEL = '@max-[361px]:sr-only'
+
+/**
  * Dense agent-activity rows (tool calls, thought and turn headers). The row is
  * a full-width target, so 28px meets WCAG 2.5.8 for mouse; touch input gets
  * 44px. Keyed on pointer type, not pane width: a narrow desktop pane still has
@@ -43,6 +52,13 @@ export const CHAT_ROW_MIN_H = 'min-h-7 pointer-coarse:min-h-11'
 
 /** Icon control inside a dense activity row; must not grow the row past {@link CHAT_ROW_MIN_H}. */
 export const CHAT_ROW_ICON = 'size-7 pointer-coarse:size-11'
+
+/**
+ * Max height for the scrollable body of an inline agent prompt panel
+ * (`AskUserQuestion`, `ElicitationQuestions`). Bounded so a long question
+ * batch can never push the message list off-screen.
+ */
+export const QUESTION_PANEL_MAX_H = 'max-h-[min(55vh,30rem)]'
 
 export type ComposerToolbarMode = 'narrow' | 'wide'
 

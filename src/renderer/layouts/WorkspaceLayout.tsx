@@ -40,6 +40,7 @@ import {
 } from '@/hooks/use-command-history'
 import { useEditorPersistence } from '@/hooks/use-editor-persistence'
 import { useFileWatcher } from '@/hooks/use-file-watcher'
+import { useMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
@@ -49,6 +50,7 @@ import { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useWorkspaceManifestSync } from '@/hooks/use-workspace-manifest-sync'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { saveTerminalLayout } from '@/hooks/useTerminalAutoSave'
+import { useWorkspaceOverlayBackStack } from '@/layouts/use-workspace-overlay-back-stack'
 import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
@@ -75,6 +77,7 @@ import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { checkWebAuthGate, getWebAuthGateState, useWebAuthGate } from '@/lib/web-auth-gate'
+import { isWorkspaceRoutePath } from '@/lib/workspace-route'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -92,12 +95,6 @@ import { wireConnectionStatusTracking } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
-import {
-  installOverlayBackHandler,
-  pushOverlaySentinel,
-  useOverlayRegistration,
-  useOverlayStackStore
-} from '@/stores/overlay-stack-store'
 import {
   useActiveProject,
   useActiveProjectId,
@@ -342,34 +339,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [gitSheetOpen, setGitSheetOpen] = useState(false)
   const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
-  // ── Story 6: overlay stack + hardware back ─────────────────────────────
-  // Every overlay visible on this layout registers itself (id + close) so
-  // the app-root popstate handler can dismiss the topmost one on Android
-  // hardware back instead of the browser exiting the app (QA F5). The
-  // sentinel push happens when the stack transitions 0 → 1 so the next back
-  // lands on a popstate we own.
-  const settingsModalOpen = settingsModalView !== null
-  useOverlayRegistration('git-sheet', gitSheetOpen, () => setGitSheetOpen(false))
-  useOverlayRegistration('command-palette', isCommandPaletteOpen, () =>
-    setIsCommandPaletteOpen(false)
-  )
-  useOverlayRegistration('settings-modal', settingsModalOpen, () =>
-    useSettingsModalStore.getState().close()
-  )
-  const overlayCount = useOverlayStackStore((s) => s.stack.length)
-  const prevOverlayCountRef = useRef(0)
-  useEffect(() => {
-    if (overlayCount > prevOverlayCountRef.current) {
-      // Stack grew (0 → 1, or an overlay stacked on another): arm the
-      // history sentinel so back pops an overlay, not the app.
-      pushOverlaySentinel()
-    }
-    prevOverlayCountRef.current = overlayCount
-  }, [overlayCount])
-  // App-root popstate listener: mounted once for the workspace surface.
-  // (The desktop Tauri shell mounts its own instance — TauriApp parity.)
-  useEffect(() => installOverlayBackHandler(), [])
-
   const isLoaded = useProjectsLoaded()
 
   // #854: probe the web auth gate at boot. On a token-gated server a
@@ -434,6 +403,24 @@ export default function WorkspaceLayout(): React.JSX.Element {
   } | null>(null)
   const [sshPasswordInput, setSSHPasswordInput] = useState('')
   const [sshPromptPasswords, setSSHPromptPasswords] = useState<Record<string, string>>({})
+  const closeSshPasswordPrompt = useCallback(() => {
+    setSSHPasswordPrompt(null)
+    setSSHPasswordInput('')
+  }, [])
+
+  // Story 6 + mobile overlay back stack: overlay registrations, the mobile
+  // shell flag and the app-root popstate handler live in one hook.
+  useWorkspaceOverlayBackStack({
+    isMobileWebShell,
+    gitSheetOpen,
+    setGitSheetOpen,
+    isCommandPaletteOpen,
+    setIsCommandPaletteOpen,
+    isCommandHistoryOpen,
+    setIsCommandHistoryOpen,
+    isSshPasswordPromptOpen: sshPasswordPrompt !== null,
+    closeSshPasswordPrompt
+  })
 
   const sshProfileWithPassword = activeSSHProfile
     ? {
@@ -557,6 +544,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     const pane = findPaneById(paneRoot, fullscreenPaneId)
     return pane?.type === 'leaf' ? pane : null
   }, [fullscreenPaneId, paneRoot])
+  // Mobile shell only: a split synced from desktop collapses to the active
+  // leaf (read-only; null on desktop so the desktop node is unchanged).
+  const mobileActiveLeaf = useMobileActiveLeaf(isMobileWebShell)
   const prevProjectIdRef = useRef<string>('')
   const watchedRootPathRef = useRef<string | null>(null)
   const projectSwitchRequestIdRef = useRef(0)
@@ -1113,7 +1103,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   )
 
   // Determine if we should show the terminal area (only on workspace dashboard)
-  const isWorkspaceRoute = location.pathname === '/' || location.pathname.startsWith('/c/')
+  const isWorkspaceRoute = isWorkspaceRoutePath(location.pathname)
 
   // Unified tab cycling - cycles through ALL workspace tabs in active pane
   const cycleTab = useCallback(
@@ -2080,7 +2070,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
                 className="h-full min-h-0 flex-1 overflow-hidden"
               >
                 <PaneRenderer
-                  node={fullscreenPane ?? paneRoot}
+                  key={mobileActiveLeaf?.id}
+                  node={mobileActiveLeaf ?? fullscreenPane ?? paneRoot}
                   onAddTerminal={handleAddTerminal}
                   onAddBrowserTab={handleNewBrowserTab}
                   onCloseTerminal={handleCloseTerminal}
@@ -2099,12 +2090,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
               </div>
             </div>
           )}
-          {/* Story 11 (QA F9): StatusBar (connection health, exit codes)
-              now renders on mobile too — previously `!isMobileWebShell`
-              gated it out entirely. On the mobile shell it sits above the
-              terminal key bar (the shell renders it after the workspace
-              child, inside the same flex column). */}
-          <StatusBar project={activeProject} />
+          {/* Story 11 (QA F9) put StatusBar on mobile; the mobile revamp
+              retires it there as desktop chrome. Connection health now
+              lives in the drawer footer. The last-command exit code has no
+              mobile surface until the header goal's terminal sheet lands,
+              and ContextBarSettingsPopover is not mounted on mobile. */}
+          {!isMobileWebShell && <StatusBar project={activeProject} />}
         </>
       )}
     </>
@@ -2141,6 +2132,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onLaunchAgent={handleLaunchAgent}
             onNewBrowserTab={handleNewBrowserTab}
             onOpenCanvas={handleOpenCanvas}
+            onNewProject={isMobileWebShell ? () => setIsNewProjectModalOpen(true) : undefined}
             onSaveSnapshot={handleOpenSnapshotModal}
             onOpenProjectSettings={handleOpenProjectSettings}
             onOpenAppPreferences={handleOpenAppPreferences}
@@ -2341,7 +2333,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <div className="flex h-screen flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)]">
         {/* pt-[env(safe-area-inset-top)] (Story 7, QA F2): with
             `viewport-fit=cover` the webview extends under the notch; the shell
-            root pads by the top inset so the h-12 header's 44px buttons clear
+            root pads by the top inset so the header's 44px buttons clear
             the cutout. Evaluates to 0 on non-notch devices (no extra padding). */}
         <Suspense fallback={<ShellSkeleton />}>
           <MobileChatShell
@@ -2355,6 +2347,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onCloseTerminal={handleCloseTerminal}
             onRenameTerminal={renameTerminal}
             onCloseEditorTab={handleCloseEditorTab}
+            onOpenProjectSettings={handleOpenProjectSettings}
+            onOpenCommandHistory={activeProjectId ? handleOpenCommandHistory : undefined}
             onRestartTerminal={(terminalId) => {
               // Restart: kill the PTY, close the old tab, then re-spawn.
               const terminal = useTerminalStore

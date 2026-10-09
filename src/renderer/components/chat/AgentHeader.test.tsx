@@ -1,10 +1,23 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import {
+  armMobileOverlayBackStack,
+  pressSystemBack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
 import type { AcpSession } from '@/stores/acp-store'
+import {
+  readOverlaySentinelDepth,
+  useOverlayRegistration,
+  useOverlayStackStore
+} from '@/stores/overlay-stack-store'
 import { ConfigChip, ModeChip } from './AgentHeader'
 
 const mobileShellRef = vi.hoisted(() => ({ current: false }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileShellRef.current
 }))
@@ -349,7 +362,37 @@ describe('mobile modal selection', () => {
     // never bleeds edge-to-edge on mobile, unlike the desktop w-56 popover.
     expect(dialog.className).toContain('w-[calc(100%-2rem)]')
     expect(dialog.className).toContain('max-w-md')
-    expect(dialog.className).toContain('max-h-[80vh]')
+    // `dvh`, not `vh`: the static unit ignores the dynamic viewport on a phone.
+    expect(dialog.className).toContain('max-h-[80dvh]')
+    expect(dialog.className).not.toContain('max-h-[80vh]')
+  })
+
+  it('caps every selector modal at 80dvh (config chip, promoted chip, mode chip)', () => {
+    const { unmount } = render(
+      <ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Alpha/ }))
+    expect(screen.getByRole('dialog').className).toContain('max-h-[80dvh]')
+    unmount()
+
+    const promoted = render(
+      <ConfigChip
+        option={{ ...option('a'), category: 'thought_level' }}
+        disabled={false}
+        promoted
+        onSelect={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByRole('dialog').className).toContain('max-h-[80dvh]')
+    promoted.unmount()
+
+    render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^Agent$/ }))
+    expect(screen.getByRole('dialog').className).toContain('max-h-[80dvh]')
+    expect(screen.getByRole('dialog').className).not.toContain('max-h-[80vh]')
   })
 
   it('closes the modal without firing onSelect on dismiss (Escape)', () => {
@@ -589,5 +632,126 @@ describe('composer menus share the dropdown motion', () => {
       'data-menu-motion',
       'dropdown'
     )
+  })
+})
+
+describe('SelectorModal over a registered sheet (mobile shell back stack)', () => {
+  let cleanup: () => void
+
+  /** Registers like MobileChatShell's sheets: own state, own close. */
+  function SheetHarness(): React.JSX.Element {
+    const [open, setOpen] = useState(true)
+    useOverlayRegistration('files-sheet', open, () => setOpen(false))
+    return (
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent side="bottom">
+          <SheetTitle>Chat options</SheetTitle>
+          <SheetDescription>Pick a model</SheetDescription>
+          <ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />
+        </SheetContent>
+      </Sheet>
+    )
+  }
+
+  const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  async function openModalOverSheet(): Promise<HTMLElement> {
+    render(<SheetHarness />)
+    await waitForSentinelDepth(1)
+    const chip = screen.getByRole('button', { name: /Alpha/ })
+    chip.focus()
+    fireEvent.click(chip)
+    expect(screen.getByRole('dialog', { name: 'Model' })).toBeInTheDocument()
+    await waitForSentinelDepth(2)
+    return chip
+  }
+
+  beforeEach(() => {
+    mobileShellRef.current = true
+    // A route entry below the base entry, so the third back has somewhere to go.
+    window.history.replaceState(null, '', '#/route-a')
+    window.history.pushState(null, '', '#/base')
+    cleanup = armMobileOverlayBackStack()
+  })
+
+  afterEach(() => {
+    cleanup()
+    mobileShellRef.current = false
+  })
+
+  it('back closes only the modal and focus returns to the chip; the next back closes the sheet; the third is a route back', async () => {
+    const chip = await openModalOverSheet()
+    expect(stackIds()).toHaveLength(2)
+
+    await pressSystemBack()
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model' })).toBeNull())
+    expect(screen.getByRole('dialog', { name: 'Chat options' })).toBeInTheDocument()
+    expect(stackIds()).toEqual(['files-sheet'])
+    await waitFor(() => expect(document.activeElement).toBe(chip))
+    expect(readOverlaySentinelDepth(history.state)).toBe(1)
+
+    await pressSystemBack()
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(stackIds()).toEqual([])
+    expect(location.hash).toBe('#/base')
+
+    // No overlay left: the third back is the router's, and closes nothing.
+    await pressSystemBack()
+    expect(location.hash).toBe('#/route-a')
+    expect(stackIds()).toEqual([])
+  })
+
+  it('Esc closes only the modal', async () => {
+    await openModalOverSheet()
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model' })).toBeNull())
+    expect(screen.getByRole('dialog', { name: 'Chat options' })).toBeInTheDocument()
+    expect(stackIds()).toEqual(['files-sheet'])
+    // The modal's sentinel is consumed; the sheet's stays armed.
+    await waitForSentinelDepth(1)
+  })
+})
+
+describe('composer chip presentation props', () => {
+  it('leaves the ModeChip DOM unchanged when the optional props are omitted', () => {
+    const base = render(
+      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
+    )
+    const baseHtml = base.container.innerHTML
+    base.unmount()
+    const explicit = render(
+      <ModeChip
+        session={session('agent')}
+        disabled={false}
+        onSelect={vi.fn()}
+        label="Agent"
+        className={undefined}
+        labelClassName={undefined}
+      />
+    )
+    expect(explicit.container.innerHTML).toBe(baseHtml)
+  })
+
+  it('merges className and wraps the ModeChip label so it can go sr-only', () => {
+    render(
+      <ModeChip
+        session={session('plan')}
+        disabled={false}
+        onSelect={vi.fn()}
+        label="Agent"
+        className="shrink-0"
+        labelClassName="@max-[361px]:sr-only"
+      />
+    )
+    // The accessible name keeps the label even when it is visually hidden.
+    const button = screen.getByRole('button', { name: 'Plan' })
+    expect(button).toHaveClass('shrink-0', 'min-w-0')
+    const label = within(button).getByText('Plan')
+    expect(label.tagName).toBe('SPAN')
+    expect(label).toHaveClass('@max-[361px]:sr-only')
   })
 })

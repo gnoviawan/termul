@@ -31,6 +31,7 @@ import { _resetWebDirectoryPickerForTesting, registerWebDirectoryPicker } from '
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { webServerDialog } from '@/lib/web-server-api'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 
 /**
  * Sync platform fallback for the picker's initial path. Evaluated at call time
@@ -308,6 +309,11 @@ export function DirectoryPicker(): React.JSX.Element {
   const handleCancel = useCallback(() => {
     close({ success: false, error: 'No directory selected', code: 'CANCELLED' })
   }, [close])
+
+  // Mobile web shell: the picker opens above NewProjectModal (also on the
+  // overlay stack), so system back must close the picker first, not the modal
+  // underneath it. Inert on desktop.
+  useOverlayRegistration('directory-picker', isOpen, handleCancel, { mobileShellOnly: true })
 
   const handleNavigateInto = useCallback(
     (entry: DirectoryEntry) => {

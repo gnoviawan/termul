@@ -42,6 +42,24 @@
  * arrives; the verbatim result is echoed into the transcript as
  * `ELICIT_ANSWER=<json>` in an `agent_message_chunk` so specs parse the
  * real wire response back, and the prompt resolves `end_turn`.
+ *
+ * Prompt marker (mobile-overlay-back-stack suite): `[RICH]` answers with one
+ * short turn that carries the content the chat's own overlays hang off — an
+ * external markdown link (link-safety confirm), an inline image (lightbox)
+ * and a subagent tool call (details dialog) — then ends it at once.
+ *
+ * `[PERMISSION]` (mobile shell suites): right after accepting the prompt the
+ * agent asks the host for a tool permission (`session/request_permission`)
+ * and leaves it unanswered, so the chat shows a pending approval — "needs
+ * you" — for as long as a client is connected (the host denies it only after
+ * its disconnect grace). The turn keeps streaming.
+ *
+ * Composer fixture (mobile-composer-row suite, additive): a `session/new`
+ * whose cwd contains `composer-row-e2e` advertises two modes plus a model and
+ * a thought-level config option (so the composer toolbar has every chip), and
+ * answers `session/set_config_option` for them. A `[USAGE]` prompt marker
+ * reports a baseline and a grown context-window snapshot (with a reported
+ * cost) so the context ring appears. Any other cwd or prompt behaves as before.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -175,6 +193,92 @@ const ELICIT_SCHEMA: JsonValue = {
   }
 }
 
+/** A 1x1 PNG: small enough to inline, real enough for the browser to decode. */
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+/**
+ * The `[RICH]` turn: a link, an image and a subagent call, then `end_turn`.
+ * Nothing is registered in `inFlightBySession`, so no timer streams after it.
+ */
+function replyRichTurn(id: number | string | undefined, sessionId: string): void {
+  const update = (body: JsonValue): void => notify('session/update', { sessionId, update: body })
+  update({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: 'Docs: [Example docs](https://example.com/docs)\n\n' }
+  })
+  update({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'image', data: TINY_PNG_BASE64, mimeType: 'image/png' }
+  })
+  update({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'rich-subagent-1',
+    title: 'Delegate review',
+    kind: 'other',
+    status: 'completed',
+    rawInput: {
+      subagent_type: 'reviewer',
+      description: 'Review the overlay change',
+      prompt: 'Review the overlay change for dead back presses.'
+    }
+  })
+  respond(id, { stopReason: 'end_turn' })
+}
+
+/** True when the prompt text carries the `[PERMISSION]` marker. */
+function wantsPermission(prompt: JsonValue | undefined): boolean {
+  return promptText(prompt).includes('[PERMISSION]')
+}
+
+/** Ids of the permission requests this agent sent: the host's replies carry no method. */
+const permissionRequestIds = new Set<string>()
+
+/** A `session/new` cwd carrying this marker gets the composer fixture below. */
+const COMPOSER_CWD_MARKER = 'composer-row-e2e'
+
+type ComposerOptionValues = Record<string, string>
+const composerValuesBySession = new Map<string, ComposerOptionValues>()
+
+function composerConfigOptions(values: ComposerOptionValues): JsonValue[] {
+  return [
+    {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: values.model ?? 'opus-5-5',
+      options: [
+        { value: 'opus-5-5', name: 'Opus 5.5' },
+        { value: 'sonnet-5-5', name: 'Sonnet 5.5' }
+      ]
+    },
+    {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: values.thought_level ?? 'medium',
+      options: [
+        { value: 'low', name: 'Low' },
+        { value: 'medium', name: 'Medium' },
+        { value: 'high', name: 'High' }
+      ]
+    }
+  ]
+}
+
+/** Report a baseline then a grown context window, so the ring clears its 1% floor. */
+function reportUsage(sessionId: string): void {
+  const update = (used: number, extra: Record<string, JsonValue> = {}): void =>
+    notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'usage_update', used, size: 200_000, ...extra }
+    })
+  update(20_000)
+  update(70_000, { cost: { amount: 0.0421, currency: 'USD' } })
+}
+
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
 const inFlightBySession = new Map<string, InFlight>()
 
@@ -304,8 +408,10 @@ function handle(msg: JsonRpcMessage): void {
   // `error` but no `method`. The only outbound request this agent makes is
   // `elicitation/create` (the `[ELICIT]` marker flow) — route it before the
   // method switch so it never falls into the `default` reply arm (replying
-  // to a response would be protocol noise).
+  // to a response would be protocol noise). The host's reply to a permission
+  // request this agent sent (`[PERMISSION]` marker) needs no answer either.
   if (method === undefined) {
+    if (id !== undefined && permissionRequestIds.delete(String(id))) return
     resolveElicitation(msg)
     return
   }
@@ -324,7 +430,35 @@ function handle(msg: JsonRpcMessage): void {
     case 'newSession':
     case 'session/new': {
       const sid = `sess-${randomUUID().slice(0, 8)}`
+      if (String(p.cwd ?? '').includes(COMPOSER_CWD_MARKER)) {
+        composerValuesBySession.set(sid, {})
+        respond(id, {
+          sessionId: sid,
+          modes: {
+            currentModeId: 'default',
+            availableModes: [
+              { id: 'default', name: 'Default' },
+              { id: 'plan', name: 'Plan' }
+            ]
+          },
+          models: [],
+          configOptions: composerConfigOptions({})
+        })
+        break
+      }
       respond(id, { sessionId: sid, modes: [], models: [] })
+      break
+    }
+    case 'setSessionConfigOption':
+    case 'session/set_config_option': {
+      const sid = String(p.sessionId ?? 'unknown')
+      const values = composerValuesBySession.get(sid)
+      if (!values) {
+        respond(id, {})
+        break
+      }
+      values[String(p.configId)] = String(p.value)
+      respond(id, { configOptions: composerConfigOptions(values) })
       break
     }
     case 'loadSession':
@@ -342,6 +476,10 @@ function handle(msg: JsonRpcMessage): void {
       const sessionId = String(p.sessionId ?? 'unknown')
       if (inFlightBySession.has(sessionId)) {
         respondError(id, -32000, 'turn already in progress for this session')
+        return
+      }
+      if (/\[RICH\]/.test(promptText(p.prompt))) {
+        replyRichTurn(id, sessionId)
         return
       }
       const elicit = elicitationRequested(p.prompt)
@@ -373,6 +511,31 @@ function handle(msg: JsonRpcMessage): void {
         })
         wireLog(`OUT: ${line}`)
         write(line)
+      }
+      if (promptText(p.prompt).includes('[USAGE]')) reportUsage(sessionId)
+      if (wantsPermission(p.prompt)) {
+        const requestId = `perm-${randomUUID().slice(0, 8)}`
+        permissionRequestIds.add(requestId)
+        write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: requestId,
+            method: 'session/request_permission',
+            params: {
+              sessionId,
+              toolCall: {
+                toolCallId: `call-${requestId}`,
+                title: 'Run the e2e tool',
+                kind: 'execute',
+                status: 'pending'
+              },
+              options: [
+                { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+                { optionId: 'reject', name: 'Reject', kind: 'reject_once' }
+              ]
+            }
+          })
+        )
       }
       // Crash only when armed AND the marker is present: the host re-sends
       // the persisted open user turn verbatim on reopen (possibly on a

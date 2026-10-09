@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setRouterNavigate } from '@/lib/router-navigate'
 import type { LeafNode, SplitNode } from '@/types/workspace.types'
 import type { WorkspaceState, WorkspaceTab } from './workspace-store'
 import { flattenSameDirection, useWorkspaceStore } from './workspace-store'
@@ -1350,5 +1351,49 @@ describe('workspace-store canvas tab singleton (OpenPencil canvas mode, AD-7)', 
     const activePane = after.find((leaf) => leaf.id === useWorkspaceStore.getState().activePaneId)
     expect(activePane?.tabs.some((t) => t.id === 'canvas-proj-2')).toBe(true)
     expect(activePaneId).toBeTruthy()
+  })
+})
+
+describe('workspace-store setActiveTab chat route (the mobile /snapshots chat row relies on it)', () => {
+  const navigate = vi.fn()
+
+  beforeEach(() => {
+    navigate.mockReset()
+    setRouterNavigate(navigate)
+    window.location.hash = ''
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = {
+        type: 'leaf',
+        id: 'pane-root',
+        tabs: [
+          { type: 'agent-chat', id: 'chat-s1', sessionId: 's1' },
+          { type: 'git', id: 'git-/proj', cwd: '/proj' }
+        ],
+        activeTabId: 'git-/proj'
+      }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  afterEach(() => {
+    setRouterNavigate(null)
+  })
+
+  it('activating an agent-chat tab navigates to /c/<sessionId>', () => {
+    useWorkspaceStore.getState().setActiveTab('pane-root', 'chat-s1')
+
+    expect(navigate).toHaveBeenCalledTimes(1)
+    expect(navigate).toHaveBeenCalledWith('/c/s1')
+  })
+
+  it('activating a non-chat tab does not navigate (the caller owns the route)', () => {
+    useWorkspaceStore.getState().setActiveTab('pane-root', 'git-/proj')
+
+    expect(navigate).not.toHaveBeenCalled()
   })
 })

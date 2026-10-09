@@ -1,8 +1,16 @@
 import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { logFrontendError } from '@/lib/log-api'
+import {
+  pressSystemBack,
+  settleOverlayBackStack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
+import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
+import type { LeafNode, SplitNode } from '@/types/workspace.types'
 
 const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
   // Mutable: mobile branch requires isTauriContext() === false.
@@ -24,11 +32,19 @@ vi.mock('@/lib/tauri-runtime', async () => {
   return { ...actual, isTauriContext: () => tauriRef.current }
 })
 
-vi.mock('@/hooks/use-mobile-web-shell', () => ({
-  useMobileWebShell: () => mobileRef.current,
-  MOBILE_WEB_SHELL_MAX_PX: 767,
-  resolveMobileWebShell: (_t: boolean, m: boolean) => m
-}))
+// `subscribeMediaQuery` stays real: the mobile header subscribes its ≤360px
+// narrow query through it.
+vi.mock('@/hooks/use-mobile-web-shell', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-mobile-web-shell')>(
+    '@/hooks/use-mobile-web-shell'
+  )
+  return {
+    ...actual,
+    useMobileWebShell: () => mobileRef.current,
+    MOBILE_WEB_SHELL_MAX_PX: 767,
+    resolveMobileWebShell: (_t: boolean, m: boolean) => m
+  }
+})
 
 vi.mock('@/lib/platform', async () => {
   const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
@@ -41,6 +57,8 @@ vi.mock('@/lib/platform', async () => {
 })
 
 vi.mock('@/stores/project-store', () => ({
+  // The drawer's project row reads the active worktree (none in this fixture).
+  getActiveWorktreeFromStore: () => undefined,
   useProjectsLoaded: () => true,
   useProjects: () => [projectRef.current],
   useActiveProject: () => projectRef.current,
@@ -68,7 +86,12 @@ vi.mock('@/stores/project-store', () => ({
 }))
 
 vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: vi.fn((selector) => selector({ terminals: [] })),
+  // `getState` serves the drawer's terminal rows, which render for any
+  // seeded terminal tab.
+  useTerminalStore: Object.assign(
+    vi.fn((selector) => selector({ terminals: [] })),
+    { getState: () => ({ terminals: [] }) }
+  ),
   useTerminals: () => [],
   useAllTerminals: () => [],
   useActiveTerminal: () => null,
@@ -120,18 +143,39 @@ vi.mock('@/stores/remote-status-store', () => ({
 // `useFullscreenPaneId`, `useSidebarVisible`, `useFileExplorerVisible`, …) is
 // defined. Their default/empty state is fine for the mobile branch.
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
-  useKeyboardShortcutsStore: vi.fn(
-    (
-      selector?: (state: {
-        shortcuts: Record<string, { customKey: string; defaultKey: string }>
-      }) => unknown
-    ) => {
-      const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
-      return selector ? selector(state) : state
-    }
-  ),
-  matchesShortcut: () => false
+vi.mock('@/stores/keyboard-shortcuts-store', () => {
+  const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
+  return {
+    // `getState` backs the window keydown handlers (save shortcut), which the
+    // overlay Esc tests exercise.
+    useKeyboardShortcutsStore: Object.assign(
+      vi.fn(
+        (
+          selector?: (s: {
+            shortcuts: Record<string, { customKey: string; defaultKey: string }>
+          }) => unknown
+        ) => (selector ? selector(state) : state)
+      ),
+      { getState: () => state }
+    ),
+    matchesShortcut: () => false
+  }
+})
+
+// The persistence restore replaces the pane tree asynchronously; the overlay
+// tests seed tabs into the real workspace store, so keep that out of the way.
+vi.mock('@/hooks/use-editor-persistence', () => ({
+  useEditorPersistence: vi.fn(),
+  persistState: vi.fn()
+}))
+
+// Persistence restore replaces the whole pane tree (resetLayout /
+// loadProjectWorkspace) when it finds nothing for the project. The pane-tree
+// rows below seed a specific tree, so keep the restore out of the way, as the
+// other WorkspaceLayout suites do.
+vi.mock('@/hooks/use-editor-persistence', () => ({
+  useEditorPersistence: vi.fn(),
+  persistState: vi.fn()
 }))
 
 vi.mock('@/hooks/use-snapshots', () => ({
@@ -161,10 +205,59 @@ vi.mock('@/hooks/use-command-history', () => ({
 // Stub CommandPalette to a marker so the mobile-branch threading test can
 // assert the trigger flips `isCommandPaletteOpen` → `isOpen` without dragging
 // in `cmdk` (whose scrollIntoView call is not implemented in jsdom). The real
-// overlay rendering is covered in CommandPalette.test.tsx.
+// overlay rendering is covered in CommandPalette.test.tsx. The stub exposes
+// whether the layout wired `onNewProject`, and runs it the way the real
+// palette's `executeCommand` does (close first, then execute).
 vi.mock('@/components/CommandPalette', () => ({
-  CommandPalette: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <input placeholder="Search commands, projects, settings..." readOnly /> : null
+  CommandPalette: ({
+    isOpen,
+    onClose,
+    onOpenCommandHistory,
+    onSSHConnect,
+    onNewProject
+  }: {
+    isOpen: boolean
+    onClose: () => void
+    onOpenCommandHistory?: () => void
+    onSSHConnect?: (profileId: string) => void
+    onNewProject?: () => void
+  }) =>
+    isOpen ? (
+      <div data-palette-new-project={onNewProject ? 'wired' : 'absent'}>
+        <input placeholder="Search commands, projects, settings..." readOnly />
+        <button type="button" onClick={onOpenCommandHistory}>
+          Open command history
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // The real palette runs the command, then closes itself.
+            onSSHConnect?.('ssh-9')
+            onClose()
+          }}
+        >
+          Connect SSH profile
+        </button>
+        {onNewProject && (
+          <button
+            type="button"
+            onClick={() => {
+              onClose()
+              onNewProject()
+            }}
+          >
+            Palette: New Project
+          </button>
+        )}
+      </div>
+    ) : null
+}))
+
+// NewProjectModal drags in project templates, shell detection and
+// filesystem APIs; the layout test only needs to see that it opens.
+vi.mock('@/components/NewProjectModal', () => ({
+  NewProjectModal: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="new-project-modal-stub" /> : null
 }))
 
 // GitPanel dependencies (rendered inside the mobile git Sheet).
@@ -207,10 +300,19 @@ vi.mock('@/stores/git-status-store', () => ({
   useGitStatusStore: (selector: (s: Record<string, unknown>) => unknown) => selector(gitState)
 }))
 
+// A spy on the PTY kill path. PaneRenderer is stubbed below and the seeded
+// leaves hold no terminal tabs, so this only proves the layout and drawer
+// wiring never reach terminalApi.kill while the visible leaf changes. That
+// unmounting a terminal view leaves its PTY alone is pinned where it is owned:
+// ConnectedTerminal.test.tsx ('should not kill PTY process on unmount').
+const { terminalKill } = vi.hoisted(() => ({
+  terminalKill: vi.fn(() => Promise.resolve({ success: true }))
+}))
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
   return {
     ...actual,
+    terminalApi: { ...actual.terminalApi, kill: terminalKill },
     remoteServerApi: { start: vi.fn(), stop: vi.fn(), status: vi.fn() },
     openerApi: { openUrlWithSystemBrowser: vi.fn(() => Promise.resolve({ success: true })) }
   }
@@ -218,9 +320,25 @@ vi.mock('@/lib/api', async () => {
 
 // Stub heavy child components so the mobile shell renders without dragging in
 // CodeMirror / xterm / page implementations.
-vi.mock('@/components/workspace/PaneRenderer', () => ({
-  PaneRenderer: () => <div data-pane-renderer-stub />
-}))
+// The stub exposes the node it was handed (so tests can see whether a split
+// was collapsed to a leaf) and a mount counter (so tests can see a remount).
+const { paneRendererState } = vi.hoisted(() => ({ paneRendererState: { mounts: 0 } }))
+vi.mock('@/components/workspace/PaneRenderer', async () => {
+  const React = await import('react')
+  return {
+    PaneRenderer: ({ node }: { node: { id: string; type: string } }) => {
+      const [mountId] = React.useState(() => ++paneRendererState.mounts)
+      return (
+        <div
+          data-pane-renderer-stub
+          data-node-id={node.id}
+          data-node-type={node.type}
+          data-mount={mountId}
+        />
+      )
+    }
+  }
+})
 
 // P17: shared canonical mock shape for the Story 6 sync hook + banner —
 // identical inline factories across the three WorkspaceLayout suites.
@@ -255,6 +373,10 @@ vi.mock('@/pages/AppPreferences', () => ({
 vi.mock('@/pages/ProjectSettings', () => ({
   ProjectSettingsModal: () => <div>project-settings</div>
 }))
+vi.mock('@/components/CommandHistoryModal', () => ({
+  CommandHistoryModal: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div>command-history-modal</div> : null
+}))
 vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> }))
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
@@ -273,7 +395,7 @@ vi.mock('@/components/mobile/MobileTerminalControls', () => ({
 // Stub SSHWorkspace + SSHFileExplorer so the lazy chunks resolve to
 // lightweight markers. The ssh-store and ssh-connection hooks are stubbed
 // with a controllable profile ref so the SSH render path activates.
-const { sshProfileRef } = vi.hoisted(() => ({
+const { sshProfileRef, sshProfilesRef } = vi.hoisted(() => ({
   sshProfileRef: {
     current: null as {
       id: string
@@ -282,6 +404,17 @@ const { sshProfileRef } = vi.hoisted(() => ({
       username: string
       password: string
     } | null
+  },
+  // Mutable: saved profiles the palette can connect to (stable identity).
+  sshProfilesRef: {
+    current: [] as Array<{
+      id: string
+      name: string
+      host: string
+      username: string
+      authMethod: 'password'
+      hasStoredPassword: boolean
+    }>
   }
 }))
 
@@ -305,7 +438,7 @@ vi.mock('@/stores/ssh-store', () => ({
     updateConnectionStatusByProfile: vi.fn(),
     setEditingFile: vi.fn()
   }),
-  useSSHProfiles: () => [],
+  useSSHProfiles: () => sshProfilesRef.current,
   useSSHStore: Object.assign(vi.fn(), {
     getState: () => ({ profiles: [], activeSSHProfileId: null })
   })
@@ -342,9 +475,9 @@ vi.mock('@/components/ssh/SSHFileExplorer', () => ({
 import { TooltipProvider } from '@/components/ui/tooltip'
 import WorkspaceLayout from './WorkspaceLayout'
 
-// Story 11: StatusBar now renders on the mobile branch too. Its tooltips
-// require a TooltipProvider — the real app mounts one at the root (App.tsx /
-// TauriApp.tsx), so mirror that here instead of mocking StatusBar away.
+// Mirror the real app's root TooltipProvider (App.tsx / TauriApp.tsx): the
+// mobile shell no longer mounts StatusBar, but the lazily loaded sheets and
+// header controls still render under it in production.
 function renderLayout(): RenderResult {
   return render(
     <TooltipProvider>
@@ -355,9 +488,13 @@ function renderLayout(): RenderResult {
   )
 }
 
+const initialWorkspace = useWorkspaceStore.getState()
+
 describe('WorkspaceLayout mobile branch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Clear any sentinel a previous test left on the current history entry.
+    window.history.replaceState(null, '', '#/')
     tauriRef.current = false
     mobileRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo', color: 'blue', gitBranch: 'main' }
@@ -365,32 +502,93 @@ describe('WorkspaceLayout mobile branch', () => {
     gitState.selectedFile = null
     gitState.commitContexts = {}
     sshProfileRef.current = null
+    sshProfilesRef.current = []
+    useSettingsModalStore.getState().close()
   })
+
+  afterEach(async () => {
+    // jsdom history traversals are asynchronous: a test that closes an overlay
+    // right before it ends leaves a consume traversal in flight, and its
+    // popstate would land on the NEXT test's freshly installed handler.
+    // (Runs before RTL's auto-unmount, so this layout's handler is still live.)
+    await settleOverlayBackStack()
+  })
+
+  // The header keeps three icon slots; Command palette, Git changes and Files
+  // live in the header ⋯ ("More") sheet. MobileChatShell is React.lazy, so
+  // each helper waits for the ⋯ button before opening the sheet.
+  async function openMoreSheet(): Promise<void> {
+    fireEvent.click(await screen.findByLabelText('More'))
+    await screen.findByRole('dialog')
+  }
+
+  async function chooseMoreItem(name: string): Promise<void> {
+    await openMoreSheet()
+    fireEvent.click(screen.getByRole('button', { name }))
+  }
 
   it('mounts MobileChatShell and threads the command-palette + git-changes triggers', async () => {
     renderLayout()
 
     // MobileChatShell is React.lazy — wait for it to load before asserting.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
-    expect(screen.getByLabelText('Command palette')).toBeInTheDocument()
-    expect(screen.getByLabelText('Git changes')).not.toBeDisabled()
+    expect(screen.queryByLabelText('Command palette')).not.toBeInTheDocument()
+    await openMoreSheet()
+    expect(screen.getByRole('button', { name: 'Command palette' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Git changes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Project settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New terminal' })).toBeInTheDocument()
   })
-  // Story 11 (QA F9): StatusBar (connection health) renders on the mobile
-  // shell — previously `!isMobileWebShell` gated it out entirely, so mobile
-  // users had no visibility into web connection status.
-  it('renders StatusBar on the mobile shell (connection health visible)', async () => {
+
+  it('threads the project sheet through the header subtitle, not a header icon', async () => {
     renderLayout()
 
-    // MobileChatShell is React.lazy — wait for the shell, then assert the
-    // StatusBar is present below the workspace child. Story 12 hides the
-    // project-name slug on mobile (name dedupe — the mobile header already
-    // shows the project), so assert on the connection-health status bar
-    // container rather than the slug.
+    expect(await screen.findByRole('button', { name: /switch project/ })).toHaveAttribute(
+      'aria-haspopup',
+      'dialog'
+    )
+    expect(screen.queryByLabelText('Switch project')).not.toBeInTheDocument()
+  })
+
+  it('threads "Project settings" to the Project Settings modal', async () => {
+    renderLayout()
+
+    await chooseMoreItem('Project settings')
+
+    expect(useSettingsModalStore.getState().view).toBe('project')
+    expect(await screen.findByText('project-settings')).toBeInTheDocument()
+  })
+
+  it('threads "Command history" into the terminal ⋯ sheet', async () => {
+    act(() => {
+      useWorkspaceStore.getState().addTerminalTab('t1')
+    })
+    try {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Command history' }))
+
+      expect(await screen.findByText('command-history-modal')).toBeInTheDocument()
+    } finally {
+      // The workspace store is real and shared by the tests below.
+      act(() => {
+        const { root, removeTab } = useWorkspaceStore.getState()
+        for (const leaf of getAllLeafPanes(root)) {
+          for (const tab of leaf.tabs) if (tab.type === 'terminal') removeTab(tab.id)
+        }
+      })
+    }
+  })
+  // The mobile revamp retires the desktop StatusBar on the phone shell:
+  // connection health moved to the drawer footer and ContextBarSettingsPopover
+  // (a StatusBar child) is not mounted. Desktop keeps it (see the breakpoint suite).
+  it('does not render the StatusBar on the mobile shell', async () => {
+    renderLayout()
+
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
-    // The StatusBar carries the connection indicator (control + terminal
-    // channels); it renders inside the mobile shell column.
-    const statusBar = document.querySelector('[data-status-bar]')
-    expect(statusBar).toBeTruthy()
+    expect(document.querySelector('[data-status-bar]')).toBeNull()
   })
 
   it('opens the CommandPalette overlay when the mobile trigger is tapped', async () => {
@@ -399,8 +597,8 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(
       screen.queryByPlaceholderText('Search commands, projects, settings...')
     ).not.toBeInTheDocument()
-    // MobileChatShell is React.lazy — wait for the trigger button to appear.
-    fireEvent.click(await screen.findByLabelText('Command palette'))
+    // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
+    await chooseMoreItem('Command palette')
     expect(
       await screen.findByPlaceholderText('Search commands, projects, settings...')
     ).toBeInTheDocument()
@@ -411,8 +609,8 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // Sheet starts closed: the GitPanel file-list filter input is absent.
     expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
-    // MobileChatShell is React.lazy — wait for the trigger button to appear.
-    fireEvent.click(await screen.findByLabelText('Git changes'))
+    // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
+    await chooseMoreItem('Git changes')
     // GitPanel mobile branch renders the file-list filter input (full-width).
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
   })
@@ -423,10 +621,11 @@ describe('WorkspaceLayout mobile branch', () => {
   it('git Sheet wrapper renders rounded top corners with a max height, not h-full', async () => {
     renderLayout()
 
-    fireEvent.click(await screen.findByLabelText('Git changes'))
-    await screen.findByPlaceholderText('Filter changes...')
+    await chooseMoreItem('Git changes')
+    const filter = await screen.findByPlaceholderText('Filter changes...')
 
-    const sheetContent = document.querySelector('[data-sheet]')
+    // The ⋯ sheet may still be unmounting; pick the Git sheet itself.
+    const sheetContent = filter.closest('[data-sheet]')
     expect(sheetContent).not.toBeNull()
     const cls = sheetContent?.className ?? ''
     expect(cls).toContain('rounded-t-xl')
@@ -435,18 +634,20 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(cls).toContain('pb-[env(safe-area-inset-bottom)]')
   })
 
-  it('disables the Git changes trigger when no active project path', async () => {
+  it('omits the Git changes row when no active project path', async () => {
     projectRef.current = { id: 'p1', name: 'Demo' }
     renderLayout()
-    // MobileChatShell is React.lazy — wait for the trigger to appear.
-    expect(await screen.findByLabelText('Git changes')).toBeDisabled()
+    // MobileChatShell is React.lazy — wait for the ⋯ button to appear.
+    await openMoreSheet()
+    expect(screen.getByRole('button', { name: 'Command palette' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Git changes' })).not.toBeInTheDocument()
   })
 
   it('closes the Git Changes sheet if the active project loses its path while open', async () => {
     const { rerender } = renderLayout()
 
-    // MobileChatShell is React.lazy — wait for the trigger to appear.
-    fireEvent.click(await screen.findByLabelText('Git changes'))
+    // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
+    await chooseMoreItem('Git changes')
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
     // Active project switches to one without a path while the sheet is open.
@@ -468,37 +669,539 @@ describe('WorkspaceLayout mobile branch', () => {
   // ── Story 6: trap-free mobile navigation ────────────────────────────────
 
   describe('hardware back closes overlays (popstate)', () => {
-    it('popstate closes the open Git sheet and the app does not navigate away', async () => {
+    it('system back closes the open Git sheet and the app does not navigate away', async () => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
-      // The overlay grew the stack 0 → 1, arming the history sentinel; a
-      // hardware back pops it. jsdom fires popstate only via real history
-      // transitions, so dispatch the event directly (the listener is real).
-      window.dispatchEvent(new Event('popstate'))
+      // The overlay grew the stack 0 → 1: the managed reconciler arms one
+      // history sentinel, and a real back press pops it.
+      await waitForSentinelDepth(1)
+      const hashBefore = window.location.hash
+      await pressSystemBack()
 
       await waitFor(() =>
         expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
       )
+      expect(window.location.hash).toBe(hashBefore)
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
     })
 
-    it('popstate closes the CommandPalette overlay when it is topmost', async () => {
+    it('system back closes the CommandPalette overlay when it is topmost', async () => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Command palette'))
+      await chooseMoreItem('Command palette')
       expect(
         await screen.findByPlaceholderText('Search commands, projects, settings...')
       ).toBeInTheDocument()
 
-      window.dispatchEvent(new Event('popstate'))
+      await waitForSentinelDepth(1)
+      await pressSystemBack()
 
       await waitFor(() =>
         expect(
           screen.queryByPlaceholderText('Search commands, projects, settings...')
         ).not.toBeInTheDocument()
       )
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    describe('overlays outside the old stack', () => {
+      afterEach(() => {
+        useWorkspaceStore.setState({
+          root: initialWorkspace.root,
+          activePaneId: initialWorkspace.activePaneId,
+          agentLauncherPaneId: null
+        })
+      })
+
+      async function openLauncherOverlay(): Promise<void> {
+        // Wait for the lazy shell, then open the launcher over a pane that has
+        // a tab (an empty pane would render it as the pane body instead).
+        await screen.findByLabelText('More')
+        act(() => {
+          useWorkspaceStore.getState().addGitTab('/demo')
+          const paneId = useWorkspaceStore.getState().activePaneId
+          if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
+        })
+      }
+
+      it('system back closes the AgentLauncher overlay', async () => {
+        renderLayout()
+        await openLauncherOverlay()
+        expect(useWorkspaceStore.getState().agentLauncherPaneId).not.toBeNull()
+
+        await waitForSentinelDepth(1)
+        const hashBefore = window.location.hash
+        await pressSystemBack()
+
+        // PaneRenderer is stubbed here, so the owning store reports it closed.
+        await waitFor(() => expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull())
+        expect(window.location.hash).toBe(hashBefore)
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+      })
+
+      it('Esc with focus outside the launcher closes it and consumes its sentinel', async () => {
+        renderLayout()
+        await openLauncherOverlay()
+        await waitForSentinelDepth(1)
+
+        fireEvent.keyDown(document.body, { key: 'Escape' })
+
+        await waitFor(() => expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull())
+        await waitForSentinelDepth(0)
+      })
+
+      it('palette → Command history swap keeps one sentinel, and back closes the sub-modal', async () => {
+        renderLayout()
+
+        await chooseMoreItem('Command palette')
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+        await waitForSentinelDepth(1)
+        const backSpy = vi.spyOn(window.history, 'back')
+        const goSpy = vi.spyOn(window.history, 'go')
+        const pushSpy = vi.spyOn(window.history, 'pushState')
+
+        // The palette closes and the lazy sub-modal opens in one batch.
+        fireEvent.click(screen.getByRole('button', { name: 'Open command history' }))
+        expect(await screen.findByText('command-history-modal')).toBeInTheDocument()
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+        await settleOverlayBackStack()
+
+        expect(backSpy).not.toHaveBeenCalled()
+        expect(goSpy).not.toHaveBeenCalled()
+        expect(pushSpy).not.toHaveBeenCalled()
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
+
+        // One back closes the sub-modal.
+        await pressSystemBack()
+        await waitFor(() =>
+          expect(screen.queryByText('command-history-modal')).not.toBeInTheDocument()
+        )
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+        backSpy.mockRestore()
+        goSpy.mockRestore()
+        pushSpy.mockRestore()
+      })
+
+      describe('SSH password prompt', () => {
+        async function openSshPrompt(): Promise<void> {
+          sshProfilesRef.current = [
+            {
+              id: 'ssh-9',
+              name: 'Build box',
+              host: 'build.example',
+              username: 'dev',
+              authMethod: 'password',
+              hasStoredPassword: false
+            }
+          ]
+          renderLayout()
+          await chooseMoreItem('Command palette')
+          await waitForSentinelDepth(1)
+
+          // The palette closes and the inline prompt opens in one batch.
+          fireEvent.click(await screen.findByRole('button', { name: 'Connect SSH profile' }))
+          expect(await screen.findByText('SSH Password')).toBeInTheDocument()
+          await settleOverlayBackStack()
+          expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
+        }
+
+        it('system back closes the prompt and clears it', async () => {
+          await openSshPrompt()
+          const hashBefore = window.location.hash
+
+          await pressSystemBack()
+
+          await waitFor(() => expect(screen.queryByText('SSH Password')).not.toBeInTheDocument())
+          expect(window.location.hash).toBe(hashBefore)
+          expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+        })
+
+        it('its Cancel button consumes the sentinel', async () => {
+          await openSshPrompt()
+
+          await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+          })
+
+          expect(screen.queryByText('SSH Password')).not.toBeInTheDocument()
+          await waitForSentinelDepth(0)
+        })
+      })
+
+      it('system back closes App Preferences', async () => {
+        renderLayout()
+        await screen.findByLabelText('More')
+
+        act(() => useSettingsModalStore.getState().openApp())
+        await screen.findByRole('button', { name: 'Close Application Preferences' })
+        await waitForSentinelDepth(1)
+        const hashBefore = window.location.hash
+
+        await pressSystemBack()
+
+        await waitFor(() =>
+          expect(
+            screen.queryByRole('button', { name: 'Close Application Preferences' })
+          ).not.toBeInTheDocument()
+        )
+        expect(useSettingsModalStore.getState().view).toBeNull()
+        expect(window.location.hash).toBe(hashBefore)
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+      })
+
+      it('closing App Preferences with its close button consumes the sentinel', async () => {
+        renderLayout()
+        await screen.findByLabelText('More')
+
+        act(() => useSettingsModalStore.getState().openApp())
+        const closeBtn = await screen.findByRole('button', {
+          name: 'Close Application Preferences'
+        })
+        await waitForSentinelDepth(1)
+        const hashBefore = window.location.hash
+
+        await act(async () => {
+          fireEvent.click(closeBtn)
+        })
+
+        await waitForSentinelDepth(0)
+        expect(useSettingsModalStore.getState().view).toBeNull()
+        expect(window.location.hash).toBe(hashBefore)
+      })
+    })
+  })
+
+  // The MobileChatShell unit tests mock the overlay store, so the shell's own
+  // registrations (`mobile-drawer`, `files-sheet`, `projects-sheet`) are only
+  // exercised against the REAL store and reconciler here.
+  describe('MobileChatShell sheets on the real overlay store', () => {
+    const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+    it('the drawer registers as mobile-drawer; system back closes it and consumes its sentinel', async () => {
+      renderLayout()
+      const menuBtn = await screen.findByLabelText('Open menu')
+
+      fireEvent.click(menuBtn)
+      await waitForSentinelDepth(1)
+      expect(stackIds()).toEqual(['mobile-drawer'])
+      expect(menuBtn).toHaveAttribute('aria-expanded', 'true')
+
+      await pressSystemBack()
+
+      await waitFor(() => expect(menuBtn).toHaveAttribute('aria-expanded', 'false'))
+      expect(stackIds()).toEqual([])
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    it('Esc closes the drawer once and consumes its sentinel', async () => {
+      renderLayout()
+      const menuBtn = await screen.findByLabelText('Open menu')
+      fireEvent.click(menuBtn)
+      await waitForSentinelDepth(1)
+
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+
+      await waitFor(() => expect(menuBtn).toHaveAttribute('aria-expanded', 'false'))
+      await waitForSentinelDepth(0)
+      expect(stackIds()).toEqual([])
+    })
+
+    it('drawer → Settings keeps one sentinel (no traversal, no push), and back closes Preferences', async () => {
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      await waitForSentinelDepth(1)
+      const settingsBtn = await screen.findByLabelText('Settings')
+      const backSpy = vi.spyOn(window.history, 'back')
+      const goSpy = vi.spyOn(window.history, 'go')
+      const pushSpy = vi.spyOn(window.history, 'pushState')
+      try {
+        // The drawer closes and Preferences opens in one handler.
+        await act(async () => {
+          fireEvent.click(settingsBtn)
+        })
+        await screen.findByRole('button', { name: 'Close Application Preferences' })
+        await settleOverlayBackStack()
+
+        expect(stackIds()).toEqual(['settings-modal'])
+        expect(backSpy).not.toHaveBeenCalled()
+        expect(goSpy).not.toHaveBeenCalled()
+        expect(pushSpy).not.toHaveBeenCalled()
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
+      } finally {
+        backSpy.mockRestore()
+        goSpy.mockRestore()
+        pushSpy.mockRestore()
+      }
+
+      await pressSystemBack()
+
+      await waitFor(() => expect(useSettingsModalStore.getState().view).toBeNull())
+      expect(stackIds()).toEqual([])
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    // The header ⋯ sheet and the sheets it hands off to (Files) or the subtitle
+    // opens (project) each register once; choosing a ⋯ row swaps the registered
+    // sheet in one batch, so one sentinel serves the whole chain.
+    it.each([
+      ['header ⋯', 'header-more-sheet', async () => openMoreSheet()],
+      ['Files', 'files-sheet', async () => chooseMoreItem('Files')],
+      [
+        'project',
+        'projects-sheet',
+        async () => {
+          fireEvent.click(await screen.findByRole('button', { name: /switch project/ }))
+        }
+      ]
+    ])('the %s sheet registers as %s; system back closes it', async (_label, id, open) => {
+      renderLayout()
+
+      await open()
+      await waitForSentinelDepth(1)
+      expect(stackIds()).toEqual([id])
+
+      await pressSystemBack()
+
+      await waitFor(() => expect(stackIds()).toEqual([]))
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+  })
+
+  // ── Mobile shell fixes (UX FIX 6 and 11) ─────────────────────────────────
+
+  describe('palette New Project (FIX 6)', () => {
+    it('wires New Project into the palette on the mobile shell and opens NewProjectModal', async () => {
+      renderLayout()
+
+      // The header no longer carries a palette icon; the palette lives in the header ⋯ sheet.
+      await chooseMoreItem('Command palette')
+      expect(
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+      ).toBeInTheDocument()
+      expect(document.querySelector('[data-palette-new-project]')).toHaveAttribute(
+        'data-palette-new-project',
+        'wired'
+      )
+      expect(screen.queryByTestId('new-project-modal-stub')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Palette: New Project' }))
+
+      // Selecting it closes the palette, then opens the modal.
+      await waitFor(() =>
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+      )
+      expect(await screen.findByTestId('new-project-modal-stub')).toBeInTheDocument()
+    })
+  })
+
+  describe('split collapse to the active leaf (FIX 11)', () => {
+    const leafA: LeafNode = {
+      type: 'leaf',
+      id: 'pane-a',
+      tabs: [{ type: 'git', id: 'git-a', cwd: '/demo' }],
+      activeTabId: 'git-a'
+    }
+    const leafB: LeafNode = {
+      type: 'leaf',
+      id: 'pane-b',
+      tabs: [{ type: 'git-history', id: 'git-history-b', cwd: '/demo' }],
+      activeTabId: 'git-history-b'
+    }
+    const splitRoot: SplitNode = {
+      type: 'split',
+      id: 'split-1',
+      direction: 'horizontal',
+      children: [leafA, leafB],
+      sizes: [50, 50]
+    }
+
+    const seed = (activePaneId: string, fullscreenPaneId: string | null = null): void => {
+      useWorkspaceStore.setState({
+        root: splitRoot,
+        activePaneId,
+        fullscreenPaneId,
+        agentLauncherPaneId: null
+      })
+    }
+    const paneStubs = (): NodeListOf<Element> =>
+      document.querySelectorAll('[data-pane-renderer-stub]')
+    const unresolvedWarnings = (): unknown[][] =>
+      vi
+        .mocked(logFrontendError)
+        .mock.calls.filter(([payload]) => payload.source === 'useMobileActiveLeaf')
+
+    afterEach(() => {
+      useWorkspaceStore.getState().resetLayout()
+    })
+
+    it('renders only the active leaf of a synced split and leaves the shared tree untouched', async () => {
+      seed('pane-b')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      const stub = paneStubs()[0]
+      expect(stub).toHaveAttribute('data-node-id', 'pane-b')
+      expect(stub).toHaveAttribute('data-node-type', 'leaf')
+
+      // The collapse is a read-only view: the tree, the active pane and the
+      // fullscreen pane are exactly what desktop synced.
+      const state = useWorkspaceStore.getState()
+      expect(state.root).toBe(splitRoot)
+      expect(getAllLeafPanes(state.root)).toHaveLength(2)
+      expect(state.activePaneId).toBe('pane-b')
+      expect(state.fullscreenPaneId).toBeNull()
+      expect(unresolvedWarnings()).toHaveLength(0)
+      // The collapse path itself never calls the PTY kill API (see the spy).
+      expect(terminalKill).not.toHaveBeenCalled()
+    })
+
+    it('shows the other leaf alone, remounted, when a drawer row for its tab is tapped', async () => {
+      seed('pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      const firstMount = paneStubs()[0].getAttribute('data-mount')
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      // The Git Changes row belongs to leaf A, the inactive leaf.
+      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
+
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
+      expect(paneStubs()).toHaveLength(1)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-type', 'leaf')
+      // Keyed by the leaf id: a pane switch remounts instead of reusing state.
+      expect(paneStubs()[0].getAttribute('data-mount')).not.toBe(firstMount)
+
+      // Nothing was closed or merged: both leaves are still in the tree.
+      const state = useWorkspaceStore.getState()
+      expect(state.root.type).toBe('split')
+      expect(getAllLeafPanes(state.root).map((leaf) => leaf.id)).toEqual(['pane-a', 'pane-b'])
+      expect(state.activePaneId).toBe('pane-a')
+      expect(state.fullscreenPaneId).toBeNull()
+      // Switching the visible leaf never calls the PTY kill API (see the spy).
+      expect(terminalKill).not.toHaveBeenCalled()
+    })
+
+    it('leaves fullscreen and shows the other leaf when a drawer row for its tab is tapped', async () => {
+      seed('pane-b', 'pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      // The Git Changes row belongs to leaf A, not the fullscreen leaf B.
+      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
+
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
+      expect(paneStubs()).toHaveLength(1)
+
+      const state = useWorkspaceStore.getState()
+      expect(state.fullscreenPaneId).toBeNull()
+      expect(state.activePaneId).toBe('pane-a')
+      // Nothing was closed or merged: both leaves are still in the tree, and
+      // no PTY died.
+      expect(state.root.type).toBe('split')
+      expect(getAllLeafPanes(state.root).map((leaf) => leaf.id)).toEqual(['pane-a', 'pane-b'])
+      expect(terminalKill).not.toHaveBeenCalled()
+    })
+
+    it('keeps fullscreen when the tapped drawer row belongs to the fullscreen leaf', async () => {
+      seed('pane-b', 'pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
+
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Git History' }))
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      )
+      expect(paneStubs()).toHaveLength(1)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      const state = useWorkspaceStore.getState()
+      expect(state.fullscreenPaneId).toBe('pane-b')
+      expect(state.activePaneId).toBe('pane-b')
+    })
+
+    it('keeps the same leaf mounted across re-renders while it stays active', async () => {
+      seed('pane-b')
+      renderLayout()
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      const firstMount = paneStubs()[0].getAttribute('data-mount')
+
+      // Opening and closing the drawer re-renders the shell around the pane.
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      fireEvent.click(await screen.findByRole('button', { name: 'Git History' }))
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      )
+      expect(paneStubs()).toHaveLength(1)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      expect(paneStubs()[0].getAttribute('data-mount')).toBe(firstMount)
+    })
+
+    it('falls back to the first leaf and warns once when activePaneId matches no leaf', async () => {
+      seed('ghost-pane')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a')
+      expect(unresolvedWarnings()).toHaveLength(1)
+      expect(unresolvedWarnings()[0][0]).toEqual(
+        expect.objectContaining({ level: 'warn', source: 'useMobileActiveLeaf' })
+      )
+
+      // A re-render with the same unresolved id does not log again, and the
+      // store is not repaired by the view.
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      expect(unresolvedWarnings()).toHaveLength(1)
+      expect(useWorkspaceStore.getState().activePaneId).toBe('ghost-pane')
+      expect(useWorkspaceStore.getState().root).toBe(splitRoot)
+    })
+
+    it('renders a fullscreen leaf as the single pane without clearing fullscreen', async () => {
+      seed('pane-a', 'pane-a')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a')
+      expect(useWorkspaceStore.getState().fullscreenPaneId).toBe('pane-a')
+      expect(useWorkspaceStore.getState().root).toBe(splitRoot)
+    })
+
+    it('renders the active leaf, not a different fullscreen leaf, so the pane matches the drawer and header', async () => {
+      // `loadProjectWorkspace` can restore an activePaneId while keeping the
+      // previous fullscreenPaneId, so "fullscreen A, active B" is reachable.
+      // The mobile shell follows activePaneId (the leaf its drawer and header
+      // describe); the fullscreen leaf only wins on desktop.
+      seed('pane-b', 'pane-a')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      expect(paneStubs()[0]).toHaveAttribute('data-node-type', 'leaf')
+
+      const state = useWorkspaceStore.getState()
+      expect(state.root).toBe(splitRoot)
+      expect(state.activePaneId).toBe('pane-b')
+      expect(state.fullscreenPaneId).toBe('pane-a')
+    })
+
+    it('hands a single-leaf workspace to PaneRenderer unchanged', async () => {
+      useWorkspaceStore.getState().resetLayout()
+      const only = useWorkspaceStore.getState().root
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', only.id)
+      expect(paneStubs()[0]).toHaveAttribute('data-node-type', 'leaf')
+      expect(unresolvedWarnings()).toHaveLength(0)
     })
   })
 

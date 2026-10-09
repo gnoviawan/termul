@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 
@@ -116,7 +116,7 @@ describe('ChatHistoryEntryRow agent sequence', () => {
     expect(glyphSpans()).toHaveLength(1)
     // No sequence wrapper: the glyph sits directly in the row button, whose
     // accessible name is the title (the open button — not delete).
-    const button = screen.getByRole('button', { name: /Switched chat/ })
+    const button = screen.getByRole('button', { name: /^Switched chat/ })
     expect(button.querySelector('span[role="img"]')).toBeNull()
     // Byte-identical DOM when `agents` is present-but-undefined vs absent.
     const before = container.innerHTML
@@ -267,5 +267,83 @@ describe('ChatHistoryEntryRow agent sequence', () => {
     const bot = sequence.querySelector('svg[data-termul-icon="Bot"]')
     expect(bot).toBeInTheDocument()
     expect(bot).toHaveAttribute('aria-hidden', 'true')
+  })
+})
+
+describe('ChatHistoryEntryRow actions and status slot', () => {
+  it('names the trash button after the chat and keeps the generic hover title', () => {
+    stateRef.current = { agentConfigs: [] }
+    render(
+      <ChatHistoryEntryRow
+        entry={entry({ title: 'Resume token gate bug' })}
+        onOpen={() => {}}
+        onDelete={() => {}}
+      />
+    )
+
+    const trash = screen.getByRole('button', { name: 'Delete Resume token gate bug' })
+    expect(trash).toHaveAttribute('title', 'Delete chat')
+    expect(screen.queryByRole('button', { name: 'Delete chat' })).not.toBeInTheDocument()
+  })
+
+  it('calls onDelete with the entry id (the confirm lives in the host)', () => {
+    stateRef.current = { agentConfigs: [] }
+    const onDelete = vi.fn()
+    render(
+      <ChatHistoryEntryRow entry={entry({ id: 'sess-9' })} onOpen={() => {}} onDelete={onDelete} />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Switched chat' }))
+
+    expect(onDelete).toHaveBeenCalledWith('sess-9')
+  })
+
+  it('exposes focus targets for the host: the row id and both buttons', () => {
+    stateRef.current = { agentConfigs: [] }
+    const { container } = render(
+      <ChatHistoryEntryRow entry={entry({ id: 'sess-9' })} onOpen={() => {}} onDelete={() => {}} />
+    )
+
+    const row = container.querySelector('[data-history-entry-id="sess-9"]')
+    expect(row).not.toBeNull()
+    expect(row?.querySelector('button[data-history-open]')).toBe(
+      screen.getByRole('button', { name: /^Switched chat/ })
+    )
+    expect(row?.querySelector('button[data-history-delete]')).toBe(
+      screen.getByRole('button', { name: 'Delete Switched chat' })
+    )
+  })
+
+  it('renders the Failed badge inside the trailing status slot with its shipped classes', () => {
+    stateRef.current = { agentConfigs: [] }
+    const { container } = render(
+      <ChatHistoryEntryRow
+        entry={entry({ status: 'error' })}
+        onOpen={() => {}}
+        onDelete={() => {}}
+      />
+    )
+
+    const slot = container.querySelector('[data-slot="history-status"]')
+    expect(slot).not.toBeNull()
+    const badge = within(slot as HTMLElement).getByText('Failed')
+    expect(badge).toHaveClass('bg-destructive/15', 'text-destructive', 'text-3xs', 'rounded-sm')
+    // Same position: after the title, before the relative time, in the open button.
+    const openButton = screen.getByRole('button', { name: /^Switched chat/ })
+    expect(openButton).toContainElement(slot as HTMLElement)
+    const title = within(openButton).getByText('Switched chat')
+    expect(title.compareDocumentPosition(slot as HTMLElement)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+  })
+
+  it('renders no status slot for a healthy row', () => {
+    stateRef.current = { agentConfigs: [] }
+    const { container } = render(
+      <ChatHistoryEntryRow entry={entry()} onOpen={() => {}} onDelete={() => {}} />
+    )
+
+    expect(container.querySelector('[data-slot="history-status"]')).toBeNull()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
   })
 })

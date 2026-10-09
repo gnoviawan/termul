@@ -9,7 +9,7 @@ function connectionLabel(connected: boolean, reconnecting: boolean): string {
 }
 
 const STATUS_TONE_CLASS = {
-  reconnecting: 'text-warning animate-pulse',
+  reconnecting: 'text-warning animate-pulse motion-reduce:animate-none',
   connected: 'text-connection',
   disconnected: 'text-destructive'
 } as const
