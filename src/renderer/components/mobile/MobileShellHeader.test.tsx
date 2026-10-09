@@ -47,6 +47,7 @@ type HeaderProps = ComponentProps<typeof MobileShellHeader>
 
 function renderHeader(overrides: Partial<HeaderProps> = {}) {
   const refs = {
+    menu: createRef<HTMLButtonElement>(),
     more: createRef<HTMLButtonElement>(),
     subtitle: createRef<HTMLButtonElement>(),
     title: createRef<HTMLHeadingElement>()
@@ -57,6 +58,7 @@ function renderHeader(overrides: Partial<HeaderProps> = {}) {
     subtitleLabel: 'termul · main, switch project',
     drawerOpen: false,
     onOpenDrawer: vi.fn(),
+    menuButtonRef: refs.menu,
     projectSheetOpen: false,
     onOpenProjectSheet: vi.fn(),
     attentionCount: 0,
@@ -146,15 +148,18 @@ describe('MobileShellHeader', () => {
   describe('☰ menu', () => {
     it('opens the drawer and reflects it with aria-expanded and aria-controls', () => {
       const onOpenDrawer = vi.fn()
-      const { rerender, props } = renderHeader({ onOpenDrawer })
+      const { rerender, props, refs } = renderHeader({ onOpenDrawer })
 
       const menu = screen.getByRole('button', { name: 'Open menu' })
+      expect(refs.menu.current).toBe(menu)
       expect(menu).toHaveAttribute('aria-expanded', 'false')
       // A closed control never references a missing id.
       expect(menu).not.toHaveAttribute('aria-controls')
 
       fireEvent.click(menu)
       expect(onOpenDrawer).toHaveBeenCalledTimes(1)
+      // The drawer returns focus to whatever opened it, so it is handed over.
+      expect(onOpenDrawer).toHaveBeenCalledWith(menu)
 
       rerender(<MobileShellHeader {...props} drawerOpen />)
       expect(menu).toHaveAttribute('aria-expanded', 'true')
@@ -232,6 +237,7 @@ describe('MobileShellHeader', () => {
 
       fireEvent.click(pill)
       expect(onOpenDrawer).toHaveBeenCalledTimes(1)
+      expect(onOpenDrawer).toHaveBeenCalledWith(pill)
     })
 
     it('uses the singular name for one chat', () => {

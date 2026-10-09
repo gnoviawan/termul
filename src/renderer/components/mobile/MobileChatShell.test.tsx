@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { MobileChatShell } from './MobileChatShell'
+import type { MobileShellDrawer } from './MobileShellDrawer'
 
 interface TestTerminal {
   id: string
@@ -13,21 +14,18 @@ interface TestTerminal {
 }
 
 const {
-  mockNavigate,
   projectRef,
   extraProjectsRef,
   tauriRef,
   workspaceRef,
-  editorRef,
-  mockRemoveBrowserTab,
   browserTabsRef,
   terminalsRef,
   sessionsRef,
   sessionIndexRef,
   mockAttentionCount,
-  mockRequestCloseAgentChat
+  mockRequestCloseAgentChat,
+  drawerPropsRef
 } = vi.hoisted(() => ({
-  mockNavigate: vi.fn(),
   // Mutable so individual tests can flip the active project (name, path, git
   // branch) and the shell into web/remote mode (where the project sheet, Files
   // and the web-only ⋯ items are mounted).
@@ -47,8 +45,8 @@ const {
     }>
   },
   tauriRef: { current: true as boolean },
-  // Mutable workspace state so Story 6 tests can seed every tab type
-  // (terminal, editor, git, git-history, browser) in the drawer.
+  // Mutable workspace state so tests can seed every tab type whose name the
+  // header shows (terminal, editor, git, git-history, browser, chat, canvas).
   workspaceRef: {
     current: {
       leaves: [] as Array<{
@@ -58,18 +56,9 @@ const {
         activeTabId: string | null
       }>,
       activePaneId: 'pane-1',
-      fullscreenPaneId: null as string | null,
-      removeTab: vi.fn(),
-      setActiveTab: vi.fn(),
-      clearFullscreenPane: vi.fn()
+      removeTab: vi.fn()
     }
   },
-  editorRef: {
-    current: {
-      openFiles: new Map<string, { isDirty: boolean }>()
-    }
-  },
-  mockRemoveBrowserTab: vi.fn(),
   browserTabsRef: { current: new Map<string, unknown>() },
   terminalsRef: {
     current: [] as Array<{
@@ -82,16 +71,10 @@ const {
   sessionsRef: { current: {} as Record<string, Record<string, unknown>> },
   sessionIndexRef: { current: [] as Array<{ id: string; title: string }> },
   mockAttentionCount: vi.fn(),
-  mockRequestCloseAgentChat: vi.fn()
+  mockRequestCloseAgentChat: vi.fn(),
+  // The last props the shell handed to the (stubbed) drawer.
+  drawerPropsRef: { current: null as null | ComponentProps<typeof MobileShellDrawer> }
 }))
-
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate
-  }
-})
 
 vi.mock('@/stores/project-store', () => ({
   useActiveProject: () => projectRef.current,
@@ -108,9 +91,7 @@ vi.mock('@/stores/workspace-store', () => ({
     vi.fn((sel: (s: unknown) => unknown) =>
       sel({
         root: { leaves: workspaceRef.current.leaves },
-        activePaneId: workspaceRef.current.activePaneId,
-        removeTab: workspaceRef.current.removeTab,
-        setActiveTab: workspaceRef.current.setActiveTab
+        activePaneId: workspaceRef.current.activePaneId
       })
     ),
     { getState: () => workspaceRef.current }
@@ -126,22 +107,9 @@ vi.mock('@/stores/terminal-store', () => ({
   )
 }))
 
-vi.mock('@/stores/editor-store', () => ({
-  useEditorStore: Object.assign(
-    vi.fn((sel: (s: { openFiles: Map<string, { isDirty: boolean }> }) => unknown) =>
-      sel({ openFiles: editorRef.current.openFiles })
-    ),
-    { getState: () => ({ openFiles: editorRef.current.openFiles }) }
-  )
-}))
-
 vi.mock('@/stores/browser-session-store', () => ({
-  useBrowserSessionStore: Object.assign(
-    vi.fn((sel: (s: { tabs: Map<string, unknown>; removeTab: unknown }) => unknown) =>
-      sel({ tabs: browserTabsRef.current, removeTab: mockRemoveBrowserTab })
-    ),
-    { getState: () => ({ tabs: browserTabsRef.current, removeTab: mockRemoveBrowserTab }) }
-  )
+  useBrowserSessionStore: (sel: (s: { tabs: Map<string, unknown> }) => unknown) =>
+    sel({ tabs: browserTabsRef.current })
 }))
 
 vi.mock('@/stores/acp-store', () => ({
@@ -159,12 +127,25 @@ vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
   requestCloseAgentChat: mockRequestCloseAgentChat
 }))
 
-vi.mock('@/components/chat/ChatHistoryTab', () => ({
-  ChatHistoryTab: ({ onSessionOpened }: { onSessionOpened?: () => void }) => (
-    <button type="button" onClick={() => onSessionOpened?.()}>
-      Open history chat
-    </button>
-  )
+// Stub the drawer so the shell test focuses on the opener wiring and the props
+// threaded through (☰ and the pill → drawerOpen → `open`; `onOpenChange` closes
+// it). The drawer's own layout, focus handling and rows are covered in
+// MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx.
+vi.mock('./MobileShellDrawer', () => ({
+  MobileShellDrawer: (props: ComponentProps<typeof MobileShellDrawer>) => {
+    drawerPropsRef.current = props
+    return props.open ? (
+      <div>
+        <span>shell-drawer</span>
+        <button type="button" onClick={() => props.onOpenChange(false)}>
+          close-shell-drawer
+        </button>
+        <button type="button" onClick={props.onOpenProjects}>
+          stub-open-projects
+        </button>
+      </div>
+    ) : null
+  }
 }))
 
 // Stub the project sheet so the shell test focuses on the trigger wiring
@@ -280,6 +261,11 @@ function seedTabs(tabs: Array<Record<string, unknown>>, activeTabId: string | nu
   }
 }
 
+function drawerProps(): ComponentProps<typeof MobileShellDrawer> {
+  if (!drawerPropsRef.current) throw new Error('drawer stub never rendered')
+  return drawerPropsRef.current
+}
+
 function seedActiveTerminal(terminal: Partial<TestTerminal> = {}): void {
   seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1')
   terminalsRef.current = [{ id: 't1', name: 'zsh — dev server', ...terminal }]
@@ -312,8 +298,6 @@ async function openHeaderSheet(): Promise<HTMLElement> {
 
 describe('MobileChatShell', () => {
   beforeEach(() => {
-    mockNavigate.mockReset()
-    mockRemoveBrowserTab.mockReset()
     mockAttentionCount.mockReset()
     mockAttentionCount.mockReturnValue(0)
     mockRequestCloseAgentChat.mockReset()
@@ -321,18 +305,15 @@ describe('MobileChatShell', () => {
       closeTab()
     )
     workspaceRef.current.removeTab.mockReset()
-    workspaceRef.current.setActiveTab.mockReset()
-    workspaceRef.current.clearFullscreenPane.mockReset()
+    drawerPropsRef.current = null
     tauriRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo' }
     extraProjectsRef.current = []
     sessionsRef.current = { s1: { title: 'Hello chat' } }
     sessionIndexRef.current = []
     terminalsRef.current = []
-    // Default leaf: one agent-chat tab (the pre-Story-6 drawer shape).
+    // Default leaf: one agent-chat tab.
     seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }], 'tab-1')
-    workspaceRef.current.fullscreenPaneId = null
-    editorRef.current.openFiles = new Map()
     browserTabsRef.current = new Map()
     useOverlayStackStore.setState({ stack: [] })
     stubNarrowViewport(false)
@@ -652,7 +633,7 @@ describe('MobileChatShell', () => {
         const { unmount } = renderShell()
 
         fireEvent.click(screen.getByRole('button', { name: '2 other chats need you' }))
-        expect(await screen.findByText('Open history chat')).toBeInTheDocument()
+        expect(await screen.findByText('shell-drawer')).toBeInTheDocument()
         expect(screen.getByLabelText('2 other chats need you')).toHaveAttribute(
           'aria-expanded',
           'true'
@@ -666,7 +647,7 @@ describe('MobileChatShell', () => {
 
         renderShell()
         fireEvent.click(screen.getByLabelText('Open menu'))
-        expect(await screen.findByText('Open history chat')).toBeInTheDocument()
+        expect(await screen.findByText('shell-drawer')).toBeInTheDocument()
         expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'true')
         expect(screen.getByLabelText('Open menu')).toHaveAttribute(
           'aria-controls',
@@ -684,7 +665,7 @@ describe('MobileChatShell', () => {
         expect(menu.querySelector('span[aria-hidden="true"]')?.className).toContain('bg-warning')
 
         fireEvent.click(menu)
-        expect(await screen.findByText('Open history chat')).toBeInTheDocument()
+        expect(await screen.findByText('shell-drawer')).toBeInTheDocument()
       })
     })
 
@@ -1263,397 +1244,124 @@ describe('MobileChatShell', () => {
     })
   })
 
-  it('opens the chat drawer and closes it after selecting a session', async () => {
-    renderShell()
+  describe('drawer opener', () => {
+    it('mounts the drawer closed, with no aria-controls on the opener', () => {
+      renderShell()
 
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'true')
-    expect(await screen.findByText('Open history chat')).toBeInTheDocument()
-    expect(screen.getByText('New chat')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByText('Open history chat'))
-    expect(screen.queryByText('Open history chat')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-  })
-
-  it('navigates to /snapshots from the drawer', () => {
-    tauriRef.current = false
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByLabelText('Snapshots'))
-    expect(mockNavigate).toHaveBeenCalledWith('/snapshots')
-    // The drawer closes after navigating.
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-  })
-
-  it('hides the Git history button in Tauri (desktop) mode', () => {
-    tauriRef.current = true
-    renderShell({ onOpenGitHistory: vi.fn() })
-    // Desktop never shows the mobile Git History entry (the ActivityRail owns
-    // it there). The drawer button must not leak into the mobile shell.
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.queryByLabelText('Git history')).not.toBeInTheDocument()
-  })
-
-  it('mounts the Git history trigger in web mode and invokes onOpenGitHistory', () => {
-    tauriRef.current = false
-    const onOpenGitHistory = vi.fn()
-    renderShell({ onOpenGitHistory })
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    const btn = screen.getByLabelText('Git history')
-    expect(btn).not.toBeDisabled()
-    fireEvent.click(btn)
-    expect(onOpenGitHistory).toHaveBeenCalledTimes(1)
-    // The drawer closes after invoking the handler.
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-  })
-
-  it('disables the Git history button when no active project path', () => {
-    tauriRef.current = false
-    projectRef.current = { id: 'p1', name: 'Demo' }
-    renderShell({ onOpenGitHistory: vi.fn() })
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.getByLabelText('Git history')).toBeDisabled()
-  })
-
-  // ── Story 6: drawer lists ALL pane tabs (QA F3 navigation traps) ─────────
-
-  function seedAllTabTypes(): void {
-    seedTabs(
-      [
-        { type: 'terminal', id: 'term-t1', terminalId: 't1' },
-        { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' },
-        { type: 'git', id: 'git-/proj', cwd: '/proj' },
-        { type: 'git-history', id: 'git-history-/proj', cwd: '/proj' },
-        { type: 'browser', id: 'browser-b1', browserTabId: 'b1' },
-        { type: 'agent-chat', id: 'tab-1', sessionId: 's1' }
-      ],
-      'tab-1'
-    )
-    browserTabsRef.current = new Map([
-      ['b1', { id: 'b1', url: 'https://example.com/page', title: 'Example Site' }]
-    ])
-  }
-
-  it('drawer lists every non-terminal pane tab with a close affordance', () => {
-    seedAllTabTypes()
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-
-    // Every tab type is listed in the drawer's Tabs section.
-    expect(screen.getByText('a.ts')).toBeInTheDocument()
-    expect(screen.getAllByText('Git Changes').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Git History').length).toBeGreaterThan(0)
-    expect(screen.getByText('Example Site')).toBeInTheDocument()
-    // Editor rows expose a close affordance routed through the dirty guard.
-    expect(screen.getByRole('button', { name: 'Close a.ts' })).toBeInTheDocument()
-  })
-
-  it('drawer shows the editor dirty dot for dirty files', () => {
-    seedAllTabTypes()
-    editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: true }]])
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.getByTestId('editor-dirty-dot')).toBeInTheDocument()
-  })
-
-  it('drawer omits the editor dirty dot when the file is clean', () => {
-    seedAllTabTypes()
-    editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: false }]])
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.queryByTestId('editor-dirty-dot')).not.toBeInTheDocument()
-  })
-
-  it('drawer close on a dirty editor tab routes through the dirty guard, not removeTab', () => {
-    seedAllTabTypes()
-    const onCloseEditorTab = vi.fn()
-    renderShell({ onCloseEditorTab })
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
-
-    expect(onCloseEditorTab).toHaveBeenCalledWith('/proj/a.ts')
-    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
-  })
-
-  it('drawer close on a terminal tab routes through the existing terminal close flow', () => {
-    seedAllTabTypes()
-    const onCloseTerminal = vi.fn()
-    renderShell({ onCloseTerminal })
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    // The terminal-store mock has no terminal records, so the row label
-    // falls back to the plain "terminal" display name.
-    fireEvent.click(screen.getByRole('button', { name: 'Close terminal' }))
-
-    expect(onCloseTerminal).toHaveBeenCalledWith('t1', 'term-t1')
-    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
-  })
-
-  it('drawer close on git and git-history tabs removes the tab directly', () => {
-    seedAllTabTypes()
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close git changes' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Close git history' }))
-
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('git-/proj')
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('git-history-/proj')
-  })
-
-  it('drawer close on a browser tab tears down the session tab and the workspace tab', () => {
-    seedAllTabTypes()
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close Example Site' }))
-
-    expect(mockRemoveBrowserTab).toHaveBeenCalledWith('b1')
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('browser-b1')
-  })
-
-  it('drawer close on an agent-chat tab closes the chat and removes the tab', () => {
-    seedAllTabTypes()
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close Hello chat' }))
-
-    expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('tab-1')
-  })
-
-  it('drawer close on an editor tab falls back to removeTab when no guard is threaded', () => {
-    seedAllTabTypes()
-    renderShell()
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
-
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('edit-/proj/a.ts')
-  })
-
-  // ── FIX 10: choosing a tab from /snapshots returns to the workspace ──────
-
-  function renderShellAt(path: string): void {
-    render(
-      <MemoryRouter initialEntries={[path]}>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-  }
-
-  const NON_CHAT_ROWS = [
-    { label: 'terminal', rowName: 'Terminal', tabId: 'term-t1' },
-    { label: 'editor', rowName: 'a.ts', tabId: 'edit-/proj/a.ts' },
-    { label: 'git', rowName: 'Git Changes', tabId: 'git-/proj' },
-    { label: 'git-history', rowName: 'Git History', tabId: 'git-history-/proj' },
-    { label: 'browser', rowName: 'Example Site', tabId: 'browser-b1' }
-  ]
-
-  it.each(
-    NON_CHAT_ROWS
-  )('on /snapshots, tapping the $label row activates the tab, closes the drawer and returns to /', ({
-    rowName,
-    tabId
-  }) => {
-    seedAllTabTypes()
-    renderShellAt('/snapshots')
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: rowName }))
-
-    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', tabId)
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-    expect(mockNavigate).toHaveBeenCalledTimes(1)
-    expect(mockNavigate).toHaveBeenCalledWith('/')
-  })
-
-  it('on /snapshots, an agent-chat row does not navigate to / (setActiveTab owns /c/<id>)', () => {
-    seedAllTabTypes()
-    renderShellAt('/snapshots')
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Hello chat' }))
-
-    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'tab-1')
-    expect(mockNavigate).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    '/',
-    '/c/s1'
-  ])('on the workspace route %s, tapping any drawer row never navigates', (path) => {
-    seedAllTabTypes()
-    renderShellAt(path)
-
-    for (const { rowName } of NON_CHAT_ROWS) {
-      fireEvent.click(screen.getByLabelText('Open menu'))
-      fireEvent.click(screen.getByRole('button', { name: rowName }))
-    }
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Hello chat' }))
-
-    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledTimes(NON_CHAT_ROWS.length + 1)
-    expect(mockNavigate).not.toHaveBeenCalled()
-  })
-
-  describe('a row in another pane on /snapshots', () => {
-    let pendingFrames: FrameRequestCallback[]
-    let raf: { mockRestore: () => void }
-
-    beforeEach(() => {
-      // Capture the deferred activation instead of running it, so each test
-      // decides when the frame fires. Restored in afterEach so a failing
-      // assertion cannot leak the stub into later tests.
-      pendingFrames = []
-      raf = vi
-        .spyOn(window, 'requestAnimationFrame')
-        .mockImplementation((callback: FrameRequestCallback) => {
-          pendingFrames.push(callback)
-          return pendingFrames.length
-        })
-      workspaceRef.current = {
-        ...workspaceRef.current,
-        leaves: [
-          { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
-          {
-            type: 'leaf',
-            id: 'pane-2',
-            tabs: [{ type: 'git', id: 'git-/proj', cwd: '/proj' }],
-            activeTabId: null
-          }
-        ],
-        activePaneId: 'pane-1'
-      }
+      const menu = screen.getByLabelText('Open menu')
+      expect(drawerProps().open).toBe(false)
+      expect(screen.queryByText('shell-drawer')).not.toBeInTheDocument()
+      expect(menu).toHaveAttribute('aria-expanded', 'false')
+      expect(menu).not.toHaveAttribute('aria-controls')
     })
 
-    afterEach(() => {
-      raf.mockRestore()
+    it('opens the drawer from ☰ and points aria-controls at #mobile-shell-drawer', () => {
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
+
+      fireEvent.click(menu)
+
+      expect(screen.getByText('shell-drawer')).toBeInTheDocument()
+      expect(drawerProps().open).toBe(true)
+      expect(menu).toHaveAttribute('aria-expanded', 'true')
+      expect(menu).toHaveAttribute('aria-controls', 'mobile-shell-drawer')
     })
 
-    it('still returns to / after its deferred activation', () => {
-      renderShellAt('/snapshots')
+    it('records ☰ as the opener and as the fallback target', () => {
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
 
-      fireEvent.click(screen.getByLabelText('Open menu'))
-      fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
-      for (const frame of pendingFrames) frame(0)
+      fireEvent.click(menu)
 
-      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-/proj')
-      expect(mockNavigate).toHaveBeenCalledTimes(1)
-      expect(mockNavigate).toHaveBeenCalledWith('/')
+      expect(drawerProps().returnFocusRef.current).toBe(menu)
+      expect(drawerProps().menuButtonRef.current).toBe(menu)
     })
 
-    it('navigates only after the tab is active, never before the frame fires', () => {
-      renderShellAt('/snapshots')
+    it('records the attention pill as the opener, keeping ☰ as the fallback', () => {
+      mockAttentionCount.mockReturnValue(2)
+      renderShell()
+      const pill = screen.getByRole('button', { name: '2 other chats need you' })
 
+      fireEvent.click(pill)
+
+      expect(drawerProps().returnFocusRef.current).toBe(pill)
+      expect(drawerProps().menuButtonRef.current).toBe(screen.getByLabelText('Open menu'))
+    })
+
+    it('closes the drawer when it calls onOpenChange(false)', () => {
+      renderShell()
       fireEvent.click(screen.getByLabelText('Open menu'))
-      fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
 
-      // The drawer closes at once, but neither the activation nor the route
-      // change has happened yet: the workspace route must not paint the
-      // previously active leaf while the activation is still pending.
+      fireEvent.click(screen.getByText('close-shell-drawer'))
+
+      expect(screen.queryByText('shell-drawer')).not.toBeInTheDocument()
       expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-      expect(pendingFrames).toHaveLength(1)
-      expect(workspaceRef.current.setActiveTab).not.toHaveBeenCalled()
-      expect(mockNavigate).not.toHaveBeenCalled()
-
-      for (const frame of pendingFrames) frame(0)
-
-      const [activation] = workspaceRef.current.setActiveTab.mock.invocationCallOrder
-      const [navigation] = mockNavigate.mock.invocationCallOrder
-      expect(activation).toBeLessThan(navigation)
-    })
-  })
-
-  describe('while a pane is fullscreen', () => {
-    let raf: { mockRestore: () => void }
-
-    beforeEach(() => {
-      // Run the deferred cross-pane activation at once; restored in afterEach
-      // so a failing assertion cannot leak the stub into later tests.
-      raf = vi
-        .spyOn(window, 'requestAnimationFrame')
-        .mockImplementation((callback: FrameRequestCallback) => {
-          callback(0)
-          return 1
-        })
-      workspaceRef.current = {
-        ...workspaceRef.current,
-        leaves: [
-          {
-            type: 'leaf',
-            id: 'pane-1',
-            tabs: [{ type: 'git', id: 'git-/a', cwd: '/a' }],
-            activeTabId: 'git-/a'
-          },
-          {
-            type: 'leaf',
-            id: 'pane-2',
-            tabs: [{ type: 'git-history', id: 'git-history-/b', cwd: '/b' }],
-            activeTabId: 'git-history-/b'
-          }
-        ],
-        activePaneId: 'pane-1',
-        fullscreenPaneId: 'pane-1'
-      }
+      expect(screen.getByLabelText('Open menu')).not.toHaveAttribute('aria-controls')
     })
 
-    afterEach(() => {
-      raf.mockRestore()
-    })
+    it('registers with the overlay back stack while open', () => {
+      renderShell()
+      expect(overlayIds()).not.toContain('mobile-drawer')
 
-    function tapRow(name: string): void {
-      renderShellAt('/')
       fireEvent.click(screen.getByLabelText('Open menu'))
-      fireEvent.click(screen.getByRole('button', { name }))
-    }
+      expect(overlayIds()).toContain('mobile-drawer')
 
-    it('leaves fullscreen before activating a tab in another leaf, so the view follows it', () => {
-      tapRow('Git History')
-
-      expect(workspaceRef.current.clearFullscreenPane).toHaveBeenCalledTimes(1)
-      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-history-/b')
-      // Cleared first: with fullscreen still set, setActiveTab would keep
-      // activePaneId on the fullscreen leaf.
-      const [clearing] = workspaceRef.current.clearFullscreenPane.mock.invocationCallOrder
-      const [activation] = workspaceRef.current.setActiveTab.mock.invocationCallOrder
-      expect(clearing).toBeLessThan(activation)
+      fireEvent.click(screen.getByText('close-shell-drawer'))
+      expect(overlayIds()).not.toContain('mobile-drawer')
     })
 
-    it('keeps fullscreen when the row belongs to the fullscreen leaf', () => {
-      tapRow('Git Changes')
+    it('opens the project sheet from the drawer project row', () => {
+      tauriRef.current = false
+      renderShell()
+      fireEvent.click(screen.getByLabelText('Open menu'))
 
-      expect(workspaceRef.current.clearFullscreenPane).not.toHaveBeenCalled()
-      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'git-/a')
+      fireEvent.click(screen.getByText('stub-open-projects'))
+
+      expect(screen.getByText('project-drawer')).toBeInTheDocument()
     })
 
-    it('leaves a fullscreen leaf that is not the active one, even for a row in the active leaf', () => {
-      // `loadProjectWorkspace` can keep a stale fullscreenPaneId, which would
-      // otherwise hand activePaneId back to the fullscreen leaf.
-      workspaceRef.current.fullscreenPaneId = 'pane-2'
-      tapRow('Git Changes')
+    it('threads the active chat and the shell handlers into the drawer', () => {
+      const handlers = {
+        onNewChat: vi.fn(),
+        onNewTerminal: vi.fn(),
+        onCloseTerminal: vi.fn(),
+        onRenameTerminal: vi.fn(),
+        onCloseEditorTab: vi.fn(),
+        onOpenGitHistory: vi.fn()
+      }
+      renderShell(handlers)
 
-      expect(workspaceRef.current.clearFullscreenPane).toHaveBeenCalledTimes(1)
-      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'git-/a')
+      const props = drawerProps()
+      expect(props.activeTabId).toBe('tab-1')
+      expect(props.activeSessionId).toBe('s1')
+      expect(props.canNewChat).toBe(true)
+      expect(props.onNewChat).toBe(handlers.onNewChat)
+      expect(props.onNewTerminal).toBe(handlers.onNewTerminal)
+      expect(props.onCloseTerminal).toBe(handlers.onCloseTerminal)
+      expect(props.onRenameTerminal).toBe(handlers.onRenameTerminal)
+      expect(props.onCloseEditorTab).toBe(handlers.onCloseEditorTab)
+      expect(props.onOpenGitHistory).toBe(handlers.onOpenGitHistory)
+      expect(typeof props.onOpenProjects).toBe('function')
     })
 
-    it('never touches fullscreen when no pane is fullscreen', () => {
-      workspaceRef.current.fullscreenPaneId = null
-      tapRow('Git History')
+    it('has no active chat when a terminal tab is active', () => {
+      seedTabs(
+        [
+          { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+          { type: 'agent-chat', id: 'tab-1', sessionId: 's1' }
+        ],
+        'term-t1'
+      )
+      renderShell()
 
-      expect(workspaceRef.current.clearFullscreenPane).not.toHaveBeenCalled()
-      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-history-/b')
+      expect(drawerProps().activeTabId).toBe('term-t1')
+      expect(drawerProps().activeSessionId).toBeNull()
+    })
+
+    it('defaults canNewChat to false', () => {
+      renderShell({ canNewChat: undefined })
+
+      expect(drawerProps().canNewChat).toBe(false)
     })
   })
 })

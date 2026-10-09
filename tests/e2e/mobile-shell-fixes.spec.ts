@@ -260,7 +260,7 @@ async function openShell(
 }
 
 function drawerOf(page: Page): Locator {
-  return page.locator('#mobile-chat-drawer')
+  return page.locator('#mobile-shell-drawer')
 }
 
 async function openDrawer(page: Page): Promise<Locator> {
