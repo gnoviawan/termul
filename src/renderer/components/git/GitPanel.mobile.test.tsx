@@ -146,6 +146,22 @@ describe('GitPanel mobile branch', () => {
     expect(container.querySelector('.w-80')).toBeNull()
   })
 
+  it('reserves the sheet close target on the right of both header rows', () => {
+    // The sheet close box is absolute at the top right (44px on coarse pointers),
+    // so the header rows must keep clear of it; without pr-14 it covers the
+    // Stash changes button.
+    const { unmount } = render(<GitPanel cwd="/work" isVisible />)
+    const stash = screen.getByTitle('Stash changes')
+    expect(stash.closest('.border-b')?.className).toContain('pr-14')
+    unmount()
+
+    gitState.selectedFile = 'a.ts'
+    render(<GitPanel cwd="/work" isVisible />)
+    expect(screen.getByLabelText('Back to file list').closest('.border-b')?.className).toContain(
+      'pr-14'
+    )
+  })
+
   it('swaps to the diff view with a back button when a file is selected', () => {
     gitState.selectedFile = 'a.ts'
     render(<GitPanel cwd="/work" isVisible />)

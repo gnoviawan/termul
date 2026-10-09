@@ -12,13 +12,21 @@ import {
 } from '@/components/ui/alert-dialog'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
 import { logFrontendError } from '@/lib/log-api'
+import { chatsMatchAnnouncement } from '@/lib/shell-announcements'
 import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
+import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { ChatHistoryEntryRow, type ChatHistorySidebarEntry } from './ChatHistoryEntryRow'
 
 /** How many sidebar rows to render per lazy-load page. */
 const SIDEBAR_PAGE_SIZE = 50
+
+/**
+ * How long the result count must hold still before it is announced, so typing
+ * "auth" does not announce the count for "a", "au" and "aut" on the way.
+ */
+const SEARCH_COUNT_ANNOUNCE_DEBOUNCE_MS = 500
 
 type SidebarEntry = ChatHistorySidebarEntry
 
@@ -116,6 +124,18 @@ export function ChatHistoryTab({
         : mergedEntries.filter((e) => e.title.toLowerCase().includes(q))
     return base.slice().sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   }, [mergedEntries, query])
+
+  // Announce the settled result count to the mobile shell live region. Inert on
+  // the desktop sidebar, where no region is mounted. An empty query stays silent.
+  const trimmedQuery = query.trim()
+  const resultCount = filtered.length
+  useEffect(() => {
+    if (trimmedQuery.length === 0) return
+    const timer = setTimeout(() => {
+      useShellAnnouncerStore.getState().announce(chatsMatchAnnouncement(resultCount))
+    }, SEARCH_COUNT_ANNOUNCE_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [trimmedQuery, resultCount])
 
   // Reset the window when the query or active scope changes. `worktreePaths`
   // is a scoping input (worktree-inclusive reachability), so a reconciler

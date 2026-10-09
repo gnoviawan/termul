@@ -37,6 +37,7 @@ import {
 import { filesystemApi, persistenceApi } from '@/lib/api'
 import { sortDirectoryEntries } from '@/lib/filesystem-sort'
 import { logFrontendError } from '@/lib/log-api'
+import { recordSheetOpener, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
@@ -46,7 +47,17 @@ import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 interface MobileFileExplorerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * Called when a file opened successfully, just before the sheet closes. The
+   * shell uses it to point focus at the new surface's heading instead of the
+   * "Browse files" opener.
+   */
+  onFileOpened?: () => void
 }
+
+// Focus return for the two pre-existing Files sheets (see lib/sheet-focus-return).
+const filesSheetCloseAutoFocus = sheetCloseAutoFocus('files-sheet')
+const fileActionsSheetCloseAutoFocus = sheetCloseAutoFocus('file-actions-sheet')
 
 interface CreateState {
   type: 'file' | 'directory'
@@ -174,7 +185,8 @@ export function resolveBreadcrumbTarget(
  * open-file wiring. Native desktop keeps its existing tree explorer. */
 export function MobileFileExplorer({
   open,
-  onOpenChange
+  onOpenChange,
+  onFileOpened
 }: MobileFileExplorerProps): React.JSX.Element {
   const { rootPath, directoryContents, loadingDirs, rootLoadError } = useFileExplorer()
   const { toggleDirectory, refreshDirectory, selectPath } = useFileExplorerActions()
@@ -293,6 +305,7 @@ export function MobileFileExplorer({
     try {
       await useEditorStore.getState().openFile(entry.path)
       useWorkspaceStore.getState().addEditorTab(entry.path)
+      onFileOpened?.()
       onOpenChange(false)
     } catch (error) {
       toast.error('Failed to open file', {
@@ -475,6 +488,7 @@ export function MobileFileExplorer({
               aria-label={`Actions for ${entry.name}`}
               onClick={(event) => {
                 event.stopPropagation()
+                recordSheetOpener('file-actions-sheet', event.currentTarget)
                 setActionEntry(entry)
               }}
             >
@@ -520,6 +534,7 @@ export function MobileFileExplorer({
       <SheetContent
         side="right"
         className="flex w-[min(100vw,26rem)] flex-col gap-0 p-0 sm:max-w-md"
+        onCloseAutoFocus={filesSheetCloseAutoFocus}
       >
         <SheetHeader className="space-y-0 border-b border-border/60 p-2 text-left">
           <div className="flex min-w-0 items-center gap-1">
@@ -699,6 +714,7 @@ export function MobileFileExplorer({
             side="bottom"
             className="flex flex-col gap-0 p-2"
             aria-label={actionEntry ? `Actions for ${actionEntry.name}` : undefined}
+            onCloseAutoFocus={fileActionsSheetCloseAutoFocus}
           >
             {actionEntry && (
               <>

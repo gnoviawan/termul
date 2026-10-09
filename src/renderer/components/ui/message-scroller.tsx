@@ -151,14 +151,23 @@ function MessageScrollerViewport({
 
 function MessageScrollerContent({
   className,
+  live = true,
   ...props
-}: React.ComponentProps<'div'>): React.JSX.Element {
+}: React.ComponentProps<'div'> & {
+  /**
+   * Whether the log announces additions. The default keeps the polite log.
+   * `false` renders `aria-live="off"` with no `aria-relevant`: `role="log"`
+   * implies polite, so omitting the attribute would not silence it. The mobile
+   * shell turns it off because its own live region announces turn events, and
+   * a virtualised list re-announces history as rows mount while scrolling.
+   */
+  live?: boolean
+}): React.JSX.Element {
   return (
     <div
       data-slot="message-scroller-content"
       role="log"
-      aria-relevant="additions"
-      aria-live="polite"
+      {...(live ? { 'aria-relevant': 'additions', 'aria-live': 'polite' } : { 'aria-live': 'off' })}
       className={cn('flex min-h-full flex-col', className)}
       {...props}
     />

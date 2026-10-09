@@ -136,7 +136,7 @@ export function MobileShellHeader({
           ref={titleRef}
           id="mobile-shell-title"
           tabIndex={-1}
-          className="pointer-events-none max-w-full truncate text-sm font-medium text-foreground"
+          className="pointer-events-none max-w-full truncate text-sm font-medium text-foreground focus:outline-none"
         >
           {title}
         </h1>
