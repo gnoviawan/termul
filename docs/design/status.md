@@ -14,7 +14,17 @@ Status colour is a role, not a hue. Pair it with a label or icon — never colou
 
 SSH (`SSHStatusBadge.tsx`): disconnected → muted; connecting **and** reconnecting → `warning`; connected → `success`; failed → `destructive`. Do not split reconnecting onto `project-orange`.
 
-StatusBar fill: `bg-status-bar` with no project; `bg-status-bar-{color}` with a project. Never `bg-project-*` on the bar (those swatches are too light for `primary-foreground`). Ink on the bar is `text-primary-foreground`. Hover wash: `hover:bg-primary-foreground/10`. Git / exit / update / remote / connection lamps on the bar keep that ink and change icon, not card-status colour.
+StatusBar is quiet: `h-7 border-t border-border bg-card text-2xs text-muted-foreground`. Do not use `bg-status-bar*`, `bg-project-*` or `text-primary-foreground` on the bar. The project colour is in the 14px project glyph only.
+
+- Use the constants in `components/status-bar-hit.ts`. Do not copy the class strings.
+- Text items: `STATUS_BAR_ITEM_CLASS` (`h-6 rounded-md px-2`) with `STATUS_BAR_HOVER_CLASS` (`hover:bg-foreground/[0.03] hover:text-foreground`). An item with no action (the project label) has no hover and `cursor-default`.
+- Icon buttons and popover triggers: `STATUS_BAR_HIT_TARGET` (`size-6`, 44px box on coarse pointers) with the glyph in `STATUS_BAR_HIT_GLYPH`.
+- Open trigger (branch picker, popovers): `STATUS_BAR_OPEN_CLASS` (`bg-foreground/[0.06]`). Focus: neutral `ring-1 ring-ring`.
+- Git counts: `diff-modified` (pencil), `diff-added` (plus), muted (untracked). Numbers use `tabular-nums`.
+- Exit code: `Check` / `X` icon and "Exit N" in bar ink. No status colour.
+- Remote access on: `Monitor` icon in `text-connection`. Web connection lamp: status tone (`connection` / `warning` / `destructive`).
+- A chat that needs you: `rounded-md bg-warning/10 text-warning font-medium` pill with a 6px `bg-warning` dot.
+- No blue (`primary`) on the bar. The bar has no live-work signal.
 
 ```
 Is it git diff line paint?
