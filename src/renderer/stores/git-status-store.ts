@@ -10,6 +10,18 @@ import { useTerminalStore } from './terminal-store'
  * same file (porcelain `MM`) do not collide. */
 export const diffKey = (cwd: string, path: string, staged: boolean) => `${cwd}:${path}:${staged}`
 
+/**
+ * Changed files for `cwd`. A file that is both staged and unstaged has two
+ * status entries but counts once, so every Git badge shows the same number.
+ */
+export const selectChangedFileCount =
+  (cwd: string | null | undefined) =>
+  (state: Pick<GitStatusState, 'statuses'>): number => {
+    const statuses = cwd ? state.statuses[cwd] : undefined
+    if (!statuses || statuses.length === 0) return 0
+    return new Set(statuses.map((status) => status.path)).size
+  }
+
 export interface GitStatusState {
   // statuses[cwd] = GitStatusDetail[]
   statuses: Record<string, GitStatusDetail[]>

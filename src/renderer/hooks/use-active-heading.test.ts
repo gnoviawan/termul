@@ -90,8 +90,7 @@ describe('use-active-heading', () => {
     const { result } = renderHook(() =>
       useBlockNoteActiveHeading({
         headings: blockHeadings,
-        container,
-        isEnabled: true
+        container
       })
     )
 
@@ -109,5 +108,59 @@ describe('use-active-heading', () => {
     })
 
     expect(result.current).toBe('toc-heading-1')
+  })
+
+  it('keeps the observed BlockNote heading when the list changes but still holds it', () => {
+    const container = document.createElement('div')
+    let observerCallback: IntersectionObserverCallback | undefined
+
+    class MockIntersectionObserver {
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallback = callback
+      }
+
+      observe = vi.fn()
+      disconnect = vi.fn()
+      unobserve = vi.fn()
+      root = null
+      rootMargin = '0px'
+      thresholds = [0]
+      takeRecords = () => []
+    }
+
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
+
+    const first: TocHeading[] = [
+      { id: 'a', blockId: 'a', level: 1, text: 'A' },
+      { id: 'b', blockId: 'b', level: 2, text: 'B' }
+    ]
+    const target = document.createElement('div')
+    target.dataset.id = 'b'
+
+    const { result, rerender } = renderHook(
+      ({ list }) => useBlockNoteActiveHeading({ headings: list, container }),
+      { initialProps: { list: first } }
+    )
+    expect(result.current).toBe('a')
+
+    act(() => {
+      observerCallback?.(
+        [
+          {
+            target,
+            isIntersecting: true,
+            boundingClientRect: { top: 0 }
+          } as unknown as IntersectionObserverEntry
+        ],
+        {} as IntersectionObserver
+      )
+    })
+    expect(result.current).toBe('b')
+
+    rerender({ list: [...first, { id: 'c', blockId: 'c', level: 2, text: 'C' }] })
+    expect(result.current).toBe('b')
+
+    rerender({ list: [first[0]] })
+    expect(result.current).toBe('a')
   })
 })

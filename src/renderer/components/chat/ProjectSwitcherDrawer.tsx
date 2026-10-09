@@ -187,8 +187,8 @@ export function ProjectSwitcherDrawer({
                         void handleSwitch(project)
                       }}
                       className={[
-                        'flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm transition-colors',
-                        isActive ? 'bg-secondary' : 'hover:bg-sidebar-accent/50',
+                        'flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors duration-150 ease-out',
+                        isActive ? 'keycap text-foreground' : 'hover:bg-foreground/[0.03]',
                         isArchived ? 'text-disabled-foreground' : '',
                         switchBlocked ? 'cursor-not-allowed' : 'cursor-pointer'
                       ].join(' ')}
@@ -257,7 +257,7 @@ export function ProjectSwitcherDrawer({
                             ? 'cursor-wait'
                             : defaultingId !== null
                               ? 'cursor-not-allowed text-disabled-foreground'
-                              : 'hover:bg-sidebar-accent/50 hover:text-foreground'
+                              : 'hover:bg-foreground/[0.03] hover:text-foreground'
                         ].join(' ')}
                       >
                         {isSettingDefault ? <Spinner size={14} decorative /> : <Home size={14} />}

@@ -1,5 +1,6 @@
 import { GitBranch } from '@/components/icons'
-import { type GitStatusState, useGitStatusStore } from '@/stores/git-status-store'
+import { CountBadge } from '@/components/ui/count-badge'
+import { selectChangedFileCount, useGitStatusStore } from '@/stores/git-status-store'
 import { TabContextMenu } from '../tab-context-menu'
 import { TabChrome } from './tab-chrome'
 import type { TabInlineProps } from './types'
@@ -22,9 +23,7 @@ export function GitTabInline({
   onDrop,
   bulkMenu
 }: GitTabInlineProps): React.JSX.Element {
-  const totalChanges = useGitStatusStore(
-    (state: GitStatusState) => (state.statuses[tab.cwd] || []).length
-  )
+  const totalChanges = useGitStatusStore(selectChangedFileCount(tab.cwd))
 
   return (
     <TabContextMenu kind="git" onClose={onClose} {...bulkMenu}>
@@ -43,9 +42,7 @@ export function GitTabInline({
         label="Git Changes"
         after={
           totalChanges > 0 ? (
-            <span className="flex h-4 min-w-[14px] shrink-0 items-center justify-center rounded-full bg-foreground/10 px-1 text-3xs font-semibold leading-none tabular-nums text-muted-foreground">
-              {totalChanges}
-            </span>
+            <CountBadge count={totalChanges} className="h-4 min-w-[14px] shrink-0 text-3xs" />
           ) : undefined
         }
         pinClose={isActive}

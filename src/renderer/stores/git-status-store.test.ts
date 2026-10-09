@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as gitApiModule from '@/lib/git-api'
 import { resetProjectStore, resetTerminalStore } from '@/lib/test-utils/store'
 import { mockTerminal } from '@/lib/test-utils/terminal'
-import { diffKey, useGitStatusStore } from './git-status-store'
+import { diffKey, selectChangedFileCount, useGitStatusStore } from './git-status-store'
 import { useProjectStore } from './project-store'
 import { useTerminalStore } from './terminal-store'
 
@@ -351,5 +351,19 @@ describe('git-status-store branch sync cross-store', () => {
     await useGitStatusStore.getState().branchSwitch('/Users/Test/Project', 'new-branch-exact')
     expect(useProjectStore.getState().projects[0].gitBranch).toBe('new-branch-exact')
     expect(useTerminalStore.getState().terminals[0].gitBranch).toBe('new-branch-exact')
+  })
+})
+
+describe('selectChangedFileCount', () => {
+  it('counts a staged + unstaged file once', () => {
+    const repo: GitStatusDetail[] = [
+      { path: 'a.ts', status: 'modified', staged: true },
+      { path: 'a.ts', status: 'modified', staged: false },
+      { path: 'b.ts', status: 'untracked', staged: false }
+    ]
+    const statuses = { '/repo': repo }
+    expect(selectChangedFileCount('/repo')({ statuses })).toBe(2)
+    expect(selectChangedFileCount('/other')({ statuses })).toBe(0)
+    expect(selectChangedFileCount(null)({ statuses })).toBe(0)
   })
 })

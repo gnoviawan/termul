@@ -116,7 +116,7 @@ export function TitleBarShortcutsPopover({
           setOpen(!isOpen)
         }}
       >
-        <Keyboard size={16} className={isOpen ? 'text-foreground' : 'text-muted-foreground'} />
+        <Keyboard size={16} />
       </button>
 
       <AnimatePresence>

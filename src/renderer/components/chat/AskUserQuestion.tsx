@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Check } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { pressedToggleClass } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import { type PendingQuestion, useAcpStore } from '@/stores/acp-store'
 import { CHAT_GUTTER_X } from './chat-layout'
@@ -94,16 +95,14 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
                 onClick={() => toggle(option.value)}
                 className={cn(
                   'flex min-h-11 items-start gap-2 rounded-lg border px-3 py-2.5 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                  isSelected
-                    ? 'border-foreground bg-secondary'
-                    : 'border-border hover:bg-secondary/60'
+                  pressedToggleClass(isSelected)
                 )}
               >
                 <span
                   aria-hidden
                   className={cn(
                     'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                    isSelected ? 'border-foreground bg-secondary text-foreground' : 'border-border'
+                    isSelected ? 'border-border bg-foreground/10 text-foreground' : 'border-border'
                   )}
                 >
                   {isSelected && <Check className="h-3 w-3" />}
