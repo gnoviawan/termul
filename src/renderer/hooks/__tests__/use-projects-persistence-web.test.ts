@@ -4,12 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
 import { useProjectsLoader } from '../use-projects-persistence'
 
-const { mockList, mockOnEvent, mockPersistenceRead, mockPersistenceWrite } = vi.hoisted(() => ({
-  mockList: vi.fn(),
-  mockOnEvent: vi.fn(),
-  mockPersistenceRead: vi.fn(),
-  mockPersistenceWrite: vi.fn()
-}))
+const { mockList, mockOnEvent, mockPersistenceRead, mockPersistenceWrite, mockReconcile } =
+  vi.hoisted(() => ({
+    mockList: vi.fn(),
+    mockReconcile: vi.fn(),
+    mockOnEvent: vi.fn(),
+    mockPersistenceRead: vi.fn(),
+    mockPersistenceWrite: vi.fn()
+  }))
 
 // Web/remote mode: the loader must hit `GET /projects` (the in-memory registry
 // mirror), NOT the stubbed plugin-store (which returns nothing in a browser).
@@ -17,6 +19,7 @@ vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => false }))
 // #854: the loader waits for the web auth gate before fetching the mirror.
 // These suites exercise the already-authed path — resolve the gate as ok.
 vi.mock('@/lib/web-auth-gate', () => ({ useWebAuthGateOk: () => true }))
+vi.mock('@/lib/worktree-reconciler', () => ({ reconcileProjectWorktrees: mockReconcile }))
 vi.mock('@/lib/web-server-api', () => ({ webServerProjects: { list: mockList } }))
 vi.mock('@/lib/acp-transport', () => ({
   // The loader registers a `projects_changed` listener via the transport.
@@ -63,6 +66,7 @@ describe('useProjectsLoader (web/remote mode)', () => {
       isWorktreeOperationLocked: false
     })
     mockOnEvent.mockReturnValue(() => {})
+    mockReconcile.mockResolvedValue('unchanged')
   })
 
   it('mirrors the project list from GET /projects instead of the stubbed store', async () => {
@@ -233,6 +237,46 @@ describe('useProjectsLoader (web/remote mode)', () => {
     const projects = useProjectStore.getState().projects
     expect(projects.find((p) => p.id === 'p2')?.isGitRepo).toBe(true)
     expect(projects.find((p) => p.id === 'p1')?.isGitRepo).toBeUndefined()
+  })
+
+  it('reconciles worktrees for every project with a path after the initial load', async () => {
+    mockList.mockResolvedValue({
+      success: true,
+      data: {
+        ...payload,
+        projects: [...payload.projects, { ...payload.projects[0]!, id: 'p3', path: null }]
+      }
+    })
+
+    renderHook(() => useProjectsLoader())
+
+    await waitFor(() => expect(mockReconcile).toHaveBeenCalledTimes(2))
+    expect(mockReconcile).toHaveBeenCalledWith('p1')
+    expect(mockReconcile).toHaveBeenCalledWith('p2')
+  })
+
+  it('PRESERVES worktrees and activeWorktreeId across a projects_changed refetch', async () => {
+    mockList
+      .mockResolvedValueOnce({ success: true, data: payload })
+      .mockResolvedValueOnce({ success: true, data: payload })
+
+    renderHook(() => useProjectsLoader())
+    await waitFor(() => expect(useProjectStore.getState().projects).toHaveLength(2))
+
+    const worktrees = [
+      { id: 'wt-1', name: 'a', branch: 'a', path: '/a/wt', createdAt: '2026-01-01T00:00:00.000Z' }
+    ]
+    useProjectStore.getState().updateProject('p1', { worktrees, activeWorktreeId: 'wt-1' })
+
+    const listener = mockOnEvent.mock.calls[0]?.[1] as (() => void) | undefined
+    listener?.()
+
+    await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2))
+    await waitFor(() => {
+      const p1 = useProjectStore.getState().projects.find((p) => p.id === 'p1')
+      expect(p1?.worktrees).toEqual(worktrees)
+      expect(p1?.activeWorktreeId).toBe('wt-1')
+    })
   })
 
   // ----- Issue #855: active project restored after reload -------------------

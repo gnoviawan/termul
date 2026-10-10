@@ -22,6 +22,11 @@ export interface Worktree {
   branch: string
   path: string
   createdAt: string // ISO timestamp
+  /**
+   * Web-only, derived by the worktree reconciler: the worktree path lies outside
+   * the project folder. Never persisted (`toPersistedWorktree` drops it).
+   */
+  outsideProjectRoot?: boolean
 }
 
 export interface ProjectGroup {

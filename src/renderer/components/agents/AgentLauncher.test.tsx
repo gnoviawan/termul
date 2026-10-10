@@ -475,14 +475,23 @@ const {
   mockWorktreeCreate,
   mockWorktreeCopyInclude,
   mockWorktreeResolveBaseBranch,
-  mockAddWorktree,
+  mockReconcileWorktrees,
+  mockStoredWorktrees,
   mockSetActiveWorktree
 } = vi.hoisted(() => ({
   mockWorktreeCreate: vi.fn(),
   mockWorktreeCopyInclude: vi.fn(),
   mockWorktreeResolveBaseBranch: vi.fn(),
-  mockAddWorktree: vi.fn(),
+  // Stands in for the single-flight reconciler (the only `project.worktrees`
+  // writer): tests make it "store" worktrees by pushing into the project's list.
+  mockReconcileWorktrees: vi.fn(),
+  mockStoredWorktrees: [] as { id: string; name: string; branch: string; path: string }[],
   mockSetActiveWorktree: vi.fn()
+}))
+
+vi.mock('@/lib/worktree-reconciler', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/worktree-reconciler')>()),
+  reconcileProjectWorktrees: mockReconcileWorktrees
 }))
 
 vi.mock('@/lib/worktree-api', () => ({
@@ -506,11 +515,16 @@ vi.mock('@/lib/worktree-api', () => ({
 }))
 
 vi.mock('@/stores/project-store', () => {
-  const baseProject = { id: 'p1', name: 'P', path: '/work', defaultShell: undefined }
+  const baseProject = {
+    id: 'p1',
+    name: 'P',
+    path: '/work',
+    defaultShell: undefined,
+    worktrees: mockStoredWorktrees
+  }
   const state = {
     activeProjectId: 'p1',
     projects: [baseProject],
-    addWorktree: mockAddWorktree,
     setActiveWorktree: mockSetActiveWorktree
   }
   const withOverride = () => ({
@@ -2604,7 +2618,17 @@ describe('AgentLauncher worktree isolation', () => {
       data: { ran: 1, copied: 1, skipped: [] }
     })
     mockWorktreeResolveBaseBranch.mockReset()
-    mockAddWorktree.mockReset()
+    mockStoredWorktrees.length = 0
+    mockReconcileWorktrees.mockReset()
+    mockReconcileWorktrees.mockImplementation(async () => {
+      mockStoredWorktrees.push({
+        id: 'wt-stored-1',
+        name: 'abcd1234',
+        branch: 'chat/abcd1234',
+        path: '/work/.termul/worktrees/abcd1234'
+      })
+      return 'updated'
+    })
     mockSetActiveWorktree.mockReset()
     // "Clean repo on feat/x, base auto" — no origin/HEAD, so the fallback
     // chain resolves to the current branch (feat/x).
@@ -2822,7 +2846,7 @@ describe('AgentLauncher worktree isolation', () => {
   // the just-created worktree in the project store and activate it so the
   // sidebar scopes to it immediately (no 60s reconciler wait) and the worktree
   // is a first-class project citizen across restarts.
-  it('registers and activates the created worktree in the project store on launch', async () => {
+  it('registers the created worktree via the reconciler and activates the stored id on launch', async () => {
     renderLauncher()
     await chooseWorktreeBaseBranch('feat/x')
 
@@ -2830,22 +2854,16 @@ describe('AgentLauncher worktree isolation', () => {
     fireEvent.click(screen.getByLabelText('Start agent chat'))
 
     await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(mockAddWorktree).toHaveBeenCalledTimes(1))
-    const [projectId, worktree] = mockAddWorktree.mock.calls[0] as [
-      string,
-      { id: string; path: string; branch: string; name: string }
-    ]
-    expect(projectId).toBe('p1')
-    expect(worktree.path).toBe('/work/.termul/worktrees/abcd1234')
-    expect(worktree.branch).toMatch(/^chat\/[a-f0-9]+$/)
-    expect(worktree.name).toMatch(/^[a-f0-9]{8}$/)
-    // The same id is activated so the sidebar scopes to the new worktree.
+    // Awaited reconcile for the launching project (no direct addWorktree).
+    await waitFor(() => expect(mockReconcileWorktrees).toHaveBeenCalledWith('p1'))
+    // The id the reconciler stored for the created path is activated so the
+    // sidebar scopes to the new worktree.
     await waitFor(() => expect(mockSetActiveWorktree).toHaveBeenCalledTimes(1))
-    expect(mockSetActiveWorktree).toHaveBeenCalledWith('p1', worktree.id)
+    expect(mockSetActiveWorktree).toHaveBeenCalledWith('p1', 'wt-stored-1')
   })
 
   it('still opens the chat when worktree registration throws (best-effort)', async () => {
-    mockAddWorktree.mockImplementation(() => {
+    mockReconcileWorktrees.mockImplementation(async () => {
       throw new Error('store unavailable')
     })
     renderLauncher()
@@ -2856,6 +2874,19 @@ describe('AgentLauncher worktree isolation', () => {
 
     // The best-effort step threw and was swallowed; the chat still opens.
     await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    expect(mockSetActiveWorktree).not.toHaveBeenCalled()
+  })
+
+  it('still opens the chat when the reconciler does not store the created worktree', async () => {
+    mockReconcileWorktrees.mockImplementation(async () => 'failed')
+    renderLauncher()
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('not listed')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockReconcileWorktrees).toHaveBeenCalledWith('p1'))
     await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
     expect(mockSetActiveWorktree).not.toHaveBeenCalled()
   })
@@ -2896,6 +2927,15 @@ describe('AgentLauncher worktree isolation', () => {
           headCommit: ''
         }
       })
+    mockReconcileWorktrees.mockImplementation(async () => {
+      mockStoredWorktrees.push({
+        id: 'wt-retry',
+        name: 'abcd1234-2',
+        branch: 'chat/abcd1234-2',
+        path: '/work/.termul/worktrees/abcd1234-2'
+      })
+      return 'updated'
+    })
     renderLauncher()
     await chooseWorktreeBaseBranch('feat/x')
 
@@ -2914,21 +2954,9 @@ describe('AgentLauncher worktree isolation', () => {
     }
     expect(finalizeArgs.worktreeBranch).toBe(`${firstBranch}-2`)
 
-    // The project-store entry must reflect the RETRY worktree (name/branch
-    // matching the retry create call's inputs, not the stale original chatId),
-    // so the registered `name` matches the git worktree on disk.
-    await waitFor(() => expect(mockAddWorktree).toHaveBeenCalledTimes(1))
-    const [, registered] = mockAddWorktree.mock.calls[0] as [
-      string,
-      { name: string; branch: string; path: string }
-    ]
-    const retryCreate = mockWorktreeCreate.mock.calls[1][0] as {
-      name: string
-      branch: string
-    }
-    expect(registered.name).toBe(retryCreate.name)
-    expect(registered.branch).toBe(retryCreate.branch)
-    expect(registered.path).toBe('/work/.termul/worktrees/abcd1234-2')
+    // The retry's path (not the stale original) is what gets looked up in the
+    // store after the reconcile, so the activated worktree is the retry one.
+    await waitFor(() => expect(mockSetActiveWorktree).toHaveBeenCalledWith('p1', 'wt-retry'))
   })
 
   // Non-collision git failures (WORKTREE_CREATE_FAILED covers GitError/IoError
@@ -3426,7 +3454,7 @@ describe('AgentLauncher per-agent update badge', () => {
       'session-1',
       'pane1'
     )
-    expect(mockAddWorktree).toHaveBeenCalled()
+    expect(mockReconcileWorktrees).toHaveBeenCalledWith('p1')
   })
 
   it('marks outdated agents in the agent picker so the entrance shows drift', async () => {

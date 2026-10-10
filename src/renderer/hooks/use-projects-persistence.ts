@@ -5,16 +5,15 @@ import {
   persistenceApi,
   secureStorageApi,
   syncProjects,
-  terminalApi,
-  worktreeApi
+  terminalApi
 } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
-import { randomUUID } from '@/lib/uuid'
 import { useWebAuthGateOk } from '@/lib/web-auth-gate'
 import { webServerProjects } from '@/lib/web-server-api'
 import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
+import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
@@ -306,99 +305,6 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
 }
 
 /**
- * Reconcile worktrees for a single project against `git worktree list --porcelain`.
- * Adds worktrees that git knows about but we don't; removes stale entries.
- * All actions are logged with [WorktreeReconciler] prefix for debugging.
- */
-async function reconcileProjectWorktrees(project: Project): Promise<void> {
-  if (!project.path) return
-
-  // Reconciliation is best-effort — `reconcile()` callers `void` it from
-  // effects, so a failed/undefined list result must not escape as an
-  // unhandled rejection.
-  // `list` may return undefined when the facade is not ready. Wrap it so
-  // that value does not throw before `.catch` can run.
-  const result = await Promise.resolve(worktreeApi.list(project.path)).catch(() => undefined)
-  if (!result?.success) {
-    // Not a git repo or git not available
-    if (result?.code === 'NOT_A_GIT_REPO' || result?.code === 'GIT_NOT_FOUND') {
-      useProjectStore.getState().updateProject(project.id, { isGitRepo: false })
-      console.debug(`[WorktreeReconciler] Not a git repo or git not found: ${project.name}`)
-    }
-    return
-  }
-
-  // Mark project as a git repo
-  useProjectStore.getState().updateProject(project.id, { isGitRepo: true })
-
-  const gitWorktrees = result.data
-  if (!gitWorktrees) return
-
-  const storedWorktrees = project.worktrees ?? []
-  const storedByPath = new Map(storedWorktrees.map((w) => [w.path, w]))
-  const gitByPath = new Map(gitWorktrees.map((w) => [w.path, w]))
-
-  let changed = false
-  const updatedWorktrees = [...storedWorktrees]
-
-  // Git has worktree not in store → add it
-  for (const gitWt of gitWorktrees) {
-    if (!storedByPath.has(gitWt.path)) {
-      const isTermulManaged = gitWt.path.includes('.termul/worktrees/')
-      updatedWorktrees.push({
-        id: randomUUID(),
-        name: gitWt.name,
-        branch: gitWt.branch,
-        path: gitWt.path,
-        createdAt: new Date().toISOString()
-      })
-      console.debug(
-        `[WorktreeReconciler] Added worktree: ${gitWt.name} at ${gitWt.path} (managed: ${isTermulManaged})`
-      )
-      changed = true
-    }
-  }
-
-  // Store has worktree git doesn't show → remove stale entry
-  // But only remove if we can verify (the path no longer exists or git doesn't list it)
-  const staleIds: string[] = []
-  for (const storedWt of storedWorktrees) {
-    if (!gitByPath.has(storedWt.path)) {
-      staleIds.push(storedWt.id)
-      console.debug(
-        `[WorktreeReconciler] Removing stale worktree: ${storedWt.name} (not in git worktree list)`
-      )
-      changed = true
-    }
-  }
-
-  if (changed) {
-    const finalList = updatedWorktrees.filter((w) => !staleIds.includes(w.id))
-
-    // Reconcile activeWorktreeId: if the active worktree was pruned, reset it
-    const currentProject = useProjectStore.getState().projects.find((p) => p.id === project.id)
-    const activeId = currentProject?.activeWorktreeId
-    const newActiveId = activeId && staleIds.includes(activeId) ? null : activeId
-
-    useProjectStore.getState().updateProject(project.id, {
-      worktrees: finalList,
-      activeWorktreeId: newActiveId
-    })
-  }
-}
-
-/**
- * Force-reconcile worktrees for a specific project after create/remove operations.
- * Always re-lists from git to ensure consistency.
- */
-export async function reconcileProjectWorktreesNow(projectId: string): Promise<void> {
-  const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-  if (project) {
-    await reconcileProjectWorktrees(project)
-  }
-}
-
-/**
  * Build the redacted `ProjectSummary[]` wire shape for the web/remote mirror
  * (Epic-4 bridge) from the renderer `Project` store. No env-var values cross
  * the wire — redact-by-omission. Shared by the auto-save live-push path + the
@@ -528,13 +434,20 @@ export function useProjectsLoader(): void {
             .projects.filter((p) => p.isGitRepo)
             .map((p) => [p.id, p.isGitRepo] as const)
         )
+        // Worktrees (and the active pick) are reconciler-owned, also not on the wire.
+        const prevById = new Map(useProjectStore.getState().projects.map((p) => [p.id, p] as const))
         const projects = result.data.projects.map((summary) => {
           const project = summaryToProject(summary)
           const icon = iconById.get(project.id)
           const isGitRepo = isGitRepoById.get(project.id)
-          return icon || isGitRepo
-            ? { ...project, ...(icon ? { icon } : {}), ...(isGitRepo ? { isGitRepo } : {}) }
-            : project
+          const prev = prevById.get(project.id)
+          return {
+            ...project,
+            ...(icon ? { icon } : {}),
+            ...(isGitRepo ? { isGitRepo } : {}),
+            ...(prev?.worktrees ? { worktrees: prev.worktrees } : {}),
+            ...(prev?.activeWorktreeId ? { activeWorktreeId: prev.activeWorktreeId } : {})
+          }
         })
         const defaultId = result.data.defaultProjectId
         // P2: validate the host default references a project still in the
@@ -557,6 +470,9 @@ export function useProjectsLoader(): void {
             restored = persisted.data
           }
           setProjects(projects, restored ?? validDefault)
+          for (const project of projects) {
+            if (project.path) void reconcileProjectWorktrees(project.id)
+          }
         } else {
           // Subsequent refetch: preserve the client's own activeProjectId.
           // If it's no longer in the list (host deleted it), fall back to the
@@ -644,13 +560,8 @@ export function useProjectsLoader(): void {
 
         setProjects(projects, validActiveId, result.data.groups as ProjectGroup[])
 
-        // Reconcile all projects against git in parallel after loading
         for (const project of projects) {
-          if (project.path) {
-            reconcileProjectWorktrees(project).catch((err) =>
-              console.debug('[WorktreeReconciler] Reconciliation error:', err)
-            )
-          }
+          if (project.path) void reconcileProjectWorktrees(project.id)
         }
       } else {
         // No saved projects - start with empty state

@@ -28,7 +28,9 @@ export interface ProjectState {
   restoreProject: (id: string) => void
   reorderProjects: (activeProjectIds: string[]) => void
   setProjects: (projects: Project[], activeProjectId?: string, groups?: ProjectGroup[]) => void
+  /** Reconciler only (AD-3): other writers go through `reconcileProjectWorktrees`. */
   addWorktree: (projectId: string, worktree: Worktree) => void
+  /** Reconciler only (AD-3): other writers go through `reconcileProjectWorktrees`. */
   removeWorktree: (projectId: string, worktreeId: string) => void
   setActiveWorktree: (projectId: string, worktreeId: string | null) => void
   setWorktreeOperationLock: (locked: boolean) => void
