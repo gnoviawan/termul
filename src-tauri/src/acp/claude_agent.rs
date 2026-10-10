@@ -530,15 +530,11 @@ impl ClaudeAgentService {
                         return Err(error);
                     }
                 };
-                // Re-check before writing: a concurrent `set_auth_mode` may
-                // have created the file since the caller observed it absent —
-                // the file is authoritative once it exists.
-                if let Ok(contents) = std::fs::read_to_string(path) {
-                    if let Ok(mode) = parse_auth_mode(contents.trim()) {
-                        return Ok(mode);
-                    }
-                }
-                match atomic_file::replace(path, value.as_bytes()) {
+                // Migrate create-if-absent: a concurrent `set_auth_mode` may
+                // have written the file since the caller observed it absent.
+                // The file is authoritative once it exists, so the migration
+                // write must fail rather than clobber it.
+                match atomic_file::create_new(path, value.as_bytes()) {
                     Ok(()) => {
                         log::info!(
                             "[acp-claude] auth mode migrated from OS keychain to {}",
@@ -551,6 +547,11 @@ impl ClaudeAgentService {
                                 "[acp-claude] legacy auth mode keychain cleanup failed: {error}"
                             );
                         }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // A concurrent writer won — resolve through the now-
+                        // existing file (parse, or its invalid-content error).
+                        return self.auth_mode();
                     }
                     Err(error) => log::warn!(
                         "[acp-claude] auth mode migration write failed path={} error={error}",

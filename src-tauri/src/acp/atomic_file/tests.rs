@@ -42,6 +42,20 @@ fn precommit_failure_preserves_old_target() {
 }
 
 #[test]
+fn create_new_writes_only_when_absent() {
+    let dir = temp_dir("create-new");
+    let target = dir.join("state.json");
+    create_new(&target, b"first").unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"first");
+    let error = create_new(&target, b"second").unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(&target).unwrap(), b"first");
+    let entries: Vec<_> = fs::read_dir(&dir).unwrap().flatten().collect();
+    assert_eq!(entries.len(), 1);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn corrupt_backup_names_do_not_collide() {
     let dir = temp_dir("backup");
     let target = dir.join("state.json");
