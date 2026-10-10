@@ -70,7 +70,11 @@ pub fn run(args: &[String]) -> ExitCode {
                     );
                     println!(
                         "API key stored in OS keychain: {}",
-                        yes_no(status.api_key_configured)
+                        if status.keychain_available {
+                            yes_no(status.api_key_configured)
+                        } else {
+                            "unavailable (OS keychain not reachable)"
+                        }
                     );
                     ExitCode::SUCCESS
                 }

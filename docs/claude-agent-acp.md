@@ -28,9 +28,14 @@ installs the exact catalog version into its managed host cache.
 
 The API-key method is available on headless hosts only (see below).
 
-Claude Code login is the default. API keys and the selected auth mode are
-host-wide. API keys stay in the OS keychain; Termul never displays a saved key
-or sends it to a browser client.
+Claude Code login is the default. API keys are host-wide; the selected auth
+mode is per state directory. API keys stay in the OS keychain; Termul never
+displays a saved key or sends it to a browser client. The selected auth mode
+is not a secret: it is stored as a plain file at `<state
+dir>/claude-auth-mode` (beside `acp-registry-binaries` — the app-data dir on
+desktop), so `claude-code` mode keeps working on hosts with no OS keychain.
+Setting the mode writes this file and removes the legacy
+`acp.claude-agent.auth-mode` keychain entry that older versions used.
 
 When host status confirms a Claude Code login, Termul does not also invoke the
 ACP adapter's separate sign-in methods before creating a session. This confirms
@@ -71,6 +76,8 @@ termul-server claude api-key delete
 ```
 
 For an explicit state directory, pass `--state-dir PATH` after `claude`.
+Auth-mode changes are written to `PATH/claude-auth-mode`; the API key stays
+in the OS keychain.
 
 ## Remote browser clients
 
@@ -86,8 +93,11 @@ Claude credentials.
   `claude auth login`.
 - **API-key mode selected but no key is saved:** run the headless
   `api-key set` command.
-- **OS keychain unavailable:** Termul fails closed. Restore keychain access
-  before selecting API-key mode or launching in that mode.
+- **OS keychain unavailable:** `claude-code` mode still launches and
+  `termul-server claude auth status` still reports (keychain-derived fields
+  show as unavailable). API-key flows stay fail-closed: `api-key set`,
+  `api-key delete`, and launching in `api-key` mode all require a working
+  keychain.
 
 `Incoming transport closed` means the ACP process closed its stdio connection
 during initialization. It does not, by itself, prove which prerequisite or
