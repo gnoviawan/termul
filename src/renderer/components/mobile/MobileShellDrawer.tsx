@@ -1,7 +1,8 @@
-import { type RefObject, useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
+import { findVisibleQuestionFocusTarget } from '@/components/chat/use-approval-dock'
 import {
   Camera,
   ChevronDown,
@@ -22,26 +23,51 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { useAgentChatUnreadTracker } from '@/hooks/use-agent-chat-unread-tracker'
+import {
+  describeIsolationDetail,
+  useChatIsolationContext
+} from '@/hooks/use-chat-isolation-context'
+import { returnFocusAfterConfirm } from '@/lib/confirm-focus-return'
+import {
+  holdSheetReturnTargets,
+  setSheetFocusDestination,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
-import {
-  getActiveWorktreeFromStore,
-  useActiveProject,
-  useProjectStore
-} from '@/stores/project-store'
+import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { MobileDrawerOpenSection } from './MobileDrawerOpenSection'
 
-/**
- * How the drawer closed, which decides where focus goes:
- *  - `dismiss`: Esc, scrim, the built-in close or back: return to the opener.
- *  - `navigate`: a row took the user somewhere: the destination title, else the opener.
- *  - `handoff`: another overlay is opening: leave focus there, else the opener.
- */
-type CloseIntent = 'dismiss' | 'navigate' | 'handoff'
-
 /** Id of the shell header's `h1`: where a navigation hands focus. Without it the opener wins. */
 const SHELL_TITLE_ID = 'mobile-shell-title'
+
+/** Registry id: the overlay id the shell registers the drawer under, and its focus-return key. */
+const DRAWER_FOCUS_ID = 'mobile-drawer'
+
+/**
+ * Focus return when the drawer closes (`lib/sheet-focus-return.ts`). The shell
+ * records the control that opened it (☰ or the attention pill, with ☰ as the
+ * fallback); a navigation close sets a destination instead.
+ */
+const drawerCloseAutoFocus = sheetCloseAutoFocus(DRAWER_FOCUS_ID)
+
+/**
+ * Where focus goes after a navigation close, resolved once the drawer has
+ * closed: the open question's first option in the chat now on screen (the
+ * destination chat only becomes visible in the commit that closes the drawer),
+ * else the shell title. Never an editor or xterm, so the keyboard stays down.
+ * A question control that refuses focus (a disabled or inert option) falls
+ * through to the title, not on to the opener.
+ */
+const resolveNavigationFocus = (): HTMLElement | null => {
+  const question = findVisibleQuestionFocusTarget()
+  if (question) {
+    question.focus()
+    if (document.activeElement === question) return question
+  }
+  return document.getElementById(SHELL_TITLE_ID)
+}
 
 interface MobileShellDrawerProps {
   open: boolean
@@ -54,25 +80,24 @@ interface MobileShellDrawerProps {
   canNewChat: boolean
   onNewChat: () => void
   onNewTerminal?: () => void
-  onCloseTerminal?: (terminalId: string, tabId: string) => void
+  /** Returns `true` only when the close opened the confirm (the drawer then hands off to it). */
+  onCloseTerminal?: (terminalId: string, tabId: string) => boolean
   onRenameTerminal?: (terminalId: string, name: string) => void
-  onCloseEditorTab?: (filePath: string) => void
+  /** Returns `true` only when the close opened the dirty-file confirm. */
+  onCloseEditorTab?: (filePath: string) => boolean
   /** Opens a git history tab in the active pane (desktop entry mirrors this). */
   onOpenGitHistory?: () => void
   /** Opens the project sheet (web only). */
   onOpenProjects: () => void
-  /** The element that opened the drawer; focus returns here on dismiss. */
-  returnFocusRef: RefObject<HTMLElement | null>
-  /** The shell's ☰ button: the fallback when the recorded opener is gone. */
-  menuButtonRef: RefObject<HTMLElement | null>
 }
 
 /**
- * The project row's two lines. Re-applies the `ChatInputBar` rules locally:
- * in a chat the session's own worktree/branch win over its project's
- * `gitBranch`; outside a chat the active worktree and project apply. A
- * detached HEAD (git project, no branch, no worktree) reads "Detached HEAD";
- * a non-git project shows its name only.
+ * The project row's two lines. The isolation detail comes from
+ * `useChatIsolationContext` (the rules the composer and the header subtitle
+ * use): in a chat the session's own project, worktree and branch win; outside a
+ * chat the active project and its active worktree apply. A detached HEAD reads
+ * "Detached HEAD", a worktree chat with no recorded branch reads "Worktree",
+ * and a non-git project shows its name only.
  */
 function DrawerProjectRow({
   activeSessionId,
@@ -82,30 +107,24 @@ function DrawerProjectRow({
   onOpen: () => void
 }): React.JSX.Element {
   const activeProject = useActiveProject()
-  const session = useAcpStore((s) => (activeSessionId ? s.sessions?.[activeSessionId] : undefined))
-  const sessionProject = useProjectStore((s) =>
-    session ? s.projects.find((p) => p.id === session.projectId) : undefined
+  const sessionProjectId = useAcpStore((s) =>
+    activeSessionId ? s.sessions?.[activeSessionId]?.projectId : undefined
   )
-
-  let isWorktree = false
-  let branch: string | null = null
-  let isGitRepo = false
-  if (session) {
-    const project = sessionProject ?? activeProject
-    isWorktree = Boolean(session.worktreePath)
-    branch = session.worktreeBranch ?? project?.gitBranch ?? null
-    isGitRepo = project?.isGitRepo ?? false
-  } else if (activeProject) {
-    const worktree = getActiveWorktreeFromStore(activeProject.id)
-    isWorktree = Boolean(worktree)
-    branch = worktree?.branch ?? activeProject.gitBranch ?? null
-    isGitRepo = activeProject.isGitRepo ?? false
-  }
-  const isDetachedHead = !branch && !isWorktree && isGitRepo
-  const detail =
-    activeProject && (branch || isDetachedHead)
-      ? `${branch ?? 'Detached HEAD'} · ${isWorktree ? 'Worktree' : 'Local'}`
-      : null
+  const sessionWorktreePath = useAcpStore((s) =>
+    activeSessionId ? s.sessions?.[activeSessionId]?.worktreePath : undefined
+  )
+  const sessionWorktreeBranch = useAcpStore((s) =>
+    activeSessionId ? s.sessions?.[activeSessionId]?.worktreeBranch : undefined
+  )
+  const chatSessionLoaded = Boolean(sessionProjectId)
+  const activeWorktree =
+    !chatSessionLoaded && activeProject ? getActiveWorktreeFromStore(activeProject.id) : undefined
+  const isolation = useChatIsolationContext({
+    projectId: chatSessionLoaded ? sessionProjectId : activeProject?.id,
+    worktreePath: chatSessionLoaded ? sessionWorktreePath : activeWorktree?.path,
+    worktreeBranch: chatSessionLoaded ? sessionWorktreeBranch : activeWorktree?.branch
+  })
+  const detail = activeProject ? describeIsolationDetail(isolation) : null
 
   return (
     <Button
@@ -140,7 +159,7 @@ function DrawerProjectRow({
  * search, New chat, then a scrolling body (Open: chats with live status,
  * Terminals, Tabs; History) and a pinned footer (Settings, Snapshots, Git
  * history, connection status). It owns where focus lands when it opens and
- * closes; the shell owns the open state and the opener bookkeeping.
+ * closes; the shell owns the open state and records the opener.
  */
 export function MobileShellDrawer({
   open,
@@ -154,9 +173,7 @@ export function MobileShellDrawer({
   onRenameTerminal,
   onCloseEditorTab,
   onOpenGitHistory,
-  onOpenProjects,
-  returnFocusRef,
-  menuButtonRef
+  onOpenProjects
 }: MobileShellDrawerProps): React.JSX.Element {
   const navigate = useNavigate()
   const activeProject = useActiveProject()
@@ -164,7 +181,9 @@ export function MobileShellDrawer({
   const contentRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const closeIntentRef = useRef<CloseIntent>('dismiss')
+  // The pending focus return of a hand-off to a close confirm; cancelled when
+  // the drawer unmounts first, or when a newer hand-off replaces it.
+  const cancelFocusReturnRef = useRef<(() => void) | null>(null)
   const searchId = useId()
   const openHeadingId = useId()
   const historyHeadingId = useId()
@@ -179,57 +198,52 @@ export function MobileShellDrawer({
     if (!open) setQuery('')
   }, [open])
 
-  const closeWith = (intent: CloseIntent): void => {
-    closeIntentRef.current = intent
+  useEffect(() => () => cancelFocusReturnRef.current?.(), [])
+
+  // A row took the user somewhere: focus follows to the destination (resolved
+  // at close time). A hand-off (another overlay opening) or a dismissal sets
+  // nothing, so focus stays in the overlay that took it, else returns to the opener.
+  const closeForNavigation = (): void => {
+    setSheetFocusDestination(DRAWER_FOCUS_ID, resolveNavigationFocus)
     onOpenChange(false)
   }
-  const closeForNavigation = (): void => closeWith('navigate')
+  const closeForHandoff = (): void => onOpenChange(false)
 
-  const focusOpener = (): void => {
-    const opener = returnFocusRef.current
-    const target = opener?.isConnected ? opener : menuButtonRef.current
-    target?.focus()
+  // A row close that raised a confirm (a terminal, a dirty file): the confirm
+  // would render under this drawer's overlay, so the drawer gets out of its
+  // way (a hand-off, like New chat). The confirm never takes or returns focus,
+  // and the close consumes the recorded opener, so read it first and put focus
+  // back on it once the confirm is gone.
+  const onConfirmOpened = (): void => {
+    const restoreFocus = holdSheetReturnTargets(DRAWER_FOCUS_ID)
+    closeForHandoff()
+    cancelFocusReturnRef.current?.()
+    cancelFocusReturnRef.current = returnFocusAfterConfirm(restoreFocus)
   }
 
   return (
-    <Sheet
-      open={open}
-      onOpenChange={(next) => {
-        // Radix-initiated closes (Esc, scrim, the built-in close) are dismissals.
-        if (!next) closeIntentRef.current = 'dismiss'
-        onOpenChange(next)
-      }}
-    >
+    <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         ref={contentRef}
         side="left"
         id="mobile-shell-drawer"
         className="flex w-[min(82vw,20rem)] flex-col gap-0 p-0"
+        onEscapeKeyDown={(event) => {
+          // Radix hears Escape on the document before the rename field does and
+          // would dismiss the drawer. Inside a row's rename field the key only
+          // cancels the rename (its own handler returns focus to the pencil).
+          if (event.target instanceof Element && event.target.closest('[data-open-rename-input]')) {
+            event.preventDefault()
+          }
+        }}
         onOpenAutoFocus={(event) => {
           // Land on the active Open row (or the title), never the search: the
           // on-screen keyboard must not rise just because the drawer opened.
           event.preventDefault()
-          closeIntentRef.current = 'dismiss'
           const current = contentRef.current?.querySelector<HTMLElement>('[aria-current="page"]')
           ;(current ?? titleRef.current)?.focus()
         }}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault()
-          const intent = closeIntentRef.current
-          closeIntentRef.current = 'dismiss'
-          // Another overlay already holds focus (a hand-off to the launcher,
-          // Settings or the project sheet): focusing ☰ behind it would steal it.
-          const otherDialog = document.activeElement?.closest(
-            '[role="dialog"], [role="alertdialog"]'
-          )
-          if (otherDialog && otherDialog !== contentRef.current) return
-          if (intent === 'navigate') {
-            const title = document.getElementById(SHELL_TITLE_ID)
-            title?.focus()
-            if (title && document.activeElement === title) return
-          }
-          focusOpener()
-        }}
+        onCloseAutoFocus={drawerCloseAutoFocus}
       >
         <SheetHeader className="space-y-0 border-b border-border/60 p-2 text-left">
           <div className="flex items-center gap-2 pr-8">
@@ -248,7 +262,7 @@ export function MobileShellDrawer({
             <DrawerProjectRow
               activeSessionId={activeSessionId}
               onOpen={() => {
-                closeWith('handoff')
+                closeForHandoff()
                 onOpenProjects()
               }}
             />
@@ -277,7 +291,7 @@ export function MobileShellDrawer({
             className="min-h-11 w-full justify-start gap-2"
             disabled={!canNewChat}
             onClick={() => {
-              closeWith('handoff')
+              closeForHandoff()
               onNewChat()
             }}
           >
@@ -287,7 +301,11 @@ export function MobileShellDrawer({
         </div>
 
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <h2 id={openHeadingId} className="label-group px-3 pb-1 pt-3 text-muted-foreground">
+          <h2
+            id={openHeadingId}
+            tabIndex={-1}
+            className="label-group px-3 pb-1 pt-3 text-muted-foreground"
+          >
             Open
           </h2>
           <MobileDrawerOpenSection
@@ -298,6 +316,7 @@ export function MobileShellDrawer({
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
+            onConfirmOpened={onConfirmOpened}
           />
 
           <h2
@@ -324,7 +343,7 @@ export function MobileShellDrawer({
               className="size-11 shrink-0"
               aria-label="Settings"
               onClick={() => {
-                closeWith('handoff')
+                closeForHandoff()
                 useSettingsModalStore.getState().openApp()
               }}
             >

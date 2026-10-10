@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { PermissionOption } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
+import { permissionToolTitle } from '@/lib/permission-denial'
 import { cn } from '@/lib/utils'
 import { type PendingPermission, useAcpStore } from '@/stores/acp-store'
 import {
@@ -25,15 +26,11 @@ interface PermissionPromptProps {
   permission: PendingPermission
   /** Render flush with the composer surface instead of as a standalone panel. */
   embedded?: boolean
-}
-
-/** Title text for the requesting tool call, best-effort from the update fields. */
-function toolTitle(toolCall: unknown): string {
-  if (toolCall && typeof toolCall === 'object') {
-    const t = toolCall as { title?: string; toolCallId?: string }
-    return t.title ?? t.toolCallId ?? 'this action'
-  }
-  return 'this action'
+  /**
+   * False while the pane is hidden (a background tab). The 400ms tap guard
+   * starts when the prompt is on screen, so it restarts when this turns true.
+   */
+  isVisible?: boolean
 }
 
 /**
@@ -43,17 +40,21 @@ function toolTitle(toolCall: unknown): string {
  */
 export function PermissionPrompt({
   permission,
-  embedded = true
+  embedded = true,
+  isVisible = true
 }: PermissionPromptProps): React.JSX.Element {
   const respond = useAcpStore((s) => s.respondPermission)
   const isMobileShell = useMobileWebShell()
-  // When this request first rendered: set at mount and again whenever the
-  // requestId changes (the prompt is not re-keyed per request). Monotonic
-  // clock: a wall-clock step backwards must not keep the guard closed.
+  // When this request first became visible: set at mount and again whenever
+  // the requestId changes (the prompt is not re-keyed per request) or a hidden
+  // pane turns visible. A request that changes while hidden is stamped when
+  // the pane shows. Monotonic clock: a wall-clock step backwards must not
+  // keep the guard closed.
   const shownRef = useRef({ requestId: permission.requestId, at: performance.now() })
   useLayoutEffect(() => {
+    if (!isVisible) return
     shownRef.current = { requestId: permission.requestId, at: performance.now() }
-  }, [permission.requestId])
+  }, [permission.requestId, isVisible])
 
   const choose = useCallback(
     (optionId?: string) => {
@@ -150,7 +151,7 @@ export function PermissionPrompt({
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             The agent is waiting for permission to run{' '}
             <code className="rounded border border-border/50 bg-muted/60 px-1.5 py-0.5 font-mono text-xs text-foreground break-all select-all">
-              {toolTitle(permission.toolCall)}
+              {permissionToolTitle(permission.toolCall)}
             </code>
             .
           </p>

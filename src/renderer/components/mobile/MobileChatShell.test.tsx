@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { _resetSheetFocusReturnForTests, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
@@ -138,9 +138,10 @@ vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
 
 // Stub the drawer so the shell test focuses on the opener wiring and the props
 // threaded through (☰ and the pill → drawerOpen → `open`; `onOpenChange` closes
-// it). The drawer's own layout, focus handling and rows are covered in
-// MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx. With
-// `drawerModalRef` set it wraps the same content in a real modal Sheet.
+// it). It carries the real drawer's id, so the `aria-controls` of ☰ and the pill
+// resolves to an element. The drawer's own layout, focus handling and rows are
+// covered in MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx.
+// With `drawerModalRef` set it wraps the same content in a real modal Sheet.
 vi.mock('./MobileShellDrawer', async () => {
   const { Sheet, SheetContent, SheetDescription, SheetTitle } = await import(
     '@/components/ui/sheet'
@@ -162,7 +163,7 @@ vi.mock('./MobileShellDrawer', async () => {
       if (drawerModalRef.current) {
         return (
           <Sheet open={props.open} onOpenChange={props.onOpenChange}>
-            <SheetContent side="left">
+            <SheetContent side="left" id="mobile-shell-drawer">
               <SheetTitle>Chats</SheetTitle>
               <SheetDescription className="sr-only">Stub drawer</SheetDescription>
               {content}
@@ -170,7 +171,7 @@ vi.mock('./MobileShellDrawer', async () => {
           </Sheet>
         )
       }
-      return props.open ? <div>{content}</div> : null
+      return props.open ? <div id="mobile-shell-drawer">{content}</div> : null
     }
   }
 })
@@ -1026,6 +1027,20 @@ describe('MobileChatShell', () => {
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     })
 
+    it('focuses the header title, not ⋯, after a row was chosen', async () => {
+      seedActiveTerminal()
+      renderTerminal()
+      await openTerminalSheet()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Restart terminal' }))
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      await waitFor(() =>
+        expect(document.activeElement).toBe(document.getElementById('mobile-shell-title'))
+      )
+      expect(document.activeElement).not.toBe(screen.getByLabelText('Terminal actions'))
+    })
+
     it('Command history calls onOpenCommandHistory() and closes', async () => {
       seedActiveTerminal()
       const { callbacks } = renderTerminal()
@@ -1064,6 +1079,220 @@ describe('MobileChatShell', () => {
       await waitFor(() =>
         expect(document.activeElement).toBe(screen.getByLabelText('Terminal actions'))
       )
+    })
+
+    describe('navigation rows (web mode)', () => {
+      function renderWebTerminal(props: Partial<ShellProps> = {}) {
+        tauriRef.current = false
+        seedActiveTerminal()
+        const navigation = {
+          onOpenGitChanges: vi.fn(),
+          onOpenCommandPalette: vi.fn(),
+          onOpenProjectSettings: vi.fn()
+        }
+        const view = renderTerminal({ ...navigation, ...props })
+        return { ...view, navigation }
+      }
+
+      function terminalSheetRows(): string[] {
+        const sheet = document.getElementById('mobile-terminal-actions-sheet')
+        return Array.from(sheet?.querySelectorAll('button') ?? [])
+          .map((button) => button.textContent?.trim() ?? '')
+          .filter((text) => text.length > 0 && text !== 'Close')
+      }
+
+      function closeEvent(): Event {
+        return new Event('focusScope.autoFocusOnUnmount', { cancelable: true })
+      }
+
+      /** Lets the terminal sheet hand focus to the title, then drops it to `<body>`. */
+      async function settleAfterTerminalSheetCloses(): Promise<void> {
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        await waitFor(() =>
+          expect(document.activeElement).toBe(document.getElementById('mobile-shell-title'))
+        )
+        act(() => {
+          ;(document.activeElement as HTMLElement | null)?.blur()
+        })
+        expect(document.activeElement).toBe(document.body)
+      }
+
+      it('lists the header sheet rows after Command history and before Close terminal', async () => {
+        renderWebTerminal()
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Git changes',
+          'Files',
+          'Command palette',
+          'Project settings',
+          'Close terminal'
+        ])
+        expect(screen.getByRole('button', { name: 'Close terminal' }).className).toContain(
+          'text-destructive'
+        )
+      })
+
+      it('has no New terminal row even when the shell can create one', async () => {
+        renderWebTerminal({ onNewTerminal: vi.fn() })
+        await openTerminalSheet()
+
+        expect(screen.queryByRole('button', { name: 'New terminal' })).not.toBeInTheDocument()
+        // The header pencil is New terminal in a terminal.
+        expect(screen.getByLabelText('New terminal')).toBeInTheDocument()
+      })
+
+      it.each([
+        ['Git changes', 'onOpenGitChanges'],
+        ['Command palette', 'onOpenCommandPalette'],
+        ['Project settings', 'onOpenProjectSettings']
+      ] as const)('"%s" runs exactly its callback once, closes and focuses the title', async (label, key) => {
+        const { navigation, callbacks } = renderWebTerminal()
+        await openTerminalSheet()
+
+        fireEvent.click(screen.getByRole('button', { name: label }))
+
+        expect(navigation[key]).toHaveBeenCalledTimes(1)
+        for (const [name, callback] of Object.entries(navigation)) {
+          if (name !== key) expect(callback, name).not.toHaveBeenCalled()
+        }
+        expect(callbacks.onRestartTerminal).not.toHaveBeenCalled()
+        expect(callbacks.onCloseTerminal).not.toHaveBeenCalled()
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        // The destination changed, so focus lands on the title, not the more button.
+        await waitFor(() =>
+          expect(document.activeElement).toBe(document.getElementById('mobile-shell-title'))
+        )
+      })
+
+      it('"Files" opens the existing Files sheet and closes the terminal sheet', async () => {
+        renderWebTerminal()
+        await openTerminalSheet()
+        expect(screen.queryByText('files-drawer')).not.toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+
+        expect(await screen.findByText('files-drawer')).toBeInTheDocument()
+        await waitFor(() =>
+          expect(document.getElementById('mobile-terminal-actions-sheet')).not.toBeInTheDocument()
+        )
+      })
+
+      it('records the more button as the Git sheet opener and still opens it', async () => {
+        const { navigation } = renderWebTerminal()
+        const more = screen.getByLabelText('Terminal actions')
+        await openTerminalSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'Git changes' }))
+
+        expect(navigation.onOpenGitChanges).toHaveBeenCalledTimes(1)
+        await settleAfterTerminalSheetCloses()
+        sheetCloseAutoFocus('git-sheet')(closeEvent())
+
+        expect(document.activeElement).toBe(more)
+      })
+
+      it('records the more button as the Files sheet opener', async () => {
+        renderWebTerminal()
+        const more = screen.getByLabelText('Terminal actions')
+        await openTerminalSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+        expect(await screen.findByText('files-drawer')).toBeInTheDocument()
+        await settleAfterTerminalSheetCloses()
+
+        const event = closeEvent()
+        sheetCloseAutoFocus('files-sheet')(event)
+
+        expect(event.defaultPrevented).toBe(true)
+        expect(document.activeElement).toBe(more)
+      })
+
+      it('keeps the Tauri gates: no Git changes, Files or Command palette, but Project settings', async () => {
+        tauriRef.current = true
+        seedActiveTerminal()
+        renderTerminal({
+          onOpenGitChanges: vi.fn(),
+          onOpenCommandPalette: vi.fn(),
+          onOpenProjectSettings: vi.fn()
+        })
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Project settings',
+          'Close terminal'
+        ])
+      })
+
+      it('omits Git changes when the project has no path', async () => {
+        projectRef.current = { id: 'p1', name: 'Demo' }
+        renderWebTerminal()
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Files',
+          'Command palette',
+          'Project settings',
+          'Close terminal'
+        ])
+      })
+
+      it('omits Project settings when there is no active project', async () => {
+        projectRef.current = undefined
+        renderWebTerminal()
+        await openTerminalSheet()
+
+        expect(screen.queryByRole('button', { name: 'Project settings' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Git changes' })).not.toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument()
+      })
+
+      it('omits rows whose callback is not threaded', async () => {
+        tauriRef.current = false
+        seedActiveTerminal()
+        renderTerminal()
+        await openTerminalSheet()
+
+        expect(terminalSheetRows()).toEqual([
+          'Rename terminal',
+          'Restart terminal',
+          'Command history',
+          'Files',
+          'Close terminal'
+        ])
+      })
+
+      it('offers the same navigation rows as the header sheet does for a chat', async () => {
+        const view = renderWebTerminal()
+        await openTerminalSheet()
+        const navigationLabels = ['Git changes', 'Files', 'Command palette', 'Project settings']
+        const fromTerminal = terminalSheetRows().filter((row) => navigationLabels.includes(row))
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+        seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }], 'tab-1')
+        rerenderShell(view, {
+          onOpenGitChanges: view.navigation.onOpenGitChanges,
+          onOpenCommandPalette: view.navigation.onOpenCommandPalette,
+          onOpenProjectSettings: view.navigation.onOpenProjectSettings
+        })
+        await openHeaderSheet()
+        const fromHeader = Array.from(
+          document.getElementById('mobile-header-more-sheet')?.querySelectorAll('button') ?? []
+        )
+          .map((button) => button.textContent?.trim() ?? '')
+          .filter((text) => navigationLabels.includes(text))
+
+        expect(fromTerminal).toEqual(navigationLabels)
+        expect(fromHeader).toEqual(fromTerminal)
+      })
     })
 
     it('titles the sheet "Terminal" when the terminal name is empty', async () => {
@@ -1198,6 +1427,20 @@ describe('MobileChatShell', () => {
       await waitFor(() => expect(document.activeElement).toBe(subtitle))
     })
 
+    it('returns focus to the subtitle when it was opened from the drawer project row', async () => {
+      tauriRef.current = false
+      renderShell()
+      const subtitle = screen.getByRole('button', { name: /switch project/ })
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByText('stub-open-projects'))
+      expect(await screen.findByText('project-drawer')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByText('close-drawer'))
+
+      expect(screen.queryByText('project-drawer')).not.toBeInTheDocument()
+      await waitFor(() => expect(document.activeElement).toBe(subtitle))
+    })
+
     it('hands onNewProject to the sheet as its Add project action', async () => {
       tauriRef.current = false
       const onNewProject = vi.fn()
@@ -1323,25 +1566,70 @@ describe('MobileChatShell', () => {
       expect(menu).toHaveAttribute('aria-controls', 'mobile-shell-drawer')
     })
 
-    it('records ☰ as the opener and as the fallback target', () => {
+    it.each([
+      ['☰', 0, 'Open menu'],
+      ['the attention pill', 2, '2 other chats need you']
+    ])('%s: aria-controls resolves to the drawer element', (_name, attentionCount, label) => {
+      mockAttentionCount.mockReturnValue(attentionCount)
       renderShell()
-      const menu = screen.getByLabelText('Open menu')
+      const control = screen.getByRole('button', { name: label })
 
-      fireEvent.click(menu)
+      fireEvent.click(control)
 
-      expect(drawerProps().returnFocusRef.current).toBe(menu)
-      expect(drawerProps().menuButtonRef.current).toBe(menu)
+      const target = document.getElementById(control.getAttribute('aria-controls') ?? '')
+      expect(target).not.toBeNull()
+      expect(target?.id).toBe('mobile-shell-drawer')
+      expect(target).toContainElement(screen.getByText('shell-drawer'))
     })
 
-    it('records the attention pill as the opener, keeping ☰ as the fallback', () => {
+    it('records ☰ as the opener: dismissing the drawer returns focus to it', () => {
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
+      fireEvent.click(menu)
+
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(menu)
+    })
+
+    it('records the attention pill as the opener when it opened the drawer', () => {
       mockAttentionCount.mockReturnValue(2)
       renderShell()
       const pill = screen.getByRole('button', { name: '2 other chats need you' })
-
       fireEvent.click(pill)
 
-      expect(drawerProps().returnFocusRef.current).toBe(pill)
-      expect(drawerProps().menuButtonRef.current).toBe(screen.getByLabelText('Open menu'))
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(pill)
+      expect(document.activeElement).not.toBe(screen.getByLabelText('Open menu'))
+    })
+
+    it('falls back to ☰ when the pill that opened the drawer is gone', () => {
+      mockAttentionCount.mockReturnValue(2)
+      const view = renderShell()
+      const pill = screen.getByRole('button', { name: '2 other chats need you' })
+      fireEvent.click(pill)
+
+      // Nothing needs the user any more, so the pill unmounts behind the drawer.
+      mockAttentionCount.mockReturnValue(0)
+      rerenderShell(view)
+      expect(pill.isConnected).toBe(false)
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(screen.getByLabelText('Open menu'))
+    })
+
+    it('records the opener again on every open', () => {
+      mockAttentionCount.mockReturnValue(2)
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
+      fireEvent.click(screen.getByRole('button', { name: '2 other chats need you' }))
+      fireEvent.click(screen.getByText('close-shell-drawer'))
+
+      fireEvent.click(menu)
+      sheetCloseAutoFocus('mobile-drawer')(new Event('focusScope.autoFocusOnUnmount'))
+
+      expect(document.activeElement).toBe(menu)
     })
 
     it('closes the drawer when it calls onOpenChange(false)', () => {
@@ -1392,11 +1680,15 @@ describe('MobileChatShell', () => {
       expect(props.activeSessionId).toBe('s1')
       expect(props.canNewChat).toBe(true)
       expect(props.onNewChat).toBe(handlers.onNewChat)
-      expect(props.onNewTerminal).toBe(handlers.onNewTerminal)
+      // New terminal and Git history are wrapped (they also leave /snapshots);
+      // the wrappers call the originals.
+      props.onNewTerminal?.()
+      expect(handlers.onNewTerminal).toHaveBeenCalledTimes(1)
+      props.onOpenGitHistory?.()
+      expect(handlers.onOpenGitHistory).toHaveBeenCalledTimes(1)
       expect(props.onCloseTerminal).toBe(handlers.onCloseTerminal)
       expect(props.onRenameTerminal).toBe(handlers.onRenameTerminal)
       expect(props.onCloseEditorTab).toBe(handlers.onCloseEditorTab)
-      expect(props.onOpenGitHistory).toBe(handlers.onOpenGitHistory)
       expect(typeof props.onOpenProjects).toBe('function')
     })
 
@@ -1727,6 +2019,148 @@ describe('MobileChatShell', () => {
       sheetCloseAutoFocus('files-sheet')(closeEvent())
 
       expect(document.activeElement).toBe(more)
+    })
+  })
+
+  // ── L-15: entry points that create or activate a tab leave /snapshots ──
+
+  describe('returning to the workspace route', () => {
+    function RouteProbe(): React.JSX.Element {
+      return <span data-testid="route">{useLocation().pathname}</span>
+    }
+
+    function renderShellAt(path: string, props: Partial<ShellProps> = {}) {
+      tauriRef.current = false
+      return render(
+        <MemoryRouter initialEntries={[path]}>
+          <MobileChatShell onNewChat={vi.fn()} canNewChat {...props}>
+            <div>chat body</div>
+          </MobileChatShell>
+          <RouteProbe />
+        </MemoryRouter>
+      )
+    }
+
+    const route = (): string | null => screen.getByTestId('route').textContent
+
+    describe('on /snapshots', () => {
+      it('leaves for / after the drawer footer Git history, once the history tab is requested', () => {
+        let routeWhenCalled: string | null = null
+        const onOpenGitHistory = vi.fn(() => {
+          routeWhenCalled = route()
+        })
+        renderShellAt('/snapshots', { onOpenGitHistory })
+
+        act(() => drawerProps().onOpenGitHistory?.())
+
+        expect(onOpenGitHistory).toHaveBeenCalledTimes(1)
+        // The tab is created first, then the route changes.
+        expect(routeWhenCalled).toBe('/snapshots')
+        expect(route()).toBe('/')
+      })
+
+      it('leaves for / after the Terminals New terminal button (the drawer handler)', () => {
+        const onNewTerminal = vi.fn()
+        renderShellAt('/snapshots', { onNewTerminal })
+
+        act(() => drawerProps().onNewTerminal?.())
+
+        expect(onNewTerminal).toHaveBeenCalledTimes(1)
+        expect(route()).toBe('/')
+      })
+
+      it('leaves for / after the header ✎ New terminal in a terminal tab', () => {
+        seedActiveTerminal()
+        const onNewTerminal = vi.fn()
+        renderShellAt('/snapshots', { onNewTerminal })
+
+        fireEvent.click(screen.getByLabelText('New terminal'))
+
+        expect(onNewTerminal).toHaveBeenCalledTimes(1)
+        expect(route()).toBe('/')
+      })
+
+      it('leaves for / after the ⋯ sheet New terminal row', async () => {
+        const onNewTerminal = vi.fn()
+        renderShellAt('/snapshots', { onNewTerminal })
+        await openHeaderSheet()
+
+        fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+
+        expect(onNewTerminal).toHaveBeenCalledTimes(1)
+        expect(route()).toBe('/')
+      })
+
+      it('leaves for / after a file opened from the Files sheet, and still points focus at the title', async () => {
+        renderShellAt('/snapshots')
+        await openHeaderSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+
+        fireEvent.click(await screen.findByText('open-file'))
+
+        expect(route()).toBe('/')
+        expect(screen.queryByText('files-drawer')).not.toBeInTheDocument()
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        act(() => {
+          ;(document.activeElement as HTMLElement | null)?.blur()
+        })
+        sheetCloseAutoFocus('files-sheet')(
+          new Event('focusScope.autoFocusOnUnmount', { cancelable: true })
+        )
+        expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 }))
+      })
+
+      it('stays on /snapshots when the Files sheet closes without opening a file', async () => {
+        renderShellAt('/snapshots')
+        await openHeaderSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+
+        fireEvent.click(await screen.findByText('close-files'))
+
+        expect(route()).toBe('/snapshots')
+      })
+    })
+
+    describe.each(['/', '/c/s1'])('on the workspace route %s', (path) => {
+      it('does not navigate for Git history, New terminal (drawer, ⋯) or an opened file', async () => {
+        const onOpenGitHistory = vi.fn()
+        const onNewTerminal = vi.fn()
+        renderShellAt(path, { onOpenGitHistory, onNewTerminal })
+
+        act(() => drawerProps().onOpenGitHistory?.())
+        act(() => drawerProps().onNewTerminal?.())
+        await openHeaderSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+        await openHeaderSheet()
+        fireEvent.click(screen.getByRole('button', { name: 'Files' }))
+        fireEvent.click(await screen.findByText('open-file'))
+
+        expect(onOpenGitHistory).toHaveBeenCalledTimes(1)
+        expect(onNewTerminal).toHaveBeenCalledTimes(2)
+        expect(route()).toBe(path)
+      })
+    })
+
+    it('keeps a missing handler missing, so the controls stay hidden', async () => {
+      renderShellAt('/snapshots')
+
+      expect(drawerProps().onNewTerminal).toBeUndefined()
+      expect(drawerProps().onOpenGitHistory).toBeUndefined()
+      await openHeaderSheet()
+      expect(screen.queryByRole('button', { name: 'New terminal' })).not.toBeInTheDocument()
+    })
+
+    it('passes the close handlers through untouched so their return value reaches the drawer', () => {
+      const onCloseTerminal = vi.fn(() => true)
+      const onCloseEditorTab = vi.fn(() => false)
+      renderShellAt('/snapshots', { onCloseTerminal, onCloseEditorTab })
+
+      expect(drawerProps().onCloseTerminal).toBe(onCloseTerminal)
+      expect(drawerProps().onCloseEditorTab).toBe(onCloseEditorTab)
+      expect(drawerProps().onCloseTerminal?.('t1', 'term-t1')).toBe(true)
+      expect(drawerProps().onCloseEditorTab?.('/a.ts')).toBe(false)
+      expect(route()).toBe('/snapshots')
     })
   })
 })

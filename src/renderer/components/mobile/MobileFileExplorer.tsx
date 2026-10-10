@@ -34,9 +34,18 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
+import { useClippedSegments } from '@/hooks/use-clipped-segments'
 import { filesystemApi, persistenceApi } from '@/lib/api'
 import { sortDirectoryEntries } from '@/lib/filesystem-sort'
-import { logFrontendError } from '@/lib/log-api'
+import {
+  buildFolderCrumbs,
+  comparePath,
+  isWithinRoot,
+  joinPath,
+  normalizePath,
+  resolveBreadcrumbTarget,
+  siblingPath
+} from '@/lib/mobile-file-paths'
 import { recordSheetOpener, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
@@ -72,123 +81,9 @@ interface RenameState {
 
 type NavigationDirection = -1 | 0 | 1
 
-const DOT_SEGMENT = /(^|\/)\.\.?(\/|$)/
-
-/** Resolves `.` and `..` segments, keeping a UNC (`//`), posix (`/`) or drive
- * (`C:/`) root; `..` cannot climb above a root. Paths without a dot segment
- * are returned untouched, so every ordinary path normalizes exactly as before. */
-function resolveDotSegments(path: string): string {
-  if (!DOT_SEGMENT.test(path)) return path
-  const root = /^(?:\/\/|[A-Za-z]:\/|\/)/.exec(path)?.[0] ?? ''
-  const kept: string[] = []
-  for (const segment of path.slice(root.length).split('/')) {
-    if (segment === '' || segment === '.') continue
-    if (segment !== '..') kept.push(segment)
-    else if (kept.length > 0 && kept[kept.length - 1] !== '..') kept.pop()
-    else if (!root) kept.push('..')
-  }
-  return root + kept.join('/')
-}
-
-function normalizePath(path: string): string {
-  const normalized = resolveDotSegments(path.replace(/\\/g, '/'))
-  if (normalized === '/' || /^[A-Za-z]:\/$/.test(normalized)) return normalized
-  return normalized.replace(/\/+$/, '') || '/'
-}
-
-function pathIdentity(path: string): string {
-  const normalized = normalizePath(path)
-  return normalized === '/' ? normalized : normalized.replace(/\/+$/, '')
-}
-
-/** Case-insensitive comparison form of a path: `pathIdentity` lowercased.
- * Routed through every within-root comparison (`isWithinRoot`, `parentOf`,
- * `isAtRoot`, `navigateBack`) so a casing discrepancy between the stored
- * `rootPath` (config casing, e.g. `e:/proj`) and server-canonicalized entry
- * paths (on-disk casing, e.g. `E:/proj/...`) no longer clamps back
- * navigation to root. Never feeds the stored `currentPath` or any display
- * string — those keep the case-preserving `normalizePath` output. */
-function comparePath(path: string): string {
-  return pathIdentity(path).toLowerCase()
-}
-
-function joinPath(parent: string, name: string): string {
-  return `${normalizePath(parent).replace(/\/$/, '')}/${name}`
-}
-
-/** `path` with its last segment replaced by `name`, the rest spelled as the listing spelled
- * it. `joinPath(parentOf(path), name)` cannot do that for a listing path whose prefix the
- * root path lacks (a Windows host lists `\\?\C:\...` under a plain `C:/...` root), and a
- * row's identity is its listing path. */
-function siblingPath(path: string, name: string): string {
-  const normalized = normalizePath(path)
-  return `${normalized.slice(0, normalized.lastIndexOf('/'))}/${name}`
-}
-
-function isWithinRoot(path: string, root: string): boolean {
-  const p = comparePath(path)
-  const r = comparePath(root)
-  if (p === r) return true
-  // Drive roots (`c:/`, lowercased from `C:/`) and posix `/` prefix any
-  // child without a trailing separator, so check `startsWith(r)` directly
-  // for those.
-  if (r === '/' || /^[A-Za-z]:\/$/.test(r)) return p.startsWith(r)
-  return p.startsWith(`${r}/`)
-}
-
-interface FolderCrumb {
-  label: string
-  path: string
-}
-
-/** Header breadcrumb for a folder below the project root; null at (or outside)
- * the root. Ancestor paths are case-preserving prefixes of `current`; the first
- * segment targets the normalized root itself, so a tap lands on the same path
- * `parentOf` / `navigateBack` reach. Both inputs are `normalizePath` output. */
-export function buildFolderCrumbs(
-  root: string,
-  current: string
-): { ancestors: FolderCrumb[]; currentLabel: string } | null {
-  if (comparePath(current) === comparePath(root) || !isWithinRoot(current, root)) return null
-  // Roots ending in a separator (`/`, `C:/`) already include it.
-  const prefixLength = root.endsWith('/') ? root.length : root.length + 1
-  const parts = current.slice(prefixLength).split('/').filter(Boolean)
-  const currentLabel = parts.pop()
-  if (currentLabel === undefined) return null
-  const ancestors: FolderCrumb[] = [
-    { label: root.split('/').filter(Boolean).at(-1) || root, path: root }
-  ]
-  let prefix = current.slice(0, prefixLength)
-  for (const part of parts) {
-    prefix += part
-    ancestors.push({ label: part, path: prefix })
-    prefix += '/'
-  }
-  return { ancestors, currentLabel }
-}
-
-/** Guard for a breadcrumb tap. Returns the normalized target, or null when the
- * tap must change nothing: a target outside the root (or with no root) is
- * logged as a warning, a tap on the folder already shown is silent. */
-export function resolveBreadcrumbTarget(
-  path: string,
-  rootPath: string | null,
-  currentPath: string | null
-): string | null {
-  const target = normalizePath(path)
-  if (!rootPath || !isWithinRoot(target, rootPath)) {
-    void logFrontendError({
-      level: 'warn',
-      source: 'MobileFileExplorer.navigateTo',
-      message: rootPath
-        ? 'breadcrumb target is outside the project root; ignored'
-        : 'breadcrumb tapped without a project root; ignored'
-    })
-    return null
-  }
-  if (currentPath && comparePath(currentPath) === comparePath(target)) return null
-  return target
-}
+// Path helpers live in `lib/mobile-file-paths`; the two below stay importable
+// from here for this module's consumers and tests.
+export { buildFolderCrumbs, resolveBreadcrumbTarget }
 
 /** Lean touch-first file explorer drawer for the web/mobile view. Directory
  * rows drill into a single folder at a time, while files reuse the desktop
@@ -566,6 +461,13 @@ export function MobileFileExplorer({
     normalizedRoot && normalizedCurrent
       ? buildFolderCrumbs(normalizedRoot, normalizedCurrent)
       : null
+  // An ancestor clipped away on the left cannot be scrolled into view, so it
+  // must not take keyboard focus unseen (see `useClippedSegments`).
+  const {
+    rootRef: crumbNavRef,
+    segmentRef: crumbRef,
+    clipped: clippedCrumbs
+  } = useClippedSegments(folderCrumbs?.ancestors.map((crumb) => crumb.path) ?? [])
   const currentEntries = currentPath
     ? sortDirectoryEntries(directoryContents.get(currentPath) ?? [])
     : []
@@ -608,6 +510,7 @@ export function MobileFileExplorer({
                 // would also clip the segments' vertical hit-slop below and
                 // shrink every tap target to the 16px row.
                 <nav
+                  ref={crumbNavRef}
                   aria-label="Folder path"
                   title={normalizedCurrent ?? undefined}
                   className="flex w-fit max-w-full items-center justify-end gap-0.5 overflow-x-clip whitespace-nowrap text-xs text-muted-foreground"
@@ -615,9 +518,13 @@ export function MobileFileExplorer({
                   {folderCrumbs.ancestors.map((crumb) => (
                     <Fragment key={crumb.path}>
                       <Button
+                        ref={crumbRef(crumb.path)}
                         type="button"
                         variant="ghost"
                         size="xs"
+                        // A fully clipped ancestor is skipped by Tab until it is
+                        // visible again; the Back button still steps up a level.
+                        tabIndex={clippedCrumbs.has(crumb.path) ? -1 : undefined}
                         // Vertical-only hit-slop (16px row + 14px each side =
                         // 44px tall): the header does not grow and neighbouring
                         // segments never overlap horizontally.

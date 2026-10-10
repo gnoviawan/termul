@@ -74,6 +74,29 @@ bun run build:tauri:mac-x64
 bun run build:tauri:linux
 ```
 
+### Packager / Raw Cargo Release Build
+
+Tauri's build script compiles with `cfg(dev)` whenever the `tauri/custom-protocol` feature is off, and a `cfg(dev)` binary loads `devUrl` ("Could not connect to localhost") instead of the embedded `frontendDist`. Only `tauri build` enables the feature for you. When building the desktop binary with plain cargo (for example a distro packager), enable it through the app feature:
+
+```bash
+# From the repo root: build the frontends first (embedded as frontendDist / dist-web)
+bun run build:web && bun run build:frontend:tauri
+cd src-tauri
+cargo build --release --features custom-protocol
+```
+
+Or let the Tauri CLI do both steps without bundling (run from the repo root; with npm or pnpm add `--` before `--no-bundle`):
+
+```bash
+bun run build:tauri --no-bundle
+```
+
+To install the desktop binary with cargo, enable the feature the same way: `cargo install --path src-tauri --features custom-protocol`.
+
+A release-profile build that lacks `custom-protocol` fails to compile the desktop binary and prints these fixes: `src-tauri/build.rs` sets a cfg, and a `compile_error!` in the desktop entry point (`src-tauri/src/main.rs`) enforces it. The check reads Tauri's own computed dev state, so it passes whenever `tauri/custom-protocol` is on, however it was enabled. Because the error lives in the desktop entry point, it blocks only the desktop binary, whatever features are on: debug-profile builds, the library, and the `termul-server` binary (`cargo build --release --bin termul-server --features standalone-server`) are never blocked.
+
+For `cargo test --release` and `cargo clippy --release`, which compile the desktop entry point but never ship it, set `TERMUL_ALLOW_RELEASE_WITHOUT_CUSTOM_PROTOCOL=1` (or `true`) to skip the check. Never use the override for a command that installs or distributes a binary (`cargo build`, `cargo install`): a binary built under it loads `devUrl`.
+
 ## Quality Checks
 
 ### Lint

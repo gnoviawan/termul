@@ -1,5 +1,6 @@
-import { act, fireEvent, renderHook } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, waitFor } from '@testing-library/react'
 import { useState } from 'react'
+import { createHashRouter, RouterProvider, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   pressSystemBack,
@@ -27,6 +28,7 @@ function makeArgs(overrides: Partial<Args> = {}): Args {
     setIsCommandHistoryOpen: vi.fn(),
     isSshPasswordPromptOpen: false,
     closeSshPasswordPrompt: vi.fn(),
+    locationKey: 'k1',
     ...overrides
   }
 }
@@ -347,6 +349,232 @@ describe('useWorkspaceOverlayBackStack', () => {
       await pressSystemBack()
 
       expect(args.setGitSheetOpen).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('route change with an overlay open (L-33)', () => {
+    it('a location key change re-arms the sentinel on the new entry, so one back closes the overlay and keeps the route', async () => {
+      const { args, rerender } = mountHook()
+      rerender({ ...args, gitSheetOpen: true })
+      await waitForSentinelDepth(1)
+
+      // The router pushes a route (no popstate) and the layout's location key changes.
+      history.pushState({ usr: null, key: 'k2', idx: 2 }, '', '#/c/chat-1')
+      expect(readOverlaySentinelDepth(history.state)).toBe(0)
+      rerender({ ...args, gitSheetOpen: true, locationKey: 'k2' })
+      await waitForSentinelDepth(1)
+      expect(location.hash).toBe('#/c/chat-1')
+
+      await pressSystemBack()
+      expect(args.setGitSheetOpen).toHaveBeenCalledTimes(1)
+      expect(args.setGitSheetOpen).toHaveBeenCalledWith(false)
+      expect(location.hash).toBe('#/c/chat-1')
+    })
+
+    it('a route replace that dropped the marker is re-armed too', async () => {
+      const { args, rerender } = mountHook()
+      rerender({ ...args, gitSheetOpen: true })
+      await waitForSentinelDepth(1)
+
+      history.replaceState({ usr: null, key: 'k2', idx: 1 }, '', '#/replaced')
+      expect(readOverlaySentinelDepth(history.state)).toBe(0)
+      rerender({ ...args, gitSheetOpen: true, locationKey: 'k2' })
+      await waitForSentinelDepth(1)
+
+      await pressSystemBack()
+      expect(args.setGitSheetOpen).toHaveBeenCalledTimes(1)
+      expect(location.hash).toBe('#/replaced')
+    })
+
+    describe('through a real createHashRouter (the layout wiring itself is covered in WorkspaceLayout.mobile.test.tsx)', () => {
+      const closeGitSheet = vi.fn()
+
+      /** What WorkspaceLayout does: feed `useLocation().key` to the hook. */
+      function LayoutProbe(): null {
+        const location = useLocation()
+        const [gitSheetOpen, setGitSheetOpen] = useState(true)
+        useWorkspaceOverlayBackStack(
+          makeArgs({
+            gitSheetOpen,
+            setGitSheetOpen: (open: boolean) => {
+              closeGitSheet(open)
+              setGitSheetOpen(open)
+            },
+            locationKey: location.key
+          })
+        )
+        return null
+      }
+
+      function mountRouter() {
+        const router = createHashRouter([{ path: '*', element: <LayoutProbe /> }])
+        const view = render(
+          <RouterProvider router={router} future={{ v7_startTransition: true }} />
+        )
+        return { router, ...view }
+      }
+
+      it('a router push re-arms the sentinel on the new entry, so one back closes the overlay and keeps the route', async () => {
+        const { router, unmount } = mountRouter()
+        await waitForSentinelDepth(1)
+
+        await act(async () => {
+          await router.navigate('/c/chat-1')
+        })
+        await waitForSentinelDepth(1)
+        expect(location.hash).toBe('#/c/chat-1')
+
+        await pressSystemBack()
+        expect(closeGitSheet).toHaveBeenCalledTimes(1)
+        expect(location.hash).toBe('#/c/chat-1')
+        await waitForSentinelDepth(0)
+
+        // The sentinel the push left below the route copies the previous entry:
+        // the stale-sentinel skip passes over it, so the next back is a route back.
+        await pressSystemBack()
+        await waitFor(() => expect(location.hash).toBe('#/base'))
+        await waitForSentinelDepth(0)
+        expect(closeGitSheet).toHaveBeenCalledTimes(1)
+
+        unmount()
+        router.dispose()
+      })
+
+      it('a router replace re-arms the sentinel, so one back closes the overlay and keeps the route', async () => {
+        const { router, unmount } = mountRouter()
+        await waitForSentinelDepth(1)
+
+        await act(async () => {
+          await router.navigate('/replaced', { replace: true })
+        })
+        await waitForSentinelDepth(1)
+        expect(location.hash).toBe('#/replaced')
+
+        await pressSystemBack()
+        expect(closeGitSheet).toHaveBeenCalledTimes(1)
+        expect(location.hash).toBe('#/replaced')
+
+        unmount()
+        router.dispose()
+      })
+    })
+
+    it('does nothing on mount or while the key stays the same', async () => {
+      const pushSpy = vi.spyOn(history, 'pushState')
+      const { args, rerender } = mountHook()
+      await settleOverlayBackStack()
+      expect(pushSpy).not.toHaveBeenCalled()
+
+      rerender({ ...args, gitSheetOpen: true })
+      await waitForSentinelDepth(1)
+      rerender({ ...args, gitSheetOpen: true, locationKey: 'k1' })
+      await settleOverlayBackStack()
+
+      expect(pushSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('desktop makes no history call for a key change', async () => {
+      const { args, rerender } = mountHook({ isMobileWebShell: false })
+      rerender({ ...args, gitSheetOpen: true })
+      const pushSpy = vi.spyOn(history, 'pushState')
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+
+      rerender({ ...args, gitSheetOpen: true, locationKey: 'k2' })
+      await settleOverlayBackStack()
+
+      expect(pushSpy).not.toHaveBeenCalled()
+      expect(backSpy).not.toHaveBeenCalled()
+      expect(goSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('mobile to desktop flip with overlays open (L-34)', () => {
+    /** Owners with real state, so a flip and a close behave like the layout's. */
+    function useFlipOwners() {
+      const [isMobileWebShell, setIsMobileWebShell] = useState(true)
+      const [gitSheetOpen, setGitSheetOpen] = useState(false)
+      const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
+      const [isSshPasswordPromptOpen, setIsSshPasswordPromptOpen] = useState(false)
+      useWorkspaceOverlayBackStack(
+        makeArgs({
+          isMobileWebShell,
+          gitSheetOpen,
+          setGitSheetOpen,
+          isCommandHistoryOpen,
+          setIsCommandHistoryOpen,
+          isSshPasswordPromptOpen,
+          closeSshPasswordPrompt: () => setIsSshPasswordPromptOpen(false)
+        })
+      )
+      return {
+        gitSheetOpen,
+        setIsMobileWebShell,
+        setGitSheetOpen,
+        setIsCommandHistoryOpen,
+        setIsSshPasswordPromptOpen
+      }
+    }
+
+    it('consumes every stranded sentinel when only mobile-only overlays were open, so the next back is a route back', async () => {
+      const { result } = renderHook(() => useFlipOwners())
+      act(() => result.current.setIsCommandHistoryOpen(true))
+      act(() => result.current.setIsSshPasswordPromptOpen(true))
+      await waitForSentinelDepth(2)
+      const goSpy = vi.spyOn(history, 'go')
+
+      act(() => result.current.setIsMobileWebShell(false))
+      await waitForSentinelDepth(0)
+
+      expect(stackIds()).toEqual([])
+      expect(goSpy).toHaveBeenCalledTimes(1)
+      expect(goSpy).toHaveBeenCalledWith(-2)
+      expect(location.hash).toBe('#/base')
+
+      await pressSystemBack()
+      expect(location.hash).toBe('#/route-a')
+    })
+
+    it('keeps one sentinel for the default-scope overlay: the next back closes it once', async () => {
+      const { result } = renderHook(() => useFlipOwners())
+      act(() => result.current.setGitSheetOpen(true))
+      act(() => result.current.setIsCommandHistoryOpen(true))
+      await waitForSentinelDepth(2)
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+
+      act(() => result.current.setIsMobileWebShell(false))
+      await waitForSentinelDepth(1)
+
+      // One cleanup traversal of one entry (history.back()), nothing closed by it.
+      expect(backSpy).toHaveBeenCalledTimes(1)
+      expect(goSpy).not.toHaveBeenCalled()
+      expect(stackIds()).toEqual(['git-sheet'])
+      expect(result.current.gitSheetOpen).toBe(true)
+
+      // The legacy popstate path closes the git sheet through its owner, once.
+      // (The route back after it is asserted in the store-level flip test: the
+      // legacy re-arm hazard with an owner that unregisters one render later is
+      // out of scope here.)
+      await pressSystemBack()
+      expect(result.current.gitSheetOpen).toBe(false)
+      expect(stackIds()).toEqual([])
+      expect(location.hash).toBe('#/base')
+    })
+
+    it('makes no history call when no sentinel is stranded', async () => {
+      const { result } = renderHook(() => useFlipOwners())
+      act(() => result.current.setGitSheetOpen(true))
+      await waitForSentinelDepth(1)
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+
+      act(() => result.current.setIsMobileWebShell(false))
+      await settleOverlayBackStack()
+
+      expect(backSpy).not.toHaveBeenCalled()
+      expect(goSpy).not.toHaveBeenCalled()
+      expect(readOverlaySentinelDepth(history.state)).toBe(1)
     })
   })
 

@@ -1,5 +1,6 @@
 import { Toaster as Sonner, toast } from 'sonner'
 import 'sonner/dist/styles.css'
+import { DOCK_CLEARANCE_VAR } from '@/hooks/use-dock-clearance'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useAppearanceMode } from '@/stores/app-settings-store'
 import './sonner.css'
@@ -7,18 +8,21 @@ import './sonner.css'
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
 /**
- * Bottom offset (px) of the toast stack on the mobile web shell: clear of the
- * dock instead of covering the composer. 160 = the one-row composer card (100:
- * editor block 46 + toolbar row 44 + 8 bottom padding + 2 borders) + the
- * `ChatInputBar` `pb-6` (24) + the `StatusBar` `h-6` (24) that the mobile shell
- * renders below the chat pane + a 12 gap. The offset is measured from the
- * viewport bottom, so the status bar counts: without it the toast's bottom edge
- * lands 12px inside the card instead of 12px above it. It also clears the
- * terminal key bar. The variable parts of the dock (changed files, queue,
- * approval) are not counted here.
+ * Bottom offset of the toast stack on the mobile web shell: a 12px gap above the
+ * highest dock edge. `useDockClearance` measures the chat dock (composer, open
+ * approval, changed-files bar, queue) and the terminal key bar and publishes the
+ * distance from the viewport bottom to that edge as `--mobile-dock-height`;
+ * sonner measures its offsets from the same bottom edge, so the dock's own
+ * padding, the iOS keyboard spacer and the safe-area inset are already counted.
+ * The variable exists only while a dock is on screen. The fallback is required:
+ * an undefined variable would make the whole `bottom` declaration invalid, so
+ * with no dock (editor, Git, browser tab) the stack sits one gap above the
+ * safe-area inset.
  */
-const MOBILE_TOAST_BOTTOM_OFFSET_PX = 160
-const MOBILE_TOAST_OFFSET = { bottom: MOBILE_TOAST_BOTTOM_OFFSET_PX }
+const MOBILE_TOAST_GAP = '12px'
+const MOBILE_TOAST_OFFSET = {
+  bottom: `calc(var(${DOCK_CLEARANCE_VAR}, env(safe-area-inset-bottom, 0px)) + ${MOBILE_TOAST_GAP})`
+}
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const appearanceMode = useAppearanceMode()
@@ -28,7 +32,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // toast over the terminal key bar. Verified against sonner@1.7.4's dist
   // source: the only tap handlers set the transient `interacting` flag, not
   // `expanded`. On the mobile web shell default the stack to expanded
-  // (expand=true) and lift the offset clear of the composer dock and key bar;
+  // (expand=true) and lift the offset clear of the measured dock and key bar;
   // desktop keeps the collapsed hover-expand pile byte-identical.
   const isMobileWebShell = useMobileWebShell()
 
@@ -44,10 +48,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
       // unsure whether they can dismiss early.
       closeButton
       // Comfortable distance from screen edge. Mobile: lift the stack above the
-      // composer dock (see MOBILE_TOAST_BOTTOM_OFFSET_PX). sonner 1.7.4 applies
-      // `offset` only above 600px and `mobileOffset` (default 16px) at 600px and
-      // below, so both are set. The object form moves only the bottom edge; a
-      // number would also set left and right and squeeze the toast.
+      // measured dock (see MOBILE_TOAST_OFFSET). sonner 1.7.4 applies `offset`
+      // only above 600px and `mobileOffset` (default 16px) at 600px and below,
+      // so both are set. The object form moves only the bottom edge; a number or
+      // string would also set left and right and squeeze the toast.
       offset={isMobileWebShell ? MOBILE_TOAST_OFFSET : 20}
       mobileOffset={isMobileWebShell ? MOBILE_TOAST_OFFSET : undefined}
       // Default 4s is fine for success; errors deserve a touch longer

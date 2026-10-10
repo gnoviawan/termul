@@ -44,6 +44,7 @@ import { useMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
+import { useProjectSwitch } from '@/hooks/use-project-switch'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { useSSHConnection } from '@/hooks/use-ssh-connection'
@@ -395,6 +396,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isExplorerVisible = useFileExplorerVisible()
   const isSidebarVisible = useSidebarVisible()
   const isMobileWebShell = useMobileWebShell()
+  const { switchTo: switchProjectFromPalette } = useProjectSwitch('CommandPalette')
   const reducedMotion = useReducedMotion() ?? false
 
   // SSH state
@@ -433,7 +435,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isCommandHistoryOpen,
     setIsCommandHistoryOpen,
     isSshPasswordPromptOpen: sshPasswordPrompt !== null,
-    closeSshPasswordPrompt
+    closeSshPasswordPrompt,
+    locationKey: location.key
   })
 
   const sshProfileWithPassword = activeSSHProfile
@@ -1611,19 +1614,23 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [closeTerminalByRecordId]
   )
 
+  // Returns true only when it opened the close confirm, so a caller that sits
+  // under that dialog (the mobile drawer) knows to get out of its way. Closing
+  // at once, or refusing a terminal that is already closing, returns false.
   const handleCloseTerminal = useCallback(
-    (id: string, tabId: string) => {
+    (id: string, tabId: string): boolean => {
       if (closingTerminalIds.includes(id)) {
-        return
+        return false
       }
 
       if (!confirmTerminalClose) {
         void closeTerminalTabByTabId(tabId)
-        return
+        return false
       }
 
       setCloseConfirmRememberChoice(false)
       setCloseConfirmTerminal({ terminalId: id, tabId })
+      return true
     },
     [closeTerminalTabByTabId, closingTerminalIds, confirmTerminalClose]
   )
@@ -1661,18 +1668,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setCloseConfirmTerminal(null)
   }, [closeConfirmLoading])
 
-  // Dirty file close handlers
-  const handleCloseEditorTab = useCallback((filePath: string) => {
+  // Dirty file close handlers. Returns true only when it opened the dirty-file
+  // confirm (see `handleCloseTerminal`).
+  const handleCloseEditorTab = useCallback((filePath: string): boolean => {
     const fileState = useEditorStore.getState().openFiles.get(filePath)
     if (fileState?.operationStatus === 'saving' || fileState?.operationStatus === 'reloading') {
-      return
+      return false
     }
     if (fileState?.isDirty) {
       setDirtyCloseFilePath(filePath)
-    } else {
-      useEditorStore.getState().closeFileIfIdle(filePath)
-      useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+      return true
     }
+    useEditorStore.getState().closeFileIfIdle(filePath)
+    useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+    return false
   }, [])
 
   const handleSaveThenClose = useCallback(async () => {
@@ -2136,7 +2145,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
             isOpen={isCommandPaletteOpen}
             onClose={() => setIsCommandPaletteOpen(false)}
             projects={projects}
-            onSwitchProject={selectProject}
+            onSwitchProject={
+              isMobileWebShell ? (id) => void switchProjectFromPalette(id) : selectProject
+            }
             onAddTerminal={() => handleAddTerminal(undefined)}
             onShowAgentLauncher={() => {
               const paneId = useWorkspaceStore.getState().activePaneId

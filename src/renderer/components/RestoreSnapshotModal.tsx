@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useId } from 'react'
 import { AlertTriangle, RotateCcw, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import type { Snapshot } from '@/types/project'
 
 interface RestoreSnapshotModalProps {
@@ -22,6 +23,13 @@ export function RestoreSnapshotModal({
   onRestore,
   isRestoring
 }: RestoreSnapshotModalProps): React.JSX.Element {
+  // Mobile web shell: system back closes this modal through the page's own
+  // close, which vetoes while a restore is in flight (inert on desktop).
+  const overlayId = `restore-snapshot-modal:${useId()}`
+  useOverlayRegistration(overlayId, isOpen && snapshot !== null, onClose, {
+    mobileShellOnly: true
+  })
+
   // Handle Escape key to close modal
   useEffect(() => {
     if (!isOpen) return

@@ -449,10 +449,26 @@ jobs:
   # web_embed_missing compile_error in assets.rs; the ordering here keeps the
   # embed non-empty).
   standalone-server:
-    name: Build termul-server (linux-x64)
+    name: Build termul-server (linux-${{ matrix.arch }})
     needs: changelog
     if: github.event_name == 'push'
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            asset_name: termul-server
+            platform_key: linux-x86_64-server
+            elf_machine: 'x86-64'
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            asset_name: termul-server-linux-aarch64
+            platform_key: linux-aarch64-server
+            elf_machine: 'ARM aarch64'
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
@@ -482,7 +498,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust
         uses: swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
@@ -505,7 +521,7 @@ jobs:
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
-      - name: Build termul-server (linux-x64 release)
+      - name: Build termul-server (linux-${{ matrix.arch }} release)
         working-directory: src-tauri
         # Bake the signing pubkey into the binary at compile time so the opt-in
         # self-update subsystem can verify downloaded binaries (option_env!).
@@ -523,6 +539,14 @@ jobs:
           find target -name 'termul-server' -type f -print || true
           ls -la target/release/termul-server 2>/dev/null || echo "target/release/termul-server NOT FOUND"
 
+      - name: Verify termul-server binary architecture
+        working-directory: src-tauri
+        env:
+          ELF_MACHINE: ${{ matrix.elf_machine }}
+        run: |
+          file target/release/termul-server
+          file target/release/termul-server | grep -F "$ELF_MACHINE"
+
       - name: Sign termul-server binary
         working-directory: src-tauri
         env:
@@ -537,24 +561,30 @@ jobs:
         env:
           VERSION: ${{ needs.changelog.outputs.normalized_version }}
           TAG: ${{ github.ref_name }}
+          ASSET_NAME: ${{ matrix.asset_name }}
+          PLATFORM_KEY: ${{ matrix.platform_key }}
         run: |
           node scripts/release/prepare-server-artifacts.mjs \
             --signature src-tauri/target/release/termul-server.sig \
+            --binary-name "$ASSET_NAME" \
+            --platform-key "$PLATFORM_KEY" \
             --tag "$TAG" \
             --version "$VERSION" \
             --output server-collected/server-manifest.json
 
       - name: Stage termul-server binary + signature
         shell: bash
+        env:
+          ASSET_NAME: ${{ matrix.asset_name }}
         run: |
           mkdir -p server-collected
-          cp src-tauri/target/release/termul-server server-collected/termul-server
-          cp src-tauri/target/release/termul-server.sig server-collected/termul-server.sig
+          cp src-tauri/target/release/termul-server "server-collected/$ASSET_NAME"
+          cp src-tauri/target/release/termul-server.sig "server-collected/$ASSET_NAME.sig"
 
       - name: Upload termul-server workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: release-standalone-server
+          name: release-standalone-server-${{ matrix.arch }}
           # Single root so upload-artifact's least-common-ancestor doesn't
           # collapse to the workspace root (which would re-prefix every path).
           path: server-collected/
@@ -616,9 +646,27 @@ jobs:
             done < <(find "$root/assets" -maxdepth 1 -type f -print0)
           done
 
-          cp release-inputs/release-standalone-server/termul-server release-assets/termul-server
-          cp release-inputs/release-standalone-server/termul-server.sig release-assets/termul-server.sig
-          manifests+=("release-inputs/release-standalone-server/server-manifest.json")
+          # Standalone server binaries: one workflow artifact per arch (<arch>:<asset>:<key>).
+          # Both are required so a release never ships without an arm64 server.
+          for entry in x64:termul-server:linux-x86_64-server arm64:termul-server-linux-aarch64:linux-aarch64-server; do
+            IFS=: read -r server_arch server_asset server_key <<< "$entry"
+            server_root="release-inputs/release-standalone-server-$server_arch"
+            if [[ ! -s "$server_root/server-manifest.json" || ! -s "$server_root/$server_asset" || ! -s "$server_root/$server_asset.sig" ]]; then
+              echo "Missing collected standalone server input for $server_arch" >&2
+              exit 1
+            fi
+            node -e '
+              const [file, key, asset] = process.argv.slice(1);
+              const record = JSON.parse(require("fs").readFileSync(file, "utf8")).platforms?.[key];
+              if (!record || !record.url.endsWith("/" + asset)) {
+                console.error(`Server manifest ${file} must map ${key} to ${asset}`);
+                process.exit(1);
+              }
+            ' "$server_root/server-manifest.json" "$server_key" "$server_asset"
+            cp "$server_root/$server_asset" "release-assets/$server_asset"
+            cp "$server_root/$server_asset.sig" "release-assets/$server_asset.sig"
+            manifests+=("$server_root/server-manifest.json")
+          done
 
           # Channel selection: stable (`v*` tag) vs Insider RC (`v*-rc.*` tag).
           # The merge validator derives the asset URL tag from the channel:
@@ -779,6 +827,18 @@ jobs:
             const m = JSON.parse(fs.readFileSync("promote/latest-insider.json", "utf8"));
             if (!m.platforms || typeof m.platforms !== "object" || Array.isArray(m.platforms)) {
               throw new Error("promote: latest-insider.json has no platforms object");
+            }
+            // An RC published before the arm64 server build has no
+            // `linux-aarch64-server` record; promoting it would leave ARM
+            // servers on stable without an update entry. Keep in sync with the
+            // `-server` keys in requiredPlatformKeys
+            // (scripts/release/merge-updater-manifests.mjs).
+            const requiredServerKeys = ["linux-x86_64-server", "linux-aarch64-server"];
+            const missingServerKeys = requiredServerKeys.filter((key) => !m.platforms[key]);
+            if (missingServerKeys.length > 0) {
+              throw new Error(
+                `promote: latest-insider.json is missing ${missingServerKeys.join(", ")}; publish a new RC that includes every server build before promoting`
+              );
             }
             m.version = stable;
             // (patch 15) Refresh pub_date to the promotion timestamp and replace

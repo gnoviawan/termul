@@ -7,7 +7,7 @@ import {
   waitFor,
   within
 } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { HashRouter, MemoryRouter, type NavigateFunction, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -15,6 +15,8 @@ import {
   settleOverlayBackStack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import { useConfirmTerminalClose } from '@/stores/app-settings-store'
+import { useEditorStore } from '@/stores/editor-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
@@ -36,6 +38,24 @@ const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
       worktrees?: Array<{ id: string; name: string; path: string }>
     }
   }
+}))
+
+// The palette's project picks: `selectProject` is the desktop path, and the
+// shared `useProjectSwitch` routine (its own tests live in
+// use-project-switch.test.tsx) is the phone shell's.
+const { selectProjectSpy, switchToSpy, useProjectSwitchSpy } = vi.hoisted(() => {
+  const switchTo = vi.fn(async () => 'completed' as const)
+  const projectSwitch = { switchTo, clearFailed: vi.fn() }
+  return {
+    selectProjectSpy: vi.fn(),
+    switchToSpy: switchTo,
+    useProjectSwitchSpy: vi.fn((_source: string) => projectSwitch)
+  }
+})
+
+vi.mock('@/hooks/use-project-switch', () => ({
+  useProjectSwitch: useProjectSwitchSpy,
+  useProjectSwitchState: () => ({ switchingId: null, queuedId: null, failedId: null, busy: false })
 }))
 
 vi.mock('@/lib/tauri-runtime', async () => {
@@ -75,7 +95,7 @@ vi.mock('@/stores/project-store', () => ({
   useActiveProject: () => projectRef.current,
   useActiveProjectId: () => 'p1',
   useProjectActions: () => ({
-    selectProject: vi.fn(),
+    selectProject: selectProjectSpy,
     addProject: vi.fn(),
     updateProject: vi.fn(),
     deleteProject: vi.fn(),
@@ -219,13 +239,15 @@ vi.mock('@/components/CommandPalette', () => ({
     onClose,
     onOpenCommandHistory,
     onSSHConnect,
-    onNewProject
+    onNewProject,
+    onSwitchProject
   }: {
     isOpen: boolean
     onClose: () => void
     onOpenCommandHistory?: () => void
     onSSHConnect?: (profileId: string) => void
     onNewProject?: () => void
+    onSwitchProject?: (projectId: string) => void
   }) =>
     isOpen ? (
       <div data-palette-new-project={onNewProject ? 'wired' : 'absent'}>
@@ -242,6 +264,16 @@ vi.mock('@/components/CommandPalette', () => ({
           }}
         >
           Connect SSH profile
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // A project entry: close first, then execute, as `executeCommand` does.
+            onClose()
+            onSwitchProject?.('p2')
+          }}
+        >
+          Palette: switch to Beta
         </button>
         {onNewProject && (
           <button
@@ -597,6 +629,119 @@ describe('WorkspaceLayout mobile branch', () => {
   // The mobile revamp retires the desktop StatusBar on the phone shell:
   // connection health moved to the drawer footer and ContextBarSettingsPopover
   // (a StatusBar child) is not mounted. Desktop keeps it (see the breakpoint suite).
+  describe('terminal ⋯ sheet navigation rows (L-14)', () => {
+    beforeEach(() => {
+      act(() => {
+        useWorkspaceStore.getState().addTerminalTab('t1')
+      })
+    })
+
+    afterEach(() => {
+      // The workspace store is real and shared by the tests below.
+      act(() => {
+        const { root, removeTab } = useWorkspaceStore.getState()
+        for (const leaf of getAllLeafPanes(root)) {
+          for (const tab of leaf.tabs) if (tab.type === 'terminal') removeTab(tab.id)
+        }
+      })
+    })
+
+    async function chooseTerminalItem(name: string): Promise<void> {
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      fireEvent.click(await screen.findByRole('button', { name }))
+    }
+
+    it('offers Git changes, Files, Command palette and Project settings, but not New terminal', async () => {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      await screen.findByRole('dialog')
+
+      const sheet = document.getElementById('mobile-terminal-actions-sheet')
+      const labels = Array.from(sheet?.querySelectorAll('button') ?? [])
+        .map((button) => button.textContent?.trim() ?? '')
+        .filter((text) => text.length > 0 && text !== 'Close')
+      expect(labels).toEqual([
+        'Rename terminal',
+        'Restart terminal',
+        'Command history',
+        'Git changes',
+        'Files',
+        'Command palette',
+        'Project settings',
+        'Close terminal'
+      ])
+    })
+
+    it('threads "Git changes" to the Git Changes sheet', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Git changes')
+
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    })
+
+    it('threads "Command palette" to the palette overlay', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Command palette')
+
+      expect(
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+      ).toBeInTheDocument()
+    })
+
+    it('threads "Project settings" to the Project Settings modal', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Project settings')
+
+      expect(useSettingsModalStore.getState().view).toBe('project')
+      expect(await screen.findByText('project-settings')).toBeInTheDocument()
+    })
+
+    it('threads "Files" and closes the terminal sheet', async () => {
+      renderLayout()
+
+      await chooseTerminalItem('Files')
+
+      await waitFor(() =>
+        expect(document.getElementById('mobile-terminal-actions-sheet')).not.toBeInTheDocument()
+      )
+    })
+
+    it('omits the Git changes row when there is no active project path', async () => {
+      projectRef.current = { id: 'p1', name: 'Demo' }
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      await screen.findByRole('dialog')
+
+      expect(screen.queryByRole('button', { name: 'Git changes' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Project settings' })).toBeInTheDocument()
+    })
+  })
+
+  describe('palette project switch (L-13)', () => {
+    it('sends a palette project pick through the shared switch routine, not selectProject', async () => {
+      renderLayout()
+
+      await chooseMoreItem('Command palette')
+      fireEvent.click(await screen.findByRole('button', { name: 'Palette: switch to Beta' }))
+
+      expect(useProjectSwitchSpy).toHaveBeenCalledWith('CommandPalette')
+      expect(switchToSpy).toHaveBeenCalledTimes(1)
+      expect(switchToSpy).toHaveBeenCalledWith('p2')
+      expect(selectProjectSpy).not.toHaveBeenCalled()
+      // The palette still closes on select; the project sheet is where badges show.
+      await waitFor(() =>
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+      )
+    })
+  })
+
   it('does not render the StatusBar on the mobile shell', async () => {
     renderLayout()
 
@@ -661,6 +806,103 @@ describe('WorkspaceLayout mobile branch', () => {
       expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
     )
     await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
+  // The changed-files bar's "Git" action lives in AgentChatPanel, which this
+  // file's PaneRenderer stub cannot host. A stand-in button beside the real
+  // layout is wired the way the panel wires it: the tapped button is handed to
+  // `openGitSheet(cwd, opener)` through `useGitSheetStore`. The Git sheet must
+  // return focus to it, not to <body> (and not to ⋯, which was never used).
+  describe('Git sheet opened from the changed-files Git action', () => {
+    function GitActionStandIn(): React.JSX.Element {
+      const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
+      return (
+        <button
+          type="button"
+          onClick={(event) => openGitSheet('/demo/.worktrees/chat', event.currentTarget)}
+        >
+          Open Git changes
+        </button>
+      )
+    }
+
+    function tree(showAction: boolean): React.JSX.Element {
+      return (
+        <TooltipProvider>
+          <MemoryRouter>
+            {showAction && <GitActionStandIn />}
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+    }
+
+    async function openFromGitAction(): Promise<{ action: HTMLElement; view: RenderResult }> {
+      const view = render(tree(true))
+      await screen.findByLabelText('More')
+      const action = screen.getByRole('button', { name: 'Open Git changes' })
+      fireEvent.click(action)
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(useGitSheetStore.getState().cwd).toBe('/demo/.worktrees/chat')
+      return { action, view }
+    }
+
+    it('returns focus to the Git action when Escape closes the sheet', async () => {
+      const { action } = await openFromGitAction()
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(action))
+      expect(document.activeElement).not.toBe(screen.getByLabelText('More'))
+    })
+
+    it("returns focus to the Git action when the sheet's Close button is used", async () => {
+      const { action } = await openFromGitAction()
+
+      const sheet = document.querySelector('[data-sheet]') as HTMLElement
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(action))
+    })
+
+    it('returns focus to the Git action when hardware back closes the sheet', async () => {
+      const { action } = await openFromGitAction()
+
+      await waitForSentinelDepth(1)
+      await pressSystemBack()
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(action))
+    })
+
+    it('leaves focus alone, with no throw, when the Git action is gone by the time it closes', async () => {
+      const { action, view } = await openFromGitAction()
+      // The bar unmounts while the sheet is open (a question replaced it).
+      view.rerender(tree(false))
+      expect(action.isConnected).toBe(false)
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() =>
+        expect(logFrontendError).toHaveBeenCalledWith({
+          level: 'info',
+          source: 'sheet-focus-return',
+          message: 'Sheet closed with no connected focus target: git-sheet'
+        })
+      )
+      expect(document.activeElement).toBe(document.body)
+    })
   })
 
   // Story 10 (QA F9/F7): the git sheet is no longer a radius-0 full-screen
@@ -852,6 +1094,42 @@ describe('WorkspaceLayout mobile branch', () => {
         expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
       )
       expect(window.location.hash).toBe(hashBefore)
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    it('a route push with the Git sheet open re-arms the sentinel, so one back closes the sheet and keeps the route', async () => {
+      const navigateRef: { current: NavigateFunction | null } = { current: null }
+      function NavProbe(): null {
+        navigateRef.current = useNavigate()
+        return null
+      }
+      render(
+        <TooltipProvider>
+          <HashRouter>
+            <NavProbe />
+            <WorkspaceLayout />
+          </HashRouter>
+        </TooltipProvider>
+      )
+
+      await chooseMoreItem('Git changes')
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      await waitForSentinelDepth(1)
+
+      // The router pushes a route (no popstate): the layout hands its new
+      // location key to the back-stack hook, which re-arms the sentinel.
+      await act(async () => {
+        navigateRef.current?.('/snapshots')
+      })
+      await waitFor(() => expect(window.location.hash).toBe('#/snapshots'))
+      await waitForSentinelDepth(1)
+
+      await pressSystemBack()
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(window.location.hash).toBe('#/snapshots')
       expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
     })
 
@@ -1413,6 +1691,155 @@ describe('WorkspaceLayout mobile branch', () => {
         leaf.tabs.some((t) => t.id === historyTabs[0].id)
       )
       expect(containingPane?.activeTabId).toBe(historyTabs[0].id)
+    })
+  })
+
+  describe('drawer row close and its confirm (L-16)', () => {
+    const leafWith = (tabs: LeafNode['tabs'], activeTabId: string): LeafNode => ({
+      type: 'leaf',
+      id: 'pane-t',
+      tabs,
+      activeTabId
+    })
+    const seedLeaf = (leaf: LeafNode): void => {
+      useWorkspaceStore.setState({
+        root: leaf,
+        activePaneId: leaf.id,
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      })
+    }
+    const tabIds = (): string[] =>
+      getAllLeafPanes(useWorkspaceStore.getState().root).flatMap((leaf) =>
+        leaf.tabs.map((tab) => tab.id)
+      )
+
+    afterEach(() => {
+      useWorkspaceStore.getState().resetLayout()
+      useEditorStore.setState({ openFiles: new Map(), activeFilePath: null })
+      vi.mocked(useConfirmTerminalClose).mockReturnValue(true)
+    })
+
+    it('hands the drawer off to the Close Terminal confirm, and Cancel keeps the tab with focus on ☰', async () => {
+      seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
+      renderLayout()
+      const menu = await screen.findByLabelText('Open menu')
+      fireEvent.click(menu)
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
+
+      // The drawer is gone, so its overlay no longer covers the confirm.
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      expect(await screen.findByText('Close Terminal')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible()
+      expect(tabIds()).toEqual(['term-t1'])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => expect(screen.queryByText('Close Terminal')).toBeNull())
+      expect(tabIds()).toEqual(['term-t1'])
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('Escape on the Close Terminal confirm also leaves focus on ☰', async () => {
+      seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
+      renderLayout()
+      const menu = await screen.findByLabelText('Open menu')
+      fireEvent.click(menu)
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
+      await screen.findByText('Close Terminal')
+
+      fireEvent.keyDown(window, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByText('Close Terminal')).toBeNull())
+      expect(tabIds()).toEqual(['term-t1'])
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('hands the drawer off to the Unsaved Changes confirm for a dirty editor row', async () => {
+      useEditorStore.setState({
+        openFiles: new Map([['/demo/a.ts', { isDirty: true }]]) as never
+      })
+      seedLeaf(
+        leafWith(
+          [{ type: 'editor', id: 'edit-/demo/a.ts', filePath: '/demo/a.ts' }],
+          'edit-/demo/a.ts'
+        )
+      )
+      renderLayout()
+      const menu = await screen.findByLabelText('Open menu')
+      fireEvent.click(menu)
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      expect(await screen.findByText('Unsaved Changes')).toBeVisible()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await waitFor(() => expect(screen.queryByText('Unsaved Changes')).toBeNull())
+      expect(tabIds()).toEqual(['edit-/demo/a.ts'])
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('keeps the drawer open, with no confirm, when confirm-before-close is off', async () => {
+      vi.mocked(useConfirmTerminalClose).mockReturnValue(false)
+      seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
+
+      await settleOverlayBackStack()
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.queryByText('Close Terminal')).not.toBeInTheDocument()
+    })
+
+    it('keeps the drawer open, with no confirm, for a file that is still saving', async () => {
+      useEditorStore.setState({
+        openFiles: new Map([['/demo/a.ts', { isDirty: true, operationStatus: 'saving' }]]) as never
+      })
+      seedLeaf(
+        leafWith(
+          [{ type: 'editor', id: 'edit-/demo/a.ts', filePath: '/demo/a.ts' }],
+          'edit-/demo/a.ts'
+        )
+      )
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+
+      fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
+
+      await settleOverlayBackStack()
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
+      expect(tabIds()).toEqual(['edit-/demo/a.ts'])
+    })
+
+    it('keeps the drawer open when a clean editor row closes, and moves focus inside it', async () => {
+      seedLeaf(
+        leafWith(
+          [{ type: 'editor', id: 'edit-/demo/a.ts', filePath: '/demo/a.ts' }],
+          'edit-/demo/a.ts'
+        )
+      )
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const close = within(drawer).getByRole('button', { name: 'Close a.ts' })
+      close.focus()
+
+      fireEvent.click(close)
+
+      await waitFor(() => expect(tabIds()).toEqual([]))
+      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
+      // The row (and its ✕) is gone; focus did not fall to <body> inside the trap.
+      expect(drawer.contains(document.activeElement)).toBe(true)
+      expect(document.activeElement).not.toBe(document.body)
     })
   })
 

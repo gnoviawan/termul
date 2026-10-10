@@ -552,7 +552,16 @@ export function PaneContent({
             exit={{ opacity: 0 }}
             transition={launcherExitTransition}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
+              // An Esc that bubbles out of a portaled selector (Radix prevents the
+              // Esc it consumes; any other React-tree portal sits outside this
+              // wrapper) belongs to that layer, not to the launcher.
+              if (
+                e.key === 'Escape' &&
+                !e.defaultPrevented &&
+                e.currentTarget.contains(e.target as Node)
+              ) {
+                useWorkspaceStore.getState().hideAgentLauncher()
+              }
             }}
           >
             <AgentLauncher paneId={pane.id} />

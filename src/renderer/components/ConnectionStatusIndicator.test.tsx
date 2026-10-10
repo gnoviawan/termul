@@ -12,7 +12,7 @@ const mockIsTauriContext = vi.hoisted(() => vi.fn(() => false))
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauriContext }))
 
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
-import { ConnectionStatusIndicator } from './ConnectionStatusIndicator'
+import { ConnectionStatusIndicator, formatConnectedSummary } from './ConnectionStatusIndicator'
 
 function renderIndicator(): ReturnType<typeof render> {
   return render(
@@ -148,13 +148,30 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
     renderLabelled()
 
     const status = screen.getByRole('status')
-    expect(status).toHaveTextContent('Connected')
+    expect(status).toHaveTextContent(`Connected · ${window.location.host}`)
     expect(status).toHaveAttribute('aria-live', 'polite')
     // The state is the text, not a changing aria-label.
     expect(status).not.toHaveAttribute('aria-label')
-    const label = screen.getByText('Connected')
-    expect(label).toHaveClass('min-w-0')
+    const label = screen.getByText(`Connected · ${window.location.host}`)
+    expect(label).toHaveClass('min-w-0', 'break-words')
     expect(status).toHaveClass('text-2xs', 'text-muted-foreground')
+  })
+
+  it('names the host when both channels are connected, as one text node', () => {
+    renderLabelled()
+
+    const label = screen.getByText(`Connected · ${window.location.host}`)
+    expect(window.location.host).not.toBe('')
+    expect(label.childNodes).toHaveLength(1)
+    expect(label.firstChild?.nodeType).toBe(Node.TEXT_NODE)
+  })
+
+  it('leaves the StatusBar render without the host', () => {
+    renderIndicator()
+
+    expect(screen.getByRole('status', { name: 'Connected' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).not.toHaveTextContent('·')
+    expect(screen.getByRole('button', { name: 'Connected' })).toBeInTheDocument()
   })
 
   it('has no tooltip button and a decorative lamp', () => {
@@ -178,7 +195,11 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
     useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
     renderLabelled()
 
-    expect(screen.getByRole('status')).toHaveTextContent('Control channel: reconnecting')
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('Control channel: reconnecting')
+    // Degraded text is unchanged: no host.
+    expect(status).not.toHaveTextContent('Connected')
+    expect(status).not.toHaveTextContent(window.location.host)
     expect(lampClass()).toContain('text-warning')
     expect(lampClass()).toContain('animate-pulse')
     expect(lampClass()).toContain('motion-reduce:animate-none')
@@ -201,5 +222,16 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
     mockIsTauriContext.mockReturnValue(true)
     const { container } = renderLabelled()
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('formatConnectedSummary', () => {
+  it('names the host after the status', () => {
+    expect(formatConnectedSummary('127.0.0.1:8199')).toBe('Connected · 127.0.0.1:8199')
+    expect(formatConnectedSummary('termul.example.com')).toBe('Connected · termul.example.com')
+  })
+
+  it.each(['', '   '])('falls back to a plain Connected for the empty host %j', (host) => {
+    expect(formatConnectedSummary(host)).toBe('Connected')
   })
 })

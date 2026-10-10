@@ -194,6 +194,39 @@ describe('ChatComposerEditor keymap ordering (patch 13)', () => {
   })
 })
 
+describe('ChatComposerEditor Escape contract (mobile back stack L-32)', () => {
+  // The AgentLauncher overlay wrapper in `PaneContent` hides the launcher only
+  // for an Esc that is not `defaultPrevented`. A host that consumes Esc through
+  // `onBeforeEditorKeyDown` (the slash/mention menu close, Escape→hide) does not
+  // call `preventDefault()` itself: ProseMirror does it when `handleKeyDown`
+  // returns true. That is the signal the wrapper relies on to leave a
+  // menu-consumed Esc alone, and no other test mounts the real composer.
+  it('marks an Escape the host consumed as defaultPrevented without the host preventing it', async () => {
+    const hostSawPrevented = vi.fn()
+    const { getByEditor } = mountEditor({
+      onBeforeEditorKeyDown: (event) => {
+        if (event.key !== 'Escape') return false
+        hostSawPrevented(event.defaultPrevented)
+        return true
+      }
+    })
+    await waitFor(() => expect(getByEditor()).toBeTruthy())
+
+    const escapeKey = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true
+    })
+    act(() => {
+      getByEditor().view.dom.dispatchEvent(escapeKey)
+    })
+
+    expect(hostSawPrevented).toHaveBeenCalledTimes(1)
+    expect(hostSawPrevented).toHaveBeenCalledWith(false)
+    expect(escapeKey.defaultPrevented).toBe(true)
+  })
+})
+
 describe('docToDisplayText round-trip (patches 7 + 11)', () => {
   it('re-emits the padding block after a pill so on-disk draft bytes are stable (patch 7)', async () => {
     const { getByEditor } = mountEditor()

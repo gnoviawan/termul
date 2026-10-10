@@ -131,6 +131,13 @@ export interface AcpSession {
   models?: SessionModelState | null
   configOptions: SessionConfigOption[]
   lastError: string | null
+  /** gh-821: JSON-RPC code of the error behind `lastError`, when it was an
+   * agent RPC error (`null`/absent otherwise). Only set by the `agent_error` /
+   * `agent_crashed` reducers: other `lastError` writers do not touch it, so
+   * read it only while the `lastError` it accompanies is the event's message. */
+  lastErrorCode?: number | null
+  /** gh-821: JSON-RPC `data` of the error behind `lastError`, when present. */
+  lastErrorData?: unknown
   createdAt: number
   /**
    * Set while a `session/load` replay may still deliver history chunks.
@@ -244,6 +251,17 @@ export interface PendingPermission {
   sessionId: SessionId
   options: PermissionOption[]
   toolCall: unknown
+}
+
+/**
+ * A permission the server denied because this device disconnected (L-09). The
+ * server emits no event for it, so the store infers it: a request that was
+ * pending at a transport loss and later left `pendingPermissions` without the
+ * user answering. `tool` is the request's tool title for the notice copy.
+ */
+export interface PermissionDenialNotice {
+  requestId: string
+  tool: string
 }
 
 /** A pending structured question (issue #411), keyed by `questionId`. */
@@ -430,6 +448,12 @@ export interface AcpState {
   pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
   pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
   pendingElicitations: Record<string, PendingElicitation>
+  /**
+   * Per-session notice that a permission was denied by a disconnect (see
+   * `PermissionDenialNotice`). Set by `attachPermissionDenialTracking`; cleared
+   * when the session's next turn starts or the session goes away.
+   */
+  permissionDenialNotices: Record<SessionId, PermissionDenialNotice>
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
   promptQueues: Record<SessionId, QueuedPrompt[]>
   /**

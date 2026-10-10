@@ -267,6 +267,25 @@ vi.mock('sonner', () => ({
   toast: { error: mockToastError, success: vi.fn() }
 }))
 
+// `null` keeps the real hook (the jsdom default), so only the dock-clearance
+// block below flips the shell. The real hook still runs on every render: the
+// override never changes the hook order.
+const { mockMobileShell } = vi.hoisted(() => ({
+  mockMobileShell: { current: null as boolean | null }
+}))
+vi.mock('@/hooks/use-mobile-web-shell', async () => {
+  const actual = await vi.importActual<typeof import('@/hooks/use-mobile-web-shell')>(
+    '@/hooks/use-mobile-web-shell'
+  )
+  return {
+    ...actual,
+    useMobileWebShell: () => {
+      const real = actual.useMobileWebShell()
+      return mockMobileShell.current ?? real
+    }
+  }
+})
+
 vi.mock('@/hooks/use-agent-skills', async () => {
   // Use the real (sync) buildPromptWithLoadedSkills so the wire framing is
   // exercised end-to-end — no mock needed now that paths are captured at pick
@@ -2467,6 +2486,82 @@ describe('AgentLauncher mobile empty-state overflow', () => {
     expect(heading.className).toContain('break-words')
     // Composer column allows flex children to shrink.
     expect(composerColumn.className).toContain('min-w-0')
+  })
+})
+
+// The mobile launcher pins a composer to the bottom of the shell and raises
+// toasts (unsupported attachments, "Failed to set model"). Its composer column
+// registers with `useDockClearance`, so a toast sits above the card instead of
+// over its toolbar. jsdom lays nothing out: the column's rect is stubbed.
+describe('AgentLauncher dock clearance (mobile toasts)', () => {
+  const DOCK_VAR = '--mobile-dock-height'
+  const dockVar = (): string => document.documentElement.style.getPropertyValue(DOCK_VAR)
+  const originalInnerHeight = window.innerHeight
+  let rectSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: 844 })
+    // Only the composer column (the parent of the composer group) has a box.
+    rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element
+    ) {
+      const isColumn = Array.from(this.children).some((child) =>
+        child.hasAttribute('data-agent-launcher-composer-group')
+      )
+      const top = isColumn ? 700 : 0
+      const width = isColumn ? 390 : 0
+      const height = isColumn ? 120 : 0
+      return {
+        x: 0,
+        y: top,
+        top,
+        left: 0,
+        width,
+        height,
+        right: width,
+        bottom: top + height,
+        toJSON: () => ({})
+      }
+    })
+  })
+
+  afterEach(() => {
+    rectSpy.mockRestore()
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      writable: true,
+      value: originalInnerHeight
+    })
+    document.documentElement.style.removeProperty(DOCK_VAR)
+    mockMobileShell.current = null
+  })
+
+  it('writes the distance to the composer column top on the mobile shell', () => {
+    mockMobileShell.current = true
+    renderLauncher()
+
+    const group = document.querySelector('[data-agent-launcher-composer-group]')
+    expect(group).not.toBeNull()
+    // The column, not the group: the group takes a morph transform while exiting.
+    expect(group?.parentElement?.className).toContain('max-w-4xl')
+    expect(dockVar()).toBe('144px')
+  })
+
+  it('writes nothing when the shell is not mobile', () => {
+    mockMobileShell.current = false
+    renderLauncher()
+
+    expect(document.querySelector('[data-agent-launcher-composer-group]')).not.toBeNull()
+    expect(dockVar()).toBe('')
+  })
+
+  it('removes the property when the launcher unmounts', () => {
+    mockMobileShell.current = true
+    renderLauncher()
+    expect(dockVar()).toBe('144px')
+
+    cleanup()
+    expect(dockVar()).toBe('')
   })
 })
 

@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { ClipboardPaste, Keyboard } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { clipboardApi } from '@/lib/clipboard-api'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
@@ -32,6 +33,9 @@ export function MobileTerminalControls({
 }: MobileTerminalControlsProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(true)
   const keyGroupId = useId()
+  // The bar exists only on the mobile shell. It reports its top edge so a toast
+  // clears the whole bar, one row or two (`useDockClearance`).
+  const barRef = useDockClearance(true)
 
   const write = async (data: string): Promise<void> => {
     const result = await terminalApi.write(terminalId, data)
@@ -55,7 +59,10 @@ export function MobileTerminalControls({
   }
 
   return (
-    <div className="shrink-0 border-t border-border/60 bg-card/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur">
+    <div
+      ref={barRef}
+      className="shrink-0 border-t border-border/60 bg-card/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur"
+    >
       {/* #859: horizontal scroll hid arrows/PgDn off-screen at 390px — the
           keys now wrap into a second row on narrow viewports instead of
           scrolling, so every key stays visible and tappable. The group is that

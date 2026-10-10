@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useId, useState } from 'react'
 import { toast } from 'sonner'
 import { FileEdit, Save, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useSSHActions, useSSHEditorContent, useSSHEditorFile } from '@/stores/ssh-store'
 
 interface SSHFileEditorProps {
@@ -47,6 +48,17 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
     if (isDirty) setConfirmClose(true)
     else setStoreFile(null)
   }, [isDirty, setStoreFile])
+
+  // Only the unsaved-changes confirm is an overlay (the editor body is not).
+  // Mobile web shell: system back takes the safe choice, "Continue Editing",
+  // so nothing is saved or discarded (inert on desktop).
+  const confirmOverlayId = `ssh-unsaved-changes-confirm:${useId()}`
+  useOverlayRegistration(
+    confirmOverlayId,
+    confirmClose && editingFile !== null,
+    () => setConfirmClose(false),
+    { mobileShellOnly: true }
+  )
 
   if (!editingFile) return <></>
 

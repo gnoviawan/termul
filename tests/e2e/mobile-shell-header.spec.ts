@@ -558,12 +558,59 @@ test('subtitle shows project · branch · Local and opens the bottom project she
   await expect(sheet.getByRole('button', { name: 'Add project' })).toBeVisible()
   await expectRowsAtLeast44(sheet.getByRole('button', { name: /^shdr-/ }))
 
+  // ⌂ "Set as host default" (V-13) sits beside every row that is not the host
+  // default, at the touch floor. The current project shows it too unless it
+  // already is the host default, which the row's Default badge says.
+  const flatDefault = sheet.getByRole('button', { name: 'Set "shdr-flat" as host default' })
+  await expect(flatDefault).toBeVisible()
+  const flatDefaultBox = await box(flatDefault)
+  expect(flatDefaultBox.width).toBeGreaterThanOrEqual(44)
+  expect(flatDefaultBox.height).toBeGreaterThanOrEqual(44)
+  const currentRow = sheet.getByRole('listitem').filter({ hasText: 'shdr-git' })
+  const currentIsDefault = (await currentRow.locator('[title^="Host default"]').count()) > 0
+  await expect(
+    currentRow.getByRole('button', { name: 'Set "shdr-git" as host default' })
+  ).toHaveCount(currentIsDefault ? 0 : 1)
+  // A row that carries the Default badge never offers the control.
+  for (const row of await sheet
+    .getByRole('listitem')
+    .filter({ has: page.locator('[title^="Host default"]') })
+    .all()) {
+    await expect(row.getByRole('button', { name: /as host default$/ })).toHaveCount(0)
+  }
+
   // Switching closes the sheet, updates the subtitle and returns focus to it.
   await sheet.getByRole('button', { name: 'shdr-flat', exact: true }).tap()
   await expect(sheet).toBeHidden()
   await expect(subtitle(page)).toHaveText('shdr-flat')
   await expect(subtitle(page)).toHaveAccessibleName('shdr-flat, switch project')
   await expect(subtitle(page)).toBeFocused()
+})
+
+test('the project sheet ⌂ control calls the default-project route for its own project only', async ({
+  page,
+  request
+}) => {
+  await createProject(request, 'shdr-home')
+  await createProject(request, 'shdr-other')
+  await openMobileWorkspace(page, 'shdr-home')
+  // The host default is shared by every suite on this server: the route is
+  // stubbed, so the tap proves the request without changing it.
+  const bodies: unknown[] = []
+  await page.route('**/projects/default', async (route) => {
+    bodies.push(route.request().postDataJSON())
+    await route.fulfill({ json: { success: true } })
+  })
+
+  await subtitle(page).tap()
+  const sheet = page.getByRole('dialog', { name: 'Projects' })
+  await expect(sheet).toBeVisible()
+  await sheet.getByRole('button', { name: 'Set "shdr-other" as host default' }).tap()
+
+  await expect(page.getByText('"shdr-other" is now the host default')).toBeVisible()
+  expect(bodies).toEqual([{ projectId: 'e2e-shdr-other' }])
+  // Setting a default is not a switch: the current project is unchanged.
+  await expect(sheet.getByRole('button', { name: /^shdr-home Current/ })).toBeDisabled()
 })
 
 test('project sheet returns focus on Escape and hardware back, and Add project opens the creation flow', async ({
@@ -930,10 +977,17 @@ test('terminal context swaps ✎ to New terminal and ⋯ to the terminal actions
   await expect(sheet.getByText('Last exit code 0')).toBeVisible()
   await expect(sheet).toHaveAccessibleDescription('Last exit code 0')
   const rows = sheet.getByRole('button').filter({ hasNotText: /^Close$/ })
+  // The project has a path, so the header sheet's navigation rows sit between
+  // Command history and the destructive Close terminal (no New terminal: the
+  // header ✎ is New terminal in a terminal).
   await expect(rows).toHaveText([
     'Rename terminal',
     'Restart terminal',
     'Command history',
+    'Git changes',
+    'Files',
+    'Command palette',
+    'Project settings',
     'Close terminal'
   ])
   await expectRowsAtLeast44(rows)

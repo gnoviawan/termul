@@ -15,6 +15,8 @@ AppPreferences still has native `<select>` and custom toggle knobs. That is lega
 
 AppPreferences persists on each control change — do not add a footer Save. ProjectSettings uses the `SettingsModal` footer Save (`variant` default). One filled `Button` in that footer.
 
+Every text field is 16px on a coarse pointer so iOS Safari does not zoom when it takes focus: `Input` is `text-base md:text-sm pointer-coarse:text-base`, and a raw `<input>`, `<textarea>` or `<select>` adds `pointer-coarse:text-base` next to its size. Never `text-[16px]`. See [typography.md](typography.md).
+
 Keep submit enabled until the request starts. Then `disabled` on the submit `Button`. Do not block paste on `Input`.
 
 ```

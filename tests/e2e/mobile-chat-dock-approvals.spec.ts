@@ -792,6 +792,17 @@ test('an elicitation takes heading focus, shows an inline error beside its toast
   const alert = page.getByRole('alert')
   await expect(alert).toHaveText('branch is required.')
   await expect(page.getByText('branch is required.')).toHaveCount(2)
+  // The toast stack follows the measured dock, so the toast ends above the
+  // prompt instead of covering its buttons. It slides in from below: poll until
+  // it settles. The intended gap is 12px; require at least 8.
+  const toast = page.locator('[data-sonner-toast]').filter({ hasText: 'branch is required.' })
+  const promptTop = (await boxOf(page.locator('[data-approval-prompt^="elicitation:"]'))).y
+  await expect
+    .poll(async () => {
+      const box = await boxOf(toast)
+      return promptTop - (box.y + box.height)
+    })
+    .toBeGreaterThanOrEqual(8)
   await expect(field).toHaveAttribute('aria-invalid', 'true')
   const alertId = await alert.getAttribute('id')
   expect(alertId).toBeTruthy()

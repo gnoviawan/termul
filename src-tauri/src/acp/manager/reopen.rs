@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::acp::legacy_models::{resolve_models, WithLegacyModels};
+
 /// Option snapshot returned by a successful `session/load` or `session/resume`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,29 +14,57 @@ pub struct SessionReopenOutcome {
     pub config_options: Option<Vec<SessionConfigOption>>,
 }
 
+/// Convert a reopen response into the outcome plus whether its model list is
+/// legacy-only (read-only for `set_model`, issue #822).
 pub(super) trait IntoSessionReopenOutcome {
-    fn into_session_reopen_outcome(self) -> SessionReopenOutcome;
+    fn into_session_reopen_outcome(self) -> (SessionReopenOutcome, bool);
+}
+
+fn reopen_outcome(
+    modes: Option<agent_client_protocol::schema::v1::SessionModeState>,
+    config_options: Option<Vec<SessionConfigOption>>,
+    legacy: Option<SessionModelState>,
+) -> (SessionReopenOutcome, bool) {
+    let resolved = resolve_models(config_options.as_deref(), legacy);
+    (
+        SessionReopenOutcome {
+            modes,
+            models: resolved.models,
+            config_options,
+        },
+        resolved.legacy_only,
+    )
 }
 
 impl IntoSessionReopenOutcome for LoadSessionResponse {
-    fn into_session_reopen_outcome(self) -> SessionReopenOutcome {
-        let models = events::models_from_config_options(self.config_options.as_deref());
-        SessionReopenOutcome {
-            modes: self.modes,
-            models,
-            config_options: self.config_options,
-        }
+    fn into_session_reopen_outcome(self) -> (SessionReopenOutcome, bool) {
+        reopen_outcome(self.modes, self.config_options, None)
     }
 }
 
 impl IntoSessionReopenOutcome for ResumeSessionResponse {
-    fn into_session_reopen_outcome(self) -> SessionReopenOutcome {
-        let models = events::models_from_config_options(self.config_options.as_deref());
-        SessionReopenOutcome {
-            modes: self.modes,
-            models,
-            config_options: self.config_options,
-        }
+    fn into_session_reopen_outcome(self) -> (SessionReopenOutcome, bool) {
+        reopen_outcome(self.modes, self.config_options, None)
+    }
+}
+
+impl IntoSessionReopenOutcome for WithLegacyModels<LoadSessionResponse> {
+    fn into_session_reopen_outcome(self) -> (SessionReopenOutcome, bool) {
+        reopen_outcome(
+            self.response.modes,
+            self.response.config_options,
+            self.legacy,
+        )
+    }
+}
+
+impl IntoSessionReopenOutcome for WithLegacyModels<ResumeSessionResponse> {
+    fn into_session_reopen_outcome(self) -> (SessionReopenOutcome, bool) {
+        reopen_outcome(
+            self.response.modes,
+            self.response.config_options,
+            self.legacy,
+        )
     }
 }
 
@@ -57,8 +87,9 @@ pub(super) fn acp_err_wire_string(error: agent_client_protocol::Error) -> String
     }
 }
 
-/// Timed `session/load` / `session/resume`: preserve the option snapshot and
-/// record the session root on success.
+/// Timed `session/load` / `session/resume`: preserve the option snapshot,
+/// record the session root, and track whether the model list is legacy-only
+/// (issue #822) on success.
 pub(super) async fn run_session_reopen<Fut, T>(
     op: &str,
     session_id: &str,
@@ -85,10 +116,17 @@ where
             Err(format!("{op} timed out after {timeout:?}"))
         }
     };
-    if result.is_ok() {
-        req_state
-            .lock()
-            .set_session_root(session_id.to_string(), PathBuf::from(cwd));
+    match result {
+        Ok((outcome, legacy_only)) => {
+            let mut state = req_state.lock();
+            state.set_session_root(session_id.to_string(), PathBuf::from(cwd));
+            if legacy_only {
+                state.mark_legacy_models(session_id.to_string());
+            } else {
+                state.clear_legacy_models(session_id);
+            }
+            Ok(outcome)
+        }
+        Err(error) => Err(error),
     }
-    result
 }

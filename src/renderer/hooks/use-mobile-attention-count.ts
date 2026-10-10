@@ -7,8 +7,8 @@ import { useAgentChatProjectSignals } from './use-agent-chat-attention'
  * Reads the shared `attentionCounts` and subtracts the active chat when it is
  * counted there, so the mobile header pill never reports the chat the user is
  * already looking at. The active chat is judged with the same inputs the signals
- * hook uses: session status, its agent's status, a pending permission or
- * question for that session, and the ephemeral flag.
+ * hook uses: session status, its agent's status, a pending permission,
+ * question or elicitation for that session, and the ephemeral flag.
  */
 export function useMobileAttentionCount(
   activeProjectId: string | undefined,
@@ -27,6 +27,9 @@ export function useMobileAttentionCount(
         (item) => item.sessionId === activeSessionId
       ),
       pendingQuestion: Object.values(state.pendingQuestions ?? {}).some(
+        (item) => item.sessionId === activeSessionId
+      ),
+      pendingElicitation: Object.values(state.pendingElicitations ?? {}).some(
         (item) => item.sessionId === activeSessionId
       ),
       ephemeral: isEphemeralAcpSession(activeSessionId)

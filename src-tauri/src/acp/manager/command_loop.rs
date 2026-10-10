@@ -2,6 +2,10 @@ use super::*;
 
 use std::collections::BTreeMap;
 
+use crate::acp::legacy_models::{
+    advertises_model_config_option, resolve_models, send_with_legacy_models,
+    LEGACY_MODEL_SWITCH_UNSUPPORTED,
+};
 use crate::acp::session::PendingElicitation;
 
 /// The agent driver's main loop: complete `initialize`, then service commands
@@ -138,10 +142,16 @@ pub(super) async fn run_command_loop(
                     log::debug!(
                         "[acp] {req_agent_id} session/new sent, awaiting reply (timeout {timeout:?})"
                     );
-                    match tokio::time::timeout(timeout, req_cx.send_request(request).block_task())
+                    match tokio::time::timeout(timeout, send_with_legacy_models(&req_cx, request))
                         .await
                     {
-                        Ok(Ok(response)) => {
+                        Ok(Ok(sent)) => {
+                            // Issue #822: `response` is the typed result parsed from
+                            // the raw JSON-RPC value; `legacy` is the top-level
+                            // `models` field the typed schema drops.
+                            let response = sent.response;
+                            let resolved =
+                                resolve_models(response.config_options.as_deref(), sent.legacy);
                             let session_id = SessionId::from(response.session_id);
                             // Story 8: the registration metadata is built once —
                             // durable sessions register immediately; ephemeral
@@ -206,14 +216,15 @@ pub(super) async fn run_command_loop(
                                     .lock()
                                     .set_model_config_id(session_id.0.clone(), id);
                             }
+                            if resolved.legacy_only {
+                                req_state.lock().mark_legacy_models(session_id.0.clone());
+                            }
 
                             let event = SessionCreatedEvent {
                                 agent_id: req_agent_id,
                                 session_id: session_id.clone(),
                                 modes: response.modes.clone(),
-                                models: events::models_from_config_options(
-                                    response.config_options.as_deref(),
-                                ),
+                                models: resolved.models.clone(),
                                 config_options: response.config_options.clone(),
                             };
                             events::fan_out(
@@ -227,9 +238,7 @@ pub(super) async fn run_command_loop(
                                 Ok(NewSessionOutcome {
                                     session_id,
                                     modes: response.modes,
-                                    models: events::models_from_config_options(
-                                        response.config_options.as_deref(),
-                                    ),
+                                    models: resolved.models,
                                     config_options: response.config_options,
                                 }),
                             );
@@ -346,7 +355,7 @@ pub(super) async fn run_command_loop(
                         &session_id.0,
                         &cwd,
                         &req_state,
-                        req_cx.send_request(request).block_task(),
+                        send_with_legacy_models(&req_cx, request),
                     )
                     .await;
                     send_reply(&task_slot, result);
@@ -428,7 +437,7 @@ pub(super) async fn run_command_loop(
                         &session_id.0,
                         &cwd,
                         &req_state,
-                        req_cx.send_request(request).block_task(),
+                        send_with_legacy_models(&req_cx, request),
                     )
                     .await;
                     send_reply(&task_slot, result);
@@ -576,14 +585,14 @@ pub(super) async fn run_command_loop(
                     let cancel_state = turn_state.clone();
                     let cancel_session = session_id.clone();
                     let cancel_cx = turn_cx.clone();
-                    let outcome: Result<StopReason, String> = race_turn(
+                    let outcome: Result<StopReason, events::AcpErrorDetail> = race_turn(
                         async {
                             turn_cx
                                 .send_request(PromptRequest::new(&session_id, content))
                                 .block_task()
                                 .await
                                 .map(|r| r.stop_reason)
-                                .map_err(|e| e.to_string())
+                                .map_err(events::AcpErrorDetail::from)
                         },
                         cancel_rx,
                         &mut idle_rx,
@@ -677,12 +686,9 @@ pub(super) async fn run_command_loop(
                             }
                             send_reply(&task_slot, Ok(stop_reason));
                         }
-                        Err(message) => {
-                            let event = AgentErrorEvent {
-                                agent_id: turn_agent_id,
-                                session_id: Some(session_id),
-                                message: message.clone(),
-                            };
+                        Err(detail) => {
+                            let message = detail.message.clone();
+                            let event = detail.into_agent_error(turn_agent_id, Some(session_id));
                             // Turn-scoped error → sid is the session id.
                             events::fan_out(
                                 &turn_sinks,
@@ -992,10 +998,28 @@ pub(super) async fn run_command_loop(
                     // the agent's `config_options`), falling back to the `"model"`
                     // convention when the agent didn't advertise one. `model_id` is
                     // the option value id the renderer picked.
-                    let config_id = req_state
-                        .lock()
-                        .model_config_id(&session_id.0)
-                        .unwrap_or_else(|| "model".to_string());
+                    //
+                    // Issue #822: a session whose models came only from the legacy
+                    // `models` field is read-only. The pinned schema defines no
+                    // `session/set_model`, and a config-option call with the
+                    // guessed id `"model"` would only yield an agent error, so
+                    // fail fast without sending anything.
+                    let (config_id, legacy_only) = {
+                        let state = req_state.lock();
+                        (
+                            state.model_config_id(&session_id.0),
+                            state.is_legacy_models(&session_id.0),
+                        )
+                    };
+                    if legacy_only {
+                        log::info!(
+                            "[acp] session {} set_model rejected: models are legacy-only (read-only)",
+                            crate::logging::redact_session_id(&session_id.0)
+                        );
+                        send_reply(&task_slot, Err(LEGACY_MODEL_SWITCH_UNSUPPORTED.to_string()));
+                        return;
+                    }
+                    let config_id = config_id.unwrap_or_else(|| "model".to_string());
                     let request = SetSessionConfigOptionRequest::new(
                         &session_id,
                         config_id,
@@ -1072,6 +1096,13 @@ pub(super) async fn run_command_loop(
                                 req_state
                                     .lock()
                                     .set_model_config_id(session_id.0.clone(), id);
+                            }
+                            // A Model `select` option supersedes a legacy-only
+                            // model list. Same rule as `resolve_models` (first
+                            // Model-category option must be a `select`), so a
+                            // non-select Model option keeps the legacy marker.
+                            if advertises_model_config_option(Some(config_options.as_slice())) {
+                                req_state.lock().clear_legacy_models(&session_id.0);
                             }
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,

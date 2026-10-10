@@ -420,6 +420,70 @@ async fn session_resume_reopen_preserves_omitted_fields() {
     );
 }
 
+fn legacy_model_state() -> SessionModelState {
+    SessionModelState {
+        current_model_id: "legacy-1".to_string(),
+        available_models: vec![crate::acp::events::SessionModel {
+            model_id: "legacy-1".to_string(),
+            name: "Legacy One".to_string(),
+            description: None,
+        }],
+    }
+}
+
+/// Issue #822: a reopen whose result carries only the legacy `models` field
+/// surfaces that list in the outcome and marks the session read-only.
+#[tokio::test]
+async fn session_reopen_uses_legacy_models_and_marks_session_read_only() {
+    use crate::acp::legacy_models::WithLegacyModels;
+    let state = Mutex::new(DriverState::new());
+    let outcome = run_session_reopen("session/load", "sess-legacy", "/work", &state, async {
+        Ok::<_, agent_client_protocol::Error>(WithLegacyModels {
+            response: LoadSessionResponse::new(),
+            legacy: Some(legacy_model_state()),
+        })
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.models, Some(legacy_model_state()));
+    assert!(state.lock().is_legacy_models("sess-legacy"));
+    // Closing the session forgets the marker.
+    state.lock().remove_session_root("sess-legacy");
+    assert!(!state.lock().is_legacy_models("sess-legacy"));
+}
+
+/// Issue #822: an advertised Model config option beats the legacy list and
+/// clears a stale legacy marker from an earlier reopen of the same session.
+#[tokio::test]
+async fn session_reopen_config_model_option_wins_over_legacy_models() {
+    use crate::acp::legacy_models::WithLegacyModels;
+    use agent_client_protocol::schema::v1::{
+        SessionConfigOptionCategory, SessionConfigSelectOption,
+    };
+    let state = Mutex::new(DriverState::new());
+    state.lock().mark_legacy_models("sess-cfg".to_string());
+    let model_option = SessionConfigOption::select(
+        "model",
+        "Model",
+        "m1",
+        vec![SessionConfigSelectOption::new("m1", "Model 1")],
+    )
+    .category(SessionConfigOptionCategory::Model);
+    let expected = events::models_from_config_options(Some(std::slice::from_ref(&model_option)));
+    let outcome = run_session_reopen("session/resume", "sess-cfg", "/work", &state, async {
+        Ok::<_, agent_client_protocol::Error>(WithLegacyModels {
+            response: ResumeSessionResponse::new().config_options(vec![model_option]),
+            legacy: Some(legacy_model_state()),
+        })
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.models, expected);
+    assert!(!state.lock().is_legacy_models("sess-cfg"));
+}
+
 /// An empty prompt is rejected before any agent contact (EMPTY-CONTENT).
 /// `send_prompt`'s guard is a pure pre-check; assert its predicate here
 /// (the manager method needs a sink fan-out, but the guard runs first).
@@ -2013,7 +2077,10 @@ fn delete_logout_and_extra_roots_follow_advertised_capabilities() {
 fn elicitation_response_maps_string_arrays() {
     let content = serde_json::Map::from_iter([
         ("q0".to_string(), serde_json::json!("Red")),
-        ("q1".to_string(), serde_json::json!(["Logging", "My custom feature"])),
+        (
+            "q1".to_string(),
+            serde_json::json!(["Logging", "My custom feature"]),
+        ),
     ]);
     let response = elicitation_response("accept", Some(content));
     let ElicitationAction::Accept(accept) = response.action else {
@@ -2072,4 +2139,50 @@ fn elicitation_response_decline_and_cancel_unchanged() {
         elicitation_response("unknown-action", None).action,
         ElicitationAction::Cancel
     ));
+}
+
+// --- gh-821: turn errors keep JSON-RPC code/data ---
+
+/// An RPC error ending a turn reaches the outcome with its code + data and an
+/// unchanged `Display` message.
+#[tokio::test(start_paused = true)]
+async fn race_turn_preserves_rpc_error_code_and_data() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let rpc = agent_client_protocol::Error::new(-32000, "auth")
+        .data(serde_json::json!({ "reason": "login" }));
+    let expected_message = rpc.to_string();
+    let result = race_turn(
+        async move { Err::<StopReason, _>(events::AcpErrorDetail::from(rpc)) },
+        cancel_rx,
+        &mut idle_rx,
+        || {},
+        None,
+        None,
+    )
+    .await;
+    let detail = result.unwrap_err();
+    assert_eq!(detail.message, expected_message);
+    assert_eq!(detail.code, Some(-32000));
+    assert_eq!(detail.data, Some(serde_json::json!({ "reason": "login" })));
+}
+
+/// Timeouts are non-RPC failures: no code/data on the typed outcome.
+#[tokio::test(start_paused = true)]
+async fn race_turn_timeout_has_no_code_or_data() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let result = race_turn(
+        std::future::pending::<Result<StopReason, events::AcpErrorDetail>>(),
+        cancel_rx,
+        &mut idle_rx,
+        || {},
+        Some(Duration::from_millis(100)),
+        None,
+    )
+    .await;
+    let detail = result.unwrap_err();
+    assert!(detail.message.contains("idle timeout"), "got {detail}");
+    assert_eq!(detail.code, None);
+    assert_eq!(detail.data, None);
 }

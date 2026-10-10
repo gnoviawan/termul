@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
+import { claimEscape, isEscapeClaimed } from '@/lib/escape-claim'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
@@ -217,8 +218,12 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
     if (!isOpen) return
 
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
-      if (e.key === 'Escape') {
+      // A layer above this modal (the DirectoryPicker) already claimed this Esc.
+      // Not `defaultPrevented`: the project sheet this modal was swapped in from
+      // prevents the Esc it still receives while it animates out.
+      if (e.key === 'Escape' && !isEscapeClaimed(e)) {
         e.preventDefault()
+        claimEscape(e)
         onClose()
       }
     }
@@ -393,8 +398,11 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
       if (e.key === 'Enter' && name.trim() && path.trim()) {
         e.preventDefault()
         handleCreate()
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'Escape' && !isEscapeClaimed(e.nativeEvent)) {
+        // Focus can stay on Browse while the picker is open above this panel. Claiming
+        // the Esc here also keeps the window handler from closing the modal a second time.
         e.preventDefault()
+        claimEscape(e.nativeEvent)
         onClose()
       }
     },
@@ -443,7 +451,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                     value={path}
                     onChange={(e) => handlePathChange(e.target.value)}
                     placeholder="No directory selected"
-                    className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
+                    className="flex-1 bg-secondary border border-border rounded px-3 py-1.5 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary outline-none placeholder-muted-foreground"
                   />
                   <button
                     onClick={handleBrowse}
@@ -463,7 +471,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="My Project"
-                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
+                  className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
                 {nameWarning && (
                   <p
@@ -496,7 +504,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                           const tpl = BUILT_IN_TEMPLATES.find((t) => t.id === e.target.value)
                           if (tpl) handleSelectTemplate(tpl)
                         }}
-                        className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                        className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
                       >
                         {BUILT_IN_TEMPLATES.map((tpl) => (
                           <option key={tpl.id} value={tpl.id}>
@@ -565,7 +573,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                         <select
                           value={selectedShell}
                           onChange={(e) => setSelectedShell(e.target.value)}
-                          className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
+                          className="w-full appearance-none bg-secondary border border-border rounded px-3 py-1.5 pr-8 text-sm pointer-coarse:text-base text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none cursor-pointer"
                         >
                           {shells?.available && shells.available.length > 0 ? (
                             shells.available.map((shell) => (

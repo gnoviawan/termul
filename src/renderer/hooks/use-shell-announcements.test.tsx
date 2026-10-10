@@ -277,6 +277,92 @@ describe('useShellAnnouncements', () => {
     })
   })
 
+  describe('permission denied by a disconnect', () => {
+    const denied =
+      'Permission for npm test -- auth was denied because this device disconnected. Ask the agent to retry.'
+    const notice = { requestId: 'r1', tool: 'npm test -- auth' }
+
+    it('speaks the denial through the region once for the active chat', () => {
+      renderHook(() => useShellAnnouncements())
+      const announce = vi.fn()
+      useShellAnnouncerStore.setState({ announce })
+
+      act(() => {
+        useAcpStore.setState({ permissionDenialNotices: { active: notice } })
+      })
+      expect(announce).toHaveBeenCalledTimes(1)
+      expect(announce).toHaveBeenCalledWith(denied)
+
+      // Unrelated writes to a watched slice re-evaluate without repeating it.
+      act(() => {
+        useAcpStore.setState({ sessions: { ...useAcpStore.getState().sessions } })
+      })
+      expect(announce).toHaveBeenCalledTimes(1)
+
+      useShellAnnouncerStore.setState({ announce: realAnnounce })
+    })
+
+    it('reaches the live region text', () => {
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useAcpStore.setState({ permissionDenialNotices: { active: notice } })
+      })
+      settle()
+      expect(region()).toBe(denied)
+    })
+
+    it('is not replaced by Turn finished when the denied turn closes right after', () => {
+      // The real order: the replayed prompt_complete drops the approval and the
+      // store raises the notice, then the deferred turn end flips activeTurn to
+      // false a macrotask later. The region holds one message and a newer call
+      // replaces a pending one, so Turn finished must not displace the denial.
+      seedSessions({ active: { activeTurn: true, openTurnId: 't1' } })
+      useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
+      renderHook(() => useShellAnnouncements())
+
+      act(() => {
+        useAcpStore.setState({
+          pendingPermissions: {},
+          permissionDenialNotices: { active: notice }
+        })
+      })
+      act(() => {
+        seedSessions({ active: { activeTurn: false, openTurnId: null } })
+      })
+      settle()
+
+      expect(region()).toBe(denied)
+    })
+
+    it('still announces Turn finished for a turn that ends without a denial', () => {
+      seedSessions({ active: { activeTurn: true, openTurnId: 't1' } })
+      renderHook(() => useShellAnnouncements())
+
+      act(() => {
+        seedSessions({ active: { activeTurn: false, openTurnId: null } })
+      })
+      settle()
+
+      expect(region()).toBe('Turn finished')
+    })
+
+    it('does not announce the notice of another chat', () => {
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useAcpStore.setState({ permissionDenialNotices: { other: notice } })
+      })
+      settle()
+      expect(region()).toBe('')
+    })
+
+    it('is silent when the shell mounts with a notice already stored', () => {
+      useAcpStore.setState({ permissionDenialNotices: { active: notice } })
+      renderHook(() => useShellAnnouncements())
+      settle()
+      expect(region()).toBe('')
+    })
+  })
+
   describe('other chat needs you', () => {
     it('announces a chat in the active project with its live title', () => {
       renderHook(() => useShellAnnouncements())
@@ -376,7 +462,7 @@ describe('useShellAnnouncements', () => {
       expect(region()).toBe('')
     })
 
-    it('is silent for another chat holding an elicitation', () => {
+    it('announces another chat that starts holding an elicitation', () => {
       renderHook(() => useShellAnnouncements())
       act(() => {
         useAcpStore.setState({
@@ -393,7 +479,7 @@ describe('useShellAnnouncements', () => {
         })
       })
       settle()
-      expect(region()).toBe('')
+      expect(region()).toBe('Title other needs you')
     })
 
     it('ignores ephemeral warm-up sessions', () => {

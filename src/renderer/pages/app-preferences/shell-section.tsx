@@ -43,7 +43,7 @@ export function ShellSection({
                 return match?.path ?? defaultShell
               })()}
               onChange={(e) => handleDefaultShellChange(e.target.value)}
-              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
+              className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow"
             >
               <option value="">System Default</option>
               {availableShells?.available?.map((shell) => (
