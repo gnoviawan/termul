@@ -80,6 +80,8 @@ export const TEXT_TOKENS = [
  * Four percent keeps contrast checks in range.
  */
 const NEUTRAL_BRAND_TINT = 0.04
+/** Keep light canvases slightly below pure white to reduce glare. */
+const LIGHT_CANVAS_DARKEN = 0.025
 
 const SCROLLBAR_ALPHA = {
   light: {
@@ -135,9 +137,13 @@ function applyCssVariables(
   chrome?: ThemeChrome
 ): void {
   const root = document.documentElement
-  const tintedNeutralSurface = chrome
+  const baseNeutralSurface = chrome
     ? emittedSurface(chrome.background)
     : brandTintedNeutral(palette)
+  const tintedNeutralSurface =
+    appearance === 'light'
+      ? emittedSurface(darkenHex(baseNeutralSurface.hex, LIGHT_CANVAS_DARKEN))
+      : baseNeutralSurface
   const tintedNeutral = chrome ? chrome.background : tintedNeutralSurface.hex
   const foregroundHex = chrome
     ? chrome.foreground
@@ -260,9 +266,11 @@ export function paletteToXtermTheme(
   chrome?: ThemeChrome
 ): ITheme {
   const isLight = appearance === 'light'
-  const surface = chrome
+  const baseSurface = chrome
     ? emittedSurface(chrome.background).emittedHex
     : brandTintedNeutral(palette).emittedHex
+  const surface =
+    appearance === 'light' ? darkenHex(baseSurface, LIGHT_CANVAS_DARKEN) : baseSurface
   const foreground = chrome?.foreground ?? palette.ink
   return {
     background: surface,

@@ -110,8 +110,8 @@ describe('apply-color-theme', () => {
 
     it('paints Termul light as paper with a mist sidebar and drops the flat flag on dark', () => {
       applyColorTheme('termul-light')
-      expect(cssVarToHex('--background')).toBe('#ffffff')
-      expect(cssVarToHex('--terminal-bg')).toBe('#ffffff')
+      expect(cssVarToHex('--background')).toBe('#f9f9f9')
+      expect(cssVarToHex('--terminal-bg')).toBe('#f9f9f9')
       expect(cssVarToHex('--card')).toBe('#ffffff')
       expect(cssVarToHex('--foreground')).toBe('#0d0d0d')
       expect(cssVarToHex('--sidebar-background')).toBe('#f9f9f9')
