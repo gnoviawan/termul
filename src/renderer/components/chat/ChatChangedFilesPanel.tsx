@@ -28,14 +28,19 @@ interface ChangedFile {
  * and duplicate slashes, resolve `..` by popping the previous segment, strip
  * trailing separators. `..` that would climb past a `/` or `C:/` root is
  * dropped; leading `..` on a relative path is kept (it escapes the base).
- * So `./x`, `a//x`, `a/b/../x`, and `x/` all canonicalize alike.
+ * The drive letter is canonicalized to uppercase (`c:` ≡ `C:` — the rest of
+ * the path keeps its case since directories may be case-sensitive) and a
+ * leading `//` UNC prefix is preserved. So `./x`, `a//x`, `a/b/../x`, and
+ * `x/` all canonicalize alike.
  */
 function canonicalizePath(path: string): string {
-  const isDriveRooted = /^[a-zA-Z]:\//.test(path)
-  const isRooted = isDriveRooted || path.startsWith('/')
+  const p = path.replace(/^([a-zA-Z]):/, (m) => m.toUpperCase())
+  const isDriveRooted = /^[a-zA-Z]:\//.test(p)
+  const isUnc = !isDriveRooted && p.startsWith('//')
+  const isRooted = isDriveRooted || isUnc || p.startsWith('/')
   const minLen = isDriveRooted ? 1 : 0 // never pop the drive letter
   const out: string[] = []
-  for (const seg of path.split('/')) {
+  for (const seg of p.split('/')) {
     if (seg === '' || seg === '.') continue
     if (seg === '..') {
       if (out.length > minLen && out[out.length - 1] !== '..') {
@@ -48,7 +53,7 @@ function canonicalizePath(path: string): string {
     out.push(seg)
   }
   const body = out.join('/')
-  return isRooted ? (isDriveRooted ? body : `/${body}`) : body
+  return isRooted ? (isDriveRooted ? body : `${isUnc ? '//' : '/'}${body}`) : body
 }
 
 /**

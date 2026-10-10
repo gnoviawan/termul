@@ -150,6 +150,42 @@ describe('ChatChangedFilesPanel', () => {
     })
   })
 
+  it('merges drive-letter case variants into one row', async () => {
+    renderPanel([
+      makeToolCall({ toolCallId: 'e1', path: 'c:/repo/src/foo.ts' }),
+      makeToolCall({ toolCallId: 'e2', path: 'C:/repo/src/foo.ts' })
+    ])
+    expect(screen.getByText('1')).toBeInTheDocument()
+  })
+
+  it('merges a lowercase-drive path with a cwd-relative one', async () => {
+    renderPanel(
+      [
+        makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' }),
+        makeToolCall({ toolCallId: 'e2', path: 'e:/repo/src/foo.ts' })
+      ],
+      'E:\\repo'
+    )
+    expect(screen.getByText('1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /expand/i }))
+    const row = await screen.findByRole('button', { name: /foo\.ts/i })
+    fireEvent.click(row)
+    await waitFor(() => {
+      expect(openFileRef.current).toHaveBeenCalledWith('E:/repo/src/foo.ts')
+    })
+  })
+
+  it('keeps the UNC prefix when resolving a relative path against a UNC cwd', async () => {
+    renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })], '\\\\server\\share\\repo')
+    fireEvent.click(screen.getByRole('button', { name: /expand/i }))
+    const row = await screen.findByRole('button', { name: /foo\.ts/i })
+    expect(row).toHaveAttribute('title', '//server/share/repo/src/foo.ts')
+    fireEvent.click(row)
+    await waitFor(() => {
+      expect(openFileRef.current).toHaveBeenCalledWith('//server/share/repo/src/foo.ts')
+    })
+  })
+
   it('toasts and logs when openFile fails', async () => {
     renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })])
     openFileRef.current = vi.fn(async () => {
