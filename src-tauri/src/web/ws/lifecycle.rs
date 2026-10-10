@@ -178,9 +178,12 @@ pub(super) async fn handle_dispose_ephemeral_session(
     // must follow regardless of the agent call's result. A stale tracker makes
     // the next `switch_project` take the Completed path (minting an orphaned
     // session the client cannot attribute) instead of the cold-tab `Selected`.
-    if current_session.lock().as_ref() == Some(&disposed_session_id) {
-        *current_session.lock() = None;
-        *current_project.lock() = None;
+    {
+        let mut tracked = current_session.lock();
+        if tracked.as_ref() == Some(&disposed_session_id) {
+            *tracked = None;
+            *current_project.lock() = None;
+        }
     }
     match result {
         Ok(()) => {
@@ -225,9 +228,12 @@ pub(super) async fn handle_close_session(
     // tracker makes the next `switch_project` take the Completed path
     // (minting an orphaned session the client cannot attribute) instead of
     // the cold-tab `Selected`.
-    if current_session.lock().as_ref() == Some(&closing_session_id) {
-        *current_session.lock() = None;
-        *current_project.lock() = None;
+    {
+        let mut tracked = current_session.lock();
+        if tracked.as_ref() == Some(&closing_session_id) {
+            *tracked = None;
+            *current_project.lock() = None;
+        }
     }
     match result {
         Ok(()) => WsReply::ok(id, Some(json!({}))),

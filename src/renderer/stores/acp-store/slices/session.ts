@@ -1516,17 +1516,21 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // `outcome.previousSessionId` is server-authoritative for "which session
       // this connection was on" — the UI pointer (sessionStorage focus +
       // activeSessionId) can be stale or empty when every chat tab was closed
-      // or when the pointer survived a reload. Fall back to it only when the
-      // server-side id has no local record.
+      // or when the pointer survived a reload. Inherit from the focused record
+      // only when the server sent no id (old server) or it matches the
+      // pointer — a mismatched pointer would inherit an unrelated session's
+      // title/modes/models.
       const previous =
         (outcome.previousSessionId ? get().sessions[outcome.previousSessionId] : undefined) ??
-        focusedSession
+        (!outcome.previousSessionId || focusedSessionId === outcome.previousSessionId
+          ? focusedSession
+          : undefined)
+      // `outcome.agentId` is the owning agent — server-authoritative. Local
+      // records are the fallback for older replies carrying no agentId. A
+      // `session_created` event stub for the minted session may already be
+      // installed (the manager fans the event out before the reply lands).
       const agentId =
-        previous?.agentId ??
-        // A `session_created` event stub for the minted session may already be
-        // installed (the manager fans the event out before the reply lands).
-        get().sessions[outcome.sessionId]?.agentId ??
-        outcome.agentId
+        outcome.agentId ?? previous?.agentId ?? get().sessions[outcome.sessionId]?.agentId
       if (!agentId) {
         // Older servers send no `agentId` and no local record exists to borrow
         // one from — the minted session cannot be attributed here. The switch

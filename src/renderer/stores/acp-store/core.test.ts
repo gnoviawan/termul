@@ -544,6 +544,35 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().activeSessionId).toBe('s-new')
   })
 
+  // Regression (CodeRabbit #983): when the reply's previousSessionId names a
+  // session that is NOT the focused one, the focused record must not donate
+  // title/modes/models — it belongs to an unrelated chat.
+  it('switchProject does not inherit metadata from an unrelated focused session', async () => {
+    seedSession('s-other', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      activeSessionId: 's-other',
+      sessions: {
+        ...s.sessions,
+        's-other': { ...s.sessions['s-other'], title: 'unrelated chat' }
+      }
+    }))
+    const switchProject = vi.fn(async () => ({
+      status: 'completed' as const,
+      projectId: 'p2',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 0,
+      previousSessionId: 's-gone',
+      agentId: 'agent-9'
+    }))
+    _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+    await useAcpStore.getState().switchProject('p2')
+
+    const created = useAcpStore.getState().sessions['s-new']
+    expect(created).toMatchObject({ agentId: 'agent-9', title: null })
+  })
+
   it('switchProject completed outcome with no resolvable agent degrades to select instead of throwing', async () => {
     // Old-server reply (no previousSessionId/agentId) AND no local records —
     // the minted session cannot be attributed. The switch committed
@@ -785,6 +814,74 @@ describe('acp-store', () => {
 
     expect(useAcpStore.getState().queuedProjectSwitchId).toBeNull()
     expect(toastError).toHaveBeenCalledWith('switch persistence failed')
+    teardown()
+  })
+
+  // Regression (CodeRabbit #983): `project_switch_completed` must attribute
+  // the minted session via the event's `agentId` — server-authoritative —
+  // even when the previous session's local record is gone.
+  it('project_switch_completed attributes via event agentId when the previous record is gone', () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    _setAcpTransportForTests({
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({ queuedProjectSwitchId: 'p2' })
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    const teardown = initAcpEventListeners()
+
+    listeners.get('project_switch_completed')?.({
+      status: 'completed',
+      requestId: 'r1',
+      projectId: 'p2',
+      previousSessionId: 's-gone',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 0,
+      agentId: 'agent-9'
+    })
+
+    expect(useAcpStore.getState().sessions['s-new']).toMatchObject({
+      agentId: 'agent-9',
+      projectId: 'p2',
+      status: 'active'
+    })
+    expect(useAcpStore.getState().activeSessionId).toBe('s-new')
+    expect(useAcpStore.getState().queuedProjectSwitchId).toBeNull()
+    teardown()
+  })
+
+  // Regression (CodeRabbit #983): the stale-switch guard runs before the
+  // no-agent fallback — a late completion matching neither the active
+  // project nor the queued intent must not selectProject.
+  it('project_switch_completed drops a stale no-agent event without touching the active project', () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    _setAcpTransportForTests({
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({ queuedProjectSwitchId: 'p3' })
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    const teardown = initAcpEventListeners()
+
+    listeners.get('project_switch_completed')?.({
+      status: 'completed',
+      requestId: 'r1',
+      projectId: 'p2',
+      previousSessionId: 's-gone',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 0
+    })
+
+    expect(useProjectStore.getState().activeProjectId).toBe('p1')
+    expect(useAcpStore.getState().sessions['s-new']).toBeUndefined()
     teardown()
   })
 

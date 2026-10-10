@@ -493,23 +493,6 @@ export function initAcpEventListeners(): () => void {
   const applyCompletedProjectSwitch = (event: ProjectSwitchCompletedEvent): void => {
     const state = useAcpStore.getState()
     const previous = state.sessions[event.previousSessionId]
-    const agentId = previous?.agentId ?? state.sessions[event.sessionId]?.agentId ?? event.agentId
-    if (!agentId) {
-      // No local record to attribute the minted session and the event carries
-      // no agentId (old server). The switch committed server-side — clear the
-      // queued marker (never leave the badge spinning) and mirror a deferred
-      // select; the session stays reachable via the history index.
-      if (state.queuedProjectSwitchId != null) {
-        useAcpStore.setState({ queuedProjectSwitchId: null })
-        useProjectStore.getState().selectProject(event.projectId)
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp-store.projectSwitchCompleted',
-          message: `Queued switch to ${event.projectId} completed but session ${event.sessionId} has no attributable agent`
-        })
-      }
-      return
-    }
     // Stale queued-switch guard: a queued (turn-active) switch completes
     // AFTER the user already moved on to a DIFFERENT project. Applying the
     // late outcome would re-run selectProject + reattach against the
@@ -529,6 +512,25 @@ export function initAcpEventListeners(): () => void {
     if (activeProjectId !== event.projectId && !queuedForThisProject) {
       if (state.queuedProjectSwitchId != null) {
         useAcpStore.setState({ queuedProjectSwitchId: null })
+      }
+      return
+    }
+    // `event.agentId` is the owning agent — server-authoritative. Local
+    // records are the fallback for older events carrying no agentId.
+    const agentId = event.agentId ?? previous?.agentId ?? state.sessions[event.sessionId]?.agentId
+    if (!agentId) {
+      // No attributable agent: old server event and no local record. The
+      // switch committed server-side — clear the queued marker (never leave
+      // the badge spinning) and mirror a deferred select; the session stays
+      // reachable via the history index.
+      if (state.queuedProjectSwitchId != null) {
+        useAcpStore.setState({ queuedProjectSwitchId: null })
+        useProjectStore.getState().selectProject(event.projectId)
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.projectSwitchCompleted',
+          message: `Queued switch to ${event.projectId} completed but session ${event.sessionId} has no attributable agent`
+        })
       }
       return
     }
