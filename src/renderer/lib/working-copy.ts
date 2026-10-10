@@ -66,11 +66,12 @@ function collapseSlashes(path: string): string {
   return path.replace(/\/{2,}/g, '/')
 }
 
-/** Resolves `.` and `..`, keeping a UNC (`//`), posix (`/`) or drive (`C:/`)
- * root; `..` cannot climb above a root. */
+/** Resolves `.` and `..`, keeping a UNC (`//server/share`), posix (`/`) or
+ * drive (`C:/`) root; `..` cannot climb above a root. A UNC root includes the
+ * server and share, so `//srv/share/..` stays at `//srv/share`. */
 function resolveDotSegments(path: string): string {
   if (!DOT_SEGMENT.test(path)) return path
-  const root = /^(?:\/\/|[A-Za-z]:\/|\/)/.exec(path)?.[0] ?? ''
+  const root = /^(?:\/\/[^/]+\/(?!\.\.?(?:\/|$))[^/]+|\/\/|[A-Za-z]:\/|\/)/.exec(path)?.[0] ?? ''
   const kept: string[] = []
   for (const segment of path.slice(root.length).split('/')) {
     if (segment === '' || segment === '.') continue
@@ -78,7 +79,10 @@ function resolveDotSegments(path: string): string {
     else if (kept.length > 0 && kept[kept.length - 1] !== '..') kept.pop()
     else if (!root) kept.push('..')
   }
-  return root + kept.join('/')
+  const joined = kept.join('/')
+  // A UNC server/share root has no trailing slash of its own.
+  const needsSlash = joined !== '' && !root.endsWith('/')
+  return root + (needsSlash ? '/' : '') + joined
 }
 
 function isWindowsForm(path: string): boolean {

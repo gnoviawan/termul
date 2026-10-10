@@ -53,7 +53,7 @@ describe('normalizePath', () => {
     expect(normalizePath('E:/a/./b/../c')).toBe('e:/a/c')
     expect(normalizePath('E:/../x')).toBe('e:/x')
     expect(normalizePath('/a/../../b')).toBe('/b')
-    expect(normalizePath('//srv/share/../../x')).toBe('//x')
+    expect(normalizePath('//srv/share/../../x')).toBe('//srv/share/x')
   })
 
   it('keeps trailing slash only on roots', () => {
@@ -184,6 +184,20 @@ describe('workingCopyOf', () => {
       key: '//srv/share/p'
     })
     expect(workingCopyOf('//srv/share/pp/a', unc)).toBeNull()
+  })
+
+  it('keeps the UNC server and share as the root when resolving parent segments', () => {
+    const unc: ProjectPaths = { path: '//srv/share/repo' }
+    expect(normalizePath('//srv/share/../repo')).toBe('//srv/share/repo')
+    expect(normalizePath('\\\\srv\\share\\..')).toBe('//srv/share')
+    expect(normalizePath('\\\\srv\\share\\..\\..\\Repo\\x')).toBe('//srv/share/repo/x')
+    expect(normalizePath('//srv/share/a/../../../b')).toBe('//srv/share/b')
+    expect(normalizePath('//srv/../x')).toBe('//x')
+    expect(workingCopyOf('//srv/share/../repo/a', unc)).toMatchObject({
+      kind: 'project',
+      key: '//srv/share/repo'
+    })
+    expect(workingCopyOf('\\\\srv\\share\\..', unc)).toBeNull()
   })
 })
 
