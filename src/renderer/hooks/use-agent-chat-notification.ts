@@ -4,6 +4,7 @@ import {
   type AgentChatNotifySnapshot,
   decideAgentChatNotifications
 } from '@/lib/agent-chat-notify'
+import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
 import { isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
@@ -83,7 +84,10 @@ export function useAgentChatNotification(): void {
       prev = next
       for (const event of events) {
         const copy = notificationCopy(event)
-        void sendDesktopNotification(copy.title, copy.body)
+        // Click opens the chat in its own project (switching if needed).
+        void sendDesktopNotification(copy.title, copy.body, {
+          onClick: () => openAgentChatInOwnProject(event.sessionId, 'useAgentChatNotification')
+        })
       }
     }
 

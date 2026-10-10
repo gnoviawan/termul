@@ -175,12 +175,19 @@ test('browser context close mid-run: a new browser continues the server-owned tu
 })
 
 test('three projects run concurrently with isolated transcripts', async ({ page }) => {
-  // One chat per project, all running at once.
-  await launchChat(page, PROMPT_A)
+  // Prompts unique to this test: earlier tests leave PROMPT_A/B/C chats in
+  // several projects, so only these titles can be asserted absent.
+  const ISO_A = 'isolated alpha survey'
+  const ISO_B = 'isolated beta survey'
+  const ISO_C = 'isolated gamma survey'
+  // One chat per project, all running at once. Select proj-a explicitly:
+  // the server's active project carries over from earlier tests.
+  await selectProject(page, 'proj-a')
+  await launchChat(page, ISO_A)
   await selectProject(page, 'proj-b')
-  await launchChat(page, PROMPT_B)
+  await launchChat(page, ISO_B)
   await selectProject(page, 'proj-c')
-  await launchChat(page, PROMPT_C)
+  await launchChat(page, ISO_C)
 
   // All three are streaming server-side; verify by rotating through the
   // projects and seeing each project's transcript grow on return.
@@ -196,13 +203,18 @@ test('three projects run concurrently with isolated transcripts', async ({ page 
   // growing on return, which the rotation loop above already pinned; this
   // adds the tab-level presence check).
   await selectProject(page, 'proj-a')
-  await expect(chatTab(page, PROMPT_A)).toBeVisible()
+  await expect(chatTab(page, ISO_A)).toBeVisible()
 
-  // NOTE (known issue, dev @ 60178b3f — partially mitigated): rapid
-  // multi-project rotation with live turns still accumulates foreign /
-  // duplicate agent-chat tabs in the switched-to project's pane. The
-  // retention + persistence ownership filters and the stale queued-switch
-  // guard (this session) reduced it (8 → 2 tabs in the single-pass flow),
-  // but the rotation path still leaks. Strict not.toContain assertions
-  // fail on the residue — documented here, tracked for the next fix.
+  // No foreign chat tabs in any project's pane (the pane tree is shared
+  // across projects, so a leaked tab would render another project's chat).
+  const tabsTitled = (title: string) => page.locator(`[draggable="true"][aria-label^="${title}"]`)
+  await expect(tabsTitled(ISO_B)).toHaveCount(0)
+  await selectProject(page, 'proj-b')
+  await expect(chatTab(page, ISO_B)).toBeVisible()
+  await expect(tabsTitled(ISO_A)).toHaveCount(0)
+  await expect(tabsTitled(ISO_C)).toHaveCount(0)
+  await selectProject(page, 'proj-c')
+  await expect(chatTab(page, ISO_C)).toBeVisible()
+  await expect(tabsTitled(ISO_A)).toHaveCount(0)
+  await expect(tabsTitled(ISO_B)).toHaveCount(0)
 })

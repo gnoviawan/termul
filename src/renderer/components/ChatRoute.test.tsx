@@ -9,6 +9,8 @@ import type { LeafNode, PaneNode } from '@/types/workspace.types'
 // directly, so the mocks expose mutable state seams.
 const {
   acpStateRef,
+  acpIndexRef,
+  activeProjectRef,
   findPaneContainingTab,
   workspaceRootRef,
   mockAddAgentChatTab,
@@ -84,7 +86,10 @@ const {
     { getState: () => ({ retainedByProject: mockRetainedByProject.current }) }
   )
   return {
-    acpStateRef: { current: {} as Record<string, { status: string }> },
+    acpStateRef: { current: {} as Record<string, { status: string; projectId?: string }> },
+    // Ownership seams: session index + the active project (foreign-route guard).
+    acpIndexRef: { current: [] as Array<{ id: string; projectId: string }> },
+    activeProjectRef: { current: 'p1' },
     findPaneContainingTab,
     workspaceRootRef,
     mockAddAgentChatTab,
@@ -106,6 +111,7 @@ vi.mock('@/stores/acp-store', () => ({
     {
       getState: () => ({
         sessions: acpStateRef.current,
+        sessionIndex: acpIndexRef.current,
         openingHistoryIds: mockOpeningHistoryIds.current
       })
     }
@@ -150,7 +156,17 @@ vi.mock('@/lib/router-navigate', () => ({
   clearChatRoute: vi.fn()
 }))
 
+vi.mock('@/stores/project-store', () => ({
+  useProjectStore: { getState: () => ({ activeProjectId: activeProjectRef.current }) }
+}))
+
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
+}))
+
 import { ChatRoute } from '@/components/ChatRoute'
+import { logFrontendError } from '@/lib/log-api'
+import { clearChatRoute } from '@/lib/router-navigate'
 
 type Rerender = (ui: ReactElement) => void
 
@@ -231,6 +247,10 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     mockUseWorkspaceStore.mockClear()
     mockUseAgentChatLifetimeStore.mockClear()
     acpStateRef.current = {}
+    acpIndexRef.current = []
+    activeProjectRef.current = 'p1'
+    vi.mocked(clearChatRoute).mockClear()
+    vi.mocked(logFrontendError).mockClear()
     mockOpeningHistoryIds.current = {}
     mockRouteClosedChats.current = new Set<string>()
     workspaceRootRef.current = { type: 'leaf', id: 'pane-a', tabs: [], activeTabId: null }
@@ -639,5 +659,54 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-restored')
     // One in-flight promise survived the whole swap sequence.
     expect(tasksStarted).toBe(1)
+  })
+
+  describe('foreign-project route guard', () => {
+    it('does not insert a live chat owned by another project; clears the route instead', () => {
+      acpStateRef.current = { 's-a': { status: 'active', projectId: 'p2' } }
+      renderChatRoute('/c/s-a')
+      expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+      expect(clearChatRoute).toHaveBeenCalledWith('s-a')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'ChatRoute' })
+      )
+      expect(chatTab(workspaceRootRef.current, 's-a')).toBeUndefined()
+    })
+
+    it('does not open a history chat the index attributes to another project', () => {
+      acpIndexRef.current = [{ id: 's-a', projectId: 'p2' }]
+      renderChatRoute('/c/s-a')
+      expect(mockOpenHistorySession).not.toHaveBeenCalled()
+      expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+      expect(clearChatRoute).toHaveBeenCalledWith('s-a')
+    })
+
+    it('skips the insert when the opened record reveals a foreign owner', async () => {
+      mockOpenHistorySession.mockImplementation(async (id: string) => {
+        acpStateRef.current = { [id]: { status: 'active', projectId: 'p2' } }
+      })
+      renderChatRoute('/c/s-a')
+      await vi.waitFor(() => expect(clearChatRoute).toHaveBeenCalledWith('s-a'))
+      expect(mockOpenHistorySession).toHaveBeenCalledWith('s-a')
+      expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+    })
+
+    it('inserts chats owned by the active project, unattributed stubs, and before a project is active', () => {
+      acpStateRef.current = {
+        's-own': { status: 'active', projectId: 'p1' },
+        's-stub': { status: 'active', projectId: '' },
+        's-other': { status: 'active', projectId: 'p2' }
+      }
+      renderChatRoute('/c/s-own')
+      renderChatRoute('/c/s-stub')
+      activeProjectRef.current = ''
+      renderChatRoute('/c/s-other')
+      expect(mockAddAgentChatTab.mock.calls.map(([id]) => id)).toEqual([
+        's-own',
+        's-stub',
+        's-other'
+      ])
+      expect(clearChatRoute).not.toHaveBeenCalled()
+    })
   })
 })

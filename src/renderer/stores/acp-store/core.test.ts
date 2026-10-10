@@ -146,6 +146,7 @@ import {
   _setAcpTransportForTests,
   type AcpTransport
 } from '@/lib/acp-transport'
+import { getTabFocusedSessionId } from '@/lib/web-tab-session'
 import {
   _resetAcpAuthForTesting,
   _resetCoalesceForTesting,
@@ -681,6 +682,43 @@ describe('acp-store', () => {
       pending.resolve({ status: 'selected', projectId: 'p2' })
       await call
       expect(useAcpStore.getState().switchingProjectId).toBeNull()
+    })
+
+    it('selected outcome clears focus pointers that name the previous project chat', async () => {
+      // s-old is owned by p1 (seedSession); the cold switch to p2 mints no
+      // session, so neither pointer may keep naming p1's chat.
+      seedSession('s-old', 'agent-1', false)
+      useAcpStore.setState({ activeSessionId: 's-old' })
+      vi.mocked(getTabFocusedSessionId).mockReturnValue('s-old')
+      _setAcpTransportForTests({
+        switchProject: vi.fn(async () => ({ status: 'selected', projectId: 'p2' })),
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      try {
+        await useAcpStore.getState().switchProject('p2')
+      } finally {
+        vi.mocked(getTabFocusedSessionId).mockReturnValue(null)
+      }
+
+      expect(useAcpStore.getState().activeSessionId).toBeNull()
+      expect(setTabFocusedSessionIdSpy).toHaveBeenCalledWith(null)
+      // The session itself is untouched.
+      expect(useAcpStore.getState().sessions['s-old']?.status).toBe('active')
+    })
+
+    it('selected outcome keeps pointers whose owner is the target or unknown', async () => {
+      seedSession('s-target', 'agent-1', false)
+      useAcpStore.setState({ activeSessionId: 's-target' })
+      _setAcpTransportForTests({
+        switchProject: vi.fn(async () => ({ status: 'selected', projectId: 'p1' })),
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      await useAcpStore.getState().switchProject('p1')
+
+      expect(useAcpStore.getState().activeSessionId).toBe('s-target')
+      expect(setTabFocusedSessionIdSpy).not.toHaveBeenCalledWith(null)
     })
 
     it('clears when the transport rejects', async () => {

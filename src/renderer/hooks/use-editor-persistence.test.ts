@@ -1,11 +1,13 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockPersistedTerminal, mockTerminal } from '@/lib/test-utils/terminal'
+import { useAcpStore } from '@/stores/acp-store'
 import {
   _resetDroppedLaunchPlaceholdersForTesting,
   setLiveLaunchSessionLookup,
   takeAllDroppedLaunchPlaceholders
 } from '@/stores/acp-store/live-turn'
+import { seedSession } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
 import {
@@ -1091,6 +1093,102 @@ describe('deserializePaneTree agent-chat restore (story 5)', () => {
     // The corrupt tab is dropped without aborting the restore of the others.
     expect(tree.tabs).toEqual([{ type: 'agent-chat', id: 'chat-sess-1', sessionId: 'sess-1' }])
     expect(tree.activeTabId).toBe('chat-sess-1')
+  })
+
+  describe('project ownership', () => {
+    const indexEntry = (id: string, projectId: string) => ({
+      id,
+      agentId: 'agent-1',
+      title: id,
+      cwd: '/work',
+      projectId,
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 1,
+      status: 'closed' as const
+    })
+    const initialAcp = useAcpStore.getState()
+    afterEach(() => {
+      useAcpStore.setState({
+        sessions: initialAcp.sessions,
+        messages: initialAcp.messages,
+        sessionIndex: initialAcp.sessionIndex
+      })
+    })
+
+    it('drops chat tabs known to belong to another project (incl. nested splits) and repairs activeTabId', () => {
+      useAcpStore.setState({
+        sessionIndex: [indexEntry('s-own', 'p1'), indexEntry('s-foreign', 'p2')]
+      })
+      const tree = deserializePaneTree(
+        {
+          type: 'split',
+          id: 'split-1',
+          direction: 'horizontal',
+          sizes: [50, 50],
+          children: [
+            {
+              type: 'leaf',
+              id: 'pane-1',
+              activeTabId: 'chat-s-foreign',
+              tabs: [
+                { type: 'agent-chat', id: 'chat-s-foreign', sessionId: 's-foreign' },
+                { type: 'agent-chat', id: 'chat-s-own', sessionId: 's-own' }
+              ]
+            },
+            {
+              type: 'leaf',
+              id: 'pane-2',
+              activeTabId: 'chat-s-foreign-2',
+              tabs: [{ type: 'agent-chat', id: 'chat-s-foreign-2', sessionId: 's-foreign' }]
+            }
+          ]
+        },
+        'p1'
+      )
+      expect(tree.type).toBe('split')
+      if (tree.type !== 'split') return
+      const [left, right] = tree.children
+      if (left.type !== 'leaf' || right.type !== 'leaf') throw new Error('expected leaves')
+      expect(left.tabs).toEqual([{ type: 'agent-chat', id: 'chat-s-own', sessionId: 's-own' }])
+      expect(left.activeTabId).toBe('chat-s-own')
+      expect(right.tabs).toEqual([])
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          source: 'useEditorPersistence.deserializePaneTree',
+          message: expect.stringContaining('foreign-project chat tab (session s-foreign)')
+        })
+      )
+    })
+
+    it('keeps chat tabs with unknown ownership, empty-owner stubs, and when no projectId is given', () => {
+      // `session_created` stub: live record not yet attributed to a project.
+      seedSession('s-stub', 'agent-1', false)
+      useAcpStore.setState((s) => ({
+        sessions: { 's-stub': { ...s.sessions['s-stub'], projectId: '' } },
+        sessionIndex: [indexEntry('s-stub', ''), indexEntry('s-foreign', 'p2')]
+      }))
+      const layout = {
+        type: 'leaf' as const,
+        id: 'pane-1',
+        activeTabId: null,
+        tabs: [
+          { type: 'agent-chat' as const, id: 'chat-s-unknown', sessionId: 's-unknown' },
+          { type: 'agent-chat' as const, id: 'chat-s-stub', sessionId: 's-stub' }
+        ]
+      }
+      const tree = deserializePaneTree(layout, 'p1')
+      if (tree.type !== 'leaf') throw new Error('expected leaf')
+      expect(tree.tabs.map((t) => t.id)).toEqual(['chat-s-unknown', 'chat-s-stub'])
+
+      const unscoped = deserializePaneTree({
+        ...layout,
+        tabs: [{ type: 'agent-chat', id: 'chat-s-foreign', sessionId: 's-foreign' }]
+      })
+      if (unscoped.type !== 'leaf') throw new Error('expected leaf')
+      expect(unscoped.tabs.map((t) => t.id)).toEqual(['chat-s-foreign'])
+    })
   })
 
   it('repairs a dangling activeTabId when the active tab was a dropped launch-* corpse', () => {

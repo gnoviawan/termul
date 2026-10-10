@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { chatForeignToProject as chatForeignToProjectIn } from '@/lib/acp-session-ownership'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
@@ -413,7 +414,10 @@ export function reconcileTerminalTabs(
 }
 
 // Deserialize pane tree with full tab mapping
-export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
+// `projectId` (when given) drops agent-chat tabs KNOWN to belong to another
+// project — a layout saved while a foreign chat leaked into the shared pane
+// tree would otherwise re-render that chat on this project.
+export function deserializePaneTree(persisted: PersistedPaneNodeInput, projectId = ''): PaneNode {
   if (persisted.type === 'leaf') {
     const tabs: WorkspaceTab[] = ('tabs' in persisted ? persisted.tabs : []).flatMap(
       (tab): WorkspaceTab[] => {
@@ -466,6 +470,14 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
                 typeof tab.sessionId === 'string'
                   ? `Dropped failed-launch placeholder chat tab (session ${tab.sessionId}) during workspace restore`
                   : 'Dropped agent-chat tab with a missing/invalid sessionId during workspace restore'
+            })
+            return []
+          }
+          if (chatForeignToProject(tab.sessionId, projectId)) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'useEditorPersistence.deserializePaneTree',
+              message: `Dropped foreign-project chat tab (session ${tab.sessionId}) during workspace restore for project ${projectId}`
             })
             return []
           }
@@ -528,7 +540,7 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
     type: 'split',
     id: persisted.id,
     direction: persisted.direction,
-    children: persisted.children.map(deserializePaneTree),
+    children: persisted.children.map((child) => deserializePaneTree(child, projectId)),
     sizes: persisted.sizes
   }
 }
@@ -541,30 +553,17 @@ function collectAgentChatSessionIds(node: PersistedPaneNodeInput | undefined): s
   return node.children.flatMap((child) => collectAgentChatSessionIds(child))
 }
 
-/** Resolve a session's owning project id from live OR index state. */
-function sessionProjectId(sessionId: string): string | undefined {
-  const state = useAcpStore.getState()
-  // Live (hydrated/open) sessions carry projectId; CLOSED history tabs are
-  // evicted from `sessions` but stay in `sessionIndex` — the index is the
-  // ownership source of truth for them (filtering on `sessions` alone would
-  // drop closed tabs from the retained/persisted layouts, and they would
-  // vanish after a reload instead of reopening from history).
-  const live = state.sessions[sessionId]?.projectId
-  if (live != null) return live
-  return state.sessionIndex.find((entry) => entry.id === sessionId)?.projectId
-}
-
 /**
- * Whether an agent-chat session belongs to `projectId` — FAIL-OPEN: an id
- * with NO ownership data anywhere (index not yet loaded on a fresh mount, a
- * session the host has never seen) is kept; only sessions the store/index
- * attribute to a DIFFERENT project are filtered out. Fail-open preserves
- * the restore-before-index-load contract (reattach must not drop tabs it
- * cannot yet judge) while still cutting every known foreign session.
+ * Whether an agent-chat session belongs to a project other than `projectId`
+ * — FAIL-OPEN (see `lib/acp-session-ownership`): an id with NO ownership data
+ * anywhere (index not yet loaded on a fresh mount, a session the host has
+ * never seen) is kept; only sessions the store/index attribute to a
+ * DIFFERENT project are filtered out. Fail-open preserves the
+ * restore-before-index-load contract (reattach must not drop tabs it cannot
+ * yet judge) while still cutting every known foreign session.
  */
 function chatForeignToProject(sessionId: string, projectId: string): boolean {
-  const owner = sessionProjectId(sessionId)
-  return owner != null && owner !== projectId
+  return chatForeignToProjectIn(sessionId, projectId, useAcpStore.getState())
 }
 
 function retainVisibleAgentChats(projectId: string): void {
@@ -818,7 +817,7 @@ export function useEditorPersistence(projectId: string): void {
           // No manifest (or load failed — logged + degraded gracefully).
           // Fall back to the existing renderer-local paneLayout path.
           if (persisted.paneLayout) {
-            const restoredTree = deserializePaneTree(persisted.paneLayout)
+            const restoredTree = deserializePaneTree(persisted.paneLayout, projectId)
             const openFilePaths = new Set(useEditorStore.getState().openFiles.keys())
             const liveProjectTerminals = useTerminalStore
               .getState()
