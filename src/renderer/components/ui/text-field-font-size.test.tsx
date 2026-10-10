@@ -330,7 +330,7 @@ const DESKTOP_ONLY: ReadonlyArray<AllowRule & { file: string; reason: string }> 
     reason: 'SSH entries are isTauriContext()-gated, and the shell never runs in Tauri'
   },
   {
-    file: 'layouts/WorkspaceLayout.tsx',
+    file: 'layouts/workspace-layout/SSHPasswordPrompt.tsx',
     tagIncludes: 'type="password"',
     reason: 'the SSH password prompt; SSH is isTauriContext()-gated'
   },
