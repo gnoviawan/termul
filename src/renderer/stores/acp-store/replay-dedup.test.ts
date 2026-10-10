@@ -140,6 +140,8 @@ vi.mock('@/lib/api', async (importActual) => {
   }
 })
 
+import { buildTimeline } from '@/components/chat/chat-timeline'
+import { describeToolCall } from '@/components/chat/tool-call-summary'
 import {
   _clearPayloadCacheForTesting,
   setCachedSessionPayload
@@ -453,6 +455,73 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     _flushCoalescedForTesting()
     expect(useAcpStore.getState().messages['s-dup']).toEqual(before)
     expect(useAcpStore.getState().sessions['s-dup'].lastError).toBeNull()
+  })
+
+  it('clears restoredSummary when a live event merges into a restored summary', async () => {
+    setCachedSessionPayload('s-live-sum', {
+      metadata: {
+        id: 's-live-sum',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 12,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'edit', 5) as never,
+        msg('snapshot:agent:12', 'agent', 'done', 12) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-sum',
+          kind: 'edit',
+          locations: [{ path: 'src/a.ts' }],
+          diffStat: { added: 1, removed: 0 },
+          seq: 7,
+          timestamp: 7,
+          restoredSummary: true
+        },
+        {
+          toolCallId: 'tc-sum-2',
+          kind: 'edit',
+          locations: [{ path: 'src/b.ts' }],
+          seq: 8,
+          timestamp: 8,
+          restoredSummary: true
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-live-sum')
+    // Live events (seq > watermark) re-using the summaries' ids.
+    useAcpStore.getState()._onToolCall(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-live-sum',
+        toolCall: { toolCallId: 'tc-sum', title: 'Edit', kind: 'edit', status: 'in_progress' }
+      },
+      20
+    )
+    useAcpStore.getState()._onToolCallUpdate(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-live-sum',
+        update: { toolCallId: 'tc-sum-2', status: 'completed' }
+      },
+      21
+    )
+    _flushCoalescedForTesting()
+    const cards = useAcpStore.getState().toolCalls['s-live-sum']
+    expect(cards.map((c) => c.restoredSummary === true)).toEqual([false, false])
+    expect(
+      buildTimeline([], cards)
+        .filter((i) => i.kind === 'tool')
+        .map((i) => i.key)
+    ).toEqual(['tc-sum', 'tc-sum-2'])
   })
 
   it('keeps restored tool cards authoritative against replayed card state', async () => {
@@ -997,6 +1066,216 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(cards[1].status).toBe('completed')
     // Envelope seq stamps the card so it interleaves with the bubbles.
     expect(cards[1].seq).toBe(11)
+  })
+
+  it('carries locations + diffStat on recovered edit cards (latest field wins)', async () => {
+    seedSession('s-rec-fc', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-fc',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-fc',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: 'edit it' }] }
+        },
+        // Durable records: the tool_call carries the path only; the update
+        // carries the diff-derived counts (UPDATE_DIFF).
+        {
+          sid: 's-rec-fc',
+          seq: 11,
+          type: 'tool_call',
+          payload: {
+            toolCall: {
+              toolCallId: 'tc-edit',
+              kind: 'edit',
+              status: 'in_progress',
+              locations: [{ path: 'src/a.ts' }]
+            }
+          }
+        },
+        {
+          sid: 's-rec-fc',
+          seq: 12,
+          type: 'tool_call_update',
+          payload: {
+            update: {
+              toolCallId: 'tc-edit',
+              status: 'completed',
+              diffStat: { added: 3, removed: 1 }
+            }
+          }
+        },
+        // A second edit whose later update overrides an earlier diffStat, and
+        // a trailing field-less update that must not clear it.
+        {
+          sid: 's-rec-fc',
+          seq: 13,
+          type: 'tool_call',
+          payload: {
+            toolCall: {
+              toolCallId: 'tc-edit-2',
+              kind: 'edit',
+              status: 'in_progress',
+              locations: [{ path: 'src/a.ts' }],
+              diffStat: { added: 1, removed: 0 }
+            }
+          }
+        },
+        {
+          sid: 's-rec-fc',
+          seq: 14,
+          type: 'tool_call_update',
+          payload: { update: { toolCallId: 'tc-edit-2', diffStat: { added: 2, removed: 0 } } }
+        },
+        {
+          sid: 's-rec-fc',
+          seq: 15,
+          type: 'tool_call_update',
+          payload: { update: { toolCallId: 'tc-edit-2', status: 'completed' } }
+        }
+      ]
+    })
+    const cards = useAcpStore.getState().toolCalls['s-rec-fc']
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-edit', 'tc-edit-2'])
+    expect(cards[0]).toMatchObject({
+      kind: 'edit',
+      status: 'completed',
+      locations: [{ path: 'src/a.ts' }],
+      diffStat: { added: 3, removed: 1 },
+      seq: 11
+    })
+    expect(cards[1]).toMatchObject({
+      status: 'completed',
+      locations: [{ path: 'src/a.ts' }],
+      diffStat: { added: 2, removed: 0 },
+      seq: 13
+    })
+    // Recovered cards are real timeline cards (not restored summaries) and
+    // render the host counts despite having no diff content.
+    expect(cards.every((c) => c.restoredSummary !== true)).toBe(true)
+    expect(describeToolCall(cards[0]).detail).toBe('+3 \u22121')
+    expect(describeToolCall(cards[1]).detail).toBe('+2')
+  })
+
+  it('installs restored file-change summaries from a full payload without timeline cards', async () => {
+    setCachedSessionPayload('s-sum', {
+      metadata: {
+        id: 's-sum',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 12,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'edit a.ts twice', 5) as never,
+        msg('snapshot:agent:12', 'agent', 'done', 12) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-a1',
+          kind: 'edit',
+          status: 'completed',
+          locations: [{ path: 'src/a.ts' }],
+          diffStat: { added: 3, removed: 1 },
+          seq: 7,
+          timestamp: 7,
+          restoredSummary: true
+        },
+        {
+          toolCallId: 'tc-a2',
+          kind: 'edit',
+          status: 'completed',
+          locations: [{ path: 'src/a.ts' }],
+          diffStat: { added: 2, removed: 0 },
+          seq: 9,
+          timestamp: 9,
+          restoredSummary: true
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-sum')
+    const state = useAcpStore.getState()
+    const toolCalls = state.toolCalls['s-sum']
+    expect(toolCalls.map((t) => t.toolCallId)).toEqual(['tc-a1', 'tc-a2'])
+    expect(toolCalls[0]).toMatchObject({
+      locations: [{ path: 'src/a.ts' }],
+      diffStat: { added: 3, removed: 1 },
+      restoredSummary: true
+    })
+    // Panel input: the summaries yield the same counts as live diff content.
+    expect(toolCalls.map((t) => describeToolCall(t).diffStat)).toEqual([
+      { added: 3, removed: 1 },
+      { added: 2, removed: 0 }
+    ])
+    // REFRESH: the timeline shows only the restored messages.
+    const items = buildTimeline(state.messages['s-sum'], toolCalls)
+    expect(items.map((i) => i.kind)).toEqual(['message', 'message'])
+  })
+
+  it('keeps whole-session summaries on a windowed tail fetch (summaries predate the window)', async () => {
+    const { HISTORY_TAIL_MESSAGE_LIMIT, loadSessionPayloadTail } = await import(
+      '@/lib/acp-history-persistence'
+    )
+    const tailMessages: TestMessage[] = [msg('snapshot:agent:200', 'agent', 'reply tail', 200)]
+    for (let i = 1; i < HISTORY_TAIL_MESSAGE_LIMIT; i += 2) {
+      const seq = 200 + i
+      tailMessages.push(msg(`turn:t${i}`, 'user', `question ${i}`, seq))
+      if (i + 1 < HISTORY_TAIL_MESSAGE_LIMIT) {
+        tailMessages.push(msg(`snapshot:agent:${seq + 1}`, 'agent', `answer ${i}`, seq + 1))
+      }
+    }
+    ;(loadSessionPayloadTail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-sum-tail',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: tailMessages.length,
+        lastSeq: 200 + HISTORY_TAIL_MESSAGE_LIMIT,
+        status: 'closed'
+      },
+      messages: tailMessages as never,
+      toolCalls: [
+        {
+          toolCallId: 'tc-early',
+          kind: 'edit',
+          status: 'completed',
+          locations: [{ path: 'src/early.ts' }],
+          diffStat: { added: 4, removed: 2 },
+          seq: 3,
+          timestamp: 3,
+          restoredSummary: true
+        },
+        {
+          toolCallId: 'tc-move',
+          kind: 'move',
+          locations: [{ path: 'src/moved.ts' }],
+          seq: 150,
+          timestamp: 150,
+          restoredSummary: true
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-sum-tail')
+    const state = useAcpStore.getState()
+    const toolCalls = state.toolCalls['s-sum-tail']
+    expect(toolCalls.map((t) => t.toolCallId)).toEqual(['tc-early', 'tc-move'])
+    expect(toolCalls[0].diffStat).toEqual({ added: 4, removed: 2 })
+    expect(
+      buildTimeline(state.messages['s-sum-tail'], toolCalls).some((i) => i.kind === 'tool')
+    ).toBe(false)
   })
 
   it('keeps a greeting-era tool card now that the leading agent row is visible', async () => {

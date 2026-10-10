@@ -740,9 +740,13 @@ export async function loadSessionPayloadTail(
     return {
       ...cached,
       messages: cached.messages.slice(tailStart),
+      // Restored file-change summaries are whole-session (the host keeps
+      // them all in tail payloads too) — never window them out.
       toolCalls: cached.toolCalls?.filter(
         (tc) =>
-          typeof tc.seq !== 'number' || tc.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
+          tc.restoredSummary === true ||
+          typeof tc.seq !== 'number' ||
+          tc.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
       ),
       // CAP-2: retain switches inside the tail window (mirrors the
       // toolCalls rule) — a switch older than the window belongs to
