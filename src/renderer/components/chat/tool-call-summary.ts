@@ -277,6 +277,21 @@ function verbForKind(kind: ToolKind | undefined): string {
   }
 }
 
+/** Count is a finite, non-negative integer (durable payloads are untrusted). */
+function isLineCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+/**
+ * The host-computed `ToolCall.diffStat` of a restored/recovered call, or null
+ * when absent or malformed (a legacy/corrupt record never renders `+NaN`).
+ */
+function persistedDiffStat(value: unknown): { added: number; removed: number } | null {
+  const record = asRecord(value)
+  if (!record || !isLineCount(record.added) || !isLineCount(record.removed)) return null
+  return { added: record.added, removed: record.removed }
+}
+
 /**
  * Derive a compact, human description of a tool call from its kind + input +
  * structured content, falling back to the agent's own title.
@@ -311,8 +326,17 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
       let detail: string | null = null
       let diffStat: { added: number; removed: number } | null = null
       if (diff.hasDiff) {
-        detail = diff.removed > 0 ? `+${diff.added} \u2212${diff.removed}` : `+${diff.added}`
         diffStat = { added: diff.added, removed: diff.removed }
+      } else {
+        // Restored/recovered calls carry no diff `content` (never persisted);
+        // the host-computed durable summary supplies the counts instead.
+        diffStat = persistedDiffStat(toolCall.diffStat)
+      }
+      if (diffStat) {
+        detail =
+          diffStat.removed > 0
+            ? `+${diffStat.added} \u2212${diffStat.removed}`
+            : `+${diffStat.added}`
       }
       return { verb, primary, detail, diffStat }
     }

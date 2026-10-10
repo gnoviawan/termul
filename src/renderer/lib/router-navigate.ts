@@ -12,9 +12,15 @@ export function navigateToChatSession(sessionId: string): void {
   }
 }
 
-export function clearChatRoute(): void {
+/**
+ * Leave the chat route. With `sessionId`, only when the URL still names that
+ * session — a caller acting on a stale route (router updates run in a
+ * transition) must not clobber a newer chat route.
+ */
+export function clearChatRoute(sessionId?: string): void {
   if (!navigateFn) return
-  if (window.location.hash.startsWith('#/c/')) {
+  const hash = window.location.hash
+  if (sessionId ? hash === `#/c/${sessionId}` : hash.startsWith('#/c/')) {
     navigateFn('/')
   }
 }

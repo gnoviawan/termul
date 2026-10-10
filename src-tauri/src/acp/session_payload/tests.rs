@@ -698,3 +698,122 @@ fn closed_status_never_reports_turn_active() {
     let payload = materialize_session_payload(&meta, &records);
     assert!(!payload.metadata.turn_active);
 }
+
+fn tool_record(seq: u64, type_: &str, tool: Value) -> PersistedEventRecord {
+    let key = if type_ == "tool_call" {
+        "toolCall"
+    } else {
+        "update"
+    };
+    record(
+        seq,
+        type_,
+        json!({"agentId": "runtime-1", "sessionId": "session-1", key: tool}),
+    )
+}
+
+#[test]
+fn tool_call_summaries_fold_latest_field_wins_with_first_seq() {
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "edit"),
+        // UPDATE_DIFF: the call carries the path, the update the counts.
+        tool_record(
+            2,
+            "tool_call",
+            json!({"toolCallId": "e1", "kind": "edit", "status": "pending",
+                "locations": [{"path": "/w/a.ts"}]}),
+        ),
+        chunk(3, "agent", "working"),
+        tool_record(
+            4,
+            "tool_call_update",
+            json!({"toolCallId": "e1", "status": "completed",
+                "locations": [{"path": "/w/a.ts"}], "diffStat": {"added": 3, "removed": 1}}),
+        ),
+        // A later update without the summary fields keeps the earlier ones.
+        tool_record(
+            5,
+            "tool_call_update",
+            json!({"toolCallId": "e1", "status": "failed"}),
+        ),
+        // REFRESH: a second edit on the same file stays its own summary (the
+        // panel aggregates per path).
+        tool_record(
+            6,
+            "tool_call",
+            json!({"toolCallId": "e2", "kind": "edit", "status": "completed",
+                "locations": [{"path": "/w/a.ts"}], "diffStat": {"added": 2, "removed": 0}}),
+        ),
+        // READ_CALL: never a summary.
+        tool_record(
+            7,
+            "tool_call",
+            json!({"toolCallId": "r1", "kind": "read", "locations": [{"path": "/w/a.ts"}]}),
+        ),
+        // LEGACY: an edit without summary fields yields nothing.
+        tool_record(
+            8,
+            "tool_call",
+            json!({"toolCallId": "old", "kind": "edit", "status": "completed"}),
+        ),
+        // An update for an unknown id is dropped (renderer recovery parity).
+        tool_record(
+            9,
+            "tool_call_update",
+            json!({"toolCallId": "ghost", "kind": "edit",
+                "locations": [{"path": "/w/ghost.ts"}]}),
+        ),
+        // A call re-kinded by a later update follows the latest kind.
+        tool_record(
+            10,
+            "tool_call",
+            json!({"toolCallId": "m1", "kind": "other", "locations": [{"path": "/w/m.ts"}]}),
+        ),
+        tool_record(
+            11,
+            "tool_call_update",
+            json!({"toolCallId": "m1", "kind": "move", "locations": [{"path": "/w/n.ts"}]}),
+        ),
+        prompt_complete(12, "turn-1"),
+    ];
+    let payload = materialize_session_payload(&metadata(), &records);
+    let value = serde_json::to_value(&payload).unwrap();
+    assert_eq!(
+        value["toolCalls"],
+        json!([
+            {"toolCallId": "e1", "kind": "edit", "status": "failed",
+                "locations": [{"path": "/w/a.ts"}], "diffStat": {"added": 3, "removed": 1},
+                "seq": 2, "timestamp": 102, "restoredSummary": true},
+            {"toolCallId": "e2", "kind": "edit", "status": "completed",
+                "locations": [{"path": "/w/a.ts"}], "diffStat": {"added": 2, "removed": 0},
+                "seq": 6, "timestamp": 106, "restoredSummary": true},
+            {"toolCallId": "m1", "kind": "move",
+                "locations": [{"path": "/w/n.ts"}],
+                "seq": 10, "timestamp": 110, "restoredSummary": true},
+        ])
+    );
+    // The message fold is untouched by the summaries.
+    let ids: Vec<&str> = payload.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["turn:turn-1", "snapshot:agent:3"]);
+}
+
+#[test]
+fn tool_call_summaries_skip_malformed_fields_and_always_serialize() {
+    let records = vec![
+        tool_record(
+            1,
+            "tool_call",
+            json!({"toolCallId": "e1", "kind": "edit",
+                "locations": [{"path": ""}, {"line": 3}, "bogus"],
+                "diffStat": {"added": -1, "removed": 2}}),
+        ),
+        tool_record(2, "tool_call", json!({"kind": "edit"})),
+        record(3, "tool_call", json!({"toolCall": "not-an-object"})),
+    ];
+    let payload = materialize_session_payload(&metadata(), &records);
+    assert!(payload.tool_calls.is_empty());
+    // Absent summaries still serialize as `[]` (byte-identical shape on
+    // both transports).
+    let empty = serde_json::to_value(materialize_session_payload(&metadata(), &[])).unwrap();
+    assert_eq!(empty["toolCalls"], json!([]));
+}

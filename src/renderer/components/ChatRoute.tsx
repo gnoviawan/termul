@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
+import { chatForeignToProject } from '@/lib/acp-session-ownership'
+import { logFrontendError } from '@/lib/log-api'
+import { clearChatRoute } from '@/lib/router-navigate'
 import { clearChatClosedOnRoute, isChatClosedOnRoute } from '@/lib/web-tab-session'
 import { useAcpStore } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 
 /**
@@ -57,11 +61,33 @@ import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stor
  *   target change clears the mark so navigating to a different chat (even
  *   a previously-closed one) re-opens it.
  *
+ * - Never insert a chat KNOWN to belong to another project than the active
+ *   one (stale route from Back/bookmark after a project switch): the pane
+ *   tree is shared across projects, so the insert would leak that chat into
+ *   this project's workspace. The route is cleared instead and the user
+ *   stays on the active project. Unknown ownership is fail-open.
+ *
  * Loop-safe: a gated re-activation runs the store's idempotent
  * addAgentChatTab (no-op when the tab is already active+focused), so the
  * follow-up run sees the same state and stops delegating (swap →
  * activate → settle).
  */
+/**
+ * Whether the routed chat is known-foreign to the active project; if so,
+ * clears the route (instead of inserting the tab) and logs the skip.
+ */
+function rejectForeignRouteChat(sessionId: string): boolean {
+  const projectId = useProjectStore.getState().activeProjectId
+  if (!chatForeignToProject(sessionId, projectId, useAcpStore.getState())) return false
+  void logFrontendError({
+    level: 'warn',
+    source: 'ChatRoute',
+    message: `Skipped foreign-project chat route (session ${sessionId}) on project ${projectId}`
+  })
+  clearChatRoute(sessionId)
+  return true
+}
+
 export function ChatRoute(): null {
   const location = useLocation()
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
@@ -132,6 +158,7 @@ export function ChatRoute(): null {
       // that is the reload path itself.
       return
     }
+    if (rejectForeignRouteChat(sessionId)) return
     if (existing && existing.status !== 'closed') {
       // Multi-project perf: idempotency lives in `addAgentChatTab` (the
       // single source of truth) — it no-ops when the chat tab already exists
@@ -153,7 +180,9 @@ export function ChatRoute(): null {
       attempt++
       try {
         await openHistorySession(sessionId)
-        if (!cancelled) {
+        // The opened record may only now reveal the owner (index not loaded
+        // before the open).
+        if (!cancelled && !rejectForeignRouteChat(sessionId)) {
           useWorkspaceStore.getState().addAgentChatTab(sessionId)
           // Same as the live branch: the (re-)opened chat clears any stale
           // closed-on-route mark from a previous visit.

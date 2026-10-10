@@ -1314,6 +1314,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const merged = clampLiveToolCallFields(e.sessionId, {
         ...list[idx],
         ...stamped,
+        // A live event turns a restored summary into a real timeline card.
+        restoredSummary: undefined,
         timestamp: list[idx].timestamp,
         seq: list[idx].seq
       })
@@ -1349,7 +1351,12 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const stream = boundTerminalStream(applyTerminalStream(list[idx], e.update))
       const clampedUpdate = clampLiveToolCallFields(e.sessionId, { ...e.update, ...stream })
       if (!clampedUpdate) return {}
-      const merged = clampLiveToolCallFields(e.sessionId, { ...list[idx], ...clampedUpdate })
+      // A live update turns a restored summary into a real timeline card.
+      const merged = clampLiveToolCallFields(e.sessionId, {
+        ...list[idx],
+        ...clampedUpdate,
+        restoredSummary: undefined
+      })
       if (!merged) return {}
       const next = [...list]
       next[idx] = merged

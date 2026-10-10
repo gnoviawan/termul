@@ -583,7 +583,7 @@ describe('WorkspaceLayout mobile branch', () => {
     // MobileChatShell is React.lazy — wait for it to load before asserting.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy(), {
       // The first test pays the cold React.lazy import of the whole shell.
-      timeout: 5000
+      timeout: 15000
     })
     expect(screen.queryByLabelText('Command palette')).not.toBeInTheDocument()
     await openMoreSheet()

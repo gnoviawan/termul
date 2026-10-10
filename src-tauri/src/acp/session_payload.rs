@@ -23,15 +23,24 @@
 //! - Message `seq` = the run's first record seq; `timestamp` = the run's
 //!   first `recorded_at`; `streaming` is always `false` (restored transcripts
 //!   never shimmer).
-//! - Tool cards are intentionally NOT materialized: desktop history payloads
-//!   also persist only `ChatMessage[]` (`toolCalls` is a live-only store
-//!   slice), and the durable tool DTO whitelist stays untouched.
+//! - Tool cards are intentionally NOT materialized as timeline cards. The
+//!   payload's sibling `toolCalls` array instead carries one durable
+//!   file-change SUMMARY per `toolCallId` (`fold_tool_call_summaries`):
+//!   `{toolCallId, kind, status?, locations: [{path}], diffStat?, seq,
+//!   timestamp, restoredSummary: true}`, folded with the renderer recovery
+//!   rule (latest event carrying a field wins; `seq`/`timestamp` from the
+//!   first record) and kept only when the final kind is edit/delete/move
+//!   with a path. They feed the Changed files panel; the timeline skips
+//!   `restoredSummary` records, so the restored chat renders as before.
+//!   The durable DTO only ever holds the path-only summary — never diff
+//!   text, titles, or raw input.
 
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::acp::session_persistence::{
-    last_unmatched_user_prompt, PersistedEventRecord, PersistedSessionStatus, SessionMetadata,
+    is_file_change_kind, last_unmatched_user_prompt, PersistedEventRecord, PersistedSessionStatus,
+    SessionMetadata, MAX_SUMMARY_PATH_CHARS,
 };
 
 /// The renderer session-metadata shape (`SessionIndexEntry` in
@@ -107,6 +116,42 @@ pub struct MaterializedAgentSwitch {
     pub seq: u64,
 }
 
+/// A path-only file location in a restored file-change summary (ACP
+/// `ToolCallLocation` without `line`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MaterializedToolCallLocation {
+    pub path: String,
+}
+
+/// Host-computed `+N −N` line counts of a restored file-change summary.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct MaterializedDiffStat {
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// One restored durable file-change summary (renderer `ToolCall` with
+/// `restoredSummary: true`). camelCase keys; `status`/`diffStat` are omitted
+/// when no record carried them.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterializedToolCallSummary {
+    pub tool_call_id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    pub locations: Vec<MaterializedToolCallLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_stat: Option<MaterializedDiffStat>,
+    /// The first record's seq (the original card placement).
+    pub seq: u64,
+    /// The first record's `recorded_at`.
+    pub timestamp: u64,
+    /// Always `true`: marks the record as a summary the timeline never
+    /// renders as a card.
+    pub restored_summary: bool,
+}
+
 /// The renderer `SessionPayload` shape served by `get_session_payload`.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +163,11 @@ pub struct MaterializedSessionPayload {
     /// absent) so both transports carry a byte-identical shape; pre-feature
     /// payloads simply materialize an empty array.
     pub switches: Vec<MaterializedAgentSwitch>,
+    /// Restored file-change summaries for the WHOLE session (never just a
+    /// tail window), in first-seq order. Always serialized (as `[]` when
+    /// none) — legacy sessions recorded before the summary fields existed
+    /// materialize an empty array.
+    pub tool_calls: Vec<MaterializedToolCallSummary>,
 }
 
 /// Materialize the renderer-shaped payload for one session from its durable
@@ -128,6 +178,7 @@ pub fn materialize_session_payload(
     records: &[PersistedEventRecord],
 ) -> MaterializedSessionPayload {
     let (messages, switches) = fold_session_records(records);
+    let tool_calls = fold_tool_call_summaries(records);
     let payload_metadata = SessionPayloadMetadata {
         id: metadata.session_id.clone(),
         agent_id: metadata.runtime_agent_id.clone().unwrap_or_default(),
@@ -171,7 +222,126 @@ pub fn materialize_session_payload(
         metadata: payload_metadata,
         messages,
         switches,
+        tool_calls,
     }
+}
+
+/// Partially-folded summary state for one `toolCallId`.
+struct ToolSummaryFold {
+    tool_call_id: String,
+    kind: Option<String>,
+    status: Option<String>,
+    locations: Option<Vec<MaterializedToolCallLocation>>,
+    diff_stat: Option<MaterializedDiffStat>,
+    seq: u64,
+    timestamp: u64,
+}
+
+/// Fold seq-sorted durable tool records into restored file-change summaries.
+///
+/// Mirrors the renderer's recovery fold (`installTransportRecovery`): a
+/// `tool_call` upserts by `toolCallId`, a `tool_call_update` folds into an
+/// already-seen id (updates for unknown ids are dropped), and per id the
+/// LATEST event carrying a field wins (`kind`, `status`, `locations`,
+/// `diffStat`) while `seq`/`timestamp` stay those of the first record. Only
+/// summaries whose final kind is edit/delete/move and that carry a path are
+/// emitted. Non-tool records are ignored, so callers may pass the full
+/// record set or just the tool-call log. Malformed fields degrade (skipped),
+/// never fail the fold.
+#[must_use]
+pub fn fold_tool_call_summaries(
+    records: &[PersistedEventRecord],
+) -> Vec<MaterializedToolCallSummary> {
+    let mut folds: Vec<ToolSummaryFold> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for record in records {
+        let key = match record.type_.as_str() {
+            "tool_call" => "toolCall",
+            "tool_call_update" => "update",
+            _ => continue,
+        };
+        let Some(tool) = record.payload.get(key).and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(tool_call_id) = tool.get("toolCallId").and_then(Value::as_str) else {
+            continue;
+        };
+        let slot = match index.get(tool_call_id).copied() {
+            Some(slot) => slot,
+            None if key == "toolCall" => {
+                index.insert(tool_call_id.to_string(), folds.len());
+                folds.push(ToolSummaryFold {
+                    tool_call_id: tool_call_id.to_string(),
+                    kind: None,
+                    status: None,
+                    locations: None,
+                    diff_stat: None,
+                    seq: record.seq,
+                    timestamp: record.recorded_at,
+                });
+                folds.len() - 1
+            }
+            // Renderer parity: an update for an unknown id is dropped.
+            None => continue,
+        };
+        let fold = &mut folds[slot];
+        if let Some(kind) = tool.get("kind").and_then(Value::as_str) {
+            fold.kind = Some(kind.to_string());
+        }
+        if let Some(status) = tool.get("status").and_then(Value::as_str) {
+            fold.status = Some(status.to_string());
+        }
+        if let Some(locations) = summary_locations(tool.get("locations")) {
+            fold.locations = Some(locations);
+        }
+        if let Some(diff_stat) = summary_diff_stat(tool.get("diffStat")) {
+            fold.diff_stat = Some(diff_stat);
+        }
+    }
+    folds
+        .into_iter()
+        .filter_map(|fold| {
+            let kind = fold
+                .kind
+                .filter(|kind| is_file_change_kind(Some(kind.as_str())))?;
+            let locations = fold.locations?;
+            Some(MaterializedToolCallSummary {
+                tool_call_id: fold.tool_call_id,
+                kind,
+                status: fold.status,
+                locations,
+                diff_stat: fold.diff_stat,
+                seq: fold.seq,
+                timestamp: fold.timestamp,
+                restored_summary: true,
+            })
+        })
+        .collect()
+}
+
+/// Path-only locations from a durable record; `None` when absent or when no
+/// entry carries a usable path (non-empty, within the persist-time bound).
+fn summary_locations(value: Option<&Value>) -> Option<Vec<MaterializedToolCallLocation>> {
+    let locations: Vec<MaterializedToolCallLocation> = value?
+        .as_array()?
+        .iter()
+        .filter_map(|location| location.get("path").and_then(Value::as_str))
+        .filter(|path| !path.is_empty() && path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
+        .map(|path| MaterializedToolCallLocation {
+            path: path.to_string(),
+        })
+        .collect();
+    (!locations.is_empty()).then_some(locations)
+}
+
+/// `{added, removed}` from a durable record; `None` unless both are
+/// non-negative integers.
+fn summary_diff_stat(value: Option<&Value>) -> Option<MaterializedDiffStat> {
+    let value = value?;
+    Some(MaterializedDiffStat {
+        added: value.get("added")?.as_u64()?,
+        removed: value.get("removed")?.as_u64()?,
+    })
 }
 
 /// Issue #838: the open turn id — the turn-id of the LAST `user_prompt`

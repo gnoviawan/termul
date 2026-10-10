@@ -161,6 +161,13 @@ export interface ToolCall {
   timestamp?: number
   /** Monotonic arrival sequence (stamped in the store) for timeline ordering. */
   seq?: number
+  /** Host-computed `+N −N` line counts from the durable file-change summary.
+   * Present on restored/recovered calls whose diff `content` is not persisted;
+   * live calls derive counts from `content` instead. */
+  diffStat?: { added: number; removed: number }
+  /** True for a restored durable file-change summary (payload `toolCalls`):
+   * feeds the Changed files panel but never renders as a timeline card. */
+  restoredSummary?: boolean
   [k: string]: unknown
 }
 
@@ -173,6 +180,8 @@ export interface ToolCallUpdate {
   locations?: ToolCallLocation[]
   rawInput?: unknown
   rawOutput?: unknown
+  /** See {@link ToolCall.diffStat} — carried by durable recovery records. */
+  diffStat?: { added: number; removed: number }
   [k: string]: unknown
 }
 

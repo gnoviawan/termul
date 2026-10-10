@@ -100,6 +100,37 @@ describe('buildTimeline', () => {
     expect(order).toEqual(['h1', 'h2', 't1'])
   })
 
+  it('skips restored file-change summaries (no timeline cards)', () => {
+    const messages = [msg('u1', 'user', 10, 1), msg('a1', 'agent', 30, 4)]
+    const restored: ToolCall = {
+      toolCallId: 'r1',
+      kind: 'edit',
+      status: 'completed',
+      locations: [{ path: 'src/a.ts' }],
+      diffStat: { added: 3, removed: 1 },
+      seq: 2,
+      timestamp: 20,
+      restoredSummary: true
+    }
+    const tools = [restored, tool('t1', 25, 3)]
+    const order = buildTimeline(messages, tools).map(timelineItemId)
+    expect(order).toEqual(['u1', 't1', 'a1'])
+  })
+
+  it('renders a restored transcript identically with or without summaries', () => {
+    const messages = [msg('u1', 'user', 10, 1), msg('a1', 'agent', 30, 3)]
+    const summaries: ToolCall[] = [
+      { toolCallId: 's1', kind: 'edit', seq: 2, timestamp: 20, restoredSummary: true },
+      { toolCallId: 's2', kind: 'delete', seq: 5, timestamp: 50, restoredSummary: true }
+    ]
+    expect(buildTimeline(messages, summaries)).toEqual(buildTimeline(messages, []))
+  })
+
+  it('keeps a tool call whose restoredSummary flag is not strictly true', () => {
+    const tools = [{ ...tool('t1', 10, 1), restoredSummary: false }]
+    expect(buildTimeline([], tools).map(timelineItemId)).toEqual(['t1'])
+  })
+
   it('returns an empty timeline when there is nothing', () => {
     expect(buildTimeline([], [])).toEqual([])
   })

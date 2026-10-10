@@ -11,6 +11,7 @@ import { useAgentChatProjectSignals } from '@/hooks/use-agent-chat-attention'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { needsYouLabel } from '@/lib/agent-chat-attention'
+import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useSessionIndexTitle } from '@/stores/acp-store'
@@ -22,7 +23,6 @@ import {
 } from '@/stores/context-bar-settings-store'
 import { useActiveTerminal } from '@/stores/terminal-store'
 import { useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 
 interface StatusBarProps {
@@ -291,7 +291,7 @@ function NeedsYouPillButton({
   return (
     <button
       type="button"
-      onClick={() => useWorkspaceStore.getState().addAgentChatTab(sessionId)}
+      onClick={() => openAgentChatInOwnProject(sessionId, 'StatusBar.NeedsYouPill')}
       className={cn(
         'flex h-6 min-w-0 max-w-56 shrink items-center gap-1.5 rounded-md bg-warning/10 px-2 font-medium text-warning transition-colors duration-150 ease-out hover:bg-warning/20',
         FOCUS_RING_CLASS

@@ -349,6 +349,20 @@ async fn durable_payload_redacts_secret_fields_and_bounds_titles() {
     let mut title = record(2, "session_info_update");
     title.payload = json!({"sessionId":"session-1", "title": format!("  {}  ", "x".repeat(100)), "token":"secret"});
     persistence.enqueue_event(title).unwrap();
+    // A file-changing call: its durable DTO gains the path-only summary
+    // (`locations: [{path}]` without `line`, `diffStat` counts) while the
+    // title, rawInput, and diff text stay out.
+    let mut edit = record(3, "tool_call");
+    edit.payload = json!({
+        "agentId":"a", "sessionId":"session-1",
+        "toolCall": {"toolCallId":"e", "title":"ordinary-text-token-123",
+            "kind":"edit", "status":"completed",
+            "locations":[{"path":"/work/src/a.ts", "line": 7}],
+            "rawInput":{"file_path":"/work/src/other.ts", "apiKey":"secret"},
+            "content":[{"type":"diff", "path":"/work/src/a.ts",
+                "oldText":"one\ntwo\n", "newText":"one\nordinary-text-token-123\nthree\n"}]}
+    });
+    persistence.enqueue_event(edit).unwrap();
     persistence.flush_session("session-1").await.unwrap();
     let records = persistence.replay_after("session-1", 0).unwrap();
     let serialized = serde_json::to_string(&records).unwrap();
@@ -356,8 +370,21 @@ async fn durable_payload_redacts_secret_fields_and_bounds_titles() {
     assert!(!serialized.contains("rawInput"));
     assert!(!serialized.contains("Authorization"));
     assert!(!serialized.contains("ordinary-text-token-123"));
+    assert!(!serialized.contains("oldText"));
+    assert!(!serialized.contains("newText"));
+    assert!(!serialized.contains("other.ts"));
     assert!(serialized.contains("toolCallId"));
     assert!(serialized.contains("execute"));
+    let execute = records.iter().find(|r| r.seq == 1).unwrap();
+    assert!(execute.payload["toolCall"].get("locations").is_none());
+    assert!(execute.payload["toolCall"].get("diffStat").is_none());
+    let edit = records.iter().find(|r| r.seq == 3).unwrap();
+    assert_eq!(
+        edit.payload["toolCall"],
+        json!({"toolCallId":"e", "kind":"edit", "status":"completed",
+            "locations":[{"path":"/work/src/a.ts"}],
+            "diffStat":{"added":2, "removed":1}})
+    );
     assert_eq!(
         persistence
             .metadata("session-1")
@@ -3241,5 +3268,265 @@ async fn shutdown_appends_no_marker_after_agent_switch() {
         records.iter().all(|r| r.type_ != "prompt_complete"),
         "a switch-abandoned turn must not gain an interrupted marker"
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+fn reduced_tool(type_: &str, tool: Value) -> Value {
+    let key = if type_ == "tool_call" {
+        "toolCall"
+    } else {
+        "update"
+    };
+    let payload = json!({"agentId":"a", "sessionId":"session-1", key: tool});
+    normalize_durable_payload(type_, &payload)[key].clone()
+}
+
+#[test]
+fn file_change_summary_gate_and_path_precedence() {
+    // READ_CALL: a read with locations is never summarized.
+    let read = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"r", "kind":"read", "locations":[{"path":"/a.ts"}]}),
+    );
+    assert_eq!(read, json!({"toolCallId":"r", "kind":"read"}));
+    // `locations[0].path` wins over rawInput and diff paths.
+    let edit = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"e", "kind":"edit",
+            "locations":[{"path":"/loc.ts", "line": 3}, {"path":"/second.ts"}],
+            "rawInput":{"path":"/input.ts"},
+            "content":[{"type":"diff", "path":"/diff.ts", "oldText":null, "newText":"x\n"}]}),
+    );
+    assert_eq!(edit["locations"], json!([{"path":"/loc.ts"}]));
+    assert_eq!(edit["diffStat"], json!({"added":1, "removed":0}));
+    // rawInput PATH_KEYS order + trim, ahead of the diff path.
+    let input = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"e", "kind":"move",
+            "rawInput":{"fileName":"/late.ts", "file_path":"  /input.ts  ", "path":"   "},
+            "content":[{"type":"diff", "path":"/diff.ts", "newText":""}]}),
+    );
+    assert_eq!(input["locations"], json!([{"path":"/input.ts"}]));
+    // Diff path fallback (first diff item with a path).
+    let diff_only = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"e", "kind":"edit",
+            "content":[{"type":"content"}, {"type":"diff", "oldText":"a\n", "newText":"b\n"},
+                {"type":"diff", "path":"/diff.ts", "oldText":"a\n", "newText":"a\nb\n"}]}),
+    );
+    assert_eq!(diff_only["locations"], json!([{"path":"/diff.ts"}]));
+    // Summed over diff items: (+1 −1) + (+1 −0).
+    assert_eq!(diff_only["diffStat"], json!({"added":2, "removed":1}));
+    // A delete with locations but no diff content: path only.
+    let delete = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"d", "kind":"delete", "locations":[{"path":"/gone.ts"}]}),
+    );
+    assert_eq!(
+        delete,
+        json!({"toolCallId":"d", "kind":"delete", "locations":[{"path":"/gone.ts"}]})
+    );
+}
+
+#[test]
+fn file_change_summary_update_gate_and_huge_path() {
+    // UPDATE_DIFF: an update without its own kind is admitted by diff content.
+    let update = reduced_tool(
+        "tool_call_update",
+        json!({"toolCallId":"e", "status":"completed",
+            "content":[{"type":"diff", "path":"/a.ts", "oldText":"1\n2\n", "newText":"1\n3\n4\n"}]}),
+    );
+    assert_eq!(
+        update,
+        json!({"toolCallId":"e", "status":"completed",
+            "locations":[{"path":"/a.ts"}], "diffStat":{"added":2, "removed":1}})
+    );
+    // An update with locations but neither a file-change kind nor diff
+    // content stays structural only.
+    let plain = reduced_tool(
+        "tool_call_update",
+        json!({"toolCallId":"e", "status":"completed", "locations":[{"path":"/a.ts"}]}),
+    );
+    assert_eq!(plain, json!({"toolCallId":"e", "status":"completed"}));
+    // An update whose own kind is a file-change kind is admitted.
+    let kinded = reduced_tool(
+        "tool_call_update",
+        json!({"toolCallId":"e", "kind":"edit", "locations":[{"path":"/a.ts"}]}),
+    );
+    assert_eq!(kinded["locations"], json!([{"path":"/a.ts"}]));
+    // A `tool_call` without a file-change kind is never admitted, even with
+    // diff content.
+    let other = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"o", "kind":"other",
+            "content":[{"type":"diff", "path":"/a.ts", "newText":"x"}]}),
+    );
+    assert_eq!(other, json!({"toolCallId":"o", "kind":"other"}));
+    // HUGE_PATH: > 4096 chars → field omitted (diffStat still kept); exactly
+    // 4096 is kept.
+    let huge = format!("/{}", "a".repeat(MAX_SUMMARY_PATH_CHARS));
+    let huge_edit = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"h", "kind":"edit", "locations":[{"path": huge}],
+            "content":[{"type":"diff", "oldText":"a", "newText":"b"}]}),
+    );
+    assert!(huge_edit.get("locations").is_none());
+    assert_eq!(huge_edit["diffStat"], json!({"added":1, "removed":1}));
+    let bound = format!("/{}", "a".repeat(MAX_SUMMARY_PATH_CHARS - 1));
+    let bound_edit = reduced_tool(
+        "tool_call",
+        json!({"toolCallId":"h", "kind":"edit", "locations":[{"path": bound.clone()}]}),
+    );
+    assert_eq!(bound_edit["locations"], json!([{ "path": bound }]));
+}
+
+/// The tail payload's `toolCalls` covers the WHOLE session (sourced from the
+/// full `tool-calls.jsonl`), identical to the full payload's — even when
+/// every tool record is older than the tail window.
+#[tokio::test]
+async fn tail_payload_carries_whole_session_file_change_summaries() {
+    let root = temp_dir("tail-tool-summaries");
+    let (persistence, _) = registered(&root).await;
+    let tool = |seq: u64, type_: &str, key: &str, body: Value| {
+        payload_record(
+            seq,
+            type_,
+            json!({"agentId":"runtime-1", "sessionId":"session-1", key: body}),
+        )
+    };
+    persistence
+        .enqueue_event(payload_record(
+            1,
+            "user_prompt",
+            json!({"agentId":"runtime-1","sessionId":"session-1","turnId":"turn-0",
+                "content":[{"type":"text","text":"edit please"}]}),
+        ))
+        .unwrap();
+    // UPDATE_DIFF: the call has no content; the update carries the diff.
+    persistence
+        .enqueue_event(tool(
+            2,
+            "tool_call",
+            "toolCall",
+            json!({"toolCallId":"e1", "kind":"edit", "status":"pending",
+                "locations":[{"path":"/w/a.ts"}]}),
+        ))
+        .unwrap();
+    persistence
+        .enqueue_event(tool(
+            3,
+            "tool_call_update",
+            "update",
+            json!({"toolCallId":"e1", "status":"completed",
+                "content":[{"type":"diff", "path":"/w/a.ts",
+                    "oldText":"1\n2\n3\n", "newText":"1\n2b\n3\n4\n5\n6\n"}]}),
+        ))
+        .unwrap();
+    // READ_CALL: excluded from the payload.
+    persistence
+        .enqueue_event(tool(
+            4,
+            "tool_call",
+            "toolCall",
+            json!({"toolCallId":"r1", "kind":"read", "status":"completed",
+                "locations":[{"path":"/w/a.ts"}]}),
+        ))
+        .unwrap();
+    persistence
+        .enqueue_event(tool(
+            5,
+            "tool_call",
+            "toolCall",
+            json!({"toolCallId":"e2", "kind":"edit", "status":"completed",
+                "content":[{"type":"diff", "path":"/w/a.ts", "oldText":null, "newText":"x\ny\n"}]}),
+        ))
+        .unwrap();
+    persistence
+        .enqueue_event(payload_record(
+            6,
+            "prompt_complete",
+            json!({"sessionId":"session-1","turnId":"turn-0","stopReason":"end_turn"}),
+        ))
+        .unwrap();
+    for i in 0..10u64 {
+        enqueue_turn(
+            &persistence,
+            7 + i * 3,
+            &format!("turn-{}", i + 1),
+            &format!("prompt-{i}"),
+            &format!("reply-{i}"),
+        );
+    }
+    persistence.flush_session("session-1").await.unwrap();
+
+    let expected = json!([
+        {"toolCallId":"e1", "kind":"edit", "status":"completed",
+            "locations":[{"path":"/w/a.ts"}], "diffStat":{"added":4, "removed":1},
+            "seq":2, "timestamp":1002, "restoredSummary":true},
+        {"toolCallId":"e2", "kind":"edit", "status":"completed",
+            "locations":[{"path":"/w/a.ts"}], "diffStat":{"added":2, "removed":0},
+            "seq":5, "timestamp":1005, "restoredSummary":true},
+    ]);
+    let full = serde_json::to_value(
+        persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(full["toolCalls"], expected);
+    let tail = persistence
+        .session_payload_tail_async("session-1", 2)
+        .await
+        .unwrap();
+    assert_eq!(tail.messages.len(), 2);
+    assert!(
+        tail.messages.iter().all(|message| message.seq > 6),
+        "every tool record is older than the tail window"
+    );
+    assert_eq!(serde_json::to_value(&tail).unwrap()["toolCalls"], expected);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// LEGACY: records written before the summary fields existed (the bare
+/// `{toolCallId, kind, status}` DTO — exactly what a path-less edit still
+/// normalizes to) materialize no summaries and never fail the payload.
+#[tokio::test]
+async fn legacy_tool_records_without_summary_fields_yield_no_summaries() {
+    let root = temp_dir("legacy-tool-summaries");
+    let (persistence, _) = registered(&root).await;
+    persistence
+        .enqueue_event(payload_record(
+            1,
+            "tool_call",
+            json!({"agentId":"runtime-1","sessionId":"session-1",
+                "toolCall":{"toolCallId":"old", "kind":"edit", "status":"completed"}}),
+        ))
+        .unwrap();
+    persistence
+        .enqueue_event(payload_record(
+            2,
+            "tool_call_update",
+            json!({"agentId":"runtime-1","sessionId":"session-1",
+                "update":{"toolCallId":"old", "status":"failed"}}),
+        ))
+        .unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        records[0].payload["toolCall"],
+        json!({"toolCallId":"old", "kind":"edit", "status":"completed"})
+    );
+    let payload = persistence
+        .session_payload_async("session-1")
+        .await
+        .unwrap();
+    assert!(payload.tool_calls.is_empty());
+    let tail = persistence
+        .session_payload_tail_async("session-1", 5)
+        .await
+        .unwrap();
+    assert!(tail.tool_calls.is_empty());
+    assert_eq!(serde_json::to_value(&tail).unwrap()["toolCalls"], json!([]));
     let _ = fs::remove_dir_all(root);
 }

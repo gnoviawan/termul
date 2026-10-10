@@ -40,6 +40,7 @@ import {
 } from '@/lib/acp-api'
 import { sanitizeNotificationText, shouldNotifyForTurnEnd } from '@/lib/chat-notify'
 import { logFrontendError } from '@/lib/log-api'
+import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
 import { configIdFromReuseKey } from '@/stores/acp-reuse-keys'
 import { useAcpStore } from '@/stores/acp-store'
@@ -110,10 +111,10 @@ function notifyChatEvent(
     void Promise.resolve(
       sendDesktopNotification(title, sanitizeNotificationText(body), {
         onClick: () => {
-          // Bring the chat on screen: add/activate its tab in the pane tree
-          // (idempotent) — the notification layer itself focuses the window
-          // (web: window.focus(); desktop: unminimize + setFocus).
-          useWorkspaceStore.getState().addAgentChatTab(sessionId)
+          // Bring the chat on screen in its own project (switching when it
+          // belongs to another one) — the notification layer itself focuses
+          // the window (web: window.focus(); desktop: unminimize + setFocus).
+          openAgentChatInOwnProject(sessionId, 'use-chat-notifications')
         }
       })
     ).catch((error: unknown) => {

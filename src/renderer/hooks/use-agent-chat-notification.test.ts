@@ -1,10 +1,12 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
 import { mockProject, seedAppSettingsStore, seedProjectStore } from '@/lib/test-utils/store'
 import { type AcpSession, useAcpStore } from '@/stores/acp-store'
 import { useAgentChatNotification } from './use-agent-chat-notification'
 
+vi.mock('@/lib/open-agent-chat', () => ({ openAgentChatInOwnProject: vi.fn() }))
 vi.mock('@/lib/tauri-notification-api', () => ({
   sendDesktopNotification: vi.fn()
 }))
@@ -59,7 +61,9 @@ describe('useAgentChatNotification', () => {
     })
 
     expect(sendDesktopNotification).toHaveBeenCalledTimes(1)
-    expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Deploy — finished')
+    expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Deploy — finished', {
+      onClick: expect.any(Function)
+    })
   })
 
   it('sends one notification for a new permission request', () => {
@@ -80,6 +84,24 @@ describe('useAgentChatNotification', () => {
     })
 
     expect(sendDesktopNotification).toHaveBeenCalledTimes(1)
-    expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Deploy — needs approval')
+    expect(sendDesktopNotification).toHaveBeenCalledWith('My Project', 'Deploy — needs approval', {
+      onClick: expect.any(Function)
+    })
+  })
+
+  it('clicking a notification opens the chat in its own project', () => {
+    renderHook(() => useAgentChatNotification())
+
+    act(() => {
+      useAcpStore.setState({
+        pendingQuestions: {
+          'q-1': { questionId: 'q-1', sessionId: 's1' } as never
+        }
+      })
+    })
+
+    const options = vi.mocked(sendDesktopNotification).mock.calls[0]?.[2]
+    options?.onClick?.()
+    expect(openAgentChatInOwnProject).toHaveBeenCalledWith('s1', 'useAgentChatNotification')
   })
 })
