@@ -47,6 +47,16 @@ pub struct PersistedEventRecord {
     pub payload: Value,
 }
 
+/// A tail replay plus the session's whole seq-sorted tool-call log (see
+/// `SessionPersistence::replay_tail_with_tool_records`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TailReplay {
+    /// The tail window records (identical to `replay_tail`).
+    pub records: Vec<PersistedEventRecord>,
+    /// Every `tool_call`/`tool_call_update` record of the session.
+    pub tool_records: Vec<PersistedEventRecord>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMetadata {

@@ -79,6 +79,10 @@ export function buildTimeline(
   })
 
   toolCalls.forEach((tool, i) => {
+    // Restored durable file-change summaries feed the Changed files panel
+    // only — they never render as timeline cards, so a restored chat looks
+    // exactly as it did before summaries were materialized.
+    if (tool.restoredSummary === true) return
     stamped.push({
       item: { kind: 'tool', key: tool.toolCallId, tool },
       seq: typeof tool.seq === 'number' ? tool.seq : undefined,

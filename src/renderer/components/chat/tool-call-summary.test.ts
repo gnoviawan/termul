@@ -66,6 +66,60 @@ describe('describeToolCall', () => {
     expect(s.detail).toBe('+2')
   })
 
+  it('falls back to the restored diffStat when an edit has no diff content', () => {
+    const s = describeToolCall(
+      call({
+        kind: 'edit',
+        locations: [{ path: 'src/a.ts' }],
+        diffStat: { added: 5, removed: 1 },
+        restoredSummary: true
+      })
+    )
+    expect(s).toEqual({
+      verb: 'Edited',
+      primary: 'a.ts',
+      detail: '+5 \u22121',
+      diffStat: { added: 5, removed: 1 }
+    })
+  })
+
+  it('shows only additions for a restored diffStat with no removals', () => {
+    const s = describeToolCall(
+      call({ kind: 'edit', locations: [{ path: 'a.ts' }], diffStat: { added: 2, removed: 0 } })
+    )
+    expect(s.detail).toBe('+2')
+    expect(s.diffStat).toEqual({ added: 2, removed: 0 })
+  })
+
+  it('prefers live diff content over a stale diffStat', () => {
+    const s = describeToolCall(
+      call({
+        kind: 'edit',
+        content: [{ type: 'diff', path: 'new.ts', newText: 'x\ny' }],
+        diffStat: { added: 99, removed: 99 }
+      })
+    )
+    expect(s.detail).toBe('+2')
+    expect(s.diffStat).toEqual({ added: 2, removed: 0 })
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['null', null],
+    ['non-object', 7],
+    ['missing removed', { added: 3 }],
+    ['negative count', { added: -1, removed: 0 }],
+    ['fractional count', { added: 1.5, removed: 0 }],
+    ['NaN count', { added: Number.NaN, removed: 0 }],
+    ['string count', { added: '3', removed: '1' }]
+  ])('ignores a %s diffStat (legacy/corrupt record)', (_label, diffStat) => {
+    const s = describeToolCall(
+      call({ kind: 'edit', locations: [{ path: 'a.ts' }], diffStat: diffStat as never })
+    )
+    expect(s.detail).toBeNull()
+    expect(s.diffStat).toBeNull()
+  })
+
   it('summarizes an executed command', () => {
     const s = describeToolCall(call({ kind: 'execute', rawInput: { command: 'bun run test' } }))
     expect(s).toEqual({ verb: 'Ran', primary: 'bun run test', detail: null })

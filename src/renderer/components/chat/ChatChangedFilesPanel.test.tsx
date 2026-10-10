@@ -404,6 +404,31 @@ describe('ChatChangedFilesPanel', () => {
     expect(screen.getByText('from-locations.ts')).toBeInTheDocument()
   })
 
+  it('renders rows with counts from restored summary-only tool calls', async () => {
+    // Payload `toolCalls` after a reload: locations + host diffStat, no
+    // content/rawInput/title (never persisted). Two edits of a.ts fold into
+    // one row summing +3−1 and +2−0.
+    const summary = (toolCallId: string, path: string, added: number, removed: number) =>
+      ({
+        toolCallId,
+        kind: 'edit',
+        status: 'completed',
+        locations: [{ path }],
+        diffStat: { added, removed },
+        seq: 1,
+        timestamp: 1,
+        restoredSummary: true
+      }) as ToolCall
+    renderPanel([summary('r1', 'src/a.ts', 3, 1), summary('r2', 'src/a.ts', 2, 0)])
+    expect(screen.getByText('Changed files')).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /expand/i }))
+    await screen.findByText('a.ts')
+    // One occurrence in the row, one in the header totals.
+    expect(screen.getAllByText('+5')).toHaveLength(2)
+    expect(screen.getAllByText('\u22121')).toHaveLength(2)
+  })
+
   it('shows panel when locations is present even without diff content', () => {
     renderPanel([
       makeToolCall({

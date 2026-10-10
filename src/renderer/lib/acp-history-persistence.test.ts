@@ -59,6 +59,7 @@ import {
   INACTIVE_PAYLOAD_CACHE_BUDGET,
   loadSessionIndex,
   loadSessionPayload,
+  loadSessionPayloadTail,
   MAX_PINNED_PAYLOADS,
   markSessionPayloadPinned,
   maxPayloadSeq,
@@ -758,6 +759,32 @@ describe('deleteSessionPayload routing (CAP-11)', () => {
 })
 
 describe('bounded full-payload cache', () => {
+  it('keeps whole-session restored summaries when slicing a cached tail', async () => {
+    const messages = Array.from({ length: 6 }, (_, i) => ({
+      ...msg(i % 2 === 0 ? 'user' : 'agent', `t-${i}`),
+      seq: 10 + i
+    }))
+    setCachedSessionPayload('s-tail-sum', {
+      ...payload('s-tail-sum', messages),
+      toolCalls: [
+        {
+          toolCallId: 'early-summary',
+          kind: 'edit',
+          locations: [{ path: 'src/a.ts' }],
+          diffStat: { added: 3, removed: 1 },
+          seq: 1,
+          timestamp: 1,
+          restoredSummary: true
+        },
+        { toolCallId: 'early-card', kind: 'read', seq: 2, timestamp: 2 },
+        { toolCallId: 'tail-card', kind: 'read', seq: 15, timestamp: 15 }
+      ]
+    })
+    const tail = await loadSessionPayloadTail('s-tail-sum', 2)
+    expect(tail?.messages.map((m) => m.seq)).toEqual([14, 15])
+    expect(tail?.toolCalls?.map((t) => t.toolCallId)).toEqual(['early-summary', 'tail-card'])
+  })
+
   it('evicts least-recent inactive entries and reloads them from Rust', async () => {
     for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
       setCachedSessionPayload(`s-${index}`, payload(`s-${index}`, [msg('user', `${index}`)]))
