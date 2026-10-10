@@ -1,10 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { useAcpStore } from '@/stores/acp-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import { StatusBar } from './StatusBar'
@@ -18,6 +18,8 @@ const { signalsRef } = vi.hoisted(() => ({
     }
   }
 }))
+
+vi.mock('@/lib/open-agent-chat', () => ({ openAgentChatInOwnProject: vi.fn() }))
 
 vi.mock('@/hooks/use-agent-chat-attention', () => ({
   useAgentChatProjectSignals: () => signalsRef.current
@@ -332,18 +334,12 @@ describe('StatusBar', () => {
           'session-1': { title: 'Fix login' } as never
         }
       })
-      const addAgentChatTab = vi.fn()
-      const prevAdd = useWorkspaceStore.getState().addAgentChatTab
-      useWorkspaceStore.setState({ addAgentChatTab })
-      try {
-        renderWithProviders(<StatusBar project={mockProject} />)
-        const pill = screen.getByRole('button', { name: 'Fix login needs you' })
-        expect(pill.className).toContain('bg-warning/10')
-        fireEvent.click(pill)
-        expect(addAgentChatTab).toHaveBeenCalledWith('session-1')
-      } finally {
-        useWorkspaceStore.setState({ addAgentChatTab: prevAdd })
-      }
+      renderWithProviders(<StatusBar project={mockProject} />)
+      const pill = screen.getByRole('button', { name: 'Fix login needs you' })
+      expect(pill.className).toContain('bg-warning/10')
+      fireEvent.click(pill)
+      // Opens in the chat's own project (switching when it is another one).
+      expect(openAgentChatInOwnProject).toHaveBeenCalledWith('session-1', 'StatusBar.NeedsYouPill')
     })
   })
 })

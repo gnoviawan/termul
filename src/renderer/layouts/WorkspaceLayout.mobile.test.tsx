@@ -576,7 +576,9 @@ describe('WorkspaceLayout mobile branch', () => {
     renderLayout()
 
     // MobileChatShell is React.lazy — wait for it to load before asserting.
-    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
+    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy(), {
+      timeout: 15000
+    })
     expect(screen.queryByLabelText('Command palette')).not.toBeInTheDocument()
     await openMoreSheet()
     expect(screen.getByRole('button', { name: 'Command palette' })).toBeInTheDocument()

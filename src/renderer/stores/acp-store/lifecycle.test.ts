@@ -157,6 +157,7 @@ import {
   takeAllDroppedLaunchPlaceholders,
   useAcpStore
 } from '@/stores/acp-store'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
 import { FRESH, seedSession } from './testkit'
 
@@ -555,6 +556,75 @@ describe('failed session lifecycle (story 5)', () => {
 
     expect(workspaceStateRef.current.removeTab).toHaveBeenCalledTimes(1)
     expect(workspaceStateRef.current.removeTab).toHaveBeenCalledWith('chat-s-corpse')
+  })
+
+  it('RELOAD_PRUNE: removes tabs the index proves foreign to the active project and hands them back to the owner', async () => {
+    // Inserted fail-open before the index loaded: s-foreign belongs to p2 but
+    // sits in p1's tree. s-own (p1) and s-unattributed ('' stub) stay.
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    useAgentChatLifetimeStore.setState({ retainedByProject: {} })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-foreign',
+      tabs: [
+        { type: 'agent-chat', id: 'chat-s-own', sessionId: 's-own' },
+        { type: 'agent-chat', id: 'chat-s-foreign', sessionId: 's-foreign' },
+        { type: 'agent-chat', id: 'chat-s-unattributed', sessionId: 's-unattributed' }
+      ]
+    }
+    const entry = (id: string, projectId: string) => ({
+      id,
+      agentId: 'agent-1',
+      title: id,
+      cwd: '/work',
+      projectId,
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 1,
+      status: 'closed' as const
+    })
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      entry('s-own', 'p1'),
+      entry('s-foreign', 'p2'),
+      entry('s-unattributed', '')
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(workspaceStateRef.current.removeTab).toHaveBeenCalledTimes(1)
+    expect(workspaceStateRef.current.removeTab).toHaveBeenCalledWith('chat-s-foreign')
+    // Lossless: the owner reattaches it on switch-back.
+    expect(useAgentChatLifetimeStore.getState().retainedByProject.p2).toEqual(['s-foreign'])
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp-store.loadSessionIndex', level: 'warn' })
+    )
+  })
+
+  it('RELOAD_PRUNE: no active project judges nothing foreign', async () => {
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: [{ type: 'agent-chat', id: 'chat-s-foreign', sessionId: 's-foreign' }]
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      {
+        id: 's-foreign',
+        agentId: 'agent-1',
+        title: 'x',
+        cwd: '/work',
+        projectId: 'p2',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      }
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
   })
 
   it('RELOAD_PRUNE: a failed index load preserves every tab', async () => {

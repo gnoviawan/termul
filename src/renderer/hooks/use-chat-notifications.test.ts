@@ -10,6 +10,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { shouldNotifyForChatEvent, shouldNotifyForTurnEnd } from '@/lib/chat-notify'
+import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { useAcpStore } from '@/stores/acp-store'
@@ -18,6 +19,9 @@ import { useChatNotifications } from './use-chat-notifications'
 vi.mock('@/lib/tauri-notification-api', () => ({
   sendDesktopNotification: vi.fn()
 }))
+
+// Ownership/project-switch behavior is covered in lib/open-agent-chat.test.ts.
+vi.mock('@/lib/open-agent-chat', () => ({ openAgentChatInOwnProject: vi.fn() }))
 
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn(() => Promise.resolve())
@@ -322,7 +326,7 @@ describe('useChatNotifications', () => {
     )
   })
 
-  it('notification click activates the chat tab', () => {
+  it('notification click opens the chat in its own project', () => {
     renderHook(() => useChatNotifications())
     setPageHidden(true)
 
@@ -338,8 +342,7 @@ describe('useChatNotifications', () => {
       onClick?.()
     })
 
-    // The chat tab now exists and is active in the (mocked) pane tree.
-    expect(workspaceState.addAgentChatTab).toHaveBeenCalledWith(SESSION_ID)
+    expect(openAgentChatInOwnProject).toHaveBeenCalledWith(SESSION_ID, 'use-chat-notifications')
   })
 
   it('unsubscribes on unmount', () => {
