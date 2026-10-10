@@ -171,10 +171,18 @@ pub(super) async fn handle_dispose_ephemeral_session(
         }
     };
     let disposed_session_id = parsed.session_id.clone();
-    match acp
+    let result = acp
         .dispose_ephemeral_session(&parsed.agent_id, parsed.session_id)
-        .await
-    {
+        .await;
+    // The client drops the session on every dispose — the connection tracker
+    // must follow regardless of the agent call's result. A stale tracker makes
+    // the next `switch_project` take the Completed path (minting an orphaned
+    // session the client cannot attribute) instead of the cold-tab `Selected`.
+    if current_session.lock().as_ref() == Some(&disposed_session_id) {
+        *current_session.lock() = None;
+        *current_project.lock() = None;
+    }
+    match result {
         Ok(()) => {
             subscribed_clients.retain(|(session_id, client_id)| {
                 if session_id == &disposed_session_id.0 {
@@ -184,10 +192,6 @@ pub(super) async fn handle_dispose_ephemeral_session(
                     true
                 }
             });
-            if current_session.lock().as_ref() == Some(&disposed_session_id) {
-                *current_session.lock() = None;
-                *current_project.lock() = None;
-            }
             relay.forget_session(&disposed_session_id.0).await;
             WsReply::ok(id, Some(json!({})))
         }
@@ -213,14 +217,20 @@ pub(super) async fn handle_close_session(
         }
     };
     let closing_session_id = parsed.session_id.clone();
-    match acp.close_session(&parsed.agent_id, parsed.session_id).await {
-        Ok(()) => {
-            if current_session.lock().as_ref() == Some(&closing_session_id) {
-                *current_session.lock() = None;
-                *current_project.lock() = None;
-            }
-            WsReply::ok(id, Some(json!({})))
-        }
+    let result = acp.close_session(&parsed.agent_id, parsed.session_id).await;
+    // The client drops the session on every close — the connection tracker
+    // must follow regardless of the agent call's result (capability-gated
+    // `session/close` fails permanently on agents without `close`, transient
+    // failures leave a session the client has already discarded). A stale
+    // tracker makes the next `switch_project` take the Completed path
+    // (minting an orphaned session the client cannot attribute) instead of
+    // the cold-tab `Selected`.
+    if current_session.lock().as_ref() == Some(&closing_session_id) {
+        *current_session.lock() = None;
+        *current_project.lock() = None;
+    }
+    match result {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(e) => acp_err_to_reply(id, e),
     }
 }

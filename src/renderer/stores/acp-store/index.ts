@@ -493,7 +493,23 @@ export function initAcpEventListeners(): () => void {
   const applyCompletedProjectSwitch = (event: ProjectSwitchCompletedEvent): void => {
     const state = useAcpStore.getState()
     const previous = state.sessions[event.previousSessionId]
-    if (!previous) return
+    const agentId = previous?.agentId ?? state.sessions[event.sessionId]?.agentId ?? event.agentId
+    if (!agentId) {
+      // No local record to attribute the minted session and the event carries
+      // no agentId (old server). The switch committed server-side — clear the
+      // queued marker (never leave the badge spinning) and mirror a deferred
+      // select; the session stays reachable via the history index.
+      if (state.queuedProjectSwitchId != null) {
+        useAcpStore.setState({ queuedProjectSwitchId: null })
+        useProjectStore.getState().selectProject(event.projectId)
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.projectSwitchCompleted',
+          message: `Queued switch to ${event.projectId} completed but session ${event.sessionId} has no attributable agent`
+        })
+      }
+      return
+    }
     // Stale queued-switch guard: a queued (turn-active) switch completes
     // AFTER the user already moved on to a DIFFERENT project. Applying the
     // late outcome would re-run selectProject + reattach against the
@@ -544,17 +560,17 @@ export function initAcpEventListeners(): () => void {
           ...s.sessions,
           [event.sessionId]: {
             id: event.sessionId,
-            agentId: previous.agentId,
+            agentId,
             cwd: event.cwd,
             projectId: event.projectId,
             status: 'active',
-            title: existing?.title ?? previous.title,
+            title: existing?.title ?? previous?.title ?? null,
             activeTurn: false,
             mcpServerCount: event.mcpServerCount,
             openTurnId: null,
-            modes: existing?.modes ?? previous.modes,
-            models: existing?.models ?? previous.models ?? null,
-            configOptions: existing?.configOptions ?? previous.configOptions,
+            modes: existing?.modes ?? previous?.modes ?? null,
+            models: existing?.models ?? previous?.models ?? null,
+            configOptions: existing?.configOptions ?? previous?.configOptions ?? [],
             lastError: existing?.lastError ?? null,
             createdAt: existing?.createdAt ?? Date.now(),
             replaying: null

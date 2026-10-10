@@ -1480,7 +1480,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // retry doesn't keep a stale "Failed" badge while the new attempt runs.
       set({ failedProjectSwitchId: null })
       const focusedSessionId = getTabFocusedSessionId() ?? get().activeSessionId
-      const currentSession = focusedSessionId ? get().sessions[focusedSessionId] : null
+      const focusedSession = focusedSessionId ? get().sessions[focusedSessionId] : null
       const outcome = await transport.switchProject(projectId)
       if (outcome.status === 'queued') {
         set({ queuedProjectSwitchId: outcome.projectId })
@@ -1494,8 +1494,6 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         useProjectStore.getState().selectProject(outcome.projectId)
         return outcome
       }
-      const agentId = currentSession?.agentId
-      if (!agentId) throw new Error('Completed project switch has no tracked agent')
 
       // Switch-back restore (Epic-4 bridge): if the server reopened an existing
       // session (detected via the server history index), fetch its transcript via
@@ -1515,6 +1513,35 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         return outcome
       }
 
+      // `outcome.previousSessionId` is server-authoritative for "which session
+      // this connection was on" — the UI pointer (sessionStorage focus +
+      // activeSessionId) can be stale or empty when every chat tab was closed
+      // or when the pointer survived a reload. Fall back to it only when the
+      // server-side id has no local record.
+      const previous =
+        (outcome.previousSessionId ? get().sessions[outcome.previousSessionId] : undefined) ??
+        focusedSession
+      const agentId =
+        previous?.agentId ??
+        // A `session_created` event stub for the minted session may already be
+        // installed (the manager fans the event out before the reply lands).
+        get().sessions[outcome.sessionId]?.agentId ??
+        outcome.agentId
+      if (!agentId) {
+        // Older servers send no `agentId` and no local record exists to borrow
+        // one from — the minted session cannot be attributed here. The switch
+        // DID commit server-side, so mirror the `selected` path rather than
+        // failing; the orphaned session stays reachable via the history index.
+        set({ queuedProjectSwitchId: null, failedProjectSwitchId: null })
+        useProjectStore.getState().selectProject(outcome.projectId)
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.switchProject',
+          message: `switch_project completed for ${outcome.projectId} but session ${outcome.sessionId} has no attributable agent; deferred to lazy spawn`
+        })
+        return outcome
+      }
+
       set((s) => {
         const existing = s.sessions[outcome.sessionId]
         return {
@@ -1529,13 +1556,13 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
               cwd: outcome.cwd,
               projectId: outcome.projectId,
               status: 'active',
-              title: existing?.title ?? currentSession.title,
+              title: existing?.title ?? previous?.title ?? null,
               activeTurn: false,
               mcpServerCount: outcome.mcpServerCount,
               openTurnId: null,
-              modes: existing?.modes ?? currentSession.modes,
-              models: existing?.models ?? currentSession.models ?? null,
-              configOptions: existing?.configOptions ?? currentSession.configOptions,
+              modes: existing?.modes ?? previous?.modes ?? null,
+              models: existing?.models ?? previous?.models ?? null,
+              configOptions: existing?.configOptions ?? previous?.configOptions ?? [],
               lastError: existing?.lastError ?? null,
               createdAt: existing?.createdAt ?? Date.now(),
               replaying: null

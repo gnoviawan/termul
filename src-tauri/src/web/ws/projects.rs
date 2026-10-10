@@ -585,6 +585,14 @@ pub(super) enum SwitchProjectOutcome {
         session_id: SessionId,
         cwd: String,
         mcp_server_count: usize,
+        /// The owning agent + the session this connection was tracking before
+        /// the switch. The web client needs both to attribute the new session
+        /// record when its own focused/active session pointer is stale or
+        /// empty (e.g. all chats closed or a sessionStorage id from before a
+        /// reload) — `applyCompletedProjectSwitch` relies on the same pair in
+        /// the queued event payload.
+        agent_id: AgentId,
+        previous_session_id: SessionId,
     },
     Queued {
         project_id: String,
@@ -607,6 +615,9 @@ pub(super) struct ProjectSwitchCompletedPayload {
     session_id: SessionId,
     cwd: String,
     mcp_server_count: usize,
+    /// Owning agent — lets the client record the new session even when the
+    /// previous session's local record is gone.
+    agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -745,9 +756,11 @@ pub(super) async fn execute_project_switch(
     if connection_already_on_project(current_project.lock().as_deref(), &target.project_id) {
         return Ok(SwitchProjectOutcome::Completed {
             project_id: target.project_id,
-            session_id: previous_session_id,
+            session_id: previous_session_id.clone(),
             cwd: target.cwd,
             mcp_server_count: target.mcp_servers.len(),
+            agent_id: agent_id.clone(),
+            previous_session_id,
         });
     }
 
@@ -801,7 +814,10 @@ pub(super) async fn execute_project_switch(
     );
 
     if previous_session_id != new_session {
-        if let Err(error) = acp.close_session(agent_id, previous_session_id).await {
+        if let Err(error) = acp
+            .close_session(agent_id, previous_session_id.clone())
+            .await
+        {
             warn!("[ws] project switch committed but old session close failed: {error}");
         }
     }
@@ -811,6 +827,8 @@ pub(super) async fn execute_project_switch(
         session_id: new_session,
         cwd: target.cwd,
         mcp_server_count,
+        agent_id: agent_id.clone(),
+        previous_session_id,
     })
 }
 
@@ -899,19 +917,22 @@ pub(super) async fn run_switch_queue(
                 session_id,
                 cwd,
                 mcp_server_count,
+                agent_id,
+                previous_session_id,
             }) => {
                 let event = SequencedEvent::new(
-                    Some(pending.previous_session_id.0.clone()),
+                    Some(previous_session_id.0.clone()),
                     0,
                     "project_switch_completed",
                     serde_json::to_value(ProjectSwitchCompletedPayload {
                         status: "completed",
                         request_id: pending.request_id,
                         project_id,
-                        previous_session_id: pending.previous_session_id,
+                        previous_session_id,
                         session_id,
                         cwd,
                         mcp_server_count,
+                        agent_id,
                     })
                     .unwrap_or_else(|_| json!({})),
                 );

@@ -159,6 +159,7 @@ import {
   initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { deferred, FRESH, seedSession } from './testkit'
 
 describe('acp-store', () => {
@@ -486,6 +487,87 @@ describe('acp-store', () => {
       status: 'active'
     })
     expect(useAcpStore.getState().queuedProjectSwitchId).toBeNull()
+  })
+
+  // Regression: the reported failure — "Completed project switch has no
+  // tracked agent". The focused/active pointer can be stale or empty (all
+  // chats closed, sessionStorage id surviving a reload) while the server
+  // still committed the switch. The reply's `previousSessionId`/`agentId`
+  // pair is authoritative: resolve the previous record by id, never throw.
+  it('switchProject resolves the previous session via reply previousSessionId when the UI pointer is stale', async () => {
+    seedSession('s-old', 'agent-1', false)
+    // Stale pointer: activeSessionId names a session absent from the map.
+    useAcpStore.setState({ activeSessionId: 's-gone' })
+    const switchProject = vi.fn(async () => ({
+      status: 'completed' as const,
+      projectId: 'p2',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 0,
+      previousSessionId: 's-old',
+      agentId: 'agent-1'
+    }))
+    _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+    await useAcpStore.getState().switchProject('p2')
+
+    expect(useAcpStore.getState().sessions['s-new']).toMatchObject({
+      agentId: 'agent-1',
+      projectId: 'p2',
+      status: 'active'
+    })
+    expect(useAcpStore.getState().activeSessionId).toBe('s-new')
+    expect(useAcpStore.getState().failedProjectSwitchId).toBeNull()
+  })
+
+  it('switchProject completed outcome attributes the session via reply agentId when no local session exists', async () => {
+    // No sessions at all: the focused/active pointer resolves to nothing —
+    // only the reply's agentId can attribute the minted session.
+    const switchProject = vi.fn(async () => ({
+      status: 'completed' as const,
+      projectId: 'p2',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 0,
+      previousSessionId: 's-gone',
+      agentId: 'agent-9'
+    }))
+    _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+    await useAcpStore.getState().switchProject('p2')
+
+    expect(useAcpStore.getState().sessions['s-new']).toMatchObject({
+      agentId: 'agent-9',
+      projectId: 'p2',
+      status: 'active'
+    })
+    expect(useAcpStore.getState().activeSessionId).toBe('s-new')
+  })
+
+  it('switchProject completed outcome with no resolvable agent degrades to select instead of throwing', async () => {
+    // Old-server reply (no previousSessionId/agentId) AND no local records —
+    // the minted session cannot be attributed. The switch committed
+    // server-side, so the store mirrors the `selected` path: project flips,
+    // no session record, no thrown error (the session stays reachable via
+    // the history index).
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    const switchProject = vi.fn(async () => ({
+      status: 'completed' as const,
+      projectId: 'p2',
+      sessionId: 's-new',
+      cwd: '/work/p2',
+      mcpServerCount: 0
+    }))
+    _setAcpTransportForTests({ switchProject, dispose: vi.fn() } as unknown as AcpTransport)
+
+    await expect(useAcpStore.getState().switchProject('p2')).resolves.toMatchObject({
+      status: 'completed'
+    })
+
+    expect(useAcpStore.getState().sessions['s-new']).toBeUndefined()
+    expect(useAcpStore.getState().failedProjectSwitchId).toBeNull()
+    expect(useAcpStore.getState().queuedProjectSwitchId).toBeNull()
+    expect(useProjectStore.getState().activeProjectId).toBe('p2')
   })
 
   it('switchProject records queued state without changing the current session', async () => {
