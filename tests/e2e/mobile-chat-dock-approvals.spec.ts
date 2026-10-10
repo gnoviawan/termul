@@ -396,15 +396,16 @@ test('changed-files bar is named by its text, starts collapsed and opens a row i
   // The visible text names it: no overriding aria-label such as "Expand changed files".
   await expect(bar).not.toHaveAttribute('aria-label', /.*/)
   await expect(bar).toHaveAttribute('aria-expanded', 'false')
-  await expect(page.getByRole('button', { name: /^src\/auth\.ts/ })).toBeHidden()
+  // Rows are labeled by basename; their accessible name is the resolved path.
+  await expect(page.getByRole('button', { name: /src\/auth\.ts/ })).toBeHidden()
 
   await bar.tap()
   await expect(bar).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: /^src\/session\.ts/ })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^src\/token\.ts/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /src\/session\.ts/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /src\/token\.ts/ })).toBeVisible()
 
   // A row still opens the file in an editor tab.
-  await page.getByRole('button', { name: /^src\/auth\.ts/ }).tap()
+  await page.getByRole('button', { name: /src\/auth\.ts/ }).tap()
   await expect(page.getByText('e2e-auth-file')).toBeVisible()
   await page.getByRole('button', { name: 'Open menu' }).tap()
   await expect(
@@ -428,7 +429,7 @@ test('the Git action reaches a 44px hit area with the bar collapsed and expanded
 
   await bar.tap()
   await expect(bar).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: /^src\/auth\.ts/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /src\/auth\.ts/ })).toBeVisible()
   await expect.poll(async () => (await hitArea(git)).height).toBeGreaterThanOrEqual(44)
   // The Git action is its own control: tapping the header toggles, Git does not.
   await expect(bar).toHaveAttribute('aria-expanded', 'true')
