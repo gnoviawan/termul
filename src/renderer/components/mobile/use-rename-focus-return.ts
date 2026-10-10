@@ -12,6 +12,13 @@ export interface RenameFocusReturn {
    * mounts it. Only while focus is lost; focus the user moved is never taken.
    */
   focusActionsButton: (pathKey: string) => void
+  /**
+   * Park focus on the Files sheet itself when nothing holds it. For a confirmed
+   * Delete: its row can be gone before the confirm hands focus back, and the
+   * sheet's own focus trap is paused underneath the confirm, so nothing else
+   * catches the fall to `<body>`.
+   */
+  focusSheetIfLost: () => void
 }
 
 /**
@@ -86,5 +93,11 @@ export function useRenameFocusReturn(
     [consume]
   )
 
-  return { registerActionsButton, focusActionsButton }
+  const focusSheetIfLost = useCallback((): void => {
+    const sheet = sheetRef.current
+    const active = document.activeElement
+    if (sheet?.isConnected && (!active || active === document.body)) sheet.focus()
+  }, [sheetRef])
+
+  return { registerActionsButton, focusActionsButton, focusSheetIfLost }
 }

@@ -72,6 +72,7 @@ const mockToastError = vi.fn()
 const mockPersistenceRead = vi.fn()
 const mockPersistenceWrite = vi.fn()
 const mockLogFrontendError = vi.fn()
+const mockFocusSheetIfLost = vi.fn()
 let mockProjectId: string | undefined
 
 // Mutable explorer state so individual tests can seed the tree (loaded root,
@@ -131,6 +132,25 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: (...args: unknown[]) => mockLogFrontendError(...args)
 }))
+
+// The real hook, with a spy on the call the delete confirm makes when it closes: jsdom's
+// focus trap catches the fall to <body> that a browser leaves, so only the call is pinned.
+vi.mock('./use-rename-focus-return', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./use-rename-focus-return')>()
+  return {
+    ...actual,
+    useRenameFocusReturn: (...args: Parameters<typeof actual.useRenameFocusReturn>) => {
+      const api = actual.useRenameFocusReturn(...args)
+      return {
+        ...api,
+        focusSheetIfLost: () => {
+          mockFocusSheetIfLost()
+          api.focusSheetIfLost()
+        }
+      }
+    }
+  }
+})
 
 vi.mock('sonner', () => ({
   toast: { error: (...args: unknown[]) => mockToastError(...args) }
@@ -1252,6 +1272,31 @@ describe('MobileFileExplorer focus return', () => {
       expect(screen.getByRole('dialog')).toBeInTheDocument()
     })
 
+    it('hands a focus the closing confirm dropped to the Files sheet, for a row that is already gone', async () => {
+      // A local delete finishes before the confirm's exit animation does, so the
+      // recorded Actions button can be disconnected when the confirm hands focus
+      // back and nothing underneath is trapping it yet.
+      setRoot([entry('doomed.txt', 'file'), entry('kept.txt', 'file')])
+      const view = render(<Harness />)
+      mockDeletePath.mockImplementationOnce(() => {
+        setRoot([entry('kept.txt', 'file')])
+        act(() => view.rerender(<Harness />))
+        return Promise.resolve({ success: true, data: undefined })
+      })
+      await openConfirm('doomed.txt')
+      expect(mockFocusSheetIfLost).not.toHaveBeenCalled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      await waitFor(() => expect(mockFocusSheetIfLost).toHaveBeenCalledTimes(1))
+      expect(screen.queryByLabelText('Actions for doomed.txt')).not.toBeInTheDocument()
+      const sheet = screen.getByRole('dialog')
+      expect(sheet.contains(document.activeElement)).toBe(true)
+      expect(document.activeElement).not.toBe(document.body)
+      expect(mockDeletePath).toHaveBeenCalledTimes(1)
+    })
+
     it('leaves focus alone and logs at info when no opener is connected', async () => {
       setRoot([entry('doomed.txt', 'file')])
       render(<Harness />)
@@ -1322,6 +1367,21 @@ describe('MobileFileExplorer focus return', () => {
       expect(mockRenameFile).not.toHaveBeenCalled()
     })
 
+    it('consumes the Enter key, so its keypress cannot press the Actions button that takes focus', async () => {
+      // Enter on an unchanged name moves focus to the row's Actions button inside the keydown.
+      // A browser then dispatches the keypress for the same Enter to that button, which
+      // activates it and opens the file actions sheet, unless the keydown was prevented.
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      const input = await startRename('note.txt')
+
+      const notPrevented = fireEvent.keyDown(input, { key: 'Enter' })
+
+      expect(notPrevented).toBe(false)
+      await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+      expect(screen.queryByText('Duplicate')).not.toBeInTheDocument()
+    })
+
     it('returns focus to the row Actions button when Enter leaves the name empty', async () => {
       setRoot([entry('note.txt', 'file')])
       render(<Harness />)
@@ -1386,6 +1446,54 @@ describe('MobileFileExplorer focus return', () => {
         expect(mockToastError).toHaveBeenCalledWith('Failed to rename', { description: 'exists' })
       )
       await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+    })
+
+    describe('listing paths with a prefix the root path lacks (a Windows host)', () => {
+      // `termul-server` on Windows lists canonicalised `\\?\C:\...` paths while the
+      // project root is a plain `C:/proj`, so `parentOf` cannot rebuild the row's own path.
+      const prefixed = (name: string): DirectoryEntry =>
+        entry(name, 'file', `\\\\?\\C:\\proj\\${name}`)
+
+      function setPrefixedRoot(entries: DirectoryEntry[]): void {
+        setRoot(entries)
+        mockExplorerState.rootPath = 'C:/proj'
+        mockExplorerState.directoryContents = new Map([['C:/proj', entries]])
+      }
+
+      it('treats an unchanged name as unchanged: no rename call, and the row Actions button takes focus', async () => {
+        setPrefixedRoot([prefixed('note.txt')])
+        render(<Harness />)
+        const input = await startRename('note.txt')
+
+        fireEvent.keyDown(input, { key: 'Enter' })
+
+        await waitFor(() =>
+          expect(screen.queryByLabelText('Rename note.txt')).not.toBeInTheDocument()
+        )
+        await waitFor(() => expect(document.activeElement).toBe(actionsFor('note.txt')))
+        expect(mockRenameFile).not.toHaveBeenCalled()
+      })
+
+      it('focuses the renamed row Actions button once the refreshed listing shows it', async () => {
+        setPrefixedRoot([prefixed('note.txt')])
+        mockRefreshDirectory.mockImplementation(async () => {
+          setPrefixedRoot([prefixed('renamed.txt')])
+        })
+        const view = render(<Harness />)
+        const input = await startRename('note.txt')
+
+        fireEvent.change(input, { target: { value: 'renamed.txt' } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+
+        await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('C:/proj'))
+        expect(mockRenameFile).toHaveBeenCalledWith(
+          prefixed('note.txt').path,
+          'C:/proj/renamed.txt'
+        )
+        view.rerender(<Harness />)
+
+        await waitFor(() => expect(document.activeElement).toBe(actionsFor('renamed.txt')))
+      })
     })
 
     it('leaves focus on the control the user moved it to', async () => {

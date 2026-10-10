@@ -143,4 +143,24 @@ describe('useRenameFocusReturn', () => {
     rerender({ rows: ['a'] })
     expect(screen.getByText('actions a')).toHaveFocus()
   })
+
+  describe('focusSheetIfLost', () => {
+    it('parks focus on the sheet content element when focus fell to <body>', () => {
+      const { api } = renderHarness()
+      expect(document.body).toHaveFocus()
+
+      act(() => api().focusSheetIfLost())
+
+      expect(screen.getByTestId('sheet')).toHaveFocus()
+    })
+
+    it('never takes focus a control already holds', () => {
+      const { api } = renderHarness()
+      act(() => screen.getByText('other control').focus())
+
+      act(() => api().focusSheetIfLost())
+
+      expect(screen.getByText('other control')).toHaveFocus()
+    })
+  })
 })

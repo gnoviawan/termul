@@ -116,6 +116,15 @@ function joinPath(parent: string, name: string): string {
   return `${normalizePath(parent).replace(/\/$/, '')}/${name}`
 }
 
+/** `path` with its last segment replaced by `name`, the rest spelled as the listing spelled
+ * it. `joinPath(parentOf(path), name)` cannot do that for a listing path whose prefix the
+ * root path lacks (a Windows host lists `\\?\C:\...` under a plain `C:/...` root), and a
+ * row's identity is its listing path. */
+function siblingPath(path: string, name: string): string {
+  const normalized = normalizePath(path)
+  return `${normalized.slice(0, normalized.lastIndexOf('/'))}/${name}`
+}
+
 function isWithinRoot(path: string, root: string): boolean {
   const p = comparePath(path)
   const r = comparePath(root)
@@ -398,7 +407,9 @@ export function MobileFileExplorer({
     }
     const parent = parentOf(entry.path)
     const newPath = joinPath(parent, name)
-    if (normalizePath(newPath) === normalizePath(entry.path)) {
+    // The row the rename leaves behind, spelled like its listing path (see siblingPath).
+    const renamedPath = siblingPath(entry.path, name)
+    if (normalizePath(renamedPath) === normalizePath(entry.path)) {
       setRenaming(null)
       returnFocus(entry.path)
       return
@@ -416,7 +427,7 @@ export function MobileFileExplorer({
       setNavigationDirection(-1)
       persistFolder(parent)
     } else {
-      returnFocus(newPath)
+      returnFocus(renamedPath)
     }
     await refreshDirectory(parent)
   }
@@ -469,7 +480,13 @@ export function MobileFileExplorer({
               void handleRename(entry, renaming.value, event.relatedTarget !== null)
             }
             onKeyDown={(event) => {
-              if (event.key === 'Enter') void handleRename(entry, renaming.value)
+              if (event.key === 'Enter') {
+                // Handled here: an unchanged or empty name moves focus to the row's Actions
+                // button during this keydown, and the browser's keypress for the same Enter
+                // would then land on that button and open its sheet.
+                event.preventDefault()
+                void handleRename(entry, renaming.value)
+              }
               if (event.key === 'Escape') {
                 setRenaming(null)
                 renameFocus.focusActionsButton(comparePath(entry.path))
@@ -798,7 +815,13 @@ export function MobileFileExplorer({
       >
         {/* An alert dialog is not a SheetContent, so it takes the row-actions
             registry itself: focus returns to the row's Actions button. */}
-        <AlertDialogContent onCloseAutoFocus={fileActionsSheetCloseAutoFocus}>
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            fileActionsSheetCloseAutoFocus(event)
+            // A confirmed delete can drop the row before the confirm unmounts.
+            renameFocus.focusSheetIfLost()
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {pendingDelete?.name ?? ''}</AlertDialogTitle>
             <AlertDialogDescription>
