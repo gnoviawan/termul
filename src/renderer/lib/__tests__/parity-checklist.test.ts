@@ -1838,8 +1838,10 @@ describe('Parity Checklist Automation', () => {
       expect(readFileSync(tabBar, 'utf-8')).toMatch(/closeCanvas/)
 
       // The workspace store owns the singleton-per-project tab id helper.
-      const workspaceStore = join(LIB_DIR, '..', 'stores', 'workspace-store.ts')
-      expect(readFileSync(workspaceStore, 'utf-8')).toMatch(/export function canvasTabId/)
+      const workspaceStoreTree = join(LIB_DIR, '..', 'stores', 'workspace-store', 'tree.ts')
+      expect(readFileSync(workspaceStoreTree, 'utf-8')).toMatch(/export function canvasTabId/)
+      const workspaceStoreIndex = join(LIB_DIR, '..', 'stores', 'workspace-store', 'index.ts')
+      expect(readFileSync(workspaceStoreIndex, 'utf-8')).toMatch(/canvasTabId/)
     })
 
     it('MCP upsert goes through the serialized acp-store mcp slice (never the persistence key)', () => {
