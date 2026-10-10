@@ -138,9 +138,14 @@ const {
   // so tests can assert hidden panels skip per-flush work.
   timelineCallCountRef: { current: { build: 0, consolidate: 0 } },
   // Latest ChatMessageList props per render (onRetry drives the live-turn
-  // retry wire rebuild; items asserts the worktree-row injection).
+  // retry wire rebuild; items asserts the worktree-row injection;
+  // filePathContext asserts the web/desktop open-in-editor parity).
   chatMessageListPropsRef: {
-    current: null as { onRetry?: () => void; items?: unknown[] } | null
+    current: null as {
+      onRetry?: () => void
+      items?: unknown[]
+      filePathContext?: { cwd?: string; projectRoot?: string }
+    } | null
   },
   // CAP-5: seedable browser-consent map so the panel's per-session filter can
   // be asserted (the pending card belongs to THIS panel's session only).
@@ -773,6 +778,41 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
     sessionRef.current = mockAcpSession({ id: 's2', cwd: '/w', status: 'closed' })
     render(<AgentChatPanel sessionId="s2" isVisible />)
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
+  })
+})
+
+// Web/desktop parity: `filePathContext` drives the `termul-file-path`
+// open-in-editor links in agent markdown — the open chain (`/fs/info` →
+// `openFile` → `addEditorTab`) is transport-agnostic, so the context must be
+// built on web too (the ChatChangedFilesPanel file-open path is proof it works).
+describe('AgentChatPanel filePathContext parity', () => {
+  beforeEach(() => {
+    chatMessageListPropsRef.current = null
+  })
+
+  afterEach(() => {
+    runtimeState.tauri = false
+  })
+
+  it('builds filePathContext on web (isTauriContext false)', () => {
+    runtimeState.tauri = false
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w', projectId: 'p-unlisted' })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    // No project 'p-unlisted' in the store → projectRoot falls back to cwd.
+    expect(chatMessageListPropsRef.current?.filePathContext).toEqual({
+      cwd: '/w',
+      projectRoot: '/w'
+    })
+  })
+
+  it('builds the same filePathContext on desktop (isTauriContext true)', () => {
+    runtimeState.tauri = true
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w', projectId: 'p-unlisted' })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(chatMessageListPropsRef.current?.filePathContext).toEqual({
+      cwd: '/w',
+      projectRoot: '/w'
+    })
   })
 })
 

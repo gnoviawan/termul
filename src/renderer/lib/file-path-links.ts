@@ -1,4 +1,5 @@
 import { filesystemApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -400,9 +401,19 @@ export async function resolveFilePathCandidate(
   )
 
   let sawDirectoryCandidate = false
+  let firstForbiddenCandidate: string | null = null
 
   for (const { absolutePath, infoResult } of infoResults) {
     if (!infoResult.success) {
+      // `/fs/info` is loopback-guarded server-side while `/fs/read` is
+      // deliberately not, so remote peers (shared-live, standalone without
+      // --allow-remote-writes) get FORBIDDEN here even when the file exists.
+      // FORBIDDEN means "unverifiable", not "missing" — pass the candidate
+      // through so `openFile` performs the real validation and reports the
+      // server's own error if the path is genuinely absent or a directory.
+      if (infoResult.code === 'FORBIDDEN' && firstForbiddenCandidate === null) {
+        firstForbiddenCandidate = absolutePath
+      }
       continue
     }
 
@@ -411,6 +422,15 @@ export async function resolveFilePathCandidate(
     }
 
     sawDirectoryCandidate = true
+  }
+
+  if (firstForbiddenCandidate) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'filePathLinks.resolveFilePathCandidate',
+      message: `getFileInfo FORBIDDEN for ${firstForbiddenCandidate}; opening unverified`
+    })
+    return { ok: true, path: firstForbiddenCandidate }
   }
 
   return sawDirectoryCandidate

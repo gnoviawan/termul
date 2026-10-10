@@ -44,6 +44,10 @@ vi.mock('sonner', () => ({
   }
 }))
 
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
+}))
+
 describe('file-path-links parsing', () => {
   it('trims wrapped paths', () => {
     expect(trimWrappedPath('`src/foo.ts`')).toBe('src/foo.ts')
@@ -406,6 +410,68 @@ describe('file-path-links resolution', () => {
     expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).toHaveBeenCalledWith('/repo/src/renderer/App.tsx')
     expect(mocks.toastError).not.toHaveBeenCalled()
+  })
+
+  it('passes FORBIDDEN stats through to openFile (remote /fs/info guard)', async () => {
+    // Remote peers are denied /fs/info while /fs/read stays reachable —
+    // FORBIDDEN is "unverifiable", so resolution defers to the open attempt.
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/repo'
+    })
+
+    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
+  })
+
+  it('surfaces the real open error when a FORBIDDEN-resolved file is absent', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.openFile.mockRejectedValue(new Error('No such file or directory'))
+
+    const opened = await openFilePathFromTerminal('missing.ts', { cwd: '/repo' })
+
+    expect(mocks.openFile).toHaveBeenCalledWith('/repo/missing.ts')
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'open-failed',
+      message: 'Failed to open file: missing.ts (No such file or directory)'
+    })
+    expect(mocks.addEditorTab).not.toHaveBeenCalled()
+  })
+
+  it('prefers a confirmed file over a FORBIDDEN candidate regardless of root order', async () => {
+    mocks.getFileInfo
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'loopback only',
+        code: 'FORBIDDEN'
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          path: '/repo/src/App.tsx',
+          size: 100,
+          modifiedAt: 1,
+          type: 'file',
+          isReadOnly: false,
+          isBinary: false
+        }
+      })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
   })
 
   it('returns not-found details and does not open missing files', async () => {
