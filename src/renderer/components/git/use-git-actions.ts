@@ -601,3 +601,5 @@ export function useGitActions({ cwd, setSelectedStaged, clearSelection }: UseGit
     handleDropStash
   }
 }
+
+export type GitActions = ReturnType<typeof useGitActions>
