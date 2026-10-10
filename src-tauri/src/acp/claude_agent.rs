@@ -1,15 +1,22 @@
 //! Host-managed lifecycle for the Claude ACP adapter.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::atomic_file;
 use super::config::resolve_runtime_executable;
 use super::credentials;
 
 const MIN_NODE_MAJOR: u64 = 22;
 const CLAUDE_PACKAGE_PREFIX: &str = "@agentclientprotocol/claude-agent-acp@";
 const API_KEY_ACCOUNT: &str = "acp.claude-agent.api-key";
+/// Legacy keychain account for the auth-mode preference. Kept for one-time
+/// migration reads; the mode file is authoritative once it exists.
 const AUTH_MODE_ACCOUNT: &str = "acp.claude-agent.auth-mode";
+/// Non-secret auth-mode preference file in the host state dir (sibling of
+/// `acp-registry-binaries`). Not a secret — it must not live in the keychain,
+/// or hosts without a working keychain cannot even launch `claude-code` mode.
+const AUTH_MODE_FILE_NAME: &str = "claude-auth-mode";
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 
 /// Extract the major version from Node's canonical `vMAJOR.MINOR.PATCH` output.
@@ -219,6 +226,17 @@ pub enum ClaudeAuthMode {
     ApiKey,
 }
 
+/// Parse the stored preference value (the same `claude-code`/`api-key`
+/// strings used by the legacy keychain account). Anything else is a corrupt
+/// preference and fails with the historical invalid-preference error.
+fn parse_auth_mode(value: &str) -> Result<ClaudeAuthMode, String> {
+    match value {
+        "claude-code" => Ok(ClaudeAuthMode::ClaudeCode),
+        "api-key" => Ok(ClaudeAuthMode::ApiKey),
+        _ => Err("Claude auth preference is invalid".to_string()),
+    }
+}
+
 /// Secret-store interface used by the Claude lifecycle module.
 trait ClaudeCredentialStore: Send + Sync {
     fn get(&self, account: &str) -> Result<Option<String>, String>;
@@ -323,6 +341,10 @@ impl ClaudeCredentialStore for SystemClaudeCredentialStore {
 pub struct ClaudeAuthStatus {
     pub auth_mode: ClaudeAuthMode,
     pub api_key_configured: bool,
+    /// `false` when the OS keychain could not be probed at all — key-derived
+    /// fields (`api_key_configured`) then report "unavailable" rather than
+    /// erroring the whole status read.
+    pub keychain_available: bool,
     pub cli_installed: bool,
     pub cli_authenticated: Option<bool>,
 }
@@ -378,13 +400,21 @@ impl ClaudeAgentService {
 
     pub fn status(&self) -> Result<ClaudeAuthStatus, String> {
         let auth_mode = self.auth_mode()?;
-        let api_key_configured = self
-            .credentials
-            .get(API_KEY_ACCOUNT)?
-            .is_some_and(|key| !key.is_empty());
+        // A missing/unavailable keychain degrades the key-derived fields
+        // instead of erroring, so headless operators can still inspect the
+        // auth mode and CLI state.
+        let (api_key_configured, keychain_available) =
+            match self.credentials.get(API_KEY_ACCOUNT) {
+                Ok(key) => (key.is_some_and(|key| !key.trim().is_empty()), true),
+                Err(error) => {
+                    log::warn!("[acp-claude] keychain probe failed; reporting unavailable: {error}");
+                    (false, false)
+                }
+            };
         Ok(ClaudeAuthStatus {
             auth_mode,
             api_key_configured,
+            keychain_available,
             cli_installed: false,
             cli_authenticated: None,
         })
@@ -434,22 +464,138 @@ impl ClaudeAgentService {
         }
     }
 
+    /// The non-secret auth-mode preference file: `<state dir>/claude-auth-mode`,
+    /// a sibling of the `acp-registry-binaries` install root. `None` for
+    /// `without_host_state()` services, which always run the default mode.
+    fn mode_file_path(&self) -> Option<PathBuf> {
+        Some(
+            self.install_root
+                .as_ref()?
+                .parent()?
+                .join(AUTH_MODE_FILE_NAME),
+        )
+    }
+
+    /// Resolve the auth mode from the host-state preference file. When the
+    /// file is absent, fall back to the legacy keychain account once and
+    /// migrate a valid value into the file; a keychain read failure there is
+    /// treated as unset (default `claude-code`, not persisted) so a recovered
+    /// keychain can still migrate the true preference.
     pub fn auth_mode(&self) -> Result<ClaudeAuthMode, String> {
-        match self.credentials.get(AUTH_MODE_ACCOUNT)?.as_deref() {
-            None | Some("claude-code") => Ok(ClaudeAuthMode::ClaudeCode),
-            Some("api-key") => Ok(ClaudeAuthMode::ApiKey),
-            Some(_) => Err("Claude auth preference is invalid".to_string()),
+        let Some(path) = self.mode_file_path() else {
+            return Ok(ClaudeAuthMode::ClaudeCode);
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => match parse_auth_mode(contents.trim()) {
+                Ok(mode) => Ok(mode),
+                Err(error) => {
+                    log::warn!(
+                        "[acp-claude] invalid auth mode file content path={} error={error}",
+                        path.display()
+                    );
+                    Err(error)
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.legacy_auth_mode(&path)
+            }
+            Err(error) => {
+                log::warn!(
+                    "[acp-claude] auth mode file read failed path={} error={error}",
+                    path.display()
+                );
+                if error.kind() == std::io::ErrorKind::InvalidData {
+                    Err("Claude auth preference is invalid".to_string())
+                } else {
+                    Err("Could not read Claude auth preference".to_string())
+                }
+            }
         }
     }
 
+    /// One-time fallback for hosts whose preference predates the mode file:
+    /// read the legacy keychain account, migrate a valid value into the file
+    /// (the file is authoritative afterward), and treat a keychain failure as
+    /// unset without persisting that default.
+    fn legacy_auth_mode(&self, path: &Path) -> Result<ClaudeAuthMode, String> {
+        match self.credentials.get(AUTH_MODE_ACCOUNT) {
+            Ok(Some(value)) => {
+                let value = value.trim();
+                let mode = match parse_auth_mode(value) {
+                    Ok(mode) => mode,
+                    Err(error) => {
+                        log::warn!(
+                            "[acp-claude] legacy auth mode keychain account {AUTH_MODE_ACCOUNT} is invalid: {error}"
+                        );
+                        return Err(error);
+                    }
+                };
+                // Re-check before writing: a concurrent `set_auth_mode` may
+                // have created the file since the caller observed it absent —
+                // the file is authoritative once it exists.
+                if let Ok(contents) = std::fs::read_to_string(path) {
+                    if let Ok(mode) = parse_auth_mode(contents.trim()) {
+                        return Ok(mode);
+                    }
+                }
+                match atomic_file::replace(path, value.as_bytes()) {
+                    Ok(()) => {
+                        log::info!(
+                            "[acp-claude] auth mode migrated from OS keychain to {}",
+                            path.display()
+                        );
+                        // The file is now authoritative; drop the legacy
+                        // keychain value so a stale entry cannot re-migrate.
+                        if let Err(error) = self.credentials.delete(AUTH_MODE_ACCOUNT) {
+                            log::warn!(
+                                "[acp-claude] legacy auth mode keychain cleanup failed: {error}"
+                            );
+                        }
+                    }
+                    Err(error) => log::warn!(
+                        "[acp-claude] auth mode migration write failed path={} error={error}",
+                        path.display()
+                    ),
+                }
+                Ok(mode)
+            }
+            Ok(None) => Ok(ClaudeAuthMode::ClaudeCode),
+            Err(error) => {
+                log::warn!(
+                    "[acp-claude] auth mode keychain probe failed; using default: {error}"
+                );
+                Ok(ClaudeAuthMode::ClaudeCode)
+            }
+        }
+    }
+
+    /// Persist the auth mode to the host-state file (atomic replace), then
+    /// best-effort delete the legacy keychain account — the file is
+    /// authoritative once it exists.
     pub fn set_auth_mode(&self, mode: ClaudeAuthMode) -> Result<(), String> {
         let value = match mode {
             ClaudeAuthMode::ClaudeCode => "claude-code",
             ClaudeAuthMode::ApiKey => "api-key",
         };
-        let result = self.credentials.set(AUTH_MODE_ACCOUNT, value);
+        let Some(path) = self.mode_file_path() else {
+            return Err("Could not save Claude auth preference".to_string());
+        };
+        let result = atomic_file::replace(&path, value.as_bytes()).map_err(|error| {
+            log::warn!(
+                "[acp-claude] auth mode write failed path={} error={error}",
+                path.display()
+            );
+            "Could not save Claude auth preference".to_string()
+        });
         match &result {
-            Ok(()) => log::info!("[acp-claude] auth mode set to {value}"),
+            Ok(()) => {
+                log::info!("[acp-claude] auth mode set to {value}");
+                if let Err(error) = self.credentials.delete(AUTH_MODE_ACCOUNT) {
+                    log::warn!(
+                        "[acp-claude] legacy auth mode keychain cleanup failed: {error}"
+                    );
+                }
+            }
             Err(error) => log::warn!("[acp-claude] auth mode set to {value} failed: {error}"),
         }
         result
