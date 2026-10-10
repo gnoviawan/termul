@@ -11,7 +11,16 @@ export interface FilePathResolutionContext {
 
 /** The result of resolving a terminal path candidate to an openable file. */
 export type FilePathResolutionResult =
-  | { ok: true; path: string }
+  | {
+      ok: true
+      path: string
+      /**
+       * Additional candidates whose `/fs/info` stat was FORBIDDEN
+       * (remote peers cannot stat) — tried in order when `openFile`
+       * rejects `path`, since we could not verify which one exists.
+       */
+      deferredPaths?: string[]
+    }
   | { ok: false; reason: 'missing-context' | 'not-found' | 'not-file' }
 
 type OpenFilePathFailureReason =
@@ -401,18 +410,18 @@ export async function resolveFilePathCandidate(
   )
 
   let sawDirectoryCandidate = false
-  let firstForbiddenCandidate: string | null = null
+  const forbiddenCandidates: string[] = []
 
   for (const { absolutePath, infoResult } of infoResults) {
     if (!infoResult.success) {
       // `/fs/info` is loopback-guarded server-side while `/fs/read` is
       // deliberately not, so remote peers (shared-live, standalone without
       // --allow-remote-writes) get FORBIDDEN here even when the file exists.
-      // FORBIDDEN means "unverifiable", not "missing" — pass the candidate
-      // through so `openFile` performs the real validation and reports the
-      // server's own error if the path is genuinely absent or a directory.
-      if (infoResult.code === 'FORBIDDEN' && firstForbiddenCandidate === null) {
-        firstForbiddenCandidate = absolutePath
+      // FORBIDDEN means "unverifiable", not "missing" — keep the candidate so
+      // `openFile` performs the real validation and reports the server's own
+      // error if the path is genuinely absent or a directory.
+      if (infoResult.code === 'FORBIDDEN') {
+        forbiddenCandidates.push(absolutePath)
       }
       continue
     }
@@ -424,13 +433,13 @@ export async function resolveFilePathCandidate(
     sawDirectoryCandidate = true
   }
 
-  if (firstForbiddenCandidate) {
+  if (forbiddenCandidates.length > 0) {
     void logFrontendError({
       level: 'warn',
       source: 'filePathLinks.resolveFilePathCandidate',
-      message: `getFileInfo FORBIDDEN for ${firstForbiddenCandidate}; opening unverified`
+      message: `getFileInfo FORBIDDEN; opening ${forbiddenCandidates.length} unverified candidate(s) starting with ${forbiddenCandidates[0]}`
     })
-    return { ok: true, path: firstForbiddenCandidate }
+    return { ok: true, path: forbiddenCandidates[0], deferredPaths: forbiddenCandidates.slice(1) }
   }
 
   return sawDirectoryCandidate
@@ -477,23 +486,28 @@ export async function openFilePathFromTerminal(
   const wrappedCandidate = trimWrappedPath(rawCandidate)
   const position = parseLineColumnSuffix(wrappedCandidate)
 
-  try {
-    await useEditorStore.getState().openFile(resolution.path)
+  let lastError: unknown = null
+  for (const candidatePath of [resolution.path, ...(resolution.deferredPaths ?? [])]) {
+    try {
+      await useEditorStore.getState().openFile(candidatePath)
 
-    if (position.line) {
-      useEditorStore
-        .getState()
-        .updateCursorPosition(resolution.path, position.line, position.column ?? 1)
-    }
+      if (position.line) {
+        useEditorStore
+          .getState()
+          .updateCursorPosition(candidatePath, position.line, position.column ?? 1)
+      }
 
-    useWorkspaceStore.getState().addEditorTab(resolution.path)
-    return { ok: true }
-  } catch (error) {
-    const details = error instanceof Error ? error.message : String(error)
-    return {
-      ok: false,
-      reason: 'open-failed',
-      message: getErrorMessage(rawCandidate, 'open-failed', details)
+      useWorkspaceStore.getState().addEditorTab(candidatePath)
+      return { ok: true }
+    } catch (error) {
+      lastError = error
     }
+  }
+
+  const details = lastError instanceof Error ? lastError.message : String(lastError)
+  return {
+    ok: false,
+    reason: 'open-failed',
+    message: getErrorMessage(rawCandidate, 'open-failed', details)
   }
 }

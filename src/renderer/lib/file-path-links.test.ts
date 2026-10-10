@@ -425,7 +425,28 @@ describe('file-path-links resolution', () => {
       cwd: '/repo'
     })
 
-    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
+    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx', deferredPaths: [] })
+  })
+
+  it('tries deferred FORBIDDEN candidates in order when the first open fails', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.openFile
+      .mockRejectedValueOnce(new Error('No such file or directory'))
+      .mockResolvedValueOnce(undefined)
+
+    const opened = await openFilePathFromTerminal('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(mocks.openFile).toHaveBeenNthCalledWith(1, '/tmp/shell/src/App.tsx')
+    expect(mocks.openFile).toHaveBeenNthCalledWith(2, '/repo/src/App.tsx')
+    expect(opened).toEqual({ ok: true })
+    expect(mocks.addEditorTab).toHaveBeenCalledWith('/repo/src/App.tsx')
   })
 
   it('surfaces the real open error when a FORBIDDEN-resolved file is absent', async () => {
