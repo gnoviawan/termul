@@ -695,12 +695,13 @@ describe('MobileShellDrawer search', () => {
 })
 
 describe('MobileShellDrawer New chat', () => {
-  it('is a 44px rounded-full default pill that hands off to the launcher', async () => {
+  it('is a compact rounded-full default pill with a 44px hit area that hands off to the launcher', async () => {
     const onNewChat = vi.fn()
     const { dialog } = await openDrawer({ onNewChat })
 
     const button = within(dialog).getByRole('button', { name: 'New chat' })
-    expect(button).toHaveClass('h-11', 'rounded-full', 'bg-primary-fill')
+    // 36px visual pill; the ::after hit-slop (-inset-1) keeps the tap area at 44px.
+    expect(button).toHaveClass('h-9', 'rounded-full', 'bg-primary-fill', 'after:-inset-1')
     fireEvent.click(button)
 
     expect(onNewChat).toHaveBeenCalledTimes(1)

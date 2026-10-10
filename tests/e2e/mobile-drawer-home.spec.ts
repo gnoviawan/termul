@@ -298,6 +298,27 @@ async function expectTouchTarget(locator: Locator, label: string): Promise<void>
 }
 
 /**
+ * A compact footer pill (36px visual) whose ::after hit-slop holds the 44px
+ * floor: a point 3.5px outside its top and bottom edges still hits the pill.
+ */
+async function expectPillHitArea(locator: Locator, label: string): Promise<void> {
+  const box = await boxOf(locator)
+  expect(box.height, `${label} visual height`).toBeGreaterThanOrEqual(36)
+  expect(box.height + 8, `${label} hit height`).toBeGreaterThanOrEqual(44)
+  const x = box.x + box.width / 2
+  for (const y of [box.y - 3.5, box.y + box.height + 3.5]) {
+    const hitsPill = await locator.evaluate(
+      (el, point) => {
+        const hit = document.elementFromPoint(point.x, point.y)
+        return hit !== null && (hit === el || el.contains(hit))
+      },
+      { x, y }
+    )
+    expect(hitsPill, `${label} hit-slop at y=${y.toFixed(1)}`).toBe(true)
+  }
+}
+
+/**
  * After a navigation close focus goes to the destination title when the shell
  * has one (`#mobile-shell-title`, the header `h1`), else to the opener.
  */
@@ -401,7 +422,7 @@ test('the drawer is a full-screen Claude-style navigator: project row beside the
   // Visible, named controls at the touch floor; the connection summary is text.
   await expectTouchTarget(projectRow, 'project row')
   await expectTouchTarget(search, 'search')
-  await expectTouchTarget(newChat, 'New chat')
+  await expectPillHitArea(newChat, 'New chat')
   await expectTouchTarget(settings, 'Settings')
   await expectTouchTarget(snapshots, 'Snapshots')
   await expectTouchTarget(gitHistory, 'Git history')
@@ -815,7 +836,7 @@ test('drawer sections: the nav switches lists in place, Terminals lists terminal
   await sectionNav(drawer, 'Editors').tap()
   await expect(drawer.getByText('No open editors')).toBeVisible()
   const browse = drawer.getByRole('button', { name: 'Browse files', exact: true })
-  await expectTouchTarget(browse, 'Browse files')
+  await expectPillHitArea(browse, 'Browse files')
   await browse.tap()
   await expect(page.getByRole('button', { name: 'Back to parent folder' })).toBeVisible()
 })

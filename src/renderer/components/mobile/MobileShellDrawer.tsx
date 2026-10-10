@@ -84,6 +84,13 @@ const SECTION_NAV: ReadonlyArray<{ section: MobileSection; label: string; Icon: 
   { section: 'editors', label: 'Editors', Icon: FileCode }
 ]
 
+/**
+ * The footer's primary pill (New chat / New terminal / Browse files): a
+ * compact 36px pill, its ::after hit-slop keeping the tappable area at 44px.
+ */
+const FOOTER_PILL_CLASS =
+  "relative min-w-0 gap-1.5 rounded-full px-3.5 text-sm after:absolute after:-inset-1 after:content-['']"
+
 /** The drawer's list heading for each section. */
 const SECTION_HEADINGS: Record<MobileSection, string> = {
   chats: 'Recents',
@@ -420,7 +427,7 @@ export function MobileShellDrawer({
           )}
         </div>
 
-        <div className="shrink-0 border-t border-border/60 px-2 pt-1 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className="shrink-0 border-t border-border/60 px-2 pt-2.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
           <div className="flex min-w-0 items-center gap-1">
             <Button
               type="button"
@@ -468,45 +475,45 @@ export function MobileShellDrawer({
               {listSection === 'chats' && (
                 <Button
                   type="button"
-                  size="touch"
-                  className="min-w-0 rounded-full px-4"
+                  size="sm"
+                  className={FOOTER_PILL_CLASS}
                   disabled={!canNewChat}
                   onClick={() => {
                     closeForHandoff()
                     onNewChat()
                   }}
                 >
-                  <Plus size={16} />
+                  <Plus size={14} />
                   New chat
                 </Button>
               )}
               {listSection === 'terminals' && (
                 <Button
                   type="button"
-                  size="touch"
-                  className="min-w-0 rounded-full px-4"
+                  size="sm"
+                  className={FOOTER_PILL_CLASS}
                   disabled={!onNewTerminal}
                   onClick={() => {
                     closeForNavigation()
                     onNewTerminal?.()
                   }}
                 >
-                  <Plus size={16} />
+                  <Plus size={14} />
                   New terminal
                 </Button>
               )}
               {listSection === 'editors' && (
                 <Button
                   type="button"
-                  size="touch"
-                  className="min-w-0 rounded-full px-4"
+                  size="sm"
+                  className={FOOTER_PILL_CLASS}
                   disabled={!onOpenFiles}
                   onClick={() => {
                     closeForHandoff()
                     onOpenFiles?.()
                   }}
                 >
-                  <FolderTree size={16} />
+                  <FolderTree size={14} />
                   Browse files
                 </Button>
               )}
