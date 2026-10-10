@@ -1021,6 +1021,62 @@ describe('useEditorPersistence', () => {
     expect(takeAllDroppedLaunchPlaceholders()).toEqual([])
   })
 
+  it('judges chat ownership with the session index that lands during the terminal-layout read', async () => {
+    const initialIndex = useAcpStore.getState().sessionIndex
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null,
+        paneLayout: {
+          type: 'leaf',
+          id: 'legacy-leaf',
+          tabs: [
+            { type: 'agent-chat', id: 'chat-s-foreign', sessionId: 's-foreign' },
+            { type: 'agent-chat', id: 'chat-s-unknown', sessionId: 's-unknown' }
+          ],
+          activeTabId: 'chat-s-foreign'
+        }
+      }
+    })
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+    // The index (proving s-foreign belongs to project-b) loads mid-restore.
+    mockLoadPersistedTerminals.mockImplementation(async () => {
+      useAcpStore.setState({
+        sessionIndex: [
+          {
+            id: 's-foreign',
+            agentId: 'agent-1',
+            title: 's-foreign',
+            cwd: '/work',
+            projectId: 'project-b',
+            createdAt: 1,
+            lastActivityAt: 2,
+            messageCount: 1,
+            status: 'closed'
+          }
+        ]
+      })
+      return null
+    })
+
+    try {
+      renderHook(() => useEditorPersistence('project-a'))
+
+      await waitFor(() => {
+        expect(mockWorkspaceState.loadProjectWorkspace).toHaveBeenCalled()
+      })
+      const tree = mockWorkspaceState.loadProjectWorkspace.mock.calls[0]?.[0] as PaneNode
+      if (tree.type !== 'leaf') throw new Error('expected leaf')
+      expect(tree.tabs.map((tab) => tab.id)).toEqual(['chat-s-unknown'])
+      expect(tree.activeTabId).toBe('chat-s-unknown')
+    } finally {
+      useAcpStore.setState({ sessionIndex: initialIndex })
+    }
+  })
+
   // P9: the restore flow sets setManifestRestoreInProgress(projectId, true)
   // before the manifest load and (projectId, false) in the finally.
   it('sets manifestRestoreInProgress true on entry and false in finally', async () => {

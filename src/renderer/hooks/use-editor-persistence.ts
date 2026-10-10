@@ -817,7 +817,6 @@ export function useEditorPersistence(projectId: string): void {
           // No manifest (or load failed — logged + degraded gracefully).
           // Fall back to the existing renderer-local paneLayout path.
           if (persisted.paneLayout) {
-            const restoredTree = deserializePaneTree(persisted.paneLayout, projectId)
             const openFilePaths = new Set(useEditorStore.getState().openFiles.keys())
             const liveProjectTerminals = useTerminalStore
               .getState()
@@ -827,6 +826,11 @@ export function useEditorPersistence(projectId: string): void {
               return
             }
 
+            // Deserialize AFTER the await, right before the commit: the
+            // session index may land during it, and its prune only scans the
+            // committed tree — judging ownership earlier would let a now-
+            // known foreign chat slip in. Unknown ownership stays fail-open.
+            const restoredTree = deserializePaneTree(persisted.paneLayout, projectId)
             const cleanTree = reconcileTerminalTabs(
               restoredTree,
               openFilePaths,
