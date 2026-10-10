@@ -299,14 +299,23 @@ async function expectTouchTarget(locator: Locator, label: string): Promise<void>
 
 /**
  * A compact footer pill (36px visual) whose ::after hit-slop holds the 44px
- * floor: a point 3.5px outside its top and bottom edges still hits the pill.
+ * floor: the slop extends 4px past the top and bottom edges (so the hit area
+ * is at least 44px tall), and points just inside that 4px band still hit the
+ * pill. The probes stay a hair inside the band because its bottom edge is
+ * exclusive to hit testing.
  */
 async function expectPillHitArea(locator: Locator, label: string): Promise<void> {
   const box = await boxOf(locator)
   expect(box.height, `${label} visual height`).toBeGreaterThanOrEqual(36)
-  expect(box.height + 8, `${label} hit height`).toBeGreaterThanOrEqual(44)
+  const slop = await locator.evaluate((el) => {
+    const after = getComputedStyle(el, '::after')
+    return { top: Number.parseFloat(after.top), bottom: Number.parseFloat(after.bottom) }
+  })
+  expect(slop.top, `${label} hit-slop top`).toBeLessThanOrEqual(-4)
+  expect(slop.bottom, `${label} hit-slop bottom`).toBeLessThanOrEqual(-4)
+  expect(box.height - slop.top - slop.bottom, `${label} hit height`).toBeGreaterThanOrEqual(44)
   const x = box.x + box.width / 2
-  for (const y of [box.y - 3.5, box.y + box.height + 3.5]) {
+  for (const y of [box.y - 3.9, box.y + box.height + 3.9]) {
     const hitsPill = await locator.evaluate(
       (el, point) => {
         const hit = document.elementFromPoint(point.x, point.y)
@@ -403,7 +412,10 @@ test('the drawer is a full-screen Claude-style navigator: project row beside the
   // The footer controls and the New chat pill share a row, the pill at its end.
   expect((await boxOf(snapshots)).y).toBe((await boxOf(settings)).y)
   expect((await boxOf(gitHistory)).y).toBe((await boxOf(settings)).y)
-  expect((await boxOf(newChat)).y).toBe((await boxOf(settings)).y)
+  // The compact pill (36px) is vertically centred on the 44px footer icons.
+  const pillBox = await boxOf(newChat)
+  const settingsBox = await boxOf(settings)
+  expect(pillBox.y + pillBox.height / 2).toBeCloseTo(settingsBox.y + settingsBox.height / 2, 0)
   expect((await boxOf(newChat)).x).toBeGreaterThan((await boxOf(gitHistory)).x)
   expect(
     await newChat.evaluate((el) => Number.parseFloat(getComputedStyle(el).borderRadius))
