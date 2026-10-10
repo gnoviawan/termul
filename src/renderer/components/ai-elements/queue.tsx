@@ -63,9 +63,9 @@ export type QueueItemImageProps = ComponentProps<'img'>
 export const QueueItemImage = ({ className, ...props }: QueueItemImageProps) => (
   <img
     alt=""
-    className={cn('h-7 w-7 rounded border object-cover', className)}
-    height={28}
-    width={28}
+    className={cn('h-10 w-10 rounded border object-cover', className)}
+    height={40}
+    width={40}
     {...props}
   />
 )
@@ -107,7 +107,7 @@ export const QueueSectionTrigger = ({
   <CollapsibleTrigger asChild>
     <button
       className={cn(
-        'group flex w-full items-center rounded-md px-2 py-1 text-left font-medium text-muted-foreground text-sm transition-colors hover:bg-muted',
+        'group flex min-h-7 w-full items-center rounded-md px-2 py-1 text-left font-medium leading-5 text-muted-foreground text-sm transition-colors hover:bg-muted',
         className
       )}
       type="button"
@@ -131,10 +131,10 @@ export const QueueSectionLabel = ({
   className,
   ...props
 }: QueueSectionLabelProps) => (
-  <span className={cn('flex items-center gap-1.5', className)} {...props}>
-    <ChevronDownIcon className="size-3.5 transition-transform duration-[var(--acc-chevron)] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none group-data-[state=closed]:-rotate-90" />
+  <span className={cn('flex items-center gap-1.5 leading-5', className)} {...props}>
+    <ChevronDownIcon className="size-3.5 shrink-0 transition-transform duration-[var(--acc-chevron)] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none group-data-[state=closed]:-rotate-90" />
     {icon}
-    <span className="tabular-nums">
+    <span className="tabular-nums leading-5">
       {count} {label}
     </span>
   </span>
@@ -151,7 +151,7 @@ export type QueueProps = ComponentProps<'div'>
 export const Queue = ({ className, ...props }: QueueProps) => (
   <div
     className={cn(
-      'relative z-0 flex flex-col gap-1 rounded-t-2xl border border-b-0 border-border/60 bg-card/60 px-3 pt-2 pb-6',
+      'relative z-0 flex flex-col gap-1 rounded-2xl border border-border/60 bg-card/60 px-3 py-2',
       className
     )}
     {...props}
