@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { CHAT_GUTTER_X, CHAT_HIT_MIN_H } from '@/components/chat/chat-layout'
-import { describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
+import { baseName, describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
 import { ChevronDown, ChevronRight, FileDiff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
@@ -13,38 +13,120 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { useForcedCollapse } from './use-forced-collapse'
 
-/** A file touched by an ACP tool call in this session. */
+/** A file touched by one or more ACP tool calls in this session. */
 interface ChangedFile {
+  /** Resolved full path — forward slashes, cwd-joined. Also the dedupe key. */
   path: string
-  toolCallId: string
+  /** Kind of the most recent contributing call (edit/delete/move). */
   kind: string
   added: number
   removed: number
 }
 
+/**
+ * POSIX-style normalization on a `/`-separated path: collapse `.` segments
+ * and duplicate slashes, resolve `..` by popping the previous segment, strip
+ * trailing separators. `..` that would climb past a `/` or `C:/` root is
+ * dropped; leading `..` on a relative path is kept (it escapes the base).
+ * The drive letter is canonicalized to uppercase (`c:` ≡ `C:` — the rest of
+ * the path keeps its case since directories may be case-sensitive) and a
+ * leading `//` UNC prefix is preserved. So `./x`, `a//x`, `a/b/../x`, and
+ * `x/` all canonicalize alike.
+ */
+function canonicalizePath(path: string): string {
+  const p = path.replace(/^([a-zA-Z]):/, (m) => m.toUpperCase())
+  const isDriveRooted = /^[a-zA-Z]:\//.test(p)
+  const isUnc = !isDriveRooted && p.startsWith('//')
+  const isRooted = isDriveRooted || isUnc || p.startsWith('/')
+  const minLen = isDriveRooted ? 1 : 0 // never pop the drive letter
+  const out: string[] = []
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      if (out.length > minLen && out[out.length - 1] !== '..') {
+        out.pop()
+      } else if (!isRooted) {
+        out.push('..')
+      }
+      continue
+    }
+    out.push(seg)
+  }
+  const body = out.join('/')
+  return isRooted ? (isDriveRooted ? body : `${isUnc ? '//' : '/'}${body}`) : body
+}
+
+/**
+ * `cwd` canonicalized for join/prefix math. An all-separator cwd ('/',
+ * '///', '\\\\') survives as '/' so a relative path still joins absolute.
+ */
+function normalizeCwd(cwd: string): string {
+  return canonicalizePath(cwd.replace(/\\/g, '/'))
+}
+
+/**
+ * Canonical form shared by dedupe, the row tooltip, and the open action:
+ * forward slashes, relative paths joined onto `cwd`, then `.`/`..`/duplicate
+ * slashes collapsed so all spellings of one file share a key. With no cwd the
+ * normalized path stands as given.
+ */
+function resolveFilePath(path: string, cwd: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const isAbsolute = /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/')
+  const base = normalizeCwd(cwd)
+  const joined = isAbsolute || !base ? normalized : `${base}/${normalized}`
+  return canonicalizePath(joined)
+}
+
+/**
+ * Directory portion for the row subtitle: relative to `cwd` when the file sits
+ * under it (so `src/components`, not `/work/src/components`), else the full
+ * directory part. Empty for basename-only paths.
+ */
+function dirName(fullPath: string, cwd: string): string {
+  const base = normalizeCwd(cwd)
+  // Root cwd: the prefix is '/', not '//'.
+  const prefix = base === '/' ? '/' : `${base}/`
+  const display = base && fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath
+  const idx = display.lastIndexOf('/')
+  return idx >= 0 ? display.slice(0, idx) : ''
+}
+
 /** Extract file-changing tool calls (edit, delete, move) from the session's
- * tool-call list. Paths come from `toolCallPath` (locations → rawInput → diff
- * content). Add/remove counts come from `describeToolCall().diffStat` — the
- * same battle-tested path used by ToolCallCard. */
-function extractChangedFiles(toolCalls: ToolCall[]): ChangedFile[] {
+ * tool-call list, deduplicated to one row per resolved path. Paths come from
+ * `toolCallPath` (locations → rawInput → diff content) and are normalized via
+ * `resolveFilePath`, so `src/foo.ts` and `/work/src/foo.ts` merge under cwd
+ * `/work`. Add/remove counts — `describeToolCall().diffStat`, the same
+ * battle-tested path used by ToolCallCard — are summed across all contributing
+ * calls and `kind` is taken from the last one. First-appearance order kept. */
+function extractChangedFiles(toolCalls: ToolCall[], cwd: string): ChangedFile[] {
   const files: ChangedFile[] = []
-  const seen = new Set<string>()
+  const byPath = new Map<string, ChangedFile>()
   for (const tc of toolCalls) {
     if (tc.kind !== 'edit' && tc.kind !== 'delete' && tc.kind !== 'move') continue
-    const path = toolCallPath(tc)
+    // `locations[].path` arrives untrimmed — a whitespace-only path would
+    // otherwise key a garbage row like `<cwd>/   `.
+    const rawPath = toolCallPath(tc)?.trim()
+    if (!rawPath) continue
+    const path = resolveFilePath(rawPath, cwd).trim()
+    // A dot-only path ('.', 'a/..') can canonicalize to empty.
     if (!path) continue
-    const key = `${path}:${tc.toolCallId}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    const summary = describeToolCall(tc)
-    const stat = summary.diffStat ?? { added: 0, removed: 0 }
-    files.push({
+    const stat = describeToolCall(tc).diffStat ?? { added: 0, removed: 0 }
+    const existing = byPath.get(path)
+    if (existing) {
+      existing.added += stat.added
+      existing.removed += stat.removed
+      existing.kind = tc.kind ?? 'edit'
+      continue
+    }
+    const file: ChangedFile = {
       path,
-      toolCallId: tc.toolCallId,
       kind: tc.kind ?? 'edit',
       added: stat.added,
       removed: stat.removed
-    })
+    }
+    byPath.set(path, file)
+    files.push(file)
   }
   return files
 }
@@ -58,21 +140,22 @@ function FileRow({
   cwd: string
   onOpen: (path: string) => void
 }) {
-  const normalized = file.path.replace(/\\/g, '/')
-  const isAbsolute = /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith('/')
-  const fullPath = isAbsolute
-    ? normalized
-    : cwd
-      ? `${cwd.replace(/\\/g, '/').replace(/\/+$/, '')}/${normalized.replace(/^\/+/, '')}`
-      : file.path
-
+  // `file.path` is already the resolved full path; `dir` shows it relative to
+  // `cwd` when the file sits underneath (GitPanel FileItem row shape).
+  const dir = dirName(file.path, cwd)
+  // A separators-only path ('/') has no basename — show the path itself.
+  const label = baseName(file.path) || file.path
   const hasCounts = file.added > 0 || file.removed > 0
 
   return (
     <button
       type="button"
       data-press-feedback="off"
-      onClick={() => onOpen(fullPath)}
+      title={file.path}
+      // `title` is hover-only; the aria-label carries the resolved path to
+      // touch and screen-reader users.
+      aria-label={file.path}
+      onClick={() => onOpen(file.path)}
       className={cn(
         'group/row flex w-full items-center gap-2 rounded-md px-3 text-left',
         CHAT_HIT_MIN_H,
@@ -83,11 +166,9 @@ function FileRow({
       )}
     >
       <FileDiff size={13} className="shrink-0 text-diff-modified" aria-hidden />
-      <span
-        className="min-w-0 flex-1 truncate text-2xs font-medium leading-tight"
-        title={normalized}
-      >
-        {normalized}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-2xs font-medium leading-tight">{label}</span>
+        {dir && <span className="block truncate text-4xs leading-tight opacity-50">{dir}</span>}
       </span>
       {hasCounts && (
         <span className="shrink-0 font-mono text-2xs leading-tight">
@@ -119,9 +200,10 @@ interface ChatChangedFilesPanelProps {
 
 /**
  * Collapsible, scrollable "Changed files" panel anchored on top of the
- * ChatInputBar. Lists files touched by ACP tool calls (edit/delete/move) in
- * the current session — persists across agent replies. Clicking a file row
- * opens it in the editor workspace. View-and-open-only.
+ * ChatInputBar. One row per unique file touched by ACP tool calls
+ * (edit/delete/move) in the current session — a file edited by several calls
+ * appears once with summed +N −N counts — persists across agent replies.
+ * Clicking a file row opens it in the editor workspace. View-and-open-only.
  *
  * The panel sits behind the chatbox (z-0 vs z-10). A negative bottom margin
  * extends the panel's translucent bg-card/60 behind the chatbox's rounded top
@@ -138,7 +220,7 @@ export function ChatChangedFilesPanel({
   const { collapsed, toggle } = useForcedCollapse(true, forceCollapsed)
   const expanded = !collapsed
 
-  const files = useMemo(() => extractChangedFiles(toolCalls), [toolCalls])
+  const files = useMemo(() => extractChangedFiles(toolCalls, cwd), [toolCalls, cwd])
   const count = files.length
   const totalAdded = useMemo(() => files.reduce((sum, f) => sum + f.added, 0), [files])
   const totalRemoved = useMemo(() => files.reduce((sum, f) => sum + f.removed, 0), [files])
@@ -234,12 +316,7 @@ export function ChatChangedFilesPanel({
               <div className="scroller-thin max-h-48 overflow-y-auto">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (
-                    <FileRow
-                      key={`${file.path}:${file.toolCallId}`}
-                      file={file}
-                      cwd={cwd}
-                      onOpen={handleOpenFile}
-                    />
+                    <FileRow key={file.path} file={file} cwd={cwd} onOpen={handleOpenFile} />
                   ))}
                 </div>
               </div>
