@@ -46,7 +46,7 @@ export function ComposerSendButton({
             className={cn(
               buttonVariants({ variant: 'composer', size: 'icon-sm' }),
               'absolute inset-0 [&_svg]:size-3.5',
-              "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
+              "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1 pointer-coarse:@[400px]:after:-inset-1.5"
             )}
           >
             <Square fill="currentColor" strokeWidth={0} />
@@ -67,7 +67,7 @@ export function ComposerSendButton({
             className={cn(
               buttonVariants({ variant: 'composer', size: 'icon-sm' }),
               'absolute inset-0 [&_svg]:size-[18px]',
-              "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
+              "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1 pointer-coarse:@[400px]:after:-inset-1.5"
             )}
           >
             <ArrowUp />

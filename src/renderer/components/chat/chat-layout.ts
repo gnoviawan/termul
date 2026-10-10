@@ -21,17 +21,23 @@ export const CHAT_GUTTER_X = 'px-3 @[400px]:px-5'
 
 /**
  * Hit area for text controls in the chat pane.
- * 44px on a narrow pane, 40px when the pane is at least 400px.
+ * 44px on a narrow pane, 40px when the pane is at least 400px, except on a
+ * coarse pointer, which keeps 44px at every width (a landscape phone's pane
+ * reaches 400px). Keyed on pointer type, as {@link CHAT_ROW_MIN_H} is, not on
+ * the mobile shell. The coarse restore must follow the 40px step: Tailwind
+ * emits it later, so it wins at equal specificity.
  * No min width: a long label must not become a square.
  */
-export const CHAT_HIT_MIN_H = 'min-h-11 @[400px]:min-h-10'
+export const CHAT_HIT_MIN_H = 'min-h-11 @[400px]:min-h-10 pointer-coarse:@[400px]:min-h-11'
 
 /**
  * Hit area for icon controls. The box is the target, so do not add a
- * pseudo-element that can overlap the next control.
+ * pseudo-element that can overlap the next control. 44px on a narrow pane,
+ * 40px from 400px up, and 44px again on a coarse pointer (see
+ * {@link CHAT_HIT_MIN_H}).
  */
 export const CHAT_HIT_ICON =
-  'relative inline-flex shrink-0 items-center justify-center size-11 @[400px]:size-10'
+  'relative inline-flex shrink-0 items-center justify-center size-11 @[400px]:size-10 pointer-coarse:@[400px]:size-11'
 
 /**
  * Visually hides a composer control's text label while keeping it in the

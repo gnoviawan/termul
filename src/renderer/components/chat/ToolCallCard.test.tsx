@@ -462,3 +462,47 @@ describe('ToolCallCard read results', () => {
     expect(container.querySelector('pre span')).toBeNull()
   })
 })
+
+describe('ToolCallCard focus ring in forced-colors mode', () => {
+  // The inset ring is a box-shadow, which forced-colors mode removes. A
+  // transparent outline is what the browser paints in its place; it is scoped to
+  // focus-visible and pulled inside the row, which is `overflow-hidden`.
+  const RING_CLASSES = [
+    'focus-visible:outline-hidden',
+    'focus-visible:-outline-offset-2',
+    'focus-visible:ring-2',
+    'focus-visible:ring-inset',
+    'focus-visible:ring-ring'
+  ]
+
+  it('gives the subagent button a transparent focus outline and keeps the ring', () => {
+    const delegatedCall: ToolCall = {
+      toolCallId: 'task-ring',
+      title: 'Audit the branch',
+      kind: 'think',
+      status: 'in_progress',
+      rawInput: { subagent_type: 'explorer', prompt: 'Look around.' }
+    }
+    render(<Card toolCall={delegatedCall} />)
+
+    const button = screen.getByRole('button', { name: /audit the branch/i })
+    expect(button).toHaveAttribute('aria-haspopup', 'dialog')
+    expect(button).toHaveClass(...RING_CLASSES)
+    expect(button).not.toHaveClass('outline-none')
+  })
+
+  it('gives the disclosure button a transparent focus outline and keeps the ring', () => {
+    render(
+      <Card
+        toolCall={toolCall('completed', [
+          { type: 'content', content: { type: 'text', text: 'Result' } }
+        ])}
+      />
+    )
+
+    const button = screen.getByRole('button')
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    expect(button).toHaveClass(...RING_CLASSES)
+    expect(button).not.toHaveClass('outline-none')
+  })
+})

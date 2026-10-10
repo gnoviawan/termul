@@ -533,6 +533,80 @@ describe('AgentModelSelector panel', () => {
     expect(screen.getByRole('button', { name: 'Sonnet 5.5' })).toHaveClass('min-h-11')
   })
 
+  describe('mobile sheet close and height cap', () => {
+    function sheet(): HTMLElement {
+      return screen.getByRole('dialog')
+    }
+
+    it('shows the built-in close button and no longer hides it', () => {
+      mockIsMobile.current = true
+      renderSelector()
+      open()
+
+      expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
+      expect(sheet().className).not.toContain('[&>button:last-child]:hidden')
+    })
+
+    it('closes from the close button and returns focus to the pill', async () => {
+      mockIsMobile.current = true
+      renderSelector()
+      open()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('agent-model-selector-panel')).not.toBeInTheDocument()
+      })
+      await waitFor(() => expect(screen.getByTestId('agent-model-selector-trigger')).toHaveFocus())
+    })
+
+    it('scrolls inside an 85dvh cap and keeps the grabber and the safe-area padding', () => {
+      mockIsMobile.current = true
+      renderSelector()
+      open()
+
+      const classes = sheet().className.split(/\s+/)
+      expect(classes).toEqual(
+        expect.arrayContaining([
+          'max-h-[85dvh]',
+          'overflow-y-auto',
+          'overscroll-contain',
+          'pb-[env(safe-area-inset-bottom)]',
+          'p-0'
+        ])
+      )
+      expect(sheet().querySelector('[aria-hidden="true"].h-1.w-9')).not.toBeNull()
+    })
+
+    it('keeps the search row clear of the close box on touch only', () => {
+      mockIsMobile.current = true
+      const view = renderSelector()
+      open()
+
+      const touchRow = screen.getByLabelText('Search models and agents').parentElement
+      expect(touchRow).toHaveClass('h-12', 'pl-5', 'pr-12')
+      expect(touchRow).not.toHaveClass('px-5')
+
+      view.unmount()
+      mockIsMobile.current = false
+      renderSelector()
+      open()
+
+      const desktopRow = screen.getByLabelText('Search models and agents').parentElement
+      expect(desktopRow).toHaveClass('h-10', 'px-3')
+      expect(desktopRow).not.toHaveClass('pr-12')
+    })
+
+    it('leaves the desktop popover without a sheet or a close button', () => {
+      renderSelector()
+      open()
+
+      expect(screen.getByTestId('agent-model-selector-panel')).toBeInTheDocument()
+      expect(document.querySelector('[data-sheet]')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
+    })
+  })
+
   it('renders without a crash against a partial store state', () => {
     acpStateRef.current = {}
     renderSelector()

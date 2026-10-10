@@ -71,6 +71,14 @@ export function joinPath(parent: string, name: string): string {
   return `${normalizePath(parent).replace(/\/$/, '')}/${name}`
 }
 
+/** `path` with its last segment replaced by `name`, the rest spelled as the listing spelled
+ * it. `joinPath(parentOf(path), name)` cannot do that for a listing path whose prefix the
+ * root path lacks, and a row's identity is its listing path. */
+export function siblingPath(path: string, name: string): string {
+  const normalized = normalizePath(path)
+  return `${normalized.slice(0, normalized.lastIndexOf('/'))}/${name}`
+}
+
 export function isWithinRoot(path: string, root: string): boolean {
   const p = comparePath(path)
   const r = comparePath(root)

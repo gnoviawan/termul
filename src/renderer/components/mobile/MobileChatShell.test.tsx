@@ -1791,6 +1791,136 @@ describe('MobileChatShell', () => {
     })
   })
 
+  // ── a11y floor: the silenced log is inert behind a modal overlay ────────
+
+  describe('inert body behind overlays', () => {
+    function shellBody(): HTMLElement {
+      const body = document.querySelector<HTMLElement>('[data-mobile-shell-body]')
+      if (!body) throw new Error('shell body wrapper not rendered')
+      return body
+    }
+
+    function register(id: string): void {
+      act(() => {
+        useOverlayStackStore.getState().registerOverlay(id, () => {})
+      })
+    }
+
+    function unregister(id: string): void {
+      act(() => {
+        useOverlayStackStore.getState().unregisterOverlay(id)
+      })
+    }
+
+    it('wraps the children in the body wrapper and leaves it interactive with no overlay', () => {
+      renderShell()
+
+      expect(shellBody()).toContainElement(screen.getByText('chat body'))
+      expect(shellBody()).not.toHaveAttribute('inert')
+    })
+
+    it('sets inert on the body wrapper while a store overlay is open and removes it on close', () => {
+      renderShell()
+
+      register('files-sheet')
+      expect(shellBody().getAttribute('inert')).toBe('')
+
+      unregister('files-sheet')
+      expect(shellBody()).not.toHaveAttribute('inert')
+    })
+
+    it('leaves the live region, the header and the key bar outside the inert subtree', () => {
+      seedActiveTerminal({ ptyId: 'pty-1' })
+      renderShell()
+      register('git-sheet')
+
+      const body = shellBody()
+      expect(body).toHaveAttribute('inert')
+      const region = document.querySelector<HTMLElement>('[data-shell-live-region]')
+      expect(region).not.toBeNull()
+      expect(region?.closest('[inert]')).toBeNull()
+      expect(screen.getByLabelText('Open menu').closest('[inert]')).toBeNull()
+      expect(screen.getByLabelText('Terminal actions').closest('[inert]')).toBeNull()
+      expect(screen.getByRole('group', { name: 'Terminal keys' }).closest('[inert]')).toBeNull()
+      expect(screen.getByText('chat body').closest('[inert]')).toBe(body)
+    })
+
+    it('does not inert the body for the exempt overlays', () => {
+      renderShell()
+
+      for (const id of ['agent-launcher', 'confirm-dialog:r1', 'message-actions-menu:m1']) {
+        register(id)
+        expect(shellBody()).not.toHaveAttribute('inert')
+      }
+
+      register('files-sheet')
+      expect(shellBody()).toHaveAttribute('inert')
+      unregister('files-sheet')
+      expect(shellBody()).not.toHaveAttribute('inert')
+    })
+
+    it('does not re-render the shell on a stack change', () => {
+      renderShell()
+      drawerPropsRef.current = null
+
+      register('files-sheet')
+      unregister('files-sheet')
+
+      // The drawer stub re-assigns its props on every shell render.
+      expect(drawerPropsRef.current).toBeNull()
+    })
+
+    it('keeps the log silenced and the live region outside the inert subtree with the real modal drawer open', async () => {
+      drawerModalRef.current = true
+      render(
+        <MemoryRouter>
+          <MobileChatShell onNewChat={vi.fn()} canNewChat>
+            <div role="log" aria-live="off" aria-label="Chat history">
+              <div>chat body</div>
+            </div>
+          </MobileChatShell>
+        </MemoryRouter>
+      )
+
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      expect(await screen.findByText('shell-drawer')).toBeInTheDocument()
+
+      const log = document.querySelector<HTMLElement>('[role="log"]')
+      expect(log).not.toBeNull()
+      expect(log).toHaveAttribute('aria-live', 'off')
+      expect(log?.getAttribute('role')).toBe('log')
+      expect(log?.closest('[inert]')).toBe(shellBody())
+      const region = document.querySelector<HTMLElement>('[data-shell-live-region]')
+      expect(region?.closest('[inert]')).toBeNull()
+      expect(region?.closest('[aria-hidden="true"]')).toBeNull()
+      expect(drawerProps().open).toBe(true)
+
+      fireEvent.click(screen.getByText('close-shell-drawer'))
+      expect(shellBody()).not.toHaveAttribute('inert')
+      expect(log).toHaveAttribute('aria-live', 'off')
+    })
+
+    it('clears the attribute and releases the subscription when the shell unmounts', () => {
+      const view = renderShell()
+      register('files-sheet')
+      const body = shellBody()
+      expect(body).toHaveAttribute('inert')
+
+      view.unmount()
+      expect(body).not.toHaveAttribute('inert')
+
+      register('git-sheet')
+      expect(body).not.toHaveAttribute('inert')
+    })
+
+    it('applies on mount when a blocking overlay is already open', () => {
+      useOverlayStackStore.setState({ stack: [{ id: 'files-sheet', close: () => {} }] })
+      renderShell()
+
+      expect(shellBody()).toHaveAttribute('inert')
+    })
+  })
+
   // ── a11y floor: focus return wiring ─────────────────────────────────────
   //
   // The Files and Git sheets open from the header ⋯ sheet, so ⋯ is the control

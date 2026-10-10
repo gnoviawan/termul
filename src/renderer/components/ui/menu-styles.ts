@@ -14,9 +14,16 @@
 export const MENU_CONTENT_CLASS =
   'z-50 min-w-[8rem] overflow-hidden rounded-xl border bg-popover p-1 text-popover-foreground shadow-md'
 
-/** Open/close and side-aware entrance motion for a Radix menu shell. */
+/**
+ * Open/close and side-aware entrance motion for a Radix menu shell. The trailing
+ * `motion-reduce:animate-none!` skips it under reduced motion: it is important
+ * on purpose, because `data-[state=open]:animate-in` compiles to a rule that
+ * outranks a bare `motion-reduce:animate-none`, and Radix `Presence` must not
+ * wait on an animation that never runs. Dropdown, select and context menus all
+ * compose this constant, so a new menu inherits the rule.
+ */
 export const MENU_MOTION_CLASS =
-  'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2'
+  'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 motion-reduce:animate-none!'
 
 /** Pointer or keyboard highlight on a menu row. */
 export const MENU_HIGHLIGHT_CLASS = 'focus:bg-foreground/[0.06] focus:text-foreground'

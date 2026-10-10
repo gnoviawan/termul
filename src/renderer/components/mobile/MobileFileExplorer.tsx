@@ -43,14 +43,20 @@ import {
   isWithinRoot,
   joinPath,
   normalizePath,
-  resolveBreadcrumbTarget
+  resolveBreadcrumbTarget,
+  siblingPath
 } from '@/lib/mobile-file-paths'
-import { recordSheetOpener, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
+import {
+  holdSheetReturnTargets,
+  recordSheetOpener,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useActiveProjectId } from '@/stores/project-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import { useRenameFocusReturn } from './use-rename-focus-return'
 
 interface MobileFileExplorerProps {
   open: boolean
@@ -112,11 +118,19 @@ export function MobileFileExplorer({
   const [creating, setCreating] = useState<CreateState | null>(null)
   const [createSubmitting, setCreateSubmitting] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<DirectoryEntry | null>(null)
+  // The Delete choice closes the row-actions sheet, and that close consumes the opener
+  // recorded for it, so the confirm that follows holds its own snapshot (see
+  // holdSheetReturnTargets) and restores focus from it when it closes.
+  const restoreDeleteFocusRef = useRef<(() => boolean) | null>(null)
   // Tracks the project root we've already restored the persisted folder for.
   // Prevents re-reading persistence (and clobbering the in-session folder) on
   // every drawer reopen — the component stays mounted across close, so
   // currentPath already holds the user's last folder.
   const restoredForRootRef = useRef<string | null>(null)
+  // A rename swaps the row for an input, so its Actions button is not the
+  // recorded sheet opener: focus returns by path (see use-rename-focus-return).
+  const sheetContentRef = useRef<HTMLDivElement>(null)
+  const renameFocus = useRenameFocusReturn(sheetContentRef, open, currentPath)
 
   function persistFolder(path: string): void {
     if (!projectId) return
@@ -277,22 +291,37 @@ export function MobileFileExplorer({
     }
   }
 
-  async function handleRename(entry: DirectoryEntry, value: string): Promise<void> {
+  /** `focusMoved`: the input blurred because the user focused another control. */
+  async function handleRename(
+    entry: DirectoryEntry,
+    value: string,
+    focusMoved = false
+  ): Promise<void> {
+    // Hand focus to the row's Actions button once the rename ends, unless the
+    // user already moved it.
+    const returnFocus = (path: string): void => {
+      if (!focusMoved) renameFocus.focusActionsButton(comparePath(path))
+    }
     const name = value.trim()
     if (!name || !renaming) {
       setRenaming(null)
+      returnFocus(entry.path)
       return
     }
     const parent = parentOf(entry.path)
     const newPath = joinPath(parent, name)
-    if (normalizePath(newPath) === normalizePath(entry.path)) {
+    // The row the rename leaves behind, spelled like its listing path (see siblingPath).
+    const renamedPath = siblingPath(entry.path, name)
+    if (normalizePath(renamedPath) === normalizePath(entry.path)) {
       setRenaming(null)
+      returnFocus(entry.path)
       return
     }
     setRenaming(null)
     const result = await filesystemApi.renameFile(entry.path, newPath)
     if (!result.success) {
       toast.error('Failed to rename', { description: result.error })
+      returnFocus(entry.path)
       return
     }
     closeAffectedTabs(entry)
@@ -300,6 +329,8 @@ export function MobileFileExplorer({
       setCurrentPath(parent)
       setNavigationDirection(-1)
       persistFolder(parent)
+    } else {
+      returnFocus(renamedPath)
     }
     await refreshDirectory(parent)
   }
@@ -348,10 +379,21 @@ export function MobileFileExplorer({
             autoFocus
             defaultValue={renaming.value}
             onChange={(event) => setRenaming({ path: entry.path, value: event.target.value })}
-            onBlur={() => void handleRename(entry, renaming.value)}
+            onBlur={(event) =>
+              void handleRename(entry, renaming.value, event.relatedTarget !== null)
+            }
             onKeyDown={(event) => {
-              if (event.key === 'Enter') void handleRename(entry, renaming.value)
-              if (event.key === 'Escape') setRenaming(null)
+              if (event.key === 'Enter') {
+                // Handled here: an unchanged or empty name moves focus to the row's Actions
+                // button during this keydown, and the browser's keypress for the same Enter
+                // would then land on that button and open its sheet.
+                event.preventDefault()
+                void handleRename(entry, renaming.value)
+              }
+              if (event.key === 'Escape') {
+                setRenaming(null)
+                renameFocus.focusActionsButton(comparePath(entry.path))
+              }
             }}
             className="m-1 h-11"
             aria-label={`Rename ${entry.name}`}
@@ -389,6 +431,7 @@ export function MobileFileExplorer({
               size="icon"
               className="size-9 shrink-0"
               aria-label={`Actions for ${entry.name}`}
+              ref={renameFocus.registerActionsButton(comparePath(entry.path))}
               onClick={(event) => {
                 event.stopPropagation()
                 recordSheetOpener('file-actions-sheet', event.currentTarget)
@@ -442,9 +485,15 @@ export function MobileFileExplorer({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
+        ref={sheetContentRef}
         side="right"
         className="flex w-[min(100vw,26rem)] flex-col gap-0 p-0 sm:max-w-md"
         onCloseAutoFocus={filesSheetCloseAutoFocus}
+        // Escape in the rename input cancels the rename; it must not also
+        // dismiss the sheet the Actions button should return focus into.
+        onEscapeKeyDown={(event) => {
+          if (renaming) event.preventDefault()
+        }}
       >
         <SheetHeader className="space-y-0 border-b border-border/60 p-2 text-left">
           <div className="flex min-w-0 items-center gap-1">
@@ -661,6 +710,7 @@ export function MobileFileExplorer({
                   type="button"
                   className="flex h-11 items-center gap-2 rounded-md px-2 text-sm text-destructive hover:bg-destructive/10"
                   onClick={() => {
+                    restoreDeleteFocusRef.current = holdSheetReturnTargets('file-actions-sheet')
                     setPendingDelete(actionEntry)
                     setActionEntry(null)
                   }}
@@ -679,7 +729,21 @@ export function MobileFileExplorer({
           if (!dialogOpen) setPendingDelete(null)
         }}
       >
-        <AlertDialogContent>
+        {/* An alert dialog is not a SheetContent, so it returns focus itself, from the
+            opener snapshot taken when Delete was chosen: the row's Actions button. */}
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            const restore = restoreDeleteFocusRef.current
+            restoreDeleteFocusRef.current = null
+            const active = document.activeElement
+            const focusLost = !active || active === document.body || !active.isConnected
+            // Focus the user (or another surface) already holds is never taken.
+            if (focusLost && restore?.()) return
+            // A confirmed delete can drop the row before the confirm unmounts.
+            renameFocus.focusSheetIfLost()
+          }}
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {pendingDelete?.name ?? ''}</AlertDialogTitle>
             <AlertDialogDescription>

@@ -6,6 +6,7 @@ import {
   describeProjectSubtitle,
   useChatIsolationContext
 } from '@/hooks/use-chat-isolation-context'
+import { useInertBehindOverlays } from '@/hooks/use-inert-behind-overlays'
 import { useMobileAttentionCount } from '@/hooks/use-mobile-attention-count'
 import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
 import {
@@ -146,6 +147,13 @@ export function MobileChatShell({
   // from store transitions; sheets and menus never own announcements.
   useShellAnnouncements()
   const announcement = useShellAnnouncerStore((s) => s.message)
+
+  // The silenced chat log stays in the accessibility tree behind a modal sheet
+  // (Radix hideOthers keeps every aria-live node). The body wrapper goes inert
+  // while a blocking overlay is open; the hook reads the overlay stack
+  // imperatively, so a stack change never re-renders the shell.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useInertBehindOverlays(bodyRef)
 
   // Story 6: the mobile drawer is the mobile tab strip. Register the shell's
   // sheets in the overlay stack so hardware back (popstate) closes the
@@ -361,7 +369,13 @@ export function MobileChatShell({
       {/* flex flex-col so the workspace child can size via flex-1 instead of
           height:100% — percentages against this flex-sized wrapper collapse
           to 0 in engines that treat flex-resolved sizes as indefinite. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+      <div
+        ref={bodyRef}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        data-mobile-shell-body=""
+      >
+        {children}
+      </div>
       {activeTab?.type === 'terminal' && activeTerminal?.ptyId ? (
         <MobileTerminalControls terminalId={activeTerminal.ptyId} />
       ) : null}

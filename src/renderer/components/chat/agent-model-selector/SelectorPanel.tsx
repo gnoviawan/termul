@@ -504,7 +504,9 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
 
   return (
     <div data-testid="agent-model-selector-panel" className={cn('flex flex-col', !touch && 'w-80')}>
-      <div className={cn('flex items-center gap-2', touch ? 'h-12 px-5' : 'h-10 px-3')}>
+      {/* On touch the sheet's 44px close box sits in the top-right 46px, so the
+          row's right padding (pr-12) keeps the field and the result count clear. */}
+      <div className={cn('flex items-center gap-2', touch ? 'h-12 pl-5 pr-12' : 'h-10 px-3')}>
         <Search
           size={touch ? 16 : 14}
           aria-hidden="true"

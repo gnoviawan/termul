@@ -334,9 +334,16 @@ interface ChatMessageProps {
   filePathContext?: FilePathResolutionContext
 }
 
-/** The same inset focus ring as `ToolCallCard`, for a focusable message. */
+/**
+ * The same inset focus ring as `ToolCallCard`, for a focusable message. The
+ * transparent outline (`outline-hidden`) is what forced-colors mode paints in
+ * place of the box-shadow ring, which it removes. It is scoped to
+ * `focus-visible` so a message is not boxed while merely focused, and its
+ * offset is pulled inside the row, where an ancestor's `overflow-hidden`
+ * would clip it.
+ */
 const MOBILE_ACTIONS_RING_CLASS =
-  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+  'rounded-lg focus-visible:outline-hidden focus-visible:-outline-offset-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
 
 /**
  * Classes for a message that owns mobile actions: the focus ring in every

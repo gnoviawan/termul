@@ -56,6 +56,19 @@ describe('ContextUsageIndicator ring visibility', () => {
     render(<ContextUsageIndicator usage={usage()} messages={MESSAGES} />)
     expect(screen.getByRole('button', { name: 'Context 21 percent used' })).toBeInTheDocument()
   })
+
+  it('keeps the 44px hit-slop on a coarse pointer in a wide pane, and 40px for a fine one', () => {
+    render(<ContextUsageIndicator usage={usage()} messages={MESSAGES} />)
+    const classes = ring().className.split(/\s+/)
+
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        'after:-inset-y-1.5',
+        '@[400px]:after:-inset-y-1',
+        'pointer-coarse:@[400px]:after:-inset-y-1.5'
+      ])
+    )
+  })
 })
 
 describe('ContextUsageIndicator on desktop', () => {

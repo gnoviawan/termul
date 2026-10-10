@@ -284,9 +284,11 @@ export function AgentModelSelector({
         side="bottom"
         onEscapeKeyDown={onEscapeKeyDown}
         onCloseAutoFocus={onCloseAutoFocus}
-        // The sheet's built-in close button is the last child; the grabber
-        // and a tap on the scrim close this sheet.
-        className="gap-0 border-border bg-popover p-0 pb-[env(safe-area-inset-bottom)] pt-2 [&>button:last-child]:hidden"
+        // The sheet's built-in close button stays (a visible way out beside the
+        // grabber and a tap on the scrim). The sheet scrolls inside the 85dvh
+        // cap every bottom sheet shares, so a long panel never outgrows a
+        // landscape phone.
+        className="gap-0 border-border bg-popover p-0 pb-[env(safe-area-inset-bottom)] pt-2 max-h-[85dvh] overflow-y-auto overscroll-contain"
       >
         <div aria-hidden="true" className="mx-auto mb-1.5 h-1 w-9 rounded-full bg-foreground/20" />
         <SheetTitle className="sr-only">Model and agent</SheetTitle>
