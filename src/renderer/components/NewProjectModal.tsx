@@ -8,13 +8,13 @@ import { ChevronDown, ChevronRight, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
-import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { claimEscape, isEscapeClaimed } from '@/lib/escape-claim'
 import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useProjectStore, useProjects } from '@/stores/project-store'
@@ -318,11 +318,9 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             isGitRepo: gitInitSucceeded
           })
           // Then detect existing .git for the non-init path. On desktop, the
-          // worktree reconciler (`reconcileProjectWorktreesNow`) does this via
-          // `worktreeApi.list` (Tauri command). On web, the reconciler is
-          // desktop-only (AGENTS.md: gate platform-only capabilities with
-          // isTauriContext()), so probe `.git` via the fs read route instead,
-          // which works for non-loopback web clients.
+          // worktree reconciler (`reconcileProjectWorktrees`) does this via
+          // `worktreeApi.list` (Tauri command). On web, probe `.git` via the
+          // fs read route instead, which works for non-loopback web clients.
           if (!gitInitSucceeded && trimmedPath) {
             // `.git` can be a directory (standard repo) or a file (worktree
             // / submodule pointer containing `gitdir:`). Probe both: list the
@@ -344,10 +342,10 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             }
           }
           // Restore worktree state for projects created from existing
-          // worktrees (desktop-only reconciler; the `.git` probe covered
-          // web parity for the isGitRepo flag above).
-          if (isTauriContext() && created.id) {
-            void reconcileProjectWorktreesNow(created.id).catch(() => {})
+          // worktrees (the shared reconciler never rejects; the `.git` probe
+          // above covers the isGitRepo flag on web).
+          if (created.id) {
+            void reconcileProjectWorktrees(created.id)
           }
         }
 

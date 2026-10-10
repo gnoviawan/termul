@@ -1,124 +1,51 @@
 /**
  * Worktree reconciliation hook.
  *
- * Periodically verifies that stored worktree entries still exist on disk
- * by cross-referencing with `git worktree list`. Removes or flags orphaned
- * entries that were deleted outside Termul (e.g. via `rm -rf` or `git worktree remove`).
- *
- * Runs reconciliation on project focus and on a 60-second interval.
+ * Thin trigger over the single-flight reconciler (`lib/worktree-reconciler.ts`,
+ * the only writer of `project.worktrees`): runs on mount and on a 60-second
+ * interval, on desktop and web alike. Desktop additionally ensures the
+ * configured symlink dirs exist in each stored worktree.
  */
 
 import { useCallback, useEffect, useRef } from 'react'
-import { reconcileProjectWorktreesNow } from '@/hooks/use-projects-persistence'
-import { worktreeApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { randomUUID } from '@/lib/uuid'
-import { useProjectActions, useProjectStore } from '@/stores/project-store'
-import type { Worktree } from '@/types/project'
+import { worktreeApi } from '@/lib/worktree-api'
+import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
+import { useProjectStore } from '@/stores/project-store'
 
 const RECONCILE_INTERVAL_MS = 60_000
 
 /**
- * Hook that reconciles stored worktree entries against actual git worktrees.
- * Removes entries whose paths no longer exist on disk.
+ * Hook that keeps the stored worktrees of a project in sync with git.
  *
  * @param projectId - The project to reconcile
  */
 export function useWorktreeReconciler(projectId: string) {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const { removeWorktree, updateProject } = useProjectActions()
 
   const reconcile = useCallback(async () => {
-    // Web/remote mode: worktree mutation/listing is desktop-only. Skip the
-    // facade calls so the 60s interval does not produce `WEB_UNSUPPORTED`
-    // noise on every project load.
-    if (!isTauriContext()) return
-    const initial = useProjectStore.getState().projects.find((p) => p.id === projectId)
-    if (!initial?.path) return
-
-    // Self-heal stale git-repo detection. A project can be marked non-git if git
-    // was not available when it was first detected (e.g. the GUI app's PATH differs
-    // from the shell at startup, or the repo was initialised afterwards). Re-run the
-    // shared reconciler, which executes `git worktree list` and flips `isGitRepo`.
-    if (!initial.isGitRepo) {
-      await reconcileProjectWorktreesNow(projectId)
-    }
-
-    // Re-read the latest state (covers the heal above and any concurrent store writes).
-    const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-    if (!project?.isGitRepo || !project.path) return
-    // Allow empty worktrees array (still reconcile to discover newly created worktrees)
-    if (project.worktrees === undefined) return
-
     try {
-      const result = await worktreeApi.list(project.path)
-      if (!result.success) {
-        // Heal the reverse case: `.git` was removed after the project was marked a repo.
-        if (result.code === 'NOT_A_GIT_REPO' || result.code === 'GIT_NOT_FOUND') {
-          updateProject(projectId, { isGitRepo: false })
-        }
-        return
-      }
-      if (!result.data) return
+      await reconcileProjectWorktrees(projectId)
 
-      // Build set of actual worktree paths from git
-      const actualPaths = new Set(result.data.map((w) => w.path))
-
-      // Find stored worktrees that no longer exist in git output
-      const orphaned = project.worktrees.filter((wt) => !actualPaths.has(wt.path))
-
-      // Remove orphaned entries from store
-      for (const wt of orphaned) {
-        removeWorktree(projectId, wt.id)
-      }
-
-      // If active worktree was orphaned, reset to root
-      const activeId = project.activeWorktreeId
-      if (activeId && orphaned.some((w) => w.id === activeId)) {
-        updateProject(projectId, { activeWorktreeId: null })
-      }
-
-      // Add newly discovered worktrees from git (not already in store)
-      const storedPaths = new Set(project.worktrees.map((w) => w.path))
-      const discovered = result.data.filter(
-        (w) => w.path !== project.path && !storedPaths.has(w.path)
-      )
-
-      for (const wt of discovered) {
-        const newWorktree: Worktree = {
-          id: randomUUID(),
-          name: wt.name,
-          branch: wt.branch,
-          path: wt.path,
-          createdAt: new Date().toISOString()
-        }
-        // Push to store — use getState to avoid stale closures
-        useProjectStore.getState().addWorktree(projectId, newWorktree)
-      }
-      // Ensure symlinks exist for each worktree
-      const symlinkDirs = project.symlinkDirs
-      if (symlinkDirs && symlinkDirs.length > 0) {
-        for (const wt of project.worktrees) {
-          try {
-            await worktreeApi.ensureSymlinks(project.path, wt.path, symlinkDirs)
-          } catch {
-            // Symlink ensure is best-effort
-          }
+      // Symlink ensure is desktop-only. Read the post-reconcile store state.
+      if (!isTauriContext()) return
+      const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+      const symlinkDirs = project?.symlinkDirs
+      if (!project?.isGitRepo || !project.path || !symlinkDirs || symlinkDirs.length === 0) return
+      for (const wt of project.worktrees ?? []) {
+        try {
+          await worktreeApi.ensureSymlinks(project.path, wt.path, symlinkDirs)
+        } catch {
+          // Symlink ensure is best-effort
         }
       }
     } catch {
       // Reconciliation is best-effort
     }
-  }, [projectId, removeWorktree, updateProject])
+  }, [projectId])
 
   // Run on mount and on interval
   useEffect(() => {
-    // Web/remote mode: worktree operations are desktop-only. Skip creating
-    // the reconciliation interval entirely — the reconcile callback would
-    // return early anyway, but this avoids a useless 60s timer firing.
-    if (!isTauriContext()) return
-
-    // Initial reconciliation
     void reconcile()
 
     timerRef.current = setInterval(() => {
