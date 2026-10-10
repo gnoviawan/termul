@@ -366,7 +366,9 @@ test('plan bar starts collapsed as "Plan 3/5" above the chat and expands in plac
   await expect(plan).toBeVisible()
   await expect(plan).toHaveAttribute('aria-expanded', 'false')
   await expect(plan).toContainText('3/5')
-  expect((await boxOf(plan)).height).toBeGreaterThanOrEqual(44)
+  // The bar may still be sliding in (a fractional y), which reads its 44px
+  // height back as 43.99999…: round to the CSS pixel.
+  expect(Math.round((await boxOf(plan)).height)).toBeGreaterThanOrEqual(44)
   await expect(entry).toBeHidden()
   // Above the thread and the dock, not inside them.
   const changed = page.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true })
@@ -407,9 +409,10 @@ test('changed-files bar is named by its text, starts collapsed and opens a row i
   // A row still opens the file in an editor tab.
   await page.getByRole('button', { name: /src\/auth\.ts/ }).tap()
   await expect(page.getByText('e2e-auth-file')).toBeVisible()
+  // The drawer opens on Editors (the file is the active tab) and lists it.
   await page.getByRole('button', { name: 'Open menu' }).tap()
   await expect(
-    page.locator('#mobile-chat-drawer').getByText('auth.ts', { exact: true })
+    page.locator('#mobile-shell-drawer').getByText('auth.ts', { exact: true })
   ).toBeVisible()
 })
 
@@ -525,7 +528,12 @@ test('the header Git changes button opens the same worktree from the active chat
     'only in the worktree\n'
   )
 
-  await page.getByRole('button', { name: 'Git changes', exact: true }).tap()
+  // Git changes lives in the header ⋯ sheet.
+  await page.getByRole('button', { name: 'More', exact: true }).tap()
+  await page
+    .locator('#mobile-header-more-sheet')
+    .getByRole('button', { name: 'Git changes', exact: true })
+    .tap()
 
   const sheet = page.getByRole('dialog', { name: 'Git changes' })
   await expect(sheet).toBeVisible()

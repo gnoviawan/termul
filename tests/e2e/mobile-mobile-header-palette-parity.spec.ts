@@ -786,7 +786,8 @@ test('header ⋯ sheet keeps its rows, order, 44px and Close chat divider on a n
   await page.keyboard.press('Escape')
   await expect(chatSheet).toBeHidden()
 
-  // An editor tab: the navigation rows again, without Close chat.
+  // An editor tab: the navigation rows again, then Close tab (the guarded
+  // editor close) in place of Close chat.
   await headerButton(page, 'More').tap()
   await chatSheet.getByRole('button', { name: 'Files', exact: true }).tap()
   const files = page.getByRole('dialog', { name: 'hpp-header' })
@@ -796,7 +797,7 @@ test('header ⋯ sheet keeps its rows, order, 44px and Close chat divider on a n
   await headerButton(page, 'More').tap()
   const editorSheet = page.getByRole('dialog', { name: 'notes.md' })
   await expect(editorSheet).toBeVisible()
-  await expect(sheetRows(editorSheet)).toHaveText(navigation)
+  await expect(sheetRows(editorSheet)).toHaveText([...navigation, 'Close tab'])
   await expectRowsAtLeast44(sheetRows(editorSheet))
   await expect(editorSheet.getByRole('button', { name: 'Close chat' })).toHaveCount(0)
 })

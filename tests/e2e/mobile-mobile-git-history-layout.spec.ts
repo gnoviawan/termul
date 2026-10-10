@@ -234,7 +234,7 @@ async function bootInto(
   // lists it in the project sidebar. Seeing it proves we booted into our project.
   if (shell === 'phone') {
     await expect(
-      page.getByRole('heading', { level: 1, name: project.name, exact: true })
+      page.getByRole('button', { name: new RegExp(`^${project.name}.*switch project$`) })
     ).toBeVisible()
   } else {
     await expect(page.getByLabel(`Project: ${project.name}`).first()).toBeVisible()

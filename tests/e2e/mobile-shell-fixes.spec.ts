@@ -232,7 +232,7 @@ async function openShell(
   // The header names the active project until a tab takes over: seeing it
   // proves the shell booted into our fresh project.
   await expect(
-    page.getByRole('heading', { level: 1, name: project.name, exact: true })
+    page.getByRole('button', { name: new RegExp(`^${project.name}.*switch project$`) })
   ).toBeVisible()
   if (options.settleAgentWarmup) await Promise.race([warmedUp, sleep(10_000)])
 }
@@ -248,9 +248,25 @@ async function openDrawer(page: Page): Promise<Locator> {
   return drawer
 }
 
-/** Tap a drawer row (a tab or terminal), which closes the drawer. */
-async function tapDrawerRow(page: Page, name: string | RegExp): Promise<void> {
+type Section = 'Chats' | 'Terminals' | 'Editors'
+
+/** Open the drawer and switch it to `section` with its nav row (the drawer stays open). */
+async function openDrawerOn(page: Page, section: Section): Promise<Locator> {
   const drawer = await openDrawer(page)
+  const nav = drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: new RegExp(`^${section}`) })
+  await nav.tap()
+  await expect(nav).toHaveAttribute('aria-current', 'true')
+  return drawer
+}
+
+/**
+ * Tap a drawer row (a tab or terminal), which closes the drawer. The drawer
+ * opens on the active tab's section; pass `section` to switch to it first.
+ */
+async function tapDrawerRow(page: Page, name: string | RegExp, section?: Section): Promise<void> {
+  const drawer = section ? await openDrawerOn(page, section) : await openDrawer(page)
   await drawer.getByRole('button', { name, exact: typeof name === 'string' }).tap()
   await expect(drawer).toBeHidden()
 }
@@ -284,7 +300,7 @@ async function goToSnapshots(page: Page): Promise<void> {
  * the drawer closes first, so the dialog is not under its overlay.
  */
 async function closeTerminal(page: Page): Promise<void> {
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Terminals')
   await drawer
     .getByRole('button', { name: /^Close Terminal \d+$/ })
     .first()
@@ -325,7 +341,12 @@ test('palette lists New Project, never Open Shortcut Menu, and New Project opens
   try {
     await openShell(page, project)
 
-    await page.getByRole('button', { name: 'Command palette' }).tap()
+    // The command palette lives in the header ⋯ sheet.
+    await page.getByRole('button', { name: 'More', exact: true }).tap()
+    await page
+      .locator('#mobile-header-more-sheet')
+      .getByRole('button', { name: 'Command palette', exact: true })
+      .tap()
     const search = page.getByPlaceholder('Search commands, projects, settings...')
     await expect(search).toBeVisible()
 
@@ -413,37 +434,38 @@ test('a drawer row for a non-chat tab returns from /snapshots to the workspace',
   const project = await createProject({ 'notes.md': 'snapshots return content' })
   await openShell(page, project, { settleAgentWarmup: true })
 
-  // One tab of each non-chat kind the drawer lists on a plain project: an
-  // editor, a terminal and git history.
+  // One tab of each non-chat kind: an editor and a terminal (Git History is a
+  // menu entry, reached from the footer, not a section row).
   await openFileFromFiles(page, 'notes.md')
   await expect(page.getByRole('button', { name: 'Save notes.md', exact: true })).toBeVisible()
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Terminals')
   await drawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
   await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeVisible()
-  const drawerAgain = await openDrawer(page)
-  await drawerAgain.getByRole('button', { name: 'Git history', exact: true }).tap()
-  await expect(page.getByRole('button', { name: 'Refresh history' })).toBeVisible()
 
-  const rows: Array<{ row: string | RegExp; landed: Locator }> = [
+  const rows: Array<{ section: Section; row: string | RegExp; landed: Locator }> = [
     {
+      section: 'Editors',
       row: 'notes.md',
       landed: page.getByRole('button', { name: 'Save notes.md', exact: true })
     },
-    { row: /^Terminal \d+$/, landed: page.getByRole('textbox', { name: 'Terminal input' }) },
-    { row: 'Git History', landed: page.getByRole('button', { name: 'Refresh history' }) }
+    {
+      section: 'Terminals',
+      row: /^Terminal \d+$/,
+      landed: page.getByRole('textbox', { name: 'Terminal input' })
+    }
   ]
-  for (const { row, landed } of rows) {
+  for (const { section, row, landed } of rows) {
     await goToSnapshots(page)
     // Snapshots has no tab picker of its own: the drawer row is the chooser.
     // The tab is activated, the drawer closes and the route goes back to `/`.
-    await tapDrawerRow(page, row)
+    await tapDrawerRow(page, row, section)
     await expect(page).toHaveURL(/#\/$/)
     await expect(page.getByRole('heading', { level: 1, name: 'Workspace Snapshots' })).toBeHidden()
     await expect(landed).toBeVisible()
   }
 
   // On the workspace route a row only switches tabs: the route is unchanged.
-  await tapDrawerRow(page, 'notes.md')
+  await tapDrawerRow(page, 'notes.md', 'Editors')
   await expect(page).toHaveURL(/#\/$/)
   await expect(page.getByRole('button', { name: 'Save notes.md', exact: true })).toBeVisible()
 
@@ -499,9 +521,10 @@ test('footer Git history, New terminal and a file from Files leave /snapshots fo
   await expect(snapshotsHeading).toBeHidden()
   await expect(page.getByRole('button', { name: 'Refresh history' })).toBeVisible()
 
-  // The Terminals ＋ New terminal: the new terminal is shown, not Snapshots.
+  // The Terminals New terminal pill: from Snapshots the new terminal is
+  // shown, not Snapshots.
   await goToSnapshots(page)
-  const drawerAgain = await openDrawer(page)
+  const drawerAgain = await openDrawerOn(page, 'Terminals')
   await drawerAgain.getByRole('button', { name: 'New terminal', exact: true }).tap()
   await expect(drawerAgain).toBeHidden()
   await expect(page).toHaveURL(/#\/$/)
@@ -523,13 +546,13 @@ test('closing a terminal from the drawer hands off to its confirm; Cancel keeps 
   const menu = page.getByRole('button', { name: 'Open menu' })
   const terminalInput = page.getByRole('textbox', { name: 'Terminal input' })
 
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Terminals')
   await drawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
   await expect(terminalInput).toBeVisible()
 
   // ✕ on the terminal row: the drawer closes and the confirm is on top of
   // the page, visible and tappable (it used to render under the drawer's overlay).
-  const drawerAgain = await openDrawer(page)
+  const drawerAgain = await openDrawerOn(page, 'Terminals')
   await drawerAgain.getByRole('button', { name: /^Close Terminal \d+$/ }).tap()
   await expect(drawerAgain).toBeHidden()
   const dialogTitle = page.getByText('Close Terminal', { exact: true })
@@ -574,18 +597,21 @@ test('a split tree synced from desktop collapses to the active leaf on a phone',
   // The collapsed leaf reads as a single-leaf workspace: no active-pane ring.
   await expect(page.locator('[data-pane-content="leaf-b"]')).not.toHaveClass(/ring-1/)
 
-  // The drawer still lists the tabs of both leaves.
+  // The drawer's Editors list still holds the tabs of both leaves.
   const drawer = await openDrawer(page)
   await expect(drawer.getByRole('button', { name: 'a.md', exact: true })).toBeVisible()
   await expect(drawer.getByRole('button', { name: 'b.md', exact: true })).toBeVisible()
-  await drawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
+  await page.keyboard.press('Escape')
+  await expect(drawer).toBeHidden()
+  const terminalsDrawer = await openDrawerOn(page, 'Terminals')
+  await terminalsDrawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
   const terminalInput = page.getByRole('textbox', { name: 'Terminal input' })
   await expect(terminalInput).toBeVisible()
   expect(frames.count('spawn')).toBe(1)
 
   // Tapping a row for a tab in the other leaf makes that leaf the only one
   // rendered; the terminal's leaf is unmounted, its PTY is not.
-  await tapDrawerRow(page, 'a.md')
+  await tapDrawerRow(page, 'a.md', 'Editors')
   await expect(page.getByText('LEAF-A-CONTENT')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Save a.md', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Save b.md', exact: true })).toHaveCount(0)
@@ -600,7 +626,7 @@ test('a split tree synced from desktop collapses to the active leaf on a phone',
 
   // Back to the terminal: it is shown again, and nothing was killed or
   // respawned along the way (one spawn for the whole test, no kill).
-  await tapDrawerRow(page, /^Terminal \d+$/)
+  await tapDrawerRow(page, /^Terminal \d+$/, 'Terminals')
   await expect(terminalInput).toBeVisible()
   await expect(page.getByText('LEAF-A-CONTENT')).toHaveCount(0)
   expect(frames.count('kill')).toBe(0)
@@ -668,7 +694,7 @@ test('the Files header path is tappable below the root: segments, back slide, pe
   // ... and restored on the next visit.
   await page.reload()
   await expect(
-    page.getByRole('heading', { level: 1, name: project.name, exact: true })
+    page.getByRole('button', { name: new RegExp(`^${project.name}.*switch project$`) })
   ).toBeVisible()
   await openFilesSheet(page)
   await expect(folderPath(page).locator('[aria-current="page"]')).toHaveText('src')

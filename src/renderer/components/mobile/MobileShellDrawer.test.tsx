@@ -311,7 +311,7 @@ async function openDrawer(props: Parameters<typeof Harness>[0] = {}) {
   const view = render(<Harness {...props} />)
   const menu = screen.getByRole('button', { name: 'Open menu' })
   fireEvent.click(menu)
-  const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+  const dialog = await screen.findByRole('dialog', { name: 'Termul' })
   return { ...view, menu, dialog }
 }
 
@@ -349,31 +349,35 @@ beforeEach(async () => {
 })
 
 describe('MobileShellDrawer shell', () => {
-  it('is the left sheet #mobile-shell-drawer, w-[min(82vw,20rem)], titled Menu', async () => {
+  it('is the full-screen left sheet #mobile-shell-drawer, named Termul, with the project row as its top row beside the close', async () => {
     const { dialog } = await openDrawer()
 
     expect(dialog.id).toBe('mobile-shell-drawer')
-    expect(dialog.className).toContain('w-[min(82vw,20rem)]')
+    expect(dialog.className).toContain('w-full')
+    expect(dialog.className).toContain('pt-[env(safe-area-inset-top)]')
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument()
     expect(dialog.className).toContain('flex-col')
-    // The old width token and its invalid cap class are gone.
-    expect(dialog.className).not.toContain('w-[72vw]')
-    expect(dialog.className).not.toContain('max-w-20rem')
-    const title = within(dialog).getByRole('heading', { level: 2, name: 'Menu' })
+    // On web the title only names the dialog: the project row is the visible top row.
+    const title = within(dialog).getByRole('heading', { level: 2, name: 'Termul' })
     expect(title).toHaveAttribute('tabindex', '-1')
-    expect(within(dialog).getByText('Browse and open agent chat sessions')).toHaveClass('sr-only')
-    expect(within(dialog).queryByText('Chats')).not.toBeInTheDocument()
+    expect(title).toHaveClass('sr-only')
+    const projectRow = within(dialog).getByRole('button', { name: /termul/ })
+    const topRow = title.parentElement
+    expect(topRow).toContainElement(projectRow)
+    // The row leaves room for the close × in the corner.
+    expect(topRow).toHaveClass('pr-10', 'min-h-11')
+    expect(
+      projectRow.compareDocumentPosition(
+        within(dialog).getByRole('navigation', { name: 'Sections' })
+      ) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(within(dialog).getByText('Browse and open chats, terminals and editors')).toHaveClass(
+      'sr-only'
+    )
   })
 
-  it('stacks the sections top to bottom: header, project, search, New chat, Open, History, footer', async () => {
-    seedTabs(
-      [
-        { type: 'terminal', id: 'term-t1', terminalId: 't1' },
-        { type: 'editor', id: 'edit-/p/a.ts', filePath: '/p/a.ts' },
-        CHAT_TAB
-      ],
-      'tab-1'
-    )
-    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+  it('orders project row, section tabs, search, Recents, footer and the New chat pill on Chats', async () => {
+    seedTabs([CHAT_TAB], 'tab-1')
     seedOptionsSession('s1', 'agent-1', { title: 'Chat one' })
     seedHistory(['Past chat'])
     const { dialog } = await openDrawer({
@@ -382,20 +386,21 @@ describe('MobileShellDrawer shell', () => {
       onOpenGitHistory: vi.fn()
     })
 
+    const nav = within(dialog).getByRole('navigation', { name: 'Sections' })
     const inOrder = [
-      within(dialog).getByRole('heading', { level: 2, name: 'Menu' }),
       within(dialog).getByRole('button', { name: /termul/ }),
+      within(nav).getByRole('button', { name: 'Chats' }),
+      within(nav).getByRole('button', { name: 'Terminals' }),
+      within(nav).getByRole('button', { name: 'Editors' }),
       within(dialog).getByRole('textbox', { name: 'Search chats' }),
-      within(dialog).getByRole('button', { name: 'New chat' }),
-      within(dialog).getByRole('heading', { level: 2, name: 'Open' }),
-      within(dialog).getByRole('button', { name: 'Chat one' }),
-      within(dialog).getByRole('heading', { level: 3, name: 'Terminals' }),
-      within(dialog).getByRole('heading', { level: 3, name: 'Tabs' }),
-      within(dialog).getByRole('heading', { level: 2, name: 'History' }),
+      within(dialog).getByRole('heading', { level: 2, name: 'Recents' }),
       within(dialog).getByRole('heading', { level: 3, name: 'Today' }),
+      within(dialog).getByRole('button', { name: 'Chat one' }),
+      within(dialog).getByRole('button', { name: /^Past chat/ }),
       within(dialog).getByRole('button', { name: 'Settings' }),
       within(dialog).getByRole('button', { name: 'Snapshots' }),
       within(dialog).getByRole('button', { name: 'Git history' }),
+      within(dialog).getByRole('button', { name: 'New chat' }),
       within(dialog).getByText(`Connected · ${window.location.host}`)
     ]
     for (let i = 1; i < inOrder.length; i++) {
@@ -406,7 +411,7 @@ describe('MobileShellDrawer shell', () => {
     }
   })
 
-  it('labels its sections as headings with labelled groups', async () => {
+  it('shows one Recents list on Chats: no Open, Terminals, Tabs or History headings', async () => {
     seedTabs(
       [
         { type: 'terminal', id: 'term-t1', terminalId: 't1' },
@@ -420,23 +425,63 @@ describe('MobileShellDrawer shell', () => {
     seedHistory(['Past chat'])
     const { dialog } = await openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1' })
 
-    for (const [level, name] of [
-      [2, 'Open'],
-      [3, 'Terminals'],
-      [3, 'Tabs'],
-      [3, 'Today']
-    ] as const) {
-      const heading = within(dialog).getByRole('heading', { level, name })
-      expect(heading, name).toHaveClass('label-group')
-      expect(within(dialog).getByRole('group', { name }), name).toHaveAttribute(
-        'aria-labelledby',
-        heading.id
-      )
+    const recents = within(dialog).getByRole('heading', { level: 2, name: 'Recents' })
+    expect(recents).toHaveAttribute('tabindex', '-1')
+    expect(within(dialog).getByRole('group', { name: 'Today' })).toBeInTheDocument()
+    for (const name of ['Open', 'Terminals', 'Tabs', 'History']) {
+      expect(within(dialog).queryByRole('heading', { name }), name).not.toBeInTheDocument()
     }
-    // History is the heading of the recency groups; it is also a focus target.
-    const history = within(dialog).getByRole('heading', { level: 2, name: 'History' })
-    expect(history).toHaveClass('label-group')
-    expect(history).toHaveAttribute('tabindex', '-1')
+    expect(within(dialog).queryByRole('button', { name: 'zsh' })).not.toBeInTheDocument()
+  })
+
+  it('lists the Terminals section with its New terminal pill and no search', async () => {
+    seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }, CHAT_TAB], 'term-t1')
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+    const onNewTerminal = vi.fn()
+    const { dialog } = await openDrawer({
+      section: 'terminals',
+      activeTabId: 'term-t1',
+      onNewTerminal
+    })
+
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'Terminals' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('group', { name: 'Terminals' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('textbox', { name: 'Search chats' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'New chat' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'New terminal' }))
+    expect(onNewTerminal).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
+  it('lists the Editors section with a Browse files pill', async () => {
+    seedTabs([{ type: 'editor', id: 'edit-/p/a.ts', filePath: '/p/a.ts' }], null)
+    const onOpenFiles = vi.fn()
+    const { dialog } = await openDrawer({ section: 'editors', onOpenFiles })
+
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'Editors' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'a.ts' })).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Browse files' }))
+    expect(onOpenFiles).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
+  it('holds its list still while open, and follows the section again once closed', async () => {
+    seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1')
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+    const { dialog, menu, rerender } = await openDrawer({ section: 'terminals' })
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'Terminals' })).toBeInTheDocument()
+
+    // The section on screen changes underneath (its last tab closed).
+    rerender(<Harness section="editors" />)
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'Terminals' })).toBeInTheDocument()
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+    fireEvent.click(menu)
+    const reopened = await screen.findByRole('dialog', { name: 'Termul' })
+    expect(within(reopened).getByRole('heading', { level: 2, name: 'Editors' })).toBeInTheDocument()
   })
 
   it('offers no New project button (the header action is the in-shell entry)', async () => {
@@ -449,6 +494,11 @@ describe('MobileShellDrawer shell', () => {
     tauriRef.current = true
     const { dialog } = await openDrawer({ onOpenGitHistory: vi.fn() })
 
+    // No project row on Tauri: a small visible wordmark title takes the top row.
+    const title = within(dialog).getByRole('heading', { level: 2, name: 'Termul' })
+    expect(title).not.toHaveClass('sr-only')
+    expect(title.parentElement?.querySelector('svg[aria-label="Termul"]')).toBeTruthy()
+
     expect(within(dialog).queryByRole('button', { name: /termul/ })).not.toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Snapshots' })).toBeInTheDocument()
@@ -456,11 +506,10 @@ describe('MobileShellDrawer shell', () => {
     expect(within(dialog).queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('renders the "No open terminals" line and History empty state', async () => {
+  it('renders the Recents empty state', async () => {
     useAcpStore.setState({ sessionIndex: [] })
     const { dialog } = await openDrawer()
 
-    expect(within(dialog).getByText('No open terminals')).toBeInTheDocument()
     expect(
       within(dialog).getByText('No chats yet. Start one with the New chat button.')
     ).toBeInTheDocument()
@@ -469,12 +518,128 @@ describe('MobileShellDrawer shell', () => {
   it('scrolls the body between a pinned top and a pinned footer', async () => {
     const { dialog } = await openDrawer()
 
-    const body = within(dialog).getByRole('heading', { level: 2, name: 'Open' }).parentElement
+    const body = within(dialog).getByRole('heading', { level: 2, name: 'Recents' }).parentElement
     expect(body).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto', 'overscroll-contain')
     const footer = within(dialog).getByRole('button', { name: 'Settings' }).parentElement
       ?.parentElement
     expect(footer).toHaveClass('border-t')
     expect(footer?.className).toContain('pb-[max(0.5rem,env(safe-area-inset-bottom))]')
+  })
+})
+
+describe('MobileShellDrawer section nav', () => {
+  const navButton = (dialog: HTMLElement, name: string | RegExp): HTMLElement =>
+    within(within(dialog).getByRole('navigation', { name: 'Sections' })).getByRole('button', {
+      name
+    })
+
+  it('shows Chats, Terminals and Editors as one row of equal 44px tabs, the preselected one current', async () => {
+    seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1')
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+    const { dialog } = await openDrawer({ section: 'terminals', activeTabId: 'term-t1' })
+
+    const rows = within(within(dialog).getByRole('navigation', { name: 'Sections' })).getAllByRole(
+      'button'
+    )
+    expect(rows.map((row) => row.textContent)).toEqual(['Chats', 'Terminals', 'Editors'])
+    // One line: the three tabs are siblings in one horizontal flex track,
+    // each taking an equal share.
+    const track = rows[0].parentElement
+    expect(track).toHaveClass('flex', 'rounded-full', 'bg-secondary')
+    expect(track?.className).not.toContain('flex-col')
+    for (const row of rows) {
+      expect(row.parentElement).toBe(track)
+      expect(row).toHaveClass('min-h-11', 'flex-1', 'rounded-full')
+      expect(row).toHaveAttribute('data-section-nav')
+    }
+    expect(navButton(dialog, 'Terminals')).toHaveAttribute('aria-current', 'true')
+    expect(navButton(dialog, 'Terminals')).toHaveClass('bg-background')
+    expect(navButton(dialog, 'Chats')).not.toHaveAttribute('aria-current')
+    // Focus lands on the active list row, not the nav.
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'zsh' })).toHaveFocus())
+  })
+
+  it('preselects Chats when no section applies (no tab, Git History)', async () => {
+    const { dialog } = await openDrawer({ section: null })
+
+    expect(navButton(dialog, 'Chats')).toHaveAttribute('aria-current', 'true')
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'Recents' })).toBeInTheDocument()
+  })
+
+  it('switches the list without closing the drawer or changing the active tab', async () => {
+    seedTabs(
+      [
+        { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+        { type: 'terminal', id: 'term-t2', terminalId: 't2' },
+        CHAT_TAB
+      ],
+      'tab-1'
+    )
+    terminalsRef.current = [
+      { id: 't1', name: 'alpha' },
+      { id: 't2', name: 'beta' }
+    ]
+    seedOptionsSession('s1', 'agent-1', { title: 'Chat one' })
+    const { dialog } = await openDrawer({ section: 'chats', activeTabId: 'tab-1' })
+
+    fireEvent.click(navButton(dialog, 'Terminals'))
+
+    expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(dialog)
+    expect(navButton(dialog, 'Terminals')).toHaveAttribute('aria-current', 'true')
+    const group = within(dialog).getByRole('group', { name: 'Terminals' })
+    expect(within(group).getByRole('button', { name: 'alpha' })).toBeInTheDocument()
+    expect(within(group).getByRole('button', { name: 'beta' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('textbox', { name: 'Search chats' })).not.toBeInTheDocument()
+    expect(workspaceRef.current.setActiveTab).not.toHaveBeenCalled()
+
+    // A list row opens its tab and closes the drawer.
+    fireEvent.click(within(group).getByRole('button', { name: 'beta' }))
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'term-t2')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
+  it('shows an empty line and the primary pill for a section with no tab', async () => {
+    const onOpenFiles = vi.fn()
+    const { dialog } = await openDrawer({ onOpenFiles, onNewTerminal: vi.fn() })
+
+    fireEvent.click(navButton(dialog, 'Terminals'))
+    expect(within(dialog).getByText('No open terminals')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'New terminal' })).toBeInTheDocument()
+
+    fireEvent.click(navButton(dialog, 'Editors'))
+    expect(within(dialog).getByText('No open editors')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Browse files' }))
+    expect(onOpenFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    [1, 'Chats, 1 needs you', '1'],
+    [3, 'Chats, 3 need you', '3'],
+    [12, 'Chats, 12 need you', '9+']
+  ])('badges Chats for %i chats that need the user', async (count, name, shown) => {
+    const { dialog } = await openDrawer({ attentionCount: count })
+
+    expect(navButton(dialog, name)).toBeInTheDocument()
+    expect(within(dialog).getByTestId('drawer-attention-badge')).toHaveTextContent(shown)
+  })
+
+  it('shows no badge with nothing needing the user', async () => {
+    const { dialog } = await openDrawer()
+
+    expect(navButton(dialog, 'Chats')).toBeInTheDocument()
+    expect(within(dialog).queryByTestId('drawer-attention-badge')).not.toBeInTheDocument()
+  })
+
+  it('preselects again on the next open after a nav switch', async () => {
+    const { dialog, menu } = await openDrawer({ section: 'chats' })
+    fireEvent.click(navButton(dialog, 'Editors'))
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+    fireEvent.click(menu)
+    const reopened = await screen.findByRole('dialog', { name: 'Termul' })
+
+    expect(navButton(reopened, 'Chats')).toHaveAttribute('aria-current', 'true')
   })
 })
 
@@ -489,13 +654,13 @@ describe('MobileShellDrawer search', () => {
     expect(search).not.toHaveFocus()
   })
 
-  it('filters History rows only, leaving Open rows unchanged', async () => {
+  it('filters the merged Recents list, open chats included', async () => {
     seedTabs([CHAT_TAB], 'tab-1')
     seedOptionsSession('s1', 'agent-1', { title: 'Open chat' })
     seedHistory(['alpha plan', 'beta plan'])
     const { dialog } = await openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1' })
     expect(within(dialog).getByText('alpha plan')).toBeInTheDocument()
-    expect(within(dialog).getByText('beta plan')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Open chat' })).toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Search chats' }), {
       target: { value: 'alpha' }
@@ -503,14 +668,12 @@ describe('MobileShellDrawer search', () => {
 
     expect(within(dialog).getByText('alpha plan')).toBeInTheDocument()
     expect(within(dialog).queryByText('beta plan')).not.toBeInTheDocument()
-    // "Open chat" does not match "alpha", and is still there.
-    expect(within(dialog).getByRole('button', { name: 'Open chat' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'Open chat' })).not.toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Search chats' }), {
       target: { value: 'zzz' }
     })
     expect(within(dialog).getByText('No chats match this search.')).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: 'Open chat' })).toBeInTheDocument()
   })
 
   it('resets the query when the drawer closes', async () => {
@@ -522,26 +685,27 @@ describe('MobileShellDrawer search', () => {
     expect(screen.queryByText('beta plan')).not.toBeInTheDocument()
 
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
 
     fireEvent.click(menu)
-    const reopened = await screen.findByRole('dialog', { name: 'Menu' })
+    const reopened = await screen.findByRole('dialog', { name: 'Termul' })
     expect(within(reopened).getByRole('textbox', { name: 'Search chats' })).toHaveValue('')
     expect(within(reopened).getByText('beta plan')).toBeInTheDocument()
   })
 })
 
 describe('MobileShellDrawer New chat', () => {
-  it('is a full-width 44px secondary button that hands off to the launcher', async () => {
+  it('is a compact rounded-full default pill with a 44px hit area that hands off to the launcher', async () => {
     const onNewChat = vi.fn()
     const { dialog } = await openDrawer({ onNewChat })
 
     const button = within(dialog).getByRole('button', { name: 'New chat' })
-    expect(button).toHaveClass('bg-secondary', 'min-h-11', 'w-full')
+    // 36px visual pill; the ::after hit-slop (-inset-1) keeps the tap area at 44px.
+    expect(button).toHaveClass('h-9', 'rounded-full', 'bg-primary-fill', 'after:-inset-1')
     fireEvent.click(button)
 
     expect(onNewChat).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 
   it('is disabled when a chat cannot be started', async () => {
@@ -572,7 +736,7 @@ describe('MobileShellDrawer footer', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Settings' }))
 
     expect(useSettingsModalStore.getState().view).toBe('app')
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 
   it('navigates to /snapshots from the drawer and closes it', async () => {
@@ -581,14 +745,14 @@ describe('MobileShellDrawer footer', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Snapshots' }))
 
     expect(mockNavigate).toHaveBeenCalledWith('/snapshots')
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 
   it('returns to the workspace after a terminal row is chosen off the workspace route', async () => {
     locationRef.current = { pathname: '/snapshots' }
     seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
     terminalsRef.current = [{ id: 't1', name: 'zsh' }]
-    const { dialog } = await openDrawer()
+    const { dialog } = await openDrawer({ section: 'terminals' })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'zsh' }))
 
@@ -599,7 +763,7 @@ describe('MobileShellDrawer footer', () => {
   it('stays on the workspace route when a terminal row is chosen there', async () => {
     seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
     terminalsRef.current = [{ id: 't1', name: 'zsh' }]
-    const { dialog } = await openDrawer()
+    const { dialog } = await openDrawer({ section: 'terminals' })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'zsh' }))
 
@@ -616,7 +780,7 @@ describe('MobileShellDrawer footer', () => {
     fireEvent.click(button)
 
     expect(onOpenGitHistory).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 
   it('hides the Git history button without a handler', async () => {
@@ -721,14 +885,10 @@ describe('MobileShellDrawer close confirm hand-off', () => {
     }
   }
 
-  it('makes the Open heading programmatically focusable, like History', async () => {
-    const { dialog } = await openDrawer()
+  it('makes the section heading programmatically focusable', async () => {
+    const { dialog } = await openDrawer({ section: 'terminals' })
 
-    expect(within(dialog).getByRole('heading', { level: 2, name: 'Open' })).toHaveAttribute(
-      'tabindex',
-      '-1'
-    )
-    expect(within(dialog).getByRole('heading', { level: 2, name: 'History' })).toHaveAttribute(
+    expect(within(dialog).getByRole('heading', { level: 2, name: 'Terminals' })).toHaveAttribute(
       'tabindex',
       '-1'
     )
@@ -736,12 +896,12 @@ describe('MobileShellDrawer close confirm hand-off', () => {
 
   it('closes when closing a terminal opened the confirm, and Cancel leaves focus on ☰', async () => {
     const onCloseTerminal = vi.fn(() => true)
-    const { dialog, menu } = await openDrawer({ onCloseTerminal })
+    const { dialog, menu } = await openDrawer({ section: 'terminals', onCloseTerminal })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
 
     expect(onCloseTerminal).toHaveBeenCalledWith('t1', 'term-t1')
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
     const confirm = openFakeConfirm()
     confirm.cancel()
 
@@ -750,13 +910,13 @@ describe('MobileShellDrawer close confirm hand-off', () => {
 
   it('returns focus to the recorded opener, not always ☰', async () => {
     const onCloseTerminal = vi.fn(() => true)
-    render(<Harness onCloseTerminal={onCloseTerminal} />)
+    render(<Harness section="terminals" onCloseTerminal={onCloseTerminal} />)
     const second = screen.getByRole('button', { name: 'Second opener' })
     fireEvent.click(second)
-    const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+    const dialog = await screen.findByRole('dialog', { name: 'Termul' })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
     const confirm = openFakeConfirm()
     confirm.cancel()
 
@@ -765,22 +925,22 @@ describe('MobileShellDrawer close confirm hand-off', () => {
 
   it('closes for a dirty editor row whose close opened the confirm', async () => {
     const onCloseEditorTab = vi.fn(() => true)
-    const { dialog, menu } = await openDrawer({ onCloseEditorTab })
+    const { dialog, menu } = await openDrawer({ section: 'editors', onCloseEditorTab })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close a.ts' }))
 
     expect(onCloseEditorTab).toHaveBeenCalledWith('/p/a.ts')
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
     openFakeConfirm().cancel()
     await waitFor(() => expect(menu).toHaveFocus())
   })
 
   it('does not take focus back when something else already holds it', async () => {
     const onCloseTerminal = vi.fn(() => true)
-    const { dialog } = await openDrawer({ onCloseTerminal })
+    const { dialog } = await openDrawer({ section: 'terminals', onCloseTerminal })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
     const confirm = openFakeConfirm()
     // The confirm's action opened another dialog that took focus.
     const next = document.createElement('input')
@@ -795,9 +955,9 @@ describe('MobileShellDrawer close confirm hand-off', () => {
 
   it('stops waiting for the confirm when the drawer unmounts first', async () => {
     const onCloseTerminal = vi.fn(() => true)
-    const { dialog, unmount } = await openDrawer({ onCloseTerminal })
+    const { dialog, unmount } = await openDrawer({ section: 'terminals', onCloseTerminal })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close zsh' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
     vi.mocked(logFrontendError).mockClear()
 
     unmount()
@@ -810,16 +970,24 @@ describe('MobileShellDrawer close confirm hand-off', () => {
   })
 
   it.each([
-    ['a terminal closed without a confirm', 'Close zsh', { onCloseTerminal: vi.fn(() => false) }],
-    ['a clean editor tab', 'Close a.ts', { onCloseEditorTab: vi.fn(() => false) }],
-    ['a terminal when no close handler is threaded', 'Close zsh', {}]
+    [
+      'a terminal closed without a confirm',
+      'Close zsh',
+      { section: 'terminals' as const, onCloseTerminal: vi.fn(() => false) }
+    ],
+    [
+      'a clean editor tab',
+      'Close a.ts',
+      { section: 'editors' as const, onCloseEditorTab: vi.fn(() => false) }
+    ],
+    ['a terminal when no close handler is threaded', 'Close zsh', { section: 'terminals' as const }]
   ])('stays open for %s, so rows can be closed in a row', async (_label, closeName, props) => {
     const { dialog } = await openDrawer(props)
 
     fireEvent.click(within(dialog).getByRole('button', { name: closeName }))
     await settle()
 
-    expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(dialog)
+    expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(dialog)
     expect(useOverlayStackStore.getState().stack.map((entry) => entry.id)).not.toContain(
       'confirm-dialog:test'
     )
@@ -933,7 +1101,7 @@ describe('MobileShellDrawer project row', () => {
     fireEvent.click(row)
 
     expect(onOpenProjects).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 })
 
@@ -958,7 +1126,7 @@ describe('MobileShellDrawer unread tracker', () => {
     expect(useAgentChatUnreadStore.getState().unread).toEqual({ s2: true })
 
     fireEvent.click(menu)
-    const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+    const dialog = await screen.findByRole('dialog', { name: 'Termul' })
     expect(
       within(dialog).getByRole('button', { name: 'Chat two, New activity' })
     ).toBeInTheDocument()
@@ -984,19 +1152,48 @@ describe('MobileShellDrawer History inside the real Sheet', () => {
     seedHistory(Array.from({ length: 60 }, (_, i) => `chat-${i}`))
     const { dialog } = await openDrawer()
 
-    const scrollBody = within(dialog).getByRole('heading', { level: 2, name: 'Open' }).parentElement
+    const scrollBody = within(dialog).getByRole('heading', {
+      level: 2,
+      name: 'Recents'
+    }).parentElement
     expect(scrollBody).toHaveClass('overflow-y-auto')
     expect(observed.length).toBeGreaterThan(0)
     expect(observed.at(-1)?.root).toBe(scrollBody)
+  })
+
+  /** Long-press a Recents row (`contextmenu`) and choose Delete chat in its sheet. */
+  async function requestDeleteFromSheet(dialog: HTMLElement, title: string): Promise<HTMLElement> {
+    const row = within(dialog).getByRole('button', { name: new RegExp(`^${title}`) })
+    fireEvent.contextMenu(row)
+    const sheet = await screen.findByRole('dialog', { name: title })
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Delete chat' }))
+    return screen.findByRole('alertdialog')
+  }
+
+  it('system back with the row actions sheet open closes only the sheet', async () => {
+    useOverlayStackStore.setState({ stack: [] })
+    seedHistory(['Past chat'])
+    const { dialog } = await openDrawer()
+
+    fireEvent.contextMenu(within(dialog).getByRole('button', { name: /^Past chat/ }))
+    const sheet = await screen.findByRole('dialog', { name: 'Past chat' })
+    expect(useOverlayStackStore.getState().stack.at(-1)?.id).toBe(sheet.id)
+
+    act(() => {
+      useOverlayStackStore.getState().closeTopmostOverlay()
+    })
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Past chat' })).toBeNull())
+    expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(dialog)
+    useOverlayStackStore.setState({ stack: [] })
   })
 
   it('opens the delete confirm over the drawer without deleting, and keeps the drawer open', async () => {
     seedHistory(['Past chat'])
     const { dialog } = await openDrawer()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete Past chat' }))
+    const confirm = await requestDeleteFromSheet(dialog, 'Past chat')
 
-    const confirm = await screen.findByRole('alertdialog')
     expect(within(confirm).getByText('Delete chat')).toBeInTheDocument()
     expect(
       within(confirm).getByText('Delete “Past chat”? This action cannot be undone.')
@@ -1005,41 +1202,26 @@ describe('MobileShellDrawer History inside the real Sheet', () => {
     expect(dialog).toBeInTheDocument()
   })
 
-  it('Cancel returns focus to that row trash button inside the drawer', async () => {
+  it('Cancel returns focus to that row inside the drawer', async () => {
     seedHistory(['First chat', 'Second chat'])
     const { dialog } = await openDrawer()
-    const trash = within(dialog).getByRole('button', { name: 'Delete Second chat' })
 
-    fireEvent.click(trash)
+    await requestDeleteFromSheet(dialog, 'Second chat')
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
-    await waitFor(() => expect(trash).toHaveFocus())
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: /^Second chat/ })).toHaveFocus()
+    )
     expect(mockDeleteHistorySession).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Termul' })).toBeInTheDocument()
   })
 
-  it('Escape returns focus to that row trash button and leaves the drawer open', async () => {
-    seedHistory(['First chat', 'Second chat'])
-    const { dialog } = await openDrawer()
-    const trash = within(dialog).getByRole('button', { name: 'Delete First chat' })
-
-    fireEvent.click(trash)
-    await screen.findByRole('alertdialog')
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
-    await waitFor(() => expect(trash).toHaveFocus())
-    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeInTheDocument()
-    expect(mockDeleteHistorySession).not.toHaveBeenCalled()
-  })
-
-  it('Delete focuses the next visible row open button', async () => {
+  it('Delete focuses the next visible row', async () => {
     seedHistory(['First chat', 'Second chat', 'Third chat'])
     const { dialog } = await openDrawer()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete First chat' }))
-    const confirm = await screen.findByRole('alertdialog')
+    const confirm = await requestDeleteFromSheet(dialog, 'First chat')
     fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
 
     expect(mockDeleteHistorySession).toHaveBeenCalledWith('h0')
@@ -1047,22 +1229,20 @@ describe('MobileShellDrawer History inside the real Sheet', () => {
     await waitFor(() =>
       expect(within(dialog).getByRole('button', { name: /^Second chat/ })).toHaveFocus()
     )
-    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Termul' })).toBeInTheDocument()
   })
 
-  it('Delete on the last visible row focuses the drawer History heading', async () => {
+  it('Delete on the last visible row focuses the Recents heading', async () => {
     seedHistory(['Only chat'])
     const { dialog } = await openDrawer()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete Only chat' }))
-    const confirm = await screen.findByRole('alertdialog')
+    const confirm = await requestDeleteFromSheet(dialog, 'Only chat')
     fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
 
     expect(mockDeleteHistorySession).toHaveBeenCalledWith('h0')
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
-    const heading = within(dialog).getByRole('heading', { level: 2, name: 'History' })
+    const heading = within(dialog).getByRole('heading', { level: 2, name: 'Recents' })
     await waitFor(() => expect(heading).toHaveFocus())
-    expect(screen.getByRole('dialog', { name: 'Menu' })).toBeInTheDocument()
   })
 })
 
@@ -1073,7 +1253,7 @@ describe('MobileShellDrawer focus', () => {
   })
 
   describe('on open', () => {
-    it('lands on the active Open row, not the search', async () => {
+    it('lands on the active Recents row, not the search', async () => {
       const { dialog } = await openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1' })
 
       const row = within(dialog).getByRole('button', { name: 'Chat one' })
@@ -1082,10 +1262,10 @@ describe('MobileShellDrawer focus', () => {
       expect(within(dialog).getByRole('textbox', { name: 'Search chats' })).not.toHaveFocus()
     })
 
-    it('lands on the Menu title when no Open row is active', async () => {
+    it('lands on the Termul title when no row is active', async () => {
       const { dialog } = await openDrawer({ activeTabId: null })
 
-      const title = within(dialog).getByRole('heading', { level: 2, name: 'Menu' })
+      const title = within(dialog).getByRole('heading', { level: 2, name: 'Termul' })
       await waitFor(() => expect(title).toHaveFocus())
       expect(within(dialog).getByRole('textbox', { name: 'Search chats' })).not.toHaveFocus()
     })
@@ -1097,7 +1277,7 @@ describe('MobileShellDrawer focus', () => {
 
       fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(menu).toHaveFocus())
     })
 
@@ -1105,7 +1285,7 @@ describe('MobileShellDrawer focus', () => {
       seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], null)
       terminalsRef.current = [{ id: 't1', name: 'zsh' }]
       const onRenameTerminal = vi.fn()
-      const { dialog } = await openDrawer({ onRenameTerminal })
+      const { dialog } = await openDrawer({ section: 'terminals', onRenameTerminal })
 
       fireEvent.click(within(dialog).getByRole('button', { name: 'Rename zsh' }))
       const input = within(dialog).getByRole('textbox', { name: 'Rename zsh' })
@@ -1116,7 +1296,7 @@ describe('MobileShellDrawer focus', () => {
 
       expect(within(dialog).queryByRole('textbox', { name: 'Rename zsh' })).toBeNull()
       expect(onRenameTerminal).not.toHaveBeenCalled()
-      expect(screen.getByRole('dialog', { name: 'Menu' })).toHaveAttribute('data-state', 'open')
+      expect(screen.getByRole('dialog', { name: 'Termul' })).toHaveAttribute('data-state', 'open')
       expect(within(dialog).getByRole('button', { name: 'Rename zsh' })).toHaveFocus()
     })
 
@@ -1125,7 +1305,7 @@ describe('MobileShellDrawer focus', () => {
 
       fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(menu).toHaveFocus())
     })
 
@@ -1133,11 +1313,11 @@ describe('MobileShellDrawer focus', () => {
       render(<Harness />)
       const second = screen.getByRole('button', { name: 'Second opener' })
       fireEvent.click(second)
-      await screen.findByRole('dialog', { name: 'Menu' })
+      await screen.findByRole('dialog', { name: 'Termul' })
 
       fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(second).toHaveFocus())
     })
 
@@ -1145,12 +1325,12 @@ describe('MobileShellDrawer focus', () => {
       render(<Harness />)
       const second = screen.getByRole('button', { name: 'Second opener' })
       fireEvent.click(second)
-      await screen.findByRole('dialog', { name: 'Menu' })
+      await screen.findByRole('dialog', { name: 'Termul' })
 
       // The shell's overlay registration closes it by state, not through Radix.
       fireEvent.click(screen.getByRole('button', { name: 'Close like back', hidden: true }))
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(second).toHaveFocus())
     })
 
@@ -1160,23 +1340,59 @@ describe('MobileShellDrawer focus', () => {
       const menu = screen.getByRole('button', { name: 'Open menu' })
       const temp = screen.getByRole('button', { name: 'Temporary opener' })
       fireEvent.click(temp)
-      await screen.findByRole('dialog', { name: 'Menu' })
+      await screen.findByRole('dialog', { name: 'Termul' })
 
       act(() => controlsRef.current?.hideTempOpener())
       expect(temp.isConnected).toBe(false)
       fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(menu).toHaveFocus())
     })
   })
 
   describe('after a navigation close', () => {
-    async function openWithRows() {
+    type Section = 'chats' | 'terminals'
+    const NAVIGATIONS: Array<[string, Section, (dialog: HTMLElement) => void]> = [
+      [
+        'an open chat row',
+        'chats',
+        (d) => fireEvent.click(within(d).getByRole('button', { name: 'Chat one' }))
+      ],
+      [
+        'a history row',
+        'chats',
+        (d) => fireEvent.click(within(d).getByRole('button', { name: /^Past chat/ }))
+      ],
+      [
+        'a terminal row',
+        'terminals',
+        (d) => fireEvent.click(within(d).getByRole('button', { name: 'zsh' }))
+      ],
+      [
+        'New terminal',
+        'terminals',
+        (d) => fireEvent.click(within(d).getByRole('button', { name: 'New terminal' }))
+      ],
+      [
+        'Snapshots',
+        'chats',
+        (d) => fireEvent.click(within(d).getByRole('button', { name: 'Snapshots' }))
+      ],
+      [
+        'Git history',
+        'chats',
+        (d) => fireEvent.click(within(d).getByRole('button', { name: 'Git history' }))
+      ]
+    ]
+
+    function openWithRows(section: Section, withTitle = true) {
       seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }, CHAT_TAB], 'tab-1')
       terminalsRef.current = [{ id: 't1', name: 'zsh' }]
       seedHistory(['Past chat'])
       return openDrawer({
+        section,
+        withTitle,
         activeTabId: 'tab-1',
         activeSessionId: 's1',
         onNewTerminal: vi.fn(),
@@ -1184,53 +1400,25 @@ describe('MobileShellDrawer focus', () => {
       })
     }
 
-    const NAVIGATIONS: Array<[string, (dialog: HTMLElement) => void]> = [
-      [
-        'an Open chat row',
-        (d) => fireEvent.click(within(d).getByRole('button', { name: 'Chat one' }))
-      ],
-      ['a terminal row', (d) => fireEvent.click(within(d).getByRole('button', { name: 'zsh' }))],
-      [
-        'New terminal',
-        (d) => fireEvent.click(within(d).getByRole('button', { name: 'New terminal' }))
-      ],
-      [
-        'a History row',
-        (d) => fireEvent.click(within(d).getByRole('button', { name: /^Past chat/ }))
-      ],
-      ['Snapshots', (d) => fireEvent.click(within(d).getByRole('button', { name: 'Snapshots' }))],
-      [
-        'Git history',
-        (d) => fireEvent.click(within(d).getByRole('button', { name: 'Git history' }))
-      ]
-    ]
-
-    it.each(NAVIGATIONS)('moves focus to #mobile-shell-title after %s', async (_name, tap) => {
-      const { dialog } = await openWithRows()
+    it.each(
+      NAVIGATIONS
+    )('moves focus to #mobile-shell-title after %s', async (_name, section, tap) => {
+      const { dialog } = await openWithRows(section)
 
       tap(dialog)
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(document.getElementById('mobile-shell-title')).toHaveFocus())
     })
 
     it.each(
       NAVIGATIONS
-    )('falls back to the opener after %s when there is no title', async (_name, tap) => {
-      seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }, CHAT_TAB], 'tab-1')
-      terminalsRef.current = [{ id: 't1', name: 'zsh' }]
-      seedHistory(['Past chat'])
-      const { dialog, menu } = await openDrawer({
-        withTitle: false,
-        activeTabId: 'tab-1',
-        activeSessionId: 's1',
-        onNewTerminal: vi.fn(),
-        onOpenGitHistory: vi.fn()
-      })
+    )('falls back to the opener after %s when there is no title', async (_name, section, tap) => {
+      const { dialog, menu } = await openWithRows(section, false)
 
       tap(dialog)
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(menu).toHaveFocus())
     })
   })
@@ -1240,7 +1428,7 @@ describe('MobileShellDrawer focus', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
     }
     const drawerClosed = (): Promise<void> =>
-      waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
     const open = (props: Parameters<typeof Harness>[0]) =>
       openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1', ...props })
 
@@ -1338,7 +1526,7 @@ describe('MobileShellDrawer focus', () => {
 
       // Reopen from ☰ and dismiss: focus returns to ☰, not the question.
       fireEvent.click(menu)
-      await screen.findByRole('dialog', { name: 'Menu' })
+      await screen.findByRole('dialog', { name: 'Termul' })
       fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
       await drawerClosed()
@@ -1370,7 +1558,7 @@ describe('MobileShellDrawer focus', () => {
 
       tap(dialog)
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       const input = await screen.findByLabelText(field)
       await settle()
       expect(input).toHaveFocus()
@@ -1384,7 +1572,7 @@ describe('MobileShellDrawer focus', () => {
 
       tap(dialog)
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       await waitFor(() => expect(menu).toHaveFocus())
     })
   })
@@ -1441,7 +1629,7 @@ describe('MobileShellDrawer opened from the real header', () => {
   })
 
   const drawerClosed = (): Promise<void> =>
-    waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
 
   it.each([
     ['☰', 'Open menu', 0],
@@ -1454,7 +1642,7 @@ describe('MobileShellDrawer opened from the real header', () => {
 
     fireEvent.click(control)
 
-    const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+    const dialog = await screen.findByRole('dialog', { name: 'Termul' })
     const controlled = control.getAttribute('aria-controls')
     expect(controlled).toBeTruthy()
     expect(document.getElementById(controlled ?? '')).toBe(dialog)
@@ -1463,7 +1651,7 @@ describe('MobileShellDrawer opened from the real header', () => {
   it('a navigation then focuses the real header title', async () => {
     render(<HeaderHarness />)
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+    const dialog = await screen.findByRole('dialog', { name: 'Termul' })
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
 
@@ -1477,7 +1665,7 @@ describe('MobileShellDrawer opened from the real header', () => {
     render(<HeaderHarness attentionCount={2} />)
     const pill = screen.getByRole('button', { name: '2 other chats need you' })
     fireEvent.click(pill)
-    await screen.findByRole('dialog', { name: 'Menu' })
+    await screen.findByRole('dialog', { name: 'Termul' })
 
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
@@ -1490,7 +1678,7 @@ describe('MobileShellDrawer opened from the real header', () => {
     const menu = screen.getByRole('button', { name: 'Open menu' })
     const pill = screen.getByRole('button', { name: '2 other chats need you' })
     fireEvent.click(pill)
-    await screen.findByRole('dialog', { name: 'Menu' })
+    await screen.findByRole('dialog', { name: 'Termul' })
 
     // Nothing needs the user any more: the pill unmounts while the drawer is open.
     rerender(<HeaderHarness attentionCount={0} />)

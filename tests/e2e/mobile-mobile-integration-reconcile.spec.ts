@@ -248,7 +248,7 @@ async function openDrawer(page: Page): Promise<Locator> {
 }
 
 async function settledDrawer(page: Page): Promise<Locator> {
-  const drawer = page.getByRole('dialog', { name: 'Menu' })
+  const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
   await expect(drawer).toBeVisible()
   // The sheet slides in from the left: act only once it has landed.
   await expect
@@ -257,16 +257,20 @@ async function settledDrawer(page: Page): Promise<Locator> {
   return drawer
 }
 
-/** An Open-section chat row: named `{title}` or `{title}, {status…}`. */
+/** A Recents chat row: named `{title}` or `{title}, {status…}` (open chats carry status). */
 function chatRow(drawer: Locator, chatTitle: string): Locator {
-  return drawer
-    .getByRole('group', { name: 'Open', exact: true })
-    .getByRole('button', { name: new RegExp(`^${escapeRegExp(chatTitle)}(,|$)`) })
+  return drawer.getByRole('button', { name: new RegExp(`^${escapeRegExp(chatTitle)}(,|$)`) })
 }
 
 /** Open the drawer, tap a chat's row, and wait for the drawer to be gone. */
 async function navigateToChat(page: Page, chatTitle: string): Promise<void> {
   const drawer = await openDrawer(page)
+  // The drawer opens on the active tab's section (Terminals from a terminal):
+  // chats are listed under Chats.
+  await drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Chats/ })
+    .tap()
   await chatRow(drawer, chatTitle).tap()
   await expect(drawer).toBeHidden()
 }
@@ -408,7 +412,7 @@ test.describe('drawer navigation focus', () => {
     // Opening the drawer from ☰ and dismissing it instead goes back to ☰.
     await openDrawer(page)
     await page.keyboard.press('Escape')
-    await expect(page.getByRole('dialog', { name: 'Menu' })).toBeHidden()
+    await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
     await expect(menuButton(page)).toBeFocused()
   })
 
@@ -458,7 +462,12 @@ test.describe('drawer navigation focus', () => {
     // own input once it attaches, and the registry leaves focus where a
     // destination put it (the spec's residual risk), so nothing is asserted
     // about focus here.
+    // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
     let drawer = await openDrawer(page)
+    await drawer
+      .getByRole('navigation', { name: 'Sections' })
+      .getByRole('button', { name: /^Terminals/ })
+      .tap()
     await drawer.getByRole('button', { name: 'New terminal' }).tap()
     await expect(drawer).toBeHidden()
     await expect(title(page)).toHaveText(/^Terminal \d+$/)
@@ -474,6 +483,11 @@ test.describe('drawer navigation focus', () => {
     // A terminal row in the drawer: the destination is a terminal, and focus
     // must stay off xterm so the keyboard does not rise.
     drawer = await openDrawer(page)
+    // The drawer opens on Chats (a chat is active): terminals are under Terminals.
+    await drawer
+      .getByRole('navigation', { name: 'Sections' })
+      .getByRole('button', { name: /^Terminals/ })
+      .tap()
     await drawer
       .getByRole('button', { name: /^Terminal \d+/ })
       .first()
@@ -528,16 +542,17 @@ test.describe('drawer opener', () => {
       await expect(control, `${name} gets focus back`).toBeFocused()
     }
 
-    // The pill opened it last, so the pill is where the scrim and back return too.
+    // The pill opened it last, so the pill is where the close and back return too
+    // (the drawer is full-screen: there is no scrim to tap).
     await pill.tap()
     const drawer = await settledDrawer(page)
-    await page.touchscreen.tap(380, 400)
+    await drawer.getByRole('button', { name: 'Close', exact: true }).tap()
     await expect(drawer).toBeHidden()
     await expect(pill).toBeFocused()
     await pill.tap()
     await settledDrawer(page)
     await page.goBack()
-    await expect(page.getByRole('dialog', { name: 'Menu' })).toBeHidden()
+    await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
     await expect(pill).toBeFocused()
 
     // ☰ records itself the same way after the pill: the record is per open.
@@ -624,7 +639,12 @@ test.describe('shell sheets focus return', () => {
     await bootShell(page, await registerProject())
     await startChat(page, `${LONG} terminal more`)
     // A terminal from the drawer, so the header swaps ⋯ for "Terminal actions".
+    // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
     const drawer = await openDrawer(page)
+    await drawer
+      .getByRole('navigation', { name: 'Sections' })
+      .getByRole('button', { name: /^Terminals/ })
+      .tap()
     await drawer.getByRole('button', { name: 'New terminal' }).tap()
     await expect(title(page)).toHaveText(/^Terminal \d+$/)
     const actions = page.getByRole('button', {

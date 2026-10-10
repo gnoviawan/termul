@@ -217,16 +217,22 @@ async function announceBarrier(
   search: { query: string; count: string } = { query: 'zzz-no-such-chat', count: '0 chats match' }
 ): Promise<void> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
+  // The drawer opens on the active tab's section: the search lives under Chats.
+  await page
+    .locator('#mobile-shell-drawer')
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Chats/ })
+    .tap()
   await page.getByRole('textbox', { name: 'Search chats' }).fill(search.query)
   await expect(liveRegion(page)).toHaveText(search.count)
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: 'Menu' })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
 }
 
 /** Tap the shell's ☰ and wait for the drawer to be on screen. */
 async function openDrawer(page: Page): Promise<Locator> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  const drawer = page.getByRole('dialog', { name: 'Menu' })
+  const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
   await expect(drawer).toBeVisible()
   return drawer
 }
@@ -235,11 +241,9 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** An Open-section chat row: named `{title}` or `{title}, {status…}`. */
+/** A Recents chat row: named `{title}` or `{title}, {status…}` (open chats carry status). */
 function chatRow(drawer: Locator, title: string): Locator {
-  return drawer
-    .getByRole('group', { name: 'Open', exact: true })
-    .getByRole('button', { name: new RegExp(`^${escapeRegExp(title)}(,|$)`) })
+  return drawer.getByRole('button', { name: new RegExp(`^${escapeRegExp(title)}(,|$)`) })
 }
 
 /** Open the chat titled `title` from the drawer and wait for the shell to show it. */

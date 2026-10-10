@@ -324,6 +324,11 @@ vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> 
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
 }))
+// The drawer's Recents list reads the session index, which this file's
+// acp-store stub does not carry; its own suite covers it.
+vi.mock('@/components/mobile/MobileRecentsList', () => ({
+  MobileRecentsList: () => <div>recents</div>
+}))
 // The real hook subscribes to the acp and connection stores; this file mocks
 // `@/stores/acp-store` with a selector-only stub (no `subscribe`). The hook has
 // its own tests (use-shell-announcements.test.tsx).
@@ -484,7 +489,10 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     )
 
     // MobileChatShell is React.lazy — wait for it to load before asserting.
-    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
+    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy(), {
+      // The first test pays the cold React.lazy import of the whole shell.
+      timeout: 5000
+    })
 
     // Desktop chrome must be absent: ActivityRail nav, ProjectSidebar,
     // StatusBar (which renders the lowercased project name, "demo").
@@ -524,6 +532,8 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     expect(main.parentElement).toHaveClass('flex-1')
     const header = document.querySelector('[data-mobile-chat-shell] header')
     expect(header).toHaveClass('shrink-0')
+    // No bottom bar on the main screen: the section switch lives in the drawer.
+    expect(document.querySelector('[data-mobile-chat-shell] nav')).toBeNull()
   })
 
   it('sends palette project picks through the shared switch routine at 390px, not selectProject', async () => {
@@ -562,6 +572,7 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
 
     // The mobile shell must be absent.
     expect(document.querySelector('[data-mobile-chat-shell]')).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull()
 
     // Desktop chrome present: ProjectSidebar + StatusBar ("demo").
     expect(screen.getByTestId('header-new-project')).toBeInTheDocument()

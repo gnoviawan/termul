@@ -14,7 +14,7 @@ import { openWorkspace } from './ui'
  * real focus model.
  *
  * Covered here (the spec's L-15, L-16, L-18, L-20, L-35, V-12, V-13):
- * - L-15  the drawer's footer Git history, the Terminals New terminal, the
+ * - L-15  the drawer's footer Git history, the Terminals New terminal pill, the
  *         header New terminal, the more-sheet New terminal and a file opened
  *         from Files leave /snapshots for `/`; on `/` and `/c/<id>` the route is
  *         left alone.
@@ -22,19 +22,20 @@ import { openWorkspace } from './ui'
  *         the drawer off, the confirm is tappable, and Cancel, Esc, Close and
  *         Discard leave focus on the menu button; a clean editor keeps the
  *         drawer open.
- * - L-18  closing an Open row or ending a rename keeps focus inside the drawer.
+ * - L-18  closing a section row or ending a rename keeps focus inside the drawer.
  * - L-20  the Files breadcrumb on a Windows-hosted termul-server, whose
  *         listings carry the verbatim `\\?\C:\...` prefix (no response shim).
  * - L-35  a fully clipped breadcrumb ancestor leaves the tab order.
  * - V-12  the drawer footer reads `Connected · {host}` (the StatusBar lamp keeps
  *         its own "Connected").
  * - V-13  the bottom project sheet's "Set as host default" control.
- * - V-14  the drawer search still filters History only.
+ * - V-14  the drawer search filters the Recents chat list only, and the
+ *         Editors list has no search at all.
  *
  * Not automated here, and why: L-17 (the canvas row): the phone shell has no
  * way to open a canvas (the palette hides it there and the workspace manifest
  * never restores one), so a canvas row cannot be produced in a browser; the
- * Vitest suites of MobileDrawerOpenSection own it. The UNC form of L-20
+ * Vitest suites of MobileDrawerSectionList own it. The UNC form of L-20
  * (`//?/UNC/...`) needs a UNC share, so the unit tests of
  * lib/mobile-file-paths own it. Hand-off with the Close confirm switched off
  * is a host-wide setting, so it stays with the WorkspaceLayout Vitest suite.
@@ -225,7 +226,7 @@ function menuButton(page: Page): Locator {
 }
 
 function drawerOf(page: Page): Locator {
-  return page.getByRole('dialog', { name: 'Menu' })
+  return page.getByRole('dialog', { name: 'Termul', exact: true })
 }
 
 /** Tap ☰ and wait for the drawer to be on screen and settled. */
@@ -240,25 +241,44 @@ async function openDrawer(page: Page): Promise<Locator> {
   return drawer
 }
 
-/** The Open section's Terminals rows. */
+/** The drawer's section nav row (Chats, Terminals, Editors). */
+function sectionNav(drawer: Locator, section: 'Chats' | 'Terminals' | 'Editors'): Locator {
+  return drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: new RegExp(`^${section}`) })
+}
+
+/** Open the drawer and switch it to `section` with its nav row (the drawer stays open). */
+async function openDrawerOn(
+  page: Page,
+  section: 'Chats' | 'Terminals' | 'Editors'
+): Promise<Locator> {
+  const drawer = await openDrawer(page)
+  await sectionNav(drawer, section).tap()
+  await expect(sectionNav(drawer, section)).toHaveAttribute('aria-current', 'true')
+  await expect(drawer).toBeVisible()
+  return drawer
+}
+
+/** The Terminals section's rows. */
 function terminalRows(drawer: Locator): Locator {
   return drawer.getByRole('group', { name: 'Terminals' }).getByRole('button', {
     name: /^Terminal \d+$/
   })
 }
 
-/** The Open section's Tabs rows (select buttons only, not their close buttons). */
+/** The Editors section's rows (select buttons only, not their close buttons). */
 function tabRows(drawer: Locator): Locator {
-  return drawer.getByRole('group', { name: 'Tabs' }).getByRole('button', { name: /^(?!Close )/ })
+  return drawer.getByRole('group', { name: 'Editors' }).getByRole('button', { name: /^(?!Close )/ })
 }
 
 const terminalInput = (page: Page): Locator => page.getByRole('textbox', { name: 'Terminal input' })
 const snapshotsHeading = (page: Page): Locator =>
   page.getByRole('heading', { level: 1, name: 'Workspace Snapshots' })
 
-/** Open a new terminal from the drawer's Terminals "＋"; the drawer closes. */
+/** Open a new terminal from the drawer's Terminals "New terminal" pill; the drawer closes. */
 async function newTerminalFromDrawer(page: Page): Promise<void> {
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Terminals')
   await drawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
   await expect(drawer).toBeHidden()
   await expect(terminalInput(page)).toBeVisible()
@@ -299,7 +319,7 @@ async function tapTerminalClose(
   page: Page,
   closeName: string | RegExp = /^Close Terminal \d+$/
 ): Promise<Locator> {
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Terminals')
   await drawer.getByRole('button', { name: closeName }).first().tap()
   await expect(drawer).toBeHidden()
   const confirm = confirmOf(page)
@@ -327,6 +347,19 @@ test('L-15: footer Git history, Terminals New terminal and a file from Files lea
   const project = await createProject({ 'notes.md': 'snapshots entry content' })
   await openShell(page, project, { settleAgentWarmup: true })
 
+  // The Terminals New terminal pill: with a terminal on screen the drawer lists
+  // Terminals, and from Snapshots the new terminal is shown, not Snapshots.
+  await newTerminalFromDrawer(page)
+  await goToSnapshots(page)
+  const terminalsDrawer = await openDrawer(page)
+  await terminalsDrawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
+  await expect(terminalsDrawer).toBeHidden()
+  await expect(page).toHaveURL(/#\/$/)
+  await expect(snapshotsHeading(page)).toBeHidden()
+  await expect(terminalInput(page)).toBeVisible()
+  await closeTerminal(page)
+  await closeTerminal(page)
+
   // A file opened from the Files sheet: the editor tab is active and the route is `/`.
   await goToSnapshots(page)
   await openFilesSheet(page)
@@ -343,17 +376,34 @@ test('L-15: footer Git history, Terminals New terminal and a file from Files lea
   await expect(page).toHaveURL(/#\/$/)
   await expect(snapshotsHeading(page)).toBeHidden()
   await expect(page.getByRole('button', { name: 'Refresh history' })).toBeVisible()
+})
 
-  // The Terminals ＋: the new terminal is shown, not Snapshots.
+test('on /snapshots the drawer opens on the active section, switches sections in place, and a row returns to the workspace', async ({
+  page
+}) => {
+  const project = await createProject({ 'notes.md': 'drawer nav entry content' })
+  await openShell(page, project, { settleAgentWarmup: true })
+  await openFileFromFiles(page, 'notes.md')
+
   await goToSnapshots(page)
-  const drawerAgain = await openDrawer(page)
-  await drawerAgain.getByRole('button', { name: 'New terminal', exact: true }).tap()
-  await expect(drawerAgain).toBeHidden()
+  // The editor was active: Editors is preselected.
+  let drawer = await openDrawer(page)
+  await expect(sectionNav(drawer, 'Editors')).toHaveAttribute('aria-current', 'true')
+  // Switching sections keeps the drawer open and the route where it is.
+  await sectionNav(drawer, 'Terminals').tap()
+  await expect(drawer).toBeVisible()
+  await expect(drawer.getByText('No open terminals')).toBeVisible()
+  await expect(page).toHaveURL(/#\/snapshots$/)
+  await sectionNav(drawer, 'Editors').tap()
+  await drawer.getByRole('button', { name: 'notes.md', exact: true }).tap()
+  await expect(drawer).toBeHidden()
   await expect(page).toHaveURL(/#\/$/)
   await expect(snapshotsHeading(page)).toBeHidden()
-  await expect(terminalInput(page)).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'notes.md', exact: true })).toBeVisible()
 
-  await closeTerminal(page)
+  // Reopened on the workspace, it preselects Editors again.
+  drawer = await openDrawer(page)
+  await expect(sectionNav(drawer, 'Editors')).toHaveAttribute('aria-current', 'true')
 })
 
 test('L-15: the header New terminal and the more-sheet New terminal leave /snapshots too', async ({
@@ -370,7 +420,7 @@ test('L-15: the header New terminal and the more-sheet New terminal leave /snaps
   await expect(page).toHaveURL(/#\/$/)
   await expect(snapshotsHeading(page)).toBeHidden()
   await expect(terminalInput(page)).toBeVisible()
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Terminals')
   await expect(terminalRows(drawer)).toHaveCount(2)
   await page.keyboard.press('Escape')
   await expect(drawer).toBeHidden()
@@ -501,14 +551,14 @@ test('L-16: a dirty editor ✕ hands off to its confirm (Cancel keeps the file, 
 // L-18: focus stays inside the drawer
 // ---------------------------------------------------------------------------
 
-test('L-18: closing an Open row moves focus to the next row, else the group heading, else the section', async ({
+test('L-18: closing an Editors row moves focus to the next row, else the section heading', async ({
   page
 }) => {
   const project = await createProject({ 'a.txt': 'a', 'b.txt': 'b', 'c.txt': 'c' })
   await openShell(page, project, { settleAgentWarmup: true })
   for (const file of ['a.txt', 'b.txt', 'c.txt']) await openFileFromFiles(page, file)
 
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Editors')
   const rows = tabRows(drawer)
   await expect(rows).toHaveText(['a.txt', 'b.txt', 'c.txt'])
 
@@ -518,25 +568,18 @@ test('L-18: closing an Open row moves focus to the next row, else the group head
   await expect(rows).toHaveText(['a.txt', 'c.txt'])
   await expect(drawer.getByRole('button', { name: 'c.txt', exact: true })).toBeFocused()
 
-  // The last row of a group that still has others: the group heading.
+  // The last row: the section heading.
   await drawer.getByRole('button', { name: 'Close c.txt', exact: true }).tap()
   await expect(rows).toHaveText(['a.txt'])
-  await expect(drawer.getByRole('heading', { name: 'Tabs', exact: true })).toBeFocused()
+  await expect(drawer.getByRole('heading', { name: 'Editors', exact: true })).toBeFocused()
 
-  // The last row of all: its group is gone, so the Open section itself takes
-  // focus (inside the drawer, never `<body>`).
+  // The last row of all: the list empties, but the drawer keeps listing
+  // Editors while it is open, and its heading keeps focus (never `<body>`).
   await drawer.getByRole('button', { name: 'Close a.txt', exact: true }).tap()
-  await expect(drawer.getByRole('group', { name: 'Tabs' })).toHaveCount(0)
+  await expect(drawer.getByRole('group', { name: 'Editors' })).toHaveCount(0)
+  await expect(drawer.getByText('No open editors')).toBeVisible()
   await expect(drawer).toBeVisible()
-  await expect
-    .poll(() =>
-      drawer.getByRole('heading', { name: 'Terminals', exact: true }).evaluate((heading) => {
-        // The section root is the nearest focusable `div` around the Terminals group.
-        const section = heading.closest('div[tabindex="-1"]')
-        return section !== null && document.activeElement === section
-      })
-    )
-    .toBe(true)
+  await expect(drawer.getByRole('heading', { name: 'Editors', exact: true })).toBeFocused()
 })
 
 test('L-18: a rename ended by Enter or Escape returns focus to its pencil; a blur commit leaves focus alone', async ({
@@ -546,7 +589,7 @@ test('L-18: a rename ended by Enter or Escape returns focus to its pencil; a blu
   await openShell(page, project, { settleAgentWarmup: true })
   await newTerminalFromDrawer(page)
 
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Terminals')
   const renameInput = (name: string | RegExp): Locator =>
     drawer.getByRole('textbox', { name, exact: typeof name === 'string' })
   const renameButton = (name: string): Locator =>
@@ -577,7 +620,7 @@ test('L-18: a rename ended by Enter or Escape returns focus to its pencil; a blu
   // focus trap's business: the rename code must not choose it.
   await renameButton('build').tap()
   await renameInput('Rename build').fill('kept')
-  await drawer.getByRole('textbox', { name: 'Search chats' }).tap()
+  await drawer.getByRole('heading', { level: 2, name: 'Terminals', exact: true }).tap()
   await expect(drawer.getByRole('button', { name: 'kept', exact: true })).toBeVisible()
   await expect(renameInput(/^Rename /)).toHaveCount(0)
   await expect(renameButton('kept')).not.toBeFocused()
@@ -653,7 +696,7 @@ test('L-20: the Files breadcrumb, an ancestor tap, Back and opening a file work 
   await page.getByRole('button', { name: 'Open folder lib', exact: true }).tap()
   await page.getByRole('button', { name: 'Open deep.md', exact: true }).tap()
   await expect(page.getByRole('button', { name: 'Save deep.md', exact: true })).toBeVisible()
-  const drawer = await openDrawer(page)
+  const drawer = await openDrawerOn(page, 'Editors')
   await expect(drawer.getByRole('button', { name: 'deep.md', exact: true })).toBeVisible()
 })
 
@@ -942,17 +985,23 @@ test('V-13: ⌂ is offered for a non-default, unarchived project with a path, an
   await expect(control(pathless)).toHaveCount(0)
 })
 
-test('V-14: the drawer search still filters History only, never the Open rows', async ({
+test('V-14: the drawer search lives with the Recents chat list, never the Editors list', async ({
   page
 }) => {
   const project = await createProject({ 'notes.txt': 'search scope' })
   await openShell(page, project, { settleAgentWarmup: true })
   await openFileFromFiles(page, 'notes.txt')
 
-  const drawer = await openDrawer(page)
+  // Editors lists the file and offers no chat search.
+  let drawer = await openDrawerOn(page, 'Editors')
   await expect(drawer.getByRole('button', { name: 'notes.txt', exact: true })).toBeVisible()
+  await expect(drawer.getByRole('textbox', { name: 'Search chats' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(drawer).toBeHidden()
+
+  // Chats: the search filters Recents, and the file is never in that list.
+  drawer = await openDrawerOn(page, 'Chats')
+  await expect(drawer.getByRole('heading', { name: 'Recents', exact: true })).toBeVisible()
   await drawer.getByRole('textbox', { name: 'Search chats' }).fill('zzz-no-such-chat')
-  // The query matches no chat, yet the Open rows are all still there.
-  await expect(drawer.getByRole('button', { name: 'notes.txt', exact: true })).toBeVisible()
-  await expect(drawer.getByRole('heading', { name: 'Open', exact: true })).toBeVisible()
+  await expect(drawer.getByRole('button', { name: 'notes.txt', exact: true })).toHaveCount(0)
 })

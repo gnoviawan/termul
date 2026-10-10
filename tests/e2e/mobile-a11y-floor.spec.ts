@@ -133,10 +133,11 @@ async function bootShell(
   // The header names the active project until a chat takes over: seeing it
   // proves the shell booted into our fresh project.
   await expect(
-    page.getByRole('heading', { level: 1, name: project.name, exact: true })
+    page.getByRole('button', { name: new RegExp(`^${project.name}.*switch project$`) })
   ).toBeVisible()
-  // The boot connection is healthy: the summary pill reads "Connected".
-  await expect(page.getByRole('status', { name: 'Connected', exact: true })).toBeVisible()
+  // (The mobile shell has no StatusBar connection pill any more; the
+  // connection summary lives in the drawer footer, which these tests leave
+  // closed, so the boot does not wait on it.)
 }
 
 function liveRegion(page: Page): Locator {
@@ -172,10 +173,16 @@ async function trackAnnouncements(page: Page): Promise<() => Promise<string[]>> 
  */
 async function announceBarrier(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
+  // The drawer opens on the active tab's section: the search lives under Chats.
+  await page
+    .locator('#mobile-shell-drawer')
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Chats/ })
+    .tap()
   await page.getByRole('textbox', { name: 'Search chats' }).fill('zzz-no-such-chat')
   await expect(liveRegion(page)).toHaveText('0 chats match')
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: 'Menu' })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
 }
 
 /**
@@ -280,7 +287,7 @@ test.describe('shell live region', () => {
     await region.evaluate((el) => el.setAttribute('data-e2e-node', 'first-mount'))
 
     await page.getByRole('button', { name: 'Open menu' }).tap()
-    await expect(page.getByRole('dialog', { name: 'Menu' })).toBeVisible()
+    await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeVisible()
     // The modal drawer hid everything outside it from assistive technology
     // (Radix hideOthers)...
     await expect(page.getByRole('banner')).toHaveCount(0)
@@ -297,7 +304,7 @@ test.describe('shell live region', () => {
     await expect.poll(announced).toEqual(['0 chats match', '0 chats match'])
 
     await page.keyboard.press('Escape')
-    await expect(page.getByRole('dialog', { name: 'Menu' })).toBeHidden()
+    await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
     // The same node, never remounted.
     await expect(liveRegion(page)).toHaveCount(1)
     await expect(region).toHaveAttribute('data-e2e-node', 'first-mount')
@@ -496,7 +503,13 @@ test.describe('shell live region', () => {
     const region = liveRegion(page)
 
     await page.getByRole('button', { name: 'Open menu' }).tap()
-    await page.getByRole('button', { name: 'New terminal' }).tap()
+    // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
+    const drawer = page.locator('#mobile-shell-drawer')
+    await drawer
+      .getByRole('navigation', { name: 'Sections' })
+      .getByRole('button', { name: /^Terminals/ })
+      .tap()
+    await drawer.getByRole('button', { name: 'New terminal' }).tap()
     const input = page.getByRole('textbox', { name: 'Terminal input' })
     await expect(input).toBeVisible()
     // The lazy first terminal connect (connected -> connecting -> connected) is silent.

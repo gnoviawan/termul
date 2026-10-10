@@ -155,7 +155,7 @@ async function openChat(page: Page, prompt: string): Promise<Chat> {
   )
   await page.goto(`${E2E_BASE_URL}/#/`)
   await expect(
-    page.getByRole('heading', { level: 1, name: projectName, exact: true })
+    page.getByRole('button', { name: new RegExp(`^${projectName}.*switch project$`) })
   ).toBeVisible()
   await warmedUp
 

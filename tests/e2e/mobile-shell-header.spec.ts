@@ -69,9 +69,9 @@ test.setTimeout(120_000)
 /** The drawer's ☰ and pill both point `aria-controls` here. */
 const DRAWER_ID = 'mobile-shell-drawer'
 
-/** The drawer is the left sheet titled "Menu". */
+/** The drawer is the full-screen left sheet named "Termul". */
 function drawerOf(page: Page): Locator {
-  return page.getByRole('dialog', { name: 'Menu' })
+  return page.getByRole('dialog', { name: 'Termul', exact: true })
 }
 
 /**
@@ -782,7 +782,7 @@ test('an editor tab is titled by its file, keeps the project subtitle and has no
   await expect(subtitle(page)).toHaveText('shdr-edit · main · Local')
   await expect(headerButton(page, 'New chat')).toBeVisible()
 
-  // The header ⋯ sheet drops the chat-only row.
+  // The header ⋯ sheet drops the chat-only row; Close tab closes the editor.
   await headerButton(page, 'More').tap()
   const sheet = page.getByRole('dialog', { name: 'notes.md' })
   await expect(sheet).toBeVisible()
@@ -792,8 +792,10 @@ test('an editor tab is titled by its file, keeps the project subtitle and has no
     'Files',
     'Command palette',
     'New terminal',
-    'Project settings'
+    'Project settings',
+    'Close tab'
   ])
+  await expect(sheet.getByRole('button', { name: 'Close chat' })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(sheet).toBeHidden()
 

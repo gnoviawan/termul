@@ -240,7 +240,20 @@ async function pressSystemBack(page: Page): Promise<void> {
 
 async function openDrawer(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await expect(page.getByRole('dialog', { name: 'Chats' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeVisible()
+}
+
+/**
+ * Open the drawer on its Chats section (it opens on the active tab's section,
+ * Terminals from a terminal), where the New chat pill lives.
+ */
+async function openDrawerOnChats(page: Page): Promise<void> {
+  await openDrawer(page)
+  await page
+    .locator('#mobile-shell-drawer')
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Chats/ })
+    .tap()
 }
 
 /**
@@ -294,7 +307,13 @@ async function launchRichChat(page: Page, label: string): Promise<HistoryPositio
 async function openTerminalTab(page: Page, warmedUp: Promise<void>): Promise<void> {
   await warmedUp
   await openDrawer(page)
-  await page.getByRole('button', { name: 'New terminal' }).tap()
+  // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
+  const drawer = page.locator('#mobile-shell-drawer')
+  await drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Terminals/ })
+    .tap()
+  await drawer.getByRole('button', { name: 'New terminal' }).tap()
   await expect(page.getByRole('button', { name: 'Terminal actions', exact: true })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeVisible()
 }
@@ -312,27 +331,25 @@ test('system back closes the open drawer and leaves the page where it was', asyn
 
   await pressSystemBack(page)
 
-  await expect(page.getByRole('dialog', { name: 'Chats' })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
   // Back landed on the page entry itself: same hash, no sentinel on top.
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 })
 
-for (const method of ['its close button', 'Esc', 'the scrim'] as const) {
+// The drawer is full-screen: there is no scrim to tap.
+for (const method of ['its close button', 'Esc'] as const) {
   test(`closing the drawer by ${method} gives its history entry back, so the next back is a real back`, async ({
     page
   }) => {
     const { base } = await bootMobileShell(page)
-    const drawer = page.getByRole('dialog', { name: 'Chats' })
+    const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
     await openDrawer(page)
     await expectHistory(page, { index: base.index + 1, sentinelDepth: 1 })
 
     if (method === 'its close button') {
       await drawer.getByRole('button', { name: 'Close', exact: true }).tap()
-    } else if (method === 'Esc') {
-      await page.keyboard.press('Escape')
     } else {
-      // The drawer covers 72% of a 390px viewport; tap well right of it.
-      await page.touchscreen.tap(375, 600)
+      await page.keyboard.press('Escape')
     }
 
     await expect(drawer).toBeHidden()
@@ -375,7 +392,7 @@ test('drawer to Settings swaps in one tap: one entry, back closes Settings', asy
   await openDrawer(page)
   await page.getByRole('button', { name: 'Settings', exact: true }).tap()
   await expect(settings).toBeVisible()
-  await expect(page.getByRole('dialog', { name: 'Chats' })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
   await settleBackStack(page)
   // The drawer's sentinel now serves Settings: no traversal, no second push.
   await expectHistory(page, { index: base.index + 1, hash: '#/', sentinelDepth: 1 })
@@ -507,7 +524,7 @@ test.describe('with a terminal tab open', () => {
     const launcher = page.getByRole('dialog', { name: 'Agent launcher' })
 
     // Drawer to launcher is a swap in one tap: still one entry.
-    await openDrawer(page)
+    await openDrawerOnChats(page)
     await page.getByRole('button', { name: 'New chat', exact: true }).tap()
     await expect(launcher).toBeVisible()
     await settleBackStack(page)
@@ -520,7 +537,7 @@ test.describe('with a terminal tab open', () => {
     // Open it again; nothing in the launcher has focus (the editor does not
     // autofocus), so Esc reaches no handler of its own and the back stack
     // closes it.
-    await page.getByRole('button', { name: 'Open menu' }).tap()
+    await openDrawerOnChats(page)
     await page.getByRole('button', { name: 'New chat', exact: true }).tap()
     await expect(launcher).toBeVisible()
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
@@ -540,7 +557,7 @@ test.describe('with a terminal tab open', () => {
     const chip = page.getByRole('button', { name: AGENT_SELECTOR_PILL })
     const modal = page.getByRole('dialog', { name: AGENT_SELECTOR_SHEET })
 
-    await openDrawer(page)
+    await openDrawerOnChats(page)
     await page.getByRole('button', { name: 'New chat', exact: true }).tap()
     await expect(launcher).toBeVisible()
     await chip.tap()
@@ -915,7 +932,7 @@ test('a reload with an overlay open lands on a stale sentinel and the shell step
   // leftover sentinel of ours: the shell traverses back to the page entry
   // instead of leaving it for a dead back press.
   await expect(projectSubtitle(page)).toContainText(name)
-  await expect(page.getByRole('dialog', { name: 'Chats' })).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeHidden()
   await expectHistory(page, { index: base.index, hash: '#/', sentinelDepth: 0 })
 })
 
@@ -952,7 +969,7 @@ test.describe('a History API that misbehaves', () => {
       }
     })
     const { base } = await bootMobileShell(page)
-    const drawer = page.getByRole('dialog', { name: 'Chats' })
+    const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
 
     await openDrawer(page)
     await expect
@@ -983,7 +1000,7 @@ test.describe('a History API that misbehaves', () => {
       History.prototype.back = () => {}
     })
     const { base } = await bootMobileShell(page)
-    const drawer = page.getByRole('dialog', { name: 'Chats' })
+    const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
     const misses = (): number => logs.filter((message) => message.includes('no popstate')).length
 
     await openDrawer(page)

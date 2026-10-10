@@ -7,8 +7,12 @@ import {
   useChatIsolationContext
 } from '@/hooks/use-chat-isolation-context'
 import { useMobileAttentionCount } from '@/hooks/use-mobile-attention-count'
+import { sectionForTab } from '@/hooks/use-mobile-section'
+import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
 import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
+import { returnFocusAfterConfirm } from '@/lib/confirm-focus-return'
 import {
+  holdSheetReturnTargets,
   recordSheetOpener,
   setSheetFocusDestination,
   sheetCloseAutoFocus
@@ -95,7 +99,10 @@ interface MobileChatShellProps {
 }
 
 /**
- * ChatGPT-style mobile web chrome: slim header + slide-out chat list drawer.
+ * Claude-style mobile web chrome: a slim header over the content, and a
+ * full-screen drawer that switches between Chats, Terminals and Editors and
+ * lists the chosen section (the hidden WorkspaceTabBar's job on mobile). No
+ * bottom bar: the main screen is the header and the content.
  * Desktop IDE chrome (ActivityRail, TitleBar, persistent sidebar, tab strip)
  * stays outside this component and must be gated by `useMobileWebShell`.
  */
@@ -147,9 +154,9 @@ export function MobileChatShell({
   useShellAnnouncements()
   const announcement = useShellAnnouncerStore((s) => s.message)
 
-  // Story 6: the mobile drawer is the mobile tab strip. Register the shell's
-  // sheets in the overlay stack so hardware back (popstate) closes the
-  // topmost one instead of exiting the app.
+  // The drawer is the mobile tab chooser. Register the shell's sheets in the
+  // overlay stack so hardware back (popstate) closes the topmost one instead
+  // of exiting the app.
   useOverlayRegistration('mobile-drawer', drawerOpen, () => setDrawerOpen(false))
   useOverlayRegistration('projects-sheet', projectsOpen, () => setProjectsOpen(false))
   useOverlayRegistration('files-sheet', filesOpen, () => setFilesOpen(false))
@@ -176,6 +183,14 @@ export function MobileChatShell({
 
   const activeSessionId = activeTab?.type === 'agent-chat' ? activeTab.sessionId : null
 
+  // Header ⋯ Close tab shares the drawer lists' guarded close routing.
+  const { closePaneTab } = useMobileTabActions({
+    onCloseTerminal,
+    onCloseEditorTab
+  })
+  // The drawer opens on the active tab's section (Chats when none applies).
+  const drawerSection = sectionForTab(activeTab)
+
   // Chat title: live session title, then the index entry, then "Agent Chat".
   // One narrow selector so streaming updates to other session fields do not
   // re-render the shell.
@@ -193,7 +208,8 @@ export function MobileChatShell({
   // tested truthiness), so the title and the terminal sheet are never blank.
   const terminalName = activeTerminal?.name || 'Terminal'
 
-  // Header title: the active tab's own name; "Termul" when no tab is open.
+  // Header title: the tab on screen's own name; an empty section's name; else
+  // "Termul" when no tab is open.
   const headerTitle = ((): string => {
     if (!activeTab) return 'Termul'
     switch (activeTab.type) {
@@ -244,8 +260,9 @@ export function MobileChatShell({
   )
   const attentionCount = useMobileAttentionCount(activeProject?.id, activeSessionId)
 
-  // The terminal ⋯ sheet exists only for an active terminal tab.
+  // The terminal ⋯ sheet and the key bar exist only for an active terminal tab.
   const isTerminalTab = activeTab?.type === 'terminal'
+  const showTerminalControls = isTerminalTab && Boolean(activeTerminal?.ptyId)
   const terminalSheetOpen = terminalActionsOpen && isTerminalTab
   useOverlayRegistration('terminal-actions-sheet', terminalSheetOpen, () =>
     setTerminalActionsOpen(false)
@@ -283,7 +300,42 @@ export function MobileChatShell({
       }
     : undefined
 
-  // Header ⋯ "Close chat": the same teardown the drawer's Open rows use, which
+  // Browse files (the drawer's Editors pill) opens the Files sheet; focus
+  // returns to ☰, else the shell title.
+  const openFilesFrom = !isTauriContext()
+    ? (opener: HTMLElement | null): void => {
+        recordSheetOpener('files-sheet', opener ?? titleRef.current, titleRef.current)
+        setFilesOpen(true)
+      }
+    : undefined
+
+  // Header ⋯ "Close tab" for a non-chat, non-terminal tab (Git History has no
+  // other close on mobile): the same guarded close the drawer rows use. When
+  // the close raised a confirm (a dirty editor) the sheet hands off to it, as
+  // the drawer does: no focus return now, the opener once the confirm is gone.
+  const skipMoreSheetFocusRef = useRef(false)
+  const cancelConfirmFocusRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => cancelConfirmFocusRef.current?.(), [])
+  const closeActiveOtherTab =
+    activeTab && activeTab.type !== 'agent-chat' && activeTab.type !== 'terminal'
+      ? (): void => {
+          if (!closePaneTab(activeTab)) return
+          const restoreFocus = holdSheetReturnTargets('header-more-sheet')
+          skipMoreSheetFocusRef.current = true
+          cancelConfirmFocusRef.current?.()
+          cancelConfirmFocusRef.current = returnFocusAfterConfirm(restoreFocus)
+        }
+      : undefined
+  const onMoreSheetCloseAutoFocus = (event: Event): void => {
+    if (skipMoreSheetFocusRef.current) {
+      skipMoreSheetFocusRef.current = false
+      event.preventDefault()
+      return
+    }
+    moreSheetCloseAutoFocus(event)
+  }
+
+  // Header ⋯ "Close chat": the same teardown the drawer's Recents rows use, which
   // asks the idle-shutdown guard before the tab goes.
   const closeActiveChat = (): void => {
     if (activeTab?.type !== 'agent-chat') return
@@ -362,13 +414,15 @@ export function MobileChatShell({
           height:100% — percentages against this flex-sized wrapper collapse
           to 0 in engines that treat flex-resolved sizes as indefinite. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
-      {activeTab?.type === 'terminal' && activeTerminal?.ptyId ? (
+      {showTerminalControls && activeTerminal?.ptyId ? (
         <MobileTerminalControls terminalId={activeTerminal.ptyId} />
       ) : null}
 
       <MobileShellDrawer
         open={drawerOpen}
         onOpenChange={setDrawerOpen}
+        section={drawerSection}
+        attentionCount={attentionCount}
         activeTabId={activeTab?.id ?? null}
         activeSessionId={activeSessionId}
         canNewChat={canNewChat}
@@ -379,6 +433,7 @@ export function MobileChatShell({
         onCloseEditorTab={onCloseEditorTab}
         onOpenGitHistory={openGitHistory}
         onOpenProjects={openProjectSheet}
+        onOpenFiles={openFilesFrom ? () => openFilesFrom(menuButtonRef.current) : undefined}
       />
 
       {!isTauriContext() && (
@@ -408,7 +463,7 @@ export function MobileChatShell({
         onOpenChange={setMoreOpen}
         title={headerTitle}
         subtitle={subtitle.text}
-        onCloseAutoFocus={moreSheetCloseAutoFocus}
+        onCloseAutoFocus={onMoreSheetCloseAutoFocus}
         onItemChosen={() => setSheetFocusDestination('header-more-sheet', titleRef.current)}
         onOpenGitChanges={openGitChangesFromSheet}
         onOpenFiles={openFilesFromSheet}
@@ -416,6 +471,7 @@ export function MobileChatShell({
         onNewTerminal={newTerminal}
         onOpenProjectSettings={openProjectSettings}
         onCloseChat={activeTab?.type === 'agent-chat' ? closeActiveChat : undefined}
+        onCloseTab={closeActiveOtherTab}
       />
 
       {activeTab?.type === 'terminal' && (

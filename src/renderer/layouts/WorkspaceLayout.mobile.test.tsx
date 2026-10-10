@@ -418,6 +418,11 @@ vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> 
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
 }))
+// The drawer's Recents list reads the session index, which this file's
+// acp-store stub does not carry; its own suite covers it.
+vi.mock('@/components/mobile/MobileRecentsList', () => ({
+  MobileRecentsList: () => <div>recents</div>
+}))
 // The real hook subscribes to the acp and connection stores; this file mocks
 // `@/stores/acp-store` with a selector-only stub (no `subscribe`). The hook has
 // its own tests (use-shell-announcements.test.tsx).
@@ -577,6 +582,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // MobileChatShell is React.lazy — wait for it to load before asserting.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy(), {
+      // The first test pays the cold React.lazy import of the whole shell.
       timeout: 15000
     })
     expect(screen.queryByLabelText('Command palette')).not.toBeInTheDocument()
@@ -649,7 +655,9 @@ describe('WorkspaceLayout mobile branch', () => {
     })
 
     async function chooseTerminalItem(name: string): Promise<void> {
-      fireEvent.click(await screen.findByLabelText('Terminal actions'))
+      // Run alone, this is the file's first test and pays the cold React.lazy
+      // import of the whole shell.
+      fireEvent.click(await screen.findByLabelText('Terminal actions', {}, { timeout: 5000 }))
       fireEvent.click(await screen.findByRole('button', { name }))
     }
 
@@ -1525,15 +1533,26 @@ describe('WorkspaceLayout mobile branch', () => {
       expect(terminalKill).not.toHaveBeenCalled()
     })
 
+    /** Open the drawer, switch it to `section` with its nav row, and tap `row`. */
+    const tapSectionRow = async (section: string, row: string): Promise<void> => {
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
+      fireEvent.click(
+        within(within(drawer).getByRole('navigation', { name: 'Sections' })).getByRole('button', {
+          name: section
+        })
+      )
+      fireEvent.click(await within(drawer).findByRole('button', { name: row }))
+    }
+
     it('shows the other leaf alone, remounted, when a drawer row for its tab is tapped', async () => {
       seed('pane-b')
       renderLayout()
       await waitFor(() => expect(paneStubs()).toHaveLength(1))
       const firstMount = paneStubs()[0].getAttribute('data-mount')
 
-      fireEvent.click(await screen.findByLabelText('Open menu'))
-      // The Git Changes row belongs to leaf A, the inactive leaf.
-      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
+      // Editors holds Git Changes, which belongs to leaf A, the inactive leaf.
+      await tapSectionRow('Editors', 'Git Changes')
 
       await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
       expect(paneStubs()).toHaveLength(1)
@@ -1556,9 +1575,8 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
       await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
 
-      fireEvent.click(await screen.findByLabelText('Open menu'))
-      // The Git Changes row belongs to leaf A, not the fullscreen leaf B.
-      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
+      // Git Changes (Editors) belongs to leaf A, not the fullscreen leaf B.
+      await tapSectionRow('Editors', 'Git Changes')
 
       await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
       expect(paneStubs()).toHaveLength(1)
@@ -1574,21 +1592,22 @@ describe('WorkspaceLayout mobile branch', () => {
     })
 
     it('keeps fullscreen when the tapped drawer row belongs to the fullscreen leaf', async () => {
-      seed('pane-b', 'pane-b')
+      seed('pane-a', 'pane-a')
       renderLayout()
-      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b'))
+      await waitFor(() => expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a'))
 
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      fireEvent.click(await screen.findByRole('button', { name: 'Git History' }))
+      // Git Changes is active, so the drawer lists the Editors section.
+      fireEvent.click(await screen.findByRole('button', { name: 'Git Changes' }))
 
       await waitFor(() =>
         expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
       )
       expect(paneStubs()).toHaveLength(1)
-      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-a')
       const state = useWorkspaceStore.getState()
-      expect(state.fullscreenPaneId).toBe('pane-b')
-      expect(state.activePaneId).toBe('pane-b')
+      expect(state.fullscreenPaneId).toBe('pane-a')
+      expect(state.activePaneId).toBe('pane-a')
     })
 
     it('keeps the same leaf mounted across re-renders while it stays active', async () => {
@@ -1599,7 +1618,8 @@ describe('WorkspaceLayout mobile branch', () => {
 
       // Opening and closing the drawer re-renders the shell around the pane.
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      fireEvent.click(await screen.findByRole('button', { name: 'Git History' }))
+      await screen.findByRole('dialog', { name: 'Termul' })
+      fireEvent.keyDown(document.body, { key: 'Escape' })
 
       await waitFor(() =>
         expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
@@ -1727,12 +1747,12 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
       const menu = await screen.findByLabelText('Open menu')
       fireEvent.click(menu)
-      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
 
       // The drawer is gone, so its overlay no longer covers the confirm.
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       expect(await screen.findByText('Close Terminal')).toBeVisible()
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible()
       expect(tabIds()).toEqual(['term-t1'])
@@ -1749,7 +1769,7 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
       const menu = await screen.findByLabelText('Open menu')
       fireEvent.click(menu)
-      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
       await screen.findByText('Close Terminal')
 
@@ -1773,11 +1793,11 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
       const menu = await screen.findByLabelText('Open menu')
       fireEvent.click(menu)
-      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
 
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
       expect(await screen.findByText('Unsaved Changes')).toBeVisible()
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
       await waitFor(() => expect(screen.queryByText('Unsaved Changes')).toBeNull())
@@ -1790,12 +1810,12 @@ describe('WorkspaceLayout mobile branch', () => {
       seedLeaf(leafWith([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1'))
       renderLayout()
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close terminal' }))
 
       await settleOverlayBackStack()
-      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(drawer)
       expect(screen.queryByText('Close Terminal')).not.toBeInTheDocument()
     })
 
@@ -1811,12 +1831,12 @@ describe('WorkspaceLayout mobile branch', () => {
       )
       renderLayout()
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
 
       fireEvent.click(within(drawer).getByRole('button', { name: 'Close a.ts' }))
 
       await settleOverlayBackStack()
-      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(drawer)
       expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
       expect(tabIds()).toEqual(['edit-/demo/a.ts'])
     })
@@ -1830,14 +1850,14 @@ describe('WorkspaceLayout mobile branch', () => {
       )
       renderLayout()
       fireEvent.click(await screen.findByLabelText('Open menu'))
-      const drawer = await screen.findByRole('dialog', { name: 'Menu' })
+      const drawer = await screen.findByRole('dialog', { name: 'Termul' })
       const close = within(drawer).getByRole('button', { name: 'Close a.ts' })
       close.focus()
 
       fireEvent.click(close)
 
       await waitFor(() => expect(tabIds()).toEqual([]))
-      expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(drawer)
+      expect(screen.getByRole('dialog', { name: 'Termul' })).toBe(drawer)
       expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument()
       // The row (and its ✕) is gone; focus did not fall to <body> inside the trap.
       expect(drawer.contains(document.activeElement)).toBe(true)

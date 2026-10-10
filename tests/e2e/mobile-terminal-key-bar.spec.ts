@@ -162,11 +162,17 @@ async function openTerminalWithBar(page: Page): Promise<TerminalBar> {
   // The header names the active project until a terminal takes over: seeing
   // it proves the shell booted into our fresh project.
   await expect(
-    page.getByRole('heading', { level: 1, name: projectName, exact: true })
+    page.getByRole('button', { name: new RegExp(`^${projectName}.*switch project$`) })
   ).toBeVisible()
   await warmedUp
+  // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await page.getByRole('button', { name: 'New terminal' }).tap()
+  const drawer = page.locator('#mobile-shell-drawer')
+  await drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Terminals/ })
+    .tap()
+  await drawer.getByRole('button', { name: 'New terminal' }).tap()
 
   const group = page.getByRole('group', { name: 'Terminal keys' })
   await expect(group).toBeVisible()

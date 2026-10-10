@@ -7,13 +7,15 @@ import { expect, request, test } from 'playwright/test'
 import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
 
 /**
- * Mobile drawer-as-home E2E (spec-mobile-drawer-home): a phone-sized browser
- * drives the web client's mobile shell and checks what jsdom cannot: the real
- * drawer geometry (width, section order, 44px hit areas), live chat status
- * fed by real agent turns (the fake long-run agent), the unread flag banking
- * across a closed drawer and a project switch, the History delete confirm,
- * the focus hand-offs, a degraded connection in the footer, and that the
- * desktop StatusBar is gone from the shell (and still there on desktop).
+ * Mobile drawer E2E (spec-mobile-drawer-home, restyled by
+ * spec-mobile-tabbar-claude-style): a phone-sized browser drives the web
+ * client's mobile shell and checks what jsdom cannot: the real drawer and tab
+ * bar geometry (width, section order, 44px hit areas, no horizontal scroll),
+ * the merged Recents list with live chat status fed by real agent turns (the
+ * fake long-run agent), the unread flag banking across a closed drawer and a
+ * project switch, the long-press row actions and the delete confirm, the
+ * focus hand-offs, a degraded connection in the footer, and that the desktop
+ * StatusBar is gone from the shell (and still there on desktop).
  *
  * Every test registers its own project (a fresh workspace layout and a
  * History list scoped to that project), so no state is shared with other
@@ -168,7 +170,7 @@ async function bootInto(
   // The header names the active project until a chat or terminal takes over:
   // seeing it proves the shell booted into our fresh project.
   await expect(
-    page.getByRole('heading', { level: 1, name: project.name, exact: true })
+    page.getByRole('button', { name: new RegExp(`^${project.name}.*switch project$`) })
   ).toBeVisible()
   await warmedUp
 }
@@ -184,22 +186,29 @@ async function bootFreshProject(
 }
 
 /** Start a NEW chat from the header button and wait for the shell to show it. */
-async function launchChat(page: Page, prompt: string): Promise<void> {
+async function launchChat(page: Page, prompt: string): Promise<string> {
   await page.getByRole('button', { name: 'New chat', exact: true }).tap()
   const composer = page.getByRole('textbox', { name: 'Agent prompt' })
   await expect(composer).toBeVisible()
   await composer.click()
   await page.keyboard.type(prompt)
   await page.keyboard.press('Enter')
-  // The chat's title is its first prompt, and the header shows the active
-  // chat's title.
-  await expect(page.getByRole('heading', { level: 1, name: prompt, exact: true })).toBeVisible()
+  // The chat's title is its first prompt (the server shortens a long one with
+  // an ellipsis), and the header shows the active chat's title.
+  const heading = page.getByRole('heading', {
+    level: 1,
+    name: new RegExp(`^${escapeRegExp(prompt.slice(0, 30))}`)
+  })
+  await expect(heading).toBeVisible()
+  const title = (await heading.innerText()).trim()
+  expect(prompt.startsWith(title.replace(/…$/, ''))).toBe(true)
+  return title
 }
 
 /** Tap the shell's ☰ and wait for the drawer to be on screen and settled. */
 async function openDrawer(page: Page): Promise<Locator> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  const drawer = page.getByRole('dialog', { name: 'Menu' })
+  const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
   await expect(drawer).toBeVisible()
   // The sheet slides in from the left: measure only once it has landed.
   await expect
@@ -213,23 +222,59 @@ function menuButton(page: Page): Locator {
   return page.getByRole('button', { name: 'Open menu', includeHidden: true })
 }
 
-/** An Open-section chat row: named `{title}` or `{title}, {status…}`. */
+/** A Recents chat row: named `{title}` or `{title}, {status…}` (open chats carry status). */
 function chatRow(drawer: Locator, title: string): Locator {
-  return drawer
-    .getByRole('group', { name: 'Open', exact: true })
-    .getByRole('button', { name: new RegExp(`^${escapeRegExp(title)}(,|$)`) })
+  return drawer.getByRole('button', { name: new RegExp(`^${escapeRegExp(title)}(,|$)`) })
 }
 
-/** The History section's group for the recency bucket (always "Today" here). */
-function historyGroup(drawer: Locator): Locator {
+/** The Recents recency bucket every chat of these tests lands in. */
+function todayGroup(drawer: Locator): Locator {
   return drawer.getByRole('group', { name: 'Today', exact: true })
 }
 
-/** A History row's open button (named `{title} {relative time}`). */
-function historyOpen(drawer: Locator, title: string): Locator {
-  return historyGroup(drawer).getByRole('button', {
-    name: new RegExp(`^${escapeRegExp(title)}( |$)`)
+/** The drawer's section nav row (Chats, Terminals, Editors). */
+function sectionNav(drawer: Locator, section: 'Chats' | 'Terminals' | 'Editors'): Locator {
+  return drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: new RegExp(`^${section}`) })
+}
+
+/** Long-press a Recents row (its `contextmenu`) and return the row actions sheet. */
+async function openRowActions(page: Page, row: Locator, title: string): Promise<Locator> {
+  await row.dispatchEvent('contextmenu')
+  const sheet = page.getByRole('dialog', { name: title, exact: true })
+  await expect(sheet).toBeVisible()
+  return sheet
+}
+
+/** Nothing inside `root` scrolls sideways. */
+async function expectNoHorizontalScroll(root: Locator, label: string): Promise<void> {
+  const offenders = await root.evaluate((el) => {
+    const bounds = el.getBoundingClientRect()
+    const describe = (node: HTMLElement): string =>
+      `${node.tagName.toLowerCase()}${node.getAttribute('aria-label') ? `[${node.getAttribute('aria-label')}]` : ''} "${(node.textContent ?? '').trim().slice(0, 30)}"`
+    const found: string[] = []
+    for (const node of [el, ...Array.from(el.querySelectorAll<HTMLElement>('*'))]) {
+      const style = getComputedStyle(node)
+      // A container that scrolls sideways.
+      if (
+        (style.overflowX === 'auto' || style.overflowX === 'scroll') &&
+        node.scrollWidth > node.clientWidth + 1
+      ) {
+        found.push(`scrolls: ${describe(node)}`)
+        continue
+      }
+      // Anything painted past the drawer's left or right edge (visually hidden
+      // 1px nodes aside).
+      const rect = node.getBoundingClientRect()
+      if (rect.width <= 1 || rect.height <= 1) continue
+      if (rect.left < bounds.left - 1 || rect.right > bounds.right + 1) {
+        found.push(`spills: ${describe(node)}`)
+      }
+    }
+    return found
   })
+  expect(offenders, `${label}: elements that scroll or spill sideways`).toEqual([])
 }
 
 interface Box {
@@ -253,6 +298,36 @@ async function expectTouchTarget(locator: Locator, label: string): Promise<void>
 }
 
 /**
+ * A compact footer pill (36px visual) whose ::after hit-slop holds the 44px
+ * floor: the slop extends 4px past the top and bottom edges (so the hit area
+ * is at least 44px tall), and points just inside that 4px band still hit the
+ * pill. The probes stay a hair inside the band because its bottom edge is
+ * exclusive to hit testing.
+ */
+async function expectPillHitArea(locator: Locator, label: string): Promise<void> {
+  const box = await boxOf(locator)
+  expect(box.height, `${label} visual height`).toBeGreaterThanOrEqual(36)
+  const slop = await locator.evaluate((el) => {
+    const after = getComputedStyle(el, '::after')
+    return { top: Number.parseFloat(after.top), bottom: Number.parseFloat(after.bottom) }
+  })
+  expect(slop.top, `${label} hit-slop top`).toBeLessThanOrEqual(-4)
+  expect(slop.bottom, `${label} hit-slop bottom`).toBeLessThanOrEqual(-4)
+  expect(box.height - slop.top - slop.bottom, `${label} hit height`).toBeGreaterThanOrEqual(44)
+  const x = box.x + box.width / 2
+  for (const y of [box.y - 3.9, box.y + box.height + 3.9]) {
+    const hitsPill = await locator.evaluate(
+      (el, point) => {
+        const hit = document.elementFromPoint(point.x, point.y)
+        return hit !== null && (hit === el || el.contains(hit))
+      },
+      { x, y }
+    )
+    expect(hitsPill, `${label} hit-slop at y=${y.toFixed(1)}`).toBe(true)
+  }
+}
+
+/**
  * After a navigation close focus goes to the destination title when the shell
  * has one (`#mobile-shell-title`, the header `h1`), else to the opener.
  */
@@ -271,13 +346,15 @@ async function expectNavigationFocus(page: Page): Promise<void> {
     .toBe(true)
 }
 
-test('the drawer is the home: Menu, project row, search, New chat, Open, History and a pinned footer, 320px wide, with no status bar', async ({
+test('the drawer is a full-screen Claude-style navigator: project row beside the close, one line of section tabs, search, Recents and a footer with the New chat pill; the main screen has no bottom bar and no status bar', async ({
   page
 }) => {
   const project = await bootFreshProject(page)
 
-  // The desktop StatusBar is gone from the mobile shell.
+  // The desktop StatusBar is gone from the mobile shell, and there is no
+  // bottom bar: the main screen is the header and the content.
   await expect(page.locator('[data-status-bar]')).toHaveCount(0)
+  await expect(page.getByRole('navigation')).toHaveCount(0)
 
   await expect(menuButton(page)).toHaveAttribute('aria-expanded', 'false')
   await expect(menuButton(page)).not.toHaveAttribute('aria-controls', /.+/)
@@ -286,61 +363,81 @@ test('the drawer is the home: Menu, project row, search, New chat, Open, History
   await expect(menuButton(page)).toHaveAttribute('aria-controls', 'mobile-shell-drawer')
   await expect(drawer).toHaveAttribute('id', 'mobile-shell-drawer')
 
-  // min(82vw, 20rem) at 390px: 319.8px, never the old 72vw with a dead cap.
+  // Full screen: the whole 390px width and the whole height.
   const drawerBox = await boxOf(drawer)
-  expect(drawerBox.width).toBeGreaterThan(319)
-  expect(drawerBox.width).toBeLessThanOrEqual(320.5)
+  expect(drawerBox.x).toBeLessThanOrEqual(0.5)
+  expect(drawerBox.width).toBeGreaterThanOrEqual(389.5)
+  expect(drawerBox.height).toBeGreaterThanOrEqual(843.5)
+  await expect(drawer.getByRole('button', { name: 'Close', exact: true })).toBeVisible()
 
-  // Top to bottom: Menu, project row, search, New chat, Open, Terminals,
-  // History, then the pinned footer.
-  const title = drawer.getByRole('heading', { level: 2, name: 'Menu', exact: true })
+  // The section tabs: one line of three equal 44px tabs, Chats preselected (no tab is open).
+  const tabTops: number[] = []
+  const tabWidths: number[] = []
+  for (const section of ['Chats', 'Terminals', 'Editors'] as const) {
+    await expectTouchTarget(sectionNav(drawer, section), `${section} tab`)
+    const box = await boxOf(sectionNav(drawer, section))
+    tabTops.push(box.y)
+    tabWidths.push(box.width)
+  }
+  expect(new Set(tabTops).size, 'the three tabs share one line').toBe(1)
+  expect(Math.max(...tabWidths) - Math.min(...tabWidths)).toBeLessThanOrEqual(1)
+  await expect(sectionNav(drawer, 'Chats')).toHaveAttribute('aria-current', 'true')
+
+  // The "Termul" title only names the dialog; the project row is the top row,
+  // beside the close ×.
+  const title = drawer.getByRole('heading', { level: 2, name: 'Termul', exact: true })
+  await expect(drawer).toHaveAccessibleName('Termul')
   const projectRow = drawer.getByRole('button', { name: project.name })
+  const close = drawer.getByRole('button', { name: 'Close', exact: true })
+  const projectBox = await boxOf(projectRow)
+  const closeBox = await boxOf(close)
+  expect(projectBox.x + projectBox.width).toBeLessThanOrEqual(closeBox.x + 1)
+  expect(
+    Math.abs(projectBox.y + projectBox.height / 2 - (closeBox.y + closeBox.height / 2))
+  ).toBeLessThan(12)
+
+  // Top to bottom: project row, section tabs, search, Recents, then the footer.
   const search = drawer.getByRole('textbox', { name: 'Search chats' })
-  const newChat = drawer.getByRole('button', { name: 'New chat', exact: true })
-  const openHeading = drawer.getByRole('heading', { level: 2, name: 'Open', exact: true })
-  const terminalsHeading = drawer.getByRole('heading', { level: 3, name: 'Terminals' })
-  const historyHeading = drawer.getByRole('heading', { level: 2, name: 'History', exact: true })
+  const recentsHeading = drawer.getByRole('heading', { level: 2, name: 'Recents', exact: true })
   const settings = drawer.getByRole('button', { name: 'Settings', exact: true })
   const snapshots = drawer.getByRole('button', { name: 'Snapshots', exact: true })
   const gitHistory = drawer.getByRole('button', { name: 'Git history', exact: true })
+  const newChat = drawer.getByRole('button', { name: 'New chat', exact: true })
   const connection = drawer.getByRole('status')
-  const ordered = [
-    title,
-    projectRow,
-    search,
-    newChat,
-    openHeading,
-    terminalsHeading,
-    historyHeading,
-    settings
-  ]
+  const ordered = [projectRow, sectionNav(drawer, 'Chats'), search, recentsHeading, settings]
   const tops: number[] = []
   for (const locator of ordered) tops.push((await boxOf(locator)).y)
   expect(tops).toEqual([...tops].sort((a, b) => a - b))
   expect(new Set(tops).size).toBe(tops.length)
-  // The footer controls share a row; the status text sits below them.
+  // The footer controls and the New chat pill share a row, the pill at its end.
   expect((await boxOf(snapshots)).y).toBe((await boxOf(settings)).y)
   expect((await boxOf(gitHistory)).y).toBe((await boxOf(settings)).y)
+  // The compact pill (36px) is vertically centred on the 44px footer icons.
+  const pillBox = await boxOf(newChat)
+  const settingsBox = await boxOf(settings)
+  expect(pillBox.y + pillBox.height / 2).toBeCloseTo(settingsBox.y + settingsBox.height / 2, 0)
+  expect((await boxOf(newChat)).x).toBeGreaterThan((await boxOf(gitHistory)).x)
+  expect(
+    await newChat.evaluate((el) => Number.parseFloat(getComputedStyle(el).borderRadius))
+  ).toBeGreaterThan(20)
   expect((await boxOf(connection)).y).toBeGreaterThan((await boxOf(settings)).y)
-  // The footer is pinned to the bottom of the drawer, below the scroll body.
   const footerBottom = (await boxOf(connection)).y + (await boxOf(connection)).height
   expect(footerBottom).toBeGreaterThan(844 - 80)
-  expect((await boxOf(settings)).y).toBeGreaterThan((await boxOf(historyHeading)).y)
 
-  // No Tabs group until a non-terminal, non-chat tab is open; no New project.
-  await expect(drawer.getByRole('heading', { level: 3, name: 'Tabs' })).toHaveCount(0)
+  // One chat list: no Open, Terminals, Tabs or History headings, no New project.
+  for (const name of ['Open', 'Terminals', 'Tabs', 'History']) {
+    await expect(drawer.getByRole('heading', { name, exact: true })).toHaveCount(0)
+  }
   await expect(drawer.getByRole('button', { name: 'New project' })).toHaveCount(0)
-  await expect(drawer.getByText('No open terminals')).toBeVisible()
   await expect(drawer.getByText('No chats yet. Start one with the New chat button.')).toBeVisible()
 
   // Visible, named controls at the touch floor; the connection summary is text.
   await expectTouchTarget(projectRow, 'project row')
   await expectTouchTarget(search, 'search')
-  await expectTouchTarget(newChat, 'New chat')
+  await expectPillHitArea(newChat, 'New chat')
   await expectTouchTarget(settings, 'Settings')
   await expectTouchTarget(snapshots, 'Snapshots')
   await expectTouchTarget(gitHistory, 'Git history')
-  await expectTouchTarget(drawer.getByRole('button', { name: 'New terminal' }), 'New terminal')
   await expect(connection).toHaveText(CONNECTED_TEXT)
 
   // A non-git project shows its name only: no "{branch} · {Local|Worktree}" line.
@@ -348,10 +445,9 @@ test('the drawer is the home: Menu, project row, search, New chat, Open, History
   await expect(projectRow).not.toContainText('·')
 
   // The search never takes focus on open (the keyboard must not rise): with
-  // no active Open row the "Menu" title holds it.
+  // no active row the (visually hidden) title holds it.
   await expect(search).not.toBeFocused()
   await expect(title).toBeFocused()
-  // The search field is 16px so iOS does not zoom on focus.
   expect(await search.evaluate((el) => getComputedStyle(el).fontSize)).toBe('16px')
 })
 
@@ -391,41 +487,51 @@ test('a git project on a detached HEAD reads "Detached HEAD · Local"', async ({
   await expect(projectRow).not.toContainText('main')
 })
 
-test('Open chat rows show live status, hold the 44px floor and name their actions', async ({
+test('Recents rows: an open chat is listed once with a status glyph, holds the 44px floor, and long titles never scroll sideways', async ({
   page
 }) => {
   const turns = trackTurnEnds(page)
   await bootFreshProject(page)
-  const prompt = 'status survey [DURATION:15]'
-  await launchChat(page, prompt)
+  const prompt =
+    'status survey with a long title that keeps on going well past the drawer edge [DURATION:15]'
+  // The chat is titled by its (server-shortened) first prompt: still far wider
+  // than a 16px row at 390px.
+  const title = await launchChat(page, prompt)
+  expect(title.length).toBeGreaterThan(40)
 
   const drawer = await openDrawer(page)
-  const row = chatRow(drawer, prompt)
-  // A live turn: the spinner glyph plus the visible "Working" label.
-  await expect(row).toHaveAccessibleName(`${prompt}, Working`)
-  await expect(row).toContainText('Working')
+  const row = chatRow(drawer, title)
+  // Listed once, though it is both an open tab and in the session index.
+  await expect(row).toHaveCount(1)
+  // A live turn: the spinner glyph, with its word only for assistive tech.
+  await expect(row).toHaveAccessibleName(`${title}, Working`)
+  await expect(row.locator('[title="Working"]')).toBeVisible()
+  await expect(row.locator('span.text-2xs')).toHaveCount(0)
   await expect(row).toHaveAttribute('aria-current', 'page')
-  // Focus lands on the active Open row, never on the search.
+  // Focus lands on the active row, never on the search.
   await expect(row).toBeFocused()
   await expect(drawer.getByRole('textbox', { name: 'Search chats' })).not.toBeFocused()
-  // Open rows never show Failed.
-  await expect(drawer.getByRole('group', { name: 'Open', exact: true })).not.toContainText('Failed')
 
-  // 44px hit areas, with actions that name their object.
+  // The active row is a full-width pill; 44px; no trailing icons.
   await expectTouchTarget(row, 'chat row')
-  const close = drawer.getByRole('button', { name: `Close ${prompt}`, exact: true })
-  await expectTouchTarget(close, 'chat close')
-  // The active row carries a primary leading bar (not colour alone).
-  expect(await row.evaluate((el) => getComputedStyle(el).borderLeftWidth)).toBe('2px')
+  expect(
+    await row.evaluate((el) => Number.parseFloat(getComputedStyle(el).borderRadius))
+  ).toBeGreaterThan(20)
+  await expect(drawer.getByRole('button', { name: `Close ${title}`, exact: true })).toHaveCount(0)
+  // The long title truncates: the glyph stays inside the drawer, nothing scrolls sideways.
+  const drawerBox = await boxOf(drawer)
+  const glyph = await boxOf(row.locator('[title="Working"]'))
+  expect(glyph.x + glyph.width).toBeLessThanOrEqual(drawerBox.x + drawerBox.width)
+  await expectNoHorizontalScroll(drawer, 'drawer')
 
   // The turn finishes while this chat is the active one: no "New activity".
   await expect.poll(() => turns.count(), { timeout: 45_000 }).toBeGreaterThan(0)
-  await expect(row).toHaveAccessibleName(prompt)
-  await expect(row).not.toContainText('Working')
-  await expect(row).not.toContainText('New activity')
+  await expect(row).toHaveAccessibleName(title)
+  await expect(row.locator('[title="Working"]')).toHaveCount(0)
+  await expect(row.locator('[title="New activity"]')).toHaveCount(0)
 })
 
-test('a pending approval reads Needs you beside Working, and only Needs you takes the warning colour', async ({
+test('a pending approval shows the Needs you glyph beside Working, and only Needs you takes the warning colour', async ({
   page
 }) => {
   await bootFreshProject(page)
@@ -435,18 +541,20 @@ test('a pending approval reads Needs you beside Working, and only Needs you take
   const drawer = await openDrawer(page)
   const row = chatRow(drawer, prompt)
   await expect(row).toHaveAccessibleName(`${prompt}, Needs you, Working`)
-  // The visible labels (the glyphs also carry sr-only copies of the same words).
-  const needsYou = row.locator('span.text-2xs', { hasText: /^Needs you$/ })
-  const working = row.locator('span.text-2xs', { hasText: /^Working$/ })
+  const needsYou = row.locator('[title="Needs you"]')
+  const working = row.locator('[title="Working"]')
   await expect(needsYou).toBeVisible()
   await expect(working).toBeVisible()
   // "Needs you" leads, and it alone is in the warning colour.
   expect((await boxOf(needsYou)).x).toBeLessThan((await boxOf(working)).x)
-  const colourOf = (label: Locator): Promise<string> =>
-    label.evaluate((el) => getComputedStyle(el).color)
+  const colourOf = (glyph: Locator): Promise<string> =>
+    glyph.evaluate((el) => getComputedStyle(el).color)
   expect(await colourOf(needsYou)).not.toBe(await colourOf(working))
   // A chat that needs you is never a failure.
   await expect(row).not.toContainText('Failed')
+
+  // The Chats nav row badges the other chats that need you, never the one on screen.
+  await expect(sectionNav(drawer, 'Chats')).toHaveAccessibleName('Chats')
 })
 
 test('a background turn banks New activity behind a closed drawer and opening the chat clears it', async ({
@@ -523,7 +631,7 @@ test('New activity survives a project switch and back', async ({ page }) => {
   await expect(chatRow(drawer, background)).toHaveAccessibleName(`${background}, New activity`)
 })
 
-test('closing a chat mid-turn reads Closing (never Working) until the turn ends, then the row goes and History keeps the chat', async ({
+test('closing a chat mid-turn from its long-press sheet reads Closing (never Working) until the turn ends, then the row stays as history', async ({
   page
 }) => {
   const turns = trackTurnEnds(page)
@@ -533,23 +641,26 @@ test('closing a chat mid-turn reads Closing (never Working) until the turn ends,
 
   const drawer = await openDrawer(page)
   await expect(chatRow(drawer, prompt)).toHaveAccessibleName(`${prompt}, Working`)
-  await drawer.getByRole('button', { name: `Close ${prompt}`, exact: true }).tap()
+  // An open chat that is in history offers Close and Delete.
+  const sheet = await openRowActions(page, chatRow(drawer, prompt), prompt)
+  await expect(sheet.getByRole('button', { name: 'Delete chat' })).toBeVisible()
+  await sheet.getByRole('button', { name: 'Close chat', exact: true }).tap()
+  await expect(sheet).toBeHidden()
 
   // The running turn stays on screen: "Closing" wins the slot over "Working".
   const row = chatRow(drawer, prompt)
   await expect(row).toHaveAccessibleName(`${prompt}, Closing`)
-  await expect(row).toContainText('Closing')
-  await expect(row).not.toContainText('Working')
+  await expect(row.locator('[title="Working"]')).toHaveCount(0)
 
   // When the turn ends the chat closes (no unread is banked for a closing
-  // chat); the persisted chat stays reachable from History.
+  // chat); the persisted chat stays in Recents, once, without status.
   await expect.poll(() => turns.count(), { timeout: 45_000 }).toBeGreaterThan(0)
-  await expect(chatRow(drawer, prompt)).toHaveCount(0)
-  await expect(historyOpen(drawer, prompt)).toBeVisible()
-  await expect(drawer.getByRole('group', { name: 'Open', exact: true })).toHaveCount(0)
+  await expect(row).toHaveAccessibleName(prompt)
+  await expect(row).toHaveCount(1)
+  await expect(row).not.toHaveAttribute('aria-current', 'page')
 })
 
-test('search filters History only, never takes focus, and starts fresh on each visit', async ({
+test('search filters the merged Recents list, never takes focus, and starts fresh on each visit', async ({
   page
 }) => {
   await bootFreshProject(page)
@@ -561,36 +672,31 @@ test('search filters History only, never takes focus, and starts fresh on each v
   let drawer = await openDrawer(page)
   const search = drawer.getByRole('textbox', { name: 'Search chats' })
   await expect(search).toHaveAttribute('placeholder', 'Search chats…')
-  // Focus lands on the active Open row, not the search field.
   await expect(chatRow(drawer, second)).toBeFocused()
   await expect(search).not.toBeFocused()
   await expect(drawer.getByRole('heading', { level: 3, name: 'Today' })).toBeVisible()
-  await expect(historyOpen(drawer, first)).toBeVisible()
-  await expect(historyOpen(drawer, second)).toBeVisible()
+  await expect(chatRow(drawer, first)).toBeVisible()
+  await expect(chatRow(drawer, second)).toBeVisible()
 
   await search.tap()
   await search.fill('foxtrot')
-  await expect(historyOpen(drawer, first)).toBeVisible()
-  await expect(historyOpen(drawer, second)).toHaveCount(0)
-  // Open rows are never filtered.
   await expect(chatRow(drawer, first)).toBeVisible()
-  await expect(chatRow(drawer, second)).toBeVisible()
+  await expect(chatRow(drawer, second)).toHaveCount(0)
 
   await search.fill('zzz-no-such-chat')
   await expect(drawer.getByText('No chats match this search.')).toBeVisible()
-  await expect(chatRow(drawer, first)).toBeVisible()
-  await expect(chatRow(drawer, second)).toBeVisible()
+  await expect(chatRow(drawer, first)).toHaveCount(0)
 
-  // Dismiss and reopen: the query resets and every History row is back.
+  // Dismiss and reopen: the query resets and every row is back.
   await page.keyboard.press('Escape')
   await expect(drawer).toBeHidden()
   drawer = await openDrawer(page)
   await expect(drawer.getByRole('textbox', { name: 'Search chats' })).toHaveValue('')
-  await expect(historyOpen(drawer, first)).toBeVisible()
-  await expect(historyOpen(drawer, second)).toBeVisible()
+  await expect(chatRow(drawer, first)).toBeVisible()
+  await expect(chatRow(drawer, second)).toBeVisible()
 })
 
-test('deleting from History asks first: Cancel and Esc keep the chat and return focus, Delete removes it and moves focus on', async ({
+test('deleting a history chat from its long-press sheet asks first: Cancel and Esc keep it and return focus, Delete removes it and moves focus on', async ({
   page
 }) => {
   const turns = trackTurnEnds(page)
@@ -599,95 +705,106 @@ test('deleting from History asks first: Cancel and Esc keep the chat and return 
   const newer = 'india notes [DURATION:2]'
   await launchChat(page, older)
   await launchChat(page, newer)
-  // A turn's end bumps its chat's last activity and re-sorts History, and the
+  // A turn's end bumps its chat's last activity and re-sorts Recents, and the
   // "next" row after a delete is decided by that order: let both turns end first.
   await expect.poll(() => turns.count(), { timeout: 45_000 }).toBeGreaterThanOrEqual(2)
 
   const drawer = await openDrawer(page)
-  const deleteButton = (title: string): Locator =>
-    historyGroup(drawer).getByRole('button', { name: `Delete ${title}`, exact: true })
+  // Close both so they are history rows: Delete then stands alone.
+  for (const title of [older, newer]) {
+    const sheet = await openRowActions(page, chatRow(drawer, title), title)
+    await sheet.getByRole('button', { name: 'Close chat', exact: true }).tap()
+    await expect(sheet).toBeHidden()
+    await expect(chatRow(drawer, title)).not.toHaveAttribute('aria-current', 'page')
+  }
   const confirm = page.getByRole('alertdialog', { name: 'Delete chat' })
-  const historyRows = historyGroup(drawer).getByRole('button', { name: /^Delete / })
-  await expect(historyRows).toHaveCount(2)
-  await expectTouchTarget(deleteButton(newer), 'History delete')
-  await expectTouchTarget(historyOpen(drawer, newer), 'History row')
+  const rows = todayGroup(drawer).locator('[data-recents-open]')
+  await expect(rows).toHaveCount(2)
+  await expectTouchTarget(chatRow(drawer, newer), 'Recents row')
 
   // The recency order decides which row is "next": read it, do not assume it.
-  const order = await historyRows.evaluateAll((buttons) =>
+  const [topTitle, nextTitle] = await rows.evaluateAll((buttons) =>
     buttons.map((button) => button.getAttribute('aria-label') ?? '')
   )
-  const [topTitle, nextTitle] = order.map((label) => label.replace(/^Delete /, ''))
   expect([topTitle, nextTitle].sort()).toEqual([older, newer].sort())
 
-  // Trash opens a confirm; nothing is deleted yet.
-  await deleteButton(topTitle).tap()
-  await expect(confirm).toBeVisible()
+  const requestDelete = async (title: string): Promise<void> => {
+    const sheet = await openRowActions(page, chatRow(drawer, title), title)
+    await expect(sheet.getByRole('button', { name: 'Close chat' })).toHaveCount(0)
+    await sheet.getByRole('button', { name: 'Delete chat', exact: true }).tap()
+    await expect(confirm).toBeVisible()
+  }
+
+  // Delete chat opens a confirm; nothing is deleted yet.
+  await requestDelete(topTitle)
   await expect(confirm).toContainText(`Delete “${topTitle}”? This action cannot be undone.`)
-  await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeVisible()
-  await expect(confirm.getByRole('button', { name: 'Delete', exact: true })).toBeVisible()
   await expect(drawer).toBeVisible()
 
-  // Cancel: nothing deleted, focus returns to that row's trash button.
+  // Cancel: nothing deleted, focus returns to that row.
   await confirm.getByRole('button', { name: 'Cancel' }).tap()
   await expect(confirm).toBeHidden()
-  await expect(historyRows).toHaveCount(2)
-  await expect(deleteButton(topTitle)).toBeFocused()
+  await expect(rows).toHaveCount(2)
+  await expect(chatRow(drawer, topTitle)).toBeFocused()
 
   // Esc behaves the same.
-  await deleteButton(topTitle).tap()
-  await expect(confirm).toBeVisible()
+  await requestDelete(topTitle)
   await page.keyboard.press('Escape')
   await expect(confirm).toBeHidden()
-  await expect(historyRows).toHaveCount(2)
-  await expect(deleteButton(topTitle)).toBeFocused()
+  await expect(rows).toHaveCount(2)
+  await expect(chatRow(drawer, topTitle)).toBeFocused()
   await expect(drawer).toBeVisible()
 
-  // Delete: the row goes, the drawer stays, focus moves to the next row's open button.
-  await deleteButton(topTitle).tap()
+  // Delete: the row goes, the drawer stays, focus moves to the next row.
+  await requestDelete(topTitle)
   await confirm.getByRole('button', { name: 'Delete', exact: true }).tap()
   await expect(confirm).toBeHidden()
-  await expect(historyOpen(drawer, topTitle)).toHaveCount(0)
-  await expect(historyRows).toHaveCount(1)
-  await expect(drawer).toBeVisible()
-  await expect(historyOpen(drawer, nextTitle)).toBeFocused()
+  await expect(chatRow(drawer, topTitle)).toHaveCount(0)
+  await expect(rows).toHaveCount(1)
+  await expect(chatRow(drawer, nextTitle)).toBeFocused()
 
-  // Deleting the last visible row leaves nothing to focus: the History heading takes it.
-  await deleteButton(nextTitle).tap()
+  // Deleting the last row leaves nothing to focus: the Recents heading takes it.
+  await requestDelete(nextTitle)
   await confirm.getByRole('button', { name: 'Delete', exact: true }).tap()
   await expect(confirm).toBeHidden()
   await expect(drawer.getByText('No chats yet. Start one with the New chat button.')).toBeVisible()
   await expect(
-    drawer.getByRole('heading', { level: 2, name: 'History', exact: true })
+    drawer.getByRole('heading', { level: 2, name: 'Recents', exact: true })
   ).toBeFocused()
 })
 
-test('Terminals and Tabs rows: a new terminal is listed with rename and close, Git history adds a Tabs row, every action holds the 44px floor', async ({
+test('drawer sections: the nav switches lists in place, Terminals lists terminals with rename and close, Editors offers Browse files, Git History lives in the menu, every action holds the 44px floor', async ({
   page
 }) => {
   await bootFreshProject(page, { git: true })
 
-  // New terminal is a navigation: the drawer closes and the shell shows it.
+  // Switching to an empty Terminals section keeps the drawer open: an empty
+  // line, no search, and the section's New terminal pill.
   let drawer = await openDrawer(page)
+  await sectionNav(drawer, 'Terminals').tap()
+  await expect(drawer).toBeVisible()
+  await expect(sectionNav(drawer, 'Terminals')).toHaveAttribute('aria-current', 'true')
+  await expect(drawer.getByText('No open terminals')).toBeVisible()
+  await expect(drawer.getByRole('textbox', { name: 'Search chats' })).toHaveCount(0)
+  // New terminal is a navigation: the drawer closes and the shell shows it.
   await drawer.getByRole('button', { name: 'New terminal', exact: true }).tap()
   await expect(drawer).toBeHidden()
 
+  // Reopened with a terminal active, the drawer preselects Terminals.
   drawer = await openDrawer(page)
-  const terminalsHeading = drawer.getByRole('heading', { level: 3, name: 'Terminals' })
+  await expect(sectionNav(drawer, 'Terminals')).toHaveAttribute('aria-current', 'true')
   const terminals = drawer.getByRole('group', { name: 'Terminals', exact: true })
-  await expect(drawer.getByText('No open terminals')).toHaveCount(0)
-  // The terminal's name is whatever the app gave it: read it off the rename action.
   const rename = terminals.getByRole('button', { name: /^Rename / })
   await expect(rename).toHaveCount(1)
   const name = ((await rename.getAttribute('aria-label')) ?? '').replace(/^Rename /, '')
   expect(name.length).toBeGreaterThan(0)
   const terminalRow = terminals.getByRole('button', { name, exact: true })
   const closeTerminal = terminals.getByRole('button', { name: `Close ${name}`, exact: true })
-  // The new terminal is the active tab: it is the focused, current row.
   await expect(terminalRow).toHaveAttribute('aria-current', 'page')
   await expect(terminalRow).toBeFocused()
   await expectTouchTarget(terminalRow, 'terminal row')
   await expectTouchTarget(rename, 'terminal rename')
   await expectTouchTarget(closeTerminal, 'terminal close')
+  await expectNoHorizontalScroll(drawer, 'Terminals drawer')
 
   // Rename in place: a labelled 16px field at the touch floor, committed with Enter.
   await rename.tap()
@@ -698,38 +815,45 @@ test('Terminals and Tabs rows: a new terminal is listed with rename and close, G
   await renameInput.fill('build shell')
   await page.keyboard.press('Enter')
   await expect(terminals.getByRole('button', { name: 'build shell', exact: true })).toBeVisible()
-  await expect(
-    terminals.getByRole('button', { name: 'Rename build shell', exact: true })
-  ).toBeVisible()
-  await expect(
-    terminals.getByRole('button', { name: 'Close build shell', exact: true })
-  ).toBeVisible()
 
-  // Git history is a navigation too, and its tab lands in the Tabs group.
-  await expect(drawer.getByRole('heading', { level: 3, name: 'Tabs' })).toHaveCount(0)
+  // Git History is a menu entry, not a section: with it on screen the drawer
+  // opens on Chats.
   await drawer.getByRole('button', { name: 'Git history', exact: true }).tap()
   await expect(drawer).toBeHidden()
-
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Git History', exact: true })
+  ).toBeVisible()
   drawer = await openDrawer(page)
-  const tabsHeading = drawer.getByRole('heading', { level: 3, name: 'Tabs' })
-  await expect(tabsHeading).toBeVisible()
-  const tabs = drawer.getByRole('group', { name: 'Tabs', exact: true })
-  const gitRow = tabs.getByRole('button', { name: 'Git History', exact: true })
-  const closeGit = tabs.getByRole('button', { name: 'Close Git History', exact: true })
-  await expect(gitRow).toHaveAttribute('aria-current', 'page')
-  await expect(gitRow).toBeFocused()
-  await expectTouchTarget(gitRow, 'tab row')
-  await expectTouchTarget(closeGit, 'tab close')
-  // Terminals sit above Tabs.
-  expect((await boxOf(terminalsHeading)).y).toBeLessThan((await boxOf(tabsHeading)).y)
+  await expect(sectionNav(drawer, 'Chats')).toHaveAttribute('aria-current', 'true')
+  await page.keyboard.press('Escape')
+  await expect(drawer).toBeHidden()
+  // Header ⋯ closes it.
+  await page.getByRole('button', { name: 'More', exact: true }).tap()
+  await page.locator('#mobile-header-more-sheet').getByRole('button', { name: 'Close tab' }).tap()
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Git History', exact: true })
+  ).toHaveCount(0)
 
-  // Closing the only other tab removes the whole Tabs group.
-  await closeGit.tap()
-  await expect(tabsHeading).toHaveCount(0)
-  await expect(drawer).toBeVisible()
+  // The terminal row switches back to it; it was never recreated.
+  drawer = await openDrawer(page)
+  await sectionNav(drawer, 'Terminals').tap()
+  await drawer.getByRole('button', { name: 'build shell', exact: true }).tap()
+  await expect(drawer).toBeHidden()
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'build shell', exact: true })
+  ).toBeVisible()
+
+  // An empty Editors section offers Browse files.
+  drawer = await openDrawer(page)
+  await sectionNav(drawer, 'Editors').tap()
+  await expect(drawer.getByText('No open editors')).toBeVisible()
+  const browse = drawer.getByRole('button', { name: 'Browse files', exact: true })
+  await expectPillHitArea(browse, 'Browse files')
+  await browse.tap()
+  await expect(page.getByRole('button', { name: 'Back to parent folder' })).toBeVisible()
 })
 
-test('focus returns to ☰ after Esc, the scrim and the built-in close, and a row navigation leaves the drawer on the opener', async ({
+test('focus returns to ☰ after Esc and the built-in close, and a row navigation leaves the drawer on the opener', async ({
   page
 }) => {
   await bootFreshProject(page)
@@ -745,19 +869,13 @@ test('focus returns to ☰ after Esc, the scrim and the built-in close, and a ro
   await expect(drawer).toBeHidden()
   await expect(menuButton(page)).toBeFocused()
 
-  // Scrim: a tap outside the 320px drawer.
-  drawer = await openDrawer(page)
-  await page.touchscreen.tap(375, 420)
-  await expect(drawer).toBeHidden()
-  await expect(menuButton(page)).toBeFocused()
-
   // The built-in close.
   drawer = await openDrawer(page)
   await drawer.getByRole('button', { name: 'Close', exact: true }).tap()
   await expect(drawer).toBeHidden()
   await expect(menuButton(page)).toBeFocused()
 
-  // Row navigation, from an Open row and then from a History row: the drawer
+  // Row navigation, from one Recents row and then another: the drawer
   // closes on the chat it opened and focus lands on the opener (or the shell
   // title once the header goal adds it).
   drawer = await openDrawer(page)
@@ -768,7 +886,7 @@ test('focus returns to ☰ after Esc, the scrim and the built-in close, and a ro
 
   drawer = await openDrawer(page)
   await expect(chatRow(drawer, first)).toBeFocused()
-  await historyOpen(drawer, second).tap()
+  await chatRow(drawer, second).tap()
   await expect(drawer).toBeHidden()
   await expect(page.getByRole('heading', { level: 1, name: second, exact: true })).toBeVisible()
   await expectNavigationFocus(page)
