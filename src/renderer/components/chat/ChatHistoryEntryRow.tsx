@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { Trash2 } from '@/components/icons'
+import { MarqueeText } from '@/components/ui/marquee-text'
 import { formatRelativeTimeFromMs } from '@/lib/git-time'
 import { cn } from '@/lib/utils'
 import { useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
@@ -183,14 +184,10 @@ export function ChatHistoryEntryRow({
           agentConfigId={entry.agentConfigId}
           agents={entry.agents}
         />
-        <span
-          className={cn(
-            'flex-1 truncate',
-            dimmed ? 'text-disabled-foreground' : 'text-sidebar-foreground'
-          )}
-        >
-          {entry.title}
-        </span>
+        <MarqueeText
+          text={entry.title}
+          className={dimmed ? 'text-disabled-foreground' : 'text-sidebar-foreground'}
+        />
         {entry.status === 'error' && (
           <span data-slot="history-status" className="inline-flex shrink-0">
             <span className="shrink-0 rounded-sm bg-destructive/15 px-1 py-px text-3xs font-medium text-destructive">

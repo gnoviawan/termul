@@ -456,6 +456,46 @@ describe('MobileDrawerOpenSection chat rows', () => {
     expect(close.className).not.toMatch(/\bsize-8\b/)
   })
 
+  it('keeps every row select-button shrinkable (min-w-0) so a long title never pushes its × off-screen', () => {
+    // Regression: without min-w-0 the button's min-width:auto pinned it to
+    // min-content — long titles overflowed the drawer and the × rendered
+    // off-screen (the drawer's scroll body gained a horizontal scroll).
+    seedTabs([
+      CHAT_TAB,
+      { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+      { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' }
+    ])
+    terminalsRef.current = [{ id: 't1', name: 'zsh' }]
+    renderSection()
+
+    for (const name of ['Hello chat', 'zsh', 'a.ts']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('min-w-0')
+    }
+    // Titles keep a fixed-width clipping viewport (truncate in jsdom, where
+    // nothing measurably overflows — MarqueeText's static path).
+    expect(
+      within(screen.getByRole('button', { name: 'Hello chat' })).getByText('Hello chat')
+    ).toHaveClass('truncate')
+  })
+
+  it('mounts the marquee runner when a row title measurably overflows', () => {
+    // jsdom reports all widths as 0, so stub them — every element reads
+    // scrollWidth 300 > clientWidth 100, i.e. an overflowing label.
+    const scrollSpy = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(300)
+    const clientSpy = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100)
+    try {
+      renderSection()
+
+      const row = screen.getByRole('button', { name: 'Hello chat' })
+      const runner = row.querySelector<HTMLElement>('.termul-marquee')
+      expect(runner).not.toBeNull()
+      expect(runner).toHaveTextContent('Hello chat')
+    } finally {
+      scrollSpy.mockRestore()
+      clientSpy.mockRestore()
+    }
+  })
+
   it('selecting a row activates its tab and navigates', () => {
     renderSection({ activeTabId: null })
 

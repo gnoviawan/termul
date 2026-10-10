@@ -13,6 +13,7 @@ import {
   X
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { MarqueeText } from '@/components/ui/marquee-text'
 import {
   AgentChatStatusGlyphs,
   agentChatStatusSlots,
@@ -36,11 +37,13 @@ const INLINE_ACTION_BUTTON = 'size-11 shrink-0'
 /**
  * Row select button: 44px minimum, a leading bar that is `primary` on the
  * active row (a non-colour-only cue beside the `secondary` fill) and
- * transparent otherwise so every row keeps the same text inset.
+ * transparent otherwise so every row keeps the same text inset. `min-w-0`
+ * lets the button shrink below its content width — without it a long title
+ * pins the row wider than the drawer and pushes the × button off-screen.
  */
 function rowButtonClass(isActive: boolean): string {
   return cn(
-    'h-auto min-h-11 flex-1 justify-start gap-2 border-l-2 px-2 py-1.5 text-sm',
+    'h-auto min-h-11 min-w-0 flex-1 justify-start gap-2 border-l-2 px-2 py-1.5 text-sm',
     isActive ? 'border-l-primary' : 'border-l-transparent'
   )
 }
@@ -196,7 +199,7 @@ function OpenChatRow({ tab, isActive, onSelect, onClose }: OpenChatRowProps): Re
           agentId={signals.session?.agentId ?? indexAgentId}
           agentConfigId={agentConfigId}
         />
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <MarqueeText text={title} />
         {statuses.map((status) => (
           <span
             key={status}
@@ -536,7 +539,7 @@ export function MobileDrawerOpenSection({
                     onClick={() => selectTab(paneId, tab.id)}
                   >
                     <TerminalSquare size={16} />
-                    <span className="min-w-0 flex-1 truncate">{terminalName ?? 'Terminal'}</span>
+                    <MarqueeText text={terminalName ?? 'Terminal'} />
                   </Button>
                   {isRenaming ? (
                     <input
@@ -619,7 +622,7 @@ export function MobileDrawerOpenSection({
                     {tab.type === 'git-history' && <History size={16} />}
                     {tab.type === 'browser' && <Globe size={16} />}
                     {tab.type === 'canvas' && <Edit2 size={16} />}
-                    <span className="min-w-0 flex-1 truncate">{rowLabel}</span>
+                    <MarqueeText text={rowLabel} />
                     {tab.type === 'editor' && isEditorFileDirty(tab.filePath) && (
                       <>
                         <span
