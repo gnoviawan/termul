@@ -3,11 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mobile shell drawer token/copy contract (story 12 QA F7/F12, retargeted at the
 // drawer-as-home revamp):
-//   - drawer width min(82vw, 20rem); the old `max-w-20rem` cap class was
-//     invalid Tailwind and capped nothing
-//   - drawer header stays in the p-2 family (no px-4 py-3 drift)
-//   - the unlabeled "Chats" scope label is replaced by real `Open` / `History`
-//     section headings (the search now sits above both, scoped to History)
+//   - full-screen drawer: full width, safe-area padded
+//   - Claude-style borderless header: the Termul wordmark
+//   - one muted "Recents" heading over the merged chat list (open chats and
+//     history together), below the search
 //   - semantic tokens and size tokens only inside the drawer
 
 const { tauriRef, workspaceRef } = vi.hoisted(() => ({
@@ -69,10 +68,6 @@ vi.mock('@/stores/browser-session-store', () => ({
   useBrowserSessionStore: (selector: (s: unknown) => unknown) => selector({ tabs: new Map() })
 }))
 
-vi.mock('@/components/chat/ChatHistoryTab', () => ({
-  ChatHistoryTab: () => <div data-testid="chat-history-stub" />
-}))
-
 import { useAcpStore } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
 import { useProjectStore } from '@/stores/project-store'
@@ -122,49 +117,43 @@ describe('MobileShellDrawer token sweep', () => {
     }
   })
 
-  it('drawer width is min(82vw, 20rem), with no invalid cap class', () => {
+  it('drawer is full-screen: full width, no width cap, safe-area padded at the top', () => {
     const cls = renderDrawer().className
 
-    // Today's `w-[72vw] max-w-20rem` had a cap class Tailwind never generated,
-    // so no cap applied. The width token carries the cap itself.
-    expect(cls).toContain('w-[min(82vw,20rem)]')
+    expect(cls).toContain('w-full')
+    expect(cls).toContain('max-w-none')
+    expect(cls).toContain('sm:max-w-none')
+    expect(cls).toContain('pt-[env(safe-area-inset-top)]')
+    // The built-in close moves below the top inset with the content.
+    expect(cls).toContain('[&>button:last-child]:mt-[env(safe-area-inset-top)]')
+    expect(cls).not.toContain('w-[min(82vw,20rem)]')
     expect(cls).not.toContain('max-w-20rem')
-    expect(cls).not.toContain('w-[72vw]')
-    expect(cls).not.toContain('100vw-3rem')
   })
 
-  it('drawer header uses the p-2 family (no px-4 py-3 drift)', () => {
+  it('drawer top row is the borderless project row, the title only naming the dialog', () => {
     const drawer = renderDrawer()
 
-    // SheetHeader renders a plain div: the drawer's first bordered section.
-    const headerDiv = drawer.querySelector('.border-b')
-    expect(headerDiv).toBeTruthy()
-    const cls = headerDiv?.className ?? ''
-    expect(cls).toContain('p-2')
-    expect(cls).not.toContain('px-4')
-    expect(cls).not.toContain('px-3')
+    const title = screen.getByRole('heading', { level: 2, name: 'Termul' })
+    expect(title).toHaveClass('sr-only')
+    expect(title.parentElement).toContainElement(screen.getByRole('button', { name: /Demo/ }))
+    // The header, the section tabs and the search sit on the sheet without rules.
+    expect(drawer.querySelector('.border-b')).toBeNull()
   })
 
-  it('replaces the Chats scope label with Open and History headings, search above both', () => {
+  it('shows one Recents heading below the search, above the merged chat list', () => {
     const drawer = renderDrawer()
 
-    const labels = Array.from(drawer.querySelectorAll('.label-group'))
-    // QA F12: the old unlabeled "Chats" divider is gone.
-    expect(labels.find((el) => el.textContent === 'Chats')).toBeUndefined()
-    const open = labels.find((el) => el.textContent === 'Open')
-    const history = labels.find((el) => el.textContent === 'History')
-    expect(open?.tagName).toBe('H2')
-    expect(history?.tagName).toBe('H2')
-
+    const headings = Array.from(drawer.querySelectorAll('h2')).map((el) => el.textContent)
+    expect(headings).toEqual(['Termul', 'Recents'])
     const search = screen.getByRole('textbox', { name: 'Search chats' })
-    const stub = drawer.querySelector('[data-testid="chat-history-stub"]')
-    expect(stub).toBeTruthy()
+    const recents = screen.getByRole('heading', { level: 2, name: 'Recents' })
+    expect(recents).toHaveClass('text-muted-foreground')
+    const row = screen.getByRole('button', { name: 'Hello chat' })
     const follows = (a: Node | null | undefined, b: Node | null | undefined): boolean =>
       Boolean(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
-    expect(follows(search, open)).toBe(true)
-    expect(follows(open, history)).toBe(true)
-    // The History heading sits directly above the history body it labels.
-    expect(follows(history, stub)).toBe(true)
+    expect(follows(search, recents)).toBe(true)
+    expect(follows(recents, row)).toBe(true)
+    expect(row).toHaveClass('rounded-full', 'bg-secondary', 'text-base')
   })
 
   it('uses size tokens and semantic colours only (no text-[Npx], no palette primitives)', () => {

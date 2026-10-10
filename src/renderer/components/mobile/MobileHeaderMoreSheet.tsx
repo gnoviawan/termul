@@ -28,6 +28,11 @@ interface MobileHeaderMoreSheetProps extends ShellNavigationActions {
   onItemChosen: () => void
   /** Agent-chat tabs only. */
   onCloseChat?: () => void
+  /**
+   * Other non-terminal tabs (Git History, editors, Git Changes, browser):
+   * closes the active tab through its guarded close.
+   */
+  onCloseTab?: () => void
 }
 
 /**
@@ -43,6 +48,7 @@ export function MobileHeaderMoreSheet({
   onCloseAutoFocus,
   onItemChosen,
   onCloseChat,
+  onCloseTab,
   ...navigation
 }: MobileHeaderMoreSheetProps): React.JSX.Element {
   const choose = (run: () => void) => (): void => {
@@ -90,6 +96,20 @@ export function MobileHeaderMoreSheet({
             >
               <X size={16} />
               Close chat
+            </button>
+          </div>
+        )}
+        {onCloseTab && !onCloseChat && (
+          <div
+            className={visibleRows.length > 0 ? SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME : undefined}
+          >
+            <button
+              type="button"
+              className={`${SHEET_ROW_CLASS_NAME} text-destructive hover:bg-destructive/10`}
+              onClick={choose(onCloseTab)}
+            >
+              <X size={16} />
+              Close tab
             </button>
           </div>
         )}

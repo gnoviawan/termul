@@ -513,7 +513,7 @@ test('the changed-files bar and its expansion push the dock top up and the toast
   await dismissToast(toast)
   await bar.tap()
   await expect(bar).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: /^src\/auth\.ts/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /src\/auth\.ts/ })).toBeVisible()
   await expect.poll(() => clearanceError(dock)).toBe(0)
   const expanded = await publishedClearance(page)
   expect(expanded).toBeGreaterThan(collapsed)
@@ -629,15 +629,20 @@ test('a chat hidden behind an editor tab releases the clearance and it returns w
   // A changed-files row opens the file in an editor tab: the chat stays mounted
   // but is no longer visible, so it stops reporting its dock.
   await dock.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true }).tap()
-  await page.getByRole('button', { name: /^src\/auth\.ts/ }).tap()
+  await page.getByRole('button', { name: /src\/auth\.ts/ }).tap()
   await expect(page.getByText('e2e-auth-file')).toBeVisible()
   await expect.poll(() => publishedClearance(page)).toBeNull()
   await expect(dock).toHaveCount(1)
 
-  // Back on the chat tab the dock reports itself again.
+  // Back on the chat tab the dock reports itself again. The drawer opens on
+  // Editors (the editor is active): switch it to Chats, then pick the chat.
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await page
-    .locator('#mobile-shell-drawer')
+  const drawer = page.locator('#mobile-shell-drawer')
+  await drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Chats/ })
+    .tap()
+  await drawer
     .getByRole('button', { name: /hidden chat/ })
     .first()
     .tap()
@@ -770,8 +775,14 @@ test('the launcher composer column is a dock: the unsupported-attachment toast c
 async function openTerminalWithBar(page: Page): Promise<Locator> {
   const project = await registerProject()
   await bootWorkspace(page, project, { settleWarmup: true })
+  // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await page.getByRole('button', { name: 'New terminal' }).tap()
+  const drawer = page.locator('#mobile-shell-drawer')
+  await drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Terminals/ })
+    .tap()
+  await drawer.getByRole('button', { name: 'New terminal' }).tap()
   const group = page.getByRole('group', { name: 'Terminal keys' })
   await expect(group).toBeVisible()
   return group

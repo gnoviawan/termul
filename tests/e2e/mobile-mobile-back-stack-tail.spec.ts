@@ -197,7 +197,20 @@ async function pressSystemBack(page: Page): Promise<void> {
 
 async function openDrawer(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await expect(page.getByRole('dialog', { name: 'Menu' })).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Termul', exact: true })).toBeVisible()
+}
+
+/**
+ * Open the drawer on its Chats section (it opens on the active tab's section,
+ * Terminals from a terminal), where the New chat pill lives.
+ */
+async function openDrawerOnChats(page: Page): Promise<void> {
+  await openDrawer(page)
+  await page
+    .locator('#mobile-shell-drawer')
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Chats/ })
+    .tap()
 }
 
 /**
@@ -396,7 +409,13 @@ function watchAgentWarmup(page: Page): Promise<void> {
 async function openTerminalTab(page: Page, warmedUp: Promise<void>): Promise<void> {
   await warmedUp
   await openDrawer(page)
-  await page.getByRole('button', { name: 'New terminal' }).tap()
+  // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
+  const drawer = page.locator('#mobile-shell-drawer')
+  await drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Terminals/ })
+    .tap()
+  await drawer.getByRole('button', { name: 'New terminal' }).tap()
   await expect(page.getByRole('button', { name: 'Terminal actions', exact: true })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeVisible()
 }
@@ -584,7 +603,7 @@ test.describe('with a terminal tab open', () => {
     const chip = page.getByRole('button', { name: AGENT_SELECTOR_PILL })
     const sheet = page.getByRole('dialog', { name: AGENT_SELECTOR_SHEET })
 
-    await openDrawer(page)
+    await openDrawerOnChats(page)
     await page.getByRole('button', { name: 'New chat', exact: true }).tap()
     await expect(launcher).toBeVisible()
     await chip.tap()
@@ -617,7 +636,7 @@ test.describe('with a terminal tab open', () => {
     await openTerminalTab(page, warmedUp)
     const launcher = page.getByRole('dialog', { name: 'Agent launcher' })
 
-    await openDrawer(page)
+    await openDrawerOnChats(page)
     await page.getByRole('button', { name: 'New chat', exact: true }).tap()
     await expect(launcher).toBeVisible()
     await settleBackStack(page)
@@ -647,7 +666,7 @@ test('a route pushed under an open drawer re-arms its entry: one back closes the
   const gate = await installReplyGate(page, (frame) => frame.type === 'create_session')
   gate.arm()
   const { base } = await bootMobileShell(page)
-  const drawer = page.getByRole('dialog', { name: 'Menu' })
+  const drawer = page.getByRole('dialog', { name: 'Termul', exact: true })
 
   // The launcher is still settling (no warm-up can be waited for with its reply
   // held): a remount can swallow the text, so type until the Start button takes it.

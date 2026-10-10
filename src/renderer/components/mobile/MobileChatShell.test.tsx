@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -62,7 +62,10 @@ const {
         activeTabId: string | null
       }>,
       activePaneId: 'pane-1',
-      removeTab: vi.fn()
+      fullscreenPaneId: null as string | null,
+      removeTab: vi.fn(),
+      setActiveTab: vi.fn(),
+      clearFullscreenPane: vi.fn()
     }
   },
   browserTabsRef: { current: new Map<string, unknown>() },
@@ -140,7 +143,8 @@ vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
 // threaded through (☰ and the pill → drawerOpen → `open`; `onOpenChange` closes
 // it). It carries the real drawer's id, so the `aria-controls` of ☰ and the pill
 // resolves to an element. The drawer's own layout, focus handling and rows are
-// covered in MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx.
+// covered in MobileShellDrawer.test.tsx, MobileRecentsList.test.tsx and
+// MobileDrawerSectionList.test.tsx.
 // With `drawerModalRef` set it wraps the same content in a real modal Sheet.
 vi.mock('./MobileShellDrawer', async () => {
   const { Sheet, SheetContent, SheetDescription, SheetTitle } = await import(
@@ -362,6 +366,9 @@ describe('MobileChatShell', () => {
       closeTab()
     )
     workspaceRef.current.removeTab.mockReset()
+    workspaceRef.current.setActiveTab.mockReset()
+    workspaceRef.current.clearFullscreenPane.mockReset()
+    workspaceRef.current.fullscreenPaneId = null
     drawerPropsRef.current = null
     tauriRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo' }
@@ -909,8 +916,34 @@ describe('MobileChatShell', () => {
         'Files',
         'Command palette',
         'New terminal',
-        'Project settings'
+        'Project settings',
+        'Close tab'
       ])
+    })
+
+    it('closes an editor tab through its dirty guard, not removeTab', async () => {
+      seedTabs(
+        [{ type: 'editor', id: 'edit-/demo/a.ts', filePath: '/demo/a.ts' }],
+        'edit-/demo/a.ts'
+      )
+      const onCloseEditorTab = vi.fn(() => true)
+      renderWeb({ onCloseEditorTab })
+      await openHeaderSheet()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close tab' }))
+
+      expect(onCloseEditorTab).toHaveBeenCalledWith('/demo/a.ts')
+      expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
+    })
+
+    it('offers Close tab for a Git History tab, through the plain removeTab', async () => {
+      seedTabs([{ type: 'git-history', id: 'gh1', cwd: '/demo' }], 'gh1')
+      renderWeb()
+      await openHeaderSheet()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close tab' }))
+
+      expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('gh1')
     })
 
     it('closes when the active tab changes underneath it, and stays closed on return', async () => {
@@ -1893,6 +1926,53 @@ describe('MobileChatShell', () => {
   })
 
   // ── L-15: entry points that create or activate a tab leave /snapshots ──
+
+  describe('drawer sections', () => {
+    it('has no bottom bar on the main screen: header and content only', () => {
+      seedActiveTerminal({ ptyId: 'pty-1' })
+      renderShell()
+
+      expect(screen.queryByRole('navigation')).not.toBeInTheDocument()
+      // The terminal key bar follows the content directly: the bottom edge again.
+      const keyBar = screen.getByRole('group', { name: 'Terminal keys' }).parentElement
+      expect(screen.getByText('chat body').parentElement?.nextElementSibling).toBe(keyBar)
+    })
+
+    it.each([
+      ['a chat', [{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }], 'tab-1', 'chats'],
+      [
+        'a terminal',
+        [{ type: 'terminal', id: 'term-t1', terminalId: 't1' }],
+        'term-t1',
+        'terminals'
+      ],
+      ['an editor', [{ type: 'editor', id: 'e1', filePath: '/demo/a.ts' }], 'e1', 'editors'],
+      ['Git Changes', [{ type: 'git', id: 'g1', cwd: '/demo' }], 'g1', 'editors'],
+      ['Git History', [{ type: 'git-history', id: 'gh1', cwd: '/demo' }], 'gh1', null],
+      ['no tab', [], null, null]
+    ])('preselects the drawer section of %s', (_label, tabs, activeTabId, section) => {
+      seedTabs(tabs, activeTabId)
+      renderShell()
+
+      expect(drawerProps().section).toBe(section)
+    })
+
+    it('hands the drawer the attention count for its Chats badge', () => {
+      mockAttentionCount.mockReturnValue(3)
+      renderShell()
+
+      expect(drawerProps().attentionCount).toBe(3)
+    })
+
+    it('hands the drawer Browse files on web, which opens the Files sheet', () => {
+      tauriRef.current = false
+      renderShell()
+
+      act(() => drawerProps().onOpenFiles?.())
+
+      expect(screen.getByText('files-drawer')).toBeInTheDocument()
+    })
+  })
 
   describe('returning to the workspace route', () => {
     function RouteProbe(): React.JSX.Element {

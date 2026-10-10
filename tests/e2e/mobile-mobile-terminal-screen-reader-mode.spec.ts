@@ -196,7 +196,7 @@ async function bootMobileShell(page: Page): Promise<void> {
   // The header names the active project until a terminal takes over: seeing
   // it proves the shell booted into our fresh project.
   await expect(
-    page.getByRole('heading', { level: 1, name: projectName, exact: true })
+    page.getByRole('button', { name: new RegExp(`^${projectName}.*switch project$`) })
   ).toBeVisible()
   await warmedUp
 }
@@ -221,8 +221,14 @@ function screenReaderSwitch(dialog: Locator): Locator {
 
 /** Drawer -> New terminal; resolves once the terminal's key bar is on screen. */
 async function openNewTerminal(page: Page): Promise<void> {
+  // New terminal is the drawer's Terminals pill: switch the drawer to Terminals first.
   await page.getByRole('button', { name: 'Open menu' }).tap()
-  await page.getByRole('button', { name: 'New terminal' }).tap()
+  const drawer = page.locator('#mobile-shell-drawer')
+  await drawer
+    .getByRole('navigation', { name: 'Sections' })
+    .getByRole('button', { name: /^Terminals/ })
+    .tap()
+  await drawer.getByRole('button', { name: 'New terminal' }).tap()
   await expect(page.getByRole('group', { name: 'Terminal keys' })).toBeVisible()
 }
 

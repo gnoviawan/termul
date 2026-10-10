@@ -107,7 +107,9 @@ async function openChat(
 
   await page.getByRole('button', { name: 'Switch project' }).tap()
   await page.getByRole('button', { name: projectName, exact: true }).tap()
-  await expect(page.getByRole('heading', { name: projectName, exact: true })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: new RegExp(`^${projectName}.*switch project$`) })
+  ).toBeVisible()
 
   const launcher = page.locator('[data-composer-editor="true"][aria-label="Agent prompt"]')
   // The project switch swaps the pane tree: wait until only the new launcher is left.
