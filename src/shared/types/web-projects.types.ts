@@ -90,6 +90,18 @@ export interface SwitchProjectCompleted {
   sessionId: string
   cwd: string
   mcpServerCount: number
+  /**
+   * The session the connection was tracking before the switch
+   * (server-authoritative — the client's focused/active pointer can be stale
+   * or absent, e.g. all chats closed or a sessionStorage id from before a
+   * reload).
+   */
+  previousSessionId: string
+  /**
+   * Agent owning the new session — lets the client attribute the session
+   * record even when the previous session's local record is gone.
+   */
+  agentId: string
 }
 
 /** Deferred `switch_project` outcome while the current turn finishes. */
@@ -123,7 +135,6 @@ export type SwitchProjectReply =
 /** Reliable completion event for a previously queued switch. */
 export interface ProjectSwitchCompletedEvent extends SwitchProjectCompleted {
   requestId: string
-  previousSessionId: string
 }
 
 /** Reliable, correlated failure event for a previously queued switch. */

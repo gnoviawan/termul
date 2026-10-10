@@ -1324,12 +1324,16 @@ fn project_switch_outcomes_and_failure_event_serialize_camel_case() {
         session_id: SessionId("s-new".to_string()),
         cwd: "/work/p2".to_string(),
         mcp_server_count: 2,
+        agent_id: AgentId("a-1".to_string()),
+        previous_session_id: SessionId("s-old".to_string()),
     };
     let completed = serde_json::to_value(completed).expect("completed serde");
     assert_eq!(completed["status"], "completed");
     assert_eq!(completed["projectId"], "p-2");
     assert_eq!(completed["sessionId"], "s-new");
     assert_eq!(completed["mcpServerCount"], 2);
+    assert_eq!(completed["agentId"], "a-1");
+    assert_eq!(completed["previousSessionId"], "s-old");
 
     let queued = SwitchProjectOutcome::Queued {
         project_id: "p-3".to_string(),
@@ -3783,6 +3787,145 @@ fn handle_switch_project_agent_without_session_degrades_to_select() {
     assert_eq!(registry.snapshot().default_project_id, None);
 }
 
+/// Regression: `close_session` failing must still clear the connection's
+/// `current_session`/`current_project` trackers. The capability gate fails
+/// BEFORE contacting the agent on `close=false` agents (e.g. devin — the
+/// observed "agent does not support session/close"), and the renderer drops
+/// the session locally on every close. A stale tracker made the next
+/// `switch_project` take the Completed path, minting a session the client
+/// could not attribute ("Completed project switch has no tracked agent").
+#[tokio::test]
+async fn close_session_failure_clears_tracker_so_switch_selects() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    // Default capabilities advertise no `sessionCapabilities.close`, so the
+    // gate errors with "agent does not support session/close".
+    acp.install_test_agent_with_sessions(crate::acp::AgentId("a-1".to_string()), HashSet::new());
+    let registry = Arc::new(ProjectRegistry::new());
+    registry.set(
+        vec![crate::web::project_registry::ProjectSummary {
+            id: "p-1".to_string(),
+            name: "Proj p-1".to_string(),
+            color: "blue".to_string(),
+            path: Some("/a".to_string()),
+            is_archived: false,
+            is_default: false,
+        }],
+        None,
+    );
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let mut authed = true;
+    let mut current_agent: Option<crate::acp::AgentId> =
+        Some(crate::acp::AgentId("a-1".to_string()));
+    let current_session = Arc::new(parking_lot::Mutex::new(Some(crate::acp::SessionId(
+        "s-1".to_string(),
+    ))));
+    let current_project = Arc::new(parking_lot::Mutex::new(Some("p-old".to_string())));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+
+    let reply = handle_request(
+        r#"{"id":"c1","type":"close_session","payload":{"agentId":"a-1","sessionId":"s-1"}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    )
+    .await;
+    // The capability miss still surfaces as an error reply — the fix is in the
+    // tracker bookkeeping, not the client-visible outcome.
+    assert!(!reply.ok);
+    assert!(current_session.lock().is_none());
+    assert!(current_project.lock().is_none());
+
+    // The follow-up switch must now take the cold-tab `selected` path instead
+    // of minting a session the client cannot attribute.
+    let reply = handle_request(
+        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(reply.ok, "switch must succeed: {:?}", reply.err);
+    let payload = reply.payload.expect("selected payload");
+    assert_eq!(payload["status"], "selected");
+    assert_eq!(payload["projectId"], "p-1");
+}
+
+/// A failed `close_session` for a session this connection is NOT tracking
+/// leaves the tracker alone — the `== closing` guard keeps a genuinely
+/// current session pointed at.
+#[tokio::test]
+async fn close_session_failure_on_untracked_session_keeps_tracker() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    acp.install_test_agent_with_sessions(crate::acp::AgentId("a-1".to_string()), HashSet::new());
+    let registry = Arc::new(ProjectRegistry::new());
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let mut authed = true;
+    let mut current_agent: Option<crate::acp::AgentId> =
+        Some(crate::acp::AgentId("a-1".to_string()));
+    let current_session = Arc::new(parking_lot::Mutex::new(Some(crate::acp::SessionId(
+        "s-live".to_string(),
+    ))));
+    let current_project = Arc::new(parking_lot::Mutex::new(Some("p-here".to_string())));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+
+    let reply = handle_request(
+        r#"{"id":"c1","type":"close_session","payload":{"agentId":"a-1","sessionId":"s-other"}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(!reply.ok);
+    assert_eq!(current_session.lock().as_ref().unwrap().0, "s-live");
+    assert_eq!(current_project.lock().as_deref(), Some("p-here"));
+}
+
 /// Host-owned history (CAP-2): `list_persisted_sessions` serves the
 /// host `SessionPersistence` index — the same seam on desktop shared-live
 /// and standalone.
@@ -4872,7 +5015,7 @@ async fn execute_project_switch_returns_early_when_already_on_project() {
         project_id,
         session_id,
         cwd,
-        mcp_server_count: _,
+        ..
     } = outcome
     else {
         panic!("expected Completed (early return), got {:?}", outcome);
