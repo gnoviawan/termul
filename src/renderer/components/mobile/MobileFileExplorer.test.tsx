@@ -1502,26 +1502,24 @@ describe('MobileFileExplorer focus return', () => {
       expect(mockDeletePath).toHaveBeenCalledTimes(1)
     })
 
-    it('leaves focus alone and logs at info when no opener is connected', async () => {
+    it('parks focus on the Files sheet when no opener was recorded for the actions sheet', async () => {
       setRoot([entry('doomed.txt', 'file')])
       render(<Harness />)
-      await openConfirm('doomed.txt')
-      // Nothing is recorded for the actions sheet any more.
+      await openFiles()
+      fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
+      const deleteRow = await screen.findByText('Delete')
+      // Nothing is recorded for the actions sheet, so the confirm has no snapshot to return to.
       _resetSheetFocusReturnForTests()
+      fireEvent.click(deleteRow)
+      await screen.findByRole('alertdialog')
+      await new Promise((resolve) => setTimeout(resolve, 20))
 
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
       await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
-      await waitFor(() =>
-        expect(mockLogFrontendError).toHaveBeenCalledWith(
-          expect.objectContaining({
-            level: 'info',
-            source: 'sheet-focus-return',
-            message: 'Sheet closed with no connected focus target: file-actions-sheet'
-          })
-        )
-      )
-      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      await waitFor(() => expect(mockFocusSheetIfLost).toHaveBeenCalledTimes(1))
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true)
+      expect(document.activeElement).not.toBe(document.body)
     })
   })
 

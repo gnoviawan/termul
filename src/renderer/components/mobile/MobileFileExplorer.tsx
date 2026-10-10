@@ -46,7 +46,11 @@ import {
   resolveBreadcrumbTarget,
   siblingPath
 } from '@/lib/mobile-file-paths'
-import { recordSheetOpener, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
+import {
+  holdSheetReturnTargets,
+  recordSheetOpener,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
@@ -114,6 +118,10 @@ export function MobileFileExplorer({
   const [creating, setCreating] = useState<CreateState | null>(null)
   const [createSubmitting, setCreateSubmitting] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<DirectoryEntry | null>(null)
+  // The Delete choice closes the row-actions sheet, and that close consumes the opener
+  // recorded for it, so the confirm that follows holds its own snapshot (see
+  // holdSheetReturnTargets) and restores focus from it when it closes.
+  const restoreDeleteFocusRef = useRef<(() => boolean) | null>(null)
   // Tracks the project root we've already restored the persisted folder for.
   // Prevents re-reading persistence (and clobbering the in-session folder) on
   // every drawer reopen — the component stays mounted across close, so
@@ -702,6 +710,7 @@ export function MobileFileExplorer({
                   type="button"
                   className="flex h-11 items-center gap-2 rounded-md px-2 text-sm text-destructive hover:bg-destructive/10"
                   onClick={() => {
+                    restoreDeleteFocusRef.current = holdSheetReturnTargets('file-actions-sheet')
                     setPendingDelete(actionEntry)
                     setActionEntry(null)
                   }}
@@ -720,11 +729,17 @@ export function MobileFileExplorer({
           if (!dialogOpen) setPendingDelete(null)
         }}
       >
-        {/* An alert dialog is not a SheetContent, so it takes the row-actions
-            registry itself: focus returns to the row's Actions button. */}
+        {/* An alert dialog is not a SheetContent, so it returns focus itself, from the
+            opener snapshot taken when Delete was chosen: the row's Actions button. */}
         <AlertDialogContent
           onCloseAutoFocus={(event) => {
-            fileActionsSheetCloseAutoFocus(event)
+            event.preventDefault()
+            const restore = restoreDeleteFocusRef.current
+            restoreDeleteFocusRef.current = null
+            const active = document.activeElement
+            const focusLost = !active || active === document.body || !active.isConnected
+            // Focus the user (or another surface) already holds is never taken.
+            if (focusLost && restore?.()) return
             // A confirmed delete can drop the row before the confirm unmounts.
             renameFocus.focusSheetIfLost()
           }}
