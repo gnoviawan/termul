@@ -186,6 +186,21 @@ describe('MobileRecentsList merged list', () => {
     expect(screen.getByRole('button', { name: 'Live title' })).toBeInTheDocument()
   })
 
+  it('leaves out an open chat tab known to belong to another project, keeping unknown ones', () => {
+    seedHistory([{ id: 'h1', title: 'Past chat' }])
+    seedOptionsSession('s7', 'agent-1', { title: 'Other project chat', projectId: 'p2' })
+    seedOptionsSession('s8', 'agent-1', { title: 'Unattributed chat', projectId: '' })
+    seedTabs([
+      { type: 'agent-chat', id: 'tab-7', sessionId: 's7' },
+      { type: 'agent-chat', id: 'tab-8', sessionId: 's8' }
+    ])
+    renderList()
+
+    expect(screen.queryByRole('button', { name: 'Other project chat' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Unattributed chat' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Past chat' })).toBeInTheDocument()
+  })
+
   it('lists an open chat the index does not have yet at the top of Today', () => {
     seedHistory([{ id: 'h1', title: 'Past chat' }])
     seedOptionsSession('s9', 'agent-1', { title: 'Brand new chat' })

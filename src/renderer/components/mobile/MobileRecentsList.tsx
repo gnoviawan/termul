@@ -10,10 +10,12 @@ import {
   useAgentChatStatusSignals
 } from '@/components/workspace/tabs/agent-chat-status'
 import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
+import { chatForeignToProject } from '@/lib/acp-session-ownership'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
+import { useProjectStore } from '@/stores/project-store'
 import { MobileRecentsActionsSheet } from './MobileRecentsActionsSheet'
 
 /** How long a touch must hold still before it opens the row actions (iOS fires no `contextmenu`). */
@@ -285,11 +287,32 @@ export function MobileRecentsList({
   const rootRef = useRef<HTMLDivElement>(null)
   const { paneTabs, selectTab, closePaneTab } = useMobileTabActions()
 
-  const openChats = useMemo(
+  // Open chat tabs of the active project only. The pane tree is shared across
+  // projects, so a chat tab KNOWN to belong to another project must not join
+  // this project's Recents (fail-open: unknown ownership stays listed).
+  const activeProjectId = useProjectStore((s) => s.activeProjectId) ?? ''
+  const allOpenChats = useMemo(
     () =>
       paneTabs.flatMap(({ tab, paneId }) => (tab.type === 'agent-chat' ? [{ tab, paneId }] : [])),
     [paneTabs]
   )
+  const foreignIds = useAcpStore(
+    useShallow((s) =>
+      allOpenChats
+        .map(({ tab }) => tab.sessionId)
+        .filter((id) =>
+          chatForeignToProject(id, activeProjectId, {
+            sessions: s.sessions ?? {},
+            sessionIndex: s.sessionIndex ?? []
+          })
+        )
+    )
+  )
+  const openChats = useMemo(() => {
+    if (foreignIds.length === 0) return allOpenChats
+    const foreign = new Set(foreignIds)
+    return allOpenChats.filter(({ tab }) => !foreign.has(tab.sessionId))
+  }, [allOpenChats, foreignIds])
   const openSessionIds = useMemo(() => openChats.map(({ tab }) => tab.sessionId), [openChats])
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
   const indexedIds = useMemo(() => new Set((sessionIndex ?? []).map((e) => e.id)), [sessionIndex])
