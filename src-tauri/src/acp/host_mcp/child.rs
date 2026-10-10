@@ -15,13 +15,13 @@
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::service::serve_server;
-use rmcp::{tool, tool_router};
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::acp::host_mcp::{
     FrameKind, FrameReply, FrameRequest, TermulBrowserInput, TermulPlanInput, TermulSetTitleInput,
-    ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
+    ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN, TERMUL_CHAT_INSTRUCTIONS,
 };
 
 /// Env-derived configuration for the child. Extracted so the arg parser is
@@ -107,10 +107,11 @@ struct TermulPlanServer {
 /// `inputSchema`. We re-export the shared `TermulPlanInput` (defined in
 /// `host_mcp::mod`) — it already derives `JsonSchema`.
 ///
-/// `server_handler` on `#[tool_router]` auto-generates the `ServerHandler` impl
-/// (no separate `impl ServerHandler` block needed — adding one would duplicate
-/// the impl + fail to compile).
-#[tool_router(server_handler)]
+/// The `ServerHandler` impl lives in its own block below (not the
+/// `server_handler` flag) so `get_info` can attach `TERMUL_CHAT_INSTRUCTIONS`
+/// to the `initialize` result — the channel that advertises the chat
+/// renderer's markdown image + open-in-editor affordances to the agent.
+#[tool_router]
 impl TermulPlanServer {
     #[tool(
         name = "plan",
@@ -189,6 +190,22 @@ impl TermulPlanServer {
             Ok(msg) => msg,
             Err(e) => format!("set_session_title error: {e}"),
         }
+    }
+}
+
+/// `#[tool_handler]` fills `call_tool`/`list_tools`/`get_tool` from the router
+/// and skips `get_info` because it is provided here: the returned
+/// `instructions` land in the MCP `initialize` result so agents learn they can
+/// embed images in markdown replies and link files for open-in-editor.
+#[tool_handler]
+impl ServerHandler for TermulPlanServer {
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+        .with_instructions(TERMUL_CHAT_INSTRUCTIONS.to_string())
     }
 }
 

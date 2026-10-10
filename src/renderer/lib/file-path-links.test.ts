@@ -12,20 +12,24 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getFileInfo: vi.fn(),
+  readFile: vi.fn(),
   openFile: vi.fn(),
   updateCursorPosition: vi.fn(),
   addEditorTab: vi.fn(),
-  toastError: vi.fn()
+  toastError: vi.fn(),
+  openFiles: new Map<string, unknown>()
 }))
 
 vi.mock('@/lib/api', () => ({
   filesystemApi: {
-    getFileInfo: mocks.getFileInfo
+    getFileInfo: mocks.getFileInfo,
+    readFile: mocks.readFile
   }
 }))
 vi.mock('@/stores/editor-store', () => ({
   useEditorStore: {
     getState: () => ({
+      openFiles: mocks.openFiles,
       openFile: mocks.openFile,
       updateCursorPosition: mocks.updateCursorPosition
     })
@@ -42,6 +46,10 @@ vi.mock('sonner', () => ({
   toast: {
     error: mocks.toastError
   }
+}))
+
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
 }))
 
 describe('file-path-links parsing', () => {
@@ -199,10 +207,16 @@ describe('hasPathEvidence', () => {
 describe('file-path-links resolution', () => {
   beforeEach(() => {
     mocks.getFileInfo.mockReset()
-    mocks.openFile.mockReset()
+    mocks.readFile
+      .mockReset()
+      .mockResolvedValue({ success: false, error: 'unreadable', code: 'READ_ERROR' })
+    mocks.openFile.mockReset().mockImplementation(async (path: string) => {
+      mocks.openFiles.set(path, {})
+    })
     mocks.updateCursorPosition.mockReset()
     mocks.addEditorTab.mockReset()
     mocks.toastError.mockReset()
+    mocks.openFiles.clear()
   })
 
   it('resolves relative paths against terminal cwd', async () => {
@@ -406,6 +420,184 @@ describe('file-path-links resolution', () => {
     expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).toHaveBeenCalledWith('/repo/src/renderer/App.tsx')
     expect(mocks.toastError).not.toHaveBeenCalled()
+  })
+
+  it('verifies FORBIDDEN-denied stats via readFile (remote /fs/info guard)', async () => {
+    // Remote peers are denied /fs/info while /fs/read stays reachable —
+    // the probe restores verified-only resolution so a wrong file can
+    // never be opened.
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.readFile.mockResolvedValue({
+      success: true,
+      data: { content: 'x', encoding: 'utf-8', size: 1, modified_at: 1 }
+    })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/repo'
+    })
+
+    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
+    expect(mocks.readFile).toHaveBeenCalledWith('/repo/src/App.tsx')
+  })
+
+  it('skips FORBIDDEN candidates whose read probe fails, trying the next root', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.readFile
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'No such file or directory',
+        code: 'READ_ERROR'
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: { content: 'x', encoding: 'utf-8', size: 1, modified_at: 1 }
+      })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(mocks.readFile).toHaveBeenNthCalledWith(1, '/tmp/shell/src/App.tsx')
+    expect(mocks.readFile).toHaveBeenNthCalledWith(2, '/repo/src/App.tsx')
+    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
+  })
+
+  it('stops on a non-absence probe failure instead of resolving another root', async () => {
+    // The cwd candidate exists but is unreadable (permission denied): the
+    // project-root candidate must NOT be substituted for it.
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.readFile.mockResolvedValueOnce({
+      success: false,
+      error: 'Permission denied (os error 13)',
+      code: 'READ_ERROR'
+    })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(result).toEqual({ ok: true, path: '/tmp/shell/src/App.tsx' })
+    expect(mocks.readFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces the real error when a non-absence probe failure reaches openFile', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.readFile.mockResolvedValue({
+      success: false,
+      error: 'Permission denied (os error 13)',
+      code: 'READ_ERROR'
+    })
+    mocks.openFile.mockRejectedValue(new Error('Permission denied (os error 13)'))
+
+    const opened = await openFilePathFromTerminal('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(mocks.openFile).toHaveBeenCalledWith('/tmp/shell/src/App.tsx')
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'open-failed',
+      message: 'Failed to open file: src/App.tsx (Permission denied (os error 13))'
+    })
+    expect(mocks.addEditorTab).not.toHaveBeenCalled()
+  })
+
+  it('reports not-found when every FORBIDDEN candidate fails its read probe', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.readFile.mockResolvedValue({
+      success: false,
+      error: 'No such file or directory',
+      code: 'READ_ERROR'
+    })
+
+    const opened = await openFilePathFromTerminal('missing.ts', { cwd: '/repo' })
+
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'not-found',
+      message: 'File not found: missing.ts'
+    })
+    expect(mocks.openFile).not.toHaveBeenCalled()
+  })
+
+  it('reports open-failed when openFile returns without storing (tab limit)', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/src/App.tsx',
+        size: 100,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: false
+      }
+    })
+    mocks.openFile.mockResolvedValue(undefined) // resolves but stores nothing
+
+    const opened = await openFilePathFromTerminal('src/App.tsx', { cwd: '/repo' })
+
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'open-failed',
+      message: 'Failed to open file: src/App.tsx (editor tab limit reached)'
+    })
+    expect(mocks.addEditorTab).not.toHaveBeenCalled()
+  })
+
+  it('skips a failed probe and uses a later confirmed file', async () => {
+    mocks.getFileInfo
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'loopback only',
+        code: 'FORBIDDEN'
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          path: '/repo/src/App.tsx',
+          size: 100,
+          modifiedAt: 1,
+          type: 'file',
+          isReadOnly: false,
+          isBinary: false
+        }
+      })
+    mocks.readFile.mockResolvedValue({
+      success: false,
+      error: 'No such file or directory',
+      code: 'READ_ERROR'
+    })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(mocks.readFile).toHaveBeenCalledWith('/tmp/shell/src/App.tsx')
+    expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
   })
 
   it('returns not-found details and does not open missing files', async () => {

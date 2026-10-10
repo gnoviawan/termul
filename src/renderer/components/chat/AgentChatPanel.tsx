@@ -25,7 +25,7 @@ import {
   stripAllCommandTokens
 } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
+import { getProjectRootPath } from '@/lib/worktree-context'
 import {
   type ChatMessage,
   prepareChatKey,
@@ -37,6 +37,7 @@ import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
+import { useProjectStore } from '@/stores/project-store'
 import {
   isAgentDeadError,
   isSendPromptOutcomeUnknownError
@@ -575,17 +576,20 @@ export function AgentChatPanel({
     session?.lastError
   ])
 
+  // Desktop + web parity: the open-in-editor chain is transport-agnostic —
+  // where `/fs/info` is loopback-guarded on remote peers, resolution falls
+  // back to the deliberately unguarded `/fs/read` open path (the same one
+  // ChatChangedFilesPanel uses). Local-image reads stay Tauri-only inside
+  // `TermulMarkdownImage` (alt-chip fallback).
+  const projects = useProjectStore((state) => state.projects)
   const filePathContext = useMemo(
-    () =>
-      isTauriContext()
-        ? {
-            cwd: session?.cwd,
-            projectRoot: session
-              ? getDefaultCwdForProject(session.projectId) || session.cwd
-              : undefined
-          }
-        : undefined,
-    [session]
+    () => ({
+      cwd: session?.cwd,
+      projectRoot: session
+        ? projects.find((p) => p.id === session.projectId)?.path || session.cwd
+        : undefined
+    }),
+    [session, projects]
   )
   const timeline = useMemo(() => {
     const items = consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches))

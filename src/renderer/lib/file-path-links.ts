@@ -1,4 +1,5 @@
 import { filesystemApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -50,6 +51,9 @@ const DOT_DIRECTORY_REGEX = /^\.[A-Za-z]/
 const LINE_COLUMN_SUFFIX_REGEX = /:(\d+)(?::\d+)?$/
 
 const FILE_EXTENSION_REGEX = /\.[^.]+$/
+
+/** OS "path does not exist" read errors — the only probe failure that may skip a root. */
+const MISSING_PATH_ERROR_REGEX = /no such file|cannot find the (file|path)|the system cannot find/i
 
 const WRAPPER_PAIRS: Array<[string, string]> = [
   ['`', '`'],
@@ -400,9 +404,40 @@ export async function resolveFilePathCandidate(
   )
 
   let sawDirectoryCandidate = false
+  let loggedForbiddenFallback = false
 
   for (const { absolutePath, infoResult } of infoResults) {
     if (!infoResult.success) {
+      // `/fs/info` is loopback-guarded server-side while `/fs/read` is
+      // deliberately not, so remote peers (shared-live, standalone without
+      // --allow-remote-writes) get FORBIDDEN here even when the file exists.
+      // Probe the candidate with `readFile` — the same route `openFile`
+      // uses — so only verified, readable files resolve and absent paths
+      // keep their honest failure instead of opening a wrong file.
+      if (infoResult.code === 'FORBIDDEN') {
+        if (!loggedForbiddenFallback) {
+          loggedForbiddenFallback = true
+          void logFrontendError({
+            level: 'warn',
+            source: 'filePathLinks.resolveFilePathCandidate',
+            message: `getFileInfo FORBIDDEN for ${absolutePath}; verifying candidates via readFile`
+          })
+        }
+        const readResult = await filesystemApi.readFile(absolutePath)
+        if (readResult.success) {
+          return { ok: true, path: absolutePath }
+        }
+        // Only absence may fall through to the next root: any other read
+        // failure means this path exists but cannot be verified, so stop
+        // here and let openFile surface the real error — falling through
+        // would silently resolve a different root's file at the same
+        // relative path.
+        if (/cannot read a directory/i.test(readResult.error)) {
+          sawDirectoryCandidate = true
+        } else if (!MISSING_PATH_ERROR_REGEX.test(readResult.error)) {
+          return { ok: true, path: absolutePath }
+        }
+      }
       continue
     }
 
@@ -459,6 +494,17 @@ export async function openFilePathFromTerminal(
 
   try {
     await useEditorStore.getState().openFile(resolution.path)
+
+    // openFile can return without storing when the tab limit is hit and no
+    // tab is evictable — verify the file actually landed before reporting
+    // success or adding a workspace tab.
+    if (!useEditorStore.getState().openFiles.has(resolution.path)) {
+      return {
+        ok: false,
+        reason: 'open-failed',
+        message: `Failed to open file: ${extractPathCandidate(rawCandidate)} (editor tab limit reached)`
+      }
+    }
 
     if (position.line) {
       useEditorStore

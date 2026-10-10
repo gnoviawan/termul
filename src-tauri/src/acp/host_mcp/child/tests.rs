@@ -143,6 +143,13 @@ async fn server_discover_without_meta_lists_tools() {
             "discover failed: {discover}"
         );
         assert!(discover.get("result").is_some(), "{discover}");
+        // `server/discover` resolves through the same `get_info` as
+        // `initialize` — pin the instructions delivery on this path too.
+        assert_eq!(
+            discover["result"]["instructions"].as_str(),
+            Some(crate::acp::host_mcp::TERMUL_CHAT_INSTRUCTIONS),
+            "discover result must carry the chat-output instructions verbatim"
+        );
 
         client_write
             .write_all(br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
@@ -210,4 +217,39 @@ async fn legacy_initialize_still_lists_tools() {
     })
     .await;
     result.expect("legacy handshake timed out");
+}
+
+/// The `initialize` result must carry `instructions` advertising the chat
+/// renderer's markdown affordances — this is the only channel that tells
+/// agents images embed inline and file links open in Termul's editor.
+#[tokio::test]
+async fn initialize_advertises_termul_chat_instructions() {
+    let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let (client_read, mut client_write) = tokio::io::split(client_io);
+    let serve = tokio::spawn(async move {
+        serve_mcp_transport(handshake_config(), server_read, server_write).await
+    });
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+        let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"0.0.1"}}}"#;
+        client_write.write_all(init.as_bytes()).await.unwrap();
+        client_write.write_all(b"\n").await.unwrap();
+        let mut reader = BufReader::new(client_read);
+        let init_reply = read_json_id(&mut reader, 1).await;
+        assert!(
+            init_reply.get("error").is_none(),
+            "initialize failed: {init_reply}"
+        );
+        assert_eq!(
+            init_reply["result"]["instructions"].as_str(),
+            Some(crate::acp::host_mcp::TERMUL_CHAT_INSTRUCTIONS),
+            "initialize result must carry the chat-output instructions verbatim"
+        );
+        drop(client_write);
+        drop(reader);
+        serve.await.expect("serve task").expect("serve ok");
+    })
+    .await;
+    result.expect("instructions handshake timed out");
 }
