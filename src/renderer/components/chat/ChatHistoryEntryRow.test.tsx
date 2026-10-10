@@ -271,6 +271,14 @@ describe('ChatHistoryEntryRow agent sequence', () => {
 })
 
 describe('ChatHistoryEntryRow actions and status slot', () => {
+  it('wraps the title in a clipping label span (truncate in jsdom — no measured overflow)', () => {
+    stateRef.current = { agentConfigs: [] }
+    render(<ChatHistoryEntryRow entry={entry()} onOpen={() => {}} onDelete={() => {}} />)
+
+    const title = screen.getByText('Switched chat')
+    expect(title).toHaveClass('min-w-0', 'flex-1', 'truncate')
+  })
+
   it('names the trash button after the chat and keeps the generic hover title', () => {
     stateRef.current = { agentConfigs: [] }
     render(

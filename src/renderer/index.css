@@ -1548,6 +1548,41 @@
   }
 }
 
+@layer components {
+  /* Mobile drawer rows: an over-long title scrolls to its tail on a slow
+     scroll-pause-return loop (MarqueeText measures the overflow and sets
+     --termul-marquee-distance/-duration inline). Reduced motion never mounts
+     this class; the media query is the belt-and-braces fallback. */
+  .termul-marquee {
+    animation: termul-marquee var(--termul-marquee-duration, 8s) ease-in-out infinite;
+  }
+  /* WCAG 2.2.2 partial mitigation: hovering the label or keyboard-focusing
+     its parent control pauses the loop so the text can be read in place. */
+  .termul-marquee:hover,
+  *:focus-visible .termul-marquee {
+    animation-play-state: paused;
+  }
+  @keyframes termul-marquee {
+    0%,
+    18% {
+      transform: translateX(0);
+    }
+    46%,
+    54% {
+      transform: translateX(calc(-1 * var(--termul-marquee-distance, 0px)));
+    }
+    82%,
+    100% {
+      transform: translateX(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .termul-marquee {
+      animation: none;
+    }
+  }
+}
+
 /* Unlayered so this wins over streamdown/styles.css (imported first).
    Streamdown prefixes the animation name: blurIn → sd-blurIn.
    Blur settles from --stream-blur (1px). Duration and easing come from
