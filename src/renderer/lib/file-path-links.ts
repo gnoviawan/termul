@@ -11,16 +11,7 @@ export interface FilePathResolutionContext {
 
 /** The result of resolving a terminal path candidate to an openable file. */
 export type FilePathResolutionResult =
-  | {
-      ok: true
-      path: string
-      /**
-       * Additional candidates whose `/fs/info` stat was FORBIDDEN
-       * (remote peers cannot stat) — tried in order when `openFile`
-       * rejects `path`, since we could not verify which one exists.
-       */
-      deferredPaths?: string[]
-    }
+  | { ok: true; path: string }
   | { ok: false; reason: 'missing-context' | 'not-found' | 'not-file' }
 
 type OpenFilePathFailureReason =
@@ -410,18 +401,32 @@ export async function resolveFilePathCandidate(
   )
 
   let sawDirectoryCandidate = false
-  const forbiddenCandidates: string[] = []
+  let loggedForbiddenFallback = false
 
   for (const { absolutePath, infoResult } of infoResults) {
     if (!infoResult.success) {
       // `/fs/info` is loopback-guarded server-side while `/fs/read` is
       // deliberately not, so remote peers (shared-live, standalone without
       // --allow-remote-writes) get FORBIDDEN here even when the file exists.
-      // FORBIDDEN means "unverifiable", not "missing" — keep the candidate so
-      // `openFile` performs the real validation and reports the server's own
-      // error if the path is genuinely absent or a directory.
+      // Probe the candidate with `readFile` — the same route `openFile`
+      // uses — so only verified, readable files resolve and absent paths
+      // keep their honest failure instead of opening a wrong file.
       if (infoResult.code === 'FORBIDDEN') {
-        forbiddenCandidates.push(absolutePath)
+        if (!loggedForbiddenFallback) {
+          loggedForbiddenFallback = true
+          void logFrontendError({
+            level: 'warn',
+            source: 'filePathLinks.resolveFilePathCandidate',
+            message: `getFileInfo FORBIDDEN for ${absolutePath}; verifying candidates via readFile`
+          })
+        }
+        const readResult = await filesystemApi.readFile(absolutePath)
+        if (readResult.success) {
+          return { ok: true, path: absolutePath }
+        }
+        if (/cannot read a directory/i.test(readResult.error)) {
+          sawDirectoryCandidate = true
+        }
       }
       continue
     }
@@ -431,15 +436,6 @@ export async function resolveFilePathCandidate(
     }
 
     sawDirectoryCandidate = true
-  }
-
-  if (forbiddenCandidates.length > 0) {
-    void logFrontendError({
-      level: 'warn',
-      source: 'filePathLinks.resolveFilePathCandidate',
-      message: `getFileInfo FORBIDDEN; opening ${forbiddenCandidates.length} unverified candidate(s) starting with ${forbiddenCandidates[0]}`
-    })
-    return { ok: true, path: forbiddenCandidates[0], deferredPaths: forbiddenCandidates.slice(1) }
   }
 
   return sawDirectoryCandidate
@@ -486,28 +482,34 @@ export async function openFilePathFromTerminal(
   const wrappedCandidate = trimWrappedPath(rawCandidate)
   const position = parseLineColumnSuffix(wrappedCandidate)
 
-  let lastError: unknown = null
-  for (const candidatePath of [resolution.path, ...(resolution.deferredPaths ?? [])]) {
-    try {
-      await useEditorStore.getState().openFile(candidatePath)
+  try {
+    await useEditorStore.getState().openFile(resolution.path)
 
-      if (position.line) {
-        useEditorStore
-          .getState()
-          .updateCursorPosition(candidatePath, position.line, position.column ?? 1)
+    // openFile can return without storing when the tab limit is hit and no
+    // tab is evictable — verify the file actually landed before reporting
+    // success or adding a workspace tab.
+    if (!useEditorStore.getState().openFiles.has(resolution.path)) {
+      return {
+        ok: false,
+        reason: 'open-failed',
+        message: `Failed to open file: ${extractPathCandidate(rawCandidate)} (editor tab limit reached)`
       }
-
-      useWorkspaceStore.getState().addEditorTab(candidatePath)
-      return { ok: true }
-    } catch (error) {
-      lastError = error
     }
-  }
 
-  const details = lastError instanceof Error ? lastError.message : String(lastError)
-  return {
-    ok: false,
-    reason: 'open-failed',
-    message: getErrorMessage(rawCandidate, 'open-failed', details)
+    if (position.line) {
+      useEditorStore
+        .getState()
+        .updateCursorPosition(resolution.path, position.line, position.column ?? 1)
+    }
+
+    useWorkspaceStore.getState().addEditorTab(resolution.path)
+    return { ok: true }
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error)
+    return {
+      ok: false,
+      reason: 'open-failed',
+      message: getErrorMessage(rawCandidate, 'open-failed', details)
+    }
   }
 }
