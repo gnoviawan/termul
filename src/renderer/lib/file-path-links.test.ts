@@ -471,6 +471,56 @@ describe('file-path-links resolution', () => {
     expect(result).toEqual({ ok: true, path: '/repo/src/App.tsx' })
   })
 
+  it('stops on a non-absence probe failure instead of resolving another root', async () => {
+    // The cwd candidate exists but is unreadable (permission denied): the
+    // project-root candidate must NOT be substituted for it.
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.readFile.mockResolvedValueOnce({
+      success: false,
+      error: 'Permission denied (os error 13)',
+      code: 'READ_ERROR'
+    })
+
+    const result = await resolveFilePathCandidate('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(result).toEqual({ ok: true, path: '/tmp/shell/src/App.tsx' })
+    expect(mocks.readFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces the real error when a non-absence probe failure reaches openFile', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: false,
+      error: 'loopback only',
+      code: 'FORBIDDEN'
+    })
+    mocks.readFile.mockResolvedValue({
+      success: false,
+      error: 'Permission denied (os error 13)',
+      code: 'READ_ERROR'
+    })
+    mocks.openFile.mockRejectedValue(new Error('Permission denied (os error 13)'))
+
+    const opened = await openFilePathFromTerminal('src/App.tsx', {
+      cwd: '/tmp/shell',
+      projectRoot: '/repo'
+    })
+
+    expect(mocks.openFile).toHaveBeenCalledWith('/tmp/shell/src/App.tsx')
+    expect(opened).toEqual({
+      ok: false,
+      reason: 'open-failed',
+      message: 'Failed to open file: src/App.tsx (Permission denied (os error 13))'
+    })
+    expect(mocks.addEditorTab).not.toHaveBeenCalled()
+  })
+
   it('reports not-found when every FORBIDDEN candidate fails its read probe', async () => {
     mocks.getFileInfo.mockResolvedValue({
       success: false,

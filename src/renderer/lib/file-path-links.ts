@@ -52,6 +52,9 @@ const LINE_COLUMN_SUFFIX_REGEX = /:(\d+)(?::\d+)?$/
 
 const FILE_EXTENSION_REGEX = /\.[^.]+$/
 
+/** OS "path does not exist" read errors — the only probe failure that may skip a root. */
+const MISSING_PATH_ERROR_REGEX = /no such file|cannot find the (file|path)|the system cannot find/i
+
 const WRAPPER_PAIRS: Array<[string, string]> = [
   ['`', '`'],
   ['"', '"'],
@@ -424,8 +427,15 @@ export async function resolveFilePathCandidate(
         if (readResult.success) {
           return { ok: true, path: absolutePath }
         }
+        // Only absence may fall through to the next root: any other read
+        // failure means this path exists but cannot be verified, so stop
+        // here and let openFile surface the real error — falling through
+        // would silently resolve a different root's file at the same
+        // relative path.
         if (/cannot read a directory/i.test(readResult.error)) {
           sawDirectoryCandidate = true
+        } else if (!MISSING_PATH_ERROR_REGEX.test(readResult.error)) {
+          return { ok: true, path: absolutePath }
         }
       }
       continue
