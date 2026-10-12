@@ -2,6 +2,7 @@
 //! host default.
 
 use super::*;
+use crate::web::watch::publish_projects;
 
 /// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
 /// Reply payload = the `NewSessionOutcome` (camelCase: sessionId/modes/models/configOptions).
@@ -248,6 +249,7 @@ pub(super) async fn handle_set_default_project(
         );
     }
     broadcast_projects_changed(relay, Some(&parsed.project_id));
+    publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %parsed.project_id,
@@ -398,6 +400,7 @@ pub(super) async fn handle_add_project(
     };
     registry.upsert(summary.clone());
     broadcast_projects_changed(relay, None);
+    publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %summary.id,
@@ -507,6 +510,7 @@ pub(super) async fn handle_update_project(
         );
     }
     broadcast_projects_changed(relay, None);
+    publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %parsed.project_id,
@@ -595,6 +599,7 @@ pub(super) async fn handle_remove_project(
     // Mirror into the in-memory registry.
     registry.remove(&parsed.project_id);
     broadcast_projects_changed(relay, None);
+    publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %parsed.project_id,

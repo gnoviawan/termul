@@ -1578,3 +1578,118 @@ async fn record_user_prompt_fans_out_before_any_later_emit() {
     assert_eq!(later.len(), 1);
     assert!(later[0].seq > event.seq);
 }
+
+// --- Watch hub: the same changes reach `watch` subscribers ------------------
+
+/// A connection watching `kind`, its full-state frame already taken.
+fn watch_connection(
+    relay: &WsRelaySink,
+    kind: crate::web::watch::WatchKind,
+) -> (crate::web::ws::OutboundSender, crate::web::ws::OutboundReceiver) {
+    let (out, mut rx) = crate::web::ws::outbound_channel(64, 15);
+    relay
+        .watches()
+        .subscribe(kind, "", &out, || json!(null))
+        .expect("subscribe");
+    let _state = rx.try_recv().expect("full-state frame");
+    (out, rx)
+}
+
+/// The deltas queued on a watching connection, in order.
+fn watch_deltas(rx: &mut crate::web::ws::OutboundReceiver) -> Vec<Value> {
+    let mut out = Vec::new();
+    while let Ok(item) = rx.try_recv() {
+        match item {
+            crate::web::ws::Outbound::Watch(frame) => {
+                out.push(frame.delta_value().cloned().expect("delta frame"))
+            }
+            _ => panic!("expected only watch frames"),
+        }
+    }
+    out
+}
+
+/// Agent roster events reach the `agents` watch (on a socket with no session
+/// subscription) as well as the `seq = 0` fan-out.
+#[tokio::test]
+async fn agent_roster_events_also_reach_the_agents_watch() {
+    use crate::web::watch::WatchKind;
+    let relay = Arc::new(WsRelaySink::new());
+    relay.seed_session_for_test("sess-1");
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
+    let (_out, mut watch_rx) = watch_connection(&relay, WatchKind::Agents);
+
+    for type_ in [
+        "acp:agent_spawned",
+        "acp:agent_crashed",
+        "acp:agent_error",
+        "acp:agent_disconnected",
+    ] {
+        relay.emit(&AcpEvent {
+            sid: None,
+            type_,
+            payload: json!({"agentId": "a-1"}),
+        });
+    }
+
+    assert_eq!(drain_rx(&mut rx).len(), 4, "the seq=0 events are still sent");
+    let deltas = watch_deltas(&mut watch_rx);
+    let types: Vec<&str> = deltas.iter().map(|d| d["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        types,
+        ["agent_spawned", "agent_crashed", "agent_error", "agent_disconnected"]
+    );
+    assert_eq!(deltas[0]["payload"]["agentId"], "a-1");
+}
+
+/// Other agent-level events are not roster events and never reach the watch.
+#[tokio::test]
+async fn non_roster_agent_events_do_not_reach_the_agents_watch() {
+    let relay = Arc::new(WsRelaySink::new());
+    let (_out, mut watch_rx) = watch_connection(&relay, crate::web::watch::WatchKind::Agents);
+    relay.emit(&AcpEvent {
+        sid: None,
+        type_: "acp:browser_open_request",
+        payload: json!({"agentId": "a-1"}),
+    });
+    assert!(watch_deltas(&mut watch_rx).is_empty());
+}
+
+/// With host persistence attached, session lifecycle events publish a
+/// `chat_history` delta naming the session; without it nothing is published.
+#[tokio::test]
+async fn session_lifecycle_publishes_a_chat_history_delta_only_when_persistent() {
+    use crate::web::watch::WatchKind;
+    let root = std::env::temp_dir().join(format!(
+        "termul-sink-history-watch-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    let durable = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+    durable.seed_session_for_test("sess-1");
+    let (_out, mut watch_rx) = watch_connection(&durable, WatchKind::ChatHistory);
+    let live_only = Arc::new(WsRelaySink::new());
+    live_only.seed_session_for_test("sess-1");
+    let (_live_out, mut live_rx) = watch_connection(&live_only, WatchKind::ChatHistory);
+
+    for relay in [&durable, &live_only] {
+        for type_ in ["acp:session_created", "acp:session_closed"] {
+            relay.emit(&AcpEvent {
+                sid: Some("sess-1".to_string()),
+                type_,
+                payload: json!({"agentId": "a-1", "sessionId": "sess-1"}),
+            });
+        }
+    }
+
+    assert_eq!(
+        watch_deltas(&mut watch_rx),
+        vec![json!({"changed": ["sess-1"]}), json!({"changed": ["sess-1"]})]
+    );
+    assert!(watch_deltas(&mut live_rx).is_empty(), "no durable index, nothing to publish");
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

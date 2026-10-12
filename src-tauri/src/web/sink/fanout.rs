@@ -419,6 +419,8 @@ impl EventSink for WsRelaySink {
                 }
             }
             None => {
+                // Roster events also go to the `agents` watch.
+                self.publish_agent_roster_event(type_, &event.payload);
                 // Agent-level: seq=0, sid=null, NOT in any per-session log (AC4).
                 // Delivered to ALL connected clients with ≥1 session.
                 let se = SequencedEvent::new(None, 0, type_, event.payload.clone());
@@ -509,7 +511,7 @@ impl EventSink for WsRelaySink {
             }
         }
 
-        self.notify_history_for(type_);
+        self.notify_history_for(event.sid.as_deref(), type_);
     }
 
     /// Issue #836: dispatch `note_session_registered` through the trait so

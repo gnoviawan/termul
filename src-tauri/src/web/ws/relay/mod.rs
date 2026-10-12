@@ -59,6 +59,9 @@ pub(crate) enum Outbound {
     /// LOSSY events of this session were dropped for the peer: the top-level
     /// `{"type":"gap","sid":..}` frame tells it to install a snapshot.
     Gap(String),
+    /// A watch frame: the full state of a watch or one delta, serialized as the
+    /// top-level `{"type":"watch", ...}` frame.
+    Watch(crate::web::watch::WatchFrame),
     /// Terminal close handshake (CAP-11: after a binary-frame protocol error).
     /// The channel is FIFO, so everything enqueued ahead of it (the
     /// `unsupported` error reply) is flushed first; the write loop then sends
@@ -221,7 +224,8 @@ pub(super) struct ConnectionCleanup {
     relay: Arc<WsRelaySink>,
     subscriptions: Arc<Subscriptions>,
     /// This connection's outbound channel, the identity its `watch_project`
-    /// subscriptions are keyed by; released with the rest of the cleanup.
+    /// and `watch` subscriptions are keyed by; released with the rest of the
+    /// cleanup.
     watch_conn: Option<OutboundSender>,
     state: Arc<std::sync::atomic::AtomicU8>,
 }
@@ -244,11 +248,12 @@ impl ConnectionCleanup {
         self
     }
 
-    /// Drop this connection's per-project fs watch subscriptions (sync; safe
-    /// from `Drop` outside a runtime).
+    /// Drop this connection's per-project fs watch and watch-hub subscriptions
+    /// (sync; safe from `Drop` outside a runtime).
     fn release_watches(&self) {
         if let Some(conn) = &self.watch_conn {
             self.relay.fs_watches().unsubscribe_all(conn);
+            self.relay.watches().unsubscribe_all(conn);
         }
     }
 

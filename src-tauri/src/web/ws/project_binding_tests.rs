@@ -211,3 +211,85 @@ fn upserting_the_reserved_id_never_registers_it() {
     ));
     assert!(!registry.contains(crate::acp::session_persistence::UNASSIGNED_PROJECT_ID));
 }
+
+/// Add and remove publish the registry as it is AFTER the mutation, so a
+/// watcher's delta is the list it should hold.
+#[tokio::test]
+async fn add_and_remove_project_publish_the_post_mutation_list_to_watchers() {
+    let relay = Arc::new(WsRelaySink::new());
+    let registry = Arc::new(ProjectRegistry::new());
+    let (out, mut rx) = outbound_channel(16, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
+        .expect("watch");
+    let _state = rx.try_recv().expect("full-state frame");
+    let dir = std::env::temp_dir().join(format!("termul-pub-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let added = projects::handle_add_project(
+        "r1".to_string(),
+        &json!({"id": "p-new", "name": "New", "path": dir.display().to_string(), "color": "blue"}),
+        &relay,
+        &registry,
+        None,
+        None,
+    )
+    .await;
+    assert!(added.ok, "{:?}", added.err);
+    let removed = projects::handle_remove_project(
+        "r2".to_string(),
+        &json!({"projectId": "p-new"}),
+        &relay,
+        &registry,
+        None,
+        None,
+    )
+    .await;
+    assert!(removed.ok, "{:?}", removed.err);
+
+    let mut lists = Vec::new();
+    while let Ok(Outbound::Watch(frame)) = rx.try_recv() {
+        let delta = frame.delta_value().expect("delta");
+        lists.push(delta["projects"].as_array().expect("projects").len());
+    }
+    assert_eq!(lists, vec![1, 0], "the delta after add holds the project, after remove it does not");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Update publishes the registry as it is after the change (a rename shows in
+/// the watcher's list).
+#[tokio::test]
+async fn update_project_publishes_the_renamed_list_to_watchers() {
+    let relay = Arc::new(WsRelaySink::new());
+    let registry = Arc::new(registry());
+    let (out, mut rx) = outbound_channel(16, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
+        .expect("watch");
+    let _state = rx.try_recv().expect("full-state frame");
+
+    let reply = projects::handle_update_project(
+        "r1".to_string(),
+        &json!({"projectId": "p-1", "name": "Renamed"}),
+        &relay,
+        &registry,
+        None,
+        None,
+    )
+    .await;
+    assert!(reply.ok, "{:?}", reply.err);
+
+    let Ok(Outbound::Watch(frame)) = rx.try_recv() else {
+        panic!("expected a projects delta");
+    };
+    let delta = frame.delta_value().expect("delta");
+    let renamed = delta["projects"]
+        .as_array()
+        .expect("projects")
+        .iter()
+        .find(|p| p["id"] == "p-1")
+        .expect("p-1 in the list");
+    assert_eq!(renamed["name"], "Renamed");
+}

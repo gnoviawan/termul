@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::web::fs_api::check_local_only;
 use crate::web::project_registry::ProjectListPayload;
 use crate::web::sink::broadcast_projects_changed;
+use crate::web::watch::publish_projects;
 use crate::web::ws::AppState;
 
 /// HTTP response body mirroring the renderer-side `IpcResult<T>` shape. Kept
@@ -218,6 +219,7 @@ pub async fn set_default_project(
         ));
     }
     broadcast_projects_changed(&state.relay, Some(&project_id));
+    publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %project_id,
@@ -380,6 +382,7 @@ pub async fn create_project(
     };
     state.registry.upsert(summary.clone());
     broadcast_projects_changed(&state.relay, None);
+    publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %req.id,
@@ -477,6 +480,7 @@ pub async fn update_project(
         ));
     }
     broadcast_projects_changed(&state.relay, None);
+    publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %project_id,
@@ -550,6 +554,7 @@ pub async fn remove_project(
     // Mirror into the in-memory registry.
     state.registry.remove(&project_id);
     broadcast_projects_changed(&state.relay, None);
+    publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %project_id,

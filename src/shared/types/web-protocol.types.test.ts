@@ -18,6 +18,7 @@ import {
   WS_PROTOCOL_VERSION,
   WS_RELAY_TIERS,
   WS_REQUEST_TYPES,
+  WS_WATCH_FRAME_TYPE,
   type WsError,
   type WsEvent,
   type WsEventType,
@@ -73,13 +74,18 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     // Delivery frames (no seq): gap after a LOSSY drop, host heartbeat.
     expect(WS_EVENT_TYPES).toContain('gap')
     expect(WS_EVENT_TYPES).toContain('heartbeat')
+    // The watch frame is not an event type: its name is also a request type.
+    expect(WS_EVENT_TYPES).not.toContain('watch')
+    expect(WS_WATCH_FRAME_TYPE).toBe('watch')
+    expect(WS_REQUEST_TYPES).toContain('watch')
+    expect(WS_REQUEST_TYPES).toContain('unwatch')
     expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
     expect(WS_REQUEST_TYPES).toContain('open_persisted_session')
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 46 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(46)
+  it('exports exactly 48 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(48)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -205,7 +211,7 @@ describe('web-protocol.types — error codes (AC2)', () => {
 
 describe('web-protocol.types — versioned handshake contract (AD-15)', () => {
   it('pins the protocol version and client id length cap shared with the Rust host', () => {
-    expect(WS_PROTOCOL_VERSION).toBe(4)
+    expect(WS_PROTOCOL_VERSION).toBe(5)
     expect(MAX_CLIENT_ID_LEN).toBe(128)
   })
 

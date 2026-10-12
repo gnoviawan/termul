@@ -2,8 +2,14 @@
 //! to a registered project's filesystem watcher. The refcounted watcher and the
 //! targeted `fs_changed` delivery live in [`crate::web::fs_watcher::FsWatchHub`];
 //! connection close releases subscriptions through `ConnectionCleanup`.
+//!
+//! `watch` / `unwatch` handlers: subscriptions to the state watches (projects,
+//! chat-history index, agent roster) of [`crate::web::watch::WatchHub`].
 
 use super::*;
+use crate::web::watch::{
+    agents_state, chat_history_state, projects_state, SubscribeError, WatchKind,
+};
 
 /// `watch_project` / `unwatch_project` payload.
 #[derive(Debug, Deserialize)]
@@ -78,4 +84,66 @@ pub(super) fn handle_unwatch_project(
         parsed.project_id
     );
     WsReply::ok(id, Some(json!({ "projectId": parsed.project_id })))
+}
+
+/// `watch` / `unwatch` payload: `{watch, scope?}`.
+#[derive(Debug, Deserialize)]
+struct WatchPayload {
+    watch: String,
+    #[serde(default)]
+    scope: String,
+}
+
+fn parse_watch(payload: &Value, request: &str) -> Result<(WatchKind, String), String> {
+    let parsed: WatchPayload = serde_json::from_value(payload.clone())
+        .map_err(|e| format!("malformed {request} payload (want watch, scope?): {e}"))?;
+    let kind = WatchKind::parse(&parsed.watch)
+        .ok_or_else(|| format!("unknown watch `{}`", parsed.watch))?;
+    if !kind.accepts_scope(&parsed.scope) {
+        return Err(format!("watch `{}` has no scope `{}`", parsed.watch, parsed.scope));
+    }
+    Ok((kind, parsed.scope))
+}
+
+/// `watch{watch, scope?}`: subscribe this connection to a state watch. The
+/// full-state frame (`reset`, revision `n = 1`) is queued before the reply, so
+/// the client holds the state when the reply arrives; deltas follow under
+/// `n + 1`. Watching again replaces the subscription and sends fresh state.
+pub(super) fn handle_watch(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
+    let (kind, scope) = match parse_watch(payload, "watch") {
+        Ok(parsed) => parsed,
+        Err(message) => return WsReply::err(id, WsErrorCode::Unsupported, message),
+    };
+    let relay = &env.relay;
+    let subscribed = relay.watches().subscribe(kind, &scope, &env.out_tx, || match kind {
+        WatchKind::Projects => projects_state(&env.registry),
+        WatchKind::ChatHistory => chat_history_state(relay, env.history_mode),
+        WatchKind::Agents => agents_state(&env.acp),
+    });
+    match subscribed {
+        Ok(revision) => WsReply::ok(
+            id,
+            Some(json!({ "watch": kind.as_str(), "scope": scope, "revision": revision })),
+        ),
+        Err(SubscribeError::QueueFull) => WsReply::err(
+            id,
+            WsErrorCode::RateLimited,
+            "connection queue is full; retry the watch",
+        ),
+        Err(SubscribeError::Closed) => {
+            WsReply::err(id, WsErrorCode::RateLimited, "connection is closing")
+        }
+    }
+}
+
+/// `unwatch{watch, scope?}`: release the subscription. Always succeeds for a
+/// well-formed request, subscribed or not.
+pub(super) fn handle_unwatch(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
+    let (kind, scope) = match parse_watch(payload, "unwatch") {
+        Ok(parsed) => parsed,
+        Err(message) => return WsReply::err(id, WsErrorCode::Unsupported, message),
+    };
+    let was_subscribed = env.relay.watches().unsubscribe(kind, &scope, &env.out_tx);
+    log::info!("[ws] unwatch watch={} was_subscribed={was_subscribed}", kind.as_str());
+    WsReply::ok(id, Some(json!({ "watch": kind.as_str(), "scope": scope })))
 }

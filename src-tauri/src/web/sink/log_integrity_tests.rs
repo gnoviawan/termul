@@ -254,3 +254,27 @@ async fn host_record_notifies_history_changed_exactly_once() {
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A host record also publishes a `chat_history` delta naming its session, once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_record_publishes_one_chat_history_delta_naming_the_session() {
+    let (relay, persistence, root) = relay_with_session("history-delta", "sess-d").await;
+    let (out, mut watch_rx) = crate::web::ws::outbound_channel(64, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || json!([]))
+        .expect("subscribe");
+    let _state = watch_rx.try_recv().expect("full-state frame");
+
+    relay
+        .record_host_event("sess-d", "agent_switch", json!({"sessionId": "sess-d"}))
+        .unwrap();
+
+    let mut deltas = Vec::new();
+    while let Ok(crate::web::ws::Outbound::Watch(frame)) = watch_rx.try_recv() {
+        deltas.push(frame.delta_value().cloned().expect("delta"));
+    }
+    assert_eq!(deltas, vec![json!({"changed": ["sess-d"]})]);
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

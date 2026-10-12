@@ -195,6 +195,7 @@ pub async fn remote_sync_projects(
 ) -> Result<IpcResult<Option<String>>, String> {
     let default_id = project_registry.set_with_default_from(payload.projects, default_after_sync);
     crate::web::broadcast_projects_changed(ws_relay.inner(), default_id.as_deref());
+    crate::web::watch::publish_projects(ws_relay.inner(), &project_registry);
     Ok(IpcResult::success(default_id))
 }
 
@@ -234,6 +235,7 @@ pub async fn set_host_default_project(
         ));
     }
     crate::web::broadcast_projects_changed(ws_relay.inner(), Some(&project_id));
+    crate::web::watch::publish_projects(ws_relay.inner(), &project_registry);
     log::info!(
         "set_host_default_project: host default updated to '{}' + broadcast",
         project_id
@@ -287,6 +289,7 @@ pub async fn remote_sync_chat_history(
     // are deliberately not retained or cloned in Rust memory.
     let _ = payload;
     crate::web::broadcast_chat_history_changed(ws_relay.inner());
+    crate::web::watch::publish_chat_history(ws_relay.inner(), &[]);
     Ok(IpcResult::success(()))
 }
 

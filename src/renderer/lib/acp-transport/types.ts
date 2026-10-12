@@ -32,6 +32,7 @@ import type {
 } from '@/lib/acp-api'
 import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import type { WatchClient } from './watch-client'
 
 /**
  * What the user reads for a host `outcome_unknown` (the spec label): the host no
@@ -343,6 +344,11 @@ export interface AcpTransport {
   watchProject?(projectId: string): Promise<void>
   /** Web/remote only: drop this connection's `watch_project` subscription. */
   unwatchProject?(projectId: string): Promise<void>
+  /**
+   * Web/remote only: the state watches (projects, chat-history index, agent
+   * roster). Absent on Tauri IPC (desktop), where those stores are local.
+   */
+  readonly watches?: WatchClient
   historyMode?(): HistoryMode | 'tauri_store'
   listPersistedSessions?(): Promise<PersistedSessionSummary[]>
   openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>

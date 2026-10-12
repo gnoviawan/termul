@@ -82,6 +82,10 @@ class FakeWebSocket {
   static watchProjectRefusals: Record<string, string> = {}
   /** When true, `watch_project` replies are held back (never answered). */
   static holdWatchProjectReplies = false
+  /** watch name → full state the host answers a `watch` request with. */
+  static watchStates: Record<string, unknown> = {}
+  /** `hostEpoch` of the watch frames the fake host sends. */
+  static watchEpoch = 'epoch-aaaaaaaa'
 
   readyState = FakeWebSocket.CONNECTING
   onopen: ((ev: Event) => void) | null = null
@@ -544,6 +548,22 @@ class FakeWebSocket {
     }
     if (req.type === 'set_config_option') {
       this.emitReply({ id: req.id, ok: true, payload: this.setConfigOptionReply })
+      return
+    }
+    if (req.type === 'watch' || req.type === 'unwatch') {
+      const { watch, scope } = req.payload as { watch: string; scope?: string }
+      if (req.type === 'watch') {
+        // The state frame is queued before the reply, as the host does.
+        this.emit({
+          type: 'watch',
+          watch,
+          scope: scope ?? '',
+          revision: { hostEpoch: FakeWebSocket.watchEpoch, n: 1 },
+          reset: true,
+          state: FakeWebSocket.watchStates[watch] ?? []
+        })
+      }
+      this.emitReply({ id: req.id, ok: true, payload: { watch, scope: scope ?? '' } })
       return
     }
     if (req.type === 'watch_project' || req.type === 'unwatch_project') {
@@ -2586,6 +2606,87 @@ describe('WsAcpTransport reconnect listener (Story 5.3)', () => {
     await transport.connect()
     // Initial connect must NOT fire the listener — only reconnect transitions.
     expect(states).toEqual([])
+    transport.dispose()
+  })
+})
+
+// State watches (projects, chat history, agents): frames reach the WatchClient
+// ahead of the `watch` reply, every reconnect resubscribes, and a revision gap
+// makes the client ask for fresh state.
+describe('WsAcpTransport state watches', () => {
+  afterEach(() => {
+    FakeWebSocket.watchStates = {}
+    FakeWebSocket.watchEpoch = 'epoch-aaaaaaaa'
+    vi.useRealTimers()
+  })
+
+  const socketOf = (transport: WsAcpTransport): FakeWebSocket =>
+    (transport as unknown as { socket: FakeWebSocket }).socket
+
+  const watchRequests = (transport: WsAcpTransport): string[] =>
+    socketOf(transport)
+      .sent.map((frame) => JSON.parse(frame) as { type: string; payload: { watch?: string } })
+      .filter((frame) => frame.type === 'watch')
+      .map((frame) => frame.payload.watch ?? '')
+
+  function open(): WsAcpTransport {
+    return new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+  }
+
+  it('subscribes once the socket is authenticated and applies the state frame', async () => {
+    FakeWebSocket.watchStates.projects = { projects: [{ id: 'p1' }] }
+    const transport = open()
+    const states: unknown[] = []
+    transport.watches.subscribe('projects', { onState: (state) => states.push(state) })
+
+    await transport.connect()
+    await vi.waitFor(() => expect(states).toEqual([{ projects: [{ id: 'p1' }] }]))
+    expect(watchRequests(transport)).toEqual(['projects'])
+    transport.dispose()
+  })
+
+  it('applies a contiguous delta and resubscribes when one is skipped', async () => {
+    const transport = open()
+    const deltas: unknown[] = []
+    transport.watches.subscribe('agents', { onState: () => {}, onDelta: (d) => deltas.push(d) })
+    await transport.connect()
+    await vi.waitFor(() => expect(watchRequests(transport)).toEqual(['agents']))
+    const sock = socketOf(transport)
+    const frame = (n: number, delta: unknown) =>
+      sock.emit({
+        type: 'watch',
+        watch: 'agents',
+        scope: '',
+        revision: { hostEpoch: FakeWebSocket.watchEpoch, n },
+        delta
+      })
+
+    frame(2, 'one')
+    frame(4, 'skipped')
+
+    expect(deltas).toEqual(['one'])
+    await vi.waitFor(() => expect(watchRequests(transport)).toEqual(['agents', 'agents']))
+    transport.dispose()
+  })
+
+  it('resubscribes every watch on the fresh socket after a reconnect', async () => {
+    vi.useFakeTimers()
+    const transport = open()
+    const states: unknown[] = []
+    transport.watches.subscribe('chat_history', { onState: (state) => states.push(state) })
+    await transport.connect()
+    await vi.advanceTimersByTimeAsync(10)
+    expect(states).toHaveLength(1)
+
+    socketOf(transport).close()
+    await vi.advanceTimersByTimeAsync(2500)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(watchRequests(transport)).toEqual(['chat_history'])
+    expect(states).toHaveLength(2)
     transport.dispose()
   })
 })

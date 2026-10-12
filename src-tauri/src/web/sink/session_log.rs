@@ -378,7 +378,7 @@ impl WsRelaySink {
         };
         let (event, head_ahead) = event;
         self.mark_head_ahead(sid, head_ahead);
-        self.notify_history_for(type_);
+        self.notify_history_for(Some(sid), type_);
         Ok(event)
     }
 

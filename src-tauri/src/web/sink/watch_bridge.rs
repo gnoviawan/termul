@@ -5,9 +5,10 @@
 
 use std::sync::Arc;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::web::project_registry::ProjectsChangedPayload;
+use crate::web::watch::{publish_agent_event, publish_chat_history, AGENT_ROSTER_EVENTS};
 use crate::web::ws::{tier_of, SequencedEvent};
 
 use super::fanout::ClientId;
@@ -22,7 +23,7 @@ impl WsRelaySink {
     /// `local_title_generated` covers background title generation. Only
     /// fires when durable persistence is attached (live-only mode has
     /// nothing to refetch).
-    pub(super) fn notify_history_for(&self, type_: &str) {
+    pub(super) fn notify_history_for(&self, sid: Option<&str>, type_: &str) {
         if self.persistence().is_some()
             && matches!(
                 type_,
@@ -42,6 +43,18 @@ impl WsRelaySink {
             )
         {
             self.notify_history_changed();
+            // The `chat_history` watch carries the same change, naming the session.
+            let changed: Vec<&str> = sid.into_iter().collect();
+            publish_chat_history(self, &changed);
+        }
+    }
+
+    /// Agent-level lifecycle events (`agent_spawned`, `agent_crashed`,
+    /// `agent_error`, `agent_disconnected`, no session) also go to the
+    /// `agents` watch.
+    pub(super) fn publish_agent_roster_event(&self, type_: &str, payload: &Value) {
+        if AGENT_ROSTER_EVENTS.contains(&type_) {
+            publish_agent_event(self, type_, payload);
         }
     }
 

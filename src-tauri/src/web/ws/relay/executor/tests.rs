@@ -30,6 +30,15 @@ fn entity_keys_name_the_first_entity_and_never_collide_across_kinds() {
     );
     assert_eq!(key("install_acp_agent", json!({"agentId": "a"})).as_deref(), Some("agent:a"));
     assert_eq!(key("watch_project", json!({"projectId": "p"})).as_deref(), Some("project:p"));
+    assert_eq!(
+        key("watch", json!({"watch": "projects"})),
+        key("unwatch", json!({"watch": "projects", "scope": ""})),
+        "an unwatch queues behind the watch it follows"
+    );
+    assert_ne!(
+        key("watch", json!({"watch": "projects"})),
+        key("watch", json!({"watch": "agents"})),
+    );
     assert_eq!(key("add_project", json!({"id": "p", "name": "n"})).as_deref(), Some("project:p"));
     assert_eq!(key("store_write", json!({"key": "k", "value": 1})).as_deref(), Some("store:k"));
     assert_eq!(key("terminal_x", json!({"terminalId": "t"})).as_deref(), Some("terminal:t"));

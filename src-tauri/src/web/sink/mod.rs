@@ -320,6 +320,9 @@ pub struct WsRelaySink {
     /// `unwatch_project`). `fs_changed` events go only to subscribed
     /// connections, not through the client registry above.
     fs_watches: crate::web::fs_watcher::FsWatchHub,
+    /// Watch subscriptions for the project list, the chat-history index and
+    /// the agent roster (`watch` / `unwatch`): state that is not a session log.
+    watches: crate::web::watch::WatchHub,
     /// The command receipt ledger, shared by `/ws` dispatch and the Tauri
     /// `acp_*` commands (one ledger per host).
     ledger: Arc<crate::web::command_ledger::CommandLedger>,
@@ -390,6 +393,7 @@ impl WsRelaySink {
             replay_gates: tokio::sync::Mutex::new(HashMap::new()),
             restore_gates: Mutex::new(HashMap::new()),
             fs_watches: crate::web::fs_watcher::FsWatchHub::default(),
+            watches: crate::web::watch::WatchHub::new(),
             ledger: Arc::new(crate::web::command_ledger::CommandLedger::new(
                 std::time::Duration::from_secs(
                     crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
@@ -417,6 +421,12 @@ impl WsRelaySink {
     #[must_use]
     pub fn fs_watches(&self) -> &crate::web::fs_watcher::FsWatchHub {
         &self.fs_watches
+    }
+
+    /// The watch hub: projects, chat-history index and agent roster.
+    #[must_use]
+    pub fn watches(&self) -> &crate::web::watch::WatchHub {
+        &self.watches
     }
 
     /// Device presence registry (connections per `deviceId`).

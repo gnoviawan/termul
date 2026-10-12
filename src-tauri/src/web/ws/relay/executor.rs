@@ -70,6 +70,14 @@ pub(super) fn entity_key(request: &WsRequest) -> Option<EntityKey> {
     {
         return Some(format!("store:{key}"));
     }
+    // `watch`/`unwatch` of one (watch, scope) run in arrival order, so an
+    // `unwatch` never overtakes the `watch` it follows.
+    if matches!(request.type_.as_str(), "watch" | "unwatch") {
+        if let Some(name) = text("watch") {
+            let scope = text("scope").unwrap_or("");
+            return Some(format!("watch:{name}:{scope}"));
+        }
+    }
     // `add_project` carries the new project's id as `id`.
     if request.type_ == "add_project" {
         if let Some(id) = text("id") {

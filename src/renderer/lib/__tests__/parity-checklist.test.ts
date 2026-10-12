@@ -2195,3 +2195,33 @@ describe('Bounded delivery parity (host heartbeat, gap frame)', () => {
     expect(protocol).toMatch(/interface WsHeartbeatFrame \{\s+type: 'heartbeat'/)
   })
 })
+
+describe('Watch hub parity (projects, chat history, agent roster)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const hubSource = readFileSync(join(SRC_TAURI, 'web', 'watch', 'hub.rs'), 'utf-8')
+  const protocol = readFileSync(
+    join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts'),
+    'utf-8'
+  )
+
+  it('the watch names the host serves are the ones the client names', () => {
+    const asStr = hubSource.slice(hubSource.indexOf('fn as_str'), hubSource.indexOf('pub fn parse'))
+    const rust = [...asStr.matchAll(/Self::\w+ => "(\w+)"/g)].map((match) => match[1])
+    const client = /WS_WATCH_NAMES = \[([^\]]+)\]/.exec(protocol)
+    expect(client).not.toBeNull()
+    const names = [...(client?.[1] ?? '').matchAll(/'(\w+)'/g)].map((match) => match[1])
+    expect(rust.sort()).toEqual([...names].sort())
+  })
+
+  it('the watch frame type matches on both ends', () => {
+    expect(hubSource).toMatch(/WS_WATCH_TYPE: &str = "watch"/)
+    expect(protocol).toMatch(/WS_WATCH_FRAME_TYPE = 'watch'/)
+  })
+
+  it('the host routes the watch and unwatch requests the client declares', () => {
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(/"watch" => handle_watch/)
+    expect(dispatch).toMatch(/"unwatch" => handle_unwatch/)
+    expect(protocol).toMatch(/'watch',\s*\n\s*'unwatch'/)
+  })
+})

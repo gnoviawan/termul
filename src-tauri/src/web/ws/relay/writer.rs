@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::web::connection_runtime::{send_close, send_going_away};
 
 use super::super::*;
+use crate::web::watch::WS_WATCH_TYPE;
 use super::outbound::OutboundReceiver;
 use super::watchdog::{HEARTBEAT_INTERVAL, PING_INTERVAL, PING_PAYLOAD};
 
@@ -147,6 +148,11 @@ where
             Outbound::Gap(sid) => {
                 let frame = json!({ "type": WS_GAP_TYPE, "sid": sid });
                 if let Some(text) = encode(&frame, || "gap frame".to_string()) {
+                    send(sink, Message::Text(text.into()), stop).await?;
+                }
+            }
+            Outbound::Watch(watch) => {
+                if let Some(text) = encode(&watch, || format!("{WS_WATCH_TYPE} frame")) {
                     send(sink, Message::Text(text.into()), stop).await?;
                 }
             }

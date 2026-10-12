@@ -25,6 +25,8 @@ mod relay_liveness_tests;
 #[cfg(test)]
 mod relay_prompt_tests;
 #[cfg(test)]
+mod watch_hub_tests;
+#[cfg(test)]
 mod watch_tests;
 
 use std::collections::HashSet;

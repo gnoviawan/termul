@@ -220,6 +220,10 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         // routes `fs_changed` events to this connection.
         | "watch_project"
         | "unwatch_project"
+        // The state watches (projects, chat history, agents) only route frames
+        // to this connection, like `subscribe`.
+        | "watch"
+        | "unwatch"
         | "list_persisted_sessions"
         | "open_persisted_session"
         | "get_session_payload"

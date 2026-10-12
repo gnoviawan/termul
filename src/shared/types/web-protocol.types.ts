@@ -42,7 +42,9 @@
  * The `acp:*` event names from `src-tauri/src/acp/events.rs` with the `acp:`
  * prefix dropped (18, including `browser_open_request`), plus relay-level and
  * Epic-4 bridge events (`auth_required`, `projects_changed`,
- * `chat_history_changed`).
+ * `chat_history_changed`) and the top-level delivery frames (`gap`,
+ * `heartbeat`). The `watch` frame has the same name as the `watch` request, so
+ * its type lives in {@link WS_WATCH_FRAME_TYPE}, outside this registry.
  */
 export const WS_EVENT_TYPES = [
   // Session/agent lifecycle (reliable)
@@ -227,7 +229,7 @@ export const WS_REQUEST_TYPES = [
   // project-list authority). Mirrors `POST /projects`, `PUT /projects/{id}`,
   // `DELETE /projects/{id}` HTTP routes (transport parity). The WS variants
   // persist to `FileProjectRegistry` (VPS) with rollback + broadcast
-  // `projects_changed`.
+  // `projects_changed` and publish the new state to every `projects` watcher.
   'add_project',
   'update_project',
   'remove_project',
@@ -244,8 +246,16 @@ export const WS_REQUEST_TYPES = [
   // (always ok for a well-formed request).
   'watch_project',
   'unwatch_project',
+  // State watches `{ watch, scope? }` (`projects`, `chat_history`, `agents`):
+  // `watch` queues the full-state frame, then replies `{ watch, scope,
+  // revision }`; later changes arrive as deltas under `n + 1`. A second
+  // `watch` of the same (watch, scope) replaces the subscription and sends
+  // fresh state. `unwatch` is idempotent. Unknown watch or scope → `unsupported`.
+  'watch',
+  'unwatch',
   // Explicit host-default project change (updates `default_project_id`,
-  // persists on file-backed hosts, broadcasts `projects_changed`).
+  // persists on file-backed hosts, broadcasts `projects_changed` and publishes
+  // the project state to every `projects` watcher).
   'set_default_project'
 ] as const
 
@@ -318,7 +328,9 @@ export const WS_COMMAND_CLASSES: Readonly<
   set_default_project: ['idempotent', null],
   record_agent_switch: ['command', 'payload'],
   watch_project: ['read', null],
-  unwatch_project: ['read', null]
+  unwatch_project: ['read', null],
+  watch: ['read', null],
+  unwatch: ['read', null]
 }
 
 /** Longest accepted `commandId`, in bytes. Mirrors the Rust `MAX_COMMAND_ID_LEN`. */
@@ -619,7 +631,7 @@ export interface AcpRuntimePolicy {
  * The `authenticate` protocol version this client speaks. Mirrors the Rust
  * `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
  */
-export const WS_PROTOCOL_VERSION = 4
+export const WS_PROTOCOL_VERSION = 5
 
 /** Longest accepted `deviceId` / `clientInstanceId`, in bytes. */
 export const MAX_CLIENT_ID_LEN = 128
@@ -815,6 +827,71 @@ export interface WsGapFrame {
 /** Top-level `heartbeat` frame: the host is alive. */
 export interface WsHeartbeatFrame {
   type: 'heartbeat'
+}
+
+/**
+ * `type` of the top-level watch frame (no `seq`): the full state of a watch
+ * (`reset: true`, revision `n = 1`) or one delta after it. It shares its name
+ * with the `watch` request, which is told apart by the request's `id`. It has
+ * no tier: a delta the host cannot queue leaves a revision gap, and the client
+ * resubscribes for fresh state.
+ */
+export const WS_WATCH_FRAME_TYPE = 'watch'
+
+/** The state watches a connection can hold. All three have the empty scope. */
+export const WS_WATCH_NAMES = ['projects', 'chat_history', 'agents'] as const
+
+/** One of {@link WS_WATCH_NAMES}. */
+export type WsWatchName = (typeof WS_WATCH_NAMES)[number]
+
+/**
+ * `(hostEpoch, n)`: which serve start produced a watch frame, and its position
+ * in that subscription's stream. `n` is `1` for the full state and then rises
+ * by one per frame.
+ */
+export interface WsWatchRevision {
+  hostEpoch: string
+  n: number
+}
+
+/** Top-level `watch` frame: the full state of a watch (`reset: true`) or one delta. */
+export interface WsWatchFrame {
+  type: typeof WS_WATCH_FRAME_TYPE
+  watch: WsWatchName
+  scope: string
+  revision: WsWatchRevision
+  reset?: true
+  state?: unknown
+  delta?: unknown
+}
+
+/** `watch` reply payload. */
+export interface WsWatchReply {
+  watch: WsWatchName
+  scope: string
+  revision: WsWatchRevision
+}
+
+/**
+ * A `chat_history` delta: the session ids whose index entry changed (an empty
+ * list means the index changed in bulk). The client refetches the index.
+ */
+export interface ChatHistoryWatchDelta {
+  changed: string[]
+}
+
+/**
+ * An `agents` delta: an agent-level lifecycle event, with the payload it had
+ * as an event.
+ */
+export interface AgentsWatchDelta {
+  event: 'agent_spawned' | 'agent_crashed' | 'agent_error' | 'agent_disconnected'
+  payload: unknown
+}
+
+/** A delta the host sends when it could not queue the one before it. */
+export interface WatchResyncDelta {
+  resync: true
 }
 
 /**

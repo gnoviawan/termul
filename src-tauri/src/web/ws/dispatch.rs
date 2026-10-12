@@ -165,6 +165,10 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // `unwatch_project`, connection close, or project archive/remove.
         "watch_project" => handle_watch_project(id, &req.payload, relay, registry, out_tx),
         "unwatch_project" => handle_unwatch_project(id, &req.payload, relay, out_tx),
+        // State watches (projects, chat-history index, agent roster): the
+        // full state now, deltas under a contiguous revision after.
+        "watch" => handle_watch(id, &req.payload, env),
+        "unwatch" => handle_unwatch(id, &req.payload, env),
         // Explicit host-default change (Epic 7 — cross-client continuity).
         // Updates the host's
         // `default_project_id`, persists to `FileProjectRegistry` (VPS, with

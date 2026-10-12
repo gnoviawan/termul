@@ -323,7 +323,7 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     .expect("ping remains processable during prompt");
     let ping = match rx.recv().await.expect("ping reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected ping reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected ping reply"),
     };
     assert!(ping.ok);
 
@@ -365,7 +365,7 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     let _ = release.send(());
     let completed = match rx.recv().await.expect("prompt reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected prompt reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected prompt reply"),
     };
     assert!(completed.ok);
     assert_eq!(completed.id, "prompt-long");
@@ -431,11 +431,11 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
 
     let first = match rx.recv().await.expect("first reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected reply"),
     };
     let second = match rx.recv().await.expect("second reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected reply"),
     };
     let replies = [first, second];
     let cancel = replies
@@ -4351,6 +4351,96 @@ async fn log_epoch_rides_subscribe_snapshot_and_cursor_replies() {
     assert!(!reply.ok, "{reply:?}");
     assert_eq!(reply.err.unwrap().code, "stale");
 
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// `set_default_project` also publishes the project state (with the new
+/// default) to every `projects` watcher, which needs no session subscription.
+#[tokio::test]
+async fn handle_set_default_project_publishes_to_all_watchers() {
+    let relay = Arc::new(WsRelaySink::new());
+    let registry = Arc::new(ProjectRegistry::new());
+    registry.set(
+        vec![crate::web::project_registry::ProjectSummary {
+            id: "p-1".to_string(),
+            name: "Proj p-1".to_string(),
+            color: "blue".to_string(),
+            path: Some("/a".to_string()),
+            is_archived: false,
+            is_default: false,
+        }],
+        None,
+    );
+    let (out, mut rx) = outbound_channel(16, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
+        .expect("watch");
+    let _state = rx.try_recv().expect("full-state frame");
+
+    let reply = handle_set_default_project(
+        "r1".to_string(),
+        &json!({ "projectId": "p-1" }),
+        &relay,
+        &registry,
+        None,
+        None,
+    )
+    .await;
+    assert!(reply.ok, "{:?}", reply.err);
+
+    let mut deltas = Vec::new();
+    while let Ok(Outbound::Watch(frame)) = rx.try_recv() {
+        deltas.push(frame);
+    }
+    assert_eq!(deltas.len(), 1, "exactly one projects delta");
+    let delta = deltas[0].delta_value().expect("delta");
+    assert_eq!(delta["defaultProjectId"], "p-1");
+    assert_eq!(delta["projects"][0]["id"], "p-1");
+}
+
+/// `delete_session` also tells every `chat_history` watcher which session changed.
+#[tokio::test]
+async fn delete_session_publishes_a_chat_history_delta() {
+    let root = std::env::temp_dir().join(format!("termul-ws-delete-watch-{}", uuid::Uuid::new_v4()));
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(crate::acp::SessionRegistration {
+            session_id: "s-1".to_string(),
+            stable_agent_namespace: Some("config:claude".to_string()),
+            runtime_agent_id: Some("agent-1".to_string()),
+            project_id: Some("p-1".to_string()),
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+    let (out, mut rx) = outbound_channel(16, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || json!([]))
+        .expect("watch");
+    let _state = rx.try_recv().expect("full-state frame");
+
+    let reply = handle_delete_session(
+        "r1".to_string(),
+        &json!({ "sessionId": "s-1" }),
+        &relay,
+        HistoryMode::Server,
+    )
+    .await;
+    assert!(reply.ok, "delete ok: {:?}", reply.err);
+
+    let Ok(Outbound::Watch(frame)) = rx.try_recv() else {
+        panic!("expected a chat_history delta");
+    };
+    assert_eq!(frame.delta_value(), Some(&json!({ "changed": ["s-1"] })));
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }

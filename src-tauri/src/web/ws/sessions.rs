@@ -55,6 +55,7 @@ pub(super) async fn handle_delete_session(
         Ok(()) => {
             relay.forget_session(&parsed.session_id).await;
             broadcast_chat_history_changed(relay);
+            crate::web::watch::publish_chat_history(relay, &[parsed.session_id.as_str()]);
             WsReply::ok(id, Some(json!({ "deleted": true })))
         }
         Err(crate::acp::session_persistence::SessionPersistenceError::SessionNotFound) => {

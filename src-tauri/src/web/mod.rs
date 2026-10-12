@@ -52,6 +52,7 @@ pub mod sink;
 pub mod skills_api;
 pub mod store;
 pub mod terminal_ws;
+pub mod watch;
 pub mod workspace_api;
 pub mod worktree_api;
 pub mod worktree_rename_api;
@@ -351,6 +352,10 @@ pub async fn serve_router(
     // AD-19: one shutdown handle + overflow tolerance for every socket this
     // host upgrades.
     let connections = ConnectionRuntime::from_config(&cfg);
+    // A serve start is a new host epoch for the watch hub: a client that sees
+    // the epoch change rebuilds its watched state from a fresh full-state frame.
+    ws_relay.watches().renew_epoch();
+    info!(target: "termul::web::watch", "watch hub host epoch renewed for this serve start");
     let socket_shutdown = connections.shutdown.clone();
     let app = router::router(
         Arc::clone(&acp),

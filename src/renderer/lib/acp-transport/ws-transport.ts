@@ -19,11 +19,13 @@ import {
   type SessionSubscribeReply,
   WS_ERROR_CODES,
   WS_EVENT_TYPES,
+  WS_WATCH_FRAME_TYPE,
   type WsAgentSummary,
   type WsEvent,
   type WsReply,
   type WsRequest,
   type WsRequestType,
+  type WsWatchFrame,
   wsTierOf
 } from '@shared/types/web-protocol.types'
 import type {
@@ -68,6 +70,7 @@ import {
   parseVisibleAt,
   type SessionCursor
 } from './types'
+import { WatchClient } from './watch-client'
 import { SessionResubscribeRetry, type SessionRetryMode } from './ws-session-retry'
 import {
   HANDSHAKE_TIMEOUT_MS,
@@ -238,6 +241,14 @@ export class WsAcpTransport implements AcpTransport {
   private readonly syncGate = new SyncGate()
   /** Sessions we should re-subscribe after reconnect. */
   private readonly subscribed = new Set<string>()
+  /**
+   * The state watches (projects, chat-history index, agent roster): frames are
+   * routed here from `onMessage`, and every (re)connect resubscribes them.
+   */
+  readonly watches = new WatchClient({
+    request: (type, payload, timeoutMs) => this.request(type, payload, timeoutMs),
+    isLive: () => this.isSocketLive()
+  })
   /** Projects whose `fs_changed` watch this connection must re-request after reconnect. */
   private readonly watchedProjects = new Set<string>()
   /** Idempotent prompt_complete turn ids already delivered, scoped by session. */
@@ -444,6 +455,7 @@ export class WsAcpTransport implements AcpTransport {
 
   dispose(): void {
     this.disposed = true
+    this.watches.dispose()
     this.detachVisibilityListeners()
     this.clearHeartbeat()
     this.clearStableTimer()
@@ -1328,6 +1340,7 @@ export class WsAcpTransport implements AcpTransport {
         }
         this.socket = null
         this.authed = false
+        this.watches.onDisconnected()
         this.clearHeartbeat()
         this.clearStableTimer()
         this.sessionRetry.cancelAll()
@@ -1561,6 +1574,7 @@ export class WsAcpTransport implements AcpTransport {
     const old = this.socket
     this.socket = null
     this.authed = false
+    this.watches.onDisconnected()
     this.rejectAllPending('closed', reason)
     this.clearHeartbeat()
     this.clearStableTimer()
@@ -1898,6 +1912,10 @@ export class WsAcpTransport implements AcpTransport {
 
     // Delivery frames carry no seq. Any host frame proves the link is alive.
     if (obj.type === 'heartbeat') return
+    if (obj.type === WS_WATCH_FRAME_TYPE) {
+      this.watches.handleFrame(obj as unknown as WsWatchFrame)
+      return
+    }
     if (obj.type === 'gap' && typeof obj.sid === 'string') {
       const gapSid = obj.sid
       // Queued behind the events already received so it lands in wire order.
@@ -2044,6 +2062,8 @@ export class WsAcpTransport implements AcpTransport {
         // that strip WS-level Ping/Pong so a focused tab stops dropping at ~75s.
         this.startHeartbeat()
         this.startStableTimer()
+        // Every watch rebuilds from fresh full state on this socket.
+        this.watches.onConnected()
         // CAP-3: if the tab is already hidden when auth completes (e.g. a
         // reconnect that finished while backgrounded), the hide event fired
         // before we were authed and was a no-op. Re-sync the server's watchdog
