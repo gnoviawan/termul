@@ -437,9 +437,18 @@ impl WsRelaySink {
             };
             if let Err(error) = outcome {
                 // `SessionNotFound` is a buffered pre-registration record (it
-                // reaches the disk) or a deleted session; any other error
-                // drops the record.
-                let dropped = !matches!(error, SessionPersistenceError::SessionNotFound);
+                // reaches the disk unless the buffer is full) or a deleted
+                // session; any other error drops the record.
+                let mut dropped = !matches!(error, SessionPersistenceError::SessionNotFound);
+                if !dropped {
+                    // The bounded pre-registration buffer evicts its oldest
+                    // record when full: that record never reaches the disk.
+                    dropped = self
+                        .pre_registration_events
+                        .lock()
+                        .get(sid)
+                        .is_some_and(|queue| queue.len() >= self.pre_registration_capacity);
+                }
                 on_persist_error(self, persistence, record, error)?;
                 head_ahead |= dropped;
             }

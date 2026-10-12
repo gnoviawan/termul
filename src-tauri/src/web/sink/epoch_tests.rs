@@ -427,3 +427,42 @@ async fn writer_retries_a_failed_head_ahead_write_after_its_next_command() {
         "the writer retried the mark after the disk recovered"
     );
 }
+
+/// The pre-registration buffer holds a bounded number of records. A burst
+/// larger than that loses its oldest records for good, so the seq frontier
+/// is ahead of the disk and the epoch must rotate on restart.
+#[tokio::test]
+async fn pre_registration_buffer_overflow_rotates_the_epoch_on_restart() {
+    let root = temp_dir("prereg-overflow");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(64, persistence.clone()));
+    // More than the 256-record buffer can hold.
+    for _ in 0..300 {
+        relay.emit(&event("sess-o"));
+    }
+    persistence
+        .register_session(SessionRegistration {
+            session_id: "sess-o".to_string(),
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    relay.note_session_registered_inherent("sess-o");
+    persistence.flush_session("sess-o").await.unwrap();
+    let before = persistence.log_epoch("sess-o").unwrap();
+    drop((relay, persistence));
+
+    let reopened = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    assert_ne!(
+        reopened.log_epoch("sess-o").unwrap(),
+        before,
+        "the evicted records never reached the disk"
+    );
+}
