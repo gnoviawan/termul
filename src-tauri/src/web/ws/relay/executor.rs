@@ -39,7 +39,23 @@ pub(super) type EntityKey = String;
 /// The serial-queue key for `request`: the first entity it names, in the order
 /// session, terminal, agent, project, store key. `None` for requests that name
 /// no entity (they run concurrently with everything).
+///
+/// Ticket answers (`respond_permission`, `answer_question`,
+/// `respond_elicitation`) are keyless on purpose: they carry only the ticket
+/// (the agent id is optional and informational), first-wins is enforced by the
+/// rendezvous, and the turn that raised the ticket is usually waiting on them,
+/// so they must never queue behind a long handler on the same agent.
+///
+/// Ordering is per key, not global: `close_session{agentId, sessionId}` and
+/// `kill_agent{agentId}` run on different queues (session vs agent), and
+/// project mutations on different `projectId`s run concurrently.
 pub(super) fn entity_key(request: &WsRequest) -> Option<EntityKey> {
+    if matches!(
+        request.type_.as_str(),
+        "respond_permission" | "answer_question" | "respond_elicitation"
+    ) {
+        return None;
+    }
     let payload = &request.payload;
     let text = |field: &str| payload.get(field).and_then(Value::as_str).filter(|v| !v.is_empty());
     if let Some(key) = matches!(

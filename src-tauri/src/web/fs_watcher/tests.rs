@@ -439,8 +439,8 @@ async fn a_moved_project_root_re_arms_the_live_watch() {
 /// misses the batch (never grows past its bound) and, once the overflow
 /// tolerance is reached, the subscriber is closed and pruned (dropping the
 /// watcher with its last subscriber).
-#[test]
-fn deliver_uses_the_bounded_queue_and_prunes_a_peer_that_stays_full() {
+#[tokio::test(start_paused = true)]
+async fn deliver_uses_the_bounded_queue_and_prunes_a_peer_that_stays_full() {
     let (tx, mut rx) = outbound_channel(1, 3);
     let watches: WatchMap = Arc::new(Mutex::new(HashMap::new()));
     watches.lock().insert(
@@ -460,11 +460,13 @@ fn deliver_uses_the_bounded_queue_and_prunes_a_peer_that_stays_full() {
 
     assert!(deliver(&watches, "p-full", 1, &payload), "first batch queued");
     assert!(deliver(&watches, "p-full", 1, &payload), "full: batch missed, peer kept");
+    tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(deliver(&watches, "p-full", 1, &payload), "full again, within tolerance");
     assert!(!tx.closing().is_cancelled());
+    tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(
         !deliver(&watches, "p-full", 1, &payload),
-        "third consecutive full batch reaches the tolerance: subscriber pruned, watch dropped"
+        "third consecutive full window reaches the tolerance: subscriber pruned, watch dropped"
     );
     assert!(tx.closing().is_cancelled(), "the overflowing peer's connection is closed");
     assert!(watches.lock().is_empty());
