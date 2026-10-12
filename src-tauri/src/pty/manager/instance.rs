@@ -244,7 +244,10 @@ impl TerminalInstance {
             || self.next_output_seq.load(Ordering::Relaxed),
             |chunk| chunk.seq,
         );
-        let reset = log_epoch.is_some_and(|epoch| epoch != self.log_epoch) || last_seq > head_seq;
+        // A nonzero cursor with no epoch cannot be verified either: only an
+        // initial (zero) cursor may come without one.
+        let reset = log_epoch.map_or(last_seq > 0, |epoch| epoch != self.log_epoch)
+            || last_seq > head_seq;
         let cursor = if reset { 0 } else { last_seq };
         // Gap if the client's cursor is behind the earliest retained chunk.
         // An empty log (eviction removed every chunk) has lost the output after

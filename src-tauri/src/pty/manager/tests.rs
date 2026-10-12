@@ -124,6 +124,13 @@ async fn subscribe_from_replays_the_retained_log_on_reset_and_reports_eviction_g
     let resumed = instance.subscribe_from(5, Some(&instance.log_epoch));
     assert!(!resumed.reset && !resumed.gap);
     assert_eq!(seqs(&resumed), vec![6]);
+
+    // A nonzero cursor with no epoch cannot be verified: full replay with reset.
+    let unverified = instance.subscribe_from(5, None);
+    assert!(unverified.reset);
+    assert_eq!(seqs(&unverified), vec![5, 6]);
+    // An initial cursor needs no epoch.
+    assert!(!instance.subscribe_from(0, None).reset);
 }
 
 /// A log emptied by eviction keeps its head: a cursor at the head resumes
