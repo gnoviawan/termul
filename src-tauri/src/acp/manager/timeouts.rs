@@ -240,22 +240,28 @@ where
         if let Some(nd) = next_deadline {
             if tokio::time::Instant::now() >= nd {
                 on_timeout_cancel();
-                return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
-                    Ok(result) => result,
-                    Err(_) if idle_deadline == Some(nd) => {
+                let timeout_error = || {
+                    if idle_deadline == Some(nd) {
                         let idle_dur = idle.unwrap_or(Duration::ZERO);
-                        Err(E::from(TurnTimeout {
+                        E::from(TurnTimeout {
                             message: format!(
                                 "turn idle timeout: no agent activity for {idle_dur:?}"
                             ),
-                        }))
-                    }
-                    Err(_) => {
+                        })
+                    } else {
                         let hard_dur = hard.unwrap_or(Duration::ZERO);
-                        Err(E::from(TurnTimeout {
+                        E::from(TurnTimeout {
                             message: format!("turn hard timeout: exceeded {hard_dur:?}"),
-                        }))
+                        })
                     }
+                };
+                // The cancel we just issued is OUR timeout cancel: an agent that
+                // honors it within the grace window answers `Cancelled`, which
+                // is still a deadline expiry (typed `TurnTimeout`), never a
+                // user cancel. Any other completion is the agent's own result.
+                return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
+                    Ok(Ok(StopReason::Cancelled)) | Err(_) => Err(timeout_error()),
+                    Ok(result) => result,
                 };
             }
         }

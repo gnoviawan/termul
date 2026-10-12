@@ -91,6 +91,44 @@ impl Drop for IdleTimeoutGuard {
     }
 }
 
+/// Turn-timeout env vars `turn_idle_timeout()` / `resolved_turn_timeout()` read.
+/// They take precedence over the in-process override the idle-timeout test
+/// sets, so a developer/CI environment that configures one would change every
+/// real-loop turn's deadlines.
+const TURN_TIMEOUT_ENV_VARS: [&str; 2] = [
+    "TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS",
+    "TERMUL_ACP_TURN_TIMEOUT_SECS",
+];
+
+/// Clears the ambient turn-timeout env vars for the harness lifetime (the
+/// caller holds [`IDLE_TIMEOUT_TEST_LOCK`]) and restores them on drop.
+struct TurnTimeoutEnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl TurnTimeoutEnvGuard {
+    fn clear() -> Self {
+        let saved = TURN_TIMEOUT_ENV_VARS
+            .into_iter()
+            .map(|name| {
+                let previous = std::env::var_os(name);
+                std::env::remove_var(name);
+                (name, previous)
+            })
+            .collect();
+        Self(saved)
+    }
+}
+
+impl Drop for TurnTimeoutEnvGuard {
+    fn drop(&mut self) {
+        for (name, previous) in self.0.drain(..) {
+            match previous {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
 /// Upper bound for one turn; a wedged loop fails the test instead of hanging.
 const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -101,9 +139,10 @@ struct Harness {
     session_id: SessionId,
     rx: mpsc::UnboundedReceiver<SequencedEvent>,
     dir: PathBuf,
-    // Field order matters: the override is cleared before the serialization
-    // lock is released.
+    // Field order matters: the override is cleared and the env restored before
+    // the serialization lock is released.
     _idle_timeout: Option<IdleTimeoutGuard>,
+    _env: TurnTimeoutEnvGuard,
     _serial: tokio::sync::MutexGuard<'static, ()>,
 }
 
@@ -122,6 +161,7 @@ impl Harness {
             );
         };
         let serial = IDLE_TIMEOUT_TEST_LOCK.lock().await;
+        let env = TurnTimeoutEnvGuard::clear();
         let dir = std::env::temp_dir().join(format!("termul-real-loop-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("mock_agent.py");
@@ -155,6 +195,7 @@ impl Harness {
             rx,
             dir,
             _idle_timeout: None,
+            _env: env,
             _serial: serial,
         })
     }

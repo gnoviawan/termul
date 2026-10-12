@@ -76,6 +76,17 @@ pub enum PromptTurnError {
 }
 
 impl PromptTurnError {
+    /// Stable variant tag safe to log: unlike [`Self::into_message`] it never
+    /// embeds a session id or manager error text.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NotOwned => "not_owned",
+            Self::Busy { .. } => "busy",
+            Self::Failed(_) => "failed",
+        }
+    }
+
     /// Plain-string form for the Tauri command boundary. `Busy` uses the
     /// stable `ACP_TURN_IN_PROGRESS` code the renderer queues on.
     #[must_use]
@@ -97,7 +108,8 @@ pub struct PromptTurnRequest {
     /// Blocks persisted in the durable `user_prompt` (the display-side
     /// override, or `content` when there is none).
     pub record_content: Vec<ContentBlock>,
-    /// Client turn id (`None` for callers that omit it: no dedupe).
+    /// Client turn id (`None` for callers that omit it: no dedupe). An empty
+    /// string is normalized to `None` by [`accept_prompt_turn`].
     pub turn_id: Option<String>,
 }
 
@@ -163,6 +175,9 @@ pub async fn accept_prompt_turn(
         record_content,
         turn_id,
     } = request;
+    // An empty `turnId` names no turn: treat it exactly like an omitted one
+    // (no dedupe, nothing recorded) rather than claiming a turn called "".
+    let turn_id = turn_id.filter(|id| !id.is_empty());
 
     match acp.owns_session(&agent_id, session_id.clone()).await {
         Ok(true) => {}
@@ -208,6 +223,61 @@ pub async fn accept_prompt_turn(
         armed: true,
     };
 
+    // Everything from here on is non-cancellable. The driver may accept the
+    // prompt at any point inside `start_prompt` (and sequence the durable
+    // `user_prompt` on its own thread) even if the carrier drops this future
+    // (peer gone, read task aborted) before the call returns; releasing the
+    // claim then would treat a running turn as rejected and let a same-`turnId`
+    // resend start a second one. So the ephemeral probe, `start_prompt`, the
+    // durable flush and the claim handoff all run in a detached task that
+    // OWNS the claim and reports the outcome through a oneshot. A rejected
+    // start drops the claim (released, not completed). When the caller is gone
+    // after a successful start, the task drives the turn to its terminal
+    // outcome itself, so the claim is recorded completed exactly once and a
+    // resend sees `in_progress` until then.
+    let (accepted_tx, accepted_rx) = oneshot::channel::<Result<RunningPrompt, PromptTurnError>>();
+    let acp = Arc::clone(acp);
+    let relay = Arc::clone(relay);
+    tokio::spawn(async move {
+        let outcome = start_claimed_prompt(
+            &acp,
+            &relay,
+            claim,
+            agent_id,
+            session_id,
+            content,
+            record_content,
+            turn_id,
+        )
+        .await;
+        if let Err(Ok(running)) = accepted_tx.send(outcome) {
+            let _ = complete_prompt_turn(&acp, running).await;
+        }
+    });
+    match accepted_rx.await {
+        Ok(Ok(running)) => Ok(PromptAdmission::Running(running)),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(PromptTurnError::Failed(
+            "prompt acceptance task ended unexpectedly".to_string(),
+        )),
+    }
+}
+
+/// Body of the detached acceptance task: start the prompt on the driver and,
+/// for durable sessions, flush the accepted `user_prompt`. Owns `claim`; any
+/// early return drops it (releasing the claim of a prompt that was never
+/// accepted).
+#[allow(clippy::too_many_arguments)]
+async fn start_claimed_prompt(
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    claim: PromptClaim,
+    agent_id: AgentId,
+    session_id: SessionId,
+    content: Vec<ContentBlock>,
+    record_content: Vec<ContentBlock>,
+    turn_id: Option<String>,
+) -> Result<RunningPrompt, PromptTurnError> {
     let ephemeral = acp
         .is_ephemeral_session(&agent_id, session_id.clone())
         .await
@@ -235,40 +305,16 @@ pub async fn accept_prompt_turn(
         .await
         .map_err(PromptTurnError::Failed)?;
 
-    let running = RunningPrompt { started, claim };
-    if ephemeral {
-        return Ok(PromptAdmission::Running(running));
+    // The record was sequenced and enqueued, so a flush failure must not
+    // unwind the accepted turn. The error text may embed the raw session
+    // id/path, so only the redacted id is logged.
+    if !ephemeral && relay.flush_prompt_record(&session_id.0).await.is_err() {
+        warn!(
+            "[prompt] failed to flush accepted user_prompt for session {}",
+            crate::logging::redact_session_id(&session_id.0)
+        );
     }
-
-    // Everything after driver acceptance is non-cancellable: the driver
-    // already runs the turn, so a carrier that drops this future (peer gone,
-    // read task aborted) must not release the claim of a running turn. The
-    // flush therefore runs in a detached task that owns the claim; when the
-    // caller is gone the task itself drives the turn to its terminal outcome,
-    // so the claim is recorded/released exactly once and a same-`turnId`
-    // resend sees `in_progress` until then.
-    let (accepted_tx, accepted_rx) = oneshot::channel();
-    let acp = Arc::clone(acp);
-    let relay = Arc::clone(relay);
-    tokio::spawn(async move {
-        if let Err(error) = relay.flush_prompt_record(&session_id.0).await {
-            // The record was sequenced and enqueued, so the flush failure
-            // must not unwind the accepted turn.
-            warn!(
-                "[prompt] failed to flush accepted user_prompt for session {}: {error}",
-                crate::logging::redact_session_id(&session_id.0)
-            );
-        }
-        if let Err(running) = accepted_tx.send(running) {
-            let _ = complete_prompt_turn(&acp, running).await;
-        }
-    });
-    match accepted_rx.await {
-        Ok(running) => Ok(PromptAdmission::Running(running)),
-        Err(_) => Err(PromptTurnError::Failed(
-            "prompt acceptance task ended unexpectedly".to_string(),
-        )),
-    }
+    Ok(RunningPrompt { started, claim })
 }
 
 /// Wait for the accepted turn and release its claim on ANY terminal outcome

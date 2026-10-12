@@ -25,6 +25,7 @@ pub(super) fn writer_loop(
         }
     }
     let _alive = AliveGuard(alive, session_id);
+    let mut tails = TailState::default();
     while let Ok(command) = rx.recv() {
         #[cfg(test)]
         {
@@ -36,13 +37,14 @@ pub(super) fn writer_loop(
             }
         }
         let result = match command {
-            WriterCommand::Append(record) => append_record(&inner.root, &metadata, record),
+            WriterCommand::Append(record) => append_record(&inner.root, &metadata, &mut tails, record),
             WriterCommand::AppendLocalTitle(title, reply) => {
                 let seq = metadata.lock().last_seq + 1;
                 let session_id = metadata.lock().session_id.clone();
                 let result = append_record(
                     &inner.root,
                     &metadata,
+                    &mut tails,
                     PersistedEventRecord {
                         schema_version: SESSION_SCHEMA_VERSION,
                         session_id: session_id.clone(),
@@ -67,6 +69,7 @@ pub(super) fn writer_loop(
                 let result = append_record(
                     &inner.root,
                     &metadata,
+                    &mut tails,
                     PersistedEventRecord {
                         schema_version: SESSION_SCHEMA_VERSION,
                         session_id: session_id.clone(),
@@ -89,11 +92,11 @@ pub(super) fn writer_loop(
                 result
             }
             WriterCommand::Finalize(status, reply) => {
-                close_writer(&inner, &metadata, &unhealthy, Some(status), false, reply);
+                close_writer(&inner, &metadata, &mut tails, &unhealthy, Some(status), false, reply);
                 return;
             }
             WriterCommand::Shutdown(reply) => {
-                close_writer(&inner, &metadata, &unhealthy, None, false, reply);
+                close_writer(&inner, &metadata, &mut tails, &unhealthy, None, false, reply);
                 break;
             }
             // Process shutdown: marker (if the turn is open) then status
@@ -103,6 +106,7 @@ pub(super) fn writer_loop(
                 close_writer(
                     &inner,
                     &metadata,
+                    &mut tails,
                     &unhealthy,
                     Some(PersistedSessionStatus::Closed),
                     true,
@@ -126,13 +130,14 @@ pub(super) fn writer_loop(
 fn close_writer(
     inner: &Inner,
     metadata: &Arc<Mutex<SessionMetadata>>,
+    tails: &mut TailState,
     unhealthy: &Arc<Mutex<Option<String>>>,
     status: Option<PersistedSessionStatus>,
     mark_interrupted: bool,
     reply: oneshot::Sender<Result<()>>,
 ) {
     if mark_interrupted {
-        append_interrupted_marker_if_open(&inner.root, metadata);
+        append_interrupted_marker_if_open(&inner.root, metadata, tails);
     }
     let snapshot = {
         let mut current = metadata.lock();
@@ -153,7 +158,11 @@ fn close_writer(
 /// the last `user_prompt` has no matching completion. Sequence is assigned
 /// here, after the queue drain, so it cannot collide with a chunk that was
 /// still queued when shutdown began. Marker failures are logged and skipped.
-fn append_interrupted_marker_if_open(root: &Path, metadata: &Arc<Mutex<SessionMetadata>>) {
+pub(super) fn append_interrupted_marker_if_open(
+    root: &Path,
+    metadata: &Arc<Mutex<SessionMetadata>>,
+    tails: &mut TailState,
+) {
     let (session_id, storage_key) = {
         let current = metadata.lock();
         (current.session_id.clone(), current.storage_key.clone())
@@ -174,7 +183,12 @@ fn append_interrupted_marker_if_open(root: &Path, metadata: &Arc<Mutex<SessionMe
         return;
     };
     let turn_id = turn_id.and_then(Value::as_str).map(str::to_owned);
-    let seq = metadata.lock().last_seq + 1;
+    // The scan sees every record on disk, including an intact-but-unterminated
+    // tail the writer's bookkeeping has not accounted for yet (a failed append
+    // whose record nevertheless reached the file): the marker must sequence
+    // after the highest seq actually present, never reuse one.
+    let on_disk_max = records.iter().map(|record| record.seq).max().unwrap_or(0);
+    let seq = metadata.lock().last_seq.max(on_disk_max) + 1;
     let mut payload = serde_json::json!({
         "sessionId": session_id,
         "stopReason": "interrupted",
@@ -191,7 +205,7 @@ fn append_interrupted_marker_if_open(root: &Path, metadata: &Arc<Mutex<SessionMe
         recorded_at: now_millis(),
         payload,
     };
-    if let Err(error) = append_record(root, metadata, record) {
+    if let Err(error) = append_record(root, metadata, tails, record) {
         log::warn!(
             "[acp-history] failed to append interrupted marker for session {}: {error}",
             crate::logging::redact_session_id(&session_id)
@@ -219,9 +233,33 @@ impl CloneForReply<()> for Result<()> {
     }
 }
 
+/// Which JSONL logs the writer has already proven newline-terminated.
+///
+/// `Some(len)` = the log is known to be exactly `len` bytes and to end with
+/// `\n` (set by this writer's own last successful append), so the next append
+/// needs no `metadata()` + seek + read probe. `None` = unknown (a fresh
+/// writer, or any failed append / rollback): the next append re-verifies the
+/// tail and repairs it inline before writing.
+#[derive(Default)]
+pub(super) struct TailState {
+    pub(super) messages: Option<u64>,
+    pub(super) tool_calls: Option<u64>,
+}
+
+impl TailState {
+    fn slot(&mut self, tool_event: bool) -> &mut Option<u64> {
+        if tool_event {
+            &mut self.tool_calls
+        } else {
+            &mut self.messages
+        }
+    }
+}
+
 pub(super) fn append_record(
     root: &Path,
     metadata: &Arc<Mutex<SessionMetadata>>,
+    tails: &mut TailState,
     record: PersistedEventRecord,
 ) -> Result<()> {
     let mut current = metadata.lock();
@@ -231,8 +269,9 @@ pub(super) fn append_record(
     {
         return Err(SessionPersistenceError::CorruptSession);
     }
+    let tool_event = is_tool_event(&record.type_);
     let dir = root.join(&current.storage_key);
-    let path = dir.join(if is_tool_event(&record.type_) {
+    let path = dir.join(if tool_event {
         TOOL_CALLS_FILE
     } else {
         MESSAGES_FILE
@@ -247,18 +286,41 @@ pub(super) fn append_record(
     // this record into one permanently unparseable line. Repair it inline
     // (terminate an intact record / quarantine + truncate a torn fragment —
     // the same repair the open path runs) so a live writer never wedges until
-    // the next restart; refuse only if the tail is still unterminated.
-    let mut len = file.metadata()?.len();
-    if !ends_with_newline_or_empty(&mut file, len)? {
-        repair_jsonl_torn_tail(&path);
-        len = file.metadata()?.len();
-        if !ends_with_newline_or_empty(&mut file, len)? {
-            return Err(SessionPersistenceError::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "refusing to append after an unterminated JSONL tail",
-            )));
+    // the next restart; refuse only if the tail is still unterminated. The
+    // probe runs only while the tail state is unknown (first append after
+    // open, or after any failed append); a successful append leaves the tail
+    // terminated and records its end offset, so the hot path skips it.
+    let slot = tails.slot(tool_event);
+    let len = match *slot {
+        Some(len) => len,
+        None => {
+            let mut len = file.metadata()?.len();
+            if !ends_with_newline_or_empty(&mut file, len)? {
+                let preserved_seq = repair_jsonl_torn_tail(&path);
+                len = file.metadata()?.len();
+                if !ends_with_newline_or_empty(&mut file, len)? {
+                    return Err(SessionPersistenceError::Io(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "refusing to append after an unterminated JSONL tail",
+                    )));
+                }
+                // An intact record preserved by the repair is part of the
+                // log: advance the sequence bookkeeping past it so nothing
+                // (this append, a later interrupted marker) reuses its seq.
+                if let Some(preserved_seq) = preserved_seq {
+                    if preserved_seq > current.last_seq {
+                        current.last_seq = preserved_seq;
+                    }
+                    if record.seq <= current.last_seq {
+                        return Err(SessionPersistenceError::CorruptSession);
+                    }
+                }
+            }
+            len
         }
-    }
+    };
+    // Unknown until this append fully succeeds.
+    *slot = None;
     // Record + newline in ONE write: a crash can no longer land between them,
     // and a failed (e.g. ENOSPC) partial write is rolled back to the last
     // terminated record when the platform allows it; when the rollback is
@@ -272,6 +334,7 @@ pub(super) fn append_record(
         return Err(error.into());
     }
     file.flush()?;
+    *tails.slot(tool_event) = Some(len + bytes.len() as u64);
     current.last_seq = record.seq;
     current.last_activity_at = record.recorded_at;
     if is_tool_event(&record.type_) {

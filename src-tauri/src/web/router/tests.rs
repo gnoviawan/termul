@@ -212,6 +212,31 @@ async fn factory_key_save_admitted_postures_reach_body_validation() {
     }
 }
 
+/// The write guard runs BEFORE body extraction: a denied peer sending syntactically
+/// invalid JSON must still get `403 FORBIDDEN` (not the extractor's 4xx), while an
+/// admitted peer sending the same body reaches the handler's own parse error.
+#[tokio::test]
+async fn factory_key_save_guard_precedes_invalid_json_body() {
+    let dir = TempDir::new("factory-key-invalid-json");
+    let (status, body) = factory_key_post(
+        gated_router(dir.path(), false, false),
+        SocketAddr::from(([203, 0, 113, 9], 40000)),
+        "{not json",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "FORBIDDEN");
+
+    let (status, body) = factory_key_post(
+        gated_router(dir.path(), false, false),
+        SocketAddr::from(([127, 0, 0, 1], 54321)),
+        "{not json",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "Invalid Factory key request");
+}
+
 #[tokio::test]
 async fn health_returns_capability_json_for_loopback_peer() {
     // Default fixture: `allow_remote_writes=false`,

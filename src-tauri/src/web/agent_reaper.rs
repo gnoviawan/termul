@@ -94,6 +94,26 @@ async fn session_pins_agent(
         .unwrap_or(true) // unknown turn state: assume busy, never kill mid-turn
 }
 
+/// Fresh pin evaluation for one agent, from a freshly listed session set (so a
+/// session created since the sweep's snapshot is covered too). `false` when the
+/// agent is gone (nothing left to stop) or any owned session is pinned.
+pub(crate) async fn agent_still_unpinned(
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    agent_id: &AgentId,
+) -> bool {
+    let summaries = acp.list_agent_summaries_with_ownership().await;
+    let Some(summary) = summaries.iter().find(|summary| summary.id == *agent_id) else {
+        return false;
+    };
+    for session_id in &summary.owns_session {
+        if session_pins_agent(acp, relay, agent_id, session_id).await {
+            return false;
+        }
+    }
+    true
+}
+
 /// One reaper sweep: evaluate every live agent, stop the ones whose owned
 /// sessions have all been unpinned for the window. `unpinned_since` carries
 /// the first instant each agent was seen unpinned (survives across sweeps).
@@ -166,6 +186,15 @@ pub(crate) async fn reap_idle_agents(
             }
         }
         if disposal_failed {
+            unpinned_since.remove(&agent_id);
+            continue;
+        }
+        // Last-moment re-check: the pin evaluation above is a snapshot, and the
+        // ephemeral probes/disposals awaited since then give a prompt, a
+        // subscriber or a new session time to land. Killing on the stale
+        // snapshot would stop a now-active agent mid-turn. The next sweep
+        // re-evaluates from a fresh idle window.
+        if !agent_still_unpinned(acp, relay, &agent_id).await {
             unpinned_since.remove(&agent_id);
             continue;
         }

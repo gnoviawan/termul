@@ -1519,8 +1519,34 @@ impl AcpManager {
         turns: Vec<FakeTurn>,
         emit_chunk: bool,
     ) {
-        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         let driver = FakeDriver::new(self.sinks.clone(), agent_id.clone(), turns, emit_chunk);
+        self.install_fake_driver_agent(agent_id, sessions, driver);
+    }
+
+    /// [`Self::install_test_agent_with_turns`] with the first prompt's accept
+    /// ack withheld until `accept_gate` fires: the driver has accepted and runs
+    /// the turn, but `start_prompt` stays pending.
+    #[cfg(test)]
+    pub(crate) fn install_test_agent_with_gated_accept(
+        &self,
+        agent_id: AgentId,
+        sessions: std::collections::HashSet<String>,
+        turns: Vec<FakeTurn>,
+        accept_gate: oneshot::Receiver<()>,
+    ) {
+        let driver = FakeDriver::new(self.sinks.clone(), agent_id.clone(), turns, false)
+            .with_accept_gate(accept_gate);
+        self.install_fake_driver_agent(agent_id, sessions, driver);
+    }
+
+    #[cfg(test)]
+    fn install_fake_driver_agent(
+        &self,
+        agent_id: AgentId,
+        sessions: std::collections::HashSet<String>,
+        driver: FakeDriver,
+    ) {
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
                 match command {

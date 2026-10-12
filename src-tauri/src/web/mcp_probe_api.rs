@@ -13,10 +13,10 @@
 use std::net::SocketAddr;
 
 use axum::{
+    body::Bytes,
     extract::{ConnectInfo, State},
     Json,
 };
-use serde_json::Value;
 
 use crate::acp::mcp_probe::{self, McpServerConfig, ProbeResult};
 use crate::web::fs_api::{check_local_only, IpcBody};
@@ -27,12 +27,15 @@ use crate::web::ws::AppState;
 /// A stdio probe spawns an arbitrary host command, so this route sits behind
 /// the same write guard as every other host-state mutation (`check_local_only`:
 /// loopback peer or `--allow-remote-writes`, and never in shared-live mode).
-/// The guard runs BEFORE the body is parsed or anything is spawned; the refusal
-/// is the stable `FORBIDDEN` code and logs only peer/route (never the config).
+/// The body is taken as raw [`Bytes`] and deserialized only AFTER the guard, so
+/// a refused peer always gets the stable `FORBIDDEN` code — even for invalid
+/// JSON (a `Json<_>` extractor would reject it with a 4xx before the guard
+/// ran). Nothing is parsed or spawned for a refused peer; the refusal logs only
+/// peer/route (never the config).
 pub async fn probe(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(value): Json<Value>,
+    body: Bytes,
 ) -> Json<IpcBody<ProbeResult>> {
     if let Some(forbidden) = check_local_only::<ProbeResult>(
         peer,
@@ -42,7 +45,7 @@ pub async fn probe(
     ) {
         return Json(forbidden);
     }
-    let server: McpServerConfig = match serde_json::from_value(value) {
+    let server: McpServerConfig = match serde_json::from_slice(&body) {
         Ok(server) => server,
         Err(error) => {
             tracing::warn!(error = %error, "MCP probe rejected malformed config");

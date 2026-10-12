@@ -18,6 +18,10 @@ pub(crate) enum FakeTurn {
     /// The connection closes mid-turn: the teardown appends `crashed`, and
     /// the turn reply is dropped (the waiter sees "agent thread dropped…").
     Crash,
+    /// The driver accepts and runs the accept hook, but starting the turn task
+    /// fails (connection shutting down): the `error` terminator closes the
+    /// published `user_prompt` and the caller gets a spawn error.
+    SpawnFail,
     /// The turn runs until `release` fires (`end_turn`) or the prompt is
     /// cancelled (`cancelled`); `entered` fires when the turn is accepted.
     Hold {
@@ -32,6 +36,7 @@ pub(crate) struct FakeDriver {
     state: Arc<Mutex<DriverState>>,
     turns: Mutex<VecDeque<FakeTurn>>,
     emit_chunk: bool,
+    accept_gate: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 impl FakeDriver {
@@ -47,7 +52,15 @@ impl FakeDriver {
             state: Arc::new(Mutex::new(DriverState::new())),
             turns: Mutex::new(turns.into()),
             emit_chunk,
+            accept_gate: Mutex::new(None),
         }
+    }
+
+    /// Withhold the accept ack of the next prompt until `gate` fires (or its
+    /// sender drops).
+    pub(crate) fn with_accept_gate(self, gate: oneshot::Receiver<()>) -> Self {
+        *self.accept_gate.lock() = Some(gate);
+        self
     }
 
     pub(crate) fn is_turn_active(&self, session_id: &str) -> bool {
@@ -80,7 +93,41 @@ impl FakeDriver {
         if let Some(hook) = on_accept {
             hook();
         }
-        let _ = accepted.send(Ok(()));
+        // Mirror of the command loop's `cx.spawn` failure after the accept
+        // hook ran: markers cleared, an `error` terminator closes the already
+        // published `user_prompt`, and the caller sees the spawn error.
+        let spawn_fails = matches!(self.turns.lock().front(), Some(FakeTurn::SpawnFail));
+        if spawn_fails {
+            self.turns.lock().pop_front();
+            self.state.lock().finish_turn(&session_id.0);
+            let error = "failed to start prompt turn: connection closed".to_string();
+            emit_turn_terminator(
+                &self.sinks,
+                &self.agent_id,
+                &session_id,
+                turn_id,
+                events::TurnFailureStop::Error.into(),
+            );
+            let _ = accepted.send(Err(error.clone()));
+            let _ = reply.send(Err(error));
+            return;
+        }
+        // Gated accept: the driver HAS accepted (single-flight marker set, hook
+        // run, turn spawned below) but the `accepted` ack to `start_prompt`
+        // is withheld until the gate opens — the window in which a carrier can
+        // drop its caller future while the driver already runs the turn.
+        let gate = self.accept_gate.lock().take();
+        match gate {
+            Some(gate) => {
+                tokio::spawn(async move {
+                    let _ = gate.await;
+                    let _ = accepted.send(Ok(()));
+                });
+            }
+            None => {
+                let _ = accepted.send(Ok(()));
+            }
+        }
         if self.emit_chunk {
             let event = events::MessageChunkEvent {
                 agent_id: self.agent_id.clone(),
@@ -114,6 +161,7 @@ impl FakeDriver {
                     message: "turn idle timeout: no agent activity".to_string(),
                 }
                 .into()),
+                FakeTurn::SpawnFail => unreachable!("handled before the turn task starts"),
                 FakeTurn::Crash => {
                     emit_crash_terminators(&state, &sinks, &agent_id);
                     return;

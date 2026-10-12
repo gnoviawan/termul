@@ -970,23 +970,41 @@ async fn reattach_swap_never_exposes_a_zero_attachment_count() {
 
     let instance = state.pty.get(&id).expect("terminal exists");
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Start barrier: the observer raises `polling` right before its first
+    // sample, and the first re-attach only starts once it is up — otherwise
+    // the whole swap loop could finish before the observer ever ran.
+    let polling = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observer = {
-        let (instance, stop) = (instance.clone(), stop.clone());
+        let (instance, stop, polling) = (instance.clone(), stop.clone(), polling.clone());
         tokio::task::spawn_blocking(move || {
-            let mut zero_seen = false;
+            let (mut samples, mut zero_seen, mut max_count) = (0u64, false, 0usize);
+            polling.store(true, Ordering::Release);
             while !stop.load(Ordering::Acquire) {
-                zero_seen |= !instance.has_web_attachment();
+                let count = instance.web_attachments.load(Ordering::Acquire);
+                samples += 1;
+                zero_seen |= count == 0;
+                max_count = max_count.max(count);
             }
-            zero_seen
+            (samples, zero_seen, max_count)
         })
     };
-    for _ in 0..100 {
+    while !polling.load(Ordering::Acquire) {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    let mut reattaches = 0u32;
+    for _ in 0..300 {
         attach_terminal(&state, &tx, &mut conn, &id, &claim).await;
+        reattaches += 1;
     }
     stop.store(true, Ordering::Release);
+    let (samples, zero_seen, max_count) = observer.await.unwrap();
+    assert!(reattaches > 0, "swaps were exercised");
+    assert!(samples > 0, "the observer sampled the count while swapping");
+    assert!(max_count >= 1, "the observer saw the live attachment");
     assert!(
-        !observer.await.unwrap(),
-        "the attachment count touched zero during a re-attach swap"
+        !zero_seen,
+        "the attachment count touched zero during a re-attach swap \
+         ({samples} samples, {reattaches} re-attaches, max count {max_count})"
     );
     assert_eq!(live_attachments(&state, &id), 1);
 

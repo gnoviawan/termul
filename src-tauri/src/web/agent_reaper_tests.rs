@@ -132,6 +132,30 @@ async fn reaper_removes_agent_with_idle_durable_session() {
     assert!(*record.shut_down.lock());
 }
 
+/// The pre-kill re-check sees pin state that changed AFTER the sweep's first
+/// evaluation: a subscriber attaching later flips the agent to "pinned", and an
+/// agent that vanished is never "unpinned" (nothing to kill).
+#[tokio::test]
+async fn still_unpinned_recheck_observes_late_pins() {
+    use crate::web::agent_reaper::agent_still_unpinned;
+    let manager = Arc::new(AcpManager::new(vec![]));
+    let relay = Arc::new(WsRelaySink::new());
+    let agent_id = AgentId("agent-late-pin".to_string());
+    manager.install_test_agent_with_reap_state(agent_id.clone(), set(&["sess-chat"]), false, false);
+    relay.seed_session_for_test("sess-chat");
+
+    assert!(agent_still_unpinned(&manager, &relay, &agent_id).await);
+    let keep = relay.subscribe("sess-chat", None).await;
+    assert!(
+        !agent_still_unpinned(&manager, &relay, &agent_id).await,
+        "a subscriber that arrived after the first pin check pins the agent"
+    );
+    std::mem::drop(keep);
+
+    let missing = AgentId("agent-missing".to_string());
+    assert!(!agent_still_unpinned(&manager, &relay, &missing).await);
+}
+
 /// A mid-turn session pins the agent even when the session is ephemeral (a
 /// warm-pool seed whose prompt is still streaming).
 #[tokio::test]

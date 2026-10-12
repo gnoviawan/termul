@@ -110,10 +110,12 @@ async fn acp_send_prompt_writes_durable_user_prompt_with_desktop_payload() {
         .replay_after_async("sess-desktop".to_string(), 0)
         .await
         .unwrap();
-    let record = records
-        .iter()
-        .find(|r| r.type_ == "user_prompt")
-        .expect("durable user_prompt");
+    let mut user_prompts = records.iter().filter(|r| r.type_ == "user_prompt");
+    let record = user_prompts.next().expect("durable user_prompt");
+    assert!(
+        user_prompts.next().is_none(),
+        "exactly one user_prompt record for the turn"
+    );
     assert_eq!(record.seq, 1, "user_prompt is sequenced first");
     assert_eq!(record.payload["agentId"], "agent-1");
     assert_eq!(record.payload["sessionId"], "sess-desktop");

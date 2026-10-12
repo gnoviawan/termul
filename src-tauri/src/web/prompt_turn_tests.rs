@@ -29,6 +29,13 @@ struct Env {
 }
 
 async fn env(turns: Vec<FakeTurn>, emit_chunk: bool) -> Env {
+    env_with(|acp, sessions| {
+        acp.install_test_agent_with_turns(AgentId(AGENT.to_string()), sessions, turns, emit_chunk);
+    })
+    .await
+}
+
+async fn env_with(install: impl FnOnce(&Arc<AcpManager>, HashSet<String>)) -> Env {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -56,7 +63,7 @@ async fn env(turns: Vec<FakeTurn>, emit_chunk: bool) -> Env {
     let acp = Arc::new(AcpManager::new(vec![relay.clone()]));
     let mut sessions = HashSet::new();
     sessions.insert(SESSION.to_string());
-    acp.install_test_agent_with_turns(AgentId(AGENT.to_string()), sessions, turns, emit_chunk);
+    install(&acp, sessions);
     Env {
         acp,
         relay,
@@ -380,4 +387,187 @@ async fn dropped_accept_during_post_accept_flush_keeps_the_turn_claimed() {
     let log = records(&env).await;
     assert_eq!(count(&log, "user_prompt"), 1);
     assert_eq!(stop_reasons(&log), vec!["end_turn"]);
+}
+
+/// The caller future can also be dropped while `start_prompt` itself is still
+/// pending: the driver already accepted (single-flight marker set, hook run,
+/// turn running) but the accept ack has not reached the caller. The claim must
+/// not be released as if the prompt were rejected: a same-`turnId` resend is
+/// `in_progress` (it must not reach the driver), and once the detached task
+/// finishes the turn the claim is recorded completed (`accepted`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_accept_while_start_prompt_pending_keeps_the_turn_claimed() {
+    let (turn, release, entered) = hold();
+    let (gate_tx, gate_rx) = oneshot::channel();
+    let env = env_with(|acp, sessions| {
+        acp.install_test_agent_with_gated_accept(
+            AgentId(AGENT.to_string()),
+            sessions,
+            vec![turn],
+            gate_rx,
+        );
+    })
+    .await;
+
+    let (acp, relay) = (env.acp.clone(), env.relay.clone());
+    let accept = tokio::spawn(async move {
+        accept_prompt_turn(&acp, &relay, request(Some("t1")))
+            .await
+            .map(|_| ())
+    });
+    // The driver runs the turn, yet `start_prompt` is parked on the withheld ack.
+    entered.await.unwrap();
+    accept.abort();
+    assert!(accept.await.unwrap_err().is_cancelled());
+
+    let PromptAdmission::Receipt(in_flight) =
+        accept_prompt_turn(&env.acp, &env.relay, request(Some("t1")))
+            .await
+            .unwrap_or_else(|_| panic!("resend must not error"))
+    else {
+        panic!("resend of the running turn must be a receipt");
+    };
+    assert_eq!(receipt(&in_flight), serde_json::json!({"receipt": "in_progress"}));
+
+    gate_tx.send(()).unwrap();
+    release.send(()).unwrap();
+    let mut accepted = false;
+    for _ in 0..200 {
+        let PromptAdmission::Receipt(reply) =
+            accept_prompt_turn(&env.acp, &env.relay, request(Some("t1")))
+                .await
+                .unwrap_or_else(|_| panic!("resend must not error"))
+        else {
+            panic!("resend of the same turn never runs it again");
+        };
+        if receipt(&reply) == serde_json::json!({"receipt": "accepted"}) {
+            accepted = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(accepted, "the detached task records the claim completed");
+
+    let log = records(&env).await;
+    assert_eq!(count(&log, "user_prompt"), 1);
+    assert_eq!(stop_reasons(&log), vec!["end_turn"]);
+}
+
+/// A held turn cancelled through the host `cancel_prompt` (the desktop/WS
+/// cancel path) ends with exactly one `cancelled` terminator, releases the
+/// claim (a resend of the finished turn is `accepted`) and the next prompt runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_cancel_of_held_turn_leaves_one_cancelled_terminator_and_releases_claim() {
+    let (turn, release, entered) = hold();
+    let env = env(vec![turn], false).await;
+    let PromptAdmission::Running(running) =
+        accept_prompt_turn(&env.acp, &env.relay, request(Some("t1")))
+            .await
+            .unwrap_or_else(|_| panic!("accepted"))
+    else {
+        panic!("must run");
+    };
+    entered.await.unwrap();
+
+    env.acp
+        .cancel_prompt(&AgentId(AGENT.to_string()), SessionId(SESSION.to_string()))
+        .await
+        .expect("host cancel");
+    let stop = complete_prompt_turn(&env.acp, running)
+        .await
+        .expect("cancelled turn resolves");
+    assert_eq!(stop, StopReason::Cancelled);
+    // `release` stayed alive for the whole turn, so only the cancel ended it.
+    drop(release);
+
+    let log = records(&env).await;
+    assert_eq!(count(&log, "user_prompt"), 1);
+    assert_eq!(stop_reasons(&log), vec!["cancelled"], "exactly one terminator");
+
+    let resend = run_prompt_turn(&env.acp, &env.relay, request(Some("t1")))
+        .await
+        .expect("resend is a receipt");
+    assert_eq!(receipt(&resend), serde_json::json!({"receipt": "accepted"}));
+
+    let next = run_prompt_turn(&env.acp, &env.relay, request(Some("t2")))
+        .await
+        .expect("next prompt accepted");
+    assert_eq!(receipt(&next), serde_json::json!("end_turn"));
+    let log = records(&env).await;
+    assert_eq!(stop_reasons(&log), vec!["cancelled", "end_turn"]);
+}
+
+/// An empty `turnId` is the same as an omitted one: no dedupe. While such a
+/// turn runs, another empty-id prompt is `Busy` (never an `in_progress`
+/// receipt), and after it finishes an empty-id send runs again instead of
+/// being answered `accepted`. No `turnId` is recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_turn_id_is_treated_as_omitted_and_gets_no_dedupe() {
+    let (turn, release, entered) = hold();
+    let env = env(vec![turn], false).await;
+    let PromptAdmission::Running(running) = accept_prompt_turn(&env.acp, &env.relay, request(Some("")))
+        .await
+        .unwrap_or_else(|_| panic!("accepted"))
+    else {
+        panic!("must run");
+    };
+    entered.await.unwrap();
+
+    let again = accept_prompt_turn(&env.acp, &env.relay, request(Some(""))).await;
+    assert!(
+        matches!(again, Err(PromptTurnError::Busy { .. })),
+        "an empty id must not dedupe into an in_progress receipt"
+    );
+
+    release.send(()).unwrap();
+    complete_prompt_turn(&env.acp, running).await.unwrap();
+
+    let next = run_prompt_turn(&env.acp, &env.relay, request(Some("")))
+        .await
+        .expect("runs again");
+    assert_eq!(
+        receipt(&next),
+        serde_json::json!("end_turn"),
+        "a finished empty-id turn is not answered with an `accepted` receipt"
+    );
+
+    let log = records(&env).await;
+    assert_eq!(count(&log, "user_prompt"), 2);
+    for record in log.iter().filter(|r| r.type_ == "user_prompt" || r.type_ == "prompt_complete") {
+        assert!(record.payload["turnId"].is_null(), "{record:?}");
+    }
+}
+
+/// The turn task could not be spawned after the accept hook already published
+/// the durable `user_prompt`: the driver closes that turn with an `error`
+/// terminator (recording the `turnId` completed) and the caller gets an error.
+/// A retry of the SAME `turnId` is then answered with an `accepted` receipt and
+/// never persists a second `user_prompt`; a new turn runs normally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_failure_after_accept_hook_retry_is_accepted_without_second_user_prompt() {
+    let env = env(vec![FakeTurn::SpawnFail], false).await;
+    let first = run_prompt_turn(&env.acp, &env.relay, request(Some("t1"))).await;
+    match first {
+        Err(PromptTurnError::Failed(message)) => {
+            assert!(message.starts_with("failed to start prompt turn"), "{message}");
+        }
+        other => panic!("spawn failure must surface as an error: {other:?}"),
+    }
+
+    let log = records(&env).await;
+    assert_eq!(count(&log, "user_prompt"), 1);
+    assert_eq!(stop_reasons(&log), vec!["error"], "the failed turn is closed");
+
+    let retry = run_prompt_turn(&env.acp, &env.relay, request(Some("t1")))
+        .await
+        .expect("retry is a receipt, not an error");
+    assert_eq!(receipt(&retry), serde_json::json!({"receipt": "accepted"}));
+    let log = records(&env).await;
+    assert_eq!(count(&log, "user_prompt"), 1, "retry persists no second user_prompt");
+    assert_eq!(stop_reasons(&log), vec!["error"]);
+
+    let next = run_prompt_turn(&env.acp, &env.relay, request(Some("t2")))
+        .await
+        .expect("next turn accepted");
+    assert_eq!(receipt(&next), serde_json::json!("end_turn"));
 }

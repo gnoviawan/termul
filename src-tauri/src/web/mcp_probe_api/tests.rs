@@ -10,6 +10,7 @@ use axum::http::{Request, StatusCode};
 use axum::routing::post;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 
@@ -197,6 +198,53 @@ async fn admitted_postures_still_run_the_probe() {
         let value = body_as_json(response.into_body()).await;
         assert_eq!(value["success"], true, "{label}");
         assert_ne!(value["code"], "FORBIDDEN", "{label}");
+        // The canary proves the admitted probe really spawned the command (a
+        // probe that "succeeded" without spawning would pass the asserts above).
+        let mut spawned = false;
+        for _ in 0..50 {
+            if marker.exists() {
+                spawned = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
         let _ = std::fs::remove_file(&marker);
+        assert!(spawned, "{label}: admitted probe must spawn the command");
     }
+}
+
+async fn post_raw_probe(
+    app: axum::Router,
+    peer: ([u8; 4], u16),
+    body: &'static str,
+) -> axum::response::Response {
+    app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/mcp-servers/probe")
+            .header("content-type", "application/json")
+            .extension(ConnectInfo(SocketAddr::from(peer)))
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+/// The write guard runs BEFORE the body is parsed: a refused peer sending
+/// invalid JSON still gets `FORBIDDEN`, while an admitted peer sending the same
+/// body gets the parse error.
+#[tokio::test]
+async fn guard_runs_before_body_parse_for_invalid_json() {
+    let denied = post_raw_probe(test_app_with(false, false), REMOTE, "{not json").await;
+    assert_eq!(denied.status(), StatusCode::OK);
+    let value = body_as_json(denied.into_body()).await;
+    assert_eq!(value["success"], false);
+    assert_eq!(value["code"], "FORBIDDEN");
+
+    let allowed = post_raw_probe(test_app_with(false, false), LOOPBACK, "{not json").await;
+    assert_eq!(allowed.status(), StatusCode::OK);
+    let value = body_as_json(allowed.into_body()).await;
+    assert_eq!(value["success"], false);
+    assert_eq!(value["code"], "MCP_PROBE_INVALID_CONFIG");
 }

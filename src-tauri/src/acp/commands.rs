@@ -446,13 +446,15 @@ pub(crate) async fn send_prompt_core(
     )
     .await
     .map_err(|error| {
-        let message = error.into_message();
-        // Session context only — never the prompt content.
+        // Redacted session context + a stable variant tag only: the message
+        // returned to the caller can embed the raw session id, and the prompt
+        // content never belongs in a log line.
         log::debug!(
-            "[acp] prompt for session {} not run: {message}",
-            crate::logging::redact_session_id(&log_session.0)
+            "[acp] prompt for session {} not run ({})",
+            crate::logging::redact_session_id(&log_session.0),
+            error.kind()
         );
-        message
+        error.into_message()
     })
 }
 

@@ -27,61 +27,72 @@ pub(super) fn jsonl_first_record_is_valid(path: &Path, expected_session_id: &str
     }
 }
 
+/// Backward-scan block for [`repair_jsonl_torn_tail`].
+const REPAIR_SCAN_BLOCK: u64 = 64 * 1024;
+
 /// Repair a torn final tail (incomplete write at the end of a JSONL file)
-/// by reading only the last 4 KiB, finding the last newline, and truncating
-/// any unparseable trailing bytes. This is O(1) per file — it never reads
-/// the full transcript — and prevents later appends from landing after a
-/// torn line (which would make `replay_after` return `CorruptSession`).
-pub(super) fn repair_jsonl_torn_tail(path: &Path) {
+/// by scanning backward from the end of the file in bounded
+/// [`REPAIR_SCAN_BLOCK`] blocks until the previous newline, then truncating
+/// any unparseable trailing bytes. Only the final line is retained in memory
+/// (never the full transcript, even when that last record is enormous), and
+/// prevents later appends from landing after a torn line (which would make
+/// `replay_after` return `CorruptSession`).
+///
+/// Returns `Some(seq)` when the tail was an intact record that merely lacked
+/// its newline and was therefore preserved (so a live writer can advance its
+/// sequence bookkeeping past it); `None` otherwise.
+pub(super) fn repair_jsonl_torn_tail(path: &Path) -> Option<u64> {
     use std::io::{Read, Seek, SeekFrom, Write};
 
-    let mut file = match fs::OpenOptions::new().read(true).write(true).open(path) {
-        Ok(f) => f,
-        Err(_) => return, // missing file is handled by `ensure_log_exists`
-    };
-    let file_size = match file.metadata() {
-        Ok(m) => m.len(),
-        Err(_) => return,
-    };
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .ok()?; // missing file is handled by `ensure_log_exists`
+    let file_size = file.metadata().ok()?.len();
     if file_size == 0 {
-        return;
+        return None;
     }
-    // Read the last 4 KiB (or entire file if smaller).
-    let block = std::cmp::min(file_size, 4096) as usize;
-    let start = file_size - block as u64;
-    if file.seek(SeekFrom::Start(start)).is_err() {
-        return;
-    }
-    let mut buf = vec![0u8; block];
-    if file.read_exact(&mut buf).is_err() {
-        return;
-    }
-    // A final record longer than the 4 KiB window leaves no newline in the
-    // block: widen to the whole file so the tail is the real last line (and
-    // is never mistaken for torn and the file truncated to zero).
-    let mut start = start;
-    if start > 0 && !buf.contains(&b'\n') {
-        buf.clear();
-        start = 0;
-        if file.seek(SeekFrom::Start(0)).is_err() || file.read_to_end(&mut buf).is_err() {
-            return;
+    // Walk back block by block until the newline that ends the previous
+    // record. The retained chunks (newest first) are the tail only — the bytes
+    // after that newline — so a >block-size last line costs its own length
+    // and nothing more. A final record longer than any window is therefore
+    // never mistaken for torn and truncated to zero.
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    let mut pos = file_size;
+    let valid_end = loop {
+        let block_len = pos.min(REPAIR_SCAN_BLOCK);
+        pos -= block_len;
+        let mut buf = vec![0u8; block_len as usize];
+        file.seek(SeekFrom::Start(pos)).ok()?;
+        file.read_exact(&mut buf).ok()?;
+        match buf.iter().rposition(|&b| b == b'\n') {
+            Some(newline) => {
+                chunks.push(buf.split_off(newline + 1));
+                break pos + newline as u64 + 1;
+            }
+            None => {
+                chunks.push(buf);
+                if pos == 0 {
+                    break 0; // no newline at all — the entire file is the tail
+                }
+            }
         }
-    }
-    // Data after the last newline is the (possibly torn) tail.
-    let last_nl = buf.iter().rposition(|&b| b == b'\n');
-    let (valid_end, tail): (u64, &[u8]) = match last_nl {
-        Some(pos) if pos + 1 < buf.len() => (start + pos as u64 + 1, &buf[pos + 1..]),
-        Some(_) => return,     // file ends with newline — no tail
-        None => (0, &buf[..]), // no newline — entire file is the tail
     };
+    let mut tail = Vec::with_capacity((file_size - valid_end) as usize);
+    for chunk in chunks.iter().rev() {
+        tail.extend_from_slice(chunk);
+    }
+    drop(chunks);
+    // Empty tail: the file ends with a newline.
     if tail.is_empty() || tail.iter().all(|b| b.is_ascii_whitespace()) {
-        return;
+        return None;
     }
     // If the tail deserializes as a valid record it is only missing its
     // trailing newline (death between record and newline, or a failed newline
     // write): terminate it durably now. `append_record` refuses to write after
     // an unterminated tail, and leaving it would fuse the next record onto it.
-    if serde_json::from_slice::<PersistedEventRecord>(tail).is_ok() {
+    if let Ok(record) = serde_json::from_slice::<PersistedEventRecord>(&tail) {
         let terminated = file.seek(SeekFrom::End(0)).is_ok()
             && file.write_all(b"\n").is_ok()
             && file.sync_all().is_ok();
@@ -90,11 +101,12 @@ pub(super) fn repair_jsonl_torn_tail(path: &Path) {
             // are refused until a later repair succeeds.
             log::warn!("[acp-history] could not terminate unterminated JSONL tail record");
         }
-        return;
+        return Some(record.seq);
     }
     // Torn tail — backup and truncate.
-    let _ = atomic_file::backup_corrupt(path, tail);
+    let _ = atomic_file::backup_corrupt(path, &tail);
     let _ = file.set_len(valid_end);
+    None
 }
 
 pub(super) fn decode_index(bytes: &[u8]) -> Result<SessionIndexFile> {

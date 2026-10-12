@@ -5,6 +5,7 @@
 use std::net::SocketAddr;
 
 use axum::{
+    body::Bytes,
     extract::{ConnectInfo, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -57,10 +58,16 @@ pub(crate) async fn factory_key_status(State(state): State<AppState>) -> Respons
     .into_response()
 }
 
+/// `POST /acp/factory-key` — validate and persist the Factory key.
+///
+/// The body is taken as raw [`Bytes`] and deserialized only AFTER the auth gate
+/// and the `check_local_only` write guard, so a refused peer always gets
+/// `403 FORBIDDEN` — even with an invalid/non-JSON body (a `Json<_>` extractor
+/// would reject malformed JSON with a 4xx before the guard ever ran).
 pub(crate) async fn factory_key_save(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(body): Json<serde_json::Value>,
+    body: Bytes,
 ) -> Response {
     if let Some(refusal) = require_active_web_auth(&state, "save").await {
         return refusal;
@@ -83,7 +90,7 @@ pub(crate) async fn factory_key_save(
         )
             .into_response();
     }
-    let request: FactoryKeySave = match serde_json::from_value(body) {
+    let request: FactoryKeySave = match serde_json::from_slice(&body) {
         Ok(request) => request,
         Err(_) => {
             return (

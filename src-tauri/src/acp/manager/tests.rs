@@ -745,6 +745,78 @@ async fn race_turn_cancel_wins_over_timeouts() {
     assert_eq!(on_timeout.load(Ordering::SeqCst), 0);
 }
 
+/// The agent honors the timeout's own cancel within `CANCEL_GRACE` and answers
+/// `Cancelled`: that is still a deadline expiry (typed timeout), not a user
+/// cancel — for both the idle and the hard deadline.
+#[tokio::test(start_paused = true)]
+async fn race_turn_honored_timeout_cancel_maps_to_typed_timeout() {
+    for (idle, hard, expect) in [
+        (
+            Some(Duration::from_millis(100)),
+            Some(Duration::from_secs(10)),
+            "idle timeout",
+        ),
+        (None, Some(Duration::from_millis(100)), "hard timeout"),
+    ] {
+        let (_idle_tx, mut idle_rx) = watch::channel(());
+        let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let prompt_notify = notify.clone();
+        let cancel_notify = notify.clone();
+        let result = race_turn(
+            async move {
+                prompt_notify.notified().await;
+                Ok::<StopReason, String>(StopReason::Cancelled)
+            },
+            cancel_rx,
+            &mut idle_rx,
+            move || cancel_notify.notify_one(),
+            idle,
+            hard,
+        )
+        .await;
+        let err = result.expect_err("honored timeout cancel is a timeout, not Cancelled");
+        assert!(err.contains(expect), "expected {expect}, got {err}");
+    }
+}
+
+/// Contrast: a USER cancel that the agent honors with `Cancelled` stays a
+/// `Cancelled` stop reason and never invokes the timeout cancel hook.
+#[tokio::test(start_paused = true)]
+async fn race_turn_honored_user_cancel_stays_cancelled() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let prompt_notify = notify.clone();
+    let on_timeout = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let on_timeout_clone = on_timeout.clone();
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let _ = cancel_tx.send(());
+        notify.notify_one();
+    });
+    let result = race_turn(
+        async move {
+            prompt_notify.notified().await;
+            Ok::<StopReason, String>(StopReason::Cancelled)
+        },
+        cancel_rx,
+        &mut idle_rx,
+        move || {
+            on_timeout_clone.fetch_add(1, Ordering::SeqCst);
+        },
+        Some(Duration::from_millis(100)),
+        Some(Duration::from_secs(10)),
+    )
+    .await;
+    let _ = canceller.await;
+    assert!(
+        matches!(result, Ok(StopReason::Cancelled)),
+        "got {result:?}"
+    );
+    assert_eq!(on_timeout.load(Ordering::SeqCst), 0);
+}
+
 /// Fully-unlimited default (`idle = None`, `hard = None`): a silent,
 /// never-completing turn is bounded ONLY by an explicit cancel — no
 /// timeout fires. This is the new default contract.
