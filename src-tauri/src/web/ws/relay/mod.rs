@@ -36,6 +36,8 @@ pub(super) use executor::KeyedExecutor;
 pub(crate) use outbound::{
     outbound_channel, EnqueueOutcome, OutboundSender, OUTBOUND_QUEUE_CAPACITY,
 };
+#[cfg(test)]
+pub(crate) use outbound::{OutboundReceiver, FULL_QUEUE_ATTEMPT};
 pub(super) use watchdog::{PING_INTERVAL, PONG_TIMEOUT};
 #[cfg(test)]
 pub(super) use watchdog::{watchdog_is_stale, BACKGROUND_TIMEOUT, WATCHDOG_TICK};

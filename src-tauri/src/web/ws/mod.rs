@@ -93,6 +93,8 @@ use watch::*;
 // The wire-contract `pub` surface stays reachable at `web::ws::*`.
 pub use relay::{ws_upgrade, AUTH_REQUIRED_TYPE, WS_BATCH_TYPE};
 pub(crate) use relay::{EnqueueOutcome, Outbound, OutboundSender};
+#[cfg(test)]
+pub(crate) use relay::{outbound_channel, OutboundReceiver, OUTBOUND_QUEUE_CAPACITY};
 
 // ---------------------------------------------------------------------------
 // Sequenced event — the wire envelope (AC2 + AC3)

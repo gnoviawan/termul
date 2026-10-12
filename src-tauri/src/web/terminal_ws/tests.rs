@@ -1,5 +1,6 @@
 use super::*;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 #[test]
 fn validates_numeric_dimensions() {
@@ -1404,4 +1405,106 @@ async fn write_capable_terminal_connection_passes_the_capability_gate() {
     )
     .await;
     assert!(outcome.is_ok(), "{outcome:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Host stop (AD-19) on the terminal carrier
+// ---------------------------------------------------------------------------
+
+use crate::web::connection_runtime::{CLOSE_DRAIN_TIMEOUT, SOCKET_DRAIN_BOUND};
+use crate::web::ws::harness::carrier::{pair, Peer};
+
+/// Serve a fault-carrier socket through the production `serve_socket` under a
+/// shutdown lease, as `terminal_ws_upgrade` does.
+fn serve_carrier(state: &crate::web::ws::AppState) -> (Peer, tokio::task::JoinHandle<()>) {
+    let (carrier, peer) = pair();
+    let lease = state.connections.shutdown.admit();
+    let task = tokio::spawn(serve_socket(
+        lease,
+        carrier,
+        state.clone(),
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+    ));
+    (peer, task)
+}
+
+/// The next reply frame for request `id`, skipping lifecycle events.
+async fn terminal_reply(peer: &mut Peer, id: &str) -> Value {
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(10), peer.next_frame())
+            .await
+            .expect("no frame in time")
+            .expect("socket closed before the reply");
+        if let Message::Text(text) = frame {
+            let value: Value = serde_json::from_str(&text).expect("json frame");
+            if value["id"] == id {
+                return value;
+            }
+        }
+    }
+}
+
+async fn authenticate_carrier(peer: &mut Peer) {
+    peer.send_json(&json!({
+        "id": "auth",
+        "type": "authenticate",
+        "payload": handshake_payload("device-stop"),
+    }));
+    let reply = terminal_reply(peer, "auth").await;
+    assert_eq!(reply["success"], true, "{reply}");
+}
+
+/// Stopping the host closes an open terminal socket with `Close(1001)`, ends
+/// its task, and releases the live attachment exactly once (CAP-16): the
+/// cleanup after the interrupted read loop runs once, so the terminal reports
+/// no live viewer afterwards.
+#[tokio::test]
+async fn host_stop_closes_the_terminal_socket_and_releases_its_attachment_once() {
+    let state = gate_test_state(None);
+    let (mut peer, task) = serve_carrier(&state);
+    authenticate_carrier(&mut peer).await;
+    peer.send_json(&json!({"id": "s", "type": "spawn", "payload": {"projectId": "stop-attach"}}));
+    let spawned = terminal_reply(&mut peer, "s").await;
+    let id = spawned["data"]["id"].as_str().unwrap().to_string();
+    let claim = spawned["data"]["claim"].as_str().unwrap().to_string();
+    peer.send_json(&json!({
+        "id": "a",
+        "type": "attach",
+        "payload": {"terminalId": id, "claim": claim, "lastSeq": 0},
+    }));
+    let attached = terminal_reply(&mut peer, "a").await;
+    assert_eq!(attached["success"], true, "{attached}");
+    assert_eq!(live_attachments(&state, &id), 1);
+
+    state.connections.shutdown.begin();
+    assert_eq!(state.connections.shutdown.drain(SOCKET_DRAIN_BOUND).await, 0);
+    let close = peer.wait_close().await.expect("close frame");
+    assert_eq!(close, (1001, "host stopping".to_string()));
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("terminal socket task outlived the drain")
+        .expect("terminal socket task did not panic");
+    assert_eq!(
+        live_attachments(&state, &id),
+        0,
+        "the attachment was not released (or was released into another viewer's count)"
+    );
+    let _ = state.pty.force_kill(&id).await;
+}
+
+/// A terminal peer that stopped reading cannot take the close: the socket
+/// gives up after the close drain timeout and the drain completes, bounded.
+#[tokio::test(start_paused = true)]
+async fn host_stop_does_not_wait_forever_on_a_stalled_terminal_peer() {
+    let state = gate_test_state(None);
+    let (mut peer, task) = serve_carrier(&state);
+    authenticate_carrier(&mut peer).await;
+    peer.stall_writes();
+
+    state.connections.shutdown.begin();
+    let started = tokio::time::Instant::now();
+    assert_eq!(state.connections.shutdown.drain(SOCKET_DRAIN_BOUND).await, 0);
+    assert_eq!(started.elapsed(), CLOSE_DRAIN_TIMEOUT);
+    task.await.expect("terminal socket task did not panic");
+    assert!(peer.close.is_none(), "a stalled peer cannot have received a close");
 }

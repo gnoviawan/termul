@@ -1,10 +1,8 @@
-//! AD-19 relay-execution audit repros (AD-16 "Relay execution" cases).
-//!
-//! Each case asserts the behavior the relay execution rework delivers
-//! (per-request tasks, independent watchdog, coordinated shutdown) and is
-//! `#[ignore]`d until that slice lands. Run them against today's code with
-//! `cargo test --lib -- --ignored audit_` to watch each fail for the stated
-//! reason.
+//! AD-19 relay-execution audit repros (AD-16 "Relay execution" cases): a
+//! handler slower than the pong deadline, a stalled half-open peer, and a host
+//! stop with an open socket. They fail on a relay whose read loop awaits
+//! handlers, whose watchdog lives in the write arm, or whose sockets outlive
+//! the host.
 
 use tokio::sync::oneshot;
 
@@ -15,7 +13,7 @@ use crate::acp::manager::{FakeAuth, FakeTurn};
 use crate::remote::host::{RemoteBindMode, RemoteServerState};
 
 /// One agent text chunk fanned out like the real driver does.
-fn emit_chunk(host: &Host) {
+pub(super) fn emit_chunk(host: &Host) {
     let event = events::MessageChunkEvent {
         agent_id: AgentId(AGENT.to_string()),
         session_id: SessionId(SESSION.to_string()),
@@ -30,21 +28,21 @@ fn emit_chunk(host: &Host) {
 }
 
 /// How long a half-open peer may stay unnoticed in the foreground: the pong
-/// deadline plus one ping interval (the watchdog only runs on a ping tick).
+/// deadline plus one watchdog tick.
 fn foreground_reap_by() -> Duration {
-    PONG_TIMEOUT + PING_INTERVAL
+    PONG_TIMEOUT + WATCHDOG_TICK
 }
 
-/// Last instant a backgrounded half-open peer must still be held: one ping
-/// interval short of the background ceiling.
+/// Last instant a backgrounded half-open peer must still be held: one
+/// watchdog tick short of the background ceiling.
 fn background_held_until() -> Duration {
-    BACKGROUND_TIMEOUT - PING_INTERVAL
+    BACKGROUND_TIMEOUT - WATCHDOG_TICK
 }
 
 /// By when a backgrounded half-open peer must be gone: the ceiling plus the
-/// tick that notices it, with one more half interval of margin.
+/// tick that notices it, with a second of margin.
 fn background_reap_by() -> Duration {
-    BACKGROUND_TIMEOUT + PING_INTERVAL + PING_INTERVAL / 2
+    BACKGROUND_TIMEOUT + WATCHDOG_TICK + Duration::from_secs(1)
 }
 
 /// A streaming turn: chunks keep flowing for `total` of (virtual) time.
@@ -59,11 +57,9 @@ async fn stream_for(host: &Host, total: Duration) {
 }
 
 /// A handler slower than the pong deadline must not get the connection
-/// killed. Today the read loop awaits the handler inline, so the peer's
-/// pongs (queued behind the pending request) never refresh the watchdog and
-/// the relay closes a perfectly healthy connection.
+/// killed: the read loop never awaits a handler, so the peer's pongs keep
+/// refreshing the watchdog while the request runs.
 #[tokio::test(start_paused = true)]
-#[ignore = "relay execution rework (AD-19): the read loop awaits handlers inline, so a handler slower than PONG_TIMEOUT starves the watchdog"]
 async fn audit_long_handler_vs_ping() {
     let host = Host::new(|acp, sessions| {
         acp.install_test_agent_with_scripts(
@@ -102,11 +98,9 @@ async fn audit_long_handler_vs_ping() {
 }
 
 /// A half-open peer during a streaming turn is reaped by the watchdog within
-/// the pong deadline, and a backgrounded one only after the background hold. Today
-/// the watchdog lives in the write arm that awaits the (stalled) send, so a
-/// peer whose socket stopped draining is never reaped.
+/// the pong deadline, and a backgrounded one only after the background hold,
+/// even though its socket stopped draining (the write loop is stuck in a send).
 #[tokio::test(start_paused = true)]
-#[ignore = "relay execution rework (AD-19): the watchdog runs inside the write arm that awaits a send, so a stalled peer blocks its own reaping"]
 async fn audit_stale_peer_during_stream_is_reaped_by_the_watchdog() {
     let (release_tx, release_rx) = oneshot::channel();
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -171,11 +165,8 @@ async fn audit_stale_peer_during_stream_is_reaped_by_the_watchdog() {
 
 /// Stopping the host sends `Close(1001)` to an open socket and the upgraded
 /// task ends with it: after the `Close` the socket reaches EOF (the host
-/// dropped it), so `kill_all` / process exit never races a live relay. Today
-/// `serve_router` only stops accepting; the upgraded socket keeps being
-/// served after the UI says "stopped".
+/// dropped it), so `kill_all` / process exit never races a live relay.
 #[tokio::test]
-#[ignore = "relay execution rework (AD-19): serve_router threads no shutdown token to upgraded sockets, so stop() leaves them open"]
 async fn audit_stop_with_open_socket_sends_close_1001_and_drains() {
     let acp = Arc::new(AcpManager::new(vec![]));
     let pty = crate::web::test_pty_manager();

@@ -342,10 +342,10 @@ pub struct ServerConfig {
     /// [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (900, the pre-existing server
     /// value). The desktop host reads the same default const.
     pub agent_idle_window_secs: u64,
-    /// Reliable-queue overflow tolerance per client. `--overflow-tolerance`
-    /// → [`DEFAULT_OVERFLOW_TOLERANCE`] (15). Reserved: this is the single
-    /// definition; the read-model work that bounds the queue reads it. No
-    /// runtime code reads it yet.
+    /// Outbound-queue overflow tolerance per client: consecutive failed
+    /// enqueues before a peer that stopped draining is closed.
+    /// `--overflow-tolerance` → [`DEFAULT_OVERFLOW_TOLERANCE`] (15). Read by
+    /// `serve_router` into the connection runtime every `/ws` socket uses.
     pub overflow_tolerance: usize,
     /// How long a command receipt is retained, in seconds.
     /// `--receipt-retention-secs` → [`DEFAULT_RECEIPT_RETENTION_SECS`] (600).

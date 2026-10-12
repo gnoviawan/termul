@@ -4,10 +4,11 @@
 //! socket against the production router seam (`ws_upgrade`).
 
 use super::tests::{
-    auth_frame, handle_sync_with_access, test_access, test_policy, ws_read_frame,
-    ws_test_app_state, ws_write_frame,
+    auth_frame, handle_sync_with_access, test_access, test_env, test_outbound, test_policy,
+    ws_read_frame, ws_test_app_state, ws_write_frame,
 };
 use super::*;
+use tokio_util::sync::CancellationToken;
 
 const MUTATIONS: &[&str] = &[
     "spawn_agent",
@@ -178,28 +179,12 @@ async fn send_prompt_fast_path_enforces_the_capability_check() {
     let relay = Arc::new(WsRelaySink::new());
     let acp = Arc::new(AcpManager::new(vec![]));
     let registry = Arc::new(ProjectRegistry::new());
-    let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
-    let subscribed = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let mut authed = true;
-    let mut access = view_only_access();
-    let alive = dispatch_connection_text(
-        r#"{"id":"p1","type":"send_prompt","payload":{"agentId":"a","sessionId":"s","text":"hi","turnId":"t"}}"#,
-        &mut authed,
-        &mut None,
-        &mut access,
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &subscribed,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    )
+    let (tx, mut rx) = test_outbound();
+    let subscribed = Arc::new(Subscriptions::default());
+    let mut conn = ConnState::authenticated(view_only_access());
+    conn.subscriptions = Arc::clone(&subscribed);
+    let exec = KeyedExecutor::new(CancellationToken::new());
+    let alive = dispatch_connection_text(r#"{"id":"p1","type":"send_prompt","payload":{"agentId":"a","sessionId":"s","text":"hi","turnId":"t"}}"#, &mut conn, &test_env(&acp, &relay, &registry, &tx, &subscribed), &exec)
     .await;
     assert!(alive);
     let Some(Outbound::Reply(reply)) = rx.recv().await else {

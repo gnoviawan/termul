@@ -555,10 +555,12 @@ impl RemoteServerState {
                     // before we proceed (returns Err(Cancelled) — ignored).
                     let _ = handle.await;
                 }
-                // Signal drain, then await the serve task so Axum finishes
-                // flushing before the caller proceeds (e.g. app exit →
-                // `kill_all`). `Drop` would only signal; awaiting here enforces
-                // ordering.
+                // Signal drain, then await the serve task: it finishes only
+                // after Axum drained AND every upgraded `/ws` + `/terminal/ws`
+                // socket received `Close(1001)` and ended (bounded; stragglers
+                // are aborted), so the caller can proceed (e.g. app exit →
+                // `kill_all`) with no socket still being served. `Drop` would
+                // only signal; awaiting here enforces ordering.
                 if let Some(tx) = server.shutdown_tx.take() {
                     let _ = tx.send(());
                 }

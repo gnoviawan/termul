@@ -7,13 +7,13 @@
 //! failing `Authenticate`). [`raw_client`] covers the cases that need a real
 //! upgraded socket (terminal teardown, host stop).
 //!
-//! Cases that assert behavior the relay execution rework (AD-19) delivers are
-//! `#[ignore]`d with a reason and named `audit_*`; run them with
-//! `cargo test --lib -- --ignored audit` to see them fail on pre-rework code.
+//! The AD-19 relay-execution repros are named `audit_*` (`cargo test --lib audit_`).
 
 pub(crate) mod carrier;
 pub(crate) mod raw_client;
 
+#[cfg(test)]
+mod relay_execution_tests;
 #[cfg(test)]
 mod relay_fault_tests;
 #[cfg(test)]
@@ -101,7 +101,8 @@ impl Host {
             let _finished = Finished(done_tx);
             // The harness peer is a local, write-capable connection.
             let local_peer = SocketAddr::from(([127, 0, 0, 1], 0));
-            run_relay(carrier, state, local_peer).await;
+            let lease = state.connections.shutdown.admit();
+            serve_socket(lease, carrier, state, local_peer).await;
         });
         Conn { peer, task, done }
     }

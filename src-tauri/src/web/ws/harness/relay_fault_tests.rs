@@ -49,8 +49,8 @@ async fn stalled_writes_resume_and_deliver_the_queued_reply() {
     assert_eq!(reply["ok"], true, "{reply}");
 }
 
-/// Today's watchdog (idle write arm): a silent half-open peer is reaped within
-/// the pong deadline plus one ping interval, and a pong arriving late but
+/// The watchdog: a silent half-open peer is reaped within the pong deadline
+/// plus one watchdog tick, and a pong arriving late but
 /// inside the deadline extends the connection's life by exactly that much.
 #[tokio::test(start_paused = true)]
 async fn silent_peer_is_reaped_and_a_late_pong_extends_the_deadline() {
