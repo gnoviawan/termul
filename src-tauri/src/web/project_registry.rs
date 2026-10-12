@@ -209,6 +209,14 @@ impl ProjectRegistry {
     /// the current default, `default_project_id` is cleared — same posture as
     /// `update`/`remove`/`load`.
     pub fn upsert(&self, project: ProjectSummary) {
+        // Same reservation as `set`: the sentinel never becomes a project.
+        if project.id == crate::acp::session_persistence::UNASSIGNED_PROJECT_ID {
+            tracing::warn!(
+                target: "termul::web::project_registry",
+                "upsert: refused a project carrying the reserved unassigned id"
+            );
+            return;
+        }
         {
             let mut g = self.inner.lock();
             let adds_real_project = project.id != SEEDED_PROJECT_ID && is_usable(&project);

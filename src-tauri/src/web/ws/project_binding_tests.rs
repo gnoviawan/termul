@@ -198,3 +198,14 @@ fn a_default_naming_the_reserved_id_is_not_kept() {
     );
     assert_eq!(registry.snapshot().default_project_id, None);
 }
+
+#[test]
+fn upserting_the_reserved_id_never_registers_it() {
+    let registry = ProjectRegistry::new();
+    registry.upsert(summary(
+        crate::acp::session_persistence::UNASSIGNED_PROJECT_ID,
+        "/work/one",
+        false,
+    ));
+    assert!(!registry.contains(crate::acp::session_persistence::UNASSIGNED_PROJECT_ID));
+}
