@@ -609,7 +609,7 @@ test('project sheet returns focus on Escape and hardware back, and Add project o
   await expect(page.getByText('Create New Project')).toBeVisible()
 })
 
-test('a project pick switches client-side, closes the sheet onto the subtitle and sends no host request', async ({
+test('a project pick switches client-side, closes the sheet onto the subtitle and sends no switch_project frame', async ({
   page,
   request
 }) => {

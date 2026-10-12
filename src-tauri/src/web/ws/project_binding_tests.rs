@@ -113,3 +113,41 @@ async fn create_session_with_a_registered_project_reaches_the_agent() {
     let message = reply.err.unwrap().message;
     assert!(!message.contains("project 'p-2'"), "{message}");
 }
+
+#[tokio::test]
+async fn add_project_refuses_the_reserved_unassigned_id() {
+    let relay = Arc::new(WsRelaySink::new());
+    let registry = Arc::new(ProjectRegistry::new());
+    let reply = projects::handle_add_project(
+        "r1".to_string(),
+        &json!({
+            "id": crate::acp::UNASSIGNED_PROJECT_ID,
+            "name": "x",
+            "path": "/work/one",
+            "color": "blue"
+        }),
+        &relay,
+        &registry,
+        None,
+        None,
+    )
+    .await;
+
+    assert!(!reply.ok);
+    assert_eq!(reply.err.unwrap().code, "unsupported");
+    assert!(registry.snapshot().projects.is_empty());
+}
+
+#[test]
+fn a_renderer_fed_project_with_the_reserved_id_is_never_registered() {
+    let registry = ProjectRegistry::new();
+    registry.set(
+        vec![
+            summary(crate::acp::UNASSIGNED_PROJECT_ID, "/work/one", false),
+            summary("p-1", "/work/two", false),
+        ],
+        None,
+    );
+    assert!(!registry.contains(crate::acp::UNASSIGNED_PROJECT_ID));
+    assert!(registry.contains("p-1"));
+}

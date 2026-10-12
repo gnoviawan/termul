@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
-import { chatForeignToProject } from '@/lib/acp-session-ownership'
 import { logFrontendError } from '@/lib/log-api'
-import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
+import { releaseFocusNotOwnedBy } from '@/lib/release-foreign-focus'
 import { useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -64,14 +63,7 @@ export function useProjectSwitch(source: string): ProjectSwitch {
         // The focus pointers still name the PREVIOUS project's chat: clear
         // them so a later manifest write cannot inherit that session on the
         // target project.
-        const acp = useAcpStore.getState()
-        if (acp.activeSessionId && chatForeignToProject(acp.activeSessionId, projectId, acp)) {
-          useAcpStore.setState({ activeSessionId: null })
-        }
-        const tabFocused = getTabFocusedSessionId()
-        if (tabFocused && chatForeignToProject(tabFocused, projectId, acp)) {
-          setTabFocusedSessionId(null)
-        }
+        releaseFocusNotOwnedBy(projectId)
         const restored = requestMostRecentChat(projectId)
         selectProject(projectId)
         void logFrontendError({

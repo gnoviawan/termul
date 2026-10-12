@@ -1884,14 +1884,16 @@ fn handle_request_post_auth_other_types_not_implemented() {
     // Story 1.7 wired `respond_permission`; Story 1.8 wired `send_prompt`,
     // `create_session`, `load_session`, `resume_session`, `close_session`,
     // `list_sessions`, `cancel_prompt`, `set_mode`, `set_model`,
-    // `set_config_option`. Only truly unknown types stay `not_implemented`.
-    let ty = "totally_unknown_type";
-    let reply = handle_sync(
-        &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
-        &mut authed,
-    );
-    assert!(!reply.ok, "{ty} should be not_implemented");
-    assert_eq!(reply.err.unwrap().code, "not_implemented", "{ty}");
+    // `set_config_option`. Unknown types, and the removed legacy
+    // `switch_project`, stay `not_implemented`.
+    for ty in ["totally_unknown_type", "switch_project"] {
+        let reply = handle_sync(
+            &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
+            &mut authed,
+        );
+        assert!(!reply.ok, "{ty} should be not_implemented");
+        assert_eq!(reply.err.unwrap().code, "not_implemented", "{ty}");
+    }
 }
 
 /// Story 1.8: ACP command handlers are wired. With an empty payload

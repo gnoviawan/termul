@@ -264,6 +264,21 @@ pub async fn create_project(
     if let Some(err) = check_project_write_guard(&state, peer, "/projects") {
         return err;
     }
+    if req.id == crate::acp::UNASSIGNED_PROJECT_ID {
+        tracing::warn!(
+            target: "termul::web::projects_api",
+            "create_project: reserved project id refused"
+        );
+        return Json(
+            IpcBody::<crate::web::project_registry::ProjectSummary>::err(
+                format!(
+                    "project id '{}' is reserved",
+                    crate::acp::UNASSIGNED_PROJECT_ID
+                ),
+                "VALIDATION_ERROR",
+            ),
+        );
+    }
     // F-020: preserve the existing root's MCP config — an upsert that
     // re-registers a project must not wipe its file-side `mcp_servers`.
     let preserved_mcp = state

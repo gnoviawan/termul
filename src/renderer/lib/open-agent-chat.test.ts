@@ -65,6 +65,7 @@ vi.mock('@/stores/ssh-store', () => ({
 }))
 
 import { logFrontendError } from '@/lib/log-api'
+import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
 import { openAgentChatInOwnProject, openAgentChatPlaced } from './open-agent-chat'
@@ -98,6 +99,12 @@ describe('openAgentChatInOwnProject', () => {
     const lifetime = useAgentChatLifetimeStore.getState()
     expect(lifetime.retainedByProject.pb).toEqual(['s-b'])
     expect(lifetime.focusSessionByProject.pb).toBe('s-b')
+  })
+
+  it("drops the previous project's tab-focus pointer when it switches to the owner", () => {
+    setTabFocusedSessionId('s-a')
+    openAgentChatInOwnProject('s-b', 'test')
+    expect(getTabFocusedSessionId()).toBeNull()
   })
 
   it('resolves the owner from the history index for closed chats', () => {

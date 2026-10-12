@@ -1,5 +1,5 @@
-//! Project WS handlers: `create_session`/`load_session`, project CRUD, the
-//! and the host default.
+//! Project WS handlers: `create_session`/`load_session`, project CRUD and the
+//! host default.
 
 use super::*;
 
@@ -73,25 +73,22 @@ pub(super) async fn handle_create_session(
     }
     // The host stamps the owning project once, here: explicit registered id,
     // else the registry project owning `cwd`, else the unassigned sentinel.
-    let project_id = match resolve_session_project(
-        registry,
-        parsed.project_id.as_deref(),
-        &parsed.cwd,
-    ) {
-        Ok(project_id) => project_id,
-        Err(unknown) => {
-            warn!(
-                target: "termul::web::ws",
-                project_id = %unknown,
-                "create_session: unknown projectId"
-            );
-            return WsReply::err(
-                id,
-                WsErrorCode::NotFound,
-                format!("project '{unknown}' not found"),
-            );
-        }
-    };
+    let project_id =
+        match resolve_session_project(registry, parsed.project_id.as_deref(), &parsed.cwd) {
+            Ok(project_id) => project_id,
+            Err(unknown) => {
+                warn!(
+                    target: "termul::web::ws",
+                    project_id = %unknown,
+                    "create_session: unknown projectId"
+                );
+                return WsReply::err(
+                    id,
+                    WsErrorCode::NotFound,
+                    format!("project '{unknown}' not found"),
+                );
+            }
+        };
     match acp
         .new_session_with_context(
             &parsed.agent_id,
@@ -319,6 +316,20 @@ pub(super) async fn handle_add_project(
             );
         }
     };
+    if parsed.id == crate::acp::UNASSIGNED_PROJECT_ID {
+        warn!(
+            target: "termul::web::ws",
+            "add_project: reserved project id refused"
+        );
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            format!(
+                "project id '{}' is reserved",
+                crate::acp::UNASSIGNED_PROJECT_ID
+            ),
+        );
+    }
     let mut root = crate::acp::VfsRoot {
         id: parsed.id.clone(),
         name: parsed.name.clone(),

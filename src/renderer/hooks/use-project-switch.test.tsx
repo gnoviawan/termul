@@ -77,16 +77,18 @@ describe('useProjectSwitch (client-only)', () => {
     expect(getTabFocusedSessionId()).toBeNull()
   })
 
-  it('keeps the focus pointers of an unassigned chat (it belongs to no project)', () => {
+  it('clears the focus pointers of an unassigned chat so no project inherits it as its focus', () => {
     useAcpStore.setState({
       sessionIndex: [indexEntry('s-un', '__unassigned__', 5)],
       activeSessionId: 's-un'
     })
+    setTabFocusedSessionId('s-un')
     const { result } = renderHook(() => useProjectSwitch('test'))
 
     result.current.switchTo('p2')
 
-    expect(useAcpStore.getState().activeSessionId).toBe('s-un')
+    expect(useAcpStore.getState().activeSessionId).toBeNull()
+    expect(getTabFocusedSessionId()).toBeNull()
   })
 
   it("requests the target project's most recent persisted chat when it has none to come back to", () => {

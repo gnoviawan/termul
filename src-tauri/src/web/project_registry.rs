@@ -171,6 +171,10 @@ impl ProjectRegistry {
     /// renderer is the source of truth in desktop-hosted mode — a fresh `set`
     /// fully supersedes the prior snapshot.
     pub fn set(&self, mut projects: Vec<ProjectSummary>, default_id: Option<String>) {
+        // The unassigned sentinel names no project; a renderer-fed entry
+        // carrying it would make its sessions indistinguishable from
+        // unassigned ones, so it is never registered.
+        projects.retain(|p| p.id != crate::acp::UNASSIGNED_PROJECT_ID);
         for project in &mut projects {
             project.is_default = default_id.as_deref() == Some(project.id.as_str());
         }
@@ -348,7 +352,11 @@ impl ProjectRegistry {
     /// `create_session` to validate an explicit `projectId` before stamping it.
     #[must_use]
     pub fn contains(&self, project_id: &str) -> bool {
-        self.inner.lock().projects.iter().any(|p| p.id == project_id)
+        self.inner
+            .lock()
+            .projects
+            .iter()
+            .any(|p| p.id == project_id)
     }
 
     /// Resolve a project id → its cwd (`path`), or `None` when the project is

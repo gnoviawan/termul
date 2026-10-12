@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
 import { sessionOwnerProjectId } from '@/lib/acp-session-ownership'
 import { logFrontendError } from '@/lib/log-api'
+import { releaseFocusNotOwnedBy } from '@/lib/release-foreign-focus'
 import { useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -93,6 +94,7 @@ export function openAgentChatInOwnProject(
     message: `Opening chat ${sessionId} switches project ${activeProjectId} -> ${owner}`
   })
   // Same as the sidebar's project select (client-only on every surface).
+  releaseFocusNotOwnedBy(owner)
   useProjectStore.getState().selectProject(owner)
   useSSHStore.getState().selectProfile(null)
   return 'switched-project'
