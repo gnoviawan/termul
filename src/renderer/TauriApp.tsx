@@ -25,7 +25,6 @@ import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useAgentChatNotification } from './hooks/use-agent-chat-notification'
-import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useChatNotifications } from './hooks/use-chat-notifications'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
@@ -101,7 +100,6 @@ function AppEffects(): null {
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
-  useAgentIdleShutdown()
   useAcpHistory()
   // Story 16: host worktree branch renames reconcile + refresh (both roots).
   useWorktreeBranchRenamed()

@@ -7,7 +7,6 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { agentChatTabId } from '@/stores/workspace-store'
 import { AgentChatTabInline } from './agent-chat-tab'
@@ -19,7 +18,7 @@ import { AgentChatTabInline } from './agent-chat-tab'
  * lives in `useAgentChatUnreadStore`, driven by the shell-level tracker, so the
  * harness below mounts `useAgentChatUnreadTracker` the way `WorkspaceLayout`
  * does (the pane's active chat is the tab's `isActive`). The
- * tests seed the real `useAcpStore` / `useAgentChatLifetimeStore` (the
+ * tests seed the real `useAcpStore` (the
  * WorkspaceTabBar suite mocks `useAcpStore` away, so it cannot cover this)
  * and drive busy + `isActive` transitions through rerender/`setState`.
  */
@@ -79,14 +78,6 @@ function setTurn(sessionId: string, busy: boolean): void {
   })
 }
 
-function setClosing(sessionId: string, closing: boolean): void {
-  act(() => {
-    useAgentChatLifetimeStore.setState({
-      closingSessionIds: closing ? { [sessionId]: true } : {}
-    })
-  })
-}
-
 /** Drive a session status transition (e.g. close mid-turn) through the store. */
 function setSessionStatus(sessionId: string, status: 'active' | 'closed' | 'error'): void {
   act(() => {
@@ -101,7 +92,6 @@ function setSessionStatus(sessionId: string, status: 'active' | 'closed' | 'erro
 
 const WORKING = 'Working'
 const UNREAD = 'New activity'
-const CLOSING_TITLE = 'Closing. This chat stops when the turn finishes.'
 const NEEDS_YOU = 'Needs you'
 
 function seedChat(sessionId = 's1', title = 'My Chat', busy = false): void {
@@ -115,12 +105,6 @@ function seedChat(sessionId = 's1', title = 'My Chat', busy = false): void {
 beforeEach(() => {
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatLifetimeStore.setState({
-    retainedByProject: {},
-    activeSessionByProject: {},
-    focusSessionByProject: {},
-    closingSessionIds: {}
-  })
   useAgentChatUnreadStore.setState({ unread: {} })
 })
 
@@ -182,27 +166,6 @@ describe('AgentChatTabInline activity indicator', () => {
     setTurn('s1', true)
     expect(screen.getByTitle(WORKING)).toBeInTheDocument()
     setTurn('s1', false)
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-  })
-
-  it('shows only the Closing spinner while a close is in flight, even mid-turn', () => {
-    seedChat('s1', 'My Chat', true)
-    useAgentChatLifetimeStore.setState({ closingSessionIds: { s1: true } })
-
-    const { container } = renderChip(false)
-
-    expect(screen.getByTitle(CLOSING_TITLE)).toBeInTheDocument()
-    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Closing')
-
-    // A turn that ends during the close banks no unread dot — not even after
-    // the closing flag clears.
-    setTurn('s1', false)
-    expect(screen.getByTitle(CLOSING_TITLE)).toBeInTheDocument()
-    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    setClosing('s1', false)
     expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
   })
@@ -353,7 +316,6 @@ describe('AgentChatTabInline activity indicator', () => {
     expect(screen.getByText('Agent Chat')).toBeInTheDocument()
     expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
     expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
-    expect(screen.queryByTitle(CLOSING_TITLE)).not.toBeInTheDocument()
     expect(screen.queryByTitle(NEEDS_YOU)).not.toBeInTheDocument()
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'Agent Chat')
   })

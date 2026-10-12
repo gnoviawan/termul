@@ -55,8 +55,7 @@ describe('shell-layout-store', () => {
     useAgentChatLifetimeStore.setState({
       retainedByProject: {},
       activeSessionByProject: {},
-      focusSessionByProject: {},
-      closingSessionIds: {}
+      focusSessionByProject: {}
     })
     mockRead.mockResolvedValue(NOT_FOUND)
     mockWrite.mockResolvedValue({ success: true, data: undefined })

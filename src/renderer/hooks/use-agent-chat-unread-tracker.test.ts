@@ -6,7 +6,6 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useAgentChatUnreadTracker } from './use-agent-chat-unread-tracker'
 
@@ -38,14 +37,6 @@ function setTurn(sessionId: string, busy: boolean): void {
   })
 }
 
-function setClosing(sessionId: string, closing: boolean): void {
-  act(() => {
-    useAgentChatLifetimeStore.setState({
-      closingSessionIds: closing ? { [sessionId]: true } : {}
-    })
-  })
-}
-
 function unreadIds(): string[] {
   return Object.keys(useAgentChatUnreadStore.getState().unread).sort()
 }
@@ -59,12 +50,6 @@ function renderTracker(activeSessionIds: readonly string[]) {
 beforeEach(() => {
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatLifetimeStore.setState({
-    retainedByProject: {},
-    activeSessionByProject: {},
-    focusSessionByProject: {},
-    closingSessionIds: {}
-  })
   useAgentChatUnreadStore.setState({ unread: {} })
 })
 
@@ -159,20 +144,6 @@ describe('useAgentChatUnreadTracker', () => {
 
     rerender({ active: ['a'] })
     expect(unreadIds()).toEqual(['b'])
-  })
-
-  it('lets closing win: a turn that ends while the chat is closing banks nothing', () => {
-    seedChat('a')
-    seedChat('b', true)
-    renderTracker(['a'])
-    setClosing('b', true)
-
-    setTurn('b', false)
-    expect(unreadIds()).toEqual([])
-
-    // Not even after the closing flag clears.
-    setClosing('b', false)
-    expect(unreadIds()).toEqual([])
   })
 
   it('banks nothing when the turn ends because the session closed', () => {

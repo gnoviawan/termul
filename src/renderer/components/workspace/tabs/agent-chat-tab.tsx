@@ -27,7 +27,7 @@ export function AgentChatTabInline({
   onDragLeave,
   onDrop
 }: AgentChatTabInlineProps) {
-  const { session, needsAttention, closing, liveSession, turnBusy } = useAgentChatStatusSignals(
+  const { session, needsAttention, liveSession, turnBusy } = useAgentChatStatusSignals(
     tab.sessionId
   )
   const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
@@ -46,30 +46,20 @@ export function AgentChatTabInline({
 
   const isClosed = session?.status === 'closed'
   const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
-  // Slot priority: the Closing spinner wins, then "needs you", then the
-  // running spinner, then the unread dot — the single slot shows one cue,
-  // so the announced status matches exactly what is visible.
-  const showWorking = !closing && turnBusy
-  const showUnread = liveSession && !closing && !turnBusy && unread
-  const activeStatus = closing
-    ? 'Closing'
-    : needsAttention
-      ? 'Needs you'
-      : showWorking
-        ? 'Working'
-        : showUnread
-          ? 'New activity'
-          : null
+  // Slot priority: "needs you", then the running spinner, then the unread
+  // dot — the single slot shows one cue, so the announced status matches
+  // exactly what is visible.
+  const showWorking = turnBusy
+  const showUnread = liveSession && !turnBusy && unread
+  const activeStatus = needsAttention
+    ? 'Needs you'
+    : showWorking
+      ? 'Working'
+      : showUnread
+        ? 'New activity'
+        : null
 
-  const statusNode = closing ? (
-    <span
-      title="Closing. This chat stops when the turn finishes."
-      className="inline-flex size-3 shrink-0 items-center justify-center text-muted-foreground"
-    >
-      <Spinner size={12} decorative />
-      <span className="sr-only">Closing</span>
-    </span>
-  ) : needsAttention ? (
+  const statusNode = needsAttention ? (
     <span
       title="Needs you"
       className="inline-flex size-3 shrink-0 items-center justify-center text-warning"
@@ -93,7 +83,7 @@ export function AgentChatTabInline({
   ) : null
 
   return (
-    <TabContextMenu kind="agent-chat" onClose={onClose} isClosing={closing} {...bulkMenu}>
+    <TabContextMenu kind="agent-chat" onClose={onClose} {...bulkMenu}>
       <TabChrome
         isActive={isActive}
         isDragging={isDragging}
@@ -136,7 +126,6 @@ export function AgentChatTabInline({
           ) : null
         }
         alive={Boolean(showWorking)}
-        closeDisabled={closing}
         pinClose={isActive}
       />
     </TabContextMenu>

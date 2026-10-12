@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import { useMobileTabActions } from './use-mobile-tab-actions'
 
-const { workspaceRef, mockRemoveBrowserTab, mockCloseCanvas, mockRequestCloseAgentChat } =
-  vi.hoisted(() => ({
+const { workspaceRef, mockRemoveBrowserTab, mockCloseCanvas, mockCloseAgentChat } = vi.hoisted(
+  () => ({
     workspaceRef: {
       current: {
         leaves: [] as Array<{ type: 'leaf'; id: string; tabs: unknown[]; activeTabId: null }>,
@@ -19,8 +19,9 @@ const { workspaceRef, mockRemoveBrowserTab, mockCloseCanvas, mockRequestCloseAge
     },
     mockRemoveBrowserTab: vi.fn(),
     mockCloseCanvas: vi.fn(),
-    mockRequestCloseAgentChat: vi.fn()
-  }))
+    mockCloseAgentChat: vi.fn()
+  })
+)
 
 vi.mock('@/stores/workspace-store', () => ({
   getAllLeafPanes: () => workspaceRef.current.leaves,
@@ -35,8 +36,8 @@ vi.mock('@/stores/browser-session-store', () => ({
 vi.mock('@/stores/canvas-store', () => ({
   useCanvasStore: { getState: () => ({ closeCanvas: mockCloseCanvas }) }
 }))
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element => (
@@ -51,7 +52,7 @@ beforeEach(() => {
   workspaceRef.current.removeTab.mockReset()
   mockRemoveBrowserTab.mockReset()
   mockCloseCanvas.mockReset().mockResolvedValue(undefined)
-  mockRequestCloseAgentChat
+  mockCloseAgentChat
     .mockReset()
     .mockImplementation((_id: string, closeTab: () => void) => closeTab())
 })
@@ -102,14 +103,14 @@ describe('useMobileTabActions closePaneTab', () => {
     )
   })
 
-  it('closes a chat through requestCloseAgentChat, removing the tab only when it completes', () => {
+  it('closes a chat through closeAgentChat, removing the tab only when it completes', () => {
     const tab = { type: 'agent-chat', id: 'tab-1', sessionId: 's1' } as WorkspaceTab
     actions().closePaneTab(tab)
-    expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
+    expect(mockCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
     expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('tab-1')
 
     workspaceRef.current.removeTab.mockReset()
-    mockRequestCloseAgentChat.mockImplementation(() => {})
+    mockCloseAgentChat.mockImplementation(() => {})
     actions().closePaneTab(tab)
     expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
   })

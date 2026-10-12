@@ -2,7 +2,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockAcpSession, mockSessionIndexEntry } from '@/lib/test-utils/acp'
 import { useAcpStore } from '@/stores/acp-store'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -84,7 +83,6 @@ beforeEach(() => {
   resetShellLayoutStoreForTests()
   useShellLayoutStore.setState({ status: 'ready' })
   useAgentChatUnreadStore.setState({ unread: {} })
-  useAgentChatLifetimeStore.setState({ closingSessionIds: {} })
   useAcpStore.setState({
     sessionIndex: [],
     sessions: {},

@@ -1,7 +1,6 @@
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 
@@ -19,8 +18,6 @@ import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
  * (`deleteHistorySession`). Only live, non-ephemeral sessions are tracked:
  * closed/error sessions can carry stale turn flags and warm-pool sessions are
  * not chats, so a turn that ends because the session closed never banks a dot.
- * `closing` wins the slot, so a turn that ends during a close never banks one
- * either.
  */
 export function useAgentChatUnreadTracker(activeSessionIds: readonly string[]): void {
   // The `?? {}` guard keeps suites that mock the acp-store as a partial shape
@@ -36,7 +33,6 @@ export function useAgentChatUnreadTracker(activeSessionIds: readonly string[]): 
       return busy
     })
   )
-  const closingSessionIds = useAgentChatLifetimeStore((state) => state.closingSessionIds)
   const previousBusy = useRef<Record<string, boolean>>({})
 
   // Callers pass a fresh array every render; a joined key keeps the effect from
@@ -53,10 +49,10 @@ export function useAgentChatUnreadTracker(activeSessionIds: readonly string[]): 
     const { markUnread, clearUnread } = useAgentChatUnreadStore.getState()
     for (const [sessionId, busy] of Object.entries(busyBySession)) {
       const turnFinished = previous[sessionId] === true && !busy
-      if (turnFinished && !activeSet.has(sessionId) && !closingSessionIds[sessionId]) {
+      if (turnFinished && !activeSet.has(sessionId)) {
         markUnread(sessionId)
       }
     }
     for (const sessionId of activeSet) clearUnread(sessionId)
-  }, [busyBySession, activeSet, closingSessionIds])
+  }, [busyBySession, activeSet])
 }

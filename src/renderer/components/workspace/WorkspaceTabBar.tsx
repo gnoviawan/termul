@@ -4,12 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { Maximize2, Minimize2 } from '@/components/icons'
 import { WindowControls } from '@/components/shell/TopRowChrome'
-import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { closeAgentChat } from '@/lib/agent-chat-close'
 import { clipboardApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCanvasStore } from '@/stores/canvas-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -230,28 +229,10 @@ export function WorkspaceTabBar({
   )
   const busyEditorPathSet = useMemo(() => new Set(busyEditorPaths), [busyEditorPaths])
 
-  const agentChatSessionIds = useMemo(
-    () => tabs.filter((t) => t.type === 'agent-chat').map((t) => t.sessionId),
-    [tabs]
-  )
-  const closingSessionFlags = useAgentChatLifetimeStore(
-    useShallow((state) =>
-      agentChatSessionIds.map((sessionId) => Boolean(state.closingSessionIds[sessionId]))
-    )
-  )
-  const closingSessionIdSet = useMemo(() => {
-    const set = new Set<string>()
-    agentChatSessionIds.forEach((sessionId, i) => {
-      if (closingSessionFlags[i]) set.add(sessionId)
-    })
-    return set
-  }, [agentChatSessionIds, closingSessionFlags])
-
   // Tabs that can actually be closed right now: terminal tabs whose store
-  // record is gone render `null`, terminals with a close in flight and
-  // agent-chat sessions already closing must not double-close, and editors
-  // mid-save/reload are skipped by the layout anyway — so all of them stay
-  // out of bulk counts and target lists.
+  // record is gone render `null`, terminals with a close in flight must not
+  // double-close, and editors mid-save/reload are skipped by the layout
+  // anyway — so all of them stay out of bulk counts and target lists.
   const closableTabs = useMemo(
     () =>
       tabs.filter((tab) => {
@@ -266,12 +247,9 @@ export function WorkspaceTabBar({
         if (tab.type === 'editor') {
           return !busyEditorPathSet.has(tab.filePath)
         }
-        if (tab.type === 'agent-chat') {
-          return !closingSessionIdSet.has(tab.sessionId)
-        }
         return true
       }),
-    [tabs, paneTerminals, closingTerminalIds, busyEditorPathSet, closingSessionIdSet]
+    [tabs, paneTerminals, closingTerminalIds, busyEditorPathSet]
   )
 
   // Single-tab close dispatcher shared by the tab close button, middle-click,
@@ -296,7 +274,7 @@ export function WorkspaceTabBar({
           useWorkspaceStore.getState().removeTab(tab.id)
           break
         case 'agent-chat':
-          requestCloseAgentChat(tab.sessionId, () => {
+          closeAgentChat(tab.sessionId, () => {
             useWorkspaceStore.getState().removeTab(tab.id)
           })
           break

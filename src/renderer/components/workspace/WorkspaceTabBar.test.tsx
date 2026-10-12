@@ -14,7 +14,7 @@ const mockRemoveTab = vi.fn()
 const mockTogglePaneFullscreen = vi.fn()
 const mockCloseFileIfIdle = vi.fn(() => true)
 const mockRemoveBrowserTab = vi.fn()
-const mockRequestCloseAgentChat = vi.hoisted(() => vi.fn())
+const mockCloseAgentChat = vi.hoisted(() => vi.fn())
 
 // Story 8 (web honesty): the tab-bar globe button (New Browser Tab) is
 // desktop-only. Mutable ref defaults to desktop so the existing browser-tab
@@ -131,18 +131,6 @@ vi.mock('@/stores/acp-store', () => ({
   useSessionIndexTitle: () => 'Chat 1'
 }))
 
-// Mutable so tests can mark a session as already-closing.
-const mockAgentChatLifetimeState = vi.hoisted(() => ({
-  closingSessionIds: {} as Record<string, true>
-}))
-
-vi.mock('@/stores/agent-chat-lifetime-store', () => ({
-  useAgentChatLifetimeStore: vi.fn(
-    (selector: (state: typeof mockAgentChatLifetimeState) => unknown) =>
-      selector(mockAgentChatLifetimeState)
-  )
-}))
-
 vi.mock('@/stores/git-status-store', async (importOriginal) => ({
   selectChangedFileCount: (await importOriginal<typeof import('@/stores/git-status-store')>())
     .selectChangedFileCount,
@@ -165,8 +153,8 @@ vi.mock('@/stores/canvas-store', () => ({
   )
 }))
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 vi.mock('@/lib/log-api', () => ({
@@ -343,11 +331,9 @@ beforeEach(() => {
   mockTogglePaneFullscreen.mockReset()
   mockCloseFileIfIdle.mockReset()
   mockRemoveBrowserTab.mockReset()
-  mockRequestCloseAgentChat.mockReset()
+  mockCloseAgentChat.mockReset()
   // Default: an idle chat closes immediately via the provided callback.
-  mockRequestCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) =>
-    closeTab()
-  )
+  mockCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) => closeTab())
   tauriRef.current = true
   mockWorkspaceStoreState.fullscreenPaneId = null
   mockCloseFileIfIdle.mockReturnValue(true)
@@ -358,7 +344,6 @@ beforeEach(() => {
   mockClearReorderPreview.mockReset()
   mockHandleTabReorder.mockReset()
   mockHandleDrop.mockReset()
-  mockAgentChatLifetimeState.closingSessionIds = {}
   mockUsePaneDnd.mockReset()
   mockUsePaneDnd.mockReturnValue({
     startTabDrag: mockStartTabDrag,
@@ -1318,25 +1303,6 @@ describe('WorkspaceTabBar', () => {
       fireEvent.click(screen.getByText('Close'))
       expect(onCloseTerminal).toHaveBeenCalledWith('term-1', 'tab-1')
     })
-
-    it('disables Close and excludes an agent-chat tab already closing from bulk targets', async () => {
-      mockAgentChatLifetimeState.closingSessionIds = { 'session-1': true }
-      const onCloseTabs = vi.fn()
-      const tabs: WorkspaceTab[] = [agentChatTab, gitTab1]
-
-      render(
-        <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="ac-1" onCloseTabs={onCloseTabs} />
-      )
-      await flushShellEffect()
-
-      await openMenuOn('Chat 1')
-      expect(screen.getByText('Close')).toHaveAttribute('data-disabled')
-      expect(screen.getByText('Close Other Agent Chats')).toHaveAttribute('data-disabled')
-
-      // Close All Tabs still targets the remaining closable tab only.
-      fireEvent.click(screen.getByText('Close All Tabs'))
-      expect(onCloseTabs).toHaveBeenCalledWith([gitTab1])
-    })
   })
 
   describe('middle-click close', () => {
@@ -1466,7 +1432,7 @@ describe('WorkspaceTabBar', () => {
       expect(mockRemoveTab).toHaveBeenCalledWith('diff:abc')
     })
 
-    it('closes an agent-chat tab on middle click through requestCloseAgentChat', async () => {
+    it('closes an agent-chat tab on middle click through closeAgentChat', async () => {
       const { container } = render(
         <WorkspaceTabBar paneId="pane-a" tabs={[agentChatTab]} activeTabId="ac-1" />
       )
@@ -1474,7 +1440,7 @@ describe('WorkspaceTabBar', () => {
 
       middleClick(container.querySelector('[draggable="true"]') as HTMLElement)
 
-      expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('session-1', expect.any(Function))
+      expect(mockCloseAgentChat).toHaveBeenCalledWith('session-1', expect.any(Function))
       expect(mockRemoveTab).toHaveBeenCalledWith('ac-1')
     })
 

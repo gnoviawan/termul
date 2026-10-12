@@ -299,8 +299,7 @@ afterEach(() => {
   useAgentChatLifetimeStore.setState({
     retainedByProject: {},
     activeSessionByProject: {},
-    focusSessionByProject: {},
-    closingSessionIds: {}
+    focusSessionByProject: {}
   })
 })
 
@@ -980,8 +979,7 @@ describe('useEditorPersistence', () => {
     useAgentChatLifetimeStore.setState({
       retainedByProject: {},
       activeSessionByProject: {},
-      focusSessionByProject: {},
-      closingSessionIds: {}
+      focusSessionByProject: {}
     })
     mockWorkspaceState.insertAgentChatTab.mockReset()
     mockPersistenceRead.mockResolvedValue({

@@ -30,7 +30,7 @@ const {
   mockToastError,
   mockToastWarning,
   mockListen,
-  mockRequestCloseAgentChat,
+  mockCloseAgentChat,
   mockLogFrontendError,
   mockTerminalKill,
   confirmTerminalCloseRef,
@@ -115,7 +115,7 @@ const {
   mockToastError: vi.fn(),
   mockToastWarning: vi.fn(),
   mockListen: vi.fn(async () => vi.fn()),
-  mockRequestCloseAgentChat: vi.fn((_sessionId: string, closeTab: () => void) => closeTab()),
+  mockCloseAgentChat: vi.fn((_sessionId: string, closeTab: () => void) => closeTab()),
   mockLogFrontendError: vi.fn(async () => undefined),
   mockTerminalKill: vi.fn(async () => ({ success: true })),
   confirmTerminalCloseRef: { current: true },
@@ -369,9 +369,8 @@ vi.mock('@/components/CommandHistoryModal', () => ({
   CommandHistoryModal: () => null
 }))
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  useAgentIdleShutdown: vi.fn(),
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 vi.mock('@/lib/browser-api', () => ({
@@ -543,7 +542,7 @@ describe('WorkspaceLayout aggregate bulk close', () => {
     mockEditorStoreState.saveAllDirty.mockResolvedValue(undefined)
     mockEditorStoreState.saveFile.mockResolvedValue(true)
     mockEditorStoreState.closeFileIfIdle.mockReturnValue(true)
-    mockRequestCloseAgentChat.mockImplementation((_s: string, closeTab: () => void) => closeTab())
+    mockCloseAgentChat.mockImplementation((_s: string, closeTab: () => void) => closeTab())
     mockTerminalKill.mockResolvedValue({ success: true })
     mockFlushPendingWrites.mockResolvedValue({ success: true, data: undefined })
     mockUpdatePanelVisibility.mockResolvedValue(undefined)
@@ -638,7 +637,7 @@ describe('WorkspaceLayout aggregate bulk close', () => {
 
     expect(mockBrowserSessionState.removeTab).toHaveBeenCalledWith('btab-1')
     expect(mockWorkspaceStoreState.removeTab).toHaveBeenCalledWith('browser-1')
-    expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('session-1', expect.any(Function))
+    expect(mockCloseAgentChat).toHaveBeenCalledWith('session-1', expect.any(Function))
     expect(mockWorkspaceStoreState.removeTab).toHaveBeenCalledWith('ac-1')
   })
 

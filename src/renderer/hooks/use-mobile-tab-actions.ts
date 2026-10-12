@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
+import { closeAgentChat } from '@/lib/agent-chat-close'
 import { returnToWorkspaceRoute } from '@/lib/workspace-route'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
@@ -122,7 +122,7 @@ export function useMobileTabActions({
         return false
       }
       if (tab.type === 'agent-chat') {
-        requestCloseAgentChat(tab.sessionId, () => {
+        closeAgentChat(tab.sessionId, () => {
           useWorkspaceStore.getState().removeTab(tab.id)
         })
         return false

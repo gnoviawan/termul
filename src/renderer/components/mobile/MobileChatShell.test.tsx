@@ -28,7 +28,7 @@ const {
   sessionsRef,
   sessionIndexRef,
   mockAttentionCount,
-  mockRequestCloseAgentChat,
+  mockCloseAgentChat,
   drawerPropsRef,
   drawerModalRef
 } = vi.hoisted(() => ({
@@ -80,7 +80,7 @@ const {
   sessionsRef: { current: {} as Record<string, Record<string, unknown>> },
   sessionIndexRef: { current: [] as Array<{ id: string; title: string }> },
   mockAttentionCount: vi.fn(),
-  mockRequestCloseAgentChat: vi.fn(),
+  mockCloseAgentChat: vi.fn(),
   // The last props the shell handed to the (stubbed) drawer.
   drawerPropsRef: { current: null as null | ComponentProps<typeof MobileShellDrawer> },
   // Opt-in: render the stubbed drawer as a real modal Radix sheet, for the one
@@ -135,8 +135,8 @@ vi.mock('@/hooks/use-mobile-attention-count', () => ({
   useMobileAttentionCount: mockAttentionCount
 }))
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 // Stub the drawer so the shell test focuses on the opener wiring and the props
@@ -374,10 +374,8 @@ describe('MobileChatShell', () => {
     drawerModalRef.current = false
     mockAttentionCount.mockReset()
     mockAttentionCount.mockReturnValue(0)
-    mockRequestCloseAgentChat.mockReset()
-    mockRequestCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) =>
-      closeTab()
-    )
+    mockCloseAgentChat.mockReset()
+    mockCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) => closeTab())
     workspaceRef.current.removeTab.mockReset()
     workspaceRef.current.setActiveTab.mockReset()
     workspaceRef.current.clearFullscreenPane.mockReset()
@@ -864,14 +862,14 @@ describe('MobileChatShell', () => {
       )
     })
 
-    it('"Close chat" closes the active chat through requestCloseAgentChat', async () => {
+    it('"Close chat" closes the active chat through closeAgentChat', async () => {
       renderWeb()
       await openHeaderSheet()
 
       fireEvent.click(screen.getByRole('button', { name: 'Close chat' }))
 
-      expect(mockRequestCloseAgentChat).toHaveBeenCalledTimes(1)
-      expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
+      expect(mockCloseAgentChat).toHaveBeenCalledTimes(1)
+      expect(mockCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
       expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('tab-1')
     })
 

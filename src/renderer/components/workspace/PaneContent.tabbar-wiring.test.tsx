@@ -102,20 +102,14 @@ vi.mock('@/stores/acp-store', () => ({
   useSessionIndexTitle: () => 'Chat 1'
 }))
 
-vi.mock('@/stores/agent-chat-lifetime-store', () => ({
-  useAgentChatLifetimeStore: vi.fn((selector: (state: unknown) => unknown) =>
-    selector({ closingSessionIds: {} })
-  )
-}))
-
 vi.mock('@/stores/git-status-store', async (importOriginal) => ({
   selectChangedFileCount: (await importOriginal<typeof import('@/stores/git-status-store')>())
     .selectChangedFileCount,
   useGitStatusStore: vi.fn((selector: (state: unknown) => unknown) => selector({ statuses: {} }))
 }))
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: vi.fn((_sessionId: string, closeTab: () => void) => closeTab())
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: vi.fn((_sessionId: string, closeTab: () => void) => closeTab())
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({

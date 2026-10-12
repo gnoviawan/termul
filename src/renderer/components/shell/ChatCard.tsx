@@ -64,7 +64,7 @@ export function ChatCard({
 
   const liveState: ProjectChatLiveState = signals.needsAttention
     ? 'needs-you'
-    : signals.turnBusy || signals.closing
+    : signals.turnBusy
       ? 'running'
       : signals.liveSession && unread
         ? 'done'

@@ -156,8 +156,7 @@ describe('#903 folder-group chat tab isolation', () => {
     useAgentChatLifetimeStore.setState({
       retainedByProject: {},
       activeSessionByProject: {},
-      focusSessionByProject: {},
-      closingSessionIds: {}
+      focusSessionByProject: {}
     })
     useWorkspaceStore.getState().resetLayout()
     useWorkspaceStore.setState({ activeProjectId: '', parkedTrees: {} })

@@ -217,7 +217,7 @@ function OpenRecentsRow({
       }
     })
   )
-  const hasStatus = signals.closing || signals.needsAttention || showWorking || showUnread
+  const hasStatus = signals.needsAttention || showWorking || showUnread
   return (
     <RecentsRowShell
       entryId={entry.id}
@@ -234,7 +234,6 @@ function OpenRecentsRow({
       status={
         hasStatus ? (
           <AgentChatStatusGlyphs
-            closing={signals.closing}
             needsAttention={signals.needsAttention}
             showWorking={showWorking}
             showUnread={showUnread}

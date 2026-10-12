@@ -75,7 +75,7 @@ const {
   // "closed record because an open is running" from "closed because the
   // user closed the chat".
   const mockOpeningHistoryIds = { current: {} as Record<string, true> }
-  // Route-closed chats seam (web-tab-session): requestCloseAgentChat marks a
+  // Route-closed chats seam (web-tab-session): closeAgentChat marks a
   // closed chat here; ChatRoute consults + clears it. Mutable so tests can
   // simulate the user's close directly.
   const mockRouteClosedChats = { current: new Set<string>() }
@@ -141,14 +141,7 @@ vi.mock('@/stores/workspace-store', () => ({
 }))
 
 vi.mock('@/stores/agent-chat-lifetime-store', () => ({
-  useAgentChatLifetimeStore: mockUseAgentChatLifetimeStore,
-  retainedAgentChatSessionIds: (retainedByProject: Record<string, string[]>): Set<string> => {
-    const ids = new Set<string>()
-    for (const list of Object.values(retainedByProject)) {
-      for (const id of list) ids.add(id)
-    }
-    return ids
-  }
+  useAgentChatLifetimeStore: mockUseAgentChatLifetimeStore
 }))
 
 vi.mock('@/lib/router-navigate', () => ({
@@ -411,7 +404,7 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     })
     expect(chatTab(workspaceRootRef.current, 's-closed')).toBeDefined()
 
-    // The user closes the chat: requestCloseAgentChat marks it closed on
+    // The user closes the chat: closeAgentChat marks it closed on
     // this route (the synchronous signal), releases the lifetime retention,
     // removes the tab — and the route stays `#/c/s-closed`. The record
     // lingers with status 'closed' (closeSession mutates the status).
@@ -447,7 +440,7 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     const { rerender } = renderChatRoute('/c/s-race')
     expect(mockOpenHistorySession).toHaveBeenCalledTimes(1)
 
-    // User closes mid-open: the mark fires (requestCloseAgentChat), the tab
+    // User closes mid-open: the mark fires (closeAgentChat), the tab
     // is removed, a root swap re-runs the effect — still inside the
     // in-flight window (record 'closed', openingHistoryIds set).
     mockRouteClosedChats.current.add('s-race')

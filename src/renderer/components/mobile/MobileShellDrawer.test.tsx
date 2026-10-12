@@ -11,7 +11,6 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
@@ -341,7 +340,6 @@ beforeEach(async () => {
   browserTabsRef.current = new Map()
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatLifetimeStore.setState({ closingSessionIds: {} })
   useAgentChatUnreadStore.setState({ unread: {} })
   useShellLayoutStore.setState({ worktreePickByProject: {} })
   useConnectionStatusStore.setState({ controlChannel: 'connected', terminalChannel: 'connected' })

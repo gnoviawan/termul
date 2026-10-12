@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
+import { closeAgentChat } from '@/lib/agent-chat-close'
 import { fileNeedsAttention } from '@/lib/editor-file-attention'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
@@ -57,7 +57,7 @@ export function useCloseActiveTab({
         useWorkspaceStore.getState().removeTab(activeTab.id)
         break
       case 'agent-chat':
-        requestCloseAgentChat(activeTab.sessionId, () => {
+        closeAgentChat(activeTab.sessionId, () => {
           useWorkspaceStore.getState().removeTab(activeTab.id)
         })
         break

@@ -5,33 +5,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
 import { _resetEphemeralSessionIdsForTesting, useAcpStore } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useProjectStore } from '@/stores/project-store'
 import { MobileRecentsList } from './MobileRecentsList'
 
-const { workspaceRef, mockRequestCloseAgentChat, mockAddAgentChatTab, mockNavigate } = vi.hoisted(
-  () => ({
-    mockNavigate: vi.fn(),
-    workspaceRef: {
-      current: {
-        leaves: [] as Array<{
-          type: 'leaf'
-          id: string
-          tabs: Array<Record<string, unknown>>
-          activeTabId: string | null
-        }>,
-        activePaneId: 'pane-1',
-        fullscreenPaneId: null as string | null,
-        removeTab: vi.fn(),
-        setActiveTab: vi.fn(),
-        clearFullscreenPane: vi.fn()
-      }
-    },
-    mockRequestCloseAgentChat: vi.fn(),
-    mockAddAgentChatTab: vi.fn()
-  })
-)
+const { workspaceRef, mockCloseAgentChat, mockAddAgentChatTab, mockNavigate } = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+  workspaceRef: {
+    current: {
+      leaves: [] as Array<{
+        type: 'leaf'
+        id: string
+        tabs: Array<Record<string, unknown>>
+        activeTabId: string | null
+      }>,
+      activePaneId: 'pane-1',
+      fullscreenPaneId: null as string | null,
+      removeTab: vi.fn(),
+      setActiveTab: vi.fn(),
+      clearFullscreenPane: vi.fn()
+    }
+  },
+  mockCloseAgentChat: vi.fn(),
+  mockAddAgentChatTab: vi.fn()
+}))
 
 vi.mock('@/stores/workspace-store', () => ({
   getAllLeafPanes: () => workspaceRef.current.leaves,
@@ -52,8 +49,8 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => mockNavigate }
 })
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 const onNavigate = vi.fn()
@@ -112,7 +109,7 @@ beforeEach(() => {
   mockAddAgentChatTab.mockReset()
   mockOpenHistorySession.mockReset().mockResolvedValue(undefined)
   mockDeleteHistorySession.mockReset().mockResolvedValue(undefined)
-  mockRequestCloseAgentChat
+  mockCloseAgentChat
     .mockReset()
     .mockImplementation((_id: string, closeTab: () => void) => closeTab())
   workspaceRef.current.removeTab.mockReset()
@@ -120,7 +117,6 @@ beforeEach(() => {
   workspaceRef.current.fullscreenPaneId = null
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatLifetimeStore.setState({ closingSessionIds: {} })
   useAgentChatUnreadStore.setState({ unread: {} })
   useProjectStore.setState({
     projects: [
@@ -279,7 +275,7 @@ describe('MobileRecentsList row actions', () => {
   })
 
   it('leaves the tab in place while the chat close is still pending', async () => {
-    mockRequestCloseAgentChat.mockImplementation(() => {
+    mockCloseAgentChat.mockImplementation(() => {
       // A running turn: the close waits, so the tab callback is not invoked.
     })
     seedHistory([{ id: 's1', title: 'Open one' }])
@@ -291,7 +287,7 @@ describe('MobileRecentsList row actions', () => {
     const sheet = await screen.findByRole('dialog', { name: 'Open one' })
     fireEvent.click(within(sheet).getByRole('button', { name: 'Close chat' }))
 
-    expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
+    expect(mockCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
     expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
   })
 
@@ -323,7 +319,7 @@ describe('MobileRecentsList row actions', () => {
     expect(mockOpenHistorySession).toHaveBeenCalledWith('h1')
   })
 
-  it('long-press on an open chat in history offers Close and Delete; Close goes through requestCloseAgentChat', async () => {
+  it('long-press on an open chat in history offers Close and Delete; Close goes through closeAgentChat', async () => {
     seedHistory([{ id: 's1', title: 'Open one' }])
     seedOptionsSession('s1', 'agent-1', { title: 'Open one' })
     seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }])
@@ -334,7 +330,7 @@ describe('MobileRecentsList row actions', () => {
     expect(within(sheet).getByRole('button', { name: 'Delete chat' })).toBeInTheDocument()
     fireEvent.click(within(sheet).getByRole('button', { name: 'Close chat' }))
 
-    expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
+    expect(mockCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
     expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('tab-1')
     expect(onNavigate).not.toHaveBeenCalled()
   })

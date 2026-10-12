@@ -54,7 +54,7 @@ import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stor
  * - Never re-open a session whose chat the user closed while this route
  *   stayed current: closing only releases the chat (lifetime store +
  *   session close) without clearing the route. The signal is the
- *   synchronous closed-on-route mark set by `requestCloseAgentChat`
+ *   synchronous closed-on-route mark set by `closeAgentChat`
  *   (`web-tab-session.ts`) — it survives a close that races the mount-time
  *   open, unlike a store-record heuristic. The first effect run (mount /
  *   route change) is exempt — that is the reload path itself. A route
@@ -151,7 +151,7 @@ export function ChatRoute(): null {
       // The user closed this chat while its route stayed current: closing
       // releases the chat and removes the tab without clearing the route,
       // so the route must not resurrect it. The signal is the synchronous
-      // closed-on-route mark set by requestCloseAgentChat — independent of
+      // closed-on-route mark set by closeAgentChat — independent of
       // acp-store timing, so a close that races the mount-time
       // openHistorySession (still in flight, record still 'closed' mid-open)
       // is still caught. The first run (mount / route change) is exempt —

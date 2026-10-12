@@ -58,7 +58,6 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
-import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useChatNotifications } from './hooks/use-chat-notifications'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
@@ -170,7 +169,6 @@ function AppEffects(): null {
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
-  useAgentIdleShutdown()
   useAcpHistory()
   // Story 16: host worktree branch renames reconcile + refresh (both roots).
   useWorktreeBranchRenamed()

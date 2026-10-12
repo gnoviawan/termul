@@ -6,7 +6,6 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import {
   AgentChatStatusGlyphs,
   agentChatStatusSlots,
@@ -14,7 +13,6 @@ import {
 } from './agent-chat-status'
 
 const IDLE = {
-  closing: false,
   needsAttention: false,
   turnBusy: false,
   liveSession: true,
@@ -48,23 +46,13 @@ describe('agentChatStatusSlots', () => {
     )
   })
 
-  it('lets Closing win over Working and New activity', () => {
-    const slots = agentChatStatusSlots({ ...IDLE, closing: true, turnBusy: true, unread: true })
-    expect(slots.showWorking).toBe(false)
-    expect(slots.showUnread).toBe(false)
-    expect(slots.statuses).toEqual(['Closing'])
-  })
-
   it('shows Needs you alongside Working', () => {
     const slots = agentChatStatusSlots({ ...IDLE, needsAttention: true, turnBusy: true })
     expect(slots.statuses).toEqual(['Needs you', 'Working'])
     expect(slots.statusText).toBe('Needs you, Working')
   })
 
-  it('orders statuses Closing, Needs you, Working, New activity', () => {
-    expect(agentChatStatusSlots({ ...IDLE, closing: true, needsAttention: true }).statuses).toEqual(
-      ['Closing', 'Needs you']
-    )
+  it('orders statuses Needs you, Working, New activity', () => {
     expect(agentChatStatusSlots({ ...IDLE, needsAttention: true, unread: true }).statusText).toBe(
       'Needs you, New activity'
     )
@@ -72,7 +60,7 @@ describe('agentChatStatusSlots', () => {
 })
 
 describe('AgentChatStatusGlyphs', () => {
-  const NONE = { closing: false, needsAttention: false, showWorking: false, showUnread: false }
+  const NONE = { needsAttention: false, showWorking: false, showUnread: false }
 
   it('renders nothing when no slot is active', () => {
     const { container } = render(<AgentChatStatusGlyphs {...NONE} />)
@@ -80,10 +68,8 @@ describe('AgentChatStatusGlyphs', () => {
   })
 
   it('renders each glyph with its title and sr-only text', () => {
-    render(<AgentChatStatusGlyphs closing needsAttention showWorking={false} showUnread={false} />)
-    expect(screen.getByTitle('Closing. This chat stops when the turn finishes.')).toBeVisible()
+    render(<AgentChatStatusGlyphs needsAttention showWorking={false} showUnread={false} />)
     expect(screen.getByTitle('Needs you')).toHaveClass('text-warning')
-    expect(screen.getByText('Closing')).toHaveClass('sr-only')
     expect(screen.getByText('Needs you')).toHaveClass('sr-only')
   })
 
@@ -101,7 +87,6 @@ describe('useAgentChatStatusSignals', () => {
   beforeEach(() => {
     useAcpStore.setState(FRESH)
     _resetEphemeralSessionIdsForTesting()
-    useAgentChatLifetimeStore.setState({ closingSessionIds: {} })
   })
 
   it('reads a live idle chat', () => {
@@ -111,13 +96,12 @@ describe('useAgentChatStatusSignals', () => {
     expect(result.current.session?.id).toBe('s1')
     expect(result.current).toMatchObject({
       needsAttention: false,
-      closing: false,
       liveSession: true,
       turnBusy: false
     })
   })
 
-  it('tracks a turn and a close in flight', () => {
+  it('tracks a running turn', () => {
     seedOptionsSession('s1', 'agent-1', { title: 'Chat' })
     const { result } = renderHook(() => useAgentChatStatusSignals('s1'))
 
@@ -128,11 +112,6 @@ describe('useAgentChatStatusSignals', () => {
       })
     })
     expect(result.current.turnBusy).toBe(true)
-
-    act(() => {
-      useAgentChatLifetimeStore.setState({ closingSessionIds: { s1: true } })
-    })
-    expect(result.current.closing).toBe(true)
   })
 
   it('flags a pending permission or question as Needs you', () => {
@@ -226,7 +205,6 @@ describe('useAgentChatStatusSignals', () => {
     expect(result.current).toEqual({
       session: undefined,
       needsAttention: false,
-      closing: false,
       liveSession: false,
       turnBusy: false
     })

@@ -11,7 +11,7 @@ const {
   browserTabsRef,
   mockNavigate,
   mockRemoveBrowserTab,
-  mockRequestCloseAgentChat
+  mockCloseAgentChat
 } = vi.hoisted(() => ({
   // Mutable workspace state so each test can seed the tab types it needs.
   workspaceRef: {
@@ -34,7 +34,7 @@ const {
   browserTabsRef: { current: new Map<string, unknown>() },
   mockNavigate: vi.fn(),
   mockRemoveBrowserTab: vi.fn(),
-  mockRequestCloseAgentChat: vi.fn()
+  mockCloseAgentChat: vi.fn()
 }))
 
 const { canvasRef, mockCloseCanvas, mockLogFrontendError } = vi.hoisted(() => ({
@@ -100,8 +100,8 @@ vi.mock('@/stores/browser-session-store', () => ({
   )
 }))
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 const onNavigate = vi.fn()
@@ -172,7 +172,7 @@ beforeEach(() => {
   onNavigate.mockReset()
   mockNavigate.mockReset()
   mockRemoveBrowserTab.mockReset()
-  mockRequestCloseAgentChat.mockReset()
+  mockCloseAgentChat.mockReset()
   mockCloseCanvas.mockReset().mockResolvedValue(undefined)
   mockLogFrontendError.mockReset()
   canvasRef.current = {}

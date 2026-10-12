@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import {
   type BulkCloseRequest,
   isEditorTabBusy,
   NO_APPROVED_DIRTY
 } from '@/layouts/workspace-layout/bulk-close'
 import { blockSaveOnDraftConflict } from '@/layouts/workspace-layout/draft-conflict-save-guard'
+import { closeAgentChat } from '@/lib/agent-chat-close'
 import { fileNeedsAttention } from '@/lib/editor-file-attention'
 import { logFrontendError } from '@/lib/log-api'
 import { useConfirmTerminalClose } from '@/stores/app-settings-store'
@@ -100,7 +100,7 @@ export function useBulkTabClose({
           useWorkspaceStore.getState().removeTab(tab.id)
           break
         case 'agent-chat':
-          requestCloseAgentChat(tab.sessionId, () => {
+          closeAgentChat(tab.sessionId, () => {
             useWorkspaceStore.getState().removeTab(tab.id)
           })
           break
