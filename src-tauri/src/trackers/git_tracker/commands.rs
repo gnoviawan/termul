@@ -653,29 +653,58 @@ pub(super) fn staged_entry_count(cwd: &str) -> Option<u32> {
 /// nothing staged is rejected; an amend requires an existing HEAD. Uses the
 /// network-length timeout so pre-commit hooks / GPG passphrase prompts are not
 /// killed mid-run (which could leave a stale `.git/index.lock`).
-pub fn git_commit_file(
+///
+/// With `stamp.expected_head`, refuses when `HEAD` is not the commit the caller
+/// saw; with `stamp.command_id`, trails the message with
+/// `Termul-Command-Id: <id>` so a resend can find the commit it made.
+pub fn git_commit_stamped(
     cwd: &str,
     summary: &str,
     description: &str,
     amend: bool,
-) -> Result<(), String> {
+    stamp: &CommitStamp<'_>,
+) -> Result<(), CommitFailure> {
     if summary.trim().is_empty() {
-        return Err("Commit summary cannot be empty".to_string());
+        return Err(CommitFailure::Failed(
+            "Commit summary cannot be empty".to_string(),
+        ));
+    }
+    if let Some(expected) = stamp.expected_head {
+        if !is_valid_expected_head(expected) {
+            return Err(CommitFailure::InvalidExpectedHead);
+        }
+        let actual = head_sha(cwd);
+        if !expected.trim().eq_ignore_ascii_case(&actual) {
+            return Err(CommitFailure::PreconditionFailed {
+                expected: expected.trim().to_string(),
+                actual,
+            });
+        }
     }
     if amend {
         if !repo_has_head(cwd) {
-            return Err("No commit to amend".to_string());
+            return Err(CommitFailure::Failed("No commit to amend".to_string()));
         }
     } else {
         match staged_entry_count(cwd) {
-            Some(0) => return Err("Nothing staged to commit".to_string()),
-            None => return Err("Failed to read the staged index".to_string()),
+            Some(0) => {
+                return Err(CommitFailure::Failed("Nothing staged to commit".to_string()))
+            }
+            None => {
+                return Err(CommitFailure::Failed(
+                    "Failed to read the staged index".to_string(),
+                ))
+            }
             Some(_) => {}
         }
     }
 
-    let message = build_commit_message(summary, description);
-    let msg_path = create_commit_message_file(message.as_bytes())?;
+    let mut message = build_commit_message(summary, description);
+    if let Some(id) = stamp.command_id {
+        message = with_command_trailer(&message, id);
+    }
+    let msg_path =
+        create_commit_message_file(message.as_bytes()).map_err(CommitFailure::Failed)?;
 
     // Pass the real OS path (not a lossy String) so a non-UTF-8 temp dir still
     // resolves to the file we actually wrote.
@@ -688,8 +717,12 @@ pub fn git_commit_file(
     let result = match GitTracker::run_git_command_with_timeout(cwd, &args, GIT_NETWORK_TIMEOUT_MS)
     {
         Some(output) if output.status.success() => Ok(()),
-        Some(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-        None => Err("git commit timed out or failed to start".to_string()),
+        Some(output) => Err(CommitFailure::Failed(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        )),
+        None => Err(CommitFailure::Failed(
+            "git commit timed out or failed to start".to_string(),
+        )),
     };
     // Always clean up the temp message file, regardless of commit outcome.
     let _ = std::fs::remove_file(&msg_path);

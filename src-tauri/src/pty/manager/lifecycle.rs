@@ -349,6 +349,58 @@ impl PtyManager {
     }
 
 
+    /// The live terminal whose spawn carried `command_id` (AD-5 entity
+    /// lookup: a spawn resend whose ledger outcome is gone finds its PTY by the
+    /// id stamped at construction). `None` when it was never spawned, was
+    /// killed, or was reaped.
+    pub fn find_by_command_id(&self, command_id: &str) -> Option<Arc<TerminalInstance>> {
+        self.terminals
+            .read()
+            .values()
+            .find(|instance| instance.command_id.as_deref() == Some(command_id))
+            .cloned()
+    }
+
+    /// The reply for a RESENT spawn whose PTY already exists: its metadata and
+    /// a FRESH claim for the resender. The claim of the first reply is never
+    /// stored anywhere (the reply was lost), so the resender gets a new one
+    /// exactly as `list_preserved` would hand out: a shared credential when a
+    /// viewer is attached (the holder keeps its stream), otherwise a replace-
+    /// and-reissue. `None` when no live terminal of `project_id` carries
+    /// `command_id`, or no credential can be issued (revoked record) — the
+    /// caller then answers `outcome_unknown` instead of respawning.
+    pub fn replay_spawn(
+        &self,
+        command_id: &str,
+        project_id: Option<&str>,
+    ) -> Option<SpawnedTerminal> {
+        let instance = self.find_by_command_id(command_id)?;
+        if instance.project_id.as_deref() != project_id {
+            return None;
+        }
+        let claim = if instance.has_web_attachment() {
+            self.claims
+                .issue_shared(&instance.id, instance.project_id.as_deref())
+                .ok()?
+        } else {
+            self.claims
+                .issue(&instance.id, instance.project_id.as_deref())
+        };
+        let cols = *instance.cols.read();
+        let rows = *instance.rows.read();
+        Some(SpawnedTerminal {
+            info: TerminalInfo {
+                id: instance.id.clone(),
+                shell: instance.shell.clone(),
+                cwd: instance.cwd.clone(),
+                pid: instance.pid,
+                cols,
+                rows,
+            },
+            claim,
+        })
+    }
+
     /// Enumerate the terminals still preserved for a project, re-issuing a
     /// claim credential for each attachable one (QA round 2 / spec story 5).
     ///

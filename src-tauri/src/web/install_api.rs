@@ -24,14 +24,16 @@
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::acp::install::{code, InstallOutcome, InstallRequest};
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_http};
 use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
 
@@ -52,6 +54,7 @@ use crate::web::ws::AppState;
 pub async fn install(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     if let Some(forbidden) = check_local_only::<InstallOutcome>(
@@ -89,32 +92,42 @@ pub async fn install(
             )),
         );
     };
-    match service.install_by_id(&req.agent_id).await {
-        Ok(outcome) => {
-            info!(
-                target: "termul::web::install_api",
-                session = crate::logging::run_id(),
-                agent = %req.agent_id,
-                "install: success"
-            );
-            (StatusCode::OK, Json(IpcBody::ok(outcome)))
-        }
-        Err(error) => {
-            let code = error.code();
-            warn!(
-                target: "termul::web::install_api",
-                session = crate::logging::run_id(),
-                agent = %req.agent_id,
-                code,
-                msg = %error.message,
-                "install: failure"
-            );
-            (
-                StatusCode::OK,
-                Json(IpcBody::<InstallOutcome>::err(error.message, code)),
-            )
-        }
-    }
+    let service = Arc::clone(service);
+    let agent_id = req.agent_id.clone();
+    let body = run_http(
+        state.relay.ledger(),
+        &headers,
+        "install_acp_agent",
+        fingerprint_of("install_acp_agent", &[("agentId", &agent_id)]),
+        no_entity(),
+        async move {
+            match service.install_by_id(&req.agent_id).await {
+                Ok(outcome) => {
+                    info!(
+                        target: "termul::web::install_api",
+                        session = crate::logging::run_id(),
+                        agent = %req.agent_id,
+                        "install: success"
+                    );
+                    IpcBody::ok(outcome)
+                }
+                Err(error) => {
+                    let code = error.code();
+                    warn!(
+                        target: "termul::web::install_api",
+                        session = crate::logging::run_id(),
+                        agent = %req.agent_id,
+                        code,
+                        msg = %error.message,
+                        "install: failure"
+                    );
+                    IpcBody::<InstallOutcome>::err(error.message, code)
+                }
+            }
+        },
+    )
+    .await;
+    (StatusCode::OK, Json(body))
 }
 
 #[cfg(test)]

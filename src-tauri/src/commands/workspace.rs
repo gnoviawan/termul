@@ -1,4 +1,6 @@
 use super::{sanitize_log_field, IpcResult};
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_domain};
+use crate::web::WsRelaySink;
 use std::sync::Arc;
 use tauri::State;
 
@@ -157,6 +159,29 @@ pub async fn workspace_manifest_write(
     based_revision: Option<u64>,
     manifest: serde_json::Value,
     store: State<'_, HostWorkspaceManifestStore>,
+    relay: State<'_, Arc<WsRelaySink>>,
+    command_id: Option<String>,
+) -> Result<IpcResult<crate::acp::WriteOutcome>, String> {
+    // A resend of a write that already advanced the revision answers the
+    // original `updated` outcome, not a `conflict` against its own write.
+    let service = store.store().map(Arc::clone);
+    let print = fingerprint_of("workspace_write", &[("projectId", &project_id)]);
+    run_domain(
+        relay.ledger(),
+        "workspace_write",
+        command_id,
+        print,
+        no_entity(),
+        workspace_write_effect(project_id, based_revision, manifest, service),
+    )
+    .await
+}
+
+async fn workspace_write_effect(
+    project_id: String,
+    based_revision: Option<u64>,
+    manifest: serde_json::Value,
+    service: Option<Arc<crate::acp::WorkspaceManifestService>>,
 ) -> Result<IpcResult<crate::acp::WriteOutcome>, String> {
     let log_project_id = sanitize_log_field(&project_id);
     log::info!(
@@ -182,7 +207,7 @@ pub async fn workspace_manifest_write(
             ));
         }
     };
-    let Some(service) = store.store().map(Arc::clone) else {
+    let Some(service) = service else {
         log::error!(
             "[workspace-manifest] write unavailable project_id={}",
             log_project_id

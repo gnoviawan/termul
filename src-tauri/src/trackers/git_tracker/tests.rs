@@ -1,5 +1,12 @@
 use super::*;
 
+/// An unstamped commit (what the desktop and web commit commands do without a
+/// `commandId` / `expectedHead`).
+fn git_commit_file(cwd: &str, summary: &str, description: &str, amend: bool) -> Result<(), String> {
+    git_commit_stamped(cwd, summary, description, amend, &CommitStamp::default())
+        .map_err(|failure| failure.to_string())
+}
+
 #[test]
 fn resolve_executable_returns_unresolved_name_unchanged() {
     // A bare name that does not exist on PATH should come back unchanged so

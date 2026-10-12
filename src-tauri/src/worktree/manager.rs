@@ -79,6 +79,21 @@ impl WorktreeManager {
         Ok(entries)
     }
 
+    /// Where [`WorktreeManager::create`] puts the worktree: `target_path`, or
+    /// `<project_path>/.termul/worktrees/<name>/`. Shared with the callers that
+    /// look the created worktree up on a command resend.
+    #[must_use]
+    pub fn target_path(project_path: &str, name: &str, target_path: Option<&str>) -> String {
+        match target_path {
+            Some(p) => p.to_string(),
+            None => format!(
+                "{}/.termul/worktrees/{}/",
+                project_path.trim_end_matches('/'),
+                name
+            ),
+        }
+    }
+
     /// Create a new worktree.
     ///
     /// - If `is_new_branch` is true, uses `git worktree add -b <branch> <path> [start_ref]`
@@ -98,14 +113,7 @@ impl WorktreeManager {
         target_path: Option<&str>,
         on_progress: Option<&mut dyn FnMut(&str)>,
     ) -> Result<GitWorktreeEntry, WorktreeError> {
-        let target = match target_path {
-            Some(p) => p.to_string(),
-            None => format!(
-                "{}/.termul/worktrees/{}/",
-                project_path.trim_end_matches('/'),
-                name
-            ),
-        };
+        let target = Self::target_path(project_path, name, target_path);
 
         // Boundary log: record the create inputs before ANY early return so
         // every failure mode (path-length guard, list/pre-check error, branch

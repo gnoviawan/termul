@@ -139,6 +139,12 @@ pub struct SpawnOptions {
     pub args: Option<Vec<String>>,
     #[serde(default)]
     pub kind: Option<String>,
+    /// The client-minted `commandId` that asked for this spawn (AD-5). Stamped
+    /// on the instance so a resend whose ledger entry is gone still finds the
+    /// live PTY ([`PtyManager::find_by_command_id`]). Absent = today's
+    /// behavior.
+    #[serde(default)]
+    pub command_id: Option<String>,
 }
 
 impl Default for SpawnOptions {
@@ -153,6 +159,7 @@ impl Default for SpawnOptions {
             program: None,
             args: None,
             kind: None,
+            command_id: None,
         }
     }
 }

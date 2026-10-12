@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::acp::AcpManager;
-use crate::web::command_ledger::{Begin, CommandClass, Fingerprint, Settled};
+use crate::web::command_ledger::{Begin, CommandClass, CommandLedger, Fingerprint, Settled};
 use crate::web::WsRelaySink;
 
 use serde_json::json;
@@ -51,19 +51,79 @@ pub async fn run_command<F>(
 where
     F: Future<Output = Settled> + Send + 'static,
 {
+    let (kind, id) = (command.kind, command.id);
+    run_command_with(
+        relay.ledger(),
+        command,
+        true,
+        || lookup_created(kind, id, acp, relay),
+        execute,
+    )
+    .await
+}
+
+/// [`run_command`] for a create whose entity is found by `lookup` (called only
+/// for classes that create an entity) instead of the ACP stamp index: PTYs by
+/// `commandId`, worktrees and branches by existence, commits by their trailer.
+///
+/// `lookup_on_fresh`: whether a first-sight id also consults `lookup`. Only a
+/// lookup that matches the entity THIS command stamped (ACP stamp index, commit
+/// trailer, PTY) may; an existence lookup (branch, worktree) would answer a new
+/// id for an already-existing entity as success and swallow the real error, so
+/// it runs only for an id the ledger already knows (evicted outcome).
+pub async fn run_command_with<L, LF, F>(
+    ledger: &Arc<CommandLedger>,
+    command: Command<'_>,
+    lookup_on_fresh: bool,
+    lookup: L,
+    execute: F,
+) -> CommandResult
+where
+    L: Fn() -> LF,
+    LF: Future<Output = Option<Settled>>,
+    F: Future<Output = Settled> + Send + 'static,
+{
+    run_command_released(ledger, command, lookup_on_fresh, lookup, async move {
+        Ran::Settled(execute.await)
+    })
+    .await
+}
+
+/// How an executed command ended, for [`run_command_released`].
+pub enum Ran {
+    /// Record the outcome and replay it to resends.
+    Settled(Settled),
+    /// The command failed without any effect (a spawn that never produced a
+    /// PTY, a caller refused before it acted): the carrier gets the refusal,
+    /// but nothing is recorded and the id is free for a retry to execute.
+    Released(Settled),
+}
+
+/// [`run_command_with`] whose `execute` may [`Ran::Released`] the id.
+pub async fn run_command_released<L, LF, F>(
+    ledger: &Arc<CommandLedger>,
+    command: Command<'_>,
+    lookup_on_fresh: bool,
+    lookup: L,
+    execute: F,
+) -> CommandResult
+where
+    L: Fn() -> LF,
+    LF: Future<Output = Option<Settled>>,
+    F: Future<Output = Ran> + Send + 'static,
+{
     let Command {
         id,
         kind,
         class,
         fingerprint,
     } = command;
-    let ledger = relay.ledger();
     let mut waited = false;
     loop {
         match ledger.begin(id, fingerprint) {
             Begin::Fresh(guard) => {
-                if class.creates_entity() {
-                    if let Some(found) = lookup_created(kind, id, acp, relay).await {
+                if lookup_on_fresh && class.creates_entity() {
+                    if let Some(found) = lookup().await {
                         info!(
                             target: "termul::web::command_ledger",
                             kind,
@@ -74,9 +134,16 @@ where
                     }
                 }
                 let handle = tokio::spawn(async move {
-                    let settled = execute.await;
-                    guard.complete(&settled, class);
-                    settled
+                    match execute.await {
+                        Ran::Settled(settled) => {
+                            guard.complete(&settled, class);
+                            settled
+                        }
+                        Ran::Released(refusal) => {
+                            guard.release();
+                            refusal
+                        }
+                    }
                 });
                 return match handle.await {
                     Ok(settled) => CommandResult::Done(settled),
@@ -96,7 +163,7 @@ where
             }
             Begin::Settled(Settled::Accepted { payload: None, .. }) if class.creates_entity() => {
                 // A payload too large to store: rebuild it from the entity.
-                if let Some(found) = lookup_created(kind, id, acp, relay).await {
+                if let Some(found) = lookup().await {
                     return CommandResult::Done(found);
                 }
                 return CommandResult::Done(Settled::Accepted {
@@ -107,7 +174,7 @@ where
             Begin::Settled(settled) => return CommandResult::Done(settled),
             Begin::Unknown => {
                 if class.creates_entity() {
-                    if let Some(found) = lookup_created(kind, id, acp, relay).await {
+                    if let Some(found) = lookup().await {
                         info!(
                             target: "termul::web::command_ledger",
                             kind,

@@ -428,10 +428,13 @@ describe('web-protocol.types — command classes (AD-5)', () => {
 })
 
 describe('web-terminal-protocol.types — error codes', () => {
-  it('mirrors the Rust terminal_ws codes, including the view-only refusal', () => {
+  it('mirrors the Rust terminal_ws codes, including the view-only refusal and the command verdicts', () => {
     expect(Object.values(WEB_TERMINAL_ERROR_CODES).sort()).toEqual([
+      'COMMAND_CONFLICT',
       'FORBIDDEN',
       'INVALID_CLIENT_IDENTITY',
+      'INVALID_COMMAND_ID',
+      'OUTCOME_UNKNOWN',
       'PROTOCOL_VERSION_MISMATCH',
       'UNAUTHORIZED'
     ])
@@ -439,5 +442,17 @@ describe('web-terminal-protocol.types — error codes', () => {
 
   it('FORBIDDEN is the SCREAMING form of the /ws `forbidden` code', () => {
     expect(WEB_TERMINAL_ERROR_CODES.FORBIDDEN.toLowerCase()).toBe(WS_ERROR_CODES.FORBIDDEN)
+  })
+
+  it('the command verdicts are the SCREAMING form of the /ws codes', () => {
+    expect(WEB_TERMINAL_ERROR_CODES.OUTCOME_UNKNOWN.toLowerCase()).toBe(
+      WS_ERROR_CODES.OUTCOME_UNKNOWN
+    )
+    expect(WEB_TERMINAL_ERROR_CODES.COMMAND_CONFLICT.toLowerCase()).toBe(
+      WS_ERROR_CODES.COMMAND_CONFLICT
+    )
+    expect(WEB_TERMINAL_ERROR_CODES.INVALID_COMMAND_ID.toLowerCase()).toBe(
+      WS_ERROR_CODES.INVALID_COMMAND_ID
+    )
   })
 })

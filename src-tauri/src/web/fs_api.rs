@@ -20,14 +20,19 @@ use std::path::{Component, Path, PathBuf};
 
 use axum::{
     extract::{ConnectInfo, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::{Deserialize, Serialize};
 
+mod precondition;
+pub(crate) use precondition::sha256_hex;
+use precondition::Expected;
+
 use crate::trackers::git_tracker::GitTracker;
 use crate::web::capabilities::{write_decision, WriteDecision, WriteFlags};
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_http, COMMAND_ID_HEADER};
 use crate::web::ws::AppState;
 
 /// HTTP response body mirroring the renderer-side `IpcResult<T>` shape
@@ -45,6 +50,10 @@ pub struct IpcBody<T> {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+    /// `"in_progress"` on a same-`commandId` resend that arrived while the
+    /// first run is still going: the command is neither done nor failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<String>,
 }
 
 impl<T> IpcBody<T> {
@@ -54,6 +63,7 @@ impl<T> IpcBody<T> {
             data: Some(data),
             error: None,
             code: None,
+            receipt: None,
         }
     }
 
@@ -63,6 +73,7 @@ impl<T> IpcBody<T> {
             data: None,
             error: Some(error.into()),
             code: Some(code.into()),
+            receipt: None,
         }
     }
 }
@@ -90,12 +101,17 @@ pub struct MkdirRequest {
     pub path: String,
 }
 
-/// `POST /fs/write` body: `{ "path": ".../README.md", "content": "..." }`.
+/// `POST /fs/write` body: `{ "path": ".../README.md", "content": "...",
+/// "expected"?: { "sha256": "<hex>" } | "absent" }`. `expected` makes the
+/// write conditional on the file still being what the caller read
+/// (`PRECONDITION_FAILED` otherwise; see [`precondition`]).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteRequest {
     pub path: String,
     pub content: String,
+    #[serde(default)]
+    pub expected: Option<Expected>,
 }
 
 /// `GET /fs/ls?path=...` and `GET /fs/browse?path=...` query.
@@ -117,8 +133,10 @@ pub struct GitInitRequest {
 const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
 /// `GET /fs/read?path=...` response body (one item). Mirrors the shared TS
-/// `FileContent` contract (`{ content, encoding, size, modifiedAt }`) used by
-/// the renderer's `filesystemApi.readFile` / editor store.
+/// `FileContent` contract (`{ content, encoding, size, modifiedAt,
+/// contentHash }`) used by the renderer's `filesystemApi.readFile` / editor
+/// store. `contentHash` is the sha256 hex of the bytes read: the value a later
+/// `/fs/write` names in `expected.sha256`.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileContentDto {
@@ -126,6 +144,7 @@ pub struct FileContentDto {
     pub encoding: String,
     pub size: u64,
     pub modified_at: u64,
+    pub content_hash: String,
 }
 
 /// `GET /fs/info?path=...` response body. Mirrors the shared TS `FileInfo`
@@ -535,6 +554,7 @@ pub async fn mkdir(
 pub async fn write(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<WriteRequest>,
 ) -> impl IntoResponse {
     if let Some(forbidden) = check_local_only::<()>(
@@ -555,14 +575,17 @@ pub async fn write(
         return (StatusCode::OK, Json(outside));
     }
     let content = req.content;
-    let result = tokio::task::spawn_blocking(move || fs::write(&path, content.as_bytes()))
-        .await
-        .map_err(|e| format!("write task failed: {e}"));
-    let body = match result {
-        Ok(Ok(())) => IpcBody::<()>::ok(()),
-        Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "WRITE_ERROR"),
-        Err(e) => IpcBody::<()>::err(format!("write task failed: {e}"), "WRITE_ERROR"),
-    };
+    let expected = req.expected;
+    let has_command_id = headers.contains_key(COMMAND_ID_HEADER);
+    let body = run_http(
+        state.relay.ledger(),
+        &headers,
+        "fs_write",
+        fingerprint_of("fs_write", &[("path", &req.path)]),
+        no_entity(),
+        precondition::write_effect(path, content, expected, has_command_id),
+    )
+    .await;
     (StatusCode::OK, Json(body))
 }
 
@@ -683,6 +706,7 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
             // corrupted content back over the original file. Desktop's
             // `readTextFile` fails on invalid UTF-8 (→ READ_ERROR); match that
             // contract so the web path never silently corrupts a file.
+            let content_hash = sha256_hex(&bytes);
             let content = String::from_utf8(bytes)
                 .map_err(|_| ("file is not valid UTF-8 text".to_string(), "READ_ERROR"))?;
             Ok(FileContentDto {
@@ -690,6 +714,7 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
                 encoding: "utf-8".to_string(),
                 size,
                 modified_at,
+                content_hash,
             })
         })
         .await
@@ -824,8 +849,11 @@ pub async fn delete(
     })
     .await
     .map_err(|e| format!("delete task failed: {e}"));
+    // Deleting an absent path is the outcome the caller asked for (AD-5), so a
+    // resend after a lost reply and a first delete of nothing both answer ok.
     let body = match result {
         Ok(Ok(())) => IpcBody::<()>::ok(()),
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => IpcBody::<()>::ok(()),
         Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "DELETE_ERROR"),
         Err(e) => IpcBody::<()>::err(format!("delete task failed: {e}"), "DELETE_ERROR"),
     };
@@ -839,6 +867,7 @@ pub async fn delete(
 pub async fn rename(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<RenameRequest>,
 ) -> impl IntoResponse {
     if let Some(forbidden) = check_local_only::<()>(
@@ -867,14 +896,24 @@ pub async fn rename(
     if let Some(outside) = ensure_remote_within_project_root::<()>(&to, peer, &state) {
         return (StatusCode::OK, Json(outside));
     }
-    let result = tokio::task::spawn_blocking(move || fs::rename(&from, &to))
-        .await
-        .map_err(|e| format!("rename task failed: {e}"));
-    let body = match result {
-        Ok(Ok(())) => IpcBody::<()>::ok(()),
-        Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "RENAME_ERROR"),
-        Err(e) => IpcBody::<()>::err(format!("rename task failed: {e}"), "RENAME_ERROR"),
-    };
+    let body = run_http(
+        state.relay.ledger(),
+        &headers,
+        "fs_rename",
+        fingerprint_of("fs_rename", &[("from", &req.from), ("to", &req.to)]),
+        no_entity(),
+        async move {
+            let result = tokio::task::spawn_blocking(move || fs::rename(&from, &to))
+                .await
+                .map_err(|e| format!("rename task failed: {e}"));
+            match result {
+                Ok(Ok(())) => IpcBody::<()>::ok(()),
+                Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "RENAME_ERROR"),
+                Err(e) => IpcBody::<()>::err(format!("rename task failed: {e}"), "RENAME_ERROR"),
+            }
+        },
+    )
+    .await;
     (StatusCode::OK, Json(body))
 }
 
@@ -887,6 +926,7 @@ pub async fn rename(
 pub async fn copy(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<CopyRequest>,
 ) -> impl IntoResponse {
     if let Some(forbidden) = check_local_only::<()>(
@@ -915,14 +955,24 @@ pub async fn copy(
     if let Some(outside) = ensure_remote_within_project_root::<()>(&to, peer, &state) {
         return (StatusCode::OK, Json(outside));
     }
-    let result = tokio::task::spawn_blocking(move || fs::copy(&from, &to).map(|_| ()))
-        .await
-        .map_err(|e| format!("copy task failed: {e}"));
-    let body = match result {
-        Ok(Ok(())) => IpcBody::<()>::ok(()),
-        Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "COPY_ERROR"),
-        Err(e) => IpcBody::<()>::err(format!("copy task failed: {e}"), "COPY_ERROR"),
-    };
+    let body = run_http(
+        state.relay.ledger(),
+        &headers,
+        "fs_copy",
+        fingerprint_of("fs_copy", &[("from", &req.from), ("to", &req.to)]),
+        no_entity(),
+        async move {
+            let result = tokio::task::spawn_blocking(move || fs::copy(&from, &to).map(|_| ()))
+                .await
+                .map_err(|e| format!("copy task failed: {e}"));
+            match result {
+                Ok(Ok(())) => IpcBody::<()>::ok(()),
+                Ok(Err(e)) => IpcBody::<()>::err(format!("{e}"), "COPY_ERROR"),
+                Err(e) => IpcBody::<()>::err(format!("copy task failed: {e}"), "COPY_ERROR"),
+            }
+        },
+    )
+    .await;
     (StatusCode::OK, Json(body))
 }
 

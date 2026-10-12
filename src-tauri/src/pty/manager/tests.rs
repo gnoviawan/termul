@@ -956,3 +956,75 @@ async fn detaching_last_web_attachment_restarts_the_web_listed_window() {
 
     manager.force_kill(&spawned.info.id).await.unwrap();
 }
+
+/// AD-5: a spawn carrying a `commandId` stamps it on the instance, and a
+/// resend resolves to that PTY — never a second one — with a FRESH claim.
+/// With a viewer attached the fresh claim is shared, so the viewer's own
+/// credential keeps verifying; without one the claim is replaced.
+#[tokio::test]
+async fn replayed_spawn_finds_the_stamped_pty_and_issues_a_fresh_claim() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(
+            SpawnOptions {
+                project_id: Some("p".to_string()),
+                command_id: Some("cmd-spawn-1".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("spawn");
+
+    let found = manager
+        .find_by_command_id("cmd-spawn-1")
+        .expect("stamped instance");
+    assert_eq!(found.id, spawned.info.id);
+    assert!(manager.find_by_command_id("cmd-other").is_none());
+
+    // A viewer is attached: the replay's claim is shared, the viewer's stays valid.
+    found.add_web_attachment();
+    let replay = manager
+        .replay_spawn("cmd-spawn-1", Some("p"))
+        .expect("replayed spawn");
+    assert_eq!(replay.info.id, spawned.info.id);
+    assert_ne!(replay.claim, spawned.claim, "the resender gets a fresh claim");
+    assert!(manager.verify_claim(&spawned.info.id, &spawned.claim).is_ok());
+    assert!(manager.verify_claim(&spawned.info.id, &replay.claim).is_ok());
+    assert_eq!(manager.get_all().len(), 1, "a replay never spawns again");
+
+    // Nobody attached: the claim is replaced, the first reply's claim dies.
+    found.remove_web_attachment();
+    let reissued = manager
+        .replay_spawn("cmd-spawn-1", Some("p"))
+        .expect("replayed spawn");
+    assert!(manager.verify_claim(&spawned.info.id, &reissued.claim).is_ok());
+    assert!(manager.verify_claim(&spawned.info.id, &spawned.claim).is_err());
+
+    manager.force_kill(&spawned.info.id).await.unwrap();
+}
+
+/// A replay of another project's spawn, or of a PTY that is gone, finds nothing
+/// (the carrier then answers `outcome_unknown` instead of respawning).
+#[tokio::test]
+async fn replayed_spawn_is_none_for_a_foreign_project_and_after_the_pty_is_gone() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(
+            SpawnOptions {
+                project_id: Some("p".to_string()),
+                command_id: Some("cmd-spawn-2".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("spawn");
+
+    assert!(manager.replay_spawn("cmd-spawn-2", Some("other")).is_none());
+    assert!(manager.replay_spawn("cmd-spawn-2", None).is_none());
+
+    manager.force_kill(&spawned.info.id).await.unwrap();
+    assert!(manager.find_by_command_id("cmd-spawn-2").is_none());
+    assert!(manager.replay_spawn("cmd-spawn-2", Some("p")).is_none());
+}

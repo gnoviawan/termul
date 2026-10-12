@@ -2,7 +2,13 @@ use super::{validate_project_path, IpcResult};
 use crate::acp::destructive_guard::{ensure_no_active_turn_in_checkout, start_ref_rewrites_tree};
 use crate::acp::AcpManager;
 use crate::trackers::git_tracker::{DiffStatError, GitDiffStat};
+use crate::trackers::git_tracker::{CommitFailure, CommitStamp};
 use crate::trackers::{GitCommit, GitStatusDetail};
+use crate::web::command_ledger::{
+    fingerprint_of, no_entity, run_domain, PRECONDITION_FAILED_PREFIX,
+};
+use crate::web::git_api::{branch_entity, commit_entity, expected_head_malformed};
+use crate::web::WsRelaySink;
 use std::sync::Arc;
 use tauri::State;
 
@@ -65,22 +71,57 @@ pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
 /// (`--- a/<path>` / `+++ b/<path>` / `@@ … @@` / body) built by the
 /// renderer from the working-tree diff. See #257.
 #[tauri::command]
-pub async fn git_stage_hunk(cwd: String, path: String, hunk_patch: String) -> Result<(), String> {
-    crate::trackers::git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch)
+pub async fn git_stage_hunk(
+    relay: State<'_, Arc<WsRelaySink>>,
+    cwd: String,
+    path: String,
+    hunk_patch: String,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    // The fingerprint names the file, never the patch.
+    let print = fingerprint_of("git_stage_hunk", &[("cwd", &cwd), ("path", &path)]);
+    run_domain(relay.ledger(), "git_stage_hunk", command_id, print, no_entity(), async move {
+        crate::trackers::git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch)
+    })
+    .await
 }
 
 /// Unstage a single hunk. `hunk_patch` is built from the staged diff and
 /// reverse-applied to the index. See #257.
 #[tauri::command]
-pub async fn git_unstage_hunk(cwd: String, path: String, hunk_patch: String) -> Result<(), String> {
-    crate::trackers::git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch)
+pub async fn git_unstage_hunk(
+    relay: State<'_, Arc<WsRelaySink>>,
+    cwd: String,
+    path: String,
+    hunk_patch: String,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    let print = fingerprint_of("git_unstage_hunk", &[("cwd", &cwd), ("path", &path)]);
+    run_domain(
+        relay.ledger(),
+        "git_unstage_hunk",
+        command_id,
+        print,
+        no_entity(),
+        async move { crate::trackers::git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch) },
+    )
+    .await
 }
 
 /// Discard changes to a single file. Untracked files are deleted; tracked
 /// changes revert to HEAD. This is destructive and irreversible.
 #[tauri::command]
-pub async fn git_discard(cwd: String, path: String) -> Result<(), String> {
-    crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
+pub async fn git_discard(
+    relay: State<'_, Arc<WsRelaySink>>,
+    cwd: String,
+    path: String,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    let print = fingerprint_of("git_discard", &[("cwd", &cwd), ("path", &path)]);
+    run_domain(relay.ledger(), "git_discard", command_id, print, no_entity(), async move {
+        crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
+    })
+    .await
 }
 
 /// Read commit history for the repository at `cwd` as structured rows for the
@@ -93,23 +134,73 @@ pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommi
 
 /// Create a commit from the staged index. `amend` rewrites HEAD instead of
 /// adding a new commit. The message is passed via a temp file, not `-m`.
+///
+/// `expected_head` (the full sha, or empty for an unborn branch) refuses the
+/// commit with a `precondition_failed: …` error when `HEAD` is elsewhere. A
+/// `command_id` stamps the commit (`Termul-Command-Id:` trailer) so a resend
+/// answers from the commit it made instead of committing again.
 #[tauri::command]
 pub async fn git_commit(
+    relay: State<'_, Arc<WsRelaySink>>,
     cwd: String,
     summary: String,
     description: Option<String>,
     amend: Option<bool>,
+    expected_head: Option<String>,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    // git_commit_file runs `git commit` (which can block on hooks / GPG prompts
-    // for up to the network timeout), so run it on the blocking thread pool
-    // instead of the async executor.
+    if expected_head_malformed(expected_head.as_deref()) {
+        return Err(commit_failure_text(CommitFailure::InvalidExpectedHead));
+    }
     let description = description.unwrap_or_default();
     let amend = amend.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::trackers::git_tracker::git_commit_file(&cwd, &summary, &description, amend)
-    })
+    let lookup = {
+        let (cwd, id, head) = (cwd.clone(), command_id.clone(), expected_head.clone());
+        move || commit_entity(cwd.clone(), id.clone(), head.clone())
+    };
+    let print = fingerprint_of("git_commit", &[("cwd", &cwd)]);
+    let stamp_id = command_id.clone();
+    run_domain(
+        relay.ledger(),
+        "git_commit",
+        command_id,
+        print,
+        lookup,
+        async move {
+            // git_commit_stamped runs `git commit` (which can block on hooks / GPG
+            // prompts for up to the network timeout), so run it on the blocking
+            // thread pool instead of the async executor.
+            tauri::async_runtime::spawn_blocking(move || {
+                let stamp = CommitStamp {
+                    command_id: stamp_id.as_deref(),
+                    expected_head: expected_head.as_deref(),
+                };
+                crate::trackers::git_tracker::git_commit_stamped(
+                    &cwd,
+                    &summary,
+                    &description,
+                    amend,
+                    &stamp,
+                )
+                .map_err(commit_failure_text)
+            })
+            .await
+            .map_err(|e| format!("git commit task failed: {e}"))?
+        },
+    )
     .await
-    .map_err(|e| format!("git commit task failed: {e}"))?
+}
+
+/// The error text of a refused commit: a stable code prefix for the two
+/// refusals the caller can act on, git's own text otherwise.
+pub(crate) fn commit_failure_text(failure: CommitFailure) -> String {
+    match failure {
+        CommitFailure::PreconditionFailed { .. } => {
+            format!("{PRECONDITION_FAILED_PREFIX}: {failure}")
+        }
+        CommitFailure::InvalidExpectedHead => format!("validation_error: {failure}"),
+        CommitFailure::Failed(message) => message,
+    }
 }
 
 /// Push the current branch to `origin`, setting upstream when none exists.
@@ -185,11 +276,28 @@ pub(crate) async fn checkout_branch_guarded(
 #[tauri::command]
 pub async fn git_create_branch(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     cwd: String,
     branch: String,
     start_ref: Option<String>,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    create_branch_guarded(&manager, cwd, branch, start_ref).await
+    // A resend finds the branch by existence instead of creating it again.
+    let lookup = {
+        let (cwd, branch) = (cwd.clone(), branch.clone());
+        move || branch_entity(cwd.clone(), branch.clone())
+    };
+    let print = fingerprint_of("git_create_branch", &[("cwd", &cwd), ("branch", &branch)]);
+    let manager = Arc::clone(manager.inner());
+    run_domain(
+        relay.ledger(),
+        "git_create_branch",
+        command_id,
+        print,
+        lookup,
+        async move { create_branch_guarded(&manager, cwd, branch, start_ref).await },
+    )
+    .await
 }
 
 /// Body of [`git_create_branch`], see [`checkout_branch_guarded`].
@@ -223,6 +331,25 @@ pub struct GitStashInfo {
 
 #[tauri::command]
 pub async fn git_stash_save(
+    relay: State<'_, Arc<WsRelaySink>>,
+    cwd: String,
+    message: Option<String>,
+    include_untracked: Option<bool>,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    let print = fingerprint_of("git_stash_save", &[("cwd", &cwd)]);
+    run_domain(
+        relay.ledger(),
+        "git_stash_save",
+        command_id,
+        print,
+        no_entity(),
+        stash_save_effect(cwd, message, include_untracked),
+    )
+    .await
+}
+
+async fn stash_save_effect(
     cwd: String,
     message: Option<String>,
     include_untracked: Option<bool>,
@@ -300,57 +427,66 @@ pub async fn git_stash_list(cwd: String) -> Result<Vec<GitStashInfo>, String> {
 }
 
 #[tauri::command]
-pub async fn git_stash_apply(cwd: String, index: usize) -> Result<(), String> {
-    let validated = validate_project_path(&cwd)?;
-    let validated_str = validated
-        .to_str()
-        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
-        .to_string();
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let stash_ref = format!("stash@{{{}}}", index);
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
-            &validated_str,
-            &["stash", "apply", &stash_ref],
-        )
-        .ok_or_else(|| "Failed to run git stash apply".to_string())?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-        }
-    })
+pub async fn git_stash_apply(
+    relay: State<'_, Arc<WsRelaySink>>,
+    cwd: String,
+    index: usize,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    let index_text = index.to_string();
+    let print = fingerprint_of("git_stash_apply", &[("cwd", &cwd), ("index", &index_text)]);
+    run_domain(
+        relay.ledger(),
+        "git_stash_apply",
+        command_id,
+        print,
+        no_entity(),
+        stash_index_effect(cwd.clone(), index, "apply"),
+    )
     .await
-    .map_err(|e| format!("git stash apply task failed: {e}"))?
 }
 
 #[tauri::command]
-pub async fn git_stash_pop(cwd: String, index: usize) -> Result<(), String> {
-    let validated = validate_project_path(&cwd)?;
-    let validated_str = validated
-        .to_str()
-        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
-        .to_string();
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let stash_ref = format!("stash@{{{}}}", index);
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
-            &validated_str,
-            &["stash", "pop", &stash_ref],
-        )
-        .ok_or_else(|| "Failed to run git stash pop".to_string())?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-        }
-    })
+pub async fn git_stash_pop(
+    relay: State<'_, Arc<WsRelaySink>>,
+    cwd: String,
+    index: usize,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    let index_text = index.to_string();
+    let print = fingerprint_of("git_stash_pop", &[("cwd", &cwd), ("index", &index_text)]);
+    run_domain(
+        relay.ledger(),
+        "git_stash_pop",
+        command_id,
+        print,
+        no_entity(),
+        stash_index_effect(cwd.clone(), index, "pop"),
+    )
     .await
-    .map_err(|e| format!("git stash pop task failed: {e}"))?
 }
 
 #[tauri::command]
-pub async fn git_stash_drop(cwd: String, index: usize) -> Result<(), String> {
+pub async fn git_stash_drop(
+    relay: State<'_, Arc<WsRelaySink>>,
+    cwd: String,
+    index: usize,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    let index_text = index.to_string();
+    let print = fingerprint_of("git_stash_drop", &[("cwd", &cwd), ("index", &index_text)]);
+    run_domain(
+        relay.ledger(),
+        "git_stash_drop",
+        command_id,
+        print,
+        no_entity(),
+        stash_index_effect(cwd.clone(), index, "drop"),
+    )
+    .await
+}
+
+async fn stash_index_effect(cwd: String, index: usize, op: &'static str) -> Result<(), String> {
     let validated = validate_project_path(&cwd)?;
     let validated_str = validated
         .to_str()
@@ -361,9 +497,9 @@ pub async fn git_stash_drop(cwd: String, index: usize) -> Result<(), String> {
         let stash_ref = format!("stash@{{{}}}", index);
         let output = crate::trackers::git_tracker::GitTracker::run_git_command(
             &validated_str,
-            &["stash", "drop", &stash_ref],
+            &["stash", op, &stash_ref],
         )
-        .ok_or_else(|| "Failed to run git stash drop".to_string())?;
+        .ok_or_else(|| format!("Failed to run git stash {op}"))?;
         if output.status.success() {
             Ok(())
         } else {
@@ -371,7 +507,7 @@ pub async fn git_stash_drop(cwd: String, index: usize) -> Result<(), String> {
         }
     })
     .await
-    .map_err(|e| format!("git stash drop task failed: {e}"))?
+    .map_err(|e| format!("git stash {op} task failed: {e}"))?
 }
 
 #[tauri::command]

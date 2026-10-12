@@ -23,13 +23,14 @@ use std::net::SocketAddr;
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
 use tracing::{info, warn};
 
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_http};
 use crate::web::fs_api::IpcBody;
 use crate::web::worktree_api::{path_string, resolve_project_path};
 use crate::web::ws::AppState;
@@ -49,6 +50,7 @@ pub struct WorktreeRenameBranchRequest {
 pub async fn rename_branch(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<WorktreeRenameBranchRequest>,
 ) -> impl IntoResponse {
     let resolved = match resolve_project_path::<()>(&req.worktree_path, &state, Some(peer), true) {
@@ -59,21 +61,38 @@ pub async fn rename_branch(
         Ok(s) => s,
         Err((st, body)) => return (st, body),
     };
-    let result = state
-        .acp
-        .rename_worktree_branch(&worktree_path, &req.old_branch, &req.new_branch)
-        .await;
-    let body = match result {
-        Ok(()) => {
-            info!(op = "rename-branch", "worktree rename-branch ok");
-            IpcBody::<()>::ok(())
-        }
-        Err(e) => {
-            let code = e.error_code();
-            warn!(op = "rename-branch", code, "worktree rename-branch failed");
-            IpcBody::<()>::err(e.to_string(), code)
-        }
-    };
+    let acp = std::sync::Arc::clone(&state.acp);
+    let body = run_http(
+        state.relay.ledger(),
+        &headers,
+        "worktree_rename_branch",
+        fingerprint_of(
+            "worktree_rename_branch",
+            &[
+                ("worktreePath", &req.worktree_path),
+                ("oldBranch", &req.old_branch),
+                ("newBranch", &req.new_branch),
+            ],
+        ),
+        no_entity(),
+        async move {
+            let result = acp
+                .rename_worktree_branch(&worktree_path, &req.old_branch, &req.new_branch)
+                .await;
+            match result {
+                Ok(()) => {
+                    info!(op = "rename-branch", "worktree rename-branch ok");
+                    IpcBody::<()>::ok(())
+                }
+                Err(e) => {
+                    let code = e.error_code();
+                    warn!(op = "rename-branch", code, "worktree rename-branch failed");
+                    IpcBody::<()>::err(e.to_string(), code)
+                }
+            }
+        },
+    )
+    .await;
     (StatusCode::OK, Json(body))
 }
 

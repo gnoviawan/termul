@@ -17,6 +17,8 @@
 
 mod admission;
 mod class;
+mod http;
+pub mod terminal;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -29,9 +31,16 @@ use tracing::warn;
 
 use crate::web::config::MAX_RECEIPT_RETENTION_SECS;
 
-pub use admission::{lookup_created, run_command, Command, CommandResult};
+pub use admission::{
+    lookup_created, run_command, run_command_released, run_command_with, Command, CommandResult, Ran,
+};
 pub use class::{
     class_of, tauri_request_type, ClassKind, CommandClass, Fingerprint, Replay, WS_COMMAND_CLASSES,
+};
+pub use http::{
+    command_id_from_headers, domain_class, fingerprint_of, found_entity, no_entity, run_domain, run_http,
+    COMMAND_CONFLICT_CODE, COMMAND_ID_HEADER, INVALID_COMMAND_ID_CODE, IN_PROGRESS_RECEIPT,
+    OUTCOME_UNKNOWN_CODE, PRECONDITION_FAILED_CODE, PRECONDITION_FAILED_PREFIX,
 };
 
 /// Longest accepted `commandId`, in bytes.
@@ -266,6 +275,19 @@ impl CommandLedger {
         (store.entries.len() - bare - outcomes, outcomes, bare)
     }
 
+    /// Remove an entry that is still in progress (dropping its sender wakes
+    /// waiters).
+    fn forget_in_progress(&self, id: &str) {
+        let mut store = self.store.lock();
+        if store
+            .entries
+            .get(id)
+            .is_some_and(|entry| matches!(entry.state, State::InProgress(_)))
+        {
+            store.entries.remove(id);
+        }
+    }
+
     fn settle(&self, id: &str, state: State) {
         let mut store = self.store.lock();
         let Some(entry) = store.entries.get_mut(id) else {
@@ -341,6 +363,15 @@ impl CommandGuard {
         self.ledger
             .settle(&self.id, State::Done(settled.sanitized(class)));
     }
+
+    /// Give the id back instead of recording an outcome: the command had no
+    /// effect (a spawn that failed before any PTY existed), so a same-id
+    /// resend is free to execute again. Waiting resends wake and `begin`
+    /// anew; exactly one of them becomes the next run.
+    pub fn release(mut self) {
+        self.settled = true;
+        self.ledger.forget_in_progress(&self.id);
+    }
 }
 
 impl Drop for CommandGuard {
@@ -357,6 +388,10 @@ impl Drop for CommandGuard {
 
 #[cfg(test)]
 mod class_tests;
+#[cfg(test)]
+mod http_tests;
+#[cfg(test)]
+mod terminal_tests;
 #[cfg(test)]
 pub(crate) mod test_clock;
 #[cfg(test)]

@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -42,6 +42,7 @@ use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::acp::{WorkspaceManifest, WriteOutcome};
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_http};
 use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
 
@@ -131,6 +132,7 @@ pub async fn write(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(project_id): Path<String>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     if let Some(forbidden) = check_local_only::<WriteOutcome>(
@@ -173,31 +175,42 @@ pub async fn write(
             )),
         );
     };
-    match service
-        .write(&project_id, req.based_revision, req.manifest)
-        .await
-    {
-        Ok(outcome) => {
-            // Boundary logging at the service layer already emits project_id
-            // + revision + update_identity (never topology or claim).
-            (StatusCode::OK, Json(IpcBody::ok(outcome)))
-        }
-        Err(error) => {
-            warn!(
-                target: "termul::web::workspace_api",
-                project_id = %project_id,
-                error = %error,
-                "write: host write failed"
-            );
-            (
-                StatusCode::OK,
-                Json(IpcBody::<WriteOutcome>::err(
-                    error.to_string(),
-                    "WORKSPACE_MANIFEST_WRITE_FAILED",
-                )),
-            )
-        }
-    }
+    // A resend whose first run already advanced the revision answers the
+    // original `updated` outcome, not a `conflict` against its own write.
+    let service = std::sync::Arc::clone(service);
+    let body = run_http(
+        state.relay.ledger(),
+        &headers,
+        "workspace_write",
+        fingerprint_of("workspace_write", &[("projectId", &project_id)]),
+        no_entity(),
+        async move {
+            match service
+                .write(&project_id, req.based_revision, req.manifest)
+                .await
+            {
+                Ok(outcome) => {
+                    // Boundary logging at the service layer already emits project_id
+                    // + revision + update_identity (never topology or claim).
+                    IpcBody::ok(outcome)
+                }
+                Err(error) => {
+                    warn!(
+                        target: "termul::web::workspace_api",
+                        project_id = %project_id,
+                        error = %error,
+                        "write: host write failed"
+                    );
+                    IpcBody::<WriteOutcome>::err(
+                        error.to_string(),
+                        "WORKSPACE_MANIFEST_WRITE_FAILED",
+                    )
+                }
+            }
+        },
+    )
+    .await;
+    (StatusCode::OK, Json(body))
 }
 
 /// `POST /workspace/:projectId/delete` — idempotent delete. Returns

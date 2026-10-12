@@ -19,13 +19,14 @@ use std::net::SocketAddr;
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
 
 use crate::trackers::git_tracker;
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_http};
 use crate::web::fs_api::IpcBody;
 use crate::web::git_api::{cwd_string, resolve_cwd};
 use crate::web::ws::AppState;
@@ -89,9 +90,10 @@ pub(crate) fn classify_hunk_error(op: HunkOp, err: &str) -> &'static str {
 pub async fn stage_hunk(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<GitHunkRequest>,
 ) -> impl IntoResponse {
-    run_hunk_write(&state, peer, req, HunkOp::Stage).await
+    run_hunk_write(&state, peer, &headers, req, HunkOp::Stage).await
 }
 
 /// `POST /git/unstage-hunk` — reverse-apply of one staged hunk to the index
@@ -99,14 +101,16 @@ pub async fn stage_hunk(
 pub async fn unstage_hunk(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<GitHunkRequest>,
 ) -> impl IntoResponse {
-    run_hunk_write(&state, peer, req, HunkOp::Unstage).await
+    run_hunk_write(&state, peer, &headers, req, HunkOp::Unstage).await
 }
 
 async fn run_hunk_write(
     state: &AppState,
     peer: SocketAddr,
+    headers: &HeaderMap,
     req: GitHunkRequest,
     op: HunkOp,
 ) -> (StatusCode, Json<IpcBody<()>>) {
@@ -120,32 +124,49 @@ async fn run_hunk_write(
     };
     let cwd_for_log = cwd.clone();
     let label = op.label();
-    let GitHunkRequest {
-        path, hunk_patch, ..
-    } = req;
-    let result = tokio::task::spawn_blocking(move || match op {
-        HunkOp::Stage => git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch),
-        HunkOp::Unstage => git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch),
-    })
-    .await;
-    // Outcome logs carry op + cwd + code only: git's stderr (and the patch)
-    // can echo file content, so neither is ever logged.
-    let body = match result {
-        Ok(Ok(())) => {
-            tracing::info!(path = %cwd_for_log, op = label, "git {label} ok");
-            IpcBody::<()>::ok(())
-        }
-        Ok(Err(e)) => {
-            let code = classify_hunk_error(op, &e);
-            tracing::warn!(path = %cwd_for_log, op = label, code, "git {label} failed");
-            IpcBody::<()>::err(e, code)
-        }
-        Err(e) => {
-            let code = op.fallback_code();
-            tracing::error!(path = %cwd_for_log, op = label, code, "git {label} task panicked");
-            IpcBody::<()>::err(format!("git {label} task failed: {e}"), code)
-        }
+    let kind = match op {
+        HunkOp::Stage => "git_stage_hunk",
+        HunkOp::Unstage => "git_unstage_hunk",
     };
+    let GitHunkRequest {
+        cwd: raw_cwd,
+        path,
+        hunk_patch,
+    } = req;
+    // The fingerprint names the file, never the patch.
+    let body = run_http(
+        state.relay.ledger(),
+        headers,
+        kind,
+        fingerprint_of(kind, &[("cwd", &raw_cwd), ("path", &path)]),
+        no_entity(),
+        async move {
+            let result = tokio::task::spawn_blocking(move || match op {
+                HunkOp::Stage => git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch),
+                HunkOp::Unstage => git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch),
+            })
+            .await;
+            // Outcome logs carry op + cwd + code only: git's stderr (and the
+            // patch) can echo file content, so neither is ever logged.
+            match result {
+                Ok(Ok(())) => {
+                    tracing::info!(path = %cwd_for_log, op = label, "git {label} ok");
+                    IpcBody::<()>::ok(())
+                }
+                Ok(Err(e)) => {
+                    let code = classify_hunk_error(op, &e);
+                    tracing::warn!(path = %cwd_for_log, op = label, code, "git {label} failed");
+                    IpcBody::<()>::err(e, code)
+                }
+                Err(e) => {
+                    let code = op.fallback_code();
+                    tracing::error!(path = %cwd_for_log, op = label, code, "git {label} task panicked");
+                    IpcBody::<()>::err(format!("git {label} task failed: {e}"), code)
+                }
+            }
+        },
+    )
+    .await;
     (StatusCode::OK, Json(body))
 }
 

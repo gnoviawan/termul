@@ -49,7 +49,14 @@ struct Request {
     type_: String,
     #[serde(default)]
     payload: Value,
+    /// The client-minted `commandId` (AD-5) of a ledgered request (`spawn`,
+    /// `write`, `kill`, `rotate_claim`, `revoke_claim`); absent = today's
+    /// behavior. See [`commands`].
+    #[serde(default)]
+    command_id: Option<String>,
 }
+
+mod commands;
 
 /// The peer address (`ConnectInfo`) feeds the connection's capabilities,
 /// resolved at `authenticate`; the router MUST be served with
@@ -452,66 +459,8 @@ async fn handle(
             Ok(json!({}))
         }
         ConnectionGate::Allow => match request.type_.as_str() {
-            "spawn" => {
-                let options: SpawnOptions = serde_json::from_value(request.payload)
-                    .map_err(|e| ("VALIDATION_ERROR", e.to_string()))?;
-                // Require project_id so the terminal is scoped — do not default
-                // to a literal that any client can target.
-                if options
-                    .project_id
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .is_none()
-                {
-                    return Err((
-                        "VALIDATION_ERROR",
-                        "spawn requires a non-empty projectId".to_string(),
-                    ));
-                }
-                info!(
-                    "[terminal-ws] spawn requested project_id={}",
-                    options.project_id.as_deref().unwrap_or("?")
-                );
-                // CAP-3: spawn is the only issuance path. The reply carries the
-                // flattened info + claim (same camelCase shape as desktop).
-                let spawned = state
-                    .pty
-                    .spawn(options, None)
-                    .await
-                    .map_err(|e| ("SPAWN_FAILED", e))?;
-                ctx.authorize(&spawned.info.id);
-                // #851b: a web spawn IS a web listing — stamp it so the
-                // web-listed reaper window starts rolling for this terminal.
-                if let Some(instance) = state.pty.get(&spawned.info.id) {
-                    instance.mark_web_listed();
-                }
-                info!(
-                    "[terminal-ws] spawn success terminal_id={}",
-                    spawned.info.id
-                );
-                serde_json::to_value(spawned).map_err(|e| ("SPAWN_FAILED", e.to_string()))
-            }
-            "write" => {
-                let terminal_id = string_field(&request.payload, "terminalId")?;
-                if !ctx.is_authorized(terminal_id) {
-                    return Err((
-                        "UNAUTHORIZED",
-                        format!("Not authorized for terminal {terminal_id}"),
-                    ));
-                }
-                let data = string_field(&request.payload, "data")?;
-                // #851 "single size owner": the device that last typed is
-                // the size owner — record it before the write.
-                if let Some(instance) = state.pty.get(terminal_id) {
-                    instance.note_web_size_owner(&ctx.client_id);
-                }
-                state
-                    .pty
-                    .write(terminal_id, data)
-                    .await
-                    .map(|_| Value::Null)
-                    .map_err(|e| ("WRITE_FAILED", e))
-            }
+            "spawn" => commands::spawn(&request, state, ctx).await,
+            "write" => commands::write(&request, state, ctx).await,
             "resize" => {
                 let terminal_id = string_field(&request.payload, "terminalId")?;
                 if !ctx.is_authorized(terminal_id) {
@@ -532,39 +481,7 @@ async fn handle(
                     .map(|_| Value::Null)
                     .map_err(|e| ("RESIZE_FAILED", e))
             }
-            "kill" => {
-                let terminal_id = string_field(&request.payload, "terminalId")?;
-                // CWE-862: authorization FIRST — a connection may only kill a
-                // terminal it spawned or verifiably attached to. The check runs
-                // BEFORE any existence check or force_kill and collapses to the
-                // single generic UNAUTHORIZED, so a client holding only the shared
-                // web token can neither terminate another connection's PTY nor
-                // distinguish "terminal exists but not yours" from "unknown id".
-                if !ctx.is_authorized(terminal_id) {
-                    return Err(unauthorized_error(terminal_id));
-                }
-                // Idempotent kill for an AUTHORIZED terminal whose PTY is already
-                // gone (reaped/exited on its own): treat as success so closing a
-                // tab over a dead PTY doesn't leave an uncloseable tab. A repeat
-                // kill after a successful kill is NOT idempotent — the first kill
-                // detached the terminal, so the retry takes the generic
-                // UNAUTHORIZED branch above like any other unauthorized id.
-                if state.pty.get(terminal_id).is_none() {
-                    ctx.detach(terminal_id, state);
-                    return Ok(Value::Null);
-                }
-                // Force-kill: bypass the desktop is_hidden deferral so web close
-                // actually terminates the process. Desktop behavior is unchanged.
-                state
-                    .pty
-                    .force_kill(terminal_id)
-                    .await
-                    .map(|_| {
-                        ctx.detach(terminal_id, state);
-                        Value::Null
-                    })
-                    .map_err(|e| ("KILL_FAILED", e))
-            }
+            "kill" => commands::kill(&request, state, ctx).await,
             "attach" => {
                 let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
                 // CAP-3: verification is the gate and runs BEFORE any replay; every
@@ -730,47 +647,8 @@ async fn handle(
                 // desktop `terminal_attach` response (no claim key, ever).
                 serde_json::to_value(attach_result).map_err(|e| ("NETWORK_ERROR", e.to_string()))
             }
-            "rotate_claim" => {
-                // CAP-3: possession of the current credential yields a fresh one
-                // and atomically invalidates the old. Any failure — including a
-                // missing/empty claim — is the same generic UNAUTHORIZED as attach
-                // (missing claims flow through verification, never a shape error).
-                let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
-                let claim = request.payload["claim"].as_str().unwrap_or("");
-                let rotated = state
-                    .pty
-                    .rotate_claim(&terminal_id, claim)
-                    .map_err(|_| unauthorized_error(&terminal_id))?;
-                // Teardown (amendment R1): the invalidated holder loses the output
-                // stream (attachment task detached) AND write/resize access
-                // (removed from the authorized set). Holders on OTHER connections
-                // are severed by the claim-generation check inside their
-                // attachment tasks. The PTY keeps running.
-                ctx.detach(&terminal_id, state);
-                info!("[terminal-ws] claim rotated terminal_id={terminal_id}");
-                serde_json::to_value(crate::pty::RotatedClaim { claim: rotated })
-                    .map_err(|e| ("NETWORK_ERROR", e.to_string()))
-            }
-            "revoke_claim" => {
-                // CAP-3: revocation invalidates the credential; the PTY survives
-                // until explicit kill/release/expiry/shutdown. Any failure —
-                // including a missing/empty claim — is the same generic
-                // UNAUTHORIZED as attach.
-                let terminal_id = string_field(&request.payload, "terminalId")?.to_string();
-                let claim = request.payload["claim"].as_str().unwrap_or("");
-                state
-                    .pty
-                    .revoke_claim(&terminal_id, claim)
-                    .map_err(|_| unauthorized_error(&terminal_id))?;
-                // Teardown (amendment R1): same severing as rotate — the revoked
-                // holder is a credential-less client and receives no further
-                // metadata or output; other connections are severed by the
-                // generation check in their attachment tasks. The PTY keeps
-                // running.
-                ctx.detach(&terminal_id, state);
-                info!("[terminal-ws] claim revoked terminal_id={terminal_id}");
-                Ok(Value::Null)
-            }
+            "rotate_claim" => commands::rotate_claim(&request, state, ctx).await,
+            "revoke_claim" => commands::revoke_claim(&request, state, ctx).await,
             "detach" => {
                 let terminal_id = string_field(&request.payload, "terminalId")?;
                 ctx.detach(terminal_id, state);
@@ -1001,5 +879,7 @@ async fn send_error(
     .await
 }
 
+#[cfg(test)]
+mod command_tests;
 #[cfg(test)]
 mod tests;

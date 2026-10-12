@@ -138,6 +138,7 @@ impl PtyManager {
             let instance = Arc::new(TerminalInstance {
                 id: id.clone(),
                 project_id: options.project_id.clone(),
+                command_id: options.command_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(Box::new(child)))),
                 master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
                 writer: Arc::new(AsyncMutex::new(Some(writer))),
@@ -295,6 +296,7 @@ impl PtyManager {
             let instance = Arc::new(TerminalInstance {
                 id: id.clone(),
                 project_id: options.project_id.clone(),
+                command_id: options.command_id.clone(),
                 child: Arc::new(AsyncMutex::new(Some(child))),
                 master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
                 writer: Arc::new(AsyncMutex::new(Some(writer))),

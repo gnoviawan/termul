@@ -23,7 +23,10 @@ use crate::web::prompt_turn::{run_prompt_turn, PromptReply, PromptTurnRequest};
 use crate::web::WsRelaySink;
 
 mod ledgered;
-pub use ledgered::run_ledgered;
+pub use ledgered::{
+    run_ledgered, COMMAND_ACCEPTED, COMMAND_CONFLICT, COMMAND_IN_PROGRESS, INVALID_COMMAND_ID,
+    OUTCOME_UNKNOWN,
+};
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
 /// Returns the authoritative [`SpawnOutcome`] (capabilities + auth methods +

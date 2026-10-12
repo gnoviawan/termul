@@ -29,7 +29,7 @@ fn is_false(value: &bool) -> bool {
 
 /// Canonical comparison key: no Windows verbatim prefix, forward slashes, no
 /// trailing slash, ASCII case-folded for Windows drive/UNC paths.
-fn path_key(path: &str) -> String {
+pub(super) fn path_key(path: &str) -> String {
     let stripped = crate::path_validation::strip_verbatim_prefix(path);
     let mut key = stripped.replace('\\', "/");
     while key.len() > 1 && key.ends_with('/') {

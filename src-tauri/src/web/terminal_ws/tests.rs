@@ -119,7 +119,7 @@ fn connection_gate_allows_all_ops_post_auth() {
 }
 /// Build an AppState with the given gate posture (mirrors the fs_api test
 /// literal). `Some(token)` = gated server, `None` = legacy ungated.
-fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
+pub(super) fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
     let pty = crate::web::test_pty_manager();
     crate::web::ws::AppState {
         acp: Arc::new(crate::acp::AcpManager::new(vec![])),
@@ -179,7 +179,7 @@ fn capability_policy(
     }
 }
 
-fn gate_test_ctx(authed: bool) -> ConnectionContext {
+pub(super) fn gate_test_ctx(authed: bool) -> ConnectionContext {
     ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
         attachments: HashMap::new(),
@@ -201,6 +201,7 @@ fn gate_request(id: &str, type_: &str, payload: Value) -> Request {
         id: id.to_string(),
         type_: type_.to_string(),
         payload,
+        command_id: None,
     }
 }
 
@@ -998,7 +999,7 @@ async fn list_preserved_live_attachment_offers_shared_claim_and_second_device_at
     .await;
 }
 
-async fn attach_terminal(
+pub(super) async fn attach_terminal(
     state: &crate::web::ws::AppState,
     tx: &mpsc::Sender<Message>,
     ctx: &mut ConnectionContext,

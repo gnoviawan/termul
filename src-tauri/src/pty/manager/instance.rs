@@ -4,6 +4,9 @@ use super::*;
 pub struct TerminalInstance {
     pub id: String,
     pub project_id: Option<String>,
+    /// The `commandId` of the spawn command that created this PTY, set once
+    /// at construction. A spawn resend resolves to this instance by it.
+    pub command_id: Option<String>,
     pub child: Arc<AsyncMutex<Option<Box<dyn Child + Send>>>>,
     pub master: Arc<AsyncMutex<Option<Box<dyn MasterPty + Send>>>>,
     pub writer: Arc<AsyncMutex<Option<Box<dyn Write + Send>>>>,

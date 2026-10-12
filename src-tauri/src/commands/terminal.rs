@@ -9,6 +9,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{Channel, Response};
 use tauri::State;
 
+use crate::web::command_ledger::terminal::{self as ledgered, Done, Effect, Outcome};
+use crate::web::WsRelaySink;
+
 /// Terminal visibility state
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,16 +55,56 @@ pub struct SetTerminalProtectedRequest {
 /// CAP-3: the response carries the terminal info PLUS the issued `claim`
 /// credential (flattened camelCase, same shape as the web `spawn` reply).
 /// This is the only issuance path.
+///
+/// `options.commandId` makes a resend after a lost reply safe: it answers with
+/// the existing terminal plus a FRESH claim (never a second PTY). The reply
+/// has the same shape as a first spawn, but the resend's new `on_data` channel
+/// is dropped — the first spawn's channel stays bound to the PTY — so the
+/// client MUST follow a replay with `terminal_attach` using the fresh claim.
+/// A spawn that fails frees the id for a retry; a resend after the terminal is
+/// gone answers `OUTCOME_UNKNOWN` instead of spawning again.
 #[tauri::command]
 pub async fn terminal_spawn(
     options: SpawnOptions,
     on_data: Channel<Response>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
 ) -> Result<IpcResult<SpawnedTerminal>, String> {
-    match pty_manager.spawn(options, Some(on_data)).await {
-        Ok(spawned) => Ok(IpcResult::success(spawned)),
-        Err(e) => Ok(IpcResult::error(e, "SPAWN_FAILED")),
+    let outcome = ledgered::spawn(relay.ledger(), pty_manager.inner(), options, Some(on_data)).await;
+    Ok(terminal_value_reply(outcome, ledgered::SPAWN))
+}
+
+/// The IPC reply of a unit-returning ledgered command: a replay of a command
+/// that succeeded is a plain success.
+pub(crate) fn terminal_unit_reply(outcome: Outcome<()>, kind: &str) -> IpcResult<()> {
+    match outcome.into_result(kind) {
+        Ok(Done::InProgress) => in_progress_error(kind),
+        Ok(_) => IpcResult::success(()),
+        Err((code, message)) => IpcResult::error(message, code),
     }
+}
+
+/// The IPC reply of a value-returning ledgered command. A replay that holds no
+/// value (a rotation: the credential was never kept) is `OUTCOME_UNKNOWN`.
+pub(crate) fn terminal_value_reply<T: Send + 'static>(outcome: Outcome<T>, kind: &str) -> IpcResult<T> {
+    match outcome.into_result(kind) {
+        Ok(Done::Executed(value) | Done::Found(value)) => IpcResult::success(value),
+        Ok(Done::InProgress) => in_progress_error(kind),
+        Ok(Done::Receipt) => IpcResult::error(
+            format!(
+                "this `{kind}` already ran but its reply is not retained; list preserved terminals to recover a fresh credential"
+            ),
+            ledgered::OUTCOME_UNKNOWN_CODE,
+        ),
+        Err((code, message)) => IpcResult::error(message, code),
+    }
+}
+
+fn in_progress_error<T>(kind: &str) -> IpcResult<T> {
+    IpcResult::error(
+        format!("the first run of this `{kind}` is still going; resend later"),
+        ledgered::COMMAND_IN_PROGRESS_CODE,
+    )
 }
 
 /// Milliseconds between claim-generation checks in a desktop attach forwarder.
@@ -252,16 +295,43 @@ pub async fn terminal_attach(
 /// generic UNAUTHORIZED error as attach. The generation bump terminates the
 /// tracked desktop attach forwarder (teardown of the invalidated holder's
 /// access) while the PTY itself keeps running.
+///
+/// With a `commandId` a resend of a rotation that already applied answers
+/// `OUTCOME_UNKNOWN` (the new credential was never retained); the client
+/// recovers a fresh one through `list_preserved`.
 #[tauri::command]
 pub async fn terminal_rotate_claim(
     terminal_id: String,
     claim: String,
+    command_id: Option<String>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
 ) -> Result<IpcResult<RotatedClaim>, String> {
-    match pty_manager.rotate_claim(&terminal_id, &claim) {
-        Ok(new_claim) => Ok(IpcResult::success(RotatedClaim { claim: new_claim })),
-        Err(_) => Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED")),
-    }
+    let Some(command_id) = command_id else {
+        return Ok(match pty_manager.rotate_claim(&terminal_id, &claim) {
+            Ok(new_claim) => IpcResult::success(RotatedClaim { claim: new_claim }),
+            Err(_) => IpcResult::error("Unauthorized", "UNAUTHORIZED"),
+        });
+    };
+    let pty = Arc::clone(pty_manager.inner());
+    let target = terminal_id.clone();
+    let outcome = ledgered::command(
+        relay.ledger(),
+        ledgered::ROTATE_CLAIM,
+        &command_id,
+        &[("terminalId", Some(&terminal_id))],
+        async move {
+            match pty.rotate_claim(&target, &claim) {
+                Ok(new_claim) => Effect::Done(RotatedClaim { claim: new_claim }),
+                Err(_) => Effect::Released {
+                    code: "UNAUTHORIZED",
+                    message: "Unauthorized".to_string(),
+                },
+            }
+        },
+    )
+    .await;
+    Ok(terminal_value_reply(outcome, ledgered::ROTATE_CLAIM))
 }
 
 /// Revoke a terminal's claim credential (CAP-3).
@@ -269,30 +339,82 @@ pub async fn terminal_rotate_claim(
 /// The PTY survives (never-clause) and stays attachable by a client holding a
 /// newly rotated credential; only the presented credential is invalidated. The
 /// generation bump terminates the tracked desktop attach forwarder. Any
-/// verification failure returns the same generic UNAUTHORIZED error.
+/// verification failure returns the same generic UNAUTHORIZED error. With a
+/// `commandId` a resend of a revocation that already applied answers ok.
 #[tauri::command]
 pub async fn terminal_revoke_claim(
     terminal_id: String,
     claim: String,
+    command_id: Option<String>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.revoke_claim(&terminal_id, &claim) {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(_) => Ok(IpcResult::error("Unauthorized", "UNAUTHORIZED")),
-    }
+    let Some(command_id) = command_id else {
+        return Ok(match pty_manager.revoke_claim(&terminal_id, &claim) {
+            Ok(()) => IpcResult::success(()),
+            Err(_) => IpcResult::error("Unauthorized", "UNAUTHORIZED"),
+        });
+    };
+    let pty = Arc::clone(pty_manager.inner());
+    let target = terminal_id.clone();
+    let outcome = ledgered::command(
+        relay.ledger(),
+        ledgered::REVOKE_CLAIM,
+        &command_id,
+        &[("terminalId", Some(&terminal_id))],
+        async move {
+            match pty.revoke_claim(&target, &claim) {
+                Ok(()) => Effect::Done(()),
+                Err(_) => Effect::Released {
+                    code: "UNAUTHORIZED",
+                    message: "Unauthorized".to_string(),
+                },
+            }
+        },
+    )
+    .await;
+    Ok(terminal_unit_reply(outcome, ledgered::REVOKE_CLAIM))
 }
 
 /// Write data to a terminal
+///
+/// With a `commandId` (one per input chunk) a resend of a chunk that already
+/// reached the PTY answers ok instead of typing it twice.
 #[tauri::command]
 pub async fn terminal_write(
     terminal_id: String,
     data: String,
+    command_id: Option<String>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.write(&terminal_id, &data).await {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "WRITE_FAILED")),
-    }
+    let Some(command_id) = command_id else {
+        return Ok(match pty_manager.write(&terminal_id, &data).await {
+            Ok(()) => IpcResult::success(()),
+            Err(e) => IpcResult::error(e, "WRITE_FAILED"),
+        });
+    };
+    let pty = Arc::clone(pty_manager.inner());
+    let target = terminal_id.clone();
+    // The chunk is identified by its terminal and length, never its text.
+    let length = data.len().to_string();
+    let outcome = ledgered::command(
+        relay.ledger(),
+        ledgered::WRITE,
+        &command_id,
+        &[("terminalId", Some(&terminal_id)), ("length", Some(&length))],
+        async move {
+            match pty.write(&target, &data).await {
+                Ok(()) => Effect::Done(()),
+                Err(message) => Effect::Failed {
+                    code: "WRITE_FAILED",
+                    message,
+                },
+            }
+        },
+    )
+    .await;
+    Ok(terminal_unit_reply(outcome, ledgered::WRITE))
 }
 
 /// Resize a terminal
@@ -310,15 +432,41 @@ pub async fn terminal_resize(
 }
 
 /// Kill a terminal
+///
+/// With a `commandId` a repeat after a successful kill answers ok instead of
+/// failing with "Terminal not found".
 #[tauri::command]
 pub async fn terminal_kill(
     terminal_id: String,
+    command_id: Option<String>,
     pty_manager: State<'_, Arc<PtyManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    match pty_manager.kill(&terminal_id).await {
-        Ok(()) => Ok(IpcResult::success(())),
-        Err(e) => Ok(IpcResult::error(e, "KILL_FAILED")),
-    }
+    let Some(command_id) = command_id else {
+        return Ok(match pty_manager.kill(&terminal_id).await {
+            Ok(()) => IpcResult::success(()),
+            Err(e) => IpcResult::error(e, "KILL_FAILED"),
+        });
+    };
+    let pty = Arc::clone(pty_manager.inner());
+    let target = terminal_id.clone();
+    let outcome = ledgered::command(
+        relay.ledger(),
+        ledgered::KILL,
+        &command_id,
+        &[("terminalId", Some(&terminal_id))],
+        async move {
+            match pty.kill(&target).await {
+                Ok(()) => Effect::Done(()),
+                Err(message) => Effect::Failed {
+                    code: "KILL_FAILED",
+                    message,
+                },
+            }
+        },
+    )
+    .await;
+    Ok(terminal_unit_reply(outcome, ledgered::KILL))
 }
 
 /// Get the current working directory for a terminal

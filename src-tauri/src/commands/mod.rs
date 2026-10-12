@@ -121,3 +121,6 @@ mod remote_sync_mcp_registry_tests;
 
 #[cfg(test)]
 mod forwarder_teardown_tests;
+
+#[cfg(test)]
+mod terminal_tests;

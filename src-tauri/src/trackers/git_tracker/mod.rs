@@ -13,6 +13,7 @@ use super::cwd_tracker::CwdTracker;
 use super::{TerminalEvent, TerminalEventHub};
 
 mod commands;
+mod commit_stamp;
 mod diff_stat;
 mod polling;
 mod resolve;
@@ -29,11 +30,16 @@ use commands::{
 };
 #[cfg(test)]
 use polling::PollingGuard;
+pub use commit_stamp::{
+    find_stamped_commit, head_sha, is_valid_expected_head, local_branch_exists, CommitFailure,
+    CommitStamp,
+};
+use commit_stamp::with_command_trailer;
 use resolve::backend_command;
 
 // `crate::trackers::git_tracker` public surface preserved via re-export.
 pub use commands::{
-    git_checkout_branch, git_commit_file, git_create_branch, git_discard_file,
+    git_checkout_branch, git_commit_stamped, git_create_branch, git_discard_file,
     git_get_commit_context, git_get_diff, git_get_log, git_get_status_detail, git_push_current,
     git_stage_file, git_stage_hunk, git_unstage_file, git_unstage_hunk,
 };

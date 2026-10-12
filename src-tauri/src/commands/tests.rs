@@ -466,3 +466,48 @@ fn search_file_names_cancel_request_is_a_dto_not_aliased_to_content() {
     };
     assert_eq!(req.search_id, "search-1");
 }
+
+/// A resend of a ledgered `worktree_create` replays the worktree git already
+/// lists as the whole `IpcResult<WorktreeInfo>` the command returns.
+#[test]
+fn a_found_worktree_replays_as_the_ipc_result_the_command_returns() {
+    use crate::web::command_ledger::Settled;
+    let entry = crate::worktree::GitWorktreeEntry {
+        name: "wt".to_string(),
+        branch: "chat/one".to_string(),
+        path: "/repo/.termul/worktrees/wt".to_string(),
+        head_commit: "abc123".to_string(),
+    };
+    let found = Settled::Accepted {
+        payload: serde_json::to_value(&entry).ok(),
+        visible_at: None,
+    };
+
+    let Settled::Accepted { payload: Some(payload), .. } = worktree::as_ipc_result(found) else {
+        panic!("a found worktree stays accepted with a payload");
+    };
+    let replayed: IpcResult<worktree::WorktreeInfo> =
+        serde_json::from_value(payload).expect("the replay decodes as the command's result");
+    assert!(replayed.success);
+    let info = replayed.data.expect("data");
+    assert_eq!((info.branch.as_str(), info.head_commit.as_str()), ("chat/one", "abc123"));
+    assert_eq!(info.path, entry.path);
+}
+
+/// The refusals a caller can act on carry a stable code prefix on the Tauri
+/// carrier; git's own failures keep their text.
+#[test]
+fn a_refused_commit_maps_to_a_stable_code_prefix() {
+    use crate::trackers::git_tracker::CommitFailure;
+    let stale = git::commit_failure_text(CommitFailure::PreconditionFailed {
+        expected: "a".repeat(40),
+        actual: "b".repeat(40),
+    });
+    assert!(stale.starts_with("precondition_failed: "), "{stale}");
+    let invalid = git::commit_failure_text(CommitFailure::InvalidExpectedHead);
+    assert!(invalid.starts_with("validation_error: "), "{invalid}");
+    assert_eq!(
+        git::commit_failure_text(CommitFailure::Failed("Nothing staged to commit".to_string())),
+        "Nothing staged to commit"
+    );
+}
