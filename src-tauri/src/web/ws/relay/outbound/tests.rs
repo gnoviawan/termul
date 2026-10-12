@@ -119,6 +119,27 @@ async fn a_successful_enqueue_resets_the_failure_count() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_full_hit_right_after_progress_starts_a_new_streak() {
+    let (tx, mut rx) = outbound_channel(1, 2);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+    // The peer makes progress, then stalls again immediately.
+    rx.try_recv().expect("queued frame");
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    assert_eq!(
+        tx.try_enqueue(event_frame()),
+        EnqueueOutcome::Full,
+        "counts as the first failure of a new streak, not absorbed by the old window"
+    );
+    tokio::time::sleep(FULL_QUEUE_ATTEMPT).await;
+    assert_eq!(
+        tx.try_enqueue(event_frame()),
+        EnqueueOutcome::Closed,
+        "the second failed window of the new streak reaches the tolerance of 2"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_reliable_enqueue_waits_for_room_instead_of_dropping() {
     let (tx, mut rx) = outbound_channel(1, 15);
     assert_eq!(tx.enqueue(event_frame()).await, EnqueueOutcome::Enqueued);

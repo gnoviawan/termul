@@ -89,7 +89,12 @@ impl Overflow {
     }
 
     fn record_success(&self) {
-        self.consecutive_full.store(0, Ordering::Release);
+        // Progress ends the failure streak and its window: a full hit right
+        // after it starts a new streak instead of being absorbed into the old
+        // window. The lock is only taken when there was a streak to end.
+        if self.consecutive_full.swap(0, Ordering::AcqRel) != 0 {
+            *self.last_failure.lock() = None;
+        }
     }
 }
 
