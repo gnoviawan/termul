@@ -107,21 +107,22 @@ impl SessionPersistence {
 
         let mut first_error: Option<SessionPersistenceError> = None;
         for entry in &matching {
-            let snapshot = {
-                let mut metadata = entry.lock();
-                metadata.worktree_branch = Some(new_branch.to_string());
-                if user_initiated && metadata.worktree_branch_source.is_some() {
-                    metadata.worktree_branch_source = Some(WorktreeBranchSource::User);
-                }
-                metadata.clone()
-            };
-            if let Err(error) = persist_metadata_at_root(&self.inner.root, &snapshot) {
+            // The entry lock stays held through the write: a concurrent
+            // metadata change (the head-ahead mark) cannot land between the
+            // snapshot and the file and then be overwritten by it.
+            let mut metadata = entry.lock();
+            metadata.worktree_branch = Some(new_branch.to_string());
+            if user_initiated && metadata.worktree_branch_source.is_some() {
+                metadata.worktree_branch_source = Some(WorktreeBranchSource::User);
+            }
+            if let Err(error) = persist_metadata_at_root(&self.inner.root, &metadata) {
                 log::warn!(
                     "[acp-history] worktree branch metadata persist failed session={}: {error}",
-                    crate::logging::redact_session_id(&snapshot.session_id)
+                    crate::logging::redact_session_id(&metadata.session_id)
                 );
                 first_error.get_or_insert(error);
             }
+            drop(metadata);
         }
         self.persist_index().await?;
         match first_error {

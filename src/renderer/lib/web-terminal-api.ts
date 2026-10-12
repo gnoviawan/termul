@@ -919,7 +919,10 @@ export class WebTerminalClient {
         for (const callback of this.dataCallbacks) callback(frame.terminalId, bytes)
         tracker.lastSeq = chunk.seq
       }
-      if (frame.reset) tracker.lastSeq = frame.latestSeq
+      // The replay ends at the head. A gap replay can carry no chunks at all
+      // (eviction emptied the log): without this the cursor stays behind the
+      // head and every reconnect would report the same gap again.
+      tracker.lastSeq = Math.max(tracker.lastSeq, frame.latestSeq)
       // If a gap was reported, write a visible marker.
       if (frame.gap) {
         const marker = new Uint8Array([

@@ -1123,6 +1123,37 @@ describe('WebTerminalClient attach/replay snapshot dispatch', () => {
     client.dispose()
   })
 
+  it('a gap replay with no chunks moves the cursor to the head, so a reconnect does not repeat the gap', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    await client.connect()
+    const internals = client as unknown as ClientInternals
+    internals.trackers.set('t5', {
+      lastSeq: 3,
+      logEpoch: 'epoch-5',
+      exited: false,
+      refCount: 1,
+      disconnected: false
+    } as never)
+
+    // Eviction emptied the log: output after seq 3 is gone and the head is 9.
+    internals.socket.emit({
+      type: 'replay',
+      terminalId: 't5',
+      chunks: [],
+      gap: true,
+      reset: false,
+      logEpoch: 'epoch-5',
+      latestSeq: 9,
+      snapshot: mockTerminalStateSnapshot()
+    })
+
+    expect(internals.trackers.get('t5')?.lastSeq).toBe(9)
+    client.dispose()
+  })
+
   it('clears the terminal before a reset replay and adopts the new log epoch + cursor', async () => {
     const client = new WebTerminalClient(
       'ws://test/terminal/ws',

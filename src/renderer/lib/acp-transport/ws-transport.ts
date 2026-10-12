@@ -485,6 +485,15 @@ export class WsAcpTransport implements AcpTransport {
     // A cursor is only meaningful with the epoch it was issued under.
     const epoch = this.logEpochs.get(sessionId)
     if (payload.lastSeq !== undefined && epoch) payload.logEpoch = epoch
+    if ((payload.lastSeq ?? 0) > 0 && !epoch) {
+      // A nonzero cursor with no epoch to verify it against cannot be trusted:
+      // applying events behind it would drop new ones as duplicates. Skip the
+      // replay (the host would stream events we would throw away) and install
+      // a snapshot, which also registers the live subscription.
+      this.clearCursor(sessionId)
+      await this.recoverSession(sessionId, timeoutMs)
+      return
+    }
     let reply: SessionSubscribeReply | undefined
     try {
       reply = await this.request<SessionSubscribeReply>('subscribe', payload, timeoutMs)
@@ -497,13 +506,11 @@ export class WsAcpTransport implements AcpTransport {
     }
     const replyEpoch = reply?.logEpoch
     if (!replyEpoch) return
-    // A nonzero cursor went out with no epoch to verify it against.
-    const unverified = !payload.logEpoch && (payload.lastSeq ?? 0) > 0
-    if ((epoch && epoch !== replyEpoch && this.lastSeq.has(sessionId)) || unverified) {
+    if (epoch && epoch !== replyEpoch && this.lastSeq.has(sessionId)) {
       // The host answered under a different log than our cursor (a subscribe
-      // sent without the epoch), or under an epoch our cursor was never
-      // issued under: `lastSeq` means nothing in it, and applying events
-      // behind it would drop new ones as duplicates. Snapshot instead.
+      // sent without the cursor, so the host could not refuse it): `lastSeq`
+      // means nothing in it, and applying events behind it would drop new
+      // ones as duplicates. Snapshot instead.
       void logFrontendError({
         level: 'info',
         source: 'WsAcpTransport.subscribe',

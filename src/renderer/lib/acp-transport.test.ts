@@ -1381,7 +1381,7 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
-  it('a nonzero cursor sent without an epoch is unverified: the host answers with an epoch and a snapshot replaces the cursor', async () => {
+  it('a nonzero cursor with no known epoch is unverified: a snapshot replaces it and no bare cursor is sent', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
@@ -1395,7 +1395,9 @@ describe('WsAcpTransport', () => {
 
     await transport.subscribeSession('s1', 5, true)
 
-    expect(findSentRequest(sock, 'subscribe')?.payload).toEqual({ sessionId: 's1', lastSeq: 5 })
+    // No bare cursor goes out: the snapshot request replaces the subscribe.
+    expect(findSentRequest(sock, 'subscribe')).toBeUndefined()
+    expect(findSentRequest(sock, 'recover_session_snapshot')).toBeDefined()
     expect(recoveries).toHaveLength(1)
     expect(transport.getSessionCursor('s1')).toEqual({ lastSeq: 42, logEpoch: 'epoch-A' })
     transport.dispose()

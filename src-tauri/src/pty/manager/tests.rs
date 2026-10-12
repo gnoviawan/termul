@@ -80,6 +80,52 @@ async fn subscribe_from_resets_a_cursor_from_another_epoch_or_ahead_of_the_head(
     manager.kill(&second.info.id).await.expect("kill second");
 }
 
+/// With chunks still retained: a refused cursor replays from the FIRST retained
+/// chunk with `reset`, and a cursor behind the earliest retained chunk after
+/// eviction reports a gap without a reset.
+#[tokio::test]
+async fn subscribe_from_replays_the_retained_log_on_reset_and_reports_eviction_gaps() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(SpawnOptions::default(), None)
+        .await
+        .expect("spawn pty");
+    let instance = manager.get(&spawned.info.id).expect("instance");
+    // Stop the shell first so no late output races the manipulated log.
+    manager.kill(&spawned.info.id).await.expect("kill pty");
+    {
+        let mut log = instance.output_log.write();
+        log.clear();
+        // Chunks 1..=4 were evicted; 5 and 6 remain.
+        for seq in [5u64, 6] {
+            log.push_back(TerminalOutputChunk {
+                seq,
+                data: vec![b'x'],
+            });
+        }
+    }
+    instance.next_output_seq.store(6, Ordering::Relaxed);
+    let seqs = |replay: &TerminalReplay| replay.chunks.iter().map(|c| c.seq).collect::<Vec<_>>();
+
+    let foreign = instance.subscribe_from(5, Some("epoch-of-another-spawn"));
+    assert!(foreign.reset);
+    assert_eq!(
+        seqs(&foreign),
+        vec![5, 6],
+        "replay starts at the first retained chunk"
+    );
+    assert_eq!(foreign.latest_seq, 6);
+
+    let evicted = instance.subscribe_from(2, Some(&instance.log_epoch));
+    assert!(!evicted.reset);
+    assert!(evicted.gap, "chunks 3 and 4 are gone");
+    assert_eq!(seqs(&evicted), vec![5, 6]);
+
+    let resumed = instance.subscribe_from(5, Some(&instance.log_epoch));
+    assert!(!resumed.reset && !resumed.gap);
+    assert_eq!(seqs(&resumed), vec![6]);
+}
+
 /// A log emptied by eviction keeps its head: a cursor at the head resumes
 /// (no spurious reset) and `latest_seq` does not rewind to 0.
 #[tokio::test]

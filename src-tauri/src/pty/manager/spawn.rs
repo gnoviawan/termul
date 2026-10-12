@@ -533,11 +533,14 @@ impl PtyManager {
             bytes: &Arc<AtomicUsize>,
             next_seq: &Arc<AtomicU64>,
         ) {
+            // Allocate the seq under the log lock: an attach that holds the lock
+            // then sees a head that is already in the log, never a reserved seq
+            // whose chunk has not landed yet.
+            let mut guard = log.write();
             let chunk = TerminalOutputChunk {
                 seq: next_seq.fetch_add(1, Ordering::Relaxed) + 1,
                 data,
             };
-            let mut guard = log.write();
             let mut total = bytes.load(Ordering::Relaxed) + chunk.data.len();
             guard.push_back(chunk.clone());
             while total > SCROLLBACK_CAP {

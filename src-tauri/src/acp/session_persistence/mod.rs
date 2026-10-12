@@ -1064,38 +1064,61 @@ impl SessionPersistence {
     ///
     /// With a writer installed the write is queued on it: the writer is the one
     /// thread that writes this session's metadata, so no stale inline write can
-    /// overtake its finalize. A failed write there leaves the mark set in
-    /// memory, and the writer's next metadata write carries it to disk. A queue
-    /// error (writer gone) clears the flag so the next call retries.
+    /// overtake its finalize. If that write fails the writer retries it on its
+    /// next command. A writer that has stopped is treated like no writer.
     ///
-    /// Without a writer the metadata is written inline, under the catalog lock
+    /// Without a (working) writer the metadata is written inline, under the catalog lock
     /// and only while the session is still in the catalog: `delete_session`
     /// drops the catalog entry before it removes the directory, so a delete in
     /// progress is seen here and never gets its directory back. A failed inline
     /// write clears the flag so the next call retries.
+    ///
+    /// `reopen_writer` can swap the catalog entry while this runs; the mark is
+    /// then applied to the new entry too (a few passes at most).
     pub fn note_head_ahead_of_durable(&self, session_id: &str) {
-        let Some(entry) = self.inner.catalog.lock().get(session_id).cloned() else {
-            return;
-        };
-        {
-            let mut metadata = entry.lock();
-            if metadata.head_ahead_of_durable {
+        for pass in 0..3 {
+            let Some(entry) = self.inner.catalog.lock().get(session_id).cloned() else {
+                return;
+            };
+            {
+                let mut metadata = entry.lock();
+                // Later passes re-queue even when the (cloned) flag is set: the
+                // new writer may not have written it.
+                if metadata.head_ahead_of_durable && pass == 0 {
+                    return;
+                }
+                metadata.head_ahead_of_durable = true;
+            }
+            let failed = match self.runtime(session_id) {
+                // A writer that refuses the command has stopped, so it can no
+                // longer write this session's metadata: write it inline.
+                Ok(runtime) => match self.send_command(
+                    &runtime,
+                    session_id,
+                    WriterCommand::PersistMetadata,
+                ) {
+                    Ok(()) => None,
+                    Err(_) => self.persist_mark_inline(session_id, &entry),
+                },
+                Err(_) => self.persist_mark_inline(session_id, &entry),
+            };
+            if let Some(error) = failed {
+                entry.lock().head_ahead_of_durable = false;
+                log::warn!(
+                    "[acp-history] could not persist the head-ahead mark session_id={} error={error}",
+                    crate::logging::redact_session_id(session_id)
+                );
                 return;
             }
-            metadata.head_ahead_of_durable = true;
-        }
-        let failed = match self.runtime(session_id) {
-            Ok(runtime) => self
-                .send_command(&runtime, session_id, WriterCommand::PersistMetadata)
-                .err(),
-            Err(_) => self.persist_mark_inline(session_id, &entry),
-        };
-        if let Some(error) = failed {
-            entry.lock().head_ahead_of_durable = false;
-            log::warn!(
-                "[acp-history] could not persist the head-ahead mark session_id={} error={error}",
-                crate::logging::redact_session_id(session_id)
-            );
+            let still_current = self
+                .inner
+                .catalog
+                .lock()
+                .get(session_id)
+                .is_none_or(|current| Arc::ptr_eq(current, &entry));
+            if still_current {
+                return;
+            }
         }
     }
 

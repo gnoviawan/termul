@@ -26,6 +26,8 @@ pub(super) fn writer_loop(
     }
     let _alive = AliveGuard(alive, session_id);
     let mut tails = TailState::default();
+    // The head-ahead mark could not be written (see `PersistMetadata`).
+    let mut mark_unsaved = false;
     while let Ok(command) = rx.recv() {
         #[cfg(test)]
         {
@@ -46,9 +48,11 @@ pub(super) fn writer_loop(
             WriterCommand::PersistMetadata => {
                 let snapshot = metadata.lock().clone();
                 // A failure here marks the writer unhealthy. The mark stays set
-                // in memory, so the next metadata write this writer makes
-                // (append batch, finalize) carries it to disk.
-                persist_metadata_at_root(&inner.root, &snapshot)
+                // in memory and the loop below retries the write after the next
+                // command, so a later flush or close still carries it to disk.
+                let result = persist_metadata_at_root(&inner.root, &snapshot);
+                mark_unsaved = result.is_err();
+                result
             }
             WriterCommand::Finalize(status, reply) => {
                 close_writer(&inner, &metadata, &mut tails, &unhealthy, Some(status), false, reply);
@@ -76,6 +80,10 @@ pub(super) fn writer_loop(
         };
         if let Err(error) = result {
             *unhealthy.lock() = Some(error.to_string());
+        } else if mark_unsaved {
+            // Retry once per command: the disk may have recovered.
+            let snapshot = metadata.lock().clone();
+            mark_unsaved = persist_metadata_at_root(&inner.root, &snapshot).is_err();
         }
     }
 }

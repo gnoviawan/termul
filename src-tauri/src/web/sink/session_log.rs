@@ -305,30 +305,33 @@ impl WsRelaySink {
                     ),
                 }
             }
-            persistence => {
-                let result = self.publish_locked(
-                    sid,
-                    type_,
-                    payload,
-                    tier,
-                    Persist::Skip,
-                    Self::absorb_persist_error,
-                );
-                // A live-only event took a seq the JSONL will never hold: the
-                // frontier is now ahead of the disk. Recorded outside the
-                // `sessions` lock (the writer queue is taken before it).
-                if let Some(persistence) = persistence {
-                    if let Some(state) = self.sessions.lock().get_mut(sid) {
-                        state.head_ahead_of_durable = true;
-                    }
-                    persistence.note_head_ahead_of_durable(sid);
-                }
-                result
-            }
+            _ => self.publish_locked(
+                sid,
+                type_,
+                payload,
+                tier,
+                Persist::Skip,
+                Self::absorb_persist_error,
+            ),
         };
-        match result {
-            Ok(event) => event,
+        let (event, head_ahead) = match result {
+            Ok(published) => published,
             Err(never) => match never {},
+        };
+        self.mark_head_ahead(sid, head_ahead);
+        event
+    }
+
+    /// Tell persistence that `sid`'s allocated frontier is ahead of its disk
+    /// (a live-only event, or a durable record that could not be queued, took
+    /// a seq the JSONL will never hold). Outside the `sessions` lock: the
+    /// writer queue is taken before it.
+    fn mark_head_ahead(&self, sid: &str, head_ahead: bool) {
+        if !head_ahead {
+            return;
+        }
+        if let Some(persistence) = &self.persistence {
+            persistence.note_head_ahead_of_durable(sid);
         }
     }
 
@@ -371,6 +374,8 @@ impl WsRelaySink {
             }
             _ => self.publish_locked(sid, type_, payload, tier, Persist::Skip, reject)?,
         };
+        let (event, head_ahead) = event;
+        self.mark_head_ahead(sid, head_ahead);
         self.notify_history_for(type_);
         Ok(event)
     }
@@ -396,7 +401,7 @@ impl WsRelaySink {
             PersistedEventRecord,
             SessionPersistenceError,
         ) -> Result<(), E>,
-    ) -> Result<SequencedEvent, E> {
+    ) -> Result<(SequencedEvent, bool), E> {
         let mut sessions = self.sessions.lock();
         let durable_last = self.durable_last_seq(sid);
         let state =
@@ -414,6 +419,9 @@ impl WsRelaySink {
         }
         let seq = state.last_seq + 1;
         let event = SequencedEvent::new(Some(sid.to_string()), seq, type_, payload);
+        // Whether this seq ends up ahead of the disk: a live-only event never
+        // reaches it, nor does a durable record the writer refused.
+        let mut head_ahead = self.persistence.is_some() && persist == Persist::Skip;
         if let Some(persistence) = self.persistence.as_ref().filter(|_| persist != Persist::Skip) {
             let record = PersistedEventRecord {
                 schema_version: SESSION_SCHEMA_VERSION,
@@ -428,7 +436,12 @@ impl WsRelaySink {
                 _ => Err(SessionPersistenceError::SessionNotFound),
             };
             if let Err(error) = outcome {
+                // `SessionNotFound` is a buffered pre-registration record (it
+                // reaches the disk) or a deleted session; any other error
+                // drops the record.
+                let dropped = !matches!(error, SessionPersistenceError::SessionNotFound);
                 on_persist_error(self, persistence, record, error)?;
+                head_ahead |= dropped;
             }
         }
         state.last_seq = seq;
@@ -443,8 +456,11 @@ impl WsRelaySink {
                 .front()
                 .map_or(state.base_seq.saturating_add(1), |e| e.seq);
         }
+        if head_ahead {
+            state.head_ahead_of_durable = true;
+        }
         self.fan_out_locked(sid, &event, tier);
-        Ok(event)
+        Ok((event, head_ahead))
     }
 
     /// Relay-event policy for a failed durable enqueue: never lose the live

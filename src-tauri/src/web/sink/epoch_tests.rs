@@ -18,20 +18,36 @@ fn event(sid: &str) -> AcpEvent {
     }
 }
 
-fn temp_dir(label: &str) -> PathBuf {
+/// A temp directory removed when the test ends.
+struct TempRoot(PathBuf);
+
+impl std::ops::Deref for TempRoot {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(label: &str) -> TempRoot {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let path = std::env::temp_dir().join(format!("termul-epoch-{label}-{nanos}"));
     std::fs::create_dir_all(&path).unwrap();
-    path
+    TempRoot(path)
 }
 
 async fn durable_relay(
     label: &str,
     sid: &str,
-) -> (Arc<WsRelaySink>, Arc<SessionPersistence>, PathBuf) {
+) -> (Arc<WsRelaySink>, Arc<SessionPersistence>, TempRoot) {
     let root = temp_dir(label);
     let cwd = root.join("cwd");
     std::fs::create_dir_all(&cwd).unwrap();
