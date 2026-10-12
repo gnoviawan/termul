@@ -29,7 +29,7 @@ pub(super) struct CreateSessionPayload {
 }
 
 /// The project id a new session is stamped with: the explicit registered id,
-/// else the registry project owning `cwd`, else [`crate::acp::UNASSIGNED_PROJECT_ID`].
+/// else the registry project owning `cwd`, else [`crate::acp::session_persistence::UNASSIGNED_PROJECT_ID`].
 /// An explicit id the registry does not know is `Err(id)` (→ `not_found`).
 pub(super) fn resolve_session_project(
     registry: &ProjectRegistry,
@@ -41,7 +41,7 @@ pub(super) fn resolve_session_project(
         Some(id) => Err(id.to_string()),
         None => Ok(registry
             .find_by_path(cwd)
-            .unwrap_or_else(|| crate::acp::UNASSIGNED_PROJECT_ID.to_string())),
+            .unwrap_or_else(|| crate::acp::session_persistence::UNASSIGNED_PROJECT_ID.to_string())),
     }
 }
 
@@ -316,7 +316,7 @@ pub(super) async fn handle_add_project(
             );
         }
     };
-    if parsed.id == crate::acp::UNASSIGNED_PROJECT_ID {
+    if parsed.id == crate::acp::session_persistence::UNASSIGNED_PROJECT_ID {
         warn!(
             target: "termul::web::ws",
             "add_project: reserved project id refused"
@@ -326,7 +326,7 @@ pub(super) async fn handle_add_project(
             WsErrorCode::Unsupported,
             format!(
                 "project id '{}' is reserved",
-                crate::acp::UNASSIGNED_PROJECT_ID
+                crate::acp::session_persistence::UNASSIGNED_PROJECT_ID
             ),
         );
     }

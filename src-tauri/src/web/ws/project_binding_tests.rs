@@ -65,7 +65,7 @@ fn an_unmatched_cwd_is_stamped_unassigned() {
     let registry = registry();
     assert_eq!(
         resolve_session_project(&registry, None, "/somewhere/else"),
-        Ok(crate::acp::UNASSIGNED_PROJECT_ID.to_string())
+        Ok(crate::acp::session_persistence::UNASSIGNED_PROJECT_ID.to_string())
     );
 }
 
@@ -121,7 +121,7 @@ async fn add_project_refuses_the_reserved_unassigned_id() {
     let reply = projects::handle_add_project(
         "r1".to_string(),
         &json!({
-            "id": crate::acp::UNASSIGNED_PROJECT_ID,
+            "id": crate::acp::session_persistence::UNASSIGNED_PROJECT_ID,
             "name": "x",
             "path": "/work/one",
             "color": "blue"
@@ -143,12 +143,16 @@ fn a_renderer_fed_project_with_the_reserved_id_is_never_registered() {
     let registry = ProjectRegistry::new();
     registry.set(
         vec![
-            summary(crate::acp::UNASSIGNED_PROJECT_ID, "/work/one", false),
+            summary(
+                crate::acp::session_persistence::UNASSIGNED_PROJECT_ID,
+                "/work/one",
+                false,
+            ),
             summary("p-1", "/work/two", false),
         ],
         None,
     );
-    assert!(!registry.contains(crate::acp::UNASSIGNED_PROJECT_ID));
+    assert!(!registry.contains(crate::acp::session_persistence::UNASSIGNED_PROJECT_ID));
     assert!(registry.contains("p-1"));
 }
 
@@ -165,7 +169,7 @@ async fn post_projects_refuses_the_reserved_unassigned_id() {
         ConnectInfo("127.0.0.1:1".parse().unwrap()),
         Json(
             serde_json::from_value(json!({
-                "id": crate::acp::UNASSIGNED_PROJECT_ID,
+                "id": crate::acp::session_persistence::UNASSIGNED_PROJECT_ID,
                 "name": "x",
                 "path": "/work/one",
                 "color": "blue"
@@ -182,7 +186,7 @@ async fn post_projects_refuses_the_reserved_unassigned_id() {
 
     assert_eq!(body["success"], json!(false));
     assert_eq!(body["code"], json!("VALIDATION_ERROR"));
-    assert!(!registry.contains(crate::acp::UNASSIGNED_PROJECT_ID));
+    assert!(!registry.contains(crate::acp::session_persistence::UNASSIGNED_PROJECT_ID));
 }
 
 #[test]
@@ -190,7 +194,7 @@ fn a_default_naming_the_reserved_id_is_not_kept() {
     let registry = ProjectRegistry::new();
     registry.set(
         vec![summary("p-1", "/work/one", false)],
-        Some(crate::acp::UNASSIGNED_PROJECT_ID.to_string()),
+        Some(crate::acp::session_persistence::UNASSIGNED_PROJECT_ID.to_string()),
     );
     assert_eq!(registry.snapshot().default_project_id, None);
 }

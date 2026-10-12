@@ -31,7 +31,6 @@ const MUTATIONS: &[&str] = &[
     "update_project",
     "remove_project",
     "set_default_project",
-    "switch_project",
     "set_catalog_opt_in",
     "install_acp_agent",
     "authenticate_agent",
@@ -183,10 +182,6 @@ async fn send_prompt_fast_path_enforces_the_capability_check() {
     let subscribed = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let mut authed = true;
     let mut access = view_only_access();
-    let mut current_agent = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None));
-    let current_project = Arc::new(parking_lot::Mutex::new(None));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let alive = dispatch_connection_text(
         r#"{"id":"p1","type":"send_prompt","payload":{"agentId":"a","sessionId":"s","text":"hi","turnId":"t"}}"#,
         &mut authed,
@@ -200,10 +195,6 @@ async fn send_prompt_fast_path_enforces_the_capability_check() {
         None,
         &tx,
         &subscribed,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,

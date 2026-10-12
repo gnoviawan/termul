@@ -506,7 +506,7 @@ async fn a_session_created_without_a_project_is_stamped_unassigned() {
             .unwrap()
             .project_id
             .as_deref(),
-        Some(crate::acp::UNASSIGNED_PROJECT_ID)
+        Some(crate::acp::session_persistence::UNASSIGNED_PROJECT_ID)
     );
     h.finish().await;
 }

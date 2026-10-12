@@ -264,7 +264,7 @@ pub async fn create_project(
     if let Some(err) = check_project_write_guard(&state, peer, "/projects") {
         return err;
     }
-    if req.id == crate::acp::UNASSIGNED_PROJECT_ID {
+    if req.id == crate::acp::session_persistence::UNASSIGNED_PROJECT_ID {
         tracing::warn!(
             target: "termul::web::projects_api",
             "create_project: reserved project id refused"
@@ -273,7 +273,7 @@ pub async fn create_project(
             IpcBody::<crate::web::project_registry::ProjectSummary>::err(
                 format!(
                     "project id '{}' is reserved",
-                    crate::acp::UNASSIGNED_PROJECT_ID
+                    crate::acp::session_persistence::UNASSIGNED_PROJECT_ID
                 ),
                 "VALIDATION_ERROR",
             ),
