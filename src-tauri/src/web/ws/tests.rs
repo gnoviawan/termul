@@ -95,7 +95,7 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
         "session-cleanup".to_string(),
         json!([]),
     );
-    let subscribed = subscriptions_with("session-cleanup".to_string(), client_id);
+    let subscribed = subscriptions_with("session-cleanup", client_id);
     assert_eq!(relay.session_subscriber_count("session-cleanup"), 1);
 
     let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
@@ -162,7 +162,7 @@ async fn question_disconnect_grace_defers_cancel_until_expiry() {
         "session-q-grace".to_string(),
         json!([]),
     );
-    let subscribed = subscriptions_with("session-q-grace".to_string(), client_id);
+    let subscribed = subscriptions_with("session-q-grace", client_id);
 
     let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
     let cleanup_task = tokio::spawn(async move {
@@ -209,7 +209,7 @@ async fn question_disconnect_grace_cancelled_by_resubscribe() {
         "session-q-resub".to_string(),
         json!([]),
     );
-    let subscribed = subscriptions_with("session-q-resub".to_string(), client_id);
+    let subscribed = subscriptions_with("session-q-resub", client_id);
 
     let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
     let cleanup_task = tokio::spawn(async move {
@@ -238,7 +238,7 @@ async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
     relay.seed_session_for_test("session-cancelled-relay");
     let (client_id, _rx, replay) = relay.subscribe("session-cancelled-relay", None).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
-    let subscribed = subscriptions_with("session-cancelled-relay".to_string(), client_id);
+    let subscribed = subscriptions_with("session-cancelled-relay", client_id);
 
     let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
     let relay_future = tokio::spawn(async move {
@@ -2591,7 +2591,7 @@ fn relay_with_subscribed_permission(
     // the production subscribe path).
     relay.seed_session_for_test(session_id);
     let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
-    let subs = subscriptions_with(session_id.to_string(), client_id);
+    let subs = subscriptions_with(session_id, client_id);
     // Emit a permission_request event through the sink (production path) so
     // the rendezvous snapshots a ticket.
     let options_value = serde_json::Value::Array(
@@ -2650,7 +2650,7 @@ fn handle_respond_permission_needs_no_subscription() {
     ));
     relay.seed_session_for_test("sess-B");
     let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
-    let subs = subscriptions_with("sess-B".to_string(), ClientId::new());
+    let subs = subscriptions_with("sess-B", ClientId::new());
     relay.emit(&AcpEvent {
         sid: Some("sess-A".to_string()),
         type_: "acp:permission_request",
@@ -2715,7 +2715,7 @@ fn relay_with_subscribed_question(
     ));
     relay.seed_session_for_test(session_id);
     let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
-    let subs = subscriptions_with(session_id.to_string(), client_id);
+    let subs = subscriptions_with(session_id, client_id);
     let options_value = serde_json::Value::Array(
         options
             .iter()
@@ -2791,7 +2791,7 @@ fn handle_answer_question_needs_no_subscription() {
     ));
     relay.seed_session_for_test("sess-B");
     let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
-    let subs = subscriptions_with("sess-B".to_string(), ClientId::new());
+    let subs = subscriptions_with("sess-B", ClientId::new());
     relay.emit(&AcpEvent {
         sid: Some("sess-A".to_string()),
         type_: "acp:question_request",

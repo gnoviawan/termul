@@ -67,18 +67,22 @@ pub(super) fn entity_key(request: &WsRequest) -> Option<EntityKey> {
     .find_map(|(field, kind)| text(field).map(|id| format!("{kind}:{id}")))
 }
 
-struct Inner {
+/// State the running tasks share. It must not own the tasks: they hold it, so
+/// owning them from here would be a cycle and dropping the executor would not
+/// abort anything.
+struct Queues {
     /// Pending jobs per key. A key is present exactly while one drain task
     /// owns it, so a submit to a present key only appends.
-    queues: HashMap<EntityKey, VecDeque<Job>>,
-    tasks: JoinSet<()>,
+    by_key: HashMap<EntityKey, VecDeque<Job>>,
     /// Jobs queued or running.
     inflight: usize,
 }
 
 /// Runs request jobs concurrently across entities and serially within one.
 pub(in crate::web::ws) struct KeyedExecutor {
-    inner: Arc<parking_lot::Mutex<Inner>>,
+    queues: Arc<parking_lot::Mutex<Queues>>,
+    /// Owned here so dropping the executor aborts every running job.
+    tasks: parking_lot::Mutex<JoinSet<()>>,
     /// Raised when a job panics: the connection can no longer be trusted to
     /// answer every request, so it is closed.
     fault: CancellationToken,
@@ -91,11 +95,11 @@ pub(in crate::web::ws) struct Saturated;
 impl KeyedExecutor {
     pub(in crate::web::ws) fn new(fault: CancellationToken) -> Self {
         Self {
-            inner: Arc::new(parking_lot::Mutex::new(Inner {
-                queues: HashMap::new(),
-                tasks: JoinSet::new(),
+            queues: Arc::new(parking_lot::Mutex::new(Queues {
+                by_key: HashMap::new(),
                 inflight: 0,
             })),
+            tasks: parking_lot::Mutex::new(JoinSet::new()),
             fault,
         }
     }
@@ -108,39 +112,40 @@ impl KeyedExecutor {
         job: impl Future<Output = ()> + Send + 'static,
     ) -> Result<(), Saturated> {
         let job: Job = Box::pin(job);
-        let mut inner = self.inner.lock();
+        let mut queues = self.queues.lock();
+        let mut tasks = self.tasks.lock();
         // Reap finished tasks so the set does not grow with the connection.
-        while inner.tasks.try_join_next().is_some() {}
-        if inner.inflight >= MAX_INFLIGHT_REQUESTS {
+        while tasks.try_join_next().is_some() {}
+        if queues.inflight >= MAX_INFLIGHT_REQUESTS {
             return Err(Saturated);
         }
-        inner.inflight += 1;
+        queues.inflight += 1;
         let Some(key) = key else {
-            let shared = Arc::clone(&self.inner);
+            let shared = Arc::clone(&self.queues);
             let fault = self.fault.clone();
-            inner.tasks.spawn(async move {
+            tasks.spawn(async move {
                 run_job(job, &fault).await;
                 shared.lock().inflight -= 1;
             });
             return Ok(());
         };
-        if let Some(queue) = inner.queues.get_mut(&key) {
+        if let Some(queue) = queues.by_key.get_mut(&key) {
             queue.push_back(job);
             return Ok(());
         }
-        inner.queues.insert(key.clone(), VecDeque::new());
-        let shared = Arc::clone(&self.inner);
+        queues.by_key.insert(key.clone(), VecDeque::new());
+        let shared = Arc::clone(&self.queues);
         let fault = self.fault.clone();
-        inner.tasks.spawn(async move {
+        tasks.spawn(async move {
             let mut job = job;
             loop {
                 run_job(job, &fault).await;
-                let mut inner = shared.lock();
-                inner.inflight -= 1;
-                match inner.queues.get_mut(&key).and_then(VecDeque::pop_front) {
+                let mut queues = shared.lock();
+                queues.inflight -= 1;
+                match queues.by_key.get_mut(&key).and_then(VecDeque::pop_front) {
                     Some(next) => job = next,
                     None => {
-                        inner.queues.remove(&key);
+                        queues.by_key.remove(&key);
                         return;
                     }
                 }
@@ -152,7 +157,7 @@ impl KeyedExecutor {
     /// Jobs queued or running.
     #[cfg(test)]
     pub(in crate::web::ws) fn inflight(&self) -> usize {
-        self.inner.lock().inflight
+        self.queues.lock().inflight
     }
 }
 
