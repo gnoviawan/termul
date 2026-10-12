@@ -72,8 +72,9 @@ export async function syncProjects(projects: ProjectSummary[]): Promise<IpcResul
  * switchable, updates `registry.set_default_project`, and broadcasts
  * `projects_changed` to all connected web clients. Mirrors the
  * `set_default_project` WS request + the `POST /projects/default` HTTP route
- * (transport parity). The only desktop path that moves the host default; it
- * stores the default and rebinds nothing.
+ * (transport parity). The explicit way to select the host default (a project-list
+ * sync only changes it when the current default is no longer valid); it stores
+ * the default and rebinds nothing.
  */
 export async function setHostDefaultProject(projectId: string): Promise<IpcResult<void>> {
   return invokeIpc<void>('set_host_default_project', { projectId })

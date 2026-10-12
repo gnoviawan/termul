@@ -667,6 +667,34 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
     unsubscribe()
   })
 
+  it('re-arms a still-wanted directory with backoff after the host ended its watch', async () => {
+    vi.useFakeTimers()
+    try {
+      const unsubscribe = tauriFilesystemApi.onFileChanged(() => {})
+      await tauriFilesystemApi.watchDirectory('/web/proj')
+      await tauriFilesystemApi.watchDirectory('/web/proj/src')
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
+
+      mockAcpTransport.emit('acp:fs_watch_ended', {
+        projectId: 'proj-1',
+        reason: 'project_unavailable'
+      })
+      // First retry fails (project still unavailable), the second succeeds.
+      mockAcpTransport.watchProject.mockRejectedValueOnce(new Error('not found'))
+      await tauriFilesystemApi.unwatchDirectory('/web/proj/src') // no longer wanted
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
+      // Re-armed: nothing further is scheduled.
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
+      unsubscribe()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('drops fs_changed for a project this client is not watching', async () => {
     await tauriFilesystemApi.watchDirectory('/web/proj')
     const received: string[] = []

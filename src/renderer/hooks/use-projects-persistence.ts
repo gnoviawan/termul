@@ -252,7 +252,8 @@ async function toPersistedProject(
     envVars: redactedEnvVars,
     worktrees: project.worktrees?.map(toPersistedWorktree),
     isGitRepo: project.isGitRepo,
-    icon: project.icon
+    icon: project.icon,
+    isDefault: project.isDefault
   }
 }
 
@@ -298,7 +299,8 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
     envVars: loadedEnvVars,
     worktrees: persisted.worktrees?.map(fromPersistedWorktree),
     isGitRepo: persisted.isGitRepo,
-    icon: persisted.icon
+    icon: persisted.icon,
+    isDefault: persisted.isDefault
   }
 }
 
@@ -321,6 +323,26 @@ export function toProjectSummaries(projects: Project[]): ProjectSummary[] {
     isArchived: p.isArchived ?? false,
     isDefault: p.isDefault === true
   }))
+}
+
+/** `true` when two summary lists carry the same wire fields (navigation rebuilds the
+ * project array to flip `isActive`, which is not a list change). */
+function sameProjectSummaries(a: ProjectSummary[], b: ProjectSummary[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((p, i) => {
+      const q = b[i]
+      return (
+        q !== undefined &&
+        p.id === q.id &&
+        p.name === q.name &&
+        p.color === q.color &&
+        p.path === q.path &&
+        p.isArchived === q.isArchived &&
+        p.isDefault === q.isDefault
+      )
+    })
+  )
 }
 
 /**
@@ -695,14 +717,16 @@ export function useProjectsAutoSave(): void {
       // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
       // Navigation (`activeProjectId`) is NOT a list change: switching the
       // active project pushes nothing and moves no host default.
+      const summaries = toProjectSummaries(state.projects)
       if (
         useRemoteStatusStore.getState().status?.running &&
-        state.projects !== prevState.projects
+        state.projects !== prevState.projects &&
+        !sameProjectSummaries(summaries, toProjectSummaries(prevState.projects))
       ) {
         const defaultChanged =
           state.projects.find((p) => p.isDefault === true)?.id !==
           prevState.projects.find((p) => p.isDefault === true)?.id
-        syncProjects(toProjectSummaries(state.projects))
+        syncProjects(summaries)
           .then((result) => {
             if (!result.success) {
               console.warn('[projects] remote sync unsuccessful:', result.error)
@@ -712,11 +736,12 @@ export function useProjectsAutoSave(): void {
             // EFFECTIVE default changed — the stored default flag moved (an
             // explicit set-default) or the host fell back to another project —
             // never on navigation. Best-effort + non-fatal; only after the
-            // sync landed. The first reply only establishes the baseline.
+            // sync landed. The first reply counts as a change (the file for the
+            // default the host picked has not been mirrored yet).
             if (result.success) {
               const previous = hostDefaultRef.current
               hostDefaultRef.current = result.data
-              const effectiveChanged = previous !== undefined && previous !== result.data
+              const effectiveChanged = previous !== result.data
               if (defaultChanged || effectiveChanged) {
                 void useAcpStore.getState().syncMcpRegistryToProjectFile()
               }

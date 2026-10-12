@@ -101,7 +101,31 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
     unmount()
   })
 
-  it('mirrors a project-list change without the active project or an MCP sync', async () => {
+  it('selectProject (navigation rebuilds the projects array) pushes nothing', async () => {
+    useProjectStore.setState({
+      projects: [
+        { id: 'p1', name: 'P1', color: 'blue', path: '/p1' },
+        { id: 'p2', name: 'P2', color: 'green', path: '/p2' }
+      ],
+      activeProjectId: 'p1'
+    })
+    const { unmount } = renderHook(() => useProjectsAutoSave())
+    await initialize()
+
+    await act(async () => {
+      useProjectStore.getState().selectProject('p2')
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(useProjectStore.getState().activeProjectId).toBe('p2')
+    expect(syncProjectsMock).not.toHaveBeenCalled()
+    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('mirrors a project-list change without the active project in the payload', async () => {
     const { unmount } = renderHook(() => useProjectsAutoSave())
     await initialize()
 
@@ -124,7 +148,6 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
       { id: 'p1', name: 'P1', color: 'blue', path: '/p1', isArchived: false, isDefault: false },
       { id: 'p2', name: 'P2', color: 'green', path: '/p2', isArchived: false, isDefault: false }
     ])
-    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
     unmount()
   })
 
@@ -148,7 +171,7 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
     const { unmount } = renderHook(() => useProjectsAutoSave())
     await initialize()
 
-    // First reply only establishes the baseline (host default p1).
+    // First reply: the host picked p1 (no stored flag) — mirrored once.
     await act(async () => {
       useProjectStore.setState({
         projects: [
@@ -160,7 +183,9 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
     await waitFor(() => {
       expect(syncProjectsMock).toHaveBeenCalledTimes(1)
     })
-    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
+    })
 
     // p1 disappears: the host falls back to p2 without any stored flag moving.
     syncProjectsMock.mockResolvedValue({ success: true, data: 'p2' })
@@ -170,7 +195,7 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
       })
     })
     await waitFor(() => {
-      expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
+      expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(2)
     })
     unmount()
   })

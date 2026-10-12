@@ -169,6 +169,8 @@ export interface PersistedProject {
   envVars?: PersistedEnvVariable[]
   // Worktree fields (added by worktree feature)
   worktrees?: PersistedWorktree[]
+  /** The explicit host-default selection (the stored default flag); additive, absent on older records. */
+  isDefault?: boolean
   /**
    * Legacy: no longer written. Records saved before the switcher pick moved to
    * the shell-layout store (`worktreePickByProject`, keyed by path) may still
