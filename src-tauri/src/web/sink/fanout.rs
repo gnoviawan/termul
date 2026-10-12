@@ -419,14 +419,17 @@ impl EventSink for WsRelaySink {
                 }
             }
             None => {
-                // Roster events also go to the `agents` watch.
-                self.publish_agent_roster_event(type_, &event.payload);
-                // Agent-level: seq=0, sid=null, NOT in any per-session log (AC4).
-                // Delivered to ALL connected clients with ≥1 session.
-                let se = SequencedEvent::new(None, 0, type_, event.payload.clone());
-                let targets: Vec<ClientId> = self.clients.lock().keys().copied().collect();
-                for client_id in targets {
-                    self.enqueue(client_id, se.clone(), tier);
+                // Agent roster events go to the `agents` watch. The rest of
+                // the agent-level events (`browser_open_request`,
+                // `worktree_branch_renamed`) are still seq=0, sid=null events
+                // outside every session log, delivered to ALL connected
+                // clients with ≥1 session.
+                if !self.route_agent_event(type_, &event.payload) {
+                    let se = SequencedEvent::new(None, 0, type_, event.payload.clone());
+                    let targets: Vec<ClientId> = self.clients.lock().keys().copied().collect();
+                    for client_id in targets {
+                        self.enqueue(client_id, se.clone(), tier);
+                    }
                 }
             }
         }

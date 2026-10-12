@@ -23,6 +23,34 @@ fn drain_rx(rx: &mut EventStream) -> Vec<SequencedEvent> {
     out
 }
 
+/// A connection watching `kind`, its full-state frame already taken.
+fn watch_connection(
+    relay: &WsRelaySink,
+    kind: crate::web::watch::WatchKind,
+) -> (crate::web::ws::OutboundSender, crate::web::ws::OutboundReceiver) {
+    let (out, mut rx) = crate::web::ws::outbound_channel(64, 15);
+    relay
+        .watches()
+        .subscribe(kind, "", &out, || json!(null))
+        .expect("subscribe");
+    let _state = rx.try_recv().expect("full-state frame");
+    (out, rx)
+}
+
+/// The deltas queued on a watching connection, in order.
+fn watch_deltas(rx: &mut crate::web::ws::OutboundReceiver) -> Vec<Value> {
+    let mut out = Vec::new();
+    while let Ok(item) = rx.try_recv() {
+        match item {
+            crate::web::ws::Outbound::Watch(frame) => {
+                out.push(frame.delta_value().cloned().expect("delta frame"))
+            }
+            _ => panic!("expected only watch frames"),
+        }
+    }
+    out
+}
+
 /// A minimal serializable payload for sink tests — exercises the same
 /// `serde_json::to_value` path the real event structs use.
 #[derive(Debug, Clone, Serialize)]
@@ -138,12 +166,12 @@ async fn ws_relay_sink_delivers_events_in_order() {
     fan_out(
         &sinks,
         None,
-        "acp:agent_disconnected",
+        "acp:browser_open_request",
         &TestPayload::new("a1", "sess-1", "third"),
     );
 
     // Lossy and reliable events share the channel in emission order;
-    // reliable agent_disconnected is last.
+    // reliable browser_open_request is last.
     let drained = drain_rx(&mut rx);
     assert_eq!(drained.len(), 3, "exactly three events were delivered");
     // Session-scoped events get monotonic seq; agent-level gets seq=0.
@@ -153,7 +181,7 @@ async fn ws_relay_sink_delivers_events_in_order() {
     assert_eq!(drained[0].payload["message"], "first");
     assert_eq!(drained[1].seq, 2);
     assert_eq!(drained[1].payload["message"], "second");
-    assert_eq!(drained[2].type_, "agent_disconnected");
+    assert_eq!(drained[2].type_, "browser_open_request");
     assert_eq!(drained[2].seq, 0);
     assert!(
         drained[2].sid.is_none(),
@@ -692,74 +720,79 @@ async fn cross_session_isolation() {
     assert_eq!(b[0].sid.as_deref(), Some("sess-b"));
 }
 
-/// Epic-4 bridge: `broadcast_projects_changed` fans an agent-level
-/// `projects_changed` event (sid=null, seq=0) to every connected client.
-/// A client subscribed to ANY session receives it (the web client then
-/// refetches `GET /projects`).
+/// Agent roster events (`agent_spawned`, `agent_crashed`, `agent_error`,
+/// `agent_disconnected`) go to the `agents` watch: a client subscribed to a
+/// session gets no `seq = 0` event for them, and a watcher gets one delta.
 #[tokio::test]
-async fn broadcast_projects_changed_reaches_subscribed_client() {
-    let relay = Arc::new(WsRelaySink::new());
-    // Subscribe a client to a session so it is in the relay's client set.
-    relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
-
-    broadcast_projects_changed(&relay, Some("p-3"));
-
-    let drained = drain_rx(&mut rx);
-    assert_eq!(drained.len(), 1, "exactly one projects_changed event");
-    let evt = &drained[0];
-    assert_eq!(evt.type_, "projects_changed");
-    assert!(evt.sid.is_none(), "agent-level event: sid must be null");
-    assert_eq!(evt.seq, 0, "agent-level event: seq must be 0");
-    assert_eq!(evt.payload["defaultProjectId"], "p-3");
-}
-
-/// `broadcast_projects_changed` with no default project still fans out;
-/// the `ProjectsChangedPayload` struct's `skip_serializing_if` OMITS the
-/// `defaultProjectId` key entirely (not `null`).
-#[tokio::test]
-async fn broadcast_projects_changed_null_default_id() {
+async fn agent_roster_events_reach_the_agents_watch_not_a_seq_zero_event() {
+    use crate::web::watch::WatchKind;
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
     let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
+    let (_out, mut watch_rx) = watch_connection(&relay, WatchKind::Agents);
 
-    broadcast_projects_changed(&relay, None);
+    for type_ in [
+        "acp:agent_spawned",
+        "acp:agent_crashed",
+        "acp:agent_error",
+        "acp:agent_disconnected",
+    ] {
+        relay.emit(&AcpEvent {
+            sid: None,
+            type_,
+            payload: json!({"agentId": "a-1"}),
+        });
+    }
 
-    let drained = drain_rx(&mut rx);
-    assert_eq!(drained.len(), 1);
-    assert_eq!(drained[0].type_, "projects_changed");
-    // `skip_serializing_if = "Option::is_none"` → the key is omitted, not null.
-    assert!(
-        drained[0].payload.get("defaultProjectId").is_none(),
-        "defaultProjectId must be omitted (not null) when None"
+    assert!(drain_rx(&mut rx).is_empty(), "no seq=0 event for roster events");
+    let deltas = watch_deltas(&mut watch_rx);
+    let types: Vec<&str> = deltas.iter().map(|d| d["event"].as_str().unwrap()).collect();
+    assert_eq!(
+        types,
+        ["agent_spawned", "agent_crashed", "agent_error", "agent_disconnected"]
     );
+    assert_eq!(deltas[0]["payload"]["agentId"], "a-1");
 }
 
-/// `broadcast_chat_history_changed` fans an agent-level event (`sid: None`,
-/// `seq: 0`) to every connected client so the web sidebar refetches the
-/// session index. Mirrors `broadcast_projects_changed`.
+/// A socket with no session subscription still receives the roster watch.
 #[tokio::test]
-async fn broadcast_chat_history_changed_reaches_subscribed_client() {
+async fn agent_roster_watch_needs_no_session_subscription() {
+    use crate::web::watch::WatchKind;
+    let relay = Arc::new(WsRelaySink::new());
+    let (_out, mut watch_rx) = watch_connection(&relay, WatchKind::Agents);
+    relay.emit(&AcpEvent {
+        sid: None,
+        type_: "acp:agent_spawned",
+        payload: json!({"agentId": "a-9"}),
+    });
+    assert_eq!(watch_deltas(&mut watch_rx).len(), 1);
+}
+
+/// The other agent-level events keep their `seq = 0` delivery until they get a
+/// watch of their own, and never reach the `agents` watch.
+#[tokio::test]
+async fn other_agent_level_events_still_fan_out_as_seq_zero() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
     let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
-
-    broadcast_chat_history_changed(&relay);
-
+    let (_out, mut watch_rx) = watch_connection(&relay, crate::web::watch::WatchKind::Agents);
+    relay.emit(&AcpEvent {
+        sid: None,
+        type_: "acp:browser_open_request",
+        payload: json!({"agentId": "a-1"}),
+    });
     let drained = drain_rx(&mut rx);
     assert_eq!(drained.len(), 1);
-    assert_eq!(drained[0].type_, "chat_history_changed");
-    assert_eq!(drained[0].seq, 0, "agent-level event: seq must be 0");
-    // The payload is empty `{}` — the web client refetches the index.
-    assert!(drained[0].payload.as_object().unwrap().is_empty());
+    assert_eq!(drained[0].type_, "browser_open_request");
+    assert_eq!(drained[0].seq, 0);
+    assert!(watch_deltas(&mut watch_rx).is_empty(), "not a roster event");
 }
 
-/// CAP-2: with host persistence attached, session lifecycle events fan an
-/// agent-level `chat_history_changed` so connected sidebars refetch the
-/// host-owned index (browser-origin sessions never flow through a desktop
-/// renderer save).
+/// CAP-2: with host persistence attached, session lifecycle events publish a
+/// `chat_history` delta so connected sidebars refetch the host-owned index
+/// (browser-origin sessions never flow through a desktop renderer save).
 #[tokio::test]
-async fn session_lifecycle_broadcasts_history_changed_when_persistent() {
+async fn session_lifecycle_publishes_history_changed_when_persistent() {
     let root = std::env::temp_dir().join(format!(
         "termul-sink-history-broadcast-{}",
         uuid::Uuid::new_v4()
@@ -770,7 +803,7 @@ async fn session_lifecycle_broadcasts_history_changed_when_persistent() {
         .unwrap();
     let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
+    let (_out, mut watch_rx) = watch_connection(&relay, crate::web::watch::WatchKind::ChatHistory);
 
     for type_ in ["acp:session_created", "acp:session_closed"] {
         relay.emit(&AcpEvent {
@@ -780,26 +813,23 @@ async fn session_lifecycle_broadcasts_history_changed_when_persistent() {
         });
     }
 
-    let drained = drain_rx(&mut rx);
-    let notifications = drained
-        .iter()
-        .filter(|event| event.type_ == "chat_history_changed")
-        .count();
+    let deltas = watch_deltas(&mut watch_rx);
     assert_eq!(
-        notifications, 2,
-        "each lifecycle event fans one chat_history_changed"
+        deltas,
+        vec![json!({"changed": ["sess-1"]}), json!({"changed": ["sess-1"]})],
+        "each lifecycle event publishes one chat_history delta naming the session"
     );
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Live-only relays (no host persistence) must NOT fan history-changed
-/// notifications — there is no durable index to refetch.
+/// Live-only relays (no host persistence) must NOT publish history changes —
+/// there is no durable index to refetch.
 #[tokio::test]
 async fn session_lifecycle_is_silent_without_persistence() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
+    let (_out, mut watch_rx) = watch_connection(&relay, crate::web::watch::WatchKind::ChatHistory);
 
     relay.emit(&AcpEvent {
         sid: Some("sess-1".to_string()),
@@ -807,12 +837,9 @@ async fn session_lifecycle_is_silent_without_persistence() {
         payload: json!({"agentId": "a-1", "sessionId": "sess-1"}),
     });
 
-    let drained = drain_rx(&mut rx);
     assert!(
-        drained
-            .iter()
-            .all(|event| event.type_ != "chat_history_changed"),
-        "no history notification without durable persistence"
+        watch_deltas(&mut watch_rx).is_empty(),
+        "no history delta without durable persistence"
     );
 }
 
@@ -984,12 +1011,12 @@ async fn deleted_session_event_is_skipped_without_failing_the_relay() {
 }
 
 /// Title metadata events (`session_info_update` for agent-supplied titles,
-/// `local_title_generated` for background titles) fan a
-/// `chat_history_changed` notification so connected sidebars refetch the
-/// host index and pick up the new title. Extends the
-/// `session_lifecycle_broadcasts_history_changed_when_persistent` coverage.
+/// `local_title_generated` for background titles) publish a `chat_history`
+/// delta so connected sidebars refetch the host index and pick up the new
+/// title. Extends the `session_lifecycle_publishes_history_changed_when_persistent`
+/// coverage.
 #[tokio::test]
-async fn title_metadata_events_broadcast_history_changed_when_persistent() {
+async fn title_metadata_events_publish_history_changed_when_persistent() {
     let root = std::env::temp_dir().join(format!(
         "termul-sink-title-broadcast-{}",
         uuid::Uuid::new_v4()
@@ -1012,7 +1039,7 @@ async fn title_metadata_events_broadcast_history_changed_when_persistent() {
         .await
         .unwrap();
     let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-title", None, None, &CancellationToken::new()).await;
+    let (_out, mut watch_rx) = watch_connection(&relay, crate::web::watch::WatchKind::ChatHistory);
 
     for type_ in ["acp:session_info_update", "acp:local_title_generated"] {
         relay.emit(&AcpEvent {
@@ -1022,14 +1049,10 @@ async fn title_metadata_events_broadcast_history_changed_when_persistent() {
         });
     }
 
-    let drained = drain_rx(&mut rx);
-    let notifications = drained
-        .iter()
-        .filter(|event| event.type_ == "chat_history_changed")
-        .count();
     assert_eq!(
-        notifications, 2,
-        "each title metadata event fans one chat_history_changed"
+        watch_deltas(&mut watch_rx).len(),
+        2,
+        "each title metadata event publishes one chat_history delta"
     );
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
@@ -1577,119 +1600,4 @@ async fn record_user_prompt_fans_out_before_any_later_emit() {
     let later = drain_rx(&mut rx);
     assert_eq!(later.len(), 1);
     assert!(later[0].seq > event.seq);
-}
-
-// --- Watch hub: the same changes reach `watch` subscribers ------------------
-
-/// A connection watching `kind`, its full-state frame already taken.
-fn watch_connection(
-    relay: &WsRelaySink,
-    kind: crate::web::watch::WatchKind,
-) -> (crate::web::ws::OutboundSender, crate::web::ws::OutboundReceiver) {
-    let (out, mut rx) = crate::web::ws::outbound_channel(64, 15);
-    relay
-        .watches()
-        .subscribe(kind, "", &out, || json!(null))
-        .expect("subscribe");
-    let _state = rx.try_recv().expect("full-state frame");
-    (out, rx)
-}
-
-/// The deltas queued on a watching connection, in order.
-fn watch_deltas(rx: &mut crate::web::ws::OutboundReceiver) -> Vec<Value> {
-    let mut out = Vec::new();
-    while let Ok(item) = rx.try_recv() {
-        match item {
-            crate::web::ws::Outbound::Watch(frame) => {
-                out.push(frame.delta_value().cloned().expect("delta frame"))
-            }
-            _ => panic!("expected only watch frames"),
-        }
-    }
-    out
-}
-
-/// Agent roster events reach the `agents` watch (on a socket with no session
-/// subscription) as well as the `seq = 0` fan-out.
-#[tokio::test]
-async fn agent_roster_events_also_reach_the_agents_watch() {
-    use crate::web::watch::WatchKind;
-    let relay = Arc::new(WsRelaySink::new());
-    relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
-    let (_out, mut watch_rx) = watch_connection(&relay, WatchKind::Agents);
-
-    for type_ in [
-        "acp:agent_spawned",
-        "acp:agent_crashed",
-        "acp:agent_error",
-        "acp:agent_disconnected",
-    ] {
-        relay.emit(&AcpEvent {
-            sid: None,
-            type_,
-            payload: json!({"agentId": "a-1"}),
-        });
-    }
-
-    assert_eq!(drain_rx(&mut rx).len(), 4, "the seq=0 events are still sent");
-    let deltas = watch_deltas(&mut watch_rx);
-    let types: Vec<&str> = deltas.iter().map(|d| d["event"].as_str().unwrap()).collect();
-    assert_eq!(
-        types,
-        ["agent_spawned", "agent_crashed", "agent_error", "agent_disconnected"]
-    );
-    assert_eq!(deltas[0]["payload"]["agentId"], "a-1");
-}
-
-/// Other agent-level events are not roster events and never reach the watch.
-#[tokio::test]
-async fn non_roster_agent_events_do_not_reach_the_agents_watch() {
-    let relay = Arc::new(WsRelaySink::new());
-    let (_out, mut watch_rx) = watch_connection(&relay, crate::web::watch::WatchKind::Agents);
-    relay.emit(&AcpEvent {
-        sid: None,
-        type_: "acp:browser_open_request",
-        payload: json!({"agentId": "a-1"}),
-    });
-    assert!(watch_deltas(&mut watch_rx).is_empty());
-}
-
-/// With host persistence attached, session lifecycle events publish a
-/// `chat_history` delta naming the session; without it nothing is published.
-#[tokio::test]
-async fn session_lifecycle_publishes_a_chat_history_delta_only_when_persistent() {
-    use crate::web::watch::WatchKind;
-    let root = std::env::temp_dir().join(format!(
-        "termul-sink-history-watch-{}",
-        uuid::Uuid::new_v4()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let persistence = SessionPersistence::open(root.join("sessions"))
-        .await
-        .unwrap();
-    let durable = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    durable.seed_session_for_test("sess-1");
-    let (_out, mut watch_rx) = watch_connection(&durable, WatchKind::ChatHistory);
-    let live_only = Arc::new(WsRelaySink::new());
-    live_only.seed_session_for_test("sess-1");
-    let (_live_out, mut live_rx) = watch_connection(&live_only, WatchKind::ChatHistory);
-
-    for relay in [&durable, &live_only] {
-        for type_ in ["acp:session_created", "acp:session_closed"] {
-            relay.emit(&AcpEvent {
-                sid: Some("sess-1".to_string()),
-                type_,
-                payload: json!({"agentId": "a-1", "sessionId": "sess-1"}),
-            });
-        }
-    }
-
-    assert_eq!(
-        watch_deltas(&mut watch_rx),
-        vec![json!({"changed": ["sess-1"]}), json!({"changed": ["sess-1"]})]
-    );
-    assert!(watch_deltas(&mut live_rx).is_empty(), "no durable index, nothing to publish");
-    persistence.shutdown().await.unwrap();
-    let _ = std::fs::remove_dir_all(root);
 }

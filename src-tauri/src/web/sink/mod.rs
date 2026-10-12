@@ -46,7 +46,6 @@ mod session_log;
 mod watch_bridge;
 
 pub use fanout::{ClientId, EventStream, StreamItem};
-pub use watch_bridge::{broadcast_chat_history_changed, broadcast_projects_changed};
 
 use fanout::ClientSub;
 use session_log::{RelaySeqAuthority, SessionState};

@@ -959,7 +959,7 @@ export function normalizeIndexTitle(title: string): string {
 /**
  * CAP-2: history is host-owned. Refresh the desktop sidebar from the host
  * index after session lifecycle events — browser-origin sessions never flow
- * through `createSession`, and the host's `chat_history_changed` broadcast
+ * through `createSession`, and the host's `chat_history` watch
  * reaches WS clients only, not the desktop renderer. Skipped on the WS
  * transport (its sidebar refetches from the negotiated push).
  */

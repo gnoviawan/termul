@@ -149,8 +149,8 @@ pub async fn remote_server_status(
 }
 
 /// Push the desktop renderer's current project list into the in-memory
-/// `ProjectRegistry` (Epic-4 bridge) and broadcast a `projects_changed` WS event
-/// so connected web clients refetch `GET /projects`. Called by the renderer
+/// `ProjectRegistry` (Epic-4 bridge) and publish the new state to every
+/// `projects` watcher so connected web clients rebuild their list. Called by the renderer
 /// on server-start success + on every project-store mutation while the server
 /// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
 ///
@@ -194,7 +194,6 @@ pub async fn remote_sync_projects(
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<Option<String>>, String> {
     let default_id = project_registry.set_with_default_from(payload.projects, default_after_sync);
-    crate::web::broadcast_projects_changed(ws_relay.inner(), default_id.as_deref());
     crate::web::watch::publish_projects(ws_relay.inner(), &project_registry);
     Ok(IpcResult::success(default_id))
 }
@@ -203,7 +202,7 @@ pub async fn remote_sync_projects(
 /// workspace continuity). Distinct from a per-connection `switch_project`:
 /// this changes the host default that new web clients start with. Validates
 /// the project is switchable, updates `registry.set_default_project`, and
-/// broadcasts `projects_changed` to all connected web clients. Desktop-hosted
+/// publishes the project state to every `projects` watcher. Desktop-hosted
 /// mode has no `FileProjectRegistry` (the file registry is VPS-only). This is
 /// the only desktop path that moves the host default; it stores the default
 /// and rebinds nothing.
@@ -234,10 +233,9 @@ pub async fn set_host_default_project(
             "NOT_FOUND",
         ));
     }
-    crate::web::broadcast_projects_changed(ws_relay.inner(), Some(&project_id));
     crate::web::watch::publish_projects(ws_relay.inner(), &project_registry);
     log::info!(
-        "set_host_default_project: host default updated to '{}' + broadcast",
+        "set_host_default_project: host default updated to '{}' + published",
         project_id
     );
     Ok(IpcResult::success(()))
@@ -246,7 +244,7 @@ pub async fn set_host_default_project(
 /// Compatibility refresh command for older renderer callers.
 ///
 /// Durable desktop history is owned by `acp_history_*`; this command retains
-/// the old invoke shape but only broadcasts `chat_history_changed`.
+/// the old invoke shape but only tells `chat_history` watchers the index changed.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -288,7 +286,6 @@ pub async fn remote_sync_chat_history(
     // this command to request a browser index refresh, but payload/index values
     // are deliberately not retained or cloned in Rust memory.
     let _ = payload;
-    crate::web::broadcast_chat_history_changed(ws_relay.inner());
     crate::web::watch::publish_chat_history(ws_relay.inner(), &[]);
     Ok(IpcResult::success(()))
 }

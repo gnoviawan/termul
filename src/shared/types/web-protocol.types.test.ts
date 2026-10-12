@@ -30,8 +30,8 @@ import {
 import { WEB_TERMINAL_ERROR_CODES } from './web-terminal-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 28 event types including durable user prompts, host records, switch markers, worktree renames + delivery frames', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(28)
+  it('exports exactly 26 event types including durable user prompts, host records, switch markers, worktree renames + delivery frames', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(26)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -55,11 +55,10 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       expect(WS_EVENT_TYPES).toContain(name)
     }
     expect(WS_EVENT_TYPES).toContain('auth_required')
-    // Epic-4 bridge: desktop project-list live push (agent-level, seq 0).
-    expect(WS_EVENT_TYPES).toContain('projects_changed')
     expect(WS_EVENT_TYPES).toContain('user_prompt')
-    // Epic-4 bridge: desktop chat-history live push (agent-level, seq 0).
-    expect(WS_EVENT_TYPES).toContain('chat_history_changed')
+    // The nudges retired by the watch hub must not come back as seq-0 events.
+    expect(WS_EVENT_TYPES).not.toContain('projects_changed')
+    expect(WS_EVENT_TYPES).not.toContain('chat_history_changed')
     // Headless ACP auth (spec-acp-terminal-auth): shim-captured auth URL.
     expect(WS_EVENT_TYPES).toContain('browser_open_request')
     // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker.
@@ -211,7 +210,7 @@ describe('web-protocol.types — error codes (AC2)', () => {
 
 describe('web-protocol.types — versioned handshake contract (AD-15)', () => {
   it('pins the protocol version and client id length cap shared with the Rust host', () => {
-    expect(WS_PROTOCOL_VERSION).toBe(5)
+    expect(WS_PROTOCOL_VERSION).toBe(6)
     expect(MAX_CLIENT_ID_LEN).toBe(128)
   })
 
@@ -284,7 +283,6 @@ describe('web-protocol.types — reliability tier registry (AC5)', () => {
       'session_info_update',
       'usage_update',
       'auth_required',
-      'projects_changed',
       'worktree_branch_renamed',
       'gap',
       'heartbeat'

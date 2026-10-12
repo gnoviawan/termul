@@ -181,6 +181,33 @@ describe('acp-store', () => {
     useAcpStore.setState(FRESH)
   })
 
+  it('applySessionIndexSnapshot installs a host index and discards an older loadSessionIndex response', async () => {
+    const { loadSessionIndex } = await import('@/lib/acp-history-persistence')
+    const entry = (id: string, title: string) => ({
+      id,
+      agentId: '',
+      title,
+      cwd: '/w',
+      projectId: 'p1',
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 0,
+      status: 'closed' as const
+    })
+    // A refetch starts, then the watch state lands first; the older response
+    // must not replace it when it resolves.
+    const slow = deferred<ReturnType<typeof entry>[]>()
+    ;(loadSessionIndex as ReturnType<typeof vi.fn>).mockReturnValueOnce(slow.promise)
+    const refetch = useAcpStore.getState().loadSessionIndex()
+
+    await useAcpStore.getState().applySessionIndexSnapshot([entry('s-new', 'Fresh')])
+    expect(useAcpStore.getState().sessionIndex.map((e) => e.id)).toEqual(['s-new'])
+
+    slow.resolve([entry('s-old', 'Stale')])
+    await refetch
+    expect(useAcpStore.getState().sessionIndex.map((e) => e.id)).toEqual(['s-new'])
+  })
+
   it('openHistorySession loads the local transcript when no agent is connected (P5)', async () => {
     const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
     ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({

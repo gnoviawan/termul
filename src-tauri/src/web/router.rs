@@ -139,7 +139,7 @@ pub fn router(
         // first-class project-list authority, not just a read-only mirror).
         // `PUT /projects/{id}` patches display fields; `DELETE /projects/{id}`
         // removes the root. Both persist to `FileProjectRegistry` (VPS) with
-        // rollback + broadcast `projects_changed`. Mirrors the
+        // rollback + publish the project state. Mirrors the
         // `add_project`/`update_project`/`remove_project` WS requests.
         .route(
             "/projects/{projectId}",

@@ -4,7 +4,7 @@
  * The desktop-hosted shared-live web server (`remote_server_start`) mirrors the
  * desktop's non-archived project list into an in-memory `ProjectRegistry` (a
  * deliberate bridge to Epic 4). The browser reads it via `GET /projects` and
- * receives live `projects_changed` WS events when the desktop mutates its store.
+ * receives the same list through the `projects` watch (full state, then deltas) when the desktop mutates its store.
  *
  * # Secret boundary (frozen constraint)
  *
@@ -51,24 +51,10 @@ export interface ProjectListPayload {
 }
 
 /**
- * `projects_changed` WS event payload (agent-level: `sid: null`, `seq: 0`).
- *
- * Carries only the new `defaultProjectId` — the web client refetches `GET
- * /projects` for the full list rather than receiving the payload inline (the
- * list can be large and the host is the source of truth). On the initial load
- * a client seeds `activeProjectId` from `defaultProjectId`; on subsequent
- * events the client preserves its own `activeProjectId` (no silent retarget).
- */
-export interface ProjectsChangedEvent {
-  /** The host's new default project id, or `null` when none is set. */
-  defaultProjectId: string | null
-}
-
-/**
  * `set_default_project` WS request payload (client→server) — the explicit
  * host-default change: this updates the host default that new web clients start with, persists to the
- * `FileProjectRegistry` (VPS), and broadcasts `projects_changed` to ALL
- * clients. Mirrors the `set_host_default_project` Tauri command + the
+ * `FileProjectRegistry` (VPS), and publishes the project state to every
+ * `projects` watcher. Mirrors the `set_host_default_project` Tauri command + the
  * `POST /projects/default` HTTP route (transport parity).
  */
 export interface SetDefaultProjectRequest {

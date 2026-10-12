@@ -93,7 +93,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         }
         // CAP-11: host-owned session delete (desktop parity with the
         // `acp_history_delete` Tauri command) — removes the persisted record
-        // and fans `chat_history_changed` so every client refetches the index.
+        // and tells every `chat_history` watcher the index changed.
         "delete_session" => handle_delete_session(id, &req.payload, relay, history_mode).await,
         "open_persisted_session" => {
             handle_open_persisted_session(
@@ -172,7 +172,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // Explicit host-default change (Epic 7 — cross-client continuity).
         // Updates the host's
         // `default_project_id`, persists to `FileProjectRegistry` (VPS, with
-        // rollback), and broadcasts `projects_changed` to ALL clients. Any
+        // rollback), and publishes the project state to every watcher. Any
         // authenticated client can set the default for now (Epic 2 wires auth).
         "set_default_project" => {
             handle_set_default_project(
@@ -187,8 +187,8 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         }
         // Option B: project-list mutations. The standalone server is a
         // first-class project-list authority; these persist to
-        // `FileProjectRegistry` (VPS, with rollback) + broadcast
-        // `projects_changed`. Mirrors the `POST /projects`,
+        // `FileProjectRegistry` (VPS, with rollback) + publish
+        // the project state. Mirrors the `POST /projects`,
         // `PUT /projects/{id}`, `DELETE /projects/{id}` HTTP routes
         // (transport parity). Any authenticated client for now (Epic 2).
         "add_project" => {

@@ -155,20 +155,6 @@ fn project_summary_serializes_camel_case_with_optional_path() {
     assert_eq!(v2["isArchived"], true);
 }
 
-#[test]
-fn projects_changed_payload_omits_none_default() {
-    let p = ProjectsChangedPayload {
-        default_project_id: None,
-    };
-    let v = serde_json::to_value(&p).unwrap();
-    assert!(v.get("defaultProjectId").is_none());
-    let p2 = ProjectsChangedPayload {
-        default_project_id: Some("p-3".to_string()),
-    };
-    let v2 = serde_json::to_value(&p2).unwrap();
-    assert_eq!(v2["defaultProjectId"], "p-3");
-}
-
 // T5.8 — VfsRoot -> ProjectSummary mapping round-trips identity/display
 // fields and redacts-by-omission (no env-var field on ProjectSummary).
 #[test]

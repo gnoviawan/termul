@@ -73,7 +73,7 @@ export function ProjectSwitcherDrawer({
 
   // Explicit host-default change (Epic 7). Distinct from the client-only
   // switch: updates the host default that new web clients start
-  // with + broadcasts `projects_changed` to ALL clients. Transport parity:
+  // with + publishes the project state to every `projects` watcher. Transport parity:
   // Tauri → `set_host_default_project`; web → `POST /projects/default`.
   async function handleSetDefault(project: Project): Promise<void> {
     if (defaultingId !== null) return
@@ -88,7 +88,7 @@ export function ProjectSwitcherDrawer({
       } else {
         // P6: update isDefault flags locally so the badge refreshes
         // immediately (desktop-hosted mode doesn't refetch on set_default;
-        // web mode refetches on the subsequent projects_changed broadcast
+        // web mode receives the new list through the `projects` watch
         // but the local update avoids a flash of the stale badge).
         useProjectStore.setState((s) => ({
           projects: s.projects.map((p) => ({ ...p, isDefault: p.id === project.id }))

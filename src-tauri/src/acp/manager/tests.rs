@@ -1838,10 +1838,7 @@ async fn record_agent_switch_shares_one_seq_with_the_live_event() {
 
     let mut live = Vec::new();
     while let Ok(crate::web::StreamItem::Event(event)) = rx.try_recv() {
-        // `seq = 0` nudges (chat_history_changed) are not log events.
-        if event.seq > 0 {
-            live.push((event.seq, event.type_));
-        }
+        live.push((event.seq, event.type_));
     }
     assert_eq!(
         live,

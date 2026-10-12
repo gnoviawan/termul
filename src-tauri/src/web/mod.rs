@@ -61,13 +61,8 @@ pub mod ws;
 pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
 pub use permissions::QuestionRendezvous;
-pub use project_registry::{
-    seed_from_file, ProjectListPayload, ProjectRegistry, ProjectSummary, ProjectsChangedPayload,
-};
-pub use sink::{
-    broadcast_chat_history_changed, broadcast_projects_changed, fan_out, EventSink, EventStream,
-    StreamItem, TauriEventSink, WsRelaySink,
-};
+pub use project_registry::{seed_from_file, ProjectListPayload, ProjectRegistry, ProjectSummary};
+pub use sink::{fan_out, EventSink, EventStream, StreamItem, TauriEventSink, WsRelaySink};
 pub use ws::{AppState, HistoryMode, ReliabilityTier, RuntimePolicy, SequencedEvent, WsErrorCode};
 
 use std::future::Future;

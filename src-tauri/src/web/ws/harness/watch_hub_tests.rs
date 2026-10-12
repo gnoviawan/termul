@@ -1,7 +1,7 @@
 //! The state watches (projects, chat-history index, agent roster) over the
 //! production relay loop: full state before the reply, once per socket with no
 //! session subscription, contiguous revisions, resubscribe returning fresh
-//! state and release on close.
+//! state, release on close, and no `seq = 0` nudge for the retired events.
 
 use super::*;
 use crate::acp::session_persistence::SessionPersistence;
@@ -75,11 +75,15 @@ async fn a_resubscribe_returns_fresh_state_and_restarts_the_revision() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_agent_roster_reaches_the_agents_watch() {
+async fn the_agent_roster_reaches_the_watch_and_never_a_seq_zero_event() {
     let host = Host::new(|_, _| {});
     let mut watcher = host.connect();
     watcher.authenticate().await;
     watcher.request("w1", "watch", json!({ "watch": "agents" })).await;
+    // A socket that subscribed a session but did not watch gets nothing.
+    let mut bystander = host.connect();
+    bystander.authenticate().await;
+    bystander.subscribe("sub").await;
 
     host.relay.emit(&AcpEvent {
         sid: None,
@@ -88,10 +92,16 @@ async fn the_agent_roster_reaches_the_agents_watch() {
     });
     publish_agent_event(&host.relay, "agent_disconnected", &json!({ "agentId": "a-1" }));
     watcher.peer.read_for(Duration::from_millis(50)).await;
+    bystander.peer.read_for(Duration::from_millis(50)).await;
 
     let deltas = frames(&watcher, "agents");
     assert_eq!(deltas[1]["delta"]["event"], "agent_spawned");
     assert_eq!(deltas[2]["delta"]["event"], "agent_disconnected");
+    assert!(
+        bystander.peer.events_of("agent_spawned").is_empty(),
+        "no seq=0 agent_spawned event any more"
+    );
+    assert!(frames(&bystander, "agents").is_empty());
 }
 
 #[tokio::test(start_paused = true)]

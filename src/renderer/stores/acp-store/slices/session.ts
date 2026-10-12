@@ -1331,6 +1331,7 @@ type SessionSliceState = Pick<
   | 'closeSession'
   | 'setActiveSession'
   | 'loadSessionIndex'
+  | 'applySessionIndexSnapshot'
   | 'openHistorySession'
   | 'resumeLiveSession'
   | 'flushLiveSessionSaves'
@@ -1342,6 +1343,55 @@ type SessionSliceState = Pick<
   | '_onSessionCreated'
   | '_onSessionClosed'
 >
+
+type IndexSet = (partial: Partial<AcpState> | ((state: AcpState) => Partial<AcpState>)) => void
+
+/**
+ * Merge a host session index into the local projection. `generation` is the
+ * load generation the entries belong to: a response older than one already
+ * applied is discarded so it cannot revert a newer local mutation.
+ */
+async function applyIndexEntries(
+  set: IndexSet,
+  get: () => AcpState,
+  generation: number,
+  entries: SessionIndexEntry[]
+): Promise<void> {
+  if (generation <= sessionIndexAppliedGeneration) return
+  sessionIndexAppliedGeneration = generation
+  // Continue the placeholder counter from the highest persisted suffix so a
+  // restart doesn't restart at 1 and collide with existing `Untitled Chat N`.
+  rebaseUntitledCounter(entries)
+  // Merge with the locally-known projection so a stale response cannot
+  // remove a just-created row or revert a freshly-titled session. The
+  // initial empty-load case (no local entries) applies the host response
+  // verbatim.
+  const current = get().sessionIndex
+  const liveSessionIds = new Set(Object.keys(get().sessions) as SessionId[])
+  const merged = stampLiveTurnOnIndex(
+    mergeSessionIndexEntries(current, entries, liveSessionIds),
+    get().sessions
+  )
+  set({ sessionIndex: merged })
+  // Prune restored agent-chat tabs whose session is neither live nor in the
+  // hydrated index — they could only render the corpse "chat unavailable"
+  // fallback. Live sessions win over index absence (a just-failed launch is
+  // local-only until the host learns about it). Runs only on a successful
+  // load: the throw path above preserves tabs when the index cannot be read.
+  // Also prunes tabs the now-loaded index proves FOREIGN to the active
+  // project (inserted fail-open before ownership was known): the pane tree
+  // is shared, so such a tab renders another project's chat here. The
+  // session keeps running and is handed back to its owner's retained set
+  // first, so switching to the owner reattaches it (lossless even in the
+  // render gap where the owner's tabs are still mounted mid-switch).
+  pruneRestoredChatTabs({
+    liveSessionIds,
+    indexedSessionIds: new Set(merged.map((e) => e.id)),
+    ownership: get(),
+    activeProjectId: useProjectStore.getState().activeProjectId
+  })
+  await recoverDroppedLaunchChats(merged)
+}
 
 export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceState> = (
   set,
@@ -1583,40 +1633,11 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       }
       throw error
     }
-    if (generation <= sessionIndexAppliedGeneration) return
-    sessionIndexAppliedGeneration = generation
-    // Continue the placeholder counter from the highest persisted suffix so a
-    // restart doesn't restart at 1 and collide with existing `Untitled Chat N`.
-    rebaseUntitledCounter(entries)
-    // Merge with the locally-known projection so a stale response cannot
-    // remove a just-created row or revert a freshly-titled session. The
-    // initial empty-load case (no local entries) applies the host response
-    // verbatim.
-    const current = get().sessionIndex
-    const liveSessionIds = new Set(Object.keys(get().sessions) as SessionId[])
-    const merged = stampLiveTurnOnIndex(
-      mergeSessionIndexEntries(current, entries, liveSessionIds),
-      get().sessions
-    )
-    set({ sessionIndex: merged })
-    // Prune restored agent-chat tabs whose session is neither live nor in the
-    // hydrated index — they could only render the corpse "chat unavailable"
-    // fallback. Live sessions win over index absence (a just-failed launch is
-    // local-only until the host learns about it). Runs only on a successful
-    // load: the throw path above preserves tabs when the index cannot be read.
-    // Also prunes tabs the now-loaded index proves FOREIGN to the active
-    // project (inserted fail-open before ownership was known): the pane tree
-    // is shared, so such a tab renders another project's chat here. The
-    // session keeps running and is handed back to its owner's retained set
-    // first, so switching to the owner reattaches it (lossless even in the
-    // render gap where the owner's tabs are still mounted mid-switch).
-    pruneRestoredChatTabs({
-      liveSessionIds,
-      indexedSessionIds: new Set(merged.map((e) => e.id)),
-      ownership: get(),
-      activeProjectId: useProjectStore.getState().activeProjectId
-    })
-    await recoverDroppedLaunchChats(merged)
+    await applyIndexEntries(set, get, generation, entries)
+  },
+
+  applySessionIndexSnapshot: async (entries) => {
+    await applyIndexEntries(set, get, ++sessionIndexLoadGeneration, entries)
   },
 
   openHistorySession: async (id) => {

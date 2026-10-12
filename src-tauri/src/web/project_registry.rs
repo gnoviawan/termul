@@ -81,21 +81,6 @@ pub struct ProjectListPayload {
     pub default_project_id: Option<String>,
 }
 
-/// `projects_changed` WS event payload (agent-level: `sid: None`, `seq: 0`).
-///
-/// Carries only the new `defaultProjectId` — the web client refetches
-/// `GET /projects` for the full list rather than receiving it inline. On the
-/// initial load the client seeds `activeProjectId` from `defaultProjectId`; on
-/// subsequent `projects_changed` events the client refetches the list but
-/// preserves its own `activeProjectId` (no silent retarget).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectsChangedPayload {
-    /// The host's new default project id, or `None` when none is set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_project_id: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct ProjectSwitchContext {
     pub project_id: String,

@@ -40,11 +40,10 @@
 
 /**
  * The `acp:*` event names from `src-tauri/src/acp/events.rs` with the `acp:`
- * prefix dropped (18, including `browser_open_request`), plus relay-level and
- * Epic-4 bridge events (`auth_required`, `projects_changed`,
- * `chat_history_changed`) and the top-level delivery frames (`gap`,
- * `heartbeat`). The `watch` frame has the same name as the `watch` request, so
- * its type lives in {@link WS_WATCH_FRAME_TYPE}, outside this registry.
+ * prefix dropped (18, including `browser_open_request`), plus the relay-level
+ * `auth_required` event and the top-level delivery frames (`gap`, `heartbeat`).
+ * The `watch` frame has the same name as the `watch` request, so its type
+ * lives in {@link WS_WATCH_FRAME_TYPE}, outside this registry.
  */
 export const WS_EVENT_TYPES = [
   // Session/agent lifecycle (reliable)
@@ -70,14 +69,8 @@ export const WS_EVENT_TYPES = [
   'plan_update',
   // Relay-level (not from events.rs) (reliable)
   'auth_required',
-  // Desktop project-list live push (Epic-4 bridge — agent-level, seq 0)
-  'projects_changed',
   // Server-authored authoritative user input (durable/replayable).
   'user_prompt',
-  // Desktop chat-history live push (Epic-4 bridge — agent-level, seq 0).
-  // Fired when the renderer-fed ChatHistoryCache mutates so connected web
-  // clients refetch the session index.
-  'chat_history_changed',
   // Headless ACP auth (spec-acp-terminal-auth): the host's browser-open shim
   // captured the agent's auth URL. Agent-level event (sid null, seq 0);
   // payload `{ agentId, url }` — the renderer shows the BrowserAuthDialog.
@@ -178,7 +171,7 @@ export const WS_REQUEST_TYPES = [
   // CAP-11: host-owned session delete (desktop parity with the
   // `acp_history_delete` Tauri command). Boolean reply (finding 6): `true` =
   // deleted, `false` = record already absent (idempotent no-op); genuine
-  // errors reject. Broadcasts `chat_history_changed` on a real delete;
+  // errors reject. Publishes a `chat_history` watch delta on a real delete;
   // live-only mode → `unsupported`.
   'delete_session',
   'open_persisted_session',
@@ -228,8 +221,8 @@ export const WS_REQUEST_TYPES = [
   // Option B: project-list mutations (the standalone server is a first-class
   // project-list authority). Mirrors `POST /projects`, `PUT /projects/{id}`,
   // `DELETE /projects/{id}` HTTP routes (transport parity). The WS variants
-  // persist to `FileProjectRegistry` (VPS) with rollback + broadcast
-  // `projects_changed` and publish the new state to every `projects` watcher.
+  // persist to `FileProjectRegistry` (VPS) with rollback + publish the new
+  // state to every `projects` watcher.
   'add_project',
   'update_project',
   'remove_project',
@@ -254,8 +247,8 @@ export const WS_REQUEST_TYPES = [
   'watch',
   'unwatch',
   // Explicit host-default project change (updates `default_project_id`,
-  // persists on file-backed hosts, broadcasts `projects_changed` and publishes
-  // the project state to every `projects` watcher).
+  // persists on file-backed hosts, publishes the project state to every
+  // `projects` watcher).
   'set_default_project'
 ] as const
 
@@ -586,9 +579,7 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   usage_update: WS_RELAY_TIERS.RELIABLE,
   permission_request: WS_RELAY_TIERS.RELIABLE,
   auth_required: WS_RELAY_TIERS.RELIABLE,
-  projects_changed: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
-  chat_history_changed: WS_RELAY_TIERS.RELIABLE,
   browser_open_request: WS_RELAY_TIERS.RELIABLE,
   // CAP-2: switch markers are one-shot durable-backed events — reliable.
   agent_switch: WS_RELAY_TIERS.RELIABLE,
@@ -631,7 +622,7 @@ export interface AcpRuntimePolicy {
  * The `authenticate` protocol version this client speaks. Mirrors the Rust
  * `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
  */
-export const WS_PROTOCOL_VERSION = 5
+export const WS_PROTOCOL_VERSION = 6
 
 /** Longest accepted `deviceId` / `clientInstanceId`, in bytes. */
 export const MAX_CLIENT_ID_LEN = 128

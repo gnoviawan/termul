@@ -370,7 +370,7 @@ export const webServerProjects = {
    * Set the host's default project (Epic 7 — cross-client workspace
    * continuity). Validates the project is switchable, updates
    * `registry.set_default_project`, persists to the `FileProjectRegistry`
-   * (VPS), and broadcasts `projects_changed` to all connected clients.
+   * (VPS), and publishes the project state to every `projects` watcher.
    */
   async setDefaultProject(projectId: string): Promise<IpcResult<void>> {
     return postJson<void>('/projects/default', { projectId })
@@ -379,7 +379,7 @@ export const webServerProjects = {
   /**
    * Create / upsert a project (Option B: the standalone server is a first-class
    * project-list authority). Canonicalizes + validates the path on the server,
-   * persists to `FileProjectRegistry` (VPS), and broadcasts `projects_changed`.
+   * persists to `FileProjectRegistry` (VPS), and publishes the project state.
    * Mirrors the `add_project` WS request.
    */
   async addProject(params: {

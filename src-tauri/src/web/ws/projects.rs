@@ -124,10 +124,10 @@ pub(super) struct SetDefaultProjectPayload {
 ///
 /// Validates the target (unknown/archived/pathless → `NOT_FOUND`), updates
 /// `registry.set_default_project`, persists to `FileProjectRegistry` (VPS only,
-/// with rollback on failure), and broadcasts `projects_changed` carrying the
-/// new `defaultProjectId` to ALL connected clients. Desktop-hosted mode has
+/// with rollback on failure), and publishes the new project state to every
+/// `projects` watcher. Desktop-hosted mode has
 /// no `FileProjectRegistry` (`registry_persistence`/`projects_file` are
-/// `None`) — it updates the in-memory registry + broadcasts only. The
+/// `None`) — it updates the in-memory registry + publishes only. The
 /// `remote_sync_projects` desktop push is the other path that changes the
 /// default (the desktop user IS the host operator).
 ///
@@ -220,7 +220,7 @@ pub(super) async fn handle_set_default_project(
             );
         }
     }
-    // Update the in-memory registry default + broadcast to all clients.
+    // Update the in-memory registry default + publish to every watcher.
     // If the in-memory set fails (target vanished between validation and
     // commit), roll back the file registry (P1: no split-brain).
     if !registry.set_default_project(&parsed.project_id) {
@@ -248,12 +248,11 @@ pub(super) async fn handle_set_default_project(
             "target project became unavailable before commit",
         );
     }
-    broadcast_projects_changed(relay, Some(&parsed.project_id));
     publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %parsed.project_id,
-        "set_default_project: host default updated + broadcast"
+        "set_default_project: host default updated + published"
     );
     WsReply::ok(id, Some(json!({})))
 }
@@ -293,9 +292,9 @@ pub(super) struct RemoveProjectPayload {
 /// `add_project` WS handler — create / upsert a VFS root (Option B).
 ///
 /// Validates + canonicalizes the path, upserts into `FileProjectRegistry`
-/// (VPS, with rollback) + the in-memory `ProjectRegistry`, and broadcasts
-/// `projects_changed`. Desktop-hosted mode has no file registry — it upserts
-/// the in-memory mirror + broadcasts only.
+/// (VPS, with rollback) + the in-memory `ProjectRegistry`, and publishes the
+/// new project state. Desktop-hosted mode has no file registry — it upserts
+/// the in-memory mirror + publishes only.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_add_project(
     id: String,
@@ -399,12 +398,11 @@ pub(super) async fn handle_add_project(
             && registry.snapshot().default_project_id.as_deref() == Some(parsed.id.as_str()),
     };
     registry.upsert(summary.clone());
-    broadcast_projects_changed(relay, None);
     publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %summary.id,
-        "add_project: project upserted + broadcast"
+        "add_project: project upserted + published"
     );
     WsReply::ok(id, Some(json!({ "project": summary })))
 }
@@ -509,12 +507,11 @@ pub(super) async fn handle_update_project(
             format!("project '{}' not found", parsed.project_id),
         );
     }
-    broadcast_projects_changed(relay, None);
     publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %parsed.project_id,
-        "update_project: project updated + broadcast"
+        "update_project: project updated + published"
     );
     WsReply::ok(id, Some(json!({})))
 }
@@ -598,12 +595,11 @@ pub(super) async fn handle_remove_project(
     }
     // Mirror into the in-memory registry.
     registry.remove(&parsed.project_id);
-    broadcast_projects_changed(relay, None);
     publish_projects(relay, registry);
     info!(
         target: "termul::web::ws",
         project_id = %parsed.project_id,
-        "remove_project: project removed + broadcast"
+        "remove_project: project removed + published"
     );
     WsReply::ok(id, Some(json!({})))
 }

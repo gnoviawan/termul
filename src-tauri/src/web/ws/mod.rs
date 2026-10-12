@@ -58,10 +58,7 @@ use crate::web::capabilities::{Carrier, CapabilityPolicy};
 use crate::web::connection_runtime::ConnectionRuntime;
 use crate::web::permissions::DEFAULT_PERMISSION_RECONNECT_GRACE;
 use crate::web::project_registry::ProjectRegistry;
-use crate::web::sink::{
-    broadcast_chat_history_changed, broadcast_projects_changed, ClientId, EventStream, ReplayResult,
-    StreamItem, WsRelaySink,
-};
+use crate::web::sink::{ClientId, EventStream, ReplayResult, StreamItem, WsRelaySink};
 use crate::web::store::WebStore;
 
 mod access;
@@ -177,7 +174,7 @@ pub fn tier_of(type_: &str) -> ReliabilityTier {
 
 /// The `authenticate` protocol version this host speaks. Mirrors the TS
 /// `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
-pub const WS_PROTOCOL_VERSION: u32 = 5;
+pub const WS_PROTOCOL_VERSION: u32 = 6;
 
 /// Longest accepted `deviceId` / `clientInstanceId`, in bytes.
 pub const MAX_CLIENT_ID_LEN: usize = 128;

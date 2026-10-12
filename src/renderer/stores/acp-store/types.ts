@@ -686,6 +686,11 @@ export interface AcpState {
 
   // Actions — chat history (P5)
   loadSessionIndex: () => Promise<void>
+  /**
+   * Merge a host-pushed full index (the `chat_history` watch state) into the
+   * local projection, with the same stale-response guard as `loadSessionIndex`.
+   */
+  applySessionIndexSnapshot: (entries: SessionIndexEntry[]) => Promise<void>
   openHistorySession: (id: string) => Promise<void>
   /** R1: Proactively reattach a still-running ACP session on refresh. Mirrors
    * `openHistorySessionInner`'s transcript-install + resume but skips

@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::web::fs_api::check_local_only;
 use crate::web::project_registry::ProjectListPayload;
-use crate::web::sink::broadcast_projects_changed;
 use crate::web::watch::publish_projects;
 use crate::web::ws::AppState;
 
@@ -98,8 +97,8 @@ pub struct UpdateProjectRequest {
 /// empty list is a valid success (the desktop hasn't synced yet, or the
 /// standalone binary has no renderer source) — the web client renders an empty
 /// sidebar, NOT an error. The registry is the source; if it is empty the
-/// browser just shows nothing (the desktop will push a `projects_changed`
-/// event when it syncs).
+/// browser just shows nothing (the desktop will publish the project state
+/// to `projects` watchers when it syncs).
 pub async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let payload: ProjectListPayload = state.registry.snapshot();
     Json(IpcBody::ok(payload))
@@ -109,11 +108,11 @@ pub async fn list(State(state): State<AppState>) -> impl IntoResponse {
 ///
 /// Validates the target is switchable (unknown/archived/pathless → `NOT_FOUND`),
 /// updates `registry.set_default_project`, persists to `FileProjectRegistry`
-/// (VPS only, with rollback on failure), and broadcasts `projects_changed`
-/// carrying the new `defaultProjectId` to ALL connected clients. Mirrors the
+/// (VPS only, with rollback on failure), and publishes the project state
+/// (with the new `defaultProjectId`) to every `projects` watcher. Mirrors the
 /// `set_default_project` WS request + the `set_host_default_project` Tauri
 /// command (transport parity). Desktop-hosted mode has no file registry — it
-/// updates the in-memory registry + broadcasts only.
+/// updates the in-memory registry + publishes only.
 ///
 /// # Malformed body (P14)
 ///
@@ -130,7 +129,7 @@ pub async fn set_default_project(
     Json(req): Json<SetDefaultProjectRequest>,
 ) -> impl IntoResponse {
     // This route mutates host state (persists the default to
-    // `FileProjectRegistry` and broadcasts `projects_changed` to ALL connected
+    // `FileProjectRegistry` and publishes the project state to ALL watching
     // clients): the shared write predicate guards it like every other
     // host-state write (CWE-306).
     if let Some(err) = check_project_write_guard(&state, peer, "/projects/default") {
@@ -189,7 +188,7 @@ pub async fn set_default_project(
             ));
         }
     }
-    // Update the in-memory registry default + broadcast.
+    // Update the in-memory registry default + publish.
     // If the in-memory set fails (target vanished between validation and
     // commit), roll back the file registry (P1: no split-brain).
     if !state.registry.set_default_project(&project_id) {
@@ -218,12 +217,11 @@ pub async fn set_default_project(
             "NOT_FOUND",
         ));
     }
-    broadcast_projects_changed(&state.relay, Some(&project_id));
     publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %project_id,
-        "set_default_project: host default updated + broadcast"
+        "set_default_project: host default updated + published"
     );
     Json(IpcBody::ok(()))
 }
@@ -253,8 +251,8 @@ fn check_project_write_guard<T>(
 ///
 /// Canonicalizes + validates the path, upserts into `FileProjectRegistry`
 /// (VPS, with rollback on failure) + the in-memory `ProjectRegistry`, and
-/// broadcasts `projects_changed`. Desktop-hosted mode has no file registry —
-/// it upserts the in-memory mirror + broadcasts only (the desktop renderer
+/// publishes the project state. Desktop-hosted mode has no file registry —
+/// it upserts the in-memory mirror + publishes only (the desktop renderer
 /// is the source of truth there, but a web-client upsert still lands in the
 /// mirror so the creating client sees it). Returns the upserted
 /// `ProjectSummary`.
@@ -381,12 +379,11 @@ pub async fn create_project(
             && state.registry.snapshot().default_project_id.as_deref() == Some(req.id.as_str()),
     };
     state.registry.upsert(summary.clone());
-    broadcast_projects_changed(&state.relay, None);
     publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %req.id,
-        "create_project: project upserted + broadcast"
+        "create_project: project upserted + published"
     );
     Json(IpcBody::<crate::web::project_registry::ProjectSummary> {
         success: true,
@@ -479,12 +476,11 @@ pub async fn update_project(
             "NOT_FOUND",
         ));
     }
-    broadcast_projects_changed(&state.relay, None);
     publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %project_id,
-        "update_project: project updated + broadcast"
+        "update_project: project updated + published"
     );
     Json(IpcBody::ok(()))
 }
@@ -553,12 +549,11 @@ pub async fn remove_project(
     }
     // Mirror into the in-memory registry.
     state.registry.remove(&project_id);
-    broadcast_projects_changed(&state.relay, None);
     publish_projects(&state.relay, &state.registry);
     tracing::info!(
         target: "termul::web::projects_api",
         project_id = %project_id,
-        "remove_project: project removed + broadcast"
+        "remove_project: project removed + published"
     );
     Json(IpcBody::ok(()))
 }

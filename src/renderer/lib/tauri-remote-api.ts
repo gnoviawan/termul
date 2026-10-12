@@ -69,8 +69,8 @@ export async function syncProjects(projects: ProjectSummary[]): Promise<IpcResul
  * Explicitly set the host's default project (Epic 7 — cross-client workspace
  * continuity). Distinct from a per-connection `switch_project`: this changes
  * the host default that new web clients start with. Validates the project is
- * switchable, updates `registry.set_default_project`, and broadcasts
- * `projects_changed` to all connected web clients. Mirrors the
+ * switchable, updates `registry.set_default_project`, and publishes
+ * the project state to every `projects` watcher. Mirrors the
  * `set_default_project` WS request + the `POST /projects/default` HTTP route
  * (transport parity). The explicit way to select the host default (a project-list
  * sync only changes it when the current default is no longer valid); it stores

@@ -707,3 +707,57 @@ describe('permission denial tracking: wiring through initAcpEventListeners', () 
     expect(notices()).toEqual({})
   })
 })
+
+describe('agent roster: wiring through initAcpEventListeners', () => {
+  beforeEach(() => {
+    resetStore()
+  })
+
+  interface RosterHandlers {
+    onState: (summaries: unknown[]) => void
+    onDelta: (delta: unknown) => void
+  }
+
+  it('watches the agents roster on a transport that has watches and detaches on teardown', () => {
+    let handlers: RosterHandlers | null = null
+    const unsubscribe = vi.fn()
+    const subscribe = vi.fn((_watch: string, h: RosterHandlers) => {
+      handlers = h
+      return unsubscribe
+    })
+    _setAcpTransportForTests({
+      onEvent: vi.fn(() => () => {}),
+      setReconnectListener: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      setReconnectPriorityProvider: vi.fn(),
+      watches: { subscribe },
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+    expect(subscribe).toHaveBeenCalledWith('agents', expect.any(Object))
+
+    // A host-spawned agent reaches the store through the watch, not an event.
+    handlers!.onDelta({
+      event: 'agent_spawned',
+      payload: { agentId: 'agent-roster', capabilities: {} }
+    })
+    expect(useAcpStore.getState().agents['agent-roster']).toBeDefined()
+    expect(useAcpStore.getState().agentStatus['agent-roster']).toBe('connected')
+
+    teardown()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not watch the roster on a transport without watches (desktop IPC)', () => {
+    const onEvent = vi.fn(() => () => {})
+    _setAcpTransportForTests({
+      onEvent,
+      setRecoveryHandler: vi.fn(),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+    // The Tauri `acp:agent_*` listeners stay the roster source there.
+    expect(onEvent).toHaveBeenCalledWith('acp:agent_spawned', expect.any(Function))
+    teardown()
+  })
+})

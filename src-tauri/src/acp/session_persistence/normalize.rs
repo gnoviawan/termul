@@ -25,7 +25,6 @@ pub fn is_durable_event(type_: &str) -> bool {
             | "agent_spawned"
             | "agent_disconnected"
             | "agent_crashed"
-            | "projects_changed"
     )
 }
 

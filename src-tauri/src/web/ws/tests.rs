@@ -1951,7 +1951,7 @@ fn resume_ok_payload_marks_replay_snapshot_null() {
 }
 
 /// CAP-11: `delete_session` removes the host-persisted record (index +
-/// in-memory relay state), fans one `chat_history_changed` broadcast, and
+/// in-memory relay state), publishes one `chat_history` delta, and
 /// answers `not_found` for an unknown id.
 #[tokio::test]
 async fn delete_session_removes_host_persisted_record() {
@@ -1973,14 +1973,14 @@ async fn delete_session_removes_host_persisted_record() {
         .await
         .unwrap();
     let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    // A client subscribed to ANOTHER session observes the broadcast —
-    // `forget_session` drops clients whose only session was the deleted
-    // one, so subscribing to "s-1" itself would not observe it.
-    // Subscribe validates session existence (unknown → not_found), so seed
-    // the observer session first — otherwise its channel never lives to
-    // receive the broadcast.
-    relay.seed_session_for_test("s-other");
-    let (_client, mut rx, _replay, _) = relay.subscribe("s-other", None, None, &CancellationToken::new()).await;
+    // A connection watching the chat-history index observes the delta; it
+    // needs no session subscription.
+    let (out, mut rx) = outbound_channel(16, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || json!([]))
+        .expect("watch");
+    let _state = rx.try_recv().expect("full-state frame");
 
     let reply = handle_delete_session(
         "r1".to_string(),
@@ -2000,15 +2000,11 @@ async fn delete_session_removes_host_persisted_record() {
             .all(|entry| entry.session_id != "s-1"),
         "deleted session leaves the index"
     );
-    // Broadcast observed: sidebars refetch the index.
-    let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
-        .await
-        .expect("chat_history_changed broadcast arrives")
-        .expect("client channel open");
-    let StreamItem::Event(event) = event else {
-        panic!("expected an event, got a gap");
+    // Delta observed: sidebars refetch the index.
+    let Ok(Outbound::Watch(frame)) = rx.try_recv() else {
+        panic!("expected a chat_history delta");
     };
-    assert_eq!(event.type_, "chat_history_changed");
+    assert_eq!(frame.delta_value(), Some(&json!({ "changed": ["s-1"] })));
 
     // Unknown id → typed idempotent delete contract: success with
     // `{ deleted: false }` (never a not-found error).
@@ -3959,10 +3955,10 @@ async fn handle_set_default_project_unknown_id_is_not_found() {
     );
 }
 
-/// `set_default_project` changes the host default and broadcasts
-/// `projects_changed` (carrying the new default) to ALL clients.
+/// `set_default_project` changes the host default and publishes the project
+/// state (carrying the new default) to every `projects` watcher.
 #[tokio::test]
-async fn handle_set_default_project_broadcasts_to_all_clients() {
+async fn handle_set_default_project_publishes_to_all_watchers() {
     let relay = Arc::new(WsRelaySink::new());
     let registry = Arc::new(ProjectRegistry::new());
     registry.set(
@@ -3976,9 +3972,13 @@ async fn handle_set_default_project_broadcasts_to_all_clients() {
         }],
         None,
     );
-    // Subscribe a client to prove the broadcast reaches it.
-    relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
+    // A watcher with no session subscription proves the delta reaches it.
+    let (out, mut rx) = outbound_channel(16, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
+        .expect("watch");
+    let _state = rx.try_recv().expect("full-state frame");
 
     let reply = handle_set_default_project(
         "r1".to_string(),
@@ -3990,20 +3990,17 @@ async fn handle_set_default_project_broadcasts_to_all_clients() {
     )
     .await;
     assert!(reply.ok, "{:?}", reply.err);
-    // P13: inspect the broadcast event type + payload (not just count).
-    let mut drained = Vec::new();
-    while let Ok(StreamItem::Event(evt)) = rx.try_recv() {
-        drained.push(evt);
+    let mut deltas = Vec::new();
+    while let Ok(Outbound::Watch(frame)) = rx.try_recv() {
+        deltas.push(frame);
     }
-    assert_eq!(drained.len(), 1, "exactly one projects_changed broadcast");
-    let evt = &drained[0];
-    assert_eq!(evt.type_, "projects_changed");
-    assert!(evt.sid.is_none(), "agent-level event: sid must be null");
-    assert_eq!(evt.seq, 0, "agent-level event: seq must be 0");
+    assert_eq!(deltas.len(), 1, "exactly one projects delta");
+    let delta = deltas[0].delta_value().expect("delta");
     assert_eq!(
-        evt.payload["defaultProjectId"], "p-1",
-        "the broadcast carries the new default project id"
+        delta["defaultProjectId"], "p-1",
+        "the delta carries the new default project id"
     );
+    assert_eq!(delta["projects"][0]["id"], "p-1");
 }
 
 // ---- Issue #837: resume_session split-brain guard at the WS boundary ----
@@ -4351,96 +4348,6 @@ async fn log_epoch_rides_subscribe_snapshot_and_cursor_replies() {
     assert!(!reply.ok, "{reply:?}");
     assert_eq!(reply.err.unwrap().code, "stale");
 
-    persistence.shutdown().await.unwrap();
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// `set_default_project` also publishes the project state (with the new
-/// default) to every `projects` watcher, which needs no session subscription.
-#[tokio::test]
-async fn handle_set_default_project_publishes_to_all_watchers() {
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
-    let (out, mut rx) = outbound_channel(16, 15);
-    relay
-        .watches()
-        .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
-        .expect("watch");
-    let _state = rx.try_recv().expect("full-state frame");
-
-    let reply = handle_set_default_project(
-        "r1".to_string(),
-        &json!({ "projectId": "p-1" }),
-        &relay,
-        &registry,
-        None,
-        None,
-    )
-    .await;
-    assert!(reply.ok, "{:?}", reply.err);
-
-    let mut deltas = Vec::new();
-    while let Ok(Outbound::Watch(frame)) = rx.try_recv() {
-        deltas.push(frame);
-    }
-    assert_eq!(deltas.len(), 1, "exactly one projects delta");
-    let delta = deltas[0].delta_value().expect("delta");
-    assert_eq!(delta["defaultProjectId"], "p-1");
-    assert_eq!(delta["projects"][0]["id"], "p-1");
-}
-
-/// `delete_session` also tells every `chat_history` watcher which session changed.
-#[tokio::test]
-async fn delete_session_publishes_a_chat_history_delta() {
-    let root = std::env::temp_dir().join(format!("termul-ws-delete-watch-{}", uuid::Uuid::new_v4()));
-    let cwd = root.join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
-        .await
-        .unwrap();
-    persistence
-        .register_session(crate::acp::SessionRegistration {
-            session_id: "s-1".to_string(),
-            stable_agent_namespace: Some("config:claude".to_string()),
-            runtime_agent_id: Some("agent-1".to_string()),
-            project_id: Some("p-1".to_string()),
-            cwd,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    let (out, mut rx) = outbound_channel(16, 15);
-    relay
-        .watches()
-        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || json!([]))
-        .expect("watch");
-    let _state = rx.try_recv().expect("full-state frame");
-
-    let reply = handle_delete_session(
-        "r1".to_string(),
-        &json!({ "sessionId": "s-1" }),
-        &relay,
-        HistoryMode::Server,
-    )
-    .await;
-    assert!(reply.ok, "delete ok: {:?}", reply.err);
-
-    let Ok(Outbound::Watch(frame)) = rx.try_recv() else {
-        panic!("expected a chat_history delta");
-    };
-    assert_eq!(frame.delta_value(), Some(&json!({ "changed": ["s-1"] })));
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }

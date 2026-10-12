@@ -19,8 +19,7 @@ pub(super) struct DeleteSessionPayload {
 /// `{ "deleted": false }` when it was already absent — never a not-found
 /// error), so the renderer can treat delete as idempotent without string
 /// sniffing. On success the relay forgets any in-memory state for the session
-/// and every connected client is told to refetch the index
-/// (`chat_history_changed`).
+/// and every `chat_history` watcher is told the session changed.
 pub(super) async fn handle_delete_session(
     id: String,
     payload: &Value,
@@ -54,7 +53,6 @@ pub(super) async fn handle_delete_session(
     match persistence.delete_session(&parsed.session_id).await {
         Ok(()) => {
             relay.forget_session(&parsed.session_id).await;
-            broadcast_chat_history_changed(relay);
             crate::web::watch::publish_chat_history(relay, &[parsed.session_id.as_str()]);
             WsReply::ok(id, Some(json!({ "deleted": true })))
         }

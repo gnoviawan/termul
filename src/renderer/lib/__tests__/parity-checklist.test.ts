@@ -2224,4 +2224,23 @@ describe('Watch hub parity (projects, chat history, agent roster)', () => {
     expect(dispatch).toMatch(/"unwatch" => handle_unwatch/)
     expect(protocol).toMatch(/'watch',\s*\n\s*'unwatch'/)
   })
+
+  it('no relay, route or command still names the retired seq 0 nudges', () => {
+    const sources = [
+      ['web', 'sink', 'fanout.rs'],
+      ['web', 'sink', 'watch_bridge.rs'],
+      ['web', 'sink', 'mod.rs'],
+      ['web', 'mod.rs'],
+      ['web', 'projects_api.rs'],
+      ['web', 'ws', 'projects.rs'],
+      ['web', 'ws', 'sessions.rs'],
+      ['commands', 'remote.rs'],
+      ['commands', 'acp_history.rs']
+    ]
+    for (const parts of sources) {
+      const source = readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+      expect(source, parts.join('/')).not.toMatch(/projects_changed|chat_history_changed/)
+    }
+    expect(protocol).not.toMatch(/^\s*'(projects_changed|chat_history_changed)',?$/m)
+  })
 })

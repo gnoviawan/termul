@@ -1,5 +1,6 @@
+import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
 import { useEffect } from 'react'
-import { runHistoryWipeMigration } from '@/lib/acp-history-persistence'
+import { fromPersistedSessionSummary, runHistoryWipeMigration } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -10,13 +11,14 @@ import { useAcpStore } from '@/stores/acp-store'
  * when a chat is opened. The v2 wipe migration runs first (idempotent) so the
  * pre-`projectId` records are cleared before the index is read (ADR 0002).
  *
- * Web/remote: also subscribes to the `chat_history_changed` WS event so the
- * sidebar refetches the index when the desktop renderer pushes an update to the
- * server's in-memory cache (Epic-4 bridge). Desktop never receives this event
- * (no WS connection) — the subscription is a harmless no-op there.
+ * Web/remote: also watches the host's `chat_history` index. The watch sends
+ * the full index on every (re)subscribe (first connect, reconnect, a missed
+ * delta) and a `{ changed }` delta on each change, which the sidebar answers by
+ * refetching. Desktop has no WS connection — the subscription is a no-op there.
  */
 export function useAcpHistory(): void {
   const loadSessionIndex = useAcpStore((s) => s.loadSessionIndex)
+  const applySessionIndexSnapshot = useAcpStore((s) => s.applySessionIndexSnapshot)
   useEffect(() => {
     void (async () => {
       try {
@@ -38,22 +40,37 @@ export function useAcpHistory(): void {
       })
     })()
 
-    // Web/remote: refetch the session index when the server pushes a
-    // `chat_history_changed` event (desktop renderer synced the cache).
-    // Desktop never receives this WS event — the subscription is a no-op there.
+    // Web/remote: the `chat_history` watch rebuilds the index from the host's
+    // full state and refetches on a delta. Desktop never receives it.
     if (isTauriContext()) return
-    const transport = getAcpTransport()
-    const unsubscribe = transport.onEvent('acp:chat_history_changed', () => {
-      void loadSessionIndex().catch((err) => {
-        void logFrontendError({
-          level: 'warn',
-          source: 'useAcpHistory.chatHistoryChanged',
-          message: `ACP history index refresh failed: ${String(err)}`
-        })
-      })
-    })
+    const unsubscribe = getAcpTransport().watches?.subscribe<PersistedSessionSummary[], unknown>(
+      'chat_history',
+      {
+        onState: (summaries) => {
+          if (!Array.isArray(summaries)) return
+          void applySessionIndexSnapshot(summaries.map(fromPersistedSessionSummary)).catch(
+            (err) => {
+              void logFrontendError({
+                level: 'warn',
+                source: 'useAcpHistory.chatHistoryState',
+                message: `ACP history index install failed: ${String(err)}`
+              })
+            }
+          )
+        },
+        onDelta: () => {
+          void loadSessionIndex().catch((err) => {
+            void logFrontendError({
+              level: 'warn',
+              source: 'useAcpHistory.chatHistoryChanged',
+              message: `ACP history index refresh failed: ${String(err)}`
+            })
+          })
+        }
+      }
+    )
     return () => {
-      unsubscribe()
+      unsubscribe?.()
     }
-  }, [loadSessionIndex])
+  }, [loadSessionIndex, applySessionIndexSnapshot])
 }

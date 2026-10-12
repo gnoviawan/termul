@@ -56,10 +56,7 @@ fn chunk(sid: &str, text: &str) -> AcpEvent {
 fn drain(rx: &mut EventStream) -> Vec<SequencedEvent> {
     let mut out = Vec::new();
     while let Ok(StreamItem::Event(event)) = rx.try_recv() {
-        // Agent-level `seq = 0` nudges (chat_history_changed) are not log events.
-        if event.seq > 0 {
-            out.push(event);
-        }
+        out.push(event);
     }
     out
 }
@@ -223,12 +220,19 @@ async fn interrupted_marker_seq_comes_from_the_relay_allocator() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// A host record nudges history refetch once: exactly one `seq = 0`
-/// `chat_history_changed` per record (not one per code path that touches it).
+/// A host record nudges history refetch once: exactly one `chat_history`
+/// delta per record (not one per code path that touches it), and no `seq = 0`
+/// event.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_record_notifies_history_changed_exactly_once() {
     let (relay, persistence, root) = relay_with_session("history-nudge", "sess-h").await;
     let (_client, mut rx, _replay, _head) = relay.subscribe("sess-h", None, None, &CancellationToken::new()).await;
+    let (out, mut watch_rx) = crate::web::ws::outbound_channel(64, 15);
+    relay
+        .watches()
+        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || json!([]))
+        .expect("subscribe");
+    let _state = watch_rx.try_recv().expect("full-state frame");
 
     for (type_, payload) in [
         ("agent_switch", json!({"sessionId": "sess-h"})),
@@ -239,42 +243,14 @@ async fn host_record_notifies_history_changed_exactly_once() {
     ] {
         relay.record_host_event("sess-h", type_, payload).unwrap();
         let mut nudges = 0;
-        let mut logged = Vec::new();
-        while let Ok(StreamItem::Event(event)) = rx.try_recv() {
-            if event.seq == 0 {
-                assert_eq!(event.type_, "chat_history_changed");
-                nudges += 1;
-            } else {
-                logged.push(event.type_);
-            }
+        while let Ok(crate::web::ws::Outbound::Watch(frame)) = watch_rx.try_recv() {
+            assert_eq!(frame.delta_value(), Some(&json!({"changed": ["sess-h"]})));
+            nudges += 1;
         }
-        assert_eq!(nudges, 1, "{type_}: one history nudge");
+        let logged: Vec<String> = drain(&mut rx).into_iter().map(|event| event.type_).collect();
+        assert_eq!(nudges, 1, "{type_}: one history delta");
         assert_eq!(logged, vec![type_.to_string()], "{type_}: one live record");
     }
-    persistence.shutdown().await.unwrap();
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// A host record also publishes a `chat_history` delta naming its session, once.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn host_record_publishes_one_chat_history_delta_naming_the_session() {
-    let (relay, persistence, root) = relay_with_session("history-delta", "sess-d").await;
-    let (out, mut watch_rx) = crate::web::ws::outbound_channel(64, 15);
-    relay
-        .watches()
-        .subscribe(crate::web::watch::WatchKind::ChatHistory, "", &out, || json!([]))
-        .expect("subscribe");
-    let _state = watch_rx.try_recv().expect("full-state frame");
-
-    relay
-        .record_host_event("sess-d", "agent_switch", json!({"sessionId": "sess-d"}))
-        .unwrap();
-
-    let mut deltas = Vec::new();
-    while let Ok(crate::web::ws::Outbound::Watch(frame)) = watch_rx.try_recv() {
-        deltas.push(frame.delta_value().cloned().expect("delta"));
-    }
-    assert_eq!(deltas, vec![json!({"changed": ["sess-d"]})]);
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }

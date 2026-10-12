@@ -23,7 +23,8 @@ use crate::web::ws::HistoryMode;
 
 use super::WatchKind;
 
-/// Agent-level event types the roster watch carries.
+/// Agent-level event types the roster watch carries. They are no longer sent
+/// as `seq = 0` events.
 pub const AGENT_ROSTER_EVENTS: &[&str] = &[
     "agent_spawned",
     "agent_crashed",
