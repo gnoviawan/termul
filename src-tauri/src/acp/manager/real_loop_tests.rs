@@ -58,8 +58,7 @@ for line in sys.stdin:
 /// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS`. It covers all real-loop tests and
 /// the override and precedence tests in `manager/tests.rs`. A real-loop test
 /// therefore never inherits another test's timeout, and vice versa.
-pub(super) static TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> =
-    tokio::sync::Mutex::const_new(());
+pub(super) static TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Opt-out for hosts without a Python interpreter. Without it a missing
 /// interpreter is a hard failure: these are the only tests that drive the
@@ -157,16 +156,22 @@ impl Harness {
     /// `None` only when the host opted out via `TERMUL_SKIP_REAL_LOOP_TESTS=1`;
     /// a missing interpreter otherwise panics rather than passing vacuously.
     async fn start() -> Option<Self> {
-        Self::start_inner(false).await
+        Self::start_inner(false, None).await
     }
 
     /// Like [`Self::start`], but relay and manager share a real
     /// `SessionPersistence` in a temp dir, exactly as on the standalone server.
     async fn start_with_persistence() -> Option<Self> {
-        Self::start_inner(true).await
+        Self::start_inner(true, None).await
     }
 
-    async fn start_inner(durable: bool) -> Option<Self> {
+    /// Durable harness whose session is created with an explicit project id,
+    /// as `create_session` hands over a resolved `projectId`.
+    async fn start_with_project(project_id: &str) -> Option<Self> {
+        Self::start_inner(true, Some(project_id)).await
+    }
+
+    async fn start_inner(durable: bool, project_id: Option<&str>) -> Option<Self> {
         let Some(python) = find_python() else {
             if std::env::var(SKIP_ENV).as_deref() == Ok("1") {
                 eprintln!("SKIP real_loop_tests: no python interpreter ({SKIP_ENV}=1)");
@@ -210,7 +215,15 @@ impl Harness {
             .await
             .expect("mock agent initializes");
         let session = acp
-            .new_session(&spawned.agent_id, dir.to_string_lossy().to_string(), vec![])
+            .new_session_with_context(
+                &spawned.agent_id,
+                dir.to_string_lossy().to_string(),
+                vec![],
+                SessionCreationContext {
+                    project_id: project_id.map(str::to_string),
+                    ..SessionCreationContext::default()
+                },
+            )
             .await
             .expect("mock session");
         let session_id = session.session_id;
@@ -326,7 +339,10 @@ async fn normal_turn_orders_user_prompt_chunk_terminator() {
     };
     assert_eq!(h.run("ok", "t1").await.unwrap(), StopReason::EndTurn);
     let events = h.events_through_terminator().await;
-    assert_eq!(kinds(&events), vec!["user_prompt", "message_chunk", "prompt_complete"]);
+    assert_eq!(
+        kinds(&events),
+        vec!["user_prompt", "message_chunk", "prompt_complete"]
+    );
     let done = terminators(&events);
     assert_eq!(done[0]["stopReason"], "end_turn");
     assert_eq!(done[0]["turnId"], "t1");
@@ -343,7 +359,10 @@ async fn rpc_error_turn_emits_one_error_terminator_and_releases_the_claim() {
     let error = h.run("rpcfail", "t1").await.unwrap_err();
     assert!(error.contains("mock failure"), "{error}");
     let events = h.events_through_terminator().await;
-    assert_eq!(kinds(&events), vec!["user_prompt", "agent_error", "prompt_complete"]);
+    assert_eq!(
+        kinds(&events),
+        vec!["user_prompt", "agent_error", "prompt_complete"]
+    );
     assert_eq!(terminators(&events)[0]["stopReason"], "error");
     assert_eq!(terminators(&events)[0]["turnId"], "t1");
 
@@ -363,7 +382,10 @@ async fn idle_timeout_turn_emits_one_timeout_terminator() {
     let error = h.run("hang", "t1").await.unwrap_err();
     assert!(error.contains("idle timeout"), "{error}");
     let events = h.events_through_terminator().await;
-    assert_eq!(kinds(&events), vec!["user_prompt", "agent_error", "prompt_complete"]);
+    assert_eq!(
+        kinds(&events),
+        vec!["user_prompt", "agent_error", "prompt_complete"]
+    );
     assert_eq!(terminators(&events)[0]["stopReason"], "timeout");
     assert_eq!(terminators(&events)[0]["turnId"], "t1");
     h.finish().await;
@@ -377,7 +399,10 @@ async fn agent_crash_mid_turn_emits_one_crashed_terminator() {
         return;
     };
     let result = h.run("crash", "t1").await;
-    assert!(result.is_err(), "the dropped turn reply surfaces as an error");
+    assert!(
+        result.is_err(),
+        "the dropped turn reply surfaces as an error"
+    );
     let events = h.events_through_terminator().await;
     let done = terminators(&events);
     assert_eq!(done.len(), 1, "exactly one terminator: {events:?}");
@@ -420,7 +445,10 @@ async fn process_shutdown_mid_turn_leaves_the_turn_to_the_interrupted_marker() {
         .await
         .expect("turn waiter resolves")
         .expect("waiter joined");
-    assert!(reply.is_err(), "the dropped turn surfaces as an error: {reply:?}");
+    assert!(
+        reply.is_err(),
+        "the dropped turn surfaces as an error: {reply:?}"
+    );
 
     // Before the persistence close: nothing terminated the turn.
     persistence.flush_all().await.unwrap();
@@ -440,7 +468,10 @@ async fn process_shutdown_mid_turn_leaves_the_turn_to_the_interrupted_marker() {
         "no terminator (crashed or otherwise) before the interrupted marker: {before:?}"
     );
 
-    h.acp.shutdown_persistence().await.expect("persistence shutdown");
+    h.acp
+        .shutdown_persistence()
+        .await
+        .expect("persistence shutdown");
     let after = persistence
         .replay_after_async(h.session_id.0.clone(), 0)
         .await
@@ -461,9 +492,7 @@ async fn process_shutdown_mid_turn_leaves_the_turn_to_the_interrupted_marker() {
 
 /// A session created without a project is stamped with the unassigned
 /// sentinel in the durable record, through the real `session/new` path that
-/// `create_session` and `acp_new_session` share. (The explicit-project case is
-/// covered at the store; the mock agent hands out one fixed session id, so a
-/// second create here would hit the store's idempotent path.)
+/// `create_session` and `acp_new_session` share.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_created_without_a_project_is_stamped_unassigned() {
     let Some(h) = Harness::start_with_persistence().await else {
@@ -478,6 +507,26 @@ async fn a_session_created_without_a_project_is_stamped_unassigned() {
             .project_id
             .as_deref(),
         Some(crate::acp::UNASSIGNED_PROJECT_ID)
+    );
+    h.finish().await;
+}
+
+/// An explicit project id handed to `session/new` reaches the durable record
+/// (the second half of `create_session`'s "stamp once" contract).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_created_with_a_project_is_stamped_with_it() {
+    let Some(h) = Harness::start_with_project("project-7").await else {
+        return;
+    };
+    let persistence = h.persistence.clone().expect("durable harness");
+
+    assert_eq!(
+        persistence
+            .metadata(&h.session_id.0)
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some("project-7")
     );
     h.finish().await;
 }

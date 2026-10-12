@@ -174,7 +174,16 @@ impl ProjectRegistry {
         // The unassigned sentinel names no project; a renderer-fed entry
         // carrying it would make its sessions indistinguishable from
         // unassigned ones, so it is never registered.
+        let before = projects.len();
         projects.retain(|p| p.id != crate::acp::UNASSIGNED_PROJECT_ID);
+        if projects.len() != before {
+            tracing::warn!(
+                target: "termul::web::project_registry",
+                "set: dropped a project carrying the reserved unassigned id"
+            );
+        }
+        // A default naming the sentinel would dangle (P4).
+        let default_id = default_id.filter(|id| id != crate::acp::UNASSIGNED_PROJECT_ID);
         for project in &mut projects {
             project.is_default = default_id.as_deref() == Some(project.id.as_str());
         }

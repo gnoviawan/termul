@@ -147,3 +147,101 @@ async fn legacy_sessions_without_a_project_are_stamped_unassigned_exactly_once()
     persistence.shutdown().await.unwrap();
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn the_sentinel_literal_matches_the_renderer_constant() {
+    // `UNASSIGNED_PROJECT_ID` in `src/shared/types/web-projects.types.ts`.
+    assert_eq!(UNASSIGNED_PROJECT_ID, "__unassigned__");
+}
+
+#[tokio::test]
+async fn new_discovered_and_imported_records_are_stamped_like_created_ones() {
+    let root = temp_dir("stamp-kinds");
+    let cwd = root.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
+
+    let discovered_bare = persistence
+        .register_discovered_session(registration("d-bare", None, &cwd), None, Some(1))
+        .await
+        .unwrap();
+    let discovered_owned = persistence
+        .register_discovered_session(registration("d-owned", Some("p-1"), &cwd), None, Some(1))
+        .await
+        .unwrap();
+    let imported_bare = persistence
+        .register_imported_session(registration("i-bare", None, &cwd), 10, None)
+        .await
+        .unwrap();
+    let imported_blank = persistence
+        .register_imported_session(registration("i-blank", Some("  "), &cwd), 10, None)
+        .await
+        .unwrap();
+    let imported_owned = persistence
+        .register_imported_session(registration("i-owned", Some("p-2"), &cwd), 10, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        discovered_bare.project_id.as_deref(),
+        Some(UNASSIGNED_PROJECT_ID)
+    );
+    assert_eq!(discovered_owned.project_id.as_deref(), Some("p-1"));
+    assert_eq!(
+        imported_bare.project_id.as_deref(),
+        Some(UNASSIGNED_PROJECT_ID)
+    );
+    assert_eq!(
+        imported_blank.project_id.as_deref(),
+        Some(UNASSIGNED_PROJECT_ID)
+    );
+    assert_eq!(imported_owned.project_id.as_deref(), Some("p-2"));
+    persistence.shutdown().await.unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_skipped_session_keeps_the_migration_open_until_every_session_is_visited() {
+    let root = temp_dir("migration-skipped");
+    let cwd = root.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    let store = root.join("store");
+    let persistence = SessionPersistence::open(store.clone()).await.unwrap();
+    let legacy = persistence
+        .register_session(registration("s-legacy", Some("project-1"), &cwd))
+        .await
+        .unwrap();
+    persistence.shutdown().await.unwrap();
+    drop(persistence);
+    strip_project_id(&store, &legacy.storage_key);
+    let _ = fs::remove_file(store.join(UNASSIGNED_MIGRATION_MARKER));
+
+    // A second store directory whose metadata cannot be decoded: its session
+    // is skipped by the recover loop.
+    let broken = store.join(Uuid::new_v4().to_string());
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("metadata.json"), b"not json").unwrap();
+
+    let persistence = SessionPersistence::open(store.clone()).await.unwrap();
+    assert_eq!(
+        persistence
+            .metadata("s-legacy")
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some(UNASSIGNED_PROJECT_ID),
+        "the readable legacy session is still stamped"
+    );
+    assert!(
+        !store.join(UNASSIGNED_MIGRATION_MARKER).exists(),
+        "a skipped session must not close the migration"
+    );
+    persistence.shutdown().await.unwrap();
+    drop(persistence);
+
+    fs::remove_dir_all(&broken).unwrap();
+    let persistence = SessionPersistence::open(store.clone()).await.unwrap();
+    assert!(store.join(UNASSIGNED_MIGRATION_MARKER).is_file());
+    persistence.shutdown().await.unwrap();
+    let _ = fs::remove_dir_all(root);
+}

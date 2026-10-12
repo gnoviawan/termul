@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { UNASSIGNED_PROJECT_ID } from './web-projects.types'
+
 import {
   isHumanRelayedCap,
   isOsFulfilledCap,
@@ -183,8 +185,12 @@ describe('web-protocol.types — error codes (AC2)', () => {
 
 describe('web-protocol.types — versioned handshake contract (AD-15)', () => {
   it('pins the protocol version and client id length cap shared with the Rust host', () => {
-    expect(WS_PROTOCOL_VERSION).toBe(1)
+    expect(WS_PROTOCOL_VERSION).toBe(2)
     expect(MAX_CLIENT_ID_LEN).toBe(128)
+  })
+
+  it('pins the unassigned-project sentinel shared with the Rust host', () => {
+    expect(UNASSIGNED_PROJECT_ID).toBe('__unassigned__')
   })
 
   it('WsRequest/WsReply carry the optional command_id / visible_at envelope fields', () => {

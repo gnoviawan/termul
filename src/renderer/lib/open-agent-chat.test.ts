@@ -91,6 +91,13 @@ describe('openAgentChatInOwnProject', () => {
     expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-unknown')
   })
 
+  it('opens a chat stamped unassigned in place (it names no project to switch to)', () => {
+    acpRef.current.sessionIndex = [{ id: 's-stray', projectId: '__unassigned__' }]
+    expect(openAgentChatInOwnProject('s-stray', 'test')).toBe('opened')
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-stray')
+    expect(useProjectStore.getState().activeProjectId).toBe('pa')
+  })
+
   it('switches to the owning project instead of adding the tab here', () => {
     expect(openAgentChatInOwnProject('s-b', 'test')).toBe('switched-project')
     expect(mockAddAgentChatTab).not.toHaveBeenCalled()

@@ -97,8 +97,8 @@ async fn create_session_with_an_unknown_project_replies_not_found_before_touchin
 #[tokio::test]
 async fn create_session_with_a_registered_project_reaches_the_agent() {
     // The no-op manager has no agent, so a request that passes project
-    // resolution fails later with the agent error, never `not_found` for the
-    // project.
+    // resolution fails later with the unknown-agent error (the project
+    // refusal is `project '<id>' not found`).
     let acp = Arc::new(AcpManager::new(vec![]));
     let registry = Arc::new(registry());
     let reply = projects::handle_create_session(
@@ -111,7 +111,7 @@ async fn create_session_with_a_registered_project_reaches_the_agent() {
 
     assert!(!reply.ok);
     let message = reply.err.unwrap().message;
-    assert!(!message.contains("project 'p-2'"), "{message}");
+    assert!(message.starts_with("unknown agent"), "{message}");
 }
 
 #[tokio::test]
@@ -150,4 +150,47 @@ fn a_renderer_fed_project_with_the_reserved_id_is_never_registered() {
     );
     assert!(!registry.contains(crate::acp::UNASSIGNED_PROJECT_ID));
     assert!(registry.contains("p-1"));
+}
+
+#[tokio::test]
+async fn post_projects_refuses_the_reserved_unassigned_id() {
+    use axum::extract::{ConnectInfo, State};
+    use axum::response::IntoResponse;
+    use axum::Json;
+
+    let state = super::tests::ws_test_app_state();
+    let registry = state.registry.clone();
+    let response = crate::web::projects_api::create_project(
+        State(state),
+        ConnectInfo("127.0.0.1:1".parse().unwrap()),
+        Json(
+            serde_json::from_value(json!({
+                "id": crate::acp::UNASSIGNED_PROJECT_ID,
+                "name": "x",
+                "path": "/work/one",
+                "color": "blue"
+            }))
+            .unwrap(),
+        ),
+    )
+    .await
+    .into_response();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(body["success"], json!(false));
+    assert_eq!(body["code"], json!("VALIDATION_ERROR"));
+    assert!(registry.snapshot().projects.is_empty());
+}
+
+#[test]
+fn a_default_naming_the_reserved_id_is_not_kept() {
+    let registry = ProjectRegistry::new();
+    registry.set(
+        vec![summary("p-1", "/work/one", false)],
+        Some(crate::acp::UNASSIGNED_PROJECT_ID.to_string()),
+    );
+    assert_eq!(registry.snapshot().default_project_id, None);
 }

@@ -1602,6 +1602,9 @@ impl SessionPersistence {
         let migration_marker = self.inner.root.join(UNASSIGNED_MIGRATION_MARKER);
         let migrate_unassigned = !migration_marker.exists();
         let mut unassigned_stamped = 0usize;
+        // Sessions the loop could not visit (unreadable, quarantined,
+        // conflicting): they miss the stamping, so they keep the migration open.
+        let mut skipped = 0usize;
         let mut recovered = HashMap::new();
         let mut logical_ids = HashSet::new();
         for entry in fs::read_dir(&self.inner.root)? {
@@ -1617,7 +1620,12 @@ impl SessionPersistence {
             let metadata_path = dir.join(METADATA_FILE);
             let bytes = match fs::read(&metadata_path) {
                 Ok(bytes) => bytes,
-                Err(_) => continue,
+                Err(error) => {
+                    if error.kind() != io::ErrorKind::NotFound {
+                        skipped += 1;
+                    }
+                    continue;
+                }
             };
             let mut metadata: SessionMetadata = match decode_versioned(&bytes) {
                 Ok(metadata) => metadata,
@@ -1626,12 +1634,14 @@ impl SessionPersistence {
                 }
                 Err(_) => {
                     let _ = atomic_file::backup_corrupt(&metadata_path, &bytes);
+                    skipped += 1;
                     continue;
                 }
             };
             if metadata.storage_key != storage_key
                 || !logical_ids.insert(metadata.session_id.clone())
             {
+                skipped += 1;
                 continue;
             }
             ensure_log_exists(&dir.join(MESSAGES_FILE))?;
@@ -1723,6 +1733,7 @@ impl SessionPersistence {
                             "[acp-history] recover() fallback load_jsonl failed for messages session_id={} error={e}",
                             crate::logging::redact_session_id(&metadata.session_id)
                         );
+                        skipped += 1;
                         continue;
                     }
                 };
@@ -1733,6 +1744,7 @@ impl SessionPersistence {
                             "[acp-history] recover() fallback load_jsonl failed for tool-calls session_id={} error={e}",
                             crate::logging::redact_session_id(&metadata.session_id)
                         );
+                        skipped += 1;
                         continue;
                     }
                 }
@@ -1741,6 +1753,7 @@ impl SessionPersistence {
                         "[acp-history] recover() fallback validate_and_sort failed, quarantining session_id={}",
                         crate::logging::redact_session_id(&metadata.session_id)
                     );
+                    skipped += 1;
                     continue;
                 }
                 metadata.message_count = records
@@ -1806,12 +1819,17 @@ impl SessionPersistence {
         // metadata + logs so stale titles/status/counts/namespaces cannot survive.
         let _ = existing_index;
         self.persist_index().await?;
-        if migrate_unassigned {
+        if migrate_unassigned && skipped == 0 {
             // Marker last: a crash before this point re-runs the (idempotent)
-            // stamping on the next open.
+            // stamping on the next open. A skipped session keeps the
+            // migration open so it is stamped once it becomes readable.
             atomic_file::replace(&migration_marker, b"1\n")?;
             log::info!(
                 "[acp-history] unassigned-project migration complete stamped={unassigned_stamped}"
+            );
+        } else if migrate_unassigned {
+            log::warn!(
+                "[acp-history] unassigned-project migration left open stamped={unassigned_stamped} skipped={skipped}"
             );
         }
         Ok(())
