@@ -45,11 +45,19 @@ pub(super) fn auth_required_event() -> SequencedEvent {
 /// first-frame `authenticate` handling (`handle_request`), so a wrong token
 /// gets a structured `unauthorized` reply instead of a failed handshake. The
 /// default bind stays localhost per `web/config.rs`.
-pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+///
+/// The peer address (`ConnectInfo`) feeds the connection's capabilities,
+/// resolved at `authenticate`; the router MUST be served with
+/// `into_make_service_with_connect_info::<SocketAddr>()`.
+pub async fn ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> impl IntoResponse {
     // The first frame is auth_required; the gate (when active) is enforced on
     // the `authenticate` request, not at upgrade time.
     ws.on_upgrade(move |socket| async move {
-        run_relay(socket, state).await;
+        run_relay(socket, state, peer).await;
     })
 }
 
@@ -137,7 +145,7 @@ pub(super) fn handle_lifecycle_signal(text: &str, authed: bool, backgrounded: &A
 /// Generic over the carrier so a host-level fault harness can drive the exact
 /// production loop over an in-memory duplex; axum's `WebSocket` satisfies
 /// both bounds, so the production path is unchanged.
-pub(super) async fn run_relay<S>(socket: S, state: AppState)
+pub(super) async fn run_relay<S>(socket: S, state: AppState, peer: SocketAddr)
 where
     S: Stream<Item = Result<Message, axum::Error>>
         + Sink<Message, Error = axum::Error>
@@ -345,8 +353,13 @@ where
     let read_backgrounded = Arc::clone(&backgrounded);
     let read_subscribed_clients = Arc::clone(&subscribed_clients);
     let read_relay = Arc::clone(&relay);
+    let capability_policy = CapabilityPolicy::for_connection(Carrier::Ws, peer, &state);
     let mut read_task = tokio::spawn(async move {
         let mut authed = false;
+        // Capabilities + presence registration live and die with this task
+        // (dropped on completion or abort), so presence is removed exactly
+        // when the connection goes away.
+        let mut access = ConnectionAccess::new(capability_policy);
         // Validated `authenticate` identity (AD-4), recorded once per
         // connection; later slices key presence and write stamps off it.
         let mut identity: Option<ClientIdentity> = None;
@@ -390,6 +403,7 @@ where
                         &t,
                         &mut authed,
                         &mut identity,
+                        &mut access,
                         web_auth.as_deref(),
                         &acp,
                         &read_relay,
@@ -559,6 +573,7 @@ pub(super) async fn dispatch_connection_text(
     text: &str,
     authed: &mut bool,
     identity: &mut Option<ClientIdentity>,
+    access: &mut ConnectionAccess,
     web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
@@ -577,6 +592,13 @@ pub(super) async fn dispatch_connection_text(
     store: Option<&Arc<WebStore>>,
 ) -> bool {
     if let Some((id, payload)) = authenticated_send_prompt(text, *authed) {
+        // The fast path bypasses `handle_request`, so it runs the same
+        // required-capability check.
+        if let Some(reply) =
+            forbidden_reply(&id, "send_prompt", &payload, access, identity.as_ref())
+        {
+            return write_tx.send(Outbound::Reply(reply)).is_ok();
+        }
         return match accept_send_prompt(id, &payload, acp, relay).await {
             Ok(accepted) => {
                 let prompt_acp = Arc::clone(acp);
@@ -596,6 +618,7 @@ pub(super) async fn dispatch_connection_text(
         text,
         authed,
         identity,
+        access,
         web_auth,
         acp,
         relay,

@@ -927,3 +927,54 @@ async fn act_routes_still_refuse_an_outside_root_worktree() {
     assert!(!body.success, "remove of outside worktree must be refused");
     assert!(outside_wt.exists(), "outside worktree must be untouched");
 }
+
+#[tokio::test]
+async fn remove_is_blocked_while_a_session_in_the_worktree_is_mid_turn() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("rm-guard-active");
+    let parent = repo.path().parent().unwrap_or_else(|| std::path::Path::new("."));
+    let state = test_state(parent);
+    let resp = post_json(
+        state.clone(),
+        "/worktree/create",
+        &serde_json::json!({
+            "projectPath": repo.path().to_string_lossy(),
+            "name": "wt-guard",
+            "branch": "chat/wt-guard",
+            "isNewBranch": true
+        }),
+    )
+    .await;
+    let created: IpcBody<GitWorktreeEntry> = body_as(resp.into_body()).await;
+    let entry = created.data.expect("entry");
+    let worktree = std::path::PathBuf::from(&entry.path);
+    let remove_body = serde_json::json!({
+        "projectPath": repo.path().to_string_lossy(),
+        "worktreePath": entry.path,
+        "force": true
+    });
+
+    // A turn is running in a subdirectory of the worktree.
+    let nested = worktree.join("src");
+    std::fs::create_dir_all(&nested).expect("nested");
+    state.acp.install_test_agent_with_session_roots(
+        crate::acp::AgentId("agent-1".to_string()),
+        vec![("session-1".to_string(), nested, true)],
+    );
+    let resp = post_json(state.clone(), "/worktree/remove", &remove_body).await;
+    let body: IpcBody<()> = body_as(resp.into_body()).await;
+    assert!(!body.success);
+    assert_eq!(body.code.as_deref(), Some("destructive_op_blocked"));
+    assert!(worktree.exists(), "the worktree must survive a refused removal");
+
+    // The same session idle: removal proceeds.
+    state.acp.install_test_agent_with_session_roots(
+        crate::acp::AgentId("agent-1".to_string()),
+        vec![("session-1".to_string(), worktree.join("src"), false)],
+    );
+    let resp = post_json(state, "/worktree/remove", &remove_body).await;
+    let body: IpcBody<()> = body_as(resp.into_body()).await;
+    assert!(body.success, "idle session must not block: {:?}", body.error);
+}

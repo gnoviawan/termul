@@ -1,6 +1,10 @@
 use super::{validate_project_path, IpcResult};
+use crate::acp::destructive_guard::ensure_no_active_turn_under;
+use crate::acp::AcpManager;
 use crate::trackers::git_tracker::{DiffStatError, GitDiffStat};
 use crate::trackers::{GitCommit, GitStatusDetail};
+use std::sync::Arc;
+use tauri::State;
 
 // ==================== Git Commands ====================
 
@@ -144,13 +148,19 @@ pub async fn git_init(cwd: String) -> Result<(), String> {
     .map_err(|e| format!("git init task failed: {e}"))?
 }
 
-/// Check out an existing local or remote-tracking branch.
+/// Check out an existing local or remote-tracking branch. Refused with a
+/// `destructive_op_blocked: …` error while a session working inside `cwd` is
+/// mid-turn (identical text on the HTTP route).
 #[tauri::command]
 pub async fn git_checkout_branch(
+    manager: State<'_, Arc<AcpManager>>,
     cwd: String,
     branch: String,
     is_remote: Option<bool>,
 ) -> Result<(), String> {
+    ensure_no_active_turn_under(&manager, std::path::Path::new(&cwd))
+        .await
+        .map_err(|blocked| blocked.to_string())?;
     let is_remote = is_remote.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
         crate::trackers::git_tracker::git_checkout_branch(&cwd, &branch, is_remote)
@@ -365,9 +375,18 @@ pub async fn git_branch_list(cwd: String) -> Result<Vec<String>, String> {
     .map_err(|e| format!("git branch list task failed: {e}"))?
 }
 
+/// `git checkout <name>`. Refused with a `destructive_op_blocked: …` error
+/// while a session working inside `cwd` is mid-turn.
 #[tauri::command]
-pub async fn git_branch_switch(cwd: String, name: String) -> Result<(), String> {
+pub async fn git_branch_switch(
+    manager: State<'_, Arc<AcpManager>>,
+    cwd: String,
+    name: String,
+) -> Result<(), String> {
     let validated = validate_project_path(&cwd)?;
+    ensure_no_active_turn_under(&manager, &validated)
+        .await
+        .map_err(|blocked| blocked.to_string())?;
     let validated_str = validated
         .to_str()
         .ok_or_else(|| "Path contains invalid UTF-8".to_string())?

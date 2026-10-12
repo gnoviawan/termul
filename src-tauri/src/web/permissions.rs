@@ -52,6 +52,43 @@ pub const DEFAULT_PERMISSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// widened. Already overridable via `permission_reconnect_grace_secs`.
 pub const DEFAULT_PERMISSION_RECONNECT_GRACE: Duration = Duration::from_secs(60);
 
+/// How many resolved ticket ids each rendezvous remembers. A later answer to
+/// a remembered id reads `already_resolved`; an older one falls off the end
+/// and reads `stale` (bounded so a long-lived host cannot grow without limit).
+pub const RESOLVED_TOMBSTONE_CAPACITY: usize = 256;
+
+/// Bounded FIFO memory of resolved ticket ids (answered, timed out or denied
+/// on disconnect).
+struct Tombstones {
+    order: VecDeque<String>,
+    ids: std::collections::HashSet<String>,
+}
+
+impl Tombstones {
+    fn new() -> Self {
+        Self {
+            order: VecDeque::new(),
+            ids: std::collections::HashSet::new(),
+        }
+    }
+
+    fn record(&mut self, id: &str) {
+        if !self.ids.insert(id.to_string()) {
+            return;
+        }
+        self.order.push_back(id.to_string());
+        while self.order.len() > RESOLVED_TOMBSTONE_CAPACITY {
+            if let Some(evicted) = self.order.pop_front() {
+                self.ids.remove(&evicted);
+            }
+        }
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.ids.contains(id)
+    }
+}
+
 /// Outcome of a successful [`PermissionRendezvous::try_respond`] call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RespondOutcome {
@@ -64,12 +101,13 @@ pub enum RespondOutcome {
 /// maps to a stable WS `err.code` (see [`RespondError::wire_code`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RespondError {
-    /// No outstanding ticket for this `request_id` (never seen, resolved +
-    /// evicted, or not yet promoted from the session queue). Wire
-    /// `err.code: "stale"`.
+    /// No outstanding ticket for this `request_id` (never seen, resolved and
+    /// aged out of the tombstones, or not yet promoted from the session
+    /// queue). Wire `err.code: "stale"`.
     NotFound,
-    /// The ticket was already resolved by a *different* client (first-wins).
-    /// Wire `err.code: "stale"`.
+    /// The ticket was already resolved — by another client (first-wins), a
+    /// timeout or a disconnect deny — and is still in the bounded tombstone
+    /// memory. Wire `err.code: "already_resolved"`.
     AlreadyResolved,
     /// The *same* client already responded to this ticket (double-respond).
     /// Wire `err.code: "duplicate"`.
@@ -78,10 +116,6 @@ pub enum RespondError {
     /// (TOCTOU defense — an attacker can't approve an option that wasn't in the
     /// original request). Wire `err.code: "permission_denied"`.
     InvalidOption,
-    /// The responding client is not subscribed to the permission's session
-    /// (ownership check per access — NFR5; full token↔session ownership is
-    /// Epic 2). Wire `err.code: "not_found"` (do not leak session existence).
-    NotSubscribed,
 }
 
 impl RespondError {
@@ -90,10 +124,10 @@ impl RespondError {
     #[must_use]
     pub const fn wire_code(self) -> &'static str {
         match self {
-            Self::NotFound | Self::AlreadyResolved => "stale",
+            Self::NotFound => "stale",
+            Self::AlreadyResolved => "already_resolved",
             Self::Duplicate => "duplicate",
             Self::InvalidOption => "permission_denied",
-            Self::NotSubscribed => "not_found",
         }
     }
 }
@@ -170,6 +204,8 @@ pub struct PermissionRendezvous {
     /// Per-session cancellation for an armed disconnect grace, keyed by a
     /// generation token so an expired older task cannot evict a newer one.
     disconnect_graces: Mutex<HashMap<String, (u64, oneshot::Sender<()>)>>,
+    /// Bounded memory of resolved request ids (`already_resolved` replies).
+    resolved: Mutex<Tombstones>,
     /// A handle to the server's tokio runtime. Captured at construction so the
     /// per-ticket timeout can be armed from ANY thread (the relay's `emit` runs
     /// on the per-agent driver thread — a plain `std::thread`, NOT a tokio
@@ -219,6 +255,7 @@ impl PermissionRendezvous {
             timeout,
             disconnect_grace,
             disconnect_graces: Mutex::new(HashMap::new()),
+            resolved: Mutex::new(Tombstones::new()),
             handle: tokio::runtime::Handle::try_current(),
         }
     }
@@ -253,6 +290,7 @@ impl PermissionRendezvous {
             timeout,
             disconnect_grace,
             disconnect_graces: Mutex::new(HashMap::new()),
+            resolved: Mutex::new(Tombstones::new()),
             handle: Ok(handle),
         }
     }
@@ -489,6 +527,16 @@ impl PermissionRendezvous {
         }
     }
 
+    /// The rejection for a `request_id` with no outstanding ticket: a recently
+    /// resolved one is `AlreadyResolved`, anything else `NotFound`.
+    fn missing_ticket_error(&self, request_id: &str) -> RespondError {
+        if self.resolved.lock().contains(request_id) {
+            RespondError::AlreadyResolved
+        } else {
+            RespondError::NotFound
+        }
+    }
+
     /// Attempt to resolve a ticket with a client's response (first-response-wins).
     ///
     /// On success (`Resolved`), the response is forwarded to
@@ -506,7 +554,7 @@ impl PermissionRendezvous {
         {
             let tickets = self.tickets.lock();
             let Some(ticket) = tickets.get(request_id) else {
-                return Err(RespondError::NotFound);
+                return Err(self.missing_ticket_error(request_id));
             };
             if ticket.resolved_by == Some(client_id) {
                 return Err(RespondError::Duplicate);
@@ -527,7 +575,7 @@ impl PermissionRendezvous {
         let (agent_id, session_id) = {
             let mut tickets = self.tickets.lock();
             let Some(ticket) = tickets.get_mut(request_id) else {
-                return Err(RespondError::NotFound);
+                return Err(self.missing_ticket_error(request_id));
             };
             // Re-check under the write lock (a concurrent first-wins could have
             // raced the read-to-claim window above).
@@ -572,7 +620,9 @@ impl PermissionRendezvous {
             warn!("[permissions] respond_permission {request_id} failed: {e}");
         }
 
-        // 4. Evict the resolved ticket + promote the next queued permission.
+        // 4. Evict the resolved ticket (remembering it, so a later answer reads
+        //    `already_resolved`) + promote the next queued permission.
+        self.resolved.lock().record(request_id);
         self.tickets.lock().remove(request_id);
         self.promote_next(&session_id);
 
@@ -671,6 +721,7 @@ impl PermissionRendezvous {
                 if let Some(cancel) = ticket.timeout_cancel.take() {
                     let _ = cancel.send(());
                 }
+                self.resolved.lock().record(request_id);
                 ticket.session_id
             } else {
                 return; // already gone (resolved concurrently).
@@ -776,11 +827,12 @@ pub enum QuestionRespondOutcome {
 /// maps to a stable WS `err.code` (see [`QuestionRespondError::wire_code`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestionRespondError {
-    /// No outstanding ticket for this `question_id` (never seen, resolved +
-    /// evicted, or already timed out). Wire `err.code: "stale"`.
+    /// No outstanding ticket for this `question_id` (never seen, or resolved
+    /// and aged out of the tombstones). Wire `err.code: "stale"`.
     NotFound,
-    /// The ticket was already resolved by a *different* client (first-wins).
-    /// Wire `err.code: "stale"`.
+    /// The ticket was already resolved — by another client (first-wins), a
+    /// timeout or a disconnect cancel — and is still in the bounded tombstone
+    /// memory. Wire `err.code: "already_resolved"`.
     AlreadyResolved,
     /// The *same* client already responded to this ticket (double-respond).
     /// Wire `err.code: "duplicate"`.
@@ -797,7 +849,7 @@ impl QuestionRespondError {
     pub const fn wire_code(self) -> &'static str {
         match self {
             Self::NotFound => "stale",
-            Self::AlreadyResolved => "stale",
+            Self::AlreadyResolved => "already_resolved",
             Self::Duplicate => "duplicate",
             Self::InvalidOption => "permission_denied",
         }
@@ -845,6 +897,8 @@ pub struct QuestionRendezvous {
     /// Per-session cancellation for an armed disconnect grace, keyed by a
     /// generation token so an expired older task cannot evict a newer one.
     disconnect_graces: Mutex<HashMap<String, (u64, oneshot::Sender<()>)>>,
+    /// Bounded memory of resolved question ids (`already_resolved` replies).
+    resolved: Mutex<Tombstones>,
     /// Tokio runtime handle (see [`PermissionRendezvous::handle`]).
     handle: Result<tokio::runtime::Handle, tokio::runtime::TryCurrentError>,
 }
@@ -872,6 +926,7 @@ impl QuestionRendezvous {
             timeout,
             disconnect_grace,
             disconnect_graces: Mutex::new(HashMap::new()),
+            resolved: Mutex::new(Tombstones::new()),
             handle: tokio::runtime::Handle::try_current(),
         }
     }
@@ -891,6 +946,7 @@ impl QuestionRendezvous {
             timeout,
             disconnect_grace,
             disconnect_graces: Mutex::new(HashMap::new()),
+            resolved: Mutex::new(Tombstones::new()),
             handle: Ok(handle),
         }
     }
@@ -1006,6 +1062,16 @@ impl QuestionRendezvous {
         }
     }
 
+    /// The rejection for a `question_id` with no outstanding ticket: a recently
+    /// resolved one is `AlreadyResolved`, anything else `NotFound`.
+    fn missing_ticket_error(&self, question_id: &str) -> QuestionRespondError {
+        if self.resolved.lock().contains(question_id) {
+            QuestionRespondError::AlreadyResolved
+        } else {
+            QuestionRespondError::NotFound
+        }
+    }
+
     /// Attempt to resolve a ticket with a client's answer (first-response-wins).
     ///
     /// On success, the answer is forwarded to [`AcpManager::answer_question`].
@@ -1020,7 +1086,7 @@ impl QuestionRendezvous {
         {
             let tickets = self.tickets.lock();
             let Some(ticket) = tickets.get(question_id) else {
-                return Err(QuestionRespondError::NotFound);
+                return Err(self.missing_ticket_error(question_id));
             };
             if ticket.resolved_by == Some(client_id) {
                 return Err(QuestionRespondError::Duplicate);
@@ -1050,7 +1116,7 @@ impl QuestionRendezvous {
         let (agent_id, _session_id) = {
             let mut tickets = self.tickets.lock();
             let Some(ticket) = tickets.get_mut(question_id) else {
-                return Err(QuestionRespondError::NotFound);
+                return Err(self.missing_ticket_error(question_id));
             };
             if ticket.resolved_by == Some(client_id) {
                 return Err(QuestionRespondError::Duplicate);
@@ -1081,6 +1147,7 @@ impl QuestionRendezvous {
             warn!("[questions] answer_question {question_id} failed: {e}");
         }
 
+        self.resolved.lock().record(question_id);
         self.tickets.lock().remove(question_id);
         Ok(QuestionRespondOutcome::Resolved)
     }
@@ -1230,6 +1297,7 @@ impl QuestionRendezvous {
                 if let Some(tx) = ticket.timeout_cancel.take() {
                     let _ = tx.send(());
                 }
+                self.resolved.lock().record(question_id);
                 cancel = true;
             }
         }

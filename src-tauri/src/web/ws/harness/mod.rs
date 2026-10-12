@@ -98,7 +98,9 @@ impl Host {
                 }
             }
             let _finished = Finished(done_tx);
-            run_relay(carrier, state).await;
+            // The harness peer is a local, write-capable connection.
+            let local_peer = SocketAddr::from(([127, 0, 0, 1], 0));
+            run_relay(carrier, state, local_peer).await;
         });
         Conn { peer, task, done }
     }

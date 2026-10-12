@@ -18,6 +18,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::web::fs_api::check_local_only;
 use crate::web::project_registry::ProjectListPayload;
 use crate::web::sink::broadcast_projects_changed;
 use crate::web::ws::AppState;
@@ -127,45 +128,12 @@ pub async fn set_default_project(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<SetDefaultProjectRequest>,
 ) -> impl IntoResponse {
-    // Loopback-only guard — this route mutates host state (persists the default
-    // to `FileProjectRegistry` and broadcasts `projects_changed` to ALL
-    // connected clients), so a LAN peer on a `0.0.0.0` bind must not reach it.
-    // Mirrors the fs/git/workspace write routes' `check_local_only` (CWE-306).
-    let is_loopback = peer.ip().is_loopback();
-    // Deployment-mode deny FIRST: shared-live (cloudflared tunnel) cannot
-    // distinguish forwarded public traffic from genuine local callers, so
-    // refuse all host-state writes on this path before peer/flag evaluation.
-    if state.shared_live_writes_denied {
-        tracing::warn!(
-            target: "termul::web::projects_api",
-            route = "/projects/default",
-            peer = %peer,
-            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
-        );
-        return Json(IpcBody::<()>::err(
-            "shared-live deployment mode denies all remote writes".to_string(),
-            "FORBIDDEN",
-        ));
-    }
-    if !is_loopback && !state.allow_remote_writes {
-        tracing::warn!(
-            target: "termul::web::projects_api",
-            route = "/projects/default",
-            peer = %peer,
-            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
-        );
-        return Json(IpcBody::<()>::err(
-            format!("host-state write routes are localhost-only (peer {peer} is not loopback)"),
-            "FORBIDDEN",
-        ));
-    }
-    if !is_loopback && state.allow_remote_writes {
-        tracing::warn!(
-            target: "termul::web::projects_api",
-            route = "/projects/default",
-            peer = %peer,
-            "remote-write guard ADMITTED (--allow-remote-writes)",
-        );
+    // This route mutates host state (persists the default to
+    // `FileProjectRegistry` and broadcasts `projects_changed` to ALL connected
+    // clients): the shared write predicate guards it like every other
+    // host-state write (CWE-306).
+    if let Some(err) = check_project_write_guard(&state, peer, "/projects/default") {
+        return err;
     }
     let project_id = req.project_id;
     // Validate via switch_context (same path as `switch_project`).
@@ -258,50 +226,25 @@ pub async fn set_default_project(
     Json(IpcBody::ok(()))
 }
 
-/// Loopback / `--allow-remote-writes` guard shared by the project mutation
-/// routes. Mirrors `set_default_project`'s write-guard posture (CWE-306):
-/// shared-live deployment mode denies ALL writes; otherwise loopback is
-/// admitted, and a non-loopback peer requires `--allow-remote-writes`. Returns
-/// `Some(error_response)` when the peer is refused.
+/// Write guard shared by the project mutation routes: the shared predicate
+/// (`fs_api::check_local_only`) wrapped in this module's `Json` response.
 fn check_project_write_guard<T>(
     state: &AppState,
     peer: SocketAddr,
     route: &str,
 ) -> Option<Json<IpcBody<T>>> {
-    let is_loopback = peer.ip().is_loopback();
-    if state.shared_live_writes_denied {
-        tracing::warn!(
-            target: "termul::web::projects_api",
-            route,
-            peer = %peer,
-            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
-        );
-        return Some(Json(IpcBody::<T>::err(
-            "shared-live deployment mode denies all remote writes".to_string(),
-            "FORBIDDEN",
-        )));
-    }
-    if !is_loopback && !state.allow_remote_writes {
-        tracing::warn!(
-            target: "termul::web::projects_api",
-            route,
-            peer = %peer,
-            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
-        );
-        return Some(Json(IpcBody::<T>::err(
-            format!("host-state write routes are localhost-only (peer {peer} is not loopback)"),
-            "FORBIDDEN",
-        )));
-    }
-    if !is_loopback && state.allow_remote_writes {
-        tracing::warn!(
-            target: "termul::web::projects_api",
-            route,
-            peer = %peer,
-            "remote-write guard ADMITTED (--allow-remote-writes)",
-        );
-    }
-    None
+    check_local_only::<T>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        route,
+    )
+    .map(|refused| {
+        Json(IpcBody::<T>::err(
+            refused.error.unwrap_or_default(),
+            refused.code.unwrap_or_default(),
+        ))
+    })
 }
 
 /// `POST /projects` → create / upsert a VFS root (Option B).

@@ -406,7 +406,13 @@ export const WS_ERROR_CODES = {
   // Upstream provider refused the call: session limit.
   PROVIDER_SESSION_LIMIT: 'provider_session_limit',
   // Upstream provider rejected the request with a 4xx class error.
-  PROVIDER_REQUEST_REJECTED: 'provider_request_rejected'
+  PROVIDER_REQUEST_REJECTED: 'provider_request_rejected',
+  // The connection lacks the capability the request needs (view-only
+  // connection attempting a mutation outside `device/<deviceId>/`).
+  FORBIDDEN: 'forbidden',
+  // respond_permission / answer_question named a ticket that was already
+  // resolved (bounded tombstones; an older ticket reads `stale`).
+  ALREADY_RESOLVED: 'already_resolved'
 } as const
 
 /** Union of all WS error code strings. */

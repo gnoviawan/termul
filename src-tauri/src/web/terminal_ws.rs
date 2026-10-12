@@ -16,10 +16,11 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -28,6 +29,10 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::pty::manager::{PtyManager, SpawnOptions};
+use crate::web::capabilities::{
+    terminal_request_is_view, Capabilities, CapabilityPolicy, Carrier,
+};
+use crate::web::presence::PresenceGuard;
 use crate::web::ws::{validate_authenticate_handshake, AppState, ClientIdentity};
 
 const MAX_RECONNECT_FRAMES: usize = 64;
@@ -44,14 +49,18 @@ struct Request {
     payload: Value,
 }
 
+/// The peer address (`ConnectInfo`) feeds the connection's capabilities,
+/// resolved at `authenticate`; the router MUST be served with
+/// `into_make_service_with_connect_info::<SocketAddr>()`.
 pub async fn terminal_ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| run(socket, state))
+    ws.on_upgrade(move |socket| run(socket, state, peer))
 }
 
-async fn run(socket: WebSocket, state: AppState) {
+async fn run(socket: WebSocket, state: AppState, peer: SocketAddr) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
 
@@ -116,6 +125,10 @@ async fn run(socket: WebSocket, state: AppState) {
         // `authenticate` handshake flips it.
         authed: false,
         identity: None,
+        // Capabilities are resolved ONCE, at `authenticate`.
+        capabilities: Capabilities::none(Carrier::TerminalWs),
+        capability_policy: CapabilityPolicy::for_connection(Carrier::TerminalWs, peer, &state),
+        presence: None,
         // #851: opaque per-connection id for the size-owner marker.
         client_id,
     };
@@ -224,6 +237,12 @@ struct ConnectionContext {
     /// Identity validated by the `authenticate` handshake (AD-4), kept
     /// exactly as received.
     identity: Option<ClientIdentity>,
+    /// What this connection may do; none until `authenticate` succeeds.
+    capabilities: Capabilities,
+    /// Carrier + deployment flags + peer, resolved into `capabilities` once.
+    capability_policy: CapabilityPolicy,
+    /// Device presence registration, held for the connection's lifetime.
+    presence: Option<PresenceGuard>,
     /// #851: opaque per-connection id (see `NEXT_CONNECTION_ID`) used for
     /// the single-size-owner marker on write/resize.
     client_id: String,
@@ -290,7 +309,21 @@ async fn handle(
     tx: &mpsc::Sender<Message>,
     ctx: &mut ConnectionContext,
 ) -> Result<Value, (&'static str, String)> {
-    match connection_gate(ctx.authed, request.type_.as_str()) {
+    let gate = connection_gate(ctx.authed, request.type_.as_str());
+    // Required-capability check before any handler arm: a view-only
+    // connection may attach/read but never mutate (spawn, write, resize,
+    // kill, claims, renderer refs, protection, orphan detection).
+    if gate == ConnectionGate::Allow
+        && !ctx.capabilities.write
+        && !terminal_request_is_view(request.type_.as_str())
+    {
+        warn!(
+            "[terminal-ws] request refused type={} id={} (view-only connection)",
+            request.type_, request.id
+        );
+        return Err((FORBIDDEN_CODE, forbidden_message(&request.type_)));
+    }
+    match gate {
         ConnectionGate::Refuse => Err(("UNAUTHORIZED", "Unauthorized".to_string())),
         ConnectionGate::Authenticate => {
             // Already authed: idempotent success, no re-validation.
@@ -324,6 +357,13 @@ async fn handle(
                 }
             }
             ctx.authed = true;
+            ctx.capabilities = ctx.capability_policy.resolve();
+            ctx.presence = Some(
+                state
+                    .relay
+                    .presence()
+                    .register(&identity, Carrier::TerminalWs),
+            );
             let identity = ctx.identity.insert(identity);
             info!(
                 "[terminal-ws] connection authenticated device_id={} client_instance_id={}",
@@ -827,6 +867,14 @@ async fn handle(
             _ => Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string())),
         },
     }
+}
+
+/// `/terminal/ws` wire form of the stable `forbidden` code (this surface's
+/// codes are SCREAMING_SNAKE_CASE, like `UNAUTHORIZED`).
+const FORBIDDEN_CODE: &str = "FORBIDDEN";
+
+fn forbidden_message(request_type: &str) -> String {
+    format!("`{request_type}` requires write capability; this connection is view-only")
 }
 
 fn string_field<'a>(value: &'a Value, key: &str) -> Result<&'a str, (&'static str, String)> {

@@ -787,11 +787,25 @@ async fn daemon_save_round_trips_through_the_daemon() {
 // Web canvas routes (sub-router via tower oneshot)
 // ---------------------------------------------------------------------------
 
+/// Deployment flags for the sub-router tests: a plain loopback deployment.
+fn loopback_write_flags() -> crate::web::capabilities::WriteFlags {
+    crate::web::capabilities::WriteFlags {
+        allow_remote_writes: false,
+        shared_live_writes_denied: false,
+    }
+}
+
+/// The loopback peer `ConnectInfo` the canvas write routes require.
+fn web_test_peer() -> std::net::SocketAddr {
+    std::net::SocketAddr::from(([127, 0, 0, 1], 54321))
+}
+
 fn web_canvas_app(pool: Option<Arc<CanvasDaemonPool>>) -> Router {
     crate::web::canvas_api::canvas_router(crate::web::canvas_api::CanvasState {
         pool,
         web_auth: None,
         boundary: None,
+        write_flags: loopback_write_flags(),
     })
 }
 
@@ -808,6 +822,7 @@ fn web_canvas_app_with_boundary(
         boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
             registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&root),
         }),
+        write_flags: loopback_write_flags(),
     })
 }
 
@@ -823,6 +838,7 @@ fn web_canvas_app_gated(
             crate::web::auth::WebAuthToken::new(token).expect("non-empty"),
         ))),
         boundary: None,
+        write_flags: loopback_write_flags(),
     })
 }
 
@@ -837,6 +853,7 @@ async fn web_open(
             Request::builder()
                 .method(Method::POST)
                 .uri("/canvas/open")
+                .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({"docPath": doc, "projectId": project_id}).to_string(),
@@ -909,6 +926,7 @@ async fn web_open_is_idempotent_for_a_live_session() {
             Request::builder()
                 .method(Method::POST)
                 .uri("/canvas/close")
+                .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::json!({"docPath": doc}).to_string()))
                 .expect("build close request"),
@@ -1039,6 +1057,7 @@ async fn web_canvas_token_is_invalidated_on_close() {
             Request::builder()
                 .method(Method::POST)
                 .uri("/canvas/close")
+                .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::json!({"docPath": doc}).to_string()))
                 .expect("build close request"),
@@ -1128,6 +1147,7 @@ async fn web_open_without_pool_degrades_to_daemon_down() {
             Request::builder()
                 .method(Method::POST)
                 .uri("/canvas/open")
+                .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({"docPath": "C:/x/design.op", "projectId": "p"}).to_string(),
@@ -1157,6 +1177,7 @@ async fn web_save_without_daemon_is_typed_daemon_down() {
             Request::builder()
                 .method(Method::POST)
                 .uri("/canvas/save")
+                .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({"docPath": doc}).to_string(),
@@ -1172,6 +1193,55 @@ async fn web_save_without_daemon_is_typed_daemon_down() {
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("IpcBody json");
     assert_eq!(parsed["success"], false);
     assert_eq!(parsed["code"], "DAEMON_DOWN");
+    drop(dir);
+}
+
+#[tokio::test]
+async fn web_canvas_write_routes_refuse_a_view_only_peer() {
+    let (dir, doc) = temp_doc();
+    let pool = Arc::new(CanvasDaemonPool::new(FakeSpawner::new(
+        FakeKind::HandshakeThenSleep,
+    )));
+    let lan = std::net::SocketAddr::from(([192, 168, 1, 50], 40000));
+    let shared_live = crate::web::capabilities::WriteFlags {
+        allow_remote_writes: false,
+        shared_live_writes_denied: true,
+    };
+    let remote_state = |write_flags| crate::web::canvas_api::CanvasState {
+        pool: Some(pool.clone()),
+        web_auth: None,
+        boundary: None,
+        write_flags,
+    };
+    let cases = [
+        (lan, loopback_write_flags()),
+        (web_test_peer(), shared_live),
+    ];
+    for (peer, flags) in cases {
+        for uri in ["/canvas/open", "/canvas/close", "/canvas/save"] {
+            let app: Router = crate::web::canvas_api::canvas_router(remote_state(flags));
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(uri)
+                        .extension(axum::extract::ConnectInfo(peer))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({"docPath": doc, "projectId": "p"}).to_string(),
+                        ))
+                        .expect("build request"),
+                )
+                .await
+                .expect("router responds");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .expect("read body");
+            let parsed: serde_json::Value = serde_json::from_slice(&body).expect("IpcBody json");
+            assert_eq!(parsed["success"], false, "{uri} from {peer}");
+            assert_eq!(parsed["code"], "FORBIDDEN", "{uri} from {peer}");
+        }
+    }
     drop(dir);
 }
 

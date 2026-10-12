@@ -234,6 +234,12 @@ enum AcpCommand {
     SessionIds {
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    /// The canonical workspace root of every session registered on this
+    /// agent's driver (`(session id, root)`), for the destructive-operation
+    /// guard.
+    SessionRoots {
+        reply: oneshot::Sender<Result<Vec<(String, PathBuf)>, String>>,
+    },
     OwnsSession {
         session_id: SessionId,
         reply: oneshot::Sender<Result<bool, String>>,
@@ -790,6 +796,17 @@ impl AcpManager {
     pub async fn agent_session_ids(&self, agent_id: &AgentId) -> Result<Vec<String>, String> {
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::SessionIds { reply }).await
+    }
+
+    /// `(session id, canonical workspace root)` for every session registered
+    /// on one live agent's driver, via the authoritative
+    /// `AcpCommand::SessionRoots` round-trip.
+    pub async fn agent_session_roots(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<Vec<(String, PathBuf)>, String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::SessionRoots { reply }).await
     }
 
     /// Identity-rich summaries enriched with each agent's owned-session set
@@ -1739,6 +1756,51 @@ impl AcpManager {
             AgentEntry {
                 command_tx,
                 capabilities,
+                stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
+                join_handle: None,
+                killed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+    }
+
+    /// Destructive-op guard fixture: the fake driver owns `sessions`, each
+    /// with its own workspace root and turn state (`(session id, root,
+    /// active turn)`). Answers `SessionIds`/`SessionRoots`/`IsTurnActive`.
+    #[cfg(test)]
+    pub(crate) fn install_test_agent_with_session_roots(
+        &self,
+        agent_id: AgentId,
+        sessions: Vec<(String, PathBuf, bool)>,
+    ) {
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    AcpCommand::SessionIds { reply } => {
+                        let _ = reply.send(Ok(sessions.iter().map(|(id, ..)| id.clone()).collect()));
+                    }
+                    AcpCommand::SessionRoots { reply } => {
+                        let _ = reply.send(Ok(sessions
+                            .iter()
+                            .map(|(id, root, _)| (id.clone(), root.clone()))
+                            .collect()));
+                    }
+                    AcpCommand::IsTurnActive { session_id, reply } => {
+                        let _ = reply.send(Ok(sessions
+                            .iter()
+                            .any(|(id, _, active)| *id == session_id.0 && *active)));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        self.agents.lock().insert(
+            agent_id,
+            AgentEntry {
+                command_tx,
+                capabilities: AgentCapabilities::default(),
                 stable_namespace: None,
                 name: "test-agent".to_string(),
                 config_id: None,

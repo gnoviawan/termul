@@ -297,6 +297,9 @@ pub struct WsRelaySink {
     /// `unwatch_project`). `fs_changed` events go only to subscribed
     /// connections, not through the client registry above.
     fs_watches: crate::web::fs_watcher::FsWatchHub,
+    /// Authenticated connections per `deviceId`, shared by `/ws` and
+    /// `/terminal/ws` (both reach the relay through `AppState.relay`).
+    presence: Arc<crate::web::presence::PresenceRegistry>,
 }
 
 /// Per-session seq + append-only bounded ring (held under [`WsRelaySink::sessions`]).
@@ -440,6 +443,7 @@ impl WsRelaySink {
             persistence: None,
             replay_gates: tokio::sync::Mutex::new(HashMap::new()),
             fs_watches: crate::web::fs_watcher::FsWatchHub::default(),
+            presence: Arc::new(crate::web::presence::PresenceRegistry::new()),
         }
     }
 
@@ -447,6 +451,12 @@ impl WsRelaySink {
     #[must_use]
     pub fn fs_watches(&self) -> &crate::web::fs_watcher::FsWatchHub {
         &self.fs_watches
+    }
+
+    /// Device presence registry (connections per `deviceId`).
+    #[must_use]
+    pub fn presence(&self) -> &Arc<crate::web::presence::PresenceRegistry> {
+        &self.presence
     }
 
     /// Create a live relay sink with a custom per-session event-log capacity and

@@ -73,6 +73,7 @@ pub(super) async fn handle_request(
     text: &str,
     authed: &mut bool,
     identity: &mut Option<ClientIdentity>,
+    access: &mut ConnectionAccess,
     web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
@@ -154,6 +155,9 @@ pub(super) async fn handle_request(
                 client_instance_id = %ClientIdentity::log_label(&validated.client_instance_id),
                 "/ws connection authenticated"
             );
+            // Capabilities are resolved ONCE, here (carrier + deployment flags
+            // + peer), and the device joins presence.
+            access.grant(&validated, relay);
             *identity = Some(validated);
             *authed = true;
             let reconnect_grace = relay
@@ -175,6 +179,12 @@ pub(super) async fn handle_request(
             WsErrorCode::Unauthorized,
             "pre-auth: send an `authenticate` request first",
         );
+    }
+
+    // Required-capability check: a view-only connection is refused every
+    // mutation before any handler runs.
+    if let Some(reply) = forbidden_reply(&req.id, &req.type_, &req.payload, access, identity.as_ref()) {
+        return reply;
     }
 
     // Post-auth routing.
@@ -237,12 +247,12 @@ pub(super) async fn handle_request(
         // decision through the server-side rendezvous (first-response-wins,
         // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
         // which resolves the agent's `Responder` on the driver thread.
-        "respond_permission" => handle_respond_permission(id, &req.payload, relay, subscribed_clients).await,
+        "respond_permission" => handle_respond_permission(id, &req.payload, relay, access.connection_id()).await,
         // Issue #411: `answer_question` — route the browser's structured-question
         // answer through the server-side question rendezvous (first-response-wins,
         // TOCTOU re-validation) to `AcpManager::answer_question`, which resolves
         // the agent's `Responder` on the driver thread.
-        "answer_question" => handle_answer_question(id, &req.payload, relay, subscribed_clients).await,
+        "answer_question" => handle_answer_question(id, &req.payload, relay, access.connection_id()).await,
         // Story 1.8: ACP command forwarding → `AcpManager`. The streaming events
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the

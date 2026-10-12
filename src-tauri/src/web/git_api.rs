@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use crate::trackers::git_tracker::{
     self, GitCommit, GitCommitContext, GitStatusDetail, GitTracker,
 };
+use crate::acp::destructive_guard::{ensure_no_active_turn_under, DESTRUCTIVE_OP_BLOCKED};
 use crate::web::fs_api::{check_local_only, resolve_request_path, IpcBody};
 use crate::web::ws::AppState;
 
@@ -531,6 +532,11 @@ pub async fn checkout_branch(
         Ok(s) => s,
         Err(resp) => return resp,
     };
+    // A checkout rewrites the whole working tree: refuse while a session
+    // working inside it is mid-turn.
+    if let Some(blocked) = destructive_op_refusal(&state, &resolved).await {
+        return blocked;
+    }
     let cwd_for_log = cwd.clone();
     let branch = req.branch;
     let branch_for_log = branch.clone();
@@ -816,6 +822,7 @@ pub async fn branch_switch(
         "checkout",
         "GIT_BRANCH_SWITCH_ERROR",
         run_simple_checkout,
+        true,
     )
     .await
 }
@@ -833,8 +840,28 @@ pub async fn branch_create(
         "checkout -b",
         "GIT_BRANCH_CREATE_ERROR",
         run_simple_checkout_b,
+        false,
     )
     .await
+}
+
+/// The shared destructive-operation guard as an HTTP refusal: `Some` when a
+/// session working inside `target` has an active turn (same code + message as
+/// the Tauri commands).
+pub(super) async fn destructive_op_refusal(
+    state: &AppState,
+    target: &std::path::Path,
+) -> Option<(StatusCode, Json<IpcBody<()>>)> {
+    match ensure_no_active_turn_under(&state.acp, target).await {
+        Ok(()) => None,
+        Err(blocked) => {
+            tracing::warn!(path = %target.display(), "destructive operation refused: active turn inside target");
+            Some((
+                StatusCode::OK,
+                Json(IpcBody::<()>::err(blocked.to_string(), DESTRUCTIVE_OP_BLOCKED)),
+            ))
+        }
+    }
 }
 
 // ============================ helpers ============================
@@ -936,6 +963,7 @@ async fn run_branch_name_write(
     label: &'static str,
     code: &'static str,
     runner: fn(&str, &str) -> Result<(), String>,
+    guard_active_turns: bool,
 ) -> (StatusCode, Json<IpcBody<()>>) {
     let resolved = match resolve_cwd::<()>(&req.cwd, state, Some(peer), true) {
         Ok(p) => p,
@@ -945,6 +973,11 @@ async fn run_branch_name_write(
         Ok(s) => s,
         Err((st, body)) => return (st, body),
     };
+    if guard_active_turns {
+        if let Some(blocked) = destructive_op_refusal(state, &resolved).await {
+            return blocked;
+        }
+    }
     let cwd_for_log = cwd.clone();
     let name = req.name;
     let name_for_log = name.clone();

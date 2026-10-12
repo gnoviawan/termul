@@ -44,10 +44,11 @@
 //! optional — the test `router_with_static` variant passes `pool: None` →
 //! routes degrade to typed `DAEMON_DOWN`).
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::extract::{Request, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::header::{self, HeaderMap};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -60,7 +61,8 @@ use crate::canvas::mcp_proxy;
 use crate::canvas::pool::CanvasDaemonPool;
 use crate::canvas::{canvas_id_for_project, CanvasOpenInfo};
 use crate::web::auth::WebAuth;
-use crate::web::fs_api::IpcBody;
+use crate::web::capabilities::WriteFlags;
+use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::project_registry::ProjectRegistry;
 
 /// Router state: the pool handle + the web auth gate + the project-root
@@ -71,6 +73,10 @@ pub struct CanvasState {
     pub pool: Option<Arc<CanvasDaemonPool>>,
     pub web_auth: Option<Arc<WebAuth>>,
     pub boundary: Option<CanvasProjectBoundary>,
+    /// Deployment flags for the shared write predicate: `/canvas/open|close|
+    /// save` start/stop host daemons and write the `.op` document, so they
+    /// are write routes like the fs/git ones.
+    pub write_flags: WriteFlags,
 }
 
 /// Project-root boundary for the web doc-path validation on open — the SAME
@@ -80,6 +86,16 @@ pub struct CanvasState {
 #[derive(Clone)]
 pub struct CanvasProjectBoundary {
     pub registry: Arc<ProjectRegistry>,
+}
+
+/// The shared write predicate for the canvas open/close/save routes.
+fn check_canvas_write<T>(state: &CanvasState, peer: SocketAddr, route: &str) -> Option<IpcBody<T>> {
+    check_local_only::<T>(
+        peer,
+        state.write_flags.allow_remote_writes,
+        state.write_flags.shared_live_writes_denied,
+        route,
+    )
 }
 
 /// Validate a canvas doc path against the project boundary — mirrors the
@@ -354,9 +370,13 @@ fn request_origin(headers: &HeaderMap) -> String {
 /// on a fresh entry.
 async fn open(
     State(state): State<CanvasState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<CanvasOpenRequest>,
 ) -> Json<IpcBody<CanvasOpenInfo>> {
+    if let Some(forbidden) = check_canvas_write(&state, peer, "/canvas/open") {
+        return Json(forbidden);
+    }
     tracing::info!(
         target: "termul::web::canvas",
         "canvas open (web) project_id={}",
@@ -446,8 +466,12 @@ async fn open(
 /// `POST /canvas/close` — evict the doc's daemon (stdin EOF → kill).
 async fn close(
     State(state): State<CanvasState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<CanvasDocRequest>,
 ) -> Json<IpcBody<bool>> {
+    if let Some(forbidden) = check_canvas_write(&state, peer, "/canvas/close") {
+        return Json(forbidden);
+    }
     let Some(pool) = state.pool else {
         return Json(IpcBody::err(
             "canvas daemon pool is unavailable on this server",
@@ -464,8 +488,12 @@ async fn close(
 /// `DAEMON_DOWN` (the "canvas closed" signal).
 async fn save(
     State(state): State<CanvasState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<CanvasDocRequest>,
 ) -> Json<IpcBody<serde_json::Value>> {
+    if let Some(forbidden) = check_canvas_write(&state, peer, "/canvas/save") {
+        return Json(forbidden);
+    }
     let Some(pool) = state.pool else {
         return Json(IpcBody::err(
             "canvas daemon pool is unavailable on this server",

@@ -42,7 +42,7 @@ use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::acp::{WorkspaceManifest, WriteOutcome};
-use crate::web::fs_api::IpcBody;
+use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
 
 /// `POST /workspace/:projectId/write` body. The `manifest` field carries the
@@ -238,57 +238,6 @@ pub async fn delete(
                 )),
             )
         }
-    }
-}
-
-/// Localhost-only guard for write/delete routes (mirrors
-/// `log_api::frontend_error` / `fs_api::check_local_only`). Returns `None`
-/// when the peer is loopback OR the standalone `termul-server` operator
-/// opt-in `allow_remote_writes` is set, or `Some(IpcBody::err(...))` with
-/// code `"FORBIDDEN"` when remote. 200+IpcResult convention (200 with the
-/// error body) so the renderer maps it to a uniform failure body. Emits a
-/// durable boundary log on admission-via-opt-in and on refusal (AGENTS.md).
-fn check_local_only<T>(
-    peer: SocketAddr,
-    allow_remote_writes: bool,
-    shared_live_writes_denied: bool,
-    route: &str,
-) -> Option<IpcBody<T>> {
-    // Deployment-mode deny FIRST (mirrors fs_api::check_local_only).
-    if shared_live_writes_denied {
-        tracing::warn!(
-            target: "termul::web::workspace_api",
-            route = route,
-            peer = %peer,
-            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
-        );
-        return Some(IpcBody::<T>::err(
-            "shared-live deployment mode denies all remote writes".to_string(),
-            "FORBIDDEN",
-        ));
-    }
-    let is_loopback = peer.ip().is_loopback();
-    if is_loopback || allow_remote_writes {
-        if !is_loopback && allow_remote_writes {
-            tracing::warn!(
-                target: "termul::web::workspace_api",
-                route = route,
-                peer = %peer,
-                "remote-write guard ADMITTED (--allow-remote-writes)",
-            );
-        }
-        None
-    } else {
-        tracing::warn!(
-            target: "termul::web::workspace_api",
-            route = route,
-            peer = %peer,
-            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
-        );
-        Some(IpcBody::<T>::err(
-            format!("workspace manifest write/delete routes are localhost-only (peer {peer} is not loopback)"),
-            "FORBIDDEN",
-        ))
     }
 }
 

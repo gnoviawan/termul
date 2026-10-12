@@ -32,13 +32,14 @@
 //! binds the connection to a session log with optional `lastSeq` cursor
 //! replay. Unknown request types return `err.code: "not_implemented"`.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,7 @@ use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContex
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::auth::WebAuth;
+use crate::web::capabilities::{Carrier, CapabilityPolicy};
 use crate::web::permissions::DEFAULT_PERMISSION_RECONNECT_GRACE;
 use crate::web::project_registry::{ProjectRegistry, ProjectSwitchContext};
 use crate::web::sink::{
@@ -58,6 +60,7 @@ use crate::web::sink::{
 };
 use crate::web::store::WebStore;
 
+mod access;
 mod agents;
 mod dispatch;
 mod lifecycle;
@@ -72,6 +75,7 @@ mod watch;
 // Handler submodules expose their items as `pub(super)`; these private
 // glob re-exports keep bare-name lookups working for sibling submodules and
 // for `tests.rs`' `use super::*` without widening visibility past `ws`.
+use access::*;
 use agents::*;
 use dispatch::*;
 use lifecycle::*;
@@ -409,6 +413,14 @@ pub enum WsErrorCode {
     /// Reserved: the upstream provider rejected the request with a 4xx class
     /// error.
     ProviderRequestRejected,
+    /// The connection lacks the capability the request needs (view-only
+    /// connection attempting a mutation outside `device/<deviceId>/`).
+    Forbidden,
+    /// `respond_permission` / `answer_question` named a ticket that was
+    /// already resolved (by this or another connection, a timeout or a
+    /// disconnect deny). Tombstones are bounded: an older ticket reads
+    /// `stale`.
+    AlreadyResolved,
 }
 
 impl WsErrorCode {
@@ -437,6 +449,8 @@ impl WsErrorCode {
             Self::ProviderQuotaExceeded => "provider_quota_exceeded",
             Self::ProviderSessionLimit => "provider_session_limit",
             Self::ProviderRequestRejected => "provider_request_rejected",
+            Self::Forbidden => "forbidden",
+            Self::AlreadyResolved => "already_resolved",
         }
     }
 }
@@ -706,6 +720,8 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
     }
 }
 
+#[cfg(test)]
+mod capability_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

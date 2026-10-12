@@ -119,10 +119,13 @@ pub(super) async fn handle_subscribe(
 
 /// CamelCase `respond_permission` payload (Story 1.7) — mirrors the client
 /// `acp-transport.ts: respondPermission(agentId, requestId, optionId?)`.
+/// The ticket (`requestId`) alone identifies the permission; `agentId` is
+/// optional and, when present, must match the ticket's agent.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RespondPermissionPayload {
-    agent_id: crate::acp::AgentId,
+    #[serde(default)]
+    agent_id: Option<crate::acp::AgentId>,
     request_id: String,
     /// `None` / omitted → cancel/deny (`RequestPermissionOutcome::Cancelled`).
     #[serde(default)]
@@ -134,6 +137,13 @@ pub(super) struct RespondPermissionPayload {
 /// `AcpManager::respond_permission` (resolves the agent `Responder` on the
 /// driver thread). Maps the rendezvous outcome/error to a stable `err.code`.
 ///
+/// Answers are keyed by the ticket (`requestId`) alone: the calling
+/// connection need not be subscribed to the permission's session (a fresh
+/// socket after a reconnect can answer a pending approval), and `agentId` is
+/// optional. First-wins is attributed to the CONNECTION (`client_id`), and a
+/// later answer to a resolved ticket gets `already_resolved`. The write
+/// capability is enforced before dispatch (`forbidden_reply`).
+///
 /// Requires a server-side rendezvous attached to the relay (`relay.rendezvous()`).
 /// On the desktop path (no rendezvous) the browser never reaches this handler
 /// — the desktop uses the `acp_respond_permission` Tauri command directly.
@@ -141,7 +151,7 @@ pub(super) async fn handle_respond_permission(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    subscribed_clients: &[(String, ClientId)],
+    client_id: ClientId,
 ) -> WsReply {
     let Some(rdz) = relay.rendezvous() else {
         return WsReply::err(
@@ -157,7 +167,7 @@ pub(super) async fn handle_respond_permission(
             return WsReply::err(
                 id,
                 WsErrorCode::Unsupported,
-                format!("malformed respond_permission payload (want agentId, requestId, optionId?): {e}"),
+                format!("malformed respond_permission payload (want requestId, optionId?, agentId?): {e}"),
             );
         }
     };
@@ -165,52 +175,34 @@ pub(super) async fn handle_respond_permission(
         return WsReply::err(id, WsErrorCode::Unsupported, "requestId is required");
     }
 
-    // Defense in depth: the payload's `agentId` must match the ticket's agent
-    // (a client cannot resolve another agent's permission).
-    let Some(ticket_agent) = rdz.agent_for_request(&parsed.request_id) else {
-        return WsReply::err(
-            id,
-            WsErrorCode::Stale,
-            "no outstanding permission for this requestId",
-        );
-    };
-    if ticket_agent != parsed.agent_id {
-        return WsReply::err(
-            id,
-            WsErrorCode::PermissionDenied,
-            "agentId does not match the permission's agent",
-        );
+    // Defense in depth: a payload `agentId`, when sent, must match the
+    // ticket's agent (a client cannot resolve another agent's permission).
+    if let (Some(claimed), Some(ticket_agent)) = (
+        parsed.agent_id.as_ref(),
+        rdz.agent_for_request(&parsed.request_id),
+    ) {
+        if *claimed != ticket_agent {
+            return WsReply::err(
+                id,
+                WsErrorCode::PermissionDenied,
+                "agentId does not match the permission's agent",
+            );
+        }
     }
-
-    // Resolve the calling connection's `ClientId` for this permission's session
-    // (a connection may be subscribed to several sessions; the permission belongs
-    // to one). Ownership check: the connection MUST be subscribed to the
-    // permission's session (NFR5 — no cross-session permission resolution).
-    let Some(session_id) = rdz.session_for_request(&parsed.request_id) else {
-        return WsReply::err(
-            id,
-            WsErrorCode::Stale,
-            "no outstanding permission for this requestId",
-        );
-    };
-    let Some((_, client_id)) = subscribed_clients
-        .iter()
-        .find(|(sid, _)| *sid == session_id)
-    else {
-        return WsReply::err(
-            id,
-            WsErrorCode::NotFound,
-            "this connection is not subscribed to the permission's session",
-        );
-    };
-    let client_id = *client_id;
 
     let option_id = parsed.option_id.as_deref();
     match rdz
         .try_respond(client_id, &parsed.request_id, option_id)
         .await
     {
-        Ok(crate::web::permissions::RespondOutcome::Resolved) => WsReply::ok(id, Some(json!({}))),
+        Ok(crate::web::permissions::RespondOutcome::Resolved) => {
+            info!(
+                target: "termul::web::ws",
+                request_id = %id,
+                "permission resolved by ticket"
+            );
+            WsReply::ok(id, Some(json!({})))
+        }
         Err(err) => {
             // Map each rendezvous rejection to its stable `err.code` (mirrors
             // `RespondError::wire_code`, but goes through `WsErrorCode` so the
@@ -221,41 +213,31 @@ pub(super) async fn handle_respond_permission(
                     "no outstanding permission for this requestId",
                 ),
                 crate::web::permissions::RespondError::AlreadyResolved => (
-                    WsErrorCode::Stale,
-                    "this permission was already resolved by another client (first-response-wins)",
+                    WsErrorCode::AlreadyResolved,
+                    "this permission was already resolved (first-response-wins)",
                 ),
                 crate::web::permissions::RespondError::Duplicate => (
                     WsErrorCode::Duplicate,
-                    "this client already responded to this permission",
+                    "this connection already responded to this permission",
                 ),
                 crate::web::permissions::RespondError::InvalidOption => (
                     WsErrorCode::PermissionDenied,
                     "optionId is not among the original permission options (TOCTOU defense)",
                 ),
-                crate::web::permissions::RespondError::NotSubscribed => (
-                    WsErrorCode::NotFound,
-                    "not subscribed to the permission's session",
-                ),
             };
             WsReply::err(id, code, msg)
         }
-        // `RespondOutcome` has only `Resolved` after the enum consolidation; the
-        // other arms are unreachable. Keep a fallthrough for future variants.
-        #[allow(unreachable_patterns)]
-        _ => WsReply::err(
-            id,
-            WsErrorCode::NotImplemented,
-            "unexpected permission rendezvous outcome",
-        ),
     }
 }
 
 /// CamelCase `answer_question` payload (issue #411) — mirrors the client
 /// `acp-transport.ts: answerQuestion(agentId, questionId, values?)`.
+/// `agentId` is optional and, when present, must match the ticket's agent.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AnswerQuestionPayload {
-    agent_id: crate::acp::AgentId,
+    #[serde(default)]
+    agent_id: Option<crate::acp::AgentId>,
     question_id: String,
     /// `None` / omitted → cancel; `Some(values)` → selected option values.
     #[serde(default)]
@@ -265,7 +247,9 @@ pub(super) struct AnswerQuestionPayload {
 /// Wire `answer_question` → [`crate::web::permissions::QuestionRendezvous`]
 /// (first-response-wins, TOCTOU re-validation) → `AcpManager::answer_question`
 /// (resolves the agent `Responder` on the driver thread). Maps the rendezvous
-/// outcome/error to a stable `err.code` (mirrors `handle_respond_permission`).
+/// outcome/error to a stable `err.code` (mirrors `handle_respond_permission`:
+/// ticket-only, no subscription requirement, per-connection first-wins,
+/// `already_resolved` for a later answer).
 ///
 /// Requires a server-side question rendezvous attached to the relay
 /// (`relay.question_rendezvous()`). On the desktop path (no rendezvous) the
@@ -275,7 +259,7 @@ pub(super) async fn handle_answer_question(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    subscribed_clients: &[(String, ClientId)],
+    client_id: ClientId,
 ) -> WsReply {
     let Some(rdz) = relay.question_rendezvous() else {
         return WsReply::err(
@@ -292,7 +276,7 @@ pub(super) async fn handle_answer_question(
                 id,
                 WsErrorCode::Unsupported,
                 format!(
-                    "malformed answer_question payload (want agentId, questionId, values?): {e}"
+                    "malformed answer_question payload (want questionId, values?, agentId?): {e}"
                 ),
             );
         }
@@ -301,42 +285,20 @@ pub(super) async fn handle_answer_question(
         return WsReply::err(id, WsErrorCode::Unsupported, "questionId is required");
     }
 
-    // Defense in depth: the payload's `agentId` must match the ticket's agent.
-    let Some(ticket_agent) = rdz.agent_for_question(&parsed.question_id) else {
-        return WsReply::err(
-            id,
-            WsErrorCode::Stale,
-            "no outstanding question for this questionId",
-        );
-    };
-    if ticket_agent != parsed.agent_id {
-        return WsReply::err(
-            id,
-            WsErrorCode::PermissionDenied,
-            "agentId does not match the question's agent",
-        );
+    // Defense in depth: a payload `agentId`, when sent, must match the
+    // ticket's agent.
+    if let (Some(claimed), Some(ticket_agent)) = (
+        parsed.agent_id.as_ref(),
+        rdz.agent_for_question(&parsed.question_id),
+    ) {
+        if *claimed != ticket_agent {
+            return WsReply::err(
+                id,
+                WsErrorCode::PermissionDenied,
+                "agentId does not match the question's agent",
+            );
+        }
     }
-
-    // Ownership check: the connection MUST be subscribed to the question's
-    // session (NFR5 — no cross-session question resolution).
-    let Some(session_id) = rdz.session_for_question(&parsed.question_id) else {
-        return WsReply::err(
-            id,
-            WsErrorCode::Stale,
-            "no outstanding question for this questionId",
-        );
-    };
-    let Some((_, client_id)) = subscribed_clients
-        .iter()
-        .find(|(sid, _)| *sid == session_id)
-    else {
-        return WsReply::err(
-            id,
-            WsErrorCode::NotFound,
-            "this connection is not subscribed to the question's session",
-        );
-    };
-    let client_id = *client_id;
 
     let values = parsed.values.as_deref();
     match rdz
@@ -344,6 +306,11 @@ pub(super) async fn handle_answer_question(
         .await
     {
         Ok(crate::web::permissions::QuestionRespondOutcome::Resolved) => {
+            info!(
+                target: "termul::web::ws",
+                request_id = %id,
+                "question resolved by ticket"
+            );
             WsReply::ok(id, Some(json!({})))
         }
         Err(err) => {
@@ -353,12 +320,12 @@ pub(super) async fn handle_answer_question(
                     "no outstanding question for this questionId",
                 ),
                 crate::web::permissions::QuestionRespondError::AlreadyResolved => (
-                    WsErrorCode::Stale,
-                    "this question was already answered by another client (first-response-wins)",
+                    WsErrorCode::AlreadyResolved,
+                    "this question was already answered (first-response-wins)",
                 ),
                 crate::web::permissions::QuestionRespondError::Duplicate => (
                     WsErrorCode::Duplicate,
-                    "this client already answered this question",
+                    "this connection already answered this question",
                 ),
                 crate::web::permissions::QuestionRespondError::InvalidOption => (
                     WsErrorCode::PermissionDenied,

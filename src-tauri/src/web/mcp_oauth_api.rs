@@ -13,47 +13,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::mcp_oauth;
-use crate::web::fs_api::IpcBody;
+use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
-
-/// Guard OAuth control routes (start/status/disconnect) the same way write
-/// routes are guarded: deny when shared-live deployment mode is active, and
-/// deny non-loopback peers without `--allow-remote-writes`. The
-/// `/oauth/callback` route stays publicly reachable for AS redirects.
-fn guard_oauth_control<T>(
-    peer: SocketAddr,
-    allow_remote_writes: bool,
-    shared_live_writes_denied: bool,
-    route: &str,
-) -> Option<IpcBody<T>> {
-    if shared_live_writes_denied {
-        tracing::warn!(
-            target: "termul::web::mcp_oauth_api",
-            route = route,
-            peer = %peer,
-            "OAuth control guard REFUSED (shared-live deployment mode denies all writes)",
-        );
-        return Some(IpcBody::<T>::err(
-            "shared-live deployment mode denies all remote writes".to_string(),
-            "FORBIDDEN",
-        ));
-    }
-    let is_loopback = peer.ip().is_loopback();
-    if is_loopback || allow_remote_writes {
-        None
-    } else {
-        tracing::warn!(
-            target: "termul::web::mcp_oauth_api",
-            route = route,
-            peer = %peer,
-            "OAuth control guard REFUSED (peer not loopback; no --allow-remote-writes)",
-        );
-        Some(IpcBody::<T>::err(
-            format!("OAuth control routes are localhost-only (peer {peer} is not loopback)"),
-            "FORBIDDEN",
-        ))
-    }
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,7 +38,7 @@ pub async fn oauth_start(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<OAuthStartRequest>,
 ) -> Json<IpcBody<OAuthStartResponse>> {
-    if let Some(err) = guard_oauth_control(
+    if let Some(err) = check_local_only(
         peer,
         state.allow_remote_writes,
         state.shared_live_writes_denied,
@@ -230,7 +191,7 @@ pub async fn oauth_status(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<OAuthStatusRequest>,
 ) -> Json<IpcBody<OAuthStatusResponse>> {
-    if let Some(err) = guard_oauth_control(
+    if let Some(err) = check_local_only(
         peer,
         state.allow_remote_writes,
         state.shared_live_writes_denied,
@@ -249,7 +210,7 @@ pub async fn oauth_disconnect(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<OAuthStatusRequest>,
 ) -> Json<IpcBody<()>> {
-    if let Some(err) = guard_oauth_control(
+    if let Some(err) = check_local_only(
         peer,
         state.allow_remote_writes,
         state.shared_live_writes_denied,

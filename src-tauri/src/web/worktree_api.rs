@@ -440,6 +440,11 @@ pub async fn remove(
         Ok(s) => s,
         Err(resp) => return resp,
     };
+    if let Some(blocked) =
+        crate::web::git_api::destructive_op_refusal(&state, &worktree_resolved).await
+    {
+        return blocked;
+    }
     let path_for_log = worktree_path.clone();
     let force = req.force;
     let result = tokio::task::spawn_blocking(move || {

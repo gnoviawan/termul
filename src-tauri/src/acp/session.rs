@@ -573,6 +573,15 @@ impl DriverState {
         self.session_roots.keys().cloned().collect()
     }
 
+    /// `(session id, workspace root)` for every session with a registered
+    /// root (destructive-operation guard).
+    pub(crate) fn session_roots_snapshot(&self) -> Vec<(String, PathBuf)> {
+        self.session_roots
+            .iter()
+            .map(|(session_id, root)| (session_id.clone(), root.clone()))
+            .collect()
+    }
+
     /// Number of sessions that still have a registered workspace root. Kept
     /// separate from `active_session_ids()` so callers that only need the
     /// count (e.g. shutdown logging) do not pull the id strings — CodeQL

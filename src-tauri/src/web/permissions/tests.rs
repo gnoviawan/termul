@@ -118,12 +118,12 @@ fn test_question_rendezvous() -> Arc<QuestionRendezvous> {
 }
 
 /// Story 1.7 AC3: first-response-wins — a second client's `try_respond` is
-/// rejected. The first response resolves + evicts the ticket; the second
-/// therefore sees `NotFound` (the ticket is gone) or `AlreadyResolved` (the
-/// rare race where the ticket is resolved but not yet evicted). BOTH map to
-/// wire `err.code: "stale"` — the assertion is on the stable wire code.
+/// rejected. The first response resolves + evicts the ticket but leaves a
+/// tombstone, so the second (and any later) answer sees `AlreadyResolved`
+/// (wire `err.code: "already_resolved"`); a ticket that never existed stays
+/// `NotFound` (`stale`).
 #[test]
-fn first_response_wins_second_is_rejected_stale() {
+fn first_response_wins_second_is_rejected_already_resolved() {
     let rdz = test_rendezvous();
     let client_a = ClientId::new();
     let client_b = ClientId::new();
@@ -138,29 +138,87 @@ fn first_response_wins_second_is_rejected_stale() {
         let a = rdz.try_respond(client_a, "perm-1", Some("allow")).await;
         let b = rdz.try_respond(client_b, "perm-1", Some("deny")).await;
         assert_eq!(a, Ok(RespondOutcome::Resolved), "first response wins");
-        // Second is rejected — either NotFound (ticket evicted) or
-        // AlreadyResolved (race window); both wire as `stale`.
-        assert!(
-            matches!(
-                b,
-                Err(RespondError::NotFound) | Err(RespondError::AlreadyResolved)
-            ),
-            "second response must be rejected (stale), got {b:?}"
-        );
-        let b_code = b.unwrap_err().wire_code();
-        assert_eq!(b_code, "stale", "first-wins rejection wires as `stale`");
-        // A third call is NotFound (also stale).
+        assert_eq!(b, Err(RespondError::AlreadyResolved));
+        assert_eq!(b.unwrap_err().wire_code(), "already_resolved");
+        // A third call is still `AlreadyResolved`; an unknown ticket is `stale`.
         let c = rdz
             .try_respond(ClientId::new(), "perm-1", Some("allow"))
             .await;
-        assert_eq!(c, Err(RespondError::NotFound));
+        assert_eq!(c, Err(RespondError::AlreadyResolved));
+        let unknown = rdz
+            .try_respond(ClientId::new(), "perm-never", Some("allow"))
+            .await;
+        assert_eq!(unknown, Err(RespondError::NotFound));
+        assert_eq!(RespondError::NotFound.wire_code(), "stale");
+    });
+}
+
+/// A ticket resolved by the timeout (deny) is remembered too: a late answer
+/// reads `already_resolved`, not `stale`.
+#[test]
+fn timed_out_permission_reads_already_resolved() {
+    let rdz = Arc::new(PermissionRendezvous::with_timeout(
+        Arc::new(AcpManager::new(vec![])),
+        Duration::from_millis(40),
+    ));
+    block_on(async {
+        rdz.register(
+            "perm-late".to_string(),
+            AgentId("a1".to_string()),
+            "sess-1".to_string(),
+            options_value(&["allow"]),
+        );
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(!rdz.is_outstanding("perm-late"));
+        let late = rdz
+            .try_respond(ClientId::new(), "perm-late", Some("allow"))
+            .await;
+        assert_eq!(late, Err(RespondError::AlreadyResolved));
+    });
+}
+
+/// Tombstones are bounded: past `RESOLVED_TOMBSTONE_CAPACITY` newer
+/// resolutions the oldest id falls back to `NotFound` (`stale`).
+#[test]
+fn resolved_tombstones_are_bounded() {
+    let rdz = test_rendezvous();
+    block_on(async {
+        let client = ClientId::new();
+        for n in 0..=RESOLVED_TOMBSTONE_CAPACITY {
+            let id = format!("perm-{n}");
+            rdz.register(
+                id.clone(),
+                AgentId("a1".to_string()),
+                format!("sess-{n}"),
+                options_value(&["allow"]),
+            );
+            assert_eq!(
+                rdz.try_respond(client, &id, Some("allow")).await,
+                Ok(RespondOutcome::Resolved)
+            );
+        }
+        assert_eq!(
+            rdz.try_respond(ClientId::new(), "perm-0", Some("allow")).await,
+            Err(RespondError::NotFound),
+            "the oldest tombstone aged out"
+        );
+        assert_eq!(
+            rdz.try_respond(
+                ClientId::new(),
+                &format!("perm-{RESOLVED_TOMBSTONE_CAPACITY}"),
+                Some("allow")
+            )
+            .await,
+            Err(RespondError::AlreadyResolved),
+            "the newest is still remembered"
+        );
     });
 }
 
 /// Issue #411: first-response-wins for questions — the second answer is
-/// rejected `stale` regardless of which rejection variant fires.
+/// rejected `already_resolved` (the resolved ticket is tombstoned).
 #[test]
-fn question_first_response_wins_second_is_rejected_stale() {
+fn question_first_response_wins_second_is_rejected_already_resolved() {
     let rdz = test_question_rendezvous();
     let client = ClientId::new();
     block_on(async {
@@ -177,18 +235,11 @@ fn question_first_response_wins_second_is_rejected_stale() {
         let second = rdz
             .try_respond(client, "q-1", Some(&["plan-b".to_string()]))
             .await;
-        assert!(
-            matches!(
-                second,
-                Err(QuestionRespondError::NotFound) | Err(QuestionRespondError::AlreadyResolved)
-            ),
-            "second response must be rejected (stale), got {second:?}"
-        );
-        assert_eq!(
-            second.unwrap_err().wire_code(),
-            "stale",
-            "first-wins rejection wires as `stale`"
-        );
+        assert_eq!(second, Err(QuestionRespondError::AlreadyResolved));
+        assert_eq!(second.unwrap_err().wire_code(), "already_resolved");
+        let unknown = rdz.try_respond(client, "q-never", None).await;
+        assert_eq!(unknown, Err(QuestionRespondError::NotFound));
+        assert_eq!(QuestionRespondError::NotFound.wire_code(), "stale");
     });
 }
 
@@ -300,7 +351,7 @@ fn question_cancel_none_resolves_and_evicts() {
         assert_eq!(outcome, Ok(QuestionRespondOutcome::Resolved));
         assert!(!rdz.is_outstanding("q-cancel"));
         let stale = rdz.try_respond(client, "q-cancel", None).await;
-        assert_eq!(stale, Err(QuestionRespondError::NotFound));
+        assert_eq!(stale, Err(QuestionRespondError::AlreadyResolved));
     });
 }
 
@@ -350,12 +401,12 @@ fn question_timeout_deny_resolves_and_evicts() {
         let stale = rdz
             .try_respond(ClientId::new(), "q-timeout", Some(&["plan-a".to_string()]))
             .await;
-        assert_eq!(stale, Err(QuestionRespondError::NotFound));
+        assert_eq!(stale, Err(QuestionRespondError::AlreadyResolved));
     });
 }
 
 /// Issue #411: same-client double-respond — exactly one wins; the loser is
-/// `stale`-coded.
+/// `already_resolved`-coded.
 #[test]
 fn question_same_client_double_respond_is_rejected() {
     let rdz = test_question_rendezvous();
@@ -376,7 +427,7 @@ fn question_same_client_double_respond_is_rejected() {
         let winner = if a.is_ok() { a } else { b };
         assert!(winner.is_ok(), "one answer must win: ({a:?}, {b:?})");
         assert!(loser.is_err(), "the other must be rejected");
-        assert_eq!(loser.unwrap_err().wire_code(), "stale");
+        assert_eq!(loser.unwrap_err().wire_code(), "already_resolved");
     });
 }
 
@@ -740,16 +791,16 @@ fn same_client_double_respond_is_rejected() {
             rdz.try_respond(client, "perm-dup", Some("allow")),
             rdz.try_respond(client, "perm-dup", Some("allow")),
         );
-        // Exactly one wins; the other is a `stale`-coded rejection
-        // (`NotFound` on this runtime, `Duplicate` under a real race).
+        // Exactly one wins; the other is rejected (`AlreadyResolved` on this
+        // runtime, `Duplicate` under a real race).
         let loser = if a.is_ok() { b } else { a };
         let winner = if a.is_ok() { a } else { b };
         assert!(winner.is_ok(), "one response must win: ({a:?}, {b:?})");
         assert!(loser.is_err(), "the other must be rejected");
         assert_eq!(
             loser.unwrap_err().wire_code(),
-            "stale",
-            "same-client double-respond rejection wires as stale"
+            "already_resolved",
+            "same-client double-respond rejection wires as already_resolved"
         );
     });
 }

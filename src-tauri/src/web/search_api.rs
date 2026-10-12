@@ -22,7 +22,14 @@
 use std::collections::BTreeMap;
 use std::io::BufRead;
 
-use axum::{extract::Query, extract::State, http::StatusCode, response::IntoResponse, Json};
+use std::net::SocketAddr;
+
+use axum::{
+    extract::{ConnectInfo, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use serde::Deserialize;
 
 use crate::commands::search_dirs::start_dir_search;
@@ -32,7 +39,7 @@ use crate::commands::{
     FileSearchMatch, FileSearchResponse, FileSearchResult, RgInfoResponse,
     SearchContentCancelRequest, SearchContentRequest, SearchFileHit, MAX_SEARCH_QUERY_LEN,
 };
-use crate::web::fs_api::IpcBody;
+use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::git_api::ensure_within_project_boundary;
 use crate::web::ws::AppState;
 
@@ -582,9 +589,20 @@ pub struct FileNameSearchResponse {
 /// functional once the deferred streaming `/search/ws` endpoint lands and
 /// registers its streaming rg children. Left wired now for protocol parity.
 pub async fn cancel(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<SearchContentCancelRequest>,
 ) -> impl IntoResponse {
+    // Cancelling kills a host `rg` child — a host-state side effect, so it
+    // takes the shared write predicate like every other write route.
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/search/cancel",
+    ) {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let search_id = req.search_id;
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut guard = search_processes().lock().map_err(|e| e.to_string())?;

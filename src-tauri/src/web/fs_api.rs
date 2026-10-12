@@ -27,6 +27,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::trackers::git_tracker::GitTracker;
+use crate::web::capabilities::{write_decision, WriteDecision, WriteFlags};
 use crate::web::ws::AppState;
 
 /// HTTP response body mirroring the renderer-side `IpcResult<T>` shape
@@ -198,21 +199,16 @@ fn should_ignore(name: &str) -> bool {
     ALWAYS_IGNORE.contains(&name)
 }
 
-/// Localhost-only guard for fs WRITE routes (Patch D). When the server is bound
-/// to `0.0.0.0` any reached LAN client could otherwise write anywhere on the
-/// host; this guard refuses the request unless the peer originates from the
-/// loopback range (`127.0.0.0/8` or `::1`). Returns `None` when the request is
-/// local, or `Some(IpcBody::err(...))` with `code: "FORBIDDEN"` when remote.
-/// Matches the existing 200+IpcResult convention (200 with the IpcResult error)
-/// so the renderer maps it to a uniform failure body.
-///
-/// Known limitation (deferred): the desktop shared-live host binds localhost
-/// and the cloudflared quick-tunnel forwards public traffic to it from a
-/// loopback source. `is_loopback()` therefore trusts cloudflared's connection,
-/// so a browser request through the public tunnel reaches these write routes
-/// even with `allow_remote_writes: false`. This predates the opt-in flag and
-/// needs a deployment-mode guard (deny writes on shared-live regardless of
-/// peer); tracked in deferred-work, not closed here.
+/// HTTP adapter over the shared write predicate
+/// ([`crate::web::capabilities::write_decision`]) — the one guard every
+/// host-state write route uses (fs, git, workspace, projects, MCP, OAuth,
+/// search cancel, canvas, …). Returns `None` when the peer may write, or
+/// `Some(IpcBody::err(...))` with `code: "FORBIDDEN"` when it may not (shared
+/// -live deployment mode denies all writes; otherwise a non-loopback peer needs
+/// `--allow-remote-writes`). Matches the 200+IpcResult convention (200 with the
+/// IpcResult error) so the renderer maps it to a uniform failure body. The
+/// same predicate is evaluated once per WebSocket connection at `authenticate`
+/// to decide its capabilities.
 ///
 /// Scope note (ADR-007): `/fs/*` write routes are intentionally NOT confined
 /// to `project_root` — they resolve any absolute path (only `..` traversal is
@@ -229,50 +225,36 @@ pub(super) fn check_local_only<T>(
     shared_live_writes_denied: bool,
     route: &str,
 ) -> Option<IpcBody<T>> {
-    // Deployment-mode deny FIRST: the desktop shared-live host binds localhost
-    // and a cloudflared quick-tunnel forwards public traffic to it from a
-    // loopback source, so `is_loopback()` cannot distinguish cloudflared's
-    // forwarded request from a genuine local caller. Refuse ALL writes on
-    // this path before evaluating the peer address or the opt-in.
-    if shared_live_writes_denied {
-        tracing::warn!(
+    let decision = write_decision(
+        peer,
+        WriteFlags {
+            allow_remote_writes,
+            shared_live_writes_denied,
+        },
+    );
+    // Durable boundary log (AGENTS.md): refusals, and non-loopback peers
+    // ADMITTED by the operator opt-in (the security-relevant event).
+    // Loopback admissions are routine and not logged (high volume). No
+    // request bodies or secrets are logged — only peer, route, decision.
+    match decision {
+        WriteDecision::Allowed => {}
+        WriteDecision::AdmittedByOptIn => tracing::warn!(
             target: "termul::web::fs_api",
             route = route,
             peer = %peer,
-            "remote-write guard REFUSED (shared-live deployment mode denies all writes)",
-        );
-        return Some(IpcBody::<T>::err(
-            "shared-live deployment mode denies all remote writes".to_string(),
-            "FORBIDDEN",
-        ));
-    }
-    let is_loopback = peer.ip().is_loopback();
-    if is_loopback || allow_remote_writes {
-        // Durable boundary log (AGENTS.md): record when a non-loopback peer
-        // is ADMITTED by the operator opt-in — the security-relevant event.
-        // Loopback admissions are routine and not logged (high volume). No
-        // request bodies or secrets are logged — only peer, route, decision.
-        if !is_loopback && allow_remote_writes {
-            tracing::warn!(
-                target: "termul::web::fs_api",
-                route = route,
-                peer = %peer,
-                "remote-write guard ADMITTED (--allow-remote-writes)",
-            );
-        }
-        None
-    } else {
-        tracing::warn!(
+            "remote-write guard ADMITTED (--allow-remote-writes)",
+        ),
+        WriteDecision::DeniedSharedLive | WriteDecision::DeniedRemotePeer => tracing::warn!(
             target: "termul::web::fs_api",
             route = route,
             peer = %peer,
-            "remote-write guard REFUSED (peer not loopback; no --allow-remote-writes)",
-        );
-        Some(IpcBody::<T>::err(
-            format!("fs write routes are localhost-only (peer {peer} is not loopback)"),
-            "FORBIDDEN",
-        ))
+            reason = ?decision,
+            "remote-write guard REFUSED",
+        ),
     }
+    decision
+        .refusal_message(peer)
+        .map(|message| IpcBody::<T>::err(message, "FORBIDDEN"))
 }
 
 /// Containment check for remote peers admitted via `--allow-remote-writes`.

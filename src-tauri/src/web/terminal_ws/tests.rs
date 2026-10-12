@@ -1,4 +1,5 @@
 use super::*;
+use std::net::SocketAddr;
 
 #[test]
 fn validates_numeric_dimensions() {
@@ -30,6 +31,9 @@ fn context_authorize_and_detach_roundtrip() {
         // Tests exercise post-gate behavior on an already-authed connection.
         authed: true,
         identity: None,
+        capabilities: write_capabilities(),
+        capability_policy: loopback_policy(),
+        presence: None,
         client_id: "test-conn-1".to_string(),
     };
     ctx.authorize("t1");
@@ -146,12 +150,46 @@ fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
     }
 }
 
+fn write_capabilities() -> Capabilities {
+    Capabilities {
+        carrier: Carrier::TerminalWs,
+        write: true,
+    }
+}
+
+/// A loopback peer on a deployment that does not deny writes.
+fn loopback_policy() -> CapabilityPolicy {
+    capability_policy([127, 0, 0, 1], false, false)
+}
+
+fn capability_policy(
+    peer: [u8; 4],
+    allow_remote_writes: bool,
+    shared_live_writes_denied: bool,
+) -> CapabilityPolicy {
+    CapabilityPolicy {
+        carrier: Carrier::TerminalWs,
+        peer: SocketAddr::from((peer, 40000)),
+        flags: crate::web::capabilities::WriteFlags {
+            allow_remote_writes,
+            shared_live_writes_denied,
+        },
+    }
+}
+
 fn gate_test_ctx(authed: bool) -> ConnectionContext {
     ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
         attachments: HashMap::new(),
         authed,
         identity: None,
+        capabilities: if authed {
+            write_capabilities()
+        } else {
+            Capabilities::none(Carrier::TerminalWs)
+        },
+        capability_policy: loopback_policy(),
+        presence: None,
         client_id: format!("test-conn-{authed}"),
     }
 }
@@ -355,6 +393,9 @@ async fn connection_detach_aborts_attachment_and_clears_authorization() {
         // Tests exercise post-gate behavior on an already-authed connection.
         authed: true,
         identity: None,
+        capabilities: write_capabilities(),
+        capability_policy: loopback_policy(),
+        presence: None,
         client_id: "test-conn-2".to_string(),
     };
     ctx.authorize("t1");
@@ -1232,4 +1273,115 @@ async fn audit_f1_dead_socket_releases_once_and_never_another_viewers_attachment
     b.release_all(&state);
     assert_eq!(live_attachments(&state, &id), 0);
     let _ = state.pty.force_kill(&id).await;
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities (view-only matrix) + presence
+// ---------------------------------------------------------------------------
+
+fn handshake_payload(device: &str) -> Value {
+    json!({
+        "protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION,
+        "deviceId": device,
+        "clientInstanceId": "tab-1",
+    })
+}
+
+#[tokio::test]
+async fn authenticate_resolves_capabilities_from_the_peer_and_registers_presence() {
+    let state = gate_test_state(None);
+    let (tx, _rx) = mpsc::channel(8);
+    let cases = [
+        ([127, 0, 0, 1], false, false, true),
+        ([192, 168, 1, 50], false, false, false),
+        ([192, 168, 1, 50], true, false, true),
+        ([127, 0, 0, 1], false, true, false),
+    ];
+    for (peer, allow, denied, may_write) in cases {
+        let mut ctx = gate_test_ctx(false);
+        ctx.capability_policy = capability_policy(peer, allow, denied);
+        assert!(!ctx.capabilities.write, "nothing granted before authenticate");
+        assert!(state.relay.presence().device("phone").is_none());
+        handle(
+            gate_request("a", "authenticate", handshake_payload("phone")),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("authenticate");
+        assert_eq!(ctx.capabilities.write, may_write, "peer={peer:?} allow={allow} denied={denied}");
+        assert_eq!(ctx.capabilities.carrier, Carrier::TerminalWs);
+        let presence = state.relay.presence().device("phone").expect("registered");
+        assert_eq!(presence.connections, 1);
+        assert!(presence.carriers.contains("terminal_ws"));
+        // Connection teardown (context drop) unregisters the device.
+        drop(ctx);
+        assert!(state.relay.presence().device("phone").is_none());
+    }
+}
+
+#[tokio::test]
+async fn view_only_terminal_connection_is_refused_every_mutation() {
+    let state = gate_test_state(None);
+    let (tx, _rx) = mpsc::channel(8);
+    let mut ctx = gate_test_ctx(true);
+    ctx.capabilities = Capabilities::none(Carrier::TerminalWs);
+    ctx.authorize("t1");
+    for mutation in [
+        "spawn",
+        "write",
+        "resize",
+        "kill",
+        "rotate_claim",
+        "revoke_claim",
+        "set_protected",
+        "update_orphan_detection",
+        "add_renderer_ref",
+        "remove_renderer_ref",
+    ] {
+        let refused = handle(
+            gate_request("m", mutation, json!({ "terminalId": "t1", "projectId": "p" })),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect_err(mutation);
+        assert_eq!(refused.0, "FORBIDDEN", "{mutation}");
+        assert_eq!(
+            refused.0.to_ascii_lowercase(),
+            crate::web::ws::WsErrorCode::Forbidden.as_str()
+        );
+    }
+    // Reads, attach bookkeeping and listing stay available.
+    for view in ["get_cwd", "get_git_branch", "get_git_status", "get_exit_code", "list_preserved", "detach"] {
+        let outcome = handle(
+            gate_request("v", view, json!({ "terminalId": "t1", "projectId": "p" })),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert!(
+            !matches!(&outcome, Err((code, _)) if *code == "FORBIDDEN"),
+            "{view} must not be refused for a view-only connection"
+        );
+    }
+}
+
+#[tokio::test]
+async fn write_capable_terminal_connection_passes_the_capability_gate() {
+    let state = gate_test_state(None);
+    let (tx, _rx) = mpsc::channel(8);
+    let mut ctx = gate_test_ctx(true);
+    // `update_orphan_detection` needs no terminal and no PTY: it must run.
+    let outcome = handle(
+        gate_request("o", "update_orphan_detection", json!({ "enabled": true })),
+        &state,
+        &tx,
+        &mut ctx,
+    )
+    .await;
+    assert!(outcome.is_ok(), "{outcome:?}");
 }

@@ -289,6 +289,10 @@ pub fn router(
                 boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
                     registry: registry.clone(),
                 }),
+                write_flags: crate::web::capabilities::WriteFlags {
+                    allow_remote_writes,
+                    shared_live_writes_denied,
+                },
             },
         ));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
@@ -579,6 +583,10 @@ pub fn router_with_static(
                 boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
                     registry: registry.clone(),
                 }),
+                write_flags: crate::web::capabilities::WriteFlags {
+                    allow_remote_writes,
+                    shared_live_writes_denied,
+                },
             },
         ))
         .fallback_service(assets::static_service_from(static_dir));
