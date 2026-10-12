@@ -44,6 +44,7 @@ use crate::acp::session_persistence::{
 };
 use crate::web::ws::{tier_of, ReliabilityTier, SequencedEvent};
 
+use super::fanout::Gaps;
 use super::{ClientId, EventStream, LogHead, ReplayResult, StreamItem, WsRelaySink};
 
 /// Per-session seq counter + append-only bounded ring (held under
@@ -590,7 +591,8 @@ impl WsRelaySink {
     ) -> (ClientId, EventStream, ReplayResult, Option<LogHead>) {
         let client_id = ClientId::new();
         let (tx, rx) = mpsc::channel::<StreamItem>(self.client_queue_capacity);
-        let no_replay = |rx| EventStream::new(Vec::new(), rx);
+        let gaps = Gaps::default();
+        let no_replay = |rx| EventStream::new(Vec::new(), rx, Arc::clone(&gaps));
         let Some(cursor) = last_seq else {
             // Live-only: validate existence and register under the SAME
             // `sessions` lock `forget_session` removes under — a concurrent
@@ -602,7 +604,7 @@ impl WsRelaySink {
                 return (client_id, no_replay(rx), ReplayResult::NotFound, None);
             }
             let head = self.session_head_locked(&mut sessions, sid);
-            self.register(client_id, sid, tx, closing);
+            self.register(client_id, sid, tx, Arc::clone(&gaps), closing);
             return (client_id, no_replay(rx), ReplayResult::Ok(0), Some(head));
         };
 
@@ -785,9 +787,9 @@ impl WsRelaySink {
             let (tx, rx) = mpsc::channel::<StreamItem>(
                 self.client_queue_capacity + by_seq.len().min(self.event_log_capacity),
             );
-            self.register(client_id, sid, tx, closing);
+            self.register(client_id, sid, tx, Arc::clone(&gaps), closing);
             let count = by_seq.len() as u64;
-            let stream = EventStream::new(by_seq.into_values().collect(), rx);
+            let stream = EventStream::new(by_seq.into_values().collect(), rx, gaps);
             return (client_id, stream, ReplayResult::Ok(count), Some(head));
         }
     }
@@ -812,6 +814,7 @@ impl WsRelaySink {
     ) -> Result<(ClientId, EventStream, Vec<SequencedEvent>, LogHead), String> {
         let client_id = ClientId::new();
         let (tx, rx) = mpsc::channel::<StreamItem>(self.client_queue_capacity);
+        let gaps = Gaps::default();
         let gate = self.replay_gate(sid).await;
         let _replay_guard = gate.lock().await;
         let Some(persistence) = &self.persistence else {
@@ -821,8 +824,8 @@ impl WsRelaySink {
                 .map(|state| state.events.iter().cloned().collect())
                 .unwrap_or_default();
             let head = self.session_head_locked(&mut sessions, sid);
-            self.register(client_id, sid, tx, closing);
-            return Ok((client_id, EventStream::new(Vec::new(), rx), snapshot, head));
+            self.register(client_id, sid, tx, Arc::clone(&gaps), closing);
+            return Ok((client_id, EventStream::new(Vec::new(), rx, gaps), snapshot, head));
         };
         let mut passes: u32 = 0;
         loop {
@@ -877,10 +880,10 @@ impl WsRelaySink {
                 }
             }
             let head = self.session_head_locked(&mut sessions, sid);
-            self.register(client_id, sid, tx, closing);
+            self.register(client_id, sid, tx, Arc::clone(&gaps), closing);
             return Ok((
                 client_id,
-                EventStream::new(Vec::new(), rx),
+                EventStream::new(Vec::new(), rx, gaps),
                 by_seq.into_values().collect(),
                 head,
             ));

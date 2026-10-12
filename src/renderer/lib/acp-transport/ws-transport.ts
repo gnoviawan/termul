@@ -579,7 +579,6 @@ export class WsAcpTransport implements AcpTransport {
         else this.logEpochs.delete(sessionId)
         this.seenTurnIds.delete(sessionId)
         await this.recoveryHandler?.(recovery, reopenGeneration)
-        this.syncGate.noteSnapshotInstalled(sessionId)
         // handle_recover_session_snapshot server-side re-registers the
         // subscription for continued live delivery — no separate subscribe
         // call needed here.
@@ -619,11 +618,9 @@ export class WsAcpTransport implements AcpTransport {
     }
     for (const item of result.held) {
       if (item.kind === 'gap') {
-        // A snapshot installed in this sync already repairs the drop; one that
-        // happened after its head shows up as a skipped seq.
-        if (!result.snapshotInstalled) {
-          this.recoverInBackground(sessionId, 'gap frame during a sync')
-        }
+        // The drop may lie past the head the sync installed, with no later
+        // event to expose it: always act on it.
+        this.recoverInBackground(sessionId, 'gap frame during a sync')
         continue
       }
       this.applyHeldEvent(sessionId, item.evt, result.floorSeq)

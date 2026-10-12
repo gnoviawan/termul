@@ -299,10 +299,14 @@ impl Harness {
                 break;
             }
         }
-        while let Ok(Some(StreamItem::Event(event))) =
-            tokio::time::timeout(Duration::from_millis(400), self.rx.recv()).await
-        {
-            seen.push((event.type_.clone(), event.payload.clone()));
+        loop {
+            match tokio::time::timeout(Duration::from_millis(400), self.rx.recv()).await {
+                Ok(Some(StreamItem::Event(event))) => {
+                    seen.push((event.type_.clone(), event.payload.clone()));
+                }
+                Ok(Some(StreamItem::Gap(sid))) => panic!("unexpected gap frame for {sid}"),
+                Ok(None) | Err(_) => break,
+            }
         }
         seen
     }

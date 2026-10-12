@@ -253,10 +253,10 @@ impl EventSink for TauriEventSink {
 /// with, capped at the event-log capacity) and a slow peer cannot grow it.
 ///
 /// - **Lossy** events (`message_chunk`, `tool_call_update`, `commands_update`,
-///   `plan_update`) that find the channel full are dropped, and one
-///   [`StreamItem::Gap`] is queued ahead of the next event of that session
-///   once the channel has room again. The client answers a gap with an atomic
-///   snapshot (and notices a hole by seq even without one).
+///   `plan_update`) that find the channel full are dropped; the stream then
+///   yields one [`StreamItem::Gap`] as soon as it has drained the channel,
+///   whether or not another event follows. The client answers a gap with an
+///   atomic snapshot (and notices a hole by seq even without one).
 /// - **Reliable** events that find the channel full close the peer's
 ///   connection (through the token handed to `subscribe`) instead of being
 ///   dropped: the client reconnects and resumes by cursor.

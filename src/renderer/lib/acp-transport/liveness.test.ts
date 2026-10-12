@@ -44,8 +44,10 @@ describe('HostLiveness', () => {
     expect(onSilent).not.toHaveBeenCalled()
     canJudge = true
     // The hidden period counts for nothing: a full limit must pass again.
-    vi.advanceTimersByTime(HOST_SILENCE_LIMIT_MS - HOST_HEARTBEAT_INTERVAL_MS)
+    vi.advanceTimersByTime(HOST_SILENCE_LIMIT_MS)
     expect(onSilent).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(HOST_HEARTBEAT_INTERVAL_MS / 2)
+    expect(onSilent).toHaveBeenCalledTimes(1)
     liveness.stop()
   })
 

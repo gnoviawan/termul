@@ -588,11 +588,11 @@ fn describe(items: &[StreamItem]) -> Vec<String> {
         .collect()
 }
 
-/// A LOSSY event that finds the subscriber's channel full is dropped; one
-/// `gap` follows as soon as the channel has room, ahead of the next event, and
-/// further drops do not queue a second one.
+/// A LOSSY event that finds the subscriber's channel full is dropped; the
+/// stream reports one `gap` as soon as it has drained, with no further event
+/// needed, and further drops before then do not queue a second one.
 #[tokio::test]
-async fn lossy_drop_on_full_channel_queues_one_gap_ahead_of_the_next_event() {
+async fn lossy_drop_on_full_channel_reports_one_gap_once_the_stream_drains() {
     let ws = Arc::new(WsRelaySink::with_capacity(4096, 2));
     ws.seed_session_for_test("sess-lossy");
     let closing = CancellationToken::new();
@@ -600,16 +600,15 @@ async fn lossy_drop_on_full_channel_queues_one_gap_ahead_of_the_next_event() {
     for text in ["one", "two", "three", "four"] {
         emit_tier(&ws, "sess-lossy", true, text);
     }
-    assert_eq!(describe(&drain_items(&mut rx)), ["event:1", "event:2"]);
+    assert_eq!(
+        describe(&drain_items(&mut rx)),
+        ["event:1", "event:2", "gap:sess-lossy"]
+    );
+    // Nothing further happened: no second gap, nothing else to deliver.
+    assert!(drain_items(&mut rx).is_empty());
 
     emit_tier(&ws, "sess-lossy", true, "five");
-    emit_tier(&ws, "sess-lossy", true, "six");
-    assert_eq!(describe(&drain_items(&mut rx)), ["gap:sess-lossy", "event:5"]);
-    // `six` was dropped behind the delivered gap, so a new gap precedes `seven`.
-    emit_tier(&ws, "sess-lossy", true, "seven");
-    assert_eq!(describe(&drain_items(&mut rx)), ["gap:sess-lossy", "event:7"]);
-    emit_tier(&ws, "sess-lossy", true, "eight");
-    assert_eq!(describe(&drain_items(&mut rx)), ["event:8"]);
+    assert_eq!(describe(&drain_items(&mut rx)), ["event:5"]);
     assert!(!closing.is_cancelled(), "a lossy drop never closes the connection");
     assert_eq!(ws.session_subscriber_count("sess-lossy"), 1);
 }
@@ -647,23 +646,6 @@ async fn idempotent_event_on_full_channel_closes_the_connection() {
     assert_eq!(describe(&drain_items(&mut rx)), ["event:1"]);
 }
 
-/// A pending gap goes out first; if that leaves no room for a reliable event,
-/// the connection closes rather than the event being dropped.
-#[tokio::test]
-async fn reliable_event_after_a_lossy_drop_closes_when_gap_and_event_do_not_fit() {
-    let ws = Arc::new(WsRelaySink::with_capacity(4096, 2));
-    ws.seed_session_for_test("sess-mix");
-    let closing = CancellationToken::new();
-    let (_client, mut rx, _, _) = ws.subscribe("sess-mix", None, None, &closing).await;
-    for text in ["one", "two", "three"] {
-        emit_tier(&ws, "sess-mix", true, text);
-    }
-    // One slot opens: room for the gap, not for the event behind it.
-    assert!(rx.try_recv().is_ok());
-    emit_tier(&ws, "sess-mix", false, "must not be dropped");
-    assert!(closing.is_cancelled());
-}
-
 /// Lossy events for one session never produce a gap for another.
 #[tokio::test]
 async fn lossy_drop_gap_is_scoped_to_its_session() {
@@ -675,12 +657,8 @@ async fn lossy_drop_gap_is_scoped_to_its_session() {
     emit_tier(&ws, "sess-x", true, "x1");
     emit_tier(&ws, "sess-x", true, "x2");
     emit_tier(&ws, "sess-y", true, "y1");
-    assert_eq!(describe(&drain_items(&mut rx_x)), ["event:1"]);
+    assert_eq!(describe(&drain_items(&mut rx_x)), ["event:1", "gap:sess-x"]);
     assert_eq!(describe(&drain_items(&mut rx_y)), ["event:1"]);
-    emit_tier(&ws, "sess-y", true, "y2");
-    emit_tier(&ws, "sess-x", true, "x3");
-    assert_eq!(describe(&drain_items(&mut rx_y)), ["event:2"]);
-    assert_eq!(describe(&drain_items(&mut rx_x)), ["gap:sess-x"]);
 }
 
 /// AC11: client on session A does not receive session B events.

@@ -40,8 +40,6 @@ export interface SyncResult {
   lost: boolean
   /** The cursor when the outermost sync began. */
   floorSeq: number
-  /** A snapshot was installed during the sync, so a held `gap` is already repaired. */
-  snapshotInstalled: boolean
 }
 
 interface Sync {
@@ -49,7 +47,6 @@ interface Sync {
   held: HeldItem[]
   lost: boolean
   floorSeq: number
-  snapshotInstalled: boolean
 }
 
 /**
@@ -71,19 +68,7 @@ export class SyncGate {
       sync.depth += 1
       return
     }
-    this.syncs.set(sessionId, {
-      depth: 1,
-      held: [],
-      lost: false,
-      floorSeq,
-      snapshotInstalled: false
-    })
-  }
-
-  /** A snapshot was installed during the current sync. */
-  noteSnapshotInstalled(sessionId: string): void {
-    const sync = this.syncs.get(sessionId)
-    if (sync) sync.snapshotInstalled = true
+    this.syncs.set(sessionId, { depth: 1, held: [], lost: false, floorSeq })
   }
 
   isSyncing(sessionId: string): boolean {
@@ -109,11 +94,6 @@ export class SyncGate {
     sync.depth -= 1
     if (sync.depth > 0) return null
     this.syncs.delete(sessionId)
-    return {
-      held: sync.held,
-      lost: sync.lost,
-      floorSeq: sync.floorSeq,
-      snapshotInstalled: sync.snapshotInstalled
-    }
+    return { held: sync.held, lost: sync.lost, floorSeq: sync.floorSeq }
   }
 }

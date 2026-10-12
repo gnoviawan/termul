@@ -183,9 +183,8 @@ async fn a_reply_that_cannot_be_queued_closes_the_connection() {
     // the forwarder move each chunk across so the queue itself fills.
     for _ in 0..OUTBOUND_QUEUE_CAPACITY {
         emit_chunk(&host);
-        tokio::task::yield_now().await;
+        Conn::settle().await;
     }
-    Conn::settle().await;
     assert!(!conn.relay_finished().await);
 
     conn.send_request("ping", "ping", json!({}));

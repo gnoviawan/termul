@@ -2191,7 +2191,7 @@ describe('Bounded delivery parity (host heartbeat, gap frame)', () => {
       join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts'),
       'utf-8'
     )
-    expect(protocol).toMatch(/type: 'gap'/)
-    expect(protocol).toMatch(/type: 'heartbeat'/)
+    expect(protocol).toMatch(/interface WsGapFrame \{\s+type: 'gap'/)
+    expect(protocol).toMatch(/interface WsHeartbeatFrame \{\s+type: 'heartbeat'/)
   })
 })

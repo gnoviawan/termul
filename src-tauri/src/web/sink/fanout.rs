@@ -5,12 +5,16 @@
 //!
 //! Every subscription owns a BOUNDED channel into the connection's forwarder
 //! (`ws/subscribe.rs`). Fan-out never waits for it: a full channel drops a
-//! LOSSY event and queues one `gap` frame once there is room again (the client
-//! then installs a snapshot), and closes the connection for any other tier (the
-//! client resumes by cursor). No unbounded queue stands behind a slow peer.
+//! LOSSY event and records the session as gapped; the receiving side yields one
+//! `gap` frame as soon as it has drained the channel (the client then installs a
+//! snapshot), even if no further event ever follows. Any other tier closes the
+//! connection (the client resumes by cursor). No unbounded queue stands behind
+//! a slow peer.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -52,23 +56,50 @@ impl StreamItem {
 pub struct EventStream {
     replay: VecDeque<SequencedEvent>,
     live: mpsc::Receiver<StreamItem>,
+    /// Sessions whose LOSSY events the sink dropped because `live` was full.
+    gaps: Gaps,
 }
 
+/// Sessions of one subscription with dropped LOSSY events, shared between the
+/// sink (records a drop) and the stream (reports it once it has drained).
+pub(super) type Gaps = Arc<Mutex<HashSet<String>>>;
+
 impl EventStream {
-    pub(super) fn new(replay: Vec<SequencedEvent>, live: mpsc::Receiver<StreamItem>) -> Self {
+    pub(super) fn new(
+        replay: Vec<SequencedEvent>,
+        live: mpsc::Receiver<StreamItem>,
+        gaps: Gaps,
+    ) -> Self {
         Self {
             replay: replay.into(),
             live,
+            gaps,
         }
     }
 
+    /// One session with a pending gap, taken off the shared set.
+    fn take_gap(&self) -> Option<StreamItem> {
+        let mut gaps = self.gaps.lock();
+        let sid = gaps.iter().next().cloned()?;
+        gaps.remove(&sid);
+        Some(StreamItem::Gap(sid))
+    }
+
     /// The next item, waiting for one. `None` once the subscription ended and
-    /// everything it held was drained.
+    /// everything it held was drained. A gap is reported as soon as the
+    /// channel has been drained, whether or not another event follows.
     pub async fn recv(&mut self) -> Option<StreamItem> {
         if let Some(event) = self.replay.pop_front() {
             return Some(StreamItem::Event(event));
         }
-        self.live.recv().await
+        match self.live.try_recv() {
+            Ok(item) => Some(item),
+            Err(mpsc::error::TryRecvError::Empty) => match self.take_gap() {
+                Some(gap) => Some(gap),
+                None => self.live.recv().await,
+            },
+            Err(mpsc::error::TryRecvError::Disconnected) => None,
+        }
     }
 
     /// The next item if one is ready.
@@ -81,7 +112,12 @@ impl EventStream {
         if let Some(event) = self.replay.pop_front() {
             return Ok(StreamItem::Event(event));
         }
-        self.live.try_recv()
+        match self.live.try_recv() {
+            Err(mpsc::error::TryRecvError::Empty) => {
+                self.take_gap().ok_or(mpsc::error::TryRecvError::Empty)
+            }
+            other => other,
+        }
     }
 }
 
@@ -93,9 +129,9 @@ pub(super) struct ClientSub {
     closing: CancellationToken,
     /// Sessions this client is subscribed to.
     sessions: HashSet<String>,
-    /// Sessions whose LOSSY events were dropped since the last `gap` frame
-    /// reached the channel.
-    gap_pending: HashSet<String>,
+    /// Sessions whose LOSSY events were dropped; the receiving stream reports
+    /// each as one `gap` once it has drained the channel.
+    gaps: Gaps,
 }
 
 /// What one push into a client's channel did.
@@ -103,7 +139,7 @@ pub(super) struct ClientSub {
 enum Push {
     /// The event is queued.
     Delivered,
-    /// The channel was full and the event was LOSSY: dropped, `gap` pending.
+    /// The channel was full and the event was LOSSY: dropped, gap recorded.
     Dropped,
     /// The channel was full and the event must not be lost: the peer is
     /// hopelessly behind.
@@ -113,23 +149,9 @@ enum Push {
 }
 
 impl ClientSub {
-    /// Queue one event without waiting. A pending `gap` frame goes first so
-    /// the client learns about the hole before it sees the next event.
+    /// Queue one event without waiting: a full channel drops a LOSSY event (the
+    /// session is recorded as gapped) and refuses any other tier.
     fn push(&mut self, se: SequencedEvent, tier: ReliabilityTier) -> Push {
-        let pending_gap = se
-            .sid
-            .as_deref()
-            .filter(|sid| self.gap_pending.contains(*sid))
-            .map(str::to_string);
-        if let Some(sid) = pending_gap {
-            match self.tx.try_send(StreamItem::Gap(sid.clone())) {
-                Ok(()) => {
-                    self.gap_pending.remove(&sid);
-                }
-                Err(TrySendError::Full(_)) => return self.full(Some(sid), tier),
-                Err(TrySendError::Closed(_)) => return Push::Gone,
-            }
-        }
         match self.tx.try_send(StreamItem::Event(se)) {
             Ok(()) => Push::Delivered,
             Err(TrySendError::Full(item)) => self.full(item.into_sid(), tier),
@@ -151,7 +173,7 @@ impl ClientSub {
             return Push::Overflow;
         }
         if let Some(sid) = sid {
-            if self.gap_pending.insert(sid) {
+            if self.gaps.lock().insert(sid) {
                 warn!(
                     "[ws] slow subscriber for session {label}: dropped a lossy event; \
                      a gap frame follows once it drains"
@@ -268,6 +290,7 @@ impl WsRelaySink {
         client_id: ClientId,
         sid: &str,
         tx: mpsc::Sender<StreamItem>,
+        gaps: Gaps,
         closing: &CancellationToken,
     ) {
         {
@@ -278,7 +301,7 @@ impl WsRelaySink {
                     tx,
                     closing: closing.clone(),
                     sessions: HashSet::from([sid.to_string()]),
-                    gap_pending: HashSet::new(),
+                    gaps,
                 },
             );
         }
@@ -298,7 +321,7 @@ impl WsRelaySink {
                 return;
             };
             sub.sessions.remove(sid);
-            sub.gap_pending.remove(sid);
+            sub.gaps.lock().remove(sid);
             if sub.sessions.is_empty() {
                 clients.remove(&client_id);
             }
@@ -322,7 +345,7 @@ impl WsRelaySink {
             for client_id in affected_clients {
                 if let Some(client) = clients.get_mut(&client_id) {
                     client.sessions.remove(sid);
-                    client.gap_pending.remove(sid);
+                    client.gaps.lock().remove(sid);
                     if client.sessions.is_empty() {
                         clients.remove(&client_id);
                     }
