@@ -155,20 +155,23 @@ pub async fn remote_server_status(
 /// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
 ///
 /// Desktop navigation does not move the host default: the payload carries no
-/// `defaultProjectId`. The registry keeps the project the summaries flag as
-/// stored default (`isDefault`, set by the explicit set-default action), else
-/// its current default while that project is still switchable, else the first
-/// switchable project so the host always has a default to bridge MCP files to.
-/// The sync only mirrors the list — it rebinds nothing.
+/// `defaultProjectId`. The registry keeps its CURRENT default while that
+/// project is still switchable (so a default set from the web or by
+/// `set_host_default_project` is never reverted by a later list mutation);
+/// only when there is none does it take the project the summaries flag as
+/// stored default (`isDefault`), else the first switchable project, so the
+/// host always has a default to bridge MCP files to. The reply carries the
+/// resulting default id so the renderer can tell when the effective default
+/// changed. The sync only mirrors the list — it rebinds nothing.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncProjectsPayload {
     pub projects: Vec<crate::web::ProjectSummary>,
 }
 
-/// The default a project-list sync keeps: the summary flagged `is_default`,
-/// else `current` while it is still a switchable project in `projects`, else
-/// the first switchable project.
+/// The default a project-list sync keeps: `current` while it is still a
+/// switchable project in `projects`, else the summary flagged `is_default`,
+/// else the first switchable project.
 pub(super) fn default_after_sync(
     projects: &[crate::web::ProjectSummary],
     current: Option<&str>,
@@ -178,8 +181,8 @@ pub(super) fn default_after_sync(
     };
     projects
         .iter()
-        .find(|p| p.is_default && switchable(p))
-        .or_else(|| projects.iter().find(|p| Some(p.id.as_str()) == current && switchable(p)))
+        .find(|p| Some(p.id.as_str()) == current && switchable(p))
+        .or_else(|| projects.iter().find(|p| p.is_default && switchable(p)))
         .or_else(|| projects.iter().find(|p| switchable(p)))
         .map(|p| p.id.clone())
 }
@@ -189,12 +192,10 @@ pub async fn remote_sync_projects(
     payload: SyncProjectsPayload,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
-) -> Result<IpcResult<()>, String> {
-    let current = project_registry.snapshot().default_project_id;
-    let default_id = default_after_sync(&payload.projects, current.as_deref());
-    project_registry.set(payload.projects, default_id.clone());
+) -> Result<IpcResult<Option<String>>, String> {
+    let default_id = project_registry.set_with_default_from(payload.projects, default_after_sync);
     crate::web::broadcast_projects_changed(ws_relay.inner(), default_id.as_deref());
-    Ok(IpcResult::success(()))
+    Ok(IpcResult::success(default_id))
 }
 
 /// Explicitly set the host's default project (Epic 7 — cross-client

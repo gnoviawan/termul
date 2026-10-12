@@ -196,6 +196,30 @@ impl ProjectRegistry {
         }
         self.rebuild_roots();
     }
+    /// Replace the whole mirror, choosing the new default from the registry's
+    /// CURRENT default under the same lock (`derive(current)`), so a
+    /// concurrent `set_default_project` can never be overwritten by a default
+    /// derived from a stale read. Returns the default that was stored.
+    pub fn set_with_default_from(
+        &self,
+        mut projects: Vec<ProjectSummary>,
+        derive: impl FnOnce(&[ProjectSummary], Option<&str>) -> Option<String>,
+    ) -> Option<String> {
+        let default_id = {
+            let mut g = self.inner.lock();
+            let default_id = derive(&projects, g.default_project_id.as_deref());
+            for project in &mut projects {
+                project.is_default = default_id.as_deref() == Some(project.id.as_str());
+            }
+            g.projects = projects;
+            g.default_project_id = default_id.clone();
+            self.epoch.fetch_add(1, Ordering::AcqRel);
+            default_id
+        };
+        self.rebuild_roots();
+        default_id
+    }
+
     /// Insert or replace a single project summary by `id` in the in-memory
     /// mirror (Option B: web-client project create/update). A root with an
     /// existing `id` is replaced in place (preserving order); a new id is

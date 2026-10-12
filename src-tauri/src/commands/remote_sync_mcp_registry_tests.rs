@@ -149,17 +149,23 @@ fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> Proje
     }
 }
 
-/// A project-list sync never lets navigation move the host default: the
-/// stored `is_default` flag wins, else the current default while still
-/// switchable, else the first switchable project.
+/// A project-list sync never moves the host default while it is still
+/// switchable: the registry's current default wins (so a web-set default is
+/// not reverted by the desktop's stale stored flag), then the stored
+/// `is_default` flag, then the first switchable project.
 #[test]
-fn sync_default_follows_stored_flag_then_current_then_first_switchable() {
+fn sync_default_keeps_current_then_stored_flag_then_first_switchable() {
     let list = vec![
         summary("a", Some("/a"), false, false),
         summary("b", Some("/b"), false, true),
         summary("c", Some("/c"), false, false),
     ];
-    assert_eq!(default_after_sync(&list, Some("a")).as_deref(), Some("b"));
+    // The registry default (set elsewhere) beats the stored flag.
+    assert_eq!(default_after_sync(&list, Some("a")).as_deref(), Some("a"));
+    // No current default: the stored flag decides.
+    assert_eq!(default_after_sync(&list, None).as_deref(), Some("b"));
+    // A current default that vanished falls back to the flag.
+    assert_eq!(default_after_sync(&list, Some("gone")).as_deref(), Some("b"));
 
     let unflagged = vec![
         summary("a", Some("/a"), false, false),
@@ -175,4 +181,24 @@ fn sync_default_follows_stored_flag_then_current_then_first_switchable() {
     ];
     assert_eq!(default_after_sync(&unswitchable, Some("arch")), None);
     assert_eq!(default_after_sync(&[], None), None);
+}
+
+/// The sync derives the default under the registry lock, so a default set
+/// concurrently is kept, never overwritten by one derived from a stale read.
+#[test]
+fn sync_derives_the_default_under_the_registry_lock() {
+    let reg = ProjectRegistry::new();
+    let list = || {
+        vec![
+            summary("a", Some("/a"), false, true),
+            summary("b", Some("/b"), false, false),
+        ]
+    };
+    assert_eq!(reg.set_with_default_from(list(), default_after_sync).as_deref(), Some("a"));
+    assert!(reg.set_default_project("b"));
+    // The desktop's list still flags "a"; the registry's "b" must survive.
+    assert_eq!(reg.set_with_default_from(list(), default_after_sync).as_deref(), Some("b"));
+    let snap = reg.snapshot();
+    assert_eq!(snap.default_project_id.as_deref(), Some("b"));
+    assert!(snap.projects.iter().find(|p| p.id == "b").is_some_and(|p| p.is_default));
 }
