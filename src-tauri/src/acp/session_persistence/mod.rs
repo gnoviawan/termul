@@ -1080,15 +1080,17 @@ impl SessionPersistence {
             let Some(entry) = self.inner.catalog.lock().get(session_id).cloned() else {
                 return;
             };
-            {
+            let we_set_it = {
                 let mut metadata = entry.lock();
                 // Later passes re-queue even when the (cloned) flag is set: the
                 // new writer may not have written it.
                 if metadata.head_ahead_of_durable && pass == 0 {
                     return;
                 }
+                let was_set = metadata.head_ahead_of_durable;
                 metadata.head_ahead_of_durable = true;
-            }
+                !was_set
+            };
             let failed = match self.runtime(session_id) {
                 // A writer that refuses the command has stopped, so it can no
                 // longer write this session's metadata: write it inline.
@@ -1103,7 +1105,11 @@ impl SessionPersistence {
                 Err(_) => self.persist_mark_inline(session_id, &entry),
             };
             if let Some(error) = failed {
-                entry.lock().head_ahead_of_durable = false;
+                // Roll back only what this pass set: a flag cloned in from the
+                // old entry may already be on disk.
+                if we_set_it {
+                    entry.lock().head_ahead_of_durable = false;
+                }
                 log::warn!(
                     "[acp-history] could not persist the head-ahead mark session_id={} error={error}",
                     crate::logging::redact_session_id(session_id)

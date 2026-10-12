@@ -388,3 +388,42 @@ async fn failed_inline_head_ahead_write_is_retried_by_the_next_call() {
         "retried and persisted"
     );
 }
+
+/// A queued mark write that fails in the live writer is retried after the
+/// writer's next command, so the mark still reaches the disk once the disk
+/// recovers.
+#[tokio::test]
+async fn writer_retries_a_failed_head_ahead_write_after_its_next_command() {
+    let (relay, persistence, root) = durable_relay("wretry", "sess-w").await;
+    let file = root
+        .join("sessions")
+        .join(persistence.metadata("sess-w").unwrap().storage_key)
+        .join("metadata.json");
+    let original = std::fs::read(&file).unwrap();
+    // A directory where the file belongs: the writer's atomic replace fails.
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+
+    persistence.note_head_ahead_of_durable("sess-w");
+    // The writer is FIFO: once this flush returns, the mark write has run (and failed).
+    assert!(persistence.flush_session("sess-w").await.is_err());
+    std::fs::remove_dir(&file).unwrap();
+    std::fs::write(&file, original).unwrap();
+
+    // An append does not write metadata itself; the retry does.
+    relay.emit(&event("sess-w"));
+    let mut persisted = false;
+    for _ in 0..100 {
+        let on_disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        if on_disk["headAheadOfDurable"] == json!(true) {
+            persisted = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        persisted,
+        "the writer retried the mark after the disk recovered"
+    );
+}
