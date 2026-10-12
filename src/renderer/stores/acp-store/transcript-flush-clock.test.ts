@@ -112,12 +112,24 @@ describe('transcript flush clock (render clocks)', () => {
 
   it('re-tiers at fire time when the watched session changes while buffered', () => {
     const h = makeHost('a')
-    h.push('b') // background when buffered…
-    h.setWatched('b') // …but the user switches to it before the timer fires
-    h.push('b')
-    vi.advanceTimersByTime(WATCHED_FLUSH_MS + 20)
-    expect(h.pending()).toBe(0)
-    expect(h.flushed[0]).toEqual(expect.objectContaining({ tier: 'watched' }))
+    const start = performance.now()
+    h.push('b') // background when buffered: only the background timer is armed
+    h.setWatched('b') // the user switches to it before that timer fires
+    // No second push: nothing but the original background timer can reach it.
+    vi.advanceTimersByTime(BACKGROUND_FLUSH_MS - 1)
+    expect(h.flushed).toHaveLength(0)
+    // The timer fires, finds nothing for the background tier (b is watched now)
+    // and re-tiers the leftover onto the watched frame clock…
+    vi.advanceTimersByTime(1)
+    expect(h.flushed).toHaveLength(0)
+    // …which flushes it on the following frame — well before the 250 ms backstop.
+    vi.advanceTimersByTime(WATCHED_FLUSH_MS)
+    expect(h.flushed).toEqual([expect.objectContaining({ tier: 'watched', sessions: ['b'] })])
+    expect(h.flushed[0].at - start).toBeLessThan(FLUSH_BACKSTOP_MS)
+    // Exactly once: nothing is left for the backstop.
+    vi.advanceTimersByTime(FLUSH_BACKSTOP_MS * 2)
+    expect(h.flushed).toHaveLength(1)
+    expect(h.clock.isArmed()).toBe(false)
   })
 
   it('cancel() disarms every frame and timer', () => {

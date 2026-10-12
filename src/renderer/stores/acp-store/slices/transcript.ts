@@ -45,6 +45,7 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  activeWirePromptTurns,
   commitMessageCollectors,
   handoffOnlyTurnIds,
   historySeqWatermarks,
@@ -59,7 +60,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpState, ChatMessage, MessageRole, OpenCodeSessionNotice } from '../types'
-import { clearPromptReconcileForTurn } from './prompt-reconcile'
+import { clearPromptReconcile, clearPromptReconcileForTurn } from './prompt-reconcile'
 import { createFlushClock, type FlushTier } from './transcript-flush-clock'
 
 function sameOpencodeNotice(
@@ -658,6 +659,10 @@ export function dropSessionTranscriptState(
   // (a recreated session must re-establish its own; a resolving probe must not
   // resurrect a pin).
   backfillCounts.delete(sessionId)
+  // A pending (unconfirmed) prompt command — its reconcile timer, store flag and
+  // wire-turn tracking — dies with the session: nothing may resend into it.
+  clearPromptReconcile(sessionId)
+  activeWirePromptTurns.delete(sessionId)
   loadingOlderSessions.delete(sessionId)
   historySeqWatermarks.delete(sessionId)
   inFlightDurabilityProbes.delete(sessionId)

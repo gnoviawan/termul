@@ -103,7 +103,7 @@ import {
   initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
-import { activeWirePromptTurns, inFlightPromotions } from './shared-state'
+import { activeWirePromptTurns, inFlightPromotions, pendingPromptCommands } from './shared-state'
 import { PROMPT_RECONCILE_RETRY_DELAYS_MS, resendPendingPrompts } from './slices/prompt-reconcile'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
 
@@ -585,6 +585,58 @@ describe('prompt pending-reconcile (AD-6)', () => {
     release()
     await running
     expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('the late prompt_complete for a turn Stop abandoned still flushes a prompt queued behind the idle session, without ending the new turn', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    const send = installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      return { receipt: 'in_progress' }
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    const abandoned = sentTurnIds(send)[0]
+    await useAcpStore.getState().cancelPrompt('s1')
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    // A prompt is waiting in the queue behind the (now idle) session.
+    useAcpStore.setState((s) => ({
+      promptQueues: {
+        ...s.promptQueues,
+        s1: [{ id: 'q1', blocks: [{ type: 'text', text: 'next' }], createdAt: 1 }]
+      }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'cancelled',
+      turnId: abandoned
+    })
+    await flushTurnEnd()
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(sentTurnIds(send)[1]).not.toBe(abandoned)
+    expect(useAcpStore.getState().promptQueues.s1 ?? []).toHaveLength(0)
+    // The queued prompt's turn is open and the stale terminator did not end it.
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+  })
+
+  it('closing a session with a pending prompt frees its reconcile state and timer', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    expect(pendingPromptCommands.size).toBe(1)
+    expect(activeWirePromptTurns.size).toBe(1)
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' } as never)
+    expect(pendingPromptCommands.size).toBe(0)
+    expect(activeWirePromptTurns.size).toBe(0)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(send).toHaveBeenCalledTimes(1) // the cancelled timer never resends
+    vi.useRealTimers()
   })
 
   it('snapshot recovery resolves it: the recovered terminator ends the turn', async () => {

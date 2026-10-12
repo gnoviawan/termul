@@ -1010,7 +1010,14 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       if (openWireTurn && openWireTurn !== e.turnId) return
       // Exactly one terminator per turn: live + replay duplicates (and the
       // dispatch-reply path) are dropped, never re-applied.
-      if (!claimPromptTurnEnd(e.turnId)) return
+      if (!claimPromptTurnEnd(e.turnId)) {
+        // A duplicate / stale terminator (e.g. the late one for a turn Stop
+        // already abandoned) ends nothing — but the session may be idle with a
+        // prompt still queued behind it. `flushNextQueuedPrompt` is a no-op
+        // while a turn is open, so a newer turn is never touched.
+        flushNextQueuedPrompt(set, e.sessionId)
+        return
+      }
     }
     const commitCollector = commitMessageCollectors.get(e.sessionId)
     if (commitCollector) {
