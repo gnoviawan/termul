@@ -327,11 +327,22 @@ pub async fn serve_router(
     } else {
         HistoryMode::LiveOnly
     };
-    // The boundary is "inside any registered project": when nothing is
-    // registered yet (standalone `--project-root` with an empty file
+    // The boundary is "inside any registered project": when no usable project
+    // is registered yet (standalone `--project-root` with an empty file
     // registry, or a freshly started desktop host awaiting its first project
     // sync), seed one project from the configured root so nothing is rejected.
-    registry.seed_root_if_empty(&cfg.project_root);
+    // With real projects registered the configured root is NOT a boundary by
+    // itself — say so when it is not inside one, so an operator is not
+    // surprised by `OUTSIDE_PROJECT_ROOT`.
+    registry.seed_root_if_no_usable_project(&cfg.project_root);
+    if !registry.is_within_any_registered_root(&cfg.project_root) {
+        warn!(
+            "configured project root '{}' is not inside any registered project; \
+             git/worktree/search/skills/canvas and remote /fs writes only accept \
+             registered project roots",
+            cfg.project_root.display()
+        );
+    }
     let app = router::router(
         Arc::clone(&acp),
         pty,

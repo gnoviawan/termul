@@ -855,8 +855,8 @@ async fn shared_live_boundary_is_any_registered_cross_drive_project() {
     registry.set(vec![project_a, project_b], Some("p-a".to_string()));
 
     let (data, _data_dir) = shared_live_fixture();
-    // Start the shared-live server. CAP-1: `start` now derives project_root
-    // from the registry default (dir_a), NOT the user home dir.
+    // Start the shared-live server. The registry already holds both projects,
+    // so `start` seeds nothing; the boundary is the registered roots.
     let state = RemoteServerState::new();
     let status = state
         .start(
@@ -885,8 +885,8 @@ async fn shared_live_boundary_is_any_registered_cross_drive_project() {
         .expect("build reqwest client");
 
     // GET /skills?projectRoot=dir_a — must succeed (not OUTSIDE_PROJECT_ROOT).
-    // The route canonicalizes dir_a and checks it against project_root
-    // (which is now dir_a's canonical form, not the home dir). Build the
+    // The route canonicalizes dir_a and checks it against the registered
+    // project roots (dir_a's canonical form, not the home dir). Build the
     // URL with percent-encoding so Windows backslash paths parse correctly.
     let skills_url_a = format!("{url}/skills?projectRoot={}", percent_encode_path(&dir_a));
     let resp = client.get(&skills_url_a).send().await.expect("GET /skills");

@@ -14,18 +14,24 @@
 //! start with on their initial `GET /projects`. It is NOT "whoever switched
 //! last": a per-client `switch_project` updates only the requesting
 //! connection's `current_project` (no broadcast, no persistence). The default
-//! changes only via `set_default_project` (an explicit user action). Desktop
-//! navigation never pushes a default: `remote_sync_projects` mirrors the
-//! project list and keeps the host's existing default when it is still valid.
+//! changes only via `set_default_project` (an explicit user action); `set`
+//! stores whatever default its caller passes (the desktop project-list sync
+//! passes the existing default, so navigation never moves it).
 //!
 //! # Boundary
 //!
 //! The web fs/git/worktree/search/skills/canvas boundary is "inside any
 //! registered, non-archived project". The registry caches each project's
-//! canonical root (rebuilt after every mutation) so a request never
+//! canonical root (rebuilt after every mutation, tracked by an epoch so a
+//! read never uses a cache that is behind a mutation) so a request never
 //! canonicalizes every project.
+//!
+//! A synthetic seed project (see [`ProjectRegistry::seed_root_if_no_usable_project`])
+//! keeps the boundary usable while no real project is registered; it is
+//! retired as soon as a real usable project is added.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -34,7 +40,7 @@ use agent_client_protocol::schema::v1::McpServer;
 
 use crate::acp::{FileProjectRegistry, VfsRoot};
 
-/// Id of the project [`ProjectRegistry::seed_root_if_empty`] registers.
+/// Id of the project [`ProjectRegistry::seed_root_if_no_usable_project`] registers.
 pub const SEEDED_PROJECT_ID: &str = "default";
 
 /// A single project's summary as exposed to the web/remote client.
@@ -104,6 +110,18 @@ struct RegistryData {
     default_project_id: Option<String>,
 }
 
+/// The cached canonical roots and the registry epoch they were built at.
+#[derive(Debug, Default)]
+struct RootsCache {
+    epoch: u64,
+    roots: Vec<CachedRoot>,
+}
+
+/// `true` for a project the boundary can use: not archived, with a non-empty path.
+fn is_usable(project: &ProjectSummary) -> bool {
+    !project.is_archived && project.path.as_deref().is_some_and(|p| !p.trim().is_empty())
+}
+
 /// A project's canonical root as cached for boundary checks. `canonical` is
 /// `None` while the directory cannot be resolved (deleted/moved); such roots
 /// are retried lazily on each check so a directory created later still counts.
@@ -129,8 +147,11 @@ struct CachedRoot {
 pub struct ProjectRegistry {
     inner: Mutex<RegistryData>,
     mcp_servers: Mutex<std::collections::HashMap<String, Vec<McpServer>>>,
-    roots: RwLock<Vec<CachedRoot>>,
+    roots: RwLock<RootsCache>,
     roots_rebuild: Mutex<()>,
+    /// Bumped under `inner` by every mutation that can change the boundary;
+    /// the cache is current only while its epoch equals this.
+    epoch: AtomicU64,
 }
 
 impl ProjectRegistry {
@@ -154,6 +175,7 @@ impl ProjectRegistry {
             let mut g = self.inner.lock();
             g.projects = projects;
             g.default_project_id = default_id;
+            self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.rebuild_roots();
     }
@@ -172,10 +194,20 @@ impl ProjectRegistry {
     pub fn upsert(&self, project: ProjectSummary) {
         {
             let mut g = self.inner.lock();
+            let adds_real_project = project.id != SEEDED_PROJECT_ID && is_usable(&project);
+            let new_id = project.id.clone();
             if let Some(existing) = g.projects.iter_mut().find(|p| p.id == project.id) {
                 *existing = project;
             } else {
                 g.projects.push(project);
+            }
+            // A real usable project retires the synthetic seed (and takes
+            // over as default when the seed was it).
+            if adds_real_project && g.projects.iter().any(|p| p.id == SEEDED_PROJECT_ID) {
+                g.projects.retain(|p| p.id != SEEDED_PROJECT_ID);
+                if g.default_project_id.as_deref() == Some(SEEDED_PROJECT_ID) {
+                    g.default_project_id = Some(new_id);
+                }
             }
             let mut default_id = g.default_project_id.clone();
             if default_id
@@ -188,6 +220,7 @@ impl ProjectRegistry {
                 p.is_default = default_id.as_deref() == Some(p.id.as_str());
             }
             g.default_project_id = default_id;
+            self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.rebuild_roots();
     }
@@ -206,6 +239,7 @@ impl ProjectRegistry {
             if g.default_project_id.as_deref() == Some(project_id) {
                 g.default_project_id = None;
             }
+            self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.rebuild_roots();
         true
@@ -238,6 +272,7 @@ impl ProjectRegistry {
             if project.is_archived && g.default_project_id.as_deref() == Some(project_id) {
                 g.default_project_id = None;
             }
+            self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.rebuild_roots();
         true
@@ -358,15 +393,17 @@ impl ProjectRegistry {
         ancestor.map(|(_, id)| id)
     }
 
-    /// Seed one registered project at `root` (also the default) when the
-    /// registry is empty, so the registry-only boundary does not reject every
-    /// request on a standalone `--project-root` server or a freshly started
-    /// desktop host that has not received its project list yet. Returns
-    /// `true` when a project was seeded; a non-empty registry is left alone.
-    /// The empty check and the insert happen under one lock, so a concurrent
-    /// `set` (renderer sync) either lands first and the seed is skipped, or
-    /// lands after and supersedes the seed — it is never overwritten by it.
-    pub fn seed_root_if_empty(&self, root: &Path) -> bool {
+    /// Seed one registered project at `root` (also the default) when no
+    /// usable project is registered (none non-archived with a path), so the
+    /// registry-only boundary does not reject every request on a standalone
+    /// `--project-root` server or a freshly started desktop host that has not
+    /// received its project list yet. Returns `true` when a project was
+    /// seeded. A registry that already has a usable project is left alone, and
+    /// the seed is retired once a real usable project is upserted.
+    /// The check and the insert happen under one lock, so a concurrent `set`
+    /// (renderer sync) either lands first and the seed is skipped, or lands
+    /// after and supersedes the seed — it is never overwritten by it.
+    pub fn seed_root_if_no_usable_project(&self, root: &Path) -> bool {
         let name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -374,9 +411,10 @@ impl ProjectRegistry {
             .unwrap_or_else(|| "Project".to_string());
         {
             let mut g = self.inner.lock();
-            if !g.projects.is_empty() {
+            if g.projects.iter().any(is_usable) {
                 return false;
             }
+            g.projects.retain(|p| p.id != SEEDED_PROJECT_ID);
             g.projects.push(ProjectSummary {
                 id: SEEDED_PROJECT_ID.to_string(),
                 name,
@@ -386,6 +424,7 @@ impl ProjectRegistry {
                 is_default: true,
             });
             g.default_project_id = Some(SEEDED_PROJECT_ID.to_string());
+            self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.rebuild_roots();
         tracing::info!(root = %root.display(), "seeded one registered project from the configured project root");
@@ -399,7 +438,7 @@ impl ProjectRegistry {
     #[must_use]
     pub(crate) fn seeded_for_test(root: &Path) -> std::sync::Arc<Self> {
         let registry = std::sync::Arc::new(Self::new());
-        registry.seed_root_if_empty(root);
+        registry.seed_root_if_no_usable_project(root);
         registry
     }
 
@@ -410,6 +449,7 @@ impl ProjectRegistry {
             let mut g = self.inner.lock();
             *g = RegistryData::default();
             self.mcp_servers.lock().clear();
+            self.epoch.fetch_add(1, Ordering::AcqRel);
         }
         self.rebuild_roots();
     }
@@ -439,9 +479,11 @@ impl ProjectRegistry {
     /// filesystem calls run after the `roots` guard is released.
     #[must_use]
     pub fn is_within_any_registered_root(&self, path: &Path) -> bool {
+        self.ensure_roots_current();
         let candidates: Vec<CachedRoot> = self
             .roots
             .read()
+            .roots
             .iter()
             .filter(|root| match &root.canonical {
                 Some(canonical) => path.starts_with(canonical),
@@ -461,13 +503,24 @@ impl ProjectRegistry {
     /// stale. Used by the per-project fs watch and the MCP bridge.
     #[must_use]
     pub fn canonical_root(&self, project_id: &str) -> Option<PathBuf> {
+        self.ensure_roots_current();
         let raw = self
             .roots
             .read()
+            .roots
             .iter()
             .find(|r| r.project_id == project_id)
             .map(|r| r.raw.clone())?;
         std::fs::canonicalize(raw).ok()
+    }
+
+    /// Rebuild the cache first when a mutation landed after it was built (the
+    /// mutator bumps the epoch before it rebuilds), so a read never admits an
+    /// archived/removed project or an old path in that window.
+    fn ensure_roots_current(&self) {
+        if self.roots.read().epoch != self.epoch.load(Ordering::Acquire) {
+            self.rebuild_roots();
+        }
     }
 
     /// Canonical root of the host default project, or `None` when there is no
@@ -501,16 +554,19 @@ impl ProjectRegistry {
     /// state.
     fn rebuild_roots(&self) {
         let _serial = self.roots_rebuild.lock();
-        let entries: Vec<(String, String)> = {
+        let (epoch, entries): (u64, Vec<(String, String)>) = {
             let g = self.inner.lock();
-            g.projects
+            let epoch = self.epoch.load(Ordering::Acquire);
+            let entries = g
+                .projects
                 .iter()
                 .filter(|p| !p.is_archived)
                 .filter_map(|p| {
                     let raw = p.path.as_deref()?.trim();
                     (!raw.is_empty()).then(|| (p.id.clone(), raw.to_string()))
                 })
-                .collect()
+                .collect();
+            (epoch, entries)
         };
         let roots = entries
             .into_iter()
@@ -529,7 +585,7 @@ impl ProjectRegistry {
                 }
             })
             .collect();
-        *self.roots.write() = roots;
+        *self.roots.write() = RootsCache { epoch, roots };
     }
 }
 

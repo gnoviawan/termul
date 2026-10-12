@@ -319,3 +319,73 @@ async fn backoff_ends_promptly_when_the_project_is_removed_or_moved() {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+/// Subscribers are told when their watch ends because the project went away,
+/// so the client can re-request it instead of waiting for events that never
+/// come.
+#[tokio::test]
+async fn subscribers_get_fs_watch_ended_when_the_project_is_archived() {
+    let dir = temp_project_dir("ended");
+    let registry = registry_with(&[("p-1", &dir)]);
+    let hub = FsWatchHub::default();
+    let (tx, mut rx) = conn();
+    hub.subscribe(&registry, "p-1", &tx).unwrap();
+    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "watcher armed");
+
+    assert!(registry.update("p-1", None, None, Some(true)));
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let ended = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(Outbound::Event(event))) if event.type_ == "fs_watch_ended" => {
+                break Some(event.payload)
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) | Err(_) => break None,
+        }
+    };
+    let payload = ended.expect("subscriber is told the watch ended");
+    assert_eq!(payload["projectId"], json!("p-1"));
+    assert_eq!(payload["reason"], json!("project_unavailable"));
+    assert_eq!(hub.watched_project_count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Moving a project's root re-arms the live watch at the new root: events
+/// under the new directory arrive for the same subscription.
+#[tokio::test]
+async fn a_moved_project_root_re_arms_the_live_watch() {
+    use crate::web::project_registry::ProjectSummary;
+    let (old, new) = (temp_project_dir("mv-old"), temp_project_dir("mv-new"));
+    let registry = registry_with(&[("p-1", &old)]);
+    let hub = FsWatchHub::default();
+    let (tx, mut rx) = conn();
+    hub.subscribe(&registry, "p-1", &tx).unwrap();
+    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "watcher armed");
+
+    registry.upsert(ProjectSummary {
+        id: "p-1".to_string(),
+        name: "p-1".to_string(),
+        color: "blue".to_string(),
+        path: Some(new.to_string_lossy().into_owned()),
+        is_archived: false,
+        is_default: false,
+    });
+
+    // Keep touching the new root until the re-armed watcher reports it (the
+    // registry tick re-resolves within a second).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut seen = None;
+    let mut n = 0;
+    while seen.is_none() && tokio::time::Instant::now() < deadline {
+        n += 1;
+        std::fs::write(new.join(format!("f{n}.txt")), "x").expect("write file");
+        seen = next_fs_changed(&mut rx, Duration::from_millis(700)).await;
+    }
+    let payload = seen.expect("events from the new root reach the subscription");
+    assert_eq!(payload["root"], json!(new.display().to_string()));
+    for d in [old, new] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}

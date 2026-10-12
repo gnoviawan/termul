@@ -371,8 +371,8 @@ impl RemoteServerState {
         //
         // A transient canonicalization failure on the registry default (deleted
         // between sync and start) falls through to the home fallback rather
-        // than refusing to start — the operator can still re-sync the registry
-        // and sync again. A `warn!` is logged so the operator notices.
+        // than refusing to start; the next renderer project sync replaces the
+        // seed. A `warn!` is logged so the operator notices.
         let project_root = {
             // 1. Try the registry's default-project path first.
             let from_registry = registry.default_project_path().and_then(|p| {

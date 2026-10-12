@@ -5551,3 +5551,46 @@ async fn unwatch_after_the_project_was_archived_succeeds() {
     assert!(u.ok, "unwatch after the project vanished must succeed");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The `watch_project` / `unwatch_project` request types reach their handlers
+/// through the real dispatch (`handle_request`), not just by direct call.
+#[tokio::test]
+async fn watch_requests_are_routed_by_handle_request() {
+    let (relay, registry, dir, tx, _rx) = watch_fixture("dispatch");
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
+    let mut subs = Vec::new();
+    let mut current_agent: Option<AgentId> = None;
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+    let mut authed = true;
+    for (type_, expect_subscribers) in [("watch_project", 1), ("unwatch_project", 0)] {
+        let frame = json!({ "id": type_, "type": type_, "payload": { "projectId": project } });
+        let reply = handle_request(
+            &frame.to_string(),
+            &mut authed,
+            &mut None,
+            None,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(reply.ok, "{type_} must be dispatched and succeed");
+        assert_eq!(relay.fs_watches().subscriber_count(project), expect_subscribers);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -369,7 +369,7 @@ pub struct ServerConfig {
     pub deprecation_warnings: Vec<String>,
     /// Seed root: when the project registry is empty at startup, one project
     /// is registered at this path (see
-    /// `ProjectRegistry::seed_root_if_empty`) so the registry-only boundary
+    /// `ProjectRegistry::seed_root_if_no_usable_project`) so the registry-only boundary
     /// (`git_api::ensure_within_project_boundary`) does not reject everything.
     /// It is NOT a boundary by itself — a non-empty registry ignores it. The
     /// `/fs/*` browse/read routes are intentionally not confined (ADR-007

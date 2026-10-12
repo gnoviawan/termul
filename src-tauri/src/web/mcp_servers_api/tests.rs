@@ -13,6 +13,10 @@ fn test_app(dir: PathBuf) -> axum::Router {
     // The registered default project's directory must exist (the MCP file
     // lives under it).
     std::fs::create_dir_all(&dir).expect("create project dir");
+    app_with_registry(crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir))
+}
+
+fn app_with_registry(registry: Arc<crate::web::project_registry::ProjectRegistry>) -> axum::Router {
     let pty = test_pty_manager();
     let state = AppState {
         acp: Arc::new(AcpManager::new(vec![])),
@@ -22,7 +26,7 @@ fn test_app(dir: PathBuf) -> axum::Router {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir),
+        registry,
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
@@ -40,6 +44,10 @@ fn test_app(dir: PathBuf) -> axum::Router {
     };
     axum::Router::new()
         .route("/mcp-servers", get(super::get).put(super::put))
+        .route(
+            "/mcp-servers/oauth/start",
+            axum::routing::post(crate::web::mcp_oauth_api::oauth_start),
+        )
         .with_state(state)
 }
 
@@ -207,4 +215,71 @@ async fn put_refused_in_shared_live_mode() {
         "shared-live guard must fire before the registry is persisted"
     );
     let _ = fs::remove_dir_all(dir).await;
+}
+
+/// With no default project there is no MCP registry file: GET reports an empty
+/// list, PUT refuses with a typed code (so a read-then-write cannot create a
+/// file outside any project), and OAuth start refuses every server URL.
+#[tokio::test]
+async fn no_default_project_has_no_mcp_registry() {
+    let dir = std::env::temp_dir().join(format!("termul-mcp-api-nodefault-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create dir");
+    let registry = crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir);
+    // Archiving the seeded default clears the default pointer.
+    assert!(registry.update(
+        crate::web::project_registry::SEEDED_PROJECT_ID,
+        None,
+        None,
+        Some(true)
+    ));
+    assert!(registry.default_canonical_root().is_none());
+    let app = app_with_registry(registry);
+    let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 54321));
+
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri("/mcp-servers").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let value: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(value["success"], true);
+    assert_eq!(value["data"], serde_json::json!([]));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/mcp-servers")
+                .header("content-type", "application/json")
+                .extension(axum::extract::ConnectInfo(loopback))
+                .body(Body::from("[]"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(value["success"], false);
+    assert_eq!(value["code"], "NO_ACTIVE_PROJECT_ROOT");
+    assert!(!dir.join(".termul").exists(), "nothing may be written without a default project");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp-servers/oauth/start")
+                .header("content-type", "application/json")
+                .extension(axum::extract::ConnectInfo(loopback))
+                .body(Body::from(r#"{"serverUrl":"https://mcp.example.com"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let value: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(value["success"], false);
+    assert_eq!(value["code"], "UNAUTHORIZED_SERVER_URL");
+    let _ = std::fs::remove_dir_all(dir);
 }

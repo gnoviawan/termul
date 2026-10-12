@@ -1703,3 +1703,25 @@ async fn operations_accept_registered_non_default_project() {
     let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
     assert!(body.success, "/fs/ls on registered project must succeed");
 }
+
+/// With no registered project at all, an opted-in remote peer is refused
+/// everywhere (loopback keeps ADR-007 breadth), so nothing is writable by
+/// default until a project is registered or seeded.
+#[tokio::test]
+async fn mkdir_remote_refused_when_no_project_is_registered() {
+    let dir = TempDir::new("mkdir-empty-registry");
+    let state = test_state_remote_writes_with_root(dir.path());
+    state.registry.clear();
+    let target = dir.path().join("made");
+    let remote = SocketAddr::from(([10, 0, 0, 5], 50000));
+    let resp = post_json_from(
+        state,
+        "/fs/mkdir",
+        &serde_json::json!({ "path": target.to_string_lossy() }),
+        remote,
+    )
+    .await;
+    let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+    assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+    assert!(!target.exists());
+}

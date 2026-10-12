@@ -95,8 +95,8 @@ async fn list_skills_degrades_on_scan_failure() {
 }
 
 #[tokio::test]
-async fn list_skills_rejects_project_root_outside_project_root() {
-    // A projectRoot that exists but is outside the server's project_root
+async fn list_skills_rejects_project_root_outside_every_registered_project() {
+    // A projectRoot that exists but is outside every registered project
     // (temp_dir's parent) must be rejected with OUTSIDE_PROJECT_ROOT.
     let state = test_state();
     // The registered project is the (canonical) temp dir; its parent is

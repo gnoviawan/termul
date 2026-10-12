@@ -462,7 +462,7 @@ fn unresolvable_root_is_retried_lazily() {
 fn seed_root_registers_one_default_project_only_when_empty() {
     let dir = tempdir_like("seed");
     let reg = ProjectRegistry::new();
-    assert!(reg.seed_root_if_empty(&dir));
+    assert!(reg.seed_root_if_no_usable_project(&dir));
     let snap = reg.snapshot();
     assert_eq!(snap.projects.len(), 1);
     assert_eq!(snap.default_project_id.as_deref(), Some(SEEDED_PROJECT_ID));
@@ -471,7 +471,7 @@ fn seed_root_registers_one_default_project_only_when_empty() {
     assert_eq!(reg.default_canonical_root().as_deref(), Some(dir.as_path()));
 
     let other = tempdir_like("seed2");
-    assert!(!reg.seed_root_if_empty(&other), "non-empty registry is left alone");
+    assert!(!reg.seed_root_if_no_usable_project(&other), "non-empty registry is left alone");
     assert_eq!(reg.len(), 1);
     for d in [dir, other] {
         let _ = std::fs::remove_dir_all(d);
@@ -502,7 +502,7 @@ fn seed_never_overwrites_a_concurrent_set() {
         let reg = Arc::new(ProjectRegistry::new());
         let seeder = {
             let (reg, dir) = (Arc::clone(&reg), dir.clone());
-            std::thread::spawn(move || reg.seed_root_if_empty(&dir))
+            std::thread::spawn(move || reg.seed_root_if_no_usable_project(&dir))
         };
         reg.set(vec![sample("synced", Some(path_str(&dir)), false)], Some("synced".to_string()));
         seeder.join().expect("seeder thread");
@@ -511,5 +511,52 @@ fn seed_never_overwrites_a_concurrent_set() {
         assert_eq!(snap.projects[0].id, "synced");
         assert_eq!(snap.default_project_id.as_deref(), Some("synced"));
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A real usable project retires the synthetic seed and takes over as default;
+/// the seed is also (re)planted when only archived/pathless projects exist.
+#[test]
+fn seed_is_retired_by_a_real_project_and_planted_when_none_is_usable() {
+    let (seed_dir, real_dir) = (tempdir_like("sd"), tempdir_like("rl"));
+    let reg = ProjectRegistry::new();
+    reg.set(
+        vec![sample("arch", Some(path_str(&real_dir)), true), sample("nopath", None, false)],
+        None,
+    );
+    assert!(reg.seed_root_if_no_usable_project(&seed_dir), "no usable project ⇒ seed");
+    assert_eq!(reg.len(), 3);
+    assert!(reg.is_within_any_registered_root(&seed_dir));
+    assert!(!reg.is_within_any_registered_root(&real_dir), "archived project stays outside");
+
+    reg.upsert(sample("real", Some(path_str(&real_dir)), false));
+    let snap = reg.snapshot();
+    assert!(snap.projects.iter().all(|p| p.id != SEEDED_PROJECT_ID), "seed retired");
+    assert_eq!(snap.default_project_id.as_deref(), Some("real"));
+    assert!(reg.is_within_any_registered_root(&real_dir));
+    assert!(!reg.is_within_any_registered_root(&seed_dir), "retired seed leaves the boundary");
+    for d in [seed_dir, real_dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// A read never uses a cache that is behind a mutation: even when the cache
+/// rebuild has not run yet (mutator released the lock, rebuild pending), an
+/// archived project is already outside the boundary.
+#[test]
+fn boundary_read_rebuilds_a_cache_that_is_behind_a_mutation() {
+    let dir = tempdir_like("epoch");
+    let reg = ProjectRegistry::new();
+    reg.set(vec![sample("p-1", Some(path_str(&dir)), false)], None);
+    assert!(reg.is_within_any_registered_root(&dir));
+
+    // Simulate the window: the mutation landed, its rebuild has not.
+    {
+        let mut g = reg.inner.lock();
+        g.projects[0].is_archived = true;
+        reg.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+    assert!(!reg.is_within_any_registered_root(&dir), "archived project must not be admitted");
+    assert_eq!(reg.canonical_root("p-1"), None);
     let _ = std::fs::remove_dir_all(&dir);
 }

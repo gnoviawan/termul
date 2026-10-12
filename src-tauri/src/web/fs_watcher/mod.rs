@@ -365,8 +365,28 @@ async fn run_project_watch(
     }
     let mut guard = watches.lock();
     if guard.get(&project_id).is_some_and(|w| w.generation == generation) {
-        guard.remove(&project_id);
+        if let Some(watch) = guard.remove(&project_id) {
+            notify_watch_ended(&project_id, &watch.subscribers);
+        }
         warn!(project_id = %project_id, "[fs-watch] project archived/removed; watcher and subscriptions dropped");
+    }
+}
+
+/// Tell every subscriber that its watch of `project_id` ended because the
+/// project is no longer watchable (archived, removed, root gone), so the client
+/// can re-request the watch instead of waiting for events that never come.
+fn notify_watch_ended(project_id: &str, subscribers: &[UnboundedSender<Outbound>]) {
+    let payload = serde_json::json!({
+        "projectId": project_id,
+        "reason": "project_unavailable",
+    });
+    for subscriber in subscribers {
+        let _ = subscriber.send(Outbound::Event(SequencedEvent::new(
+            None,
+            0,
+            "fs_watch_ended",
+            payload.clone(),
+        )));
     }
 }
 
