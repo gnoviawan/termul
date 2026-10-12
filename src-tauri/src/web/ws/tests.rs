@@ -5537,6 +5537,9 @@ async fn unwatch_after_the_project_was_archived_succeeds() {
     let (relay, registry, dir, tx, _rx) = watch_fixture("gone");
     let project = crate::web::project_registry::SEEDED_PROJECT_ID;
     assert!(handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx).ok);
+    // Archive only once the watcher is live, so a LIVE subscription is what
+    // gets dropped (not a task that finds the project gone on first lookup).
+    assert!(relay.fs_watches().wait_armed(project, Duration::from_secs(10)).await);
     assert!(registry.update(project, None, None, Some(true)));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     while relay.fs_watches().watched_project_count() != 0 && tokio::time::Instant::now() < deadline {

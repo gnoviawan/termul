@@ -662,6 +662,7 @@ fn remote_server_state_default_equals_new() {
 async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
     let (acp, pty, relay, registry) = lifecycle_fixtures();
     assert!(registry.is_empty());
+    let (data, _data_dir) = shared_live_fixture();
     let state = RemoteServerState::new();
     state
         .start(
@@ -670,6 +671,8 @@ async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
             relay.clone(),
             registry.clone(),
             RemoteBindMode::Localhost,
+            false,
+            &data,
             None,
             None,
             None,
@@ -710,7 +713,6 @@ async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shared_live_boundary_is_any_registered_cross_drive_project() {
     let (acp, pty, relay, registry) = lifecycle_fixtures();
-    let (data, _data_dir) = shared_live_fixture();
 
     // Resolve the user home dir the way the buggy `default_project_root()`
     // does, then pick a base provably OUTSIDE the home tree so the project
@@ -852,6 +854,7 @@ async fn shared_live_boundary_is_any_registered_cross_drive_project() {
     };
     registry.set(vec![project_a, project_b], Some("p-a".to_string()));
 
+    let (data, _data_dir) = shared_live_fixture();
     // Start the shared-live server. CAP-1: `start` now derives project_root
     // from the registry default (dir_a), NOT the user home dir.
     let state = RemoteServerState::new();
