@@ -212,7 +212,8 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
     // Request 1 (slow) then request 2 (fast): 2 reports p2, then 1 reports p1.
     await act(async () => {
       useProjectStore.setState({
-        projects: [{ id: 'p1', name: 'P1 renamed', color: 'blue', path: '/p1' }]
+        // A stored-default change: if its (stale) reply could write, it would mirror again.
+        projects: [{ id: 'p1', name: 'P1', color: 'blue', path: '/p1', isDefault: true }]
       })
     })
     syncProjectsMock.mockResolvedValue({ success: true, data: 'p2' })

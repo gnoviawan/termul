@@ -598,16 +598,20 @@ export function nextSyncSeq(): number {
 }
 
 /**
- * Record the host default a sync reply reported. Returns `true` when the
- * effective default changed (or was unknown); a reply older than one already
- * applied is ignored (`false`).
+ * Record the host default a sync reply reported: `'changed'` when the
+ * effective default changed (or was unknown), `'same'` when it did not, and
+ * `'stale'` for a reply older than one already applied (ignored entirely — it
+ * must not trigger any further write).
  */
-export function noteHostDefault(seq: number, hostDefault: string | null | undefined): boolean {
-  if (seq < hostDefaultAppliedSeq) return false
+export function noteHostDefault(
+  seq: number,
+  hostDefault: string | null | undefined
+): 'changed' | 'same' | 'stale' {
+  if (seq < hostDefaultAppliedSeq) return 'stale'
   hostDefaultAppliedSeq = seq
   const changed = hostDefaultSeen !== hostDefault
   hostDefaultSeen = hostDefault
-  return changed
+  return changed ? 'changed' : 'same'
 }
 
 /** Forget the host default (the server stopped; its registry was cleared). */
@@ -771,8 +775,11 @@ export function useProjectsAutoSave(): void {
             // sync landed. The first reply counts as a change (the file for the
             // default the host picked has not been mirrored yet).
             if (result.success) {
-              const effectiveChanged = noteHostDefault(syncSeq, result.data)
-              if (defaultChanged || effectiveChanged) {
+              const outcome = noteHostDefault(syncSeq, result.data)
+              // A stale reply never writes: the newer reply already carries the
+              // effective default, and a second mirror could replace a file
+              // update made in between.
+              if (outcome !== 'stale' && (defaultChanged || outcome === 'changed')) {
                 void useAcpStore.getState().syncMcpRegistryToProjectFile()
               }
             }

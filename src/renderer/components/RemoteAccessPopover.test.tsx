@@ -50,7 +50,7 @@ vi.mock('@/stores/acp-store', () => ({
 }))
 
 const { noteHostDefault, resetHostDefault } = vi.hoisted(() => ({
-  noteHostDefault: vi.fn(() => true),
+  noteHostDefault: vi.fn(() => 'changed'),
   resetHostDefault: vi.fn()
 }))
 vi.mock('@/hooks/use-projects-persistence', () => ({
