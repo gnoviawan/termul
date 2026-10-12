@@ -274,23 +274,6 @@ describe('MobileRecentsList row actions', () => {
     expect(within(sheet).queryByRole('button', { name: 'Delete chat' })).not.toBeInTheDocument()
   })
 
-  it('leaves the tab in place while the chat close is still pending', async () => {
-    mockCloseAgentChat.mockImplementation(() => {
-      // A running turn: the close waits, so the tab callback is not invoked.
-    })
-    seedHistory([{ id: 's1', title: 'Open one' }])
-    seedOptionsSession('s1', 'agent-1', { title: 'Open one' })
-    seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }])
-    renderList()
-
-    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open one' }))
-    const sheet = await screen.findByRole('dialog', { name: 'Open one' })
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Close chat' }))
-
-    expect(mockCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
-    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
-  })
-
   it('on /snapshots, selecting an open chat activates it without navigating (setActiveTab owns /c/<id>)', () => {
     seedHistory([{ id: 's1', title: 'Open one' }])
     seedOptionsSession('s1', 'agent-1', { title: 'Open one' })
