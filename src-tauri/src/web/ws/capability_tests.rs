@@ -194,6 +194,37 @@ async fn send_prompt_fast_path_enforces_the_capability_check() {
     assert!(rx.try_recv().is_err(), "no turn was started");
 }
 
+/// A refusal happens ahead of admission: a view-only connection's mutation
+/// with a `commandId` leaves no ledger entry, so the same id stays free for a
+/// connection that may write.
+#[tokio::test]
+async fn a_capability_refusal_leaves_no_ledger_entry() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let registry = Arc::new(ProjectRegistry::new());
+    let (tx, mut rx) = test_outbound();
+    let subscribed = Arc::new(Subscriptions::default());
+    let mut conn = ConnState::authenticated(view_only_access());
+    conn.subscriptions = Arc::clone(&subscribed);
+    let exec = KeyedExecutor::new(CancellationToken::new());
+    let env = test_env(&acp, &relay, &registry, &tx, &subscribed);
+
+    let alive = dispatch_connection_text(
+        r#"{"id":"c1","type":"promote_session","command_id":"cmd-1","payload":{"agentId":"a","sessionId":"s"}}"#,
+        &mut conn,
+        &env,
+        &exec,
+    )
+    .await;
+
+    assert!(alive);
+    let Some(Outbound::Reply(reply)) = rx.recv().await else {
+        panic!("expected a reply frame");
+    };
+    assert_eq!(code(&reply), "forbidden");
+    assert_eq!(relay.ledger().counts(), (0, 0, 0), "the refusal was not recorded");
+}
+
 // ---------------------------------------------------------------------------
 // Real-socket tests against the production `ws_upgrade` handler
 // ---------------------------------------------------------------------------

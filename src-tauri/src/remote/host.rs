@@ -422,7 +422,7 @@ impl RemoteServerState {
             event_log_capacity: ws_relay.event_log_capacity(),
             agent_idle_window_secs: crate::web::config::DEFAULT_AGENT_IDLE_WINDOW_SECS,
             overflow_tolerance: crate::web::config::DEFAULT_OVERFLOW_TOLERANCE,
-            receipt_retention_secs: crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
+            receipt_retention_secs: ws_relay.ledger().retention().as_secs(),
             // Unset until the device-state work picks values.
             partition_gc_age_secs: None,
             partition_byte_budget: None,

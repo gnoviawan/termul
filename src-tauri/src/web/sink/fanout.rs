@@ -202,6 +202,7 @@ impl WsRelaySink {
             }
         }
         self.turn_watermark.forget_session(sid);
+        self.restore_gates.lock().remove(sid);
         self.replay_gates.lock().await.remove(sid);
     }
 

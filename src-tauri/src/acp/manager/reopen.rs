@@ -3,7 +3,7 @@ use super::*;
 use crate::acp::legacy_models::{resolve_models, WithLegacyModels};
 
 /// Option snapshot returned by a successful `session/load` or `session/resume`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionReopenOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]

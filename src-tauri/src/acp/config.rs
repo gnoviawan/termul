@@ -97,18 +97,33 @@ pub struct AgentConfig {
     pub allow_terminal: bool,
 }
 
-/// OQ1: the spawn path requires a non-empty `configId` so it derives a stable
-/// `config:{config_id}` session namespace (no fallback hash). Both the desktop
-/// `acp_spawn_agent` command and the WS `spawn_agent` handler route through
-/// this shared guard — the desktop path returns the `Err(String)` directly, the
-/// WS handler maps it to a `WsReply::err` with `WsErrorCode::Unsupported`.
-pub(crate) fn require_config_id(config: &AgentConfig) -> Result<(), String> {
+/// Spawn-config guard shared by the desktop `acp_spawn_agent` command and the
+/// WS `spawn_agent` handler. Mirrors the renderer's `validateAgentConfig`
+/// (trim + non-empty `name`/`command`) and OQ1: a non-empty `configId`, so the
+/// spawn path derives a stable `config:{config_id}` session namespace (no
+/// fallback hash). A violation is a definite rejection tagged
+/// [`ACP_INVALID_AGENT_CONFIG`](crate::acp::manager::ACP_INVALID_AGENT_CONFIG):
+/// retrying the same config cannot succeed.
+pub(crate) fn validate_spawn_config(config: &mut AgentConfig) -> Result<(), String> {
+    use crate::acp::manager::invalid_agent_config;
+
+    config.name = config.name.trim().to_string();
+    config.command = config.command.trim().to_string();
+    if config.name.is_empty() {
+        return Err(invalid_agent_config(
+            "spawn_agent requires a non-empty `config.name`",
+        ));
+    }
+    if config.command.is_empty() {
+        return Err(invalid_agent_config(
+            "spawn_agent requires a non-empty `config.command`",
+        ));
+    }
     let config_id = config.config_id.as_deref().map(str::trim).unwrap_or("");
     if config_id.is_empty() {
-        return Err(
-            "spawn_agent requires a non-empty `config.configId` for durable session matching"
-                .to_string(),
-        );
+        return Err(invalid_agent_config(
+            "spawn_agent requires a non-empty `config.configId` for durable session matching",
+        ));
     }
     Ok(())
 }

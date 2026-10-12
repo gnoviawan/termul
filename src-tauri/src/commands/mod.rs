@@ -1,5 +1,5 @@
 use crate::path_validation;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Validate and canonicalize a project path to prevent path traversal attacks.
@@ -43,7 +43,7 @@ macro_rules! validate_and_stringify {
 }
 
 /// IPC Result pattern
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IpcResult<T> {
     pub success: bool,

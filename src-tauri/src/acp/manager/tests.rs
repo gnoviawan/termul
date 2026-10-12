@@ -97,6 +97,7 @@ async fn owns_session_queries_authoritative_agent_driver_state() {
             config_id: None,
             join_handle: None,
             killed: Arc::new(AtomicBool::new(false)),
+            stamp: SpawnStamp::default(),
         },
     );
     let requested = SessionId::new("owned-session");
@@ -134,6 +135,7 @@ fn list_agent_summaries_returns_identity_rich_entries() {
                 config_id: config_id.map(str::to_string),
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
     };
@@ -2130,6 +2132,7 @@ async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
             config_id: None,
             join_handle: None,
             killed: Arc::new(AtomicBool::new(false)),
+            stamp: SpawnStamp::default(),
         },
     );
 
@@ -2242,6 +2245,7 @@ async fn spawn_refused_after_kill_all_checked_starts_shutdown() {
             sample_config("test", "definitely-missing-agent-binary", &[]),
             false,
             vec![],
+            None,
         )
         .await
         .expect_err("spawn must be refused once process shutdown began");
@@ -2543,4 +2547,49 @@ async fn transport_closed_outcome_is_left_to_the_interrupted_marker_on_shutdown(
     assert!(!outcome_owned_by_process_shutdown(Some(&persistence), &ok));
     assert!(!outcome_owned_by_process_shutdown(None, &closed));
     let _ = std::fs::remove_dir_all(root);
+}
+
+mod spawn_error_cases {
+    use super::super::spawn_error::*;
+
+    #[test]
+    fn tagged_errors_round_trip_and_untagged_stay_unclassified() {
+        let unavailable = agent_unavailable("program not found");
+        assert_eq!(
+            classify_spawn_error(&unavailable),
+            Some((SpawnFailure::AgentUnavailable, "program not found"))
+        );
+        let invalid = invalid_agent_config("empty command");
+        assert_eq!(
+            classify_spawn_error(&invalid),
+            Some((SpawnFailure::InvalidAgentConfig, "empty command"))
+        );
+        assert_eq!(classify_spawn_error("agent initialize failed: eof"), None);
+        assert_eq!(classify_spawn_error("ACP_AGENT_UNAVAILABLEX: nope"), None);
+    }
+
+    #[test]
+    fn only_concrete_launch_refusals_are_definite() {
+        for detail in [
+            "Internal error: No such file or directory (os error 2)",
+            "program not found",
+            "Permission denied (os error 13)",
+            "Exec format error (os error 8)",
+            "The system cannot find the file specified. (os error 2)",
+            "Internal error: The system cannot find the path specified. (os error 3)",
+            "Access is denied. (os error 5)",
+            "%1 is not a valid Win32 application. (os error 193)",
+            "'ghost' is not recognized as an internal or external command",
+        ] {
+            assert!(is_launch_refusal(detail), "{detail}");
+        }
+        for detail in [
+            "failed to build runtime: out of threads",
+            "connection closed",
+            "Failed to open stdin",
+            "agent exited with status 1",
+        ] {
+            assert!(!is_launch_refusal(detail), "{detail}");
+        }
+    }
 }

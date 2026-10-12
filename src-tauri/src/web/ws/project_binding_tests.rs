@@ -87,6 +87,7 @@ async fn create_session_with_an_unknown_project_replies_not_found_before_touchin
         &json!({"agentId": "a-1", "cwd": "/work/one", "projectId": "ghost"}),
         &acp,
         &registry,
+        None,
     )
     .await;
 
@@ -106,6 +107,7 @@ async fn create_session_with_a_registered_project_reaches_the_agent() {
         &json!({"agentId": "a-1", "cwd": "/work/one", "projectId": "p-2"}),
         &acp,
         &registry,
+        None,
     )
     .await;
 

@@ -29,6 +29,9 @@ pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 900;
 pub const DEFAULT_OVERFLOW_TOLERANCE: usize = 15;
 /// Default command-receipt retention in seconds (10 min).
 pub const DEFAULT_RECEIPT_RETENTION_SECS: u64 = 600;
+/// Longest command-receipt retention the host honors (7 days); a larger
+/// `--receipt-retention-secs` is clamped to it at startup.
+pub const MAX_RECEIPT_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 const AGENT_IDLE_WINDOW_ENV: &str = "TERMUL_AGENT_IDLE_REAP_SECS";
 const PARTITION_GC_AGE_ENV: &str = "TERMUL_PARTITION_GC_AGE_SECS";
@@ -347,10 +350,11 @@ pub struct ServerConfig {
     /// `--overflow-tolerance` → [`DEFAULT_OVERFLOW_TOLERANCE`] (15). Read by
     /// `serve_router` into the connection runtime every `/ws` socket uses.
     pub overflow_tolerance: usize,
-    /// How long a command receipt is retained, in seconds.
+    /// How long the command ledger keeps a command's outcome, in seconds
+    /// (bare command ids are kept six times as long).
     /// `--receipt-retention-secs` → [`DEFAULT_RECEIPT_RETENTION_SECS`] (600).
-    /// Reserved: the command-receipt work reads it. No runtime code reads it
-    /// yet.
+    /// `termul-server` builds its ledger from it; the desktop shared-live host
+    /// uses the default.
     pub receipt_retention_secs: u64,
     /// Age (seconds) after which an unused per-device partition is garbage
     /// collected. `None` (unset) until the device-state work picks a value;
@@ -544,6 +548,9 @@ impl ServerConfig {
         let mut agent_idle_window_secs: Option<u64> = None;
         let mut overflow_tolerance: usize = DEFAULT_OVERFLOW_TOLERANCE;
         let mut receipt_retention_secs: u64 = DEFAULT_RECEIPT_RETENTION_SECS;
+        // The last requested value above the cap; the clamp warning is queued
+        // after parsing so a repeated flag cannot leave a stale warning.
+        let mut receipt_retention_over_cap: Option<u64> = None;
         let mut partition_gc_age_secs: Option<u64> = None;
         let mut partition_byte_budget: Option<u64> = None;
         let mut deprecation_warnings: Vec<String> = Vec::new();
@@ -652,6 +659,11 @@ impl ServerConfig {
                     let value = require_value(&mut iter, "--receipt-retention-secs")?;
                     receipt_retention_secs =
                         parse_positive::<u64>("--receipt-retention-secs", value.as_ref())?;
+                    receipt_retention_over_cap = (receipt_retention_secs
+                        > MAX_RECEIPT_RETENTION_SECS)
+                        .then_some(receipt_retention_secs);
+                    receipt_retention_secs =
+                        receipt_retention_secs.min(MAX_RECEIPT_RETENTION_SECS);
                 }
                 "--partition-gc-age-secs" => {
                     let value = require_value(&mut iter, "--partition-gc-age-secs")?;
@@ -910,6 +922,12 @@ impl ServerConfig {
                 "sessions directory '{}' is not a directory",
                 sessions_dir.display()
             )));
+        }
+
+        if let Some(requested) = receipt_retention_over_cap {
+            deprecation_warnings.push(format!(
+                "--receipt-retention-secs {requested} exceeds the maximum; using {MAX_RECEIPT_RETENTION_SECS} (7 days)"
+            ));
         }
 
         // Tunables: `--flag` wins, then the env var (where one exists), then

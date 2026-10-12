@@ -115,6 +115,12 @@ pub struct SessionMetadata {
     /// a resumed session cannot rename a second time. Host-internal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_launch_branch: Option<String>,
+    /// The `commandId` of the `create_session` that made this session, so a
+    /// resend after ledger eviction or a host restart finds it instead of
+    /// creating a second one. Host-internal: never on `SessionIndexEntry` or
+    /// any wire type. Additive: old metadata loads with `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
 }
 
 /// Provenance of a worktree branch name (story 16): `Auto` is the launcher's
@@ -230,6 +236,9 @@ pub struct SessionRegistration {
     /// (host-detected via `worktree::take_launch_created`; story 16). Never
     /// supplied by a client.
     pub worktree_created: bool,
+    /// The client `commandId` of the creating request (stamped on the record;
+    /// see `SessionMetadata::command_id`). Never set for discovered sessions.
+    pub command_id: Option<String>,
 }
 
 /// A session's current model id plus a display-name snapshot (CAP-3).

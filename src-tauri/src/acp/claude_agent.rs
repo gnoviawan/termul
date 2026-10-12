@@ -648,7 +648,8 @@ impl ClaudeAgentService {
         }
         if let Err(reason) = self.runtime_probe.ensure_supported().await {
             log::warn!("[acp-claude] managed config rejected: {reason}");
-            return Err(reason);
+            // Missing Claude CLI / Node runtime: nothing a retry can fix.
+            return Err(super::manager::agent_unavailable(reason));
         }
         match self.auth_mode() {
             Ok(ClaudeAuthMode::ClaudeCode) => {

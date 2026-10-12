@@ -70,6 +70,7 @@ mod gates;
 pub(crate) use gates::{ConfigOptionValue, GatewayAuthInput};
 mod history;
 mod reopen;
+mod spawn_error;
 mod timeouts;
 mod turn;
 mod wire;
@@ -91,6 +92,7 @@ mod real_loop_tests;
 
 pub(crate) use history::*;
 pub use reopen::*;
+pub use spawn_error::*;
 pub use timeouts::*;
 pub(crate) use worktree_branch::*;
 
@@ -125,7 +127,7 @@ const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub const ACP_SESSION_OWNED_BY_OTHER: &str = "ACP_SESSION_OWNED_BY_OTHER";
 
 /// Outcome of creating a new session, returned to the command caller.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSessionOutcome {
     pub session_id: SessionId,
@@ -158,6 +160,10 @@ pub struct SessionCreationContext {
     /// Extra absolute workspace roots. Applied only when the agent advertises
     /// `additionalDirectories`.
     pub additional_directories: Vec<String>,
+    /// The client `commandId` of the creating request, stamped on the durable
+    /// record so a resend finds the session after ledger eviction or a host
+    /// restart. Ephemeral sessions are live-only and carry no durable stamp.
+    pub command_id: Option<String>,
 }
 
 /// Commands sent from Tauri command handlers to an agent's driver thread.
@@ -176,6 +182,7 @@ enum AcpCommand {
         worktree_path: Option<String>,
         worktree_branch: Option<String>,
         additional_directories: Vec<PathBuf>,
+        command_id: Option<String>,
         reply: oneshot::Sender<Result<NewSessionOutcome, String>>,
     },
     LoadSession {
@@ -331,7 +338,7 @@ struct InitOutcome {
 /// `acp:agent_spawned` event is still emitted for observers but is no longer the
 /// source of truth — the spawn response is. Serialized camelCase on the wire so
 /// desktop (Tauri `Result`) and web (`WsReply` payload) share one contract.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnOutcome {
     pub agent_id: AgentId,
@@ -366,6 +373,10 @@ pub struct AgentSummary {
     /// answer "which live agent owns this session" from the `list_agents`
     /// reply alone, without a per-agent round-trip.
     pub owns_session: Vec<String>,
+    /// The `commandId` of the `spawn_agent` that created this agent. In-process
+    /// only: never serialized to clients.
+    #[serde(skip)]
+    pub command_id: Option<String>,
 }
 
 /// Test-only record of what the idle reaper did to a fake agent (issue #837
@@ -391,6 +402,19 @@ struct AgentEntry {
     /// driver thread's teardown can tell an intentional kill (silent) from a
     /// spontaneous crash (emits `acp:agent_disconnected`). See L4.
     killed: Arc<AtomicBool>,
+    /// The spawn's `commandId` and handshake facts (see [`SpawnStamp`]).
+    stamp: SpawnStamp,
+}
+
+/// What a spawn stamps on its agent: the client `commandId` (a resent
+/// `spawn_agent` finds the live agent by it) plus the handshake facts a
+/// resend needs to rebuild the original [`SpawnOutcome`]. Carries no config,
+/// env or credential.
+#[derive(Debug, Clone, Default)]
+struct SpawnStamp {
+    command_id: Option<String>,
+    auth_methods: Vec<AuthMethodInfo>,
+    host_auth_ready: bool,
 }
 
 /// Manages all ACP agents, mirroring the `PtyManager` ownership pattern.
@@ -563,15 +587,40 @@ impl AcpManager {
     /// host-auth readiness, and stable namespace so the renderer can populate the store
     /// synchronously from the response (CAP-4: the spawn response — not the
     /// async event — is the source of truth).
-    pub async fn spawn(&self, mut config: AgentConfig) -> Result<SpawnOutcome, String> {
+    pub async fn spawn(&self, config: AgentConfig) -> Result<SpawnOutcome, String> {
+        self.spawn_with_command_id(config, None).await
+    }
+
+    /// [`spawn`](Self::spawn) stamping the client `commandId` on the agent, so
+    /// a resent `spawn_agent` finds it ([`Self::spawn_outcome_by_command_id`]).
+    pub async fn spawn_with_command_id(
+        &self,
+        mut config: AgentConfig,
+        command_id: Option<String>,
+    ) -> Result<SpawnOutcome, String> {
         crate::acp::factory_key::normalize_launch_args(&mut config);
         crate::acp::factory_key::inject(&mut config)?;
         let host_auth_ready = self
             .claude_agent
             .prepare_managed_config(&mut config)
             .await?;
-        self.spawn_with_sinks(config, host_auth_ready, self.sinks.clone())
+        self.spawn_with_sinks(config, host_auth_ready, self.sinks.clone(), command_id)
             .await
+    }
+
+    /// The [`SpawnOutcome`] of the live agent spawned under `command_id`, or
+    /// `None` when no live agent carries it (never spawned, or since gone).
+    #[must_use]
+    pub fn spawn_outcome_by_command_id(&self, command_id: &str) -> Option<SpawnOutcome> {
+        self.agents.lock().iter().find_map(|(id, entry)| {
+            (entry.stamp.command_id.as_deref() == Some(command_id)).then(|| SpawnOutcome {
+                agent_id: id.clone(),
+                capabilities: entry.capabilities.clone(),
+                auth_methods: entry.stamp.auth_methods.clone(),
+                host_auth_ready: entry.stamp.host_auth_ready,
+                stable_namespace: entry.stable_namespace.clone(),
+            })
+        })
     }
 
     /// Candidate validation bypasses the persisted-key overlay.
@@ -580,7 +629,7 @@ impl AcpManager {
         mut config: AgentConfig,
     ) -> Result<SpawnOutcome, String> {
         crate::acp::factory_key::normalize_launch_args(&mut config);
-        self.spawn_with_sinks(config, false, vec![]).await
+        self.spawn_with_sinks(config, false, vec![], None).await
     }
 
     /// Same as [`spawn`](Self::spawn) but lets the caller supply the sink list
@@ -591,6 +640,7 @@ impl AcpManager {
         config: AgentConfig,
         host_auth_ready: bool,
         sinks: Vec<Arc<dyn EventSink>>,
+        command_id: Option<String>,
     ) -> Result<SpawnOutcome, String> {
         // Fail fast once process shutdown began: the agent would register
         // (or worse, miss registration ordering) after `kill_all_checked`
@@ -673,6 +723,10 @@ impl AcpManager {
                 // (e.g. "program not found") over the generic fallback.
                 join_thread_bounded(join_handle).await;
                 let reason = start_error.lock().take();
+                // Only a concrete launch refusal (missing / non-executable
+                // program) is a definite rejection; any other start failure
+                // may be transient and stays untagged so it can be retried.
+                let definite = reason.as_deref().is_some_and(is_launch_refusal);
                 let message = match reason {
                     Some(detail) => format!("agent failed to start: {detail}"),
                     None => "agent failed to start (process did not initialize)".to_string(),
@@ -681,10 +735,19 @@ impl AcpManager {
                     // Same redaction convention as the initialize path: generic
                     // toward the renderer, specific detail in the host log.
                     log::warn!("[acp] Factory Droid start failed: {message}");
-                    return Err("Factory Droid start failed".to_string());
+                    let generic = "Factory Droid start failed";
+                    return Err(if definite {
+                        agent_unavailable(generic)
+                    } else {
+                        generic.to_string()
+                    });
                 }
                 log::warn!("[acp] spawn failed: {message}");
-                return Err(message);
+                return Err(if definite {
+                    agent_unavailable(message)
+                } else {
+                    message
+                });
             }
         };
 
@@ -728,6 +791,11 @@ impl AcpManager {
                     config_id: config.config_id.clone(),
                     join_handle: Some(join_handle),
                     killed,
+                    stamp: SpawnStamp {
+                        command_id,
+                        auth_methods: auth_methods.clone(),
+                        host_auth_ready,
+                    },
                 },
             );
         }
@@ -784,6 +852,7 @@ impl AcpManager {
                 namespace: entry.stable_namespace.clone(),
                 capabilities: entry.capabilities.clone(),
                 owns_session: Vec::new(),
+                command_id: entry.stamp.command_id.clone(),
             })
             .collect()
     }
@@ -938,6 +1007,7 @@ impl AcpManager {
                 worktree_path: context.worktree_path,
                 worktree_branch: context.worktree_branch,
                 additional_directories,
+                command_id: context.command_id,
                 reply,
             })
             .await
@@ -1638,6 +1708,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
     }
@@ -1704,6 +1775,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
         record
@@ -1761,6 +1833,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
     }
@@ -1798,6 +1871,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
     }
@@ -1843,6 +1917,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
     }
@@ -1897,6 +1972,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
     }
@@ -1954,6 +2030,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                stamp: SpawnStamp::default(),
             },
         );
         (release_tx, entered_rx)

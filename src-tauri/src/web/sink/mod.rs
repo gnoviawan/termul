@@ -35,6 +35,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
+use tracing::warn;
 
 use crate::acp::session_persistence::{
     PersistedEventRecord, SessionPersistence, SessionPersistenceError,
@@ -308,10 +309,15 @@ pub struct WsRelaySink {
     /// Serializes each session's durable replay/catch-up/register handoff.
     /// Emits remain non-blocking and use the synchronous session state lock.
     replay_gates: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Single-flight gate per session for [`Self::ensure_turns_restored`].
+    restore_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Per-`projectId` filesystem watch subscriptions (`watch_project` /
     /// `unwatch_project`). `fs_changed` events go only to subscribed
     /// connections, not through the client registry above.
     fs_watches: crate::web::fs_watcher::FsWatchHub,
+    /// The command receipt ledger, shared by `/ws` dispatch and the Tauri
+    /// `acp_*` commands (one ledger per host).
+    ledger: Arc<crate::web::command_ledger::CommandLedger>,
     /// Authenticated connections per `deviceId`, shared by `/ws` and
     /// `/terminal/ws` (both reach the relay through `AppState.relay`).
     presence: Arc<crate::web::presence::PresenceRegistry>,
@@ -375,9 +381,29 @@ impl WsRelaySink {
             pre_registration_capacity: DEFAULT_PRE_REGISTRATION_CAPACITY,
             persistence: None,
             replay_gates: tokio::sync::Mutex::new(HashMap::new()),
+            restore_gates: Mutex::new(HashMap::new()),
             fs_watches: crate::web::fs_watcher::FsWatchHub::default(),
+            ledger: Arc::new(crate::web::command_ledger::CommandLedger::new(
+                std::time::Duration::from_secs(
+                    crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
+                ),
+            )),
             presence: Arc::new(crate::web::presence::PresenceRegistry::new()),
         }
+    }
+
+    /// The command receipt ledger.
+    #[must_use]
+    pub fn ledger(&self) -> &Arc<crate::web::command_ledger::CommandLedger> {
+        &self.ledger
+    }
+
+    /// Replace the ledger (outcome retention from `ServerConfig`, or a test
+    /// ledger with an injected clock). Call before the sink is shared.
+    #[must_use]
+    pub fn with_ledger(mut self, ledger: crate::web::command_ledger::CommandLedger) -> Self {
+        self.ledger = Arc::new(ledger);
+        self
     }
 
     /// The per-project filesystem watch manager.
@@ -514,6 +540,56 @@ impl WsRelaySink {
     #[must_use]
     pub fn turn_watermark(&self) -> &crate::web::permissions::TurnWatermark {
         &self.turn_watermark
+    }
+
+    /// Restore `session_id`'s completed-turn set from durable history once,
+    /// before a prompt claims a turn. Completed turns are otherwise restored
+    /// only lazily on subscribe, so a resend of a completed `turnId` after a
+    /// host restart (before any subscribe) would find no record of the turn
+    /// and run it again. Single-flight per session: concurrent claims wait for
+    /// the first scan instead of repeating it.
+    ///
+    /// A session with no durable history (no persistence, or not in the
+    /// catalog: ephemeral) has nothing to restore. Any other failure is
+    /// returned: claiming without the completed set could re-run a finished
+    /// turn, so the caller must refuse the prompt (the next claim retries).
+    ///
+    /// # Errors
+    /// A generic message when the durable read failed; the cause is logged.
+    pub async fn ensure_turns_restored(&self, session_id: &str) -> Result<(), String> {
+        let Some(persistence) = &self.persistence else {
+            return Ok(());
+        };
+        if self.turn_watermark.is_restored(session_id) {
+            return Ok(());
+        }
+        let gate = Arc::clone(
+            self.restore_gates
+                .lock()
+                .entry(session_id.to_string())
+                .or_default(),
+        );
+        let _single_flight = gate.lock().await;
+        if self.turn_watermark.is_restored(session_id) {
+            return Ok(());
+        }
+        match persistence.completed_turn_ids_async(session_id.to_string()).await {
+            Ok(turn_ids) => {
+                self.turn_watermark.restore_completed(session_id, turn_ids);
+                self.turn_watermark.mark_restored(session_id);
+                Ok(())
+            }
+            Err(crate::acp::session_persistence::SessionPersistenceError::SessionNotFound) => {
+                Ok(())
+            }
+            Err(error) => {
+                warn!(
+                    "[prompt] completed turns could not be restored for session {}: {error}",
+                    crate::logging::redact_session_id(session_id)
+                );
+                Err("the session's turn history could not be read; retry the prompt".to_string())
+            }
+        }
     }
 
     /// Current session sequence frontier. Used as the snapshot watermark.

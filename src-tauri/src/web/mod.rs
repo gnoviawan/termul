@@ -24,6 +24,7 @@ pub mod auth;
 pub mod canvas_api;
 pub mod capabilities;
 pub mod catalog_api;
+pub mod command_ledger;
 pub mod config;
 pub mod connection_runtime;
 pub mod fs_api;

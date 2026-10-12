@@ -27,6 +27,7 @@ fn metadata() -> SessionMetadata {
         model_name: None,
         worktree_branch_source: None,
         worktree_launch_branch: None,
+        command_id: None,
     }
 }
 

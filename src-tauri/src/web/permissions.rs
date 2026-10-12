@@ -1375,6 +1375,9 @@ pub struct TurnWatermark {
     in_flight: Mutex<HashMap<String, String>>,
     /// `session_id → set of seen turn-ids` (idempotent event dedup).
     seen: Mutex<HashMap<String, std::collections::HashSet<String>>>,
+    /// Sessions whose completed set was restored from durable history (once
+    /// per session, before the first claim).
+    restored: Mutex<std::collections::HashSet<String>>,
 }
 
 impl TurnWatermark {
@@ -1385,7 +1388,19 @@ impl TurnWatermark {
             completed: Mutex::new(HashMap::new()),
             in_flight: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
+            restored: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Whether `session_id`'s completed set was restored from history.
+    #[must_use]
+    pub fn is_restored(&self, session_id: &str) -> bool {
+        self.restored.lock().contains(session_id)
+    }
+
+    /// Record that `session_id`'s completed set was restored from history.
+    pub fn mark_restored(&self, session_id: &str) {
+        self.restored.lock().insert(session_id.to_string());
     }
 
     /// Record that `turn_id` was seen for `session_id` (idempotent dedup set).
@@ -1490,6 +1505,7 @@ impl TurnWatermark {
         self.completed.lock().remove(session_id);
         self.in_flight.lock().remove(session_id);
         self.seen.lock().remove(session_id);
+        self.restored.lock().remove(session_id);
     }
 }
 

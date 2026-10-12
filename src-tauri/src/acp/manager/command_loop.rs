@@ -121,6 +121,7 @@ pub(super) async fn run_command_loop(
                 worktree_path,
                 worktree_branch,
                 additional_directories,
+                command_id,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -178,6 +179,7 @@ pub(super) async fn run_command_loop(
                                 worktree_path,
                                 worktree_branch,
                                 worktree_created,
+                                command_id,
                                 model: resolved.models.as_ref().map(
                                     crate::acp::session_persistence::snapshot_from_model_state,
                                 ),

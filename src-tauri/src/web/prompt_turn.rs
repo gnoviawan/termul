@@ -185,6 +185,15 @@ pub async fn accept_prompt_turn(
         Err(error) => return Err(PromptTurnError::Failed(error)),
     }
 
+    // After a host restart the completed turns exist only on disk: restore
+    // them before claiming, or a resend of a completed turn would run again.
+    if turn_id.is_some() {
+        relay
+            .ensure_turns_restored(&session_id.0)
+            .await
+            .map_err(PromptTurnError::Failed)?;
+    }
+
     match relay
         .turn_watermark()
         .claim_turn(session_id.0.as_str(), turn_id.as_deref())

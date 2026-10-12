@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { UNASSIGNED_PROJECT_ID } from './web-projects.types'
 
 import {
+  COMMAND_ID_PATTERN,
   isHumanRelayedCap,
   isOsFulfilledCap,
   MAX_CLIENT_ID_LEN,
+  MAX_COMMAND_ID_LEN,
   type ReliabilityTier,
+  WS_COMMAND_CLASSES,
   WS_ERROR_CODES,
   WS_EVENT_TIERS,
   WS_EVENT_TYPES,
@@ -72,8 +75,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 45 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(45)
+  it('exports exactly 46 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(46)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -130,7 +133,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'record_agent_switch',
       // Per-project fs watch.
       'watch_project',
-      'unwatch_project'
+      'unwatch_project',
+      // Explicit host-default project change.
+      'set_default_project'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)
@@ -147,9 +152,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 22 stable error codes', () => {
+  it('exports exactly 26 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(22)
+    expect(codes.size).toBe(26)
     const expected = [
       'not_found',
       'unauthorized',
@@ -175,7 +180,13 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'provider_request_rejected',
       // Capability refusal + ticket tombstone.
       'forbidden',
-      'already_resolved'
+      'already_resolved',
+      // Deterministic spawn rejections (never auto-retried).
+      'agent_unavailable',
+      'invalid_agent_config',
+      // Command ledger refusals.
+      'command_conflict',
+      'invalid_command_id'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)
@@ -382,6 +393,37 @@ describe('web-protocol.types — envelope shapes (AC2 + AC3)', () => {
     expect(typeof e).toBe('string')
     expect(typeof r).toBe('string')
     expect(typeof t).toBe('string')
+  })
+})
+
+describe('web-protocol.types — command classes (AD-5)', () => {
+  it('classifies exactly the request types, with a replay policy on create/command only', () => {
+    expect(Object.keys(WS_COMMAND_CLASSES).sort()).toEqual([...WS_REQUEST_TYPES].sort())
+    for (const [kind, replay] of Object.values(WS_COMMAND_CLASSES)) {
+      expect(replay !== null).toBe(kind === 'create' || kind === 'command')
+    }
+  })
+
+  it('keeps the credential-bearing kinds receipt-only and the prompt on its turn id', () => {
+    for (const type of [
+      'authenticate_agent',
+      'respond_elicitation',
+      'acp_deliver_auth_redirect'
+    ] as const) {
+      expect(WS_COMMAND_CLASSES[type]).toEqual(['command', 'receipt-only'])
+    }
+    expect(WS_COMMAND_CLASSES.send_prompt).toEqual(['command', 'entity'])
+    expect(WS_COMMAND_CLASSES.create_session).toEqual(['create', 'entity'])
+  })
+
+  it('accepts 1-128 chars of [A-Za-z0-9_-] as a commandId and nothing else', () => {
+    expect(MAX_COMMAND_ID_LEN).toBe(128)
+    expect(COMMAND_ID_PATTERN.test('3f2b9c0e-1d4a-4b7e-9a10-aabbccddeeff')).toBe(true)
+    expect(COMMAND_ID_PATTERN.test('a'.repeat(128))).toBe(true)
+    expect(COMMAND_ID_PATTERN.test('a'.repeat(129))).toBe(false)
+    expect(COMMAND_ID_PATTERN.test('')).toBe(false)
+    expect(COMMAND_ID_PATTERN.test('has space')).toBe(false)
+    expect(COMMAND_ID_PATTERN.test('new\nline')).toBe(false)
   })
 })
 

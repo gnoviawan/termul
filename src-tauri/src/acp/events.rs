@@ -14,7 +14,7 @@ use agent_client_protocol::schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
     SessionConfigSelectOptions, SessionMode, SessionModeId, StopReason, ToolCall, ToolCallUpdate,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Re-export the transport-neutral fan-out helper so the `acp` dispatcher emits
 /// through `Vec<Arc<dyn EventSink>>` instead of `AppHandle::emit` directly
@@ -33,7 +33,7 @@ pub(crate) use crate::web::fan_out;
 /// 0.14 — they are a `SessionConfigOption` with `category = "model"` — so
 /// Termul reconstructs this legacy view from `config_options` to keep the
 /// renderer's Model Picker contract byte-compatible.
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionModel {
     pub model_id: String,
@@ -46,7 +46,7 @@ pub struct SessionModel {
 ///
 /// Wire-identical to the pre-1.3 schema `SessionModelState`
 /// (`{ currentModelId, availableModels[] }`).
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionModelState {
     pub current_model_id: String,
@@ -212,7 +212,7 @@ pub enum ChunkRole {
 /// forwards `type` only — the renderer shows a disabled "not supported" entry
 /// (respawn-with-env is out of scope). No agent-type filtering is applied —
 /// every advertised method is forwarded.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthMethodInfo {
     pub id: String,

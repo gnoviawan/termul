@@ -55,6 +55,7 @@ mod diff_stat;
 mod jsonl;
 mod model;
 mod normalize;
+mod sweep;
 mod types;
 mod worktree_branch;
 mod writer;
@@ -127,6 +128,10 @@ struct Inner {
     sessions: Mutex<HashMap<String, SessionRuntime>>,
     /// Canonical in-memory metadata for both active and finalized sessions.
     catalog: Mutex<HashMap<String, Arc<Mutex<SessionMetadata>>>>,
+    /// Secondary index over the catalog: creating `commandId` -> session id,
+    /// for resend resolution ([`SessionPersistence::find_session_by_command_id`]).
+    /// Always updated together with the catalog (insert/remove helpers).
+    command_index: Mutex<HashMap<String, String>>,
     registration_lock: tokio::sync::Mutex<()>,
     index_lock: tokio::sync::Mutex<()>,
     /// Set by `kill_all` before agent drivers exit. A single-agent kill,
@@ -161,6 +166,8 @@ pub(crate) struct ReplayTestHook {
     entered: StdMutex<Option<std::sync::mpsc::Sender<()>>>,
     released: StdMutex<bool>,
     release: Condvar,
+    /// How many scans reached the hook.
+    waits: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(test)]
@@ -170,10 +177,17 @@ impl ReplayTestHook {
             entered: StdMutex::new(Some(entered)),
             released: StdMutex::new(false),
             release: Condvar::new(),
+            waits: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
+    /// How many scans reached the hook so far.
+    pub(crate) fn waits(&self) -> usize {
+        self.waits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     fn wait(&self) {
+        self.waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(entered) = self.entered.lock().expect("replay hook poisoned").take() {
             let _ = entered.send(());
         }
@@ -276,6 +290,22 @@ impl WriterCommand {
     }
 }
 
+/// The non-empty `turnId`s of the `prompt_complete` records.
+fn turn_ids_of(records: Vec<PersistedEventRecord>) -> HashSet<String> {
+    records
+        .into_iter()
+        .filter(|record| record.type_ == "prompt_complete")
+        .filter_map(|record| {
+            record
+                .payload
+                .get("turnId")
+                .and_then(Value::as_str)
+                .filter(|turn_id| !turn_id.is_empty())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
 impl SessionPersistence {
     pub async fn open(root: PathBuf) -> Result<Arc<Self>> {
         if root.exists() && !root.is_dir() {
@@ -290,6 +320,7 @@ impl SessionPersistence {
                 root,
                 sessions: Mutex::new(HashMap::new()),
                 catalog: Mutex::new(HashMap::new()),
+                command_index: Mutex::new(HashMap::new()),
                 registration_lock: tokio::sync::Mutex::new(()),
                 index_lock: tokio::sync::Mutex::new(()),
                 process_shutdown: AtomicBool::new(false),
@@ -384,6 +415,7 @@ impl SessionPersistence {
             // Story 16: provenance is recorded only for the creating session.
             worktree_branch_source: creator.then_some(WorktreeBranchSource::Auto),
             worktree_launch_branch: if creator { launch_branch } else { None },
+            command_id: registration.command_id.filter(|id| !id.is_empty()),
         };
         self.persist_metadata(&metadata)?;
         if let Err(error) = self.install_runtime(metadata.clone()) {
@@ -398,7 +430,7 @@ impl SessionPersistence {
         }
         if let Err(error) = self.persist_index().await {
             self.inner.sessions.lock().remove(&registration.session_id);
-            self.inner.catalog.lock().remove(&registration.session_id);
+            self.remove_catalog_entry(&registration.session_id);
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
             return Err(error);
         }
@@ -488,6 +520,7 @@ impl SessionPersistence {
             model_name: None,
             worktree_branch_source: None,
             worktree_launch_branch: None,
+            command_id: None,
         };
         if let Err(error) = self.persist_metadata(&metadata) {
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
@@ -495,7 +528,7 @@ impl SessionPersistence {
         }
         self.install_catalog_entry(metadata.clone());
         if let Err(error) = self.persist_index().await {
-            self.inner.catalog.lock().remove(session_id);
+            self.remove_catalog_entry(session_id);
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
             return Err(error);
         }
@@ -557,6 +590,7 @@ impl SessionPersistence {
             model_name: None,
             worktree_branch_source: None,
             worktree_launch_branch: None,
+            command_id: None,
         };
         self.persist_metadata(&metadata)?;
         if let Err(error) = self.install_runtime(metadata.clone()) {
@@ -570,7 +604,7 @@ impl SessionPersistence {
         }
         if let Err(error) = self.persist_index().await {
             self.inner.sessions.lock().remove(&registration.session_id);
-            self.inner.catalog.lock().remove(&registration.session_id);
+            self.remove_catalog_entry(&registration.session_id);
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
             return Err(error);
         }
@@ -1029,7 +1063,7 @@ impl SessionPersistence {
         // salvage serializes its rewrite on the catalog lock, so once the
         // entry is gone no in-flight or future salvage can stage a rewrite
         // that would resurrect the deleted dir via `create_dir_all`.
-        self.inner.catalog.lock().remove(session_id);
+        self.remove_catalog_entry(session_id);
         fs::remove_dir_all(&dir)?;
         self.persist_index().await?;
         log::info!(
@@ -1559,19 +1593,16 @@ impl SessionPersistence {
     /// records. This survives restart without treating arbitrary browser input
     /// as authoritative transcript state.
     pub fn completed_turn_ids(&self, session_id: &str) -> Result<HashSet<String>> {
-        Ok(self
-            .replay_after(session_id, 0)?
-            .into_iter()
-            .filter(|record| record.type_ == "prompt_complete")
-            .filter_map(|record| {
-                record
-                    .payload
-                    .get("turnId")
-                    .and_then(Value::as_str)
-                    .filter(|turn_id| !turn_id.is_empty())
-                    .map(str::to_string)
-            })
-            .collect())
+        Ok(turn_ids_of(self.replay_after(session_id, 0)?))
+    }
+
+    /// [`Self::completed_turn_ids`] on Tokio's blocking pool (the JSONL scan
+    /// never stalls the async runtime).
+    pub async fn completed_turn_ids_async(
+        self: &Arc<Self>,
+        session_id: String,
+    ) -> Result<HashSet<String>> {
+        Ok(turn_ids_of(self.replay_after_async(session_id, 0).await?))
     }
 
     async fn recover(&self) -> Result<()> {
@@ -1781,6 +1812,11 @@ impl SessionPersistence {
                 metadata.status = PersistedSessionStatus::Closed;
                 dirty = true;
             }
+            // AD-5 host-start sweep: terminate a turn the crash left open
+            // (never replayed) before any manager or carrier exists.
+            if sweep::sweep_interrupted_turn(&self.inner.root, &mut metadata) {
+                dirty = true;
+            }
             if migrate_unassigned
                 && metadata
                     .project_id
@@ -1902,10 +1938,7 @@ impl SessionPersistence {
             }
             return Err(SessionPersistenceError::Io(error));
         }
-        self.inner
-            .catalog
-            .lock()
-            .insert(session_id.clone(), Arc::clone(&metadata));
+        self.insert_catalog_entry(session_id.clone(), Arc::clone(&metadata));
         self.inner.sessions.lock().insert(
             session_id,
             SessionRuntime {
@@ -1922,10 +1955,38 @@ impl SessionPersistence {
     }
 
     fn install_catalog_entry(&self, metadata: SessionMetadata) {
-        self.inner
-            .catalog
-            .lock()
-            .insert(metadata.session_id.clone(), Arc::new(Mutex::new(metadata)));
+        self.insert_catalog_entry(metadata.session_id.clone(), Arc::new(Mutex::new(metadata)));
+    }
+
+    /// The single catalog insert: keeps the `commandId` index in step.
+    fn insert_catalog_entry(&self, session_id: String, metadata: Arc<Mutex<SessionMetadata>>) {
+        if let Some(command_id) = metadata.lock().command_id.clone() {
+            self.inner
+                .command_index
+                .lock()
+                .insert(command_id, session_id.clone());
+        }
+        self.inner.catalog.lock().insert(session_id, metadata);
+    }
+
+    /// The single catalog remove: drops the session's `commandId` index entry.
+    fn remove_catalog_entry(&self, session_id: &str) {
+        let removed = self.inner.catalog.lock().remove(session_id);
+        if let Some(command_id) = removed.and_then(|metadata| metadata.lock().command_id.clone()) {
+            let mut index = self.inner.command_index.lock();
+            if index.get(&command_id).is_some_and(|sid| sid == session_id) {
+                index.remove(&command_id);
+            }
+        }
+    }
+
+    /// The session created by the command with `command_id`, if it still
+    /// exists. Durable: the stamp is part of the persisted metadata, so this
+    /// answers after a host restart too.
+    #[must_use]
+    pub fn find_session_by_command_id(&self, command_id: &str) -> Option<SessionMetadata> {
+        let session_id = self.inner.command_index.lock().get(command_id).cloned()?;
+        self.metadata(&session_id).ok()
     }
 
     fn runtime(&self, session_id: &str) -> Result<SessionRuntime> {
@@ -2043,3 +2104,5 @@ mod tests;
 mod unassigned_tests;
 #[cfg(test)]
 mod worktree_branch_tests;
+#[cfg(test)]
+mod sweep_tests;

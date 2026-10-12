@@ -144,7 +144,9 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the
         // existing `fan_out` → `WsRelaySink::emit` → WS frame → store pipeline.
-        "create_session" => handle_create_session(id, &req.payload, acp, registry).await,
+        "create_session" => {
+            handle_create_session(id, &req.payload, acp, registry, req.command_id.clone()).await
+        }
         "load_session" => handle_load_session(id, &req.payload, acp).await,
         "resume_session" => handle_resume_session(id, &req.payload, acp).await,
         "close_session" => handle_close_session(id, &req.payload, acp).await,
@@ -218,7 +220,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
             )
             .await
         }
-        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp).await,
+        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, req.command_id.clone()).await,
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
         // resolved `SupportedAcpAgentStatus`. The web client never probes

@@ -1329,3 +1329,34 @@ fn from_args_state_dir_sessions_dir_must_be_dir_if_exists() {
         "a <state-dir>/sessions FILE must fail fast like an explicit --sessions-dir file"
     );
 }
+
+#[test]
+fn a_receipt_retention_above_the_maximum_is_clamped_with_a_warning() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let cfg = ServerConfig::from_args(["--receipt-retention-secs", "18446744073709551615"])
+        .expect("parse");
+
+    assert_eq!(cfg.receipt_retention_secs, MAX_RECEIPT_RETENTION_SECS);
+    assert!(cfg
+        .deprecation_warnings
+        .iter()
+        .any(|warning| warning.contains("--receipt-retention-secs")));
+}
+
+#[test]
+fn a_later_receipt_retention_within_the_maximum_drops_the_clamp_warning() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let cfg = ServerConfig::from_args([
+        "--receipt-retention-secs",
+        "18446744073709551615",
+        "--receipt-retention-secs",
+        "120",
+    ])
+    .expect("parse");
+
+    assert_eq!(cfg.receipt_retention_secs, 120);
+    assert!(!cfg
+        .deprecation_warnings
+        .iter()
+        .any(|warning| warning.contains("--receipt-retention-secs")));
+}

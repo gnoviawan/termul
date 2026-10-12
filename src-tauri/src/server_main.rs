@@ -335,10 +335,12 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let ws_relay = Arc::new(WsRelaySink::with_persistence(
-            cfg.event_log_capacity,
-            Arc::clone(&persistence),
-        ));
+        let ws_relay = Arc::new(
+            WsRelaySink::with_persistence(cfg.event_log_capacity, Arc::clone(&persistence))
+                .with_ledger(termul_manager_lib::web::command_ledger::CommandLedger::new(
+                    Duration::from_secs(cfg.receipt_retention_secs),
+                )),
+        );
         let acp = Arc::new(AcpManager::with_persistence_and_claude_agent(
             vec![ws_relay.clone()],
             persistence,
@@ -771,9 +773,12 @@ OPTIONS:
                                   validates it but does not read it yet.
                                   [default: 15]
     --receipt-retention-secs <SECS>
-                                  How long a command receipt is retained.
-                                  Positive integer. Reserved: the host
-                                  validates it but does not read it yet.
+                                  How long the command ledger keeps a
+                                  command's outcome, so a resend after a lost
+                                  reply gets the original answer (bare command
+                                  ids are kept six times as long). Positive
+                                  integer; values above 604800 (7 days) are
+                                  clamped.
                                   [default: 600]
     --partition-gc-age-secs <SECS>
                                   Age after which an unused device partition

@@ -10,9 +10,10 @@ use std::sync::Arc;
 use agent_client_protocol::schema::v1::{
     ContentBlock, ListSessionsResponse, McpServer, SessionConfigOption, TextContent,
 };
+use serde_json::json;
 use tauri::State;
 
-use crate::acp::config::{require_config_id, AgentConfig, AgentId, SessionId};
+use crate::acp::config::{validate_spawn_config, AgentConfig, AgentId, SessionId};
 use crate::acp::manager::{
     AcpManager, AgentSummary, ConfigOptionValue, GatewayAuthInput, NewSessionOutcome,
     SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
@@ -20,6 +21,9 @@ use crate::acp::manager::{
 use crate::acp::session_persistence::{AgentSwitchRecord, SessionIndexEntry, SessionRegistration};
 use crate::web::prompt_turn::{run_prompt_turn, PromptReply, PromptTurnRequest};
 use crate::web::WsRelaySink;
+
+mod ledgered;
+pub use ledgered::run_ledgered;
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
 /// Returns the authoritative [`SpawnOutcome`] (capabilities + auth methods +
@@ -29,13 +33,30 @@ use crate::web::WsRelaySink;
 #[tauri::command]
 pub async fn acp_spawn_agent(
     manager: State<'_, Arc<AcpManager>>,
-    config: AgentConfig,
+    relay: State<'_, Arc<WsRelaySink>>,
+    mut config: AgentConfig,
+    command_id: Option<String>,
 ) -> Result<SpawnOutcome, String> {
-    // OQ1: reject an AgentConfig without a non-empty `configId` so the spawn
-    // path derives a stable `config:{config_id}` namespace (no fallback hash).
-    // Shared with the WS `spawn_agent` handler via `require_config_id`.
-    require_config_id(&config)?;
-    manager.spawn(config).await
+    // Shared with the WS `spawn_agent` handler: trim + non-empty
+    // name/command/`configId` (OQ1). A rejection carries the stable
+    // `ACP_INVALID_AGENT_CONFIG` prefix; a missing binary surfaces from the
+    // manager as `ACP_AGENT_UNAVAILABLE`. The renderer never auto-retries either.
+    validate_spawn_config(&mut config)?;
+    // `commandId` makes a resend after a lost reply answer with the original
+    // outcome (or the live agent stamped with it) instead of a second agent.
+    let payload = json!({ "config": &config });
+    let manager = Arc::clone(manager.inner());
+    let spawner = Arc::clone(&manager);
+    let stamp = command_id.clone();
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_spawn_agent",
+        command_id,
+        payload,
+        async move { spawner.spawn_with_command_id(config, stamp).await },
+    )
+    .await
 }
 
 /// Whether the host OS keychain currently holds a Factory Droid API key.
@@ -99,6 +120,7 @@ pub async fn acp_list_agent_details(
 #[allow(clippy::too_many_arguments)]
 pub async fn acp_new_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     cwd: String,
     mcp_servers: Option<Vec<McpServer>>,
@@ -108,79 +130,153 @@ pub async fn acp_new_session(
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
     additional_directories: Option<Vec<String>>,
+    command_id: Option<String>,
 ) -> Result<NewSessionOutcome, String> {
-    manager
-        .new_session_with_context(
-            &agent_id,
-            cwd,
-            mcp_servers.unwrap_or_default(),
-            SessionCreationContext {
-                project_id: project_id.filter(|id| !id.trim().is_empty()),
-                ephemeral: ephemeral.unwrap_or(false),
-                promotable: promotable.unwrap_or(false),
-                worktree_path: worktree_path.filter(|p| !p.trim().is_empty()),
-                worktree_branch: worktree_branch.filter(|b| !b.trim().is_empty()),
-                additional_directories: additional_directories.unwrap_or_default(),
-            },
-        )
-        .await
+    let mcp_servers = mcp_servers.unwrap_or_default();
+    // Normalize once: the fingerprinted value is the one the session is
+    // created with.
+    let project_id = project_id.filter(|id| !id.trim().is_empty());
+    let payload = json!({
+        "agentId": &agent_id,
+        "cwd": &cwd,
+        "projectId": &project_id,
+    });
+    let context = SessionCreationContext {
+        project_id,
+        ephemeral: ephemeral.unwrap_or(false),
+        promotable: promotable.unwrap_or(false),
+        worktree_path: worktree_path.filter(|p| !p.trim().is_empty()),
+        worktree_branch: worktree_branch.filter(|b| !b.trim().is_empty()),
+        additional_directories: additional_directories.unwrap_or_default(),
+        command_id: command_id.clone(),
+    };
+    let manager = Arc::clone(manager.inner());
+    let creator = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_new_session",
+        command_id,
+        payload,
+        async move {
+            creator
+                .new_session_with_context(&agent_id, cwd, mcp_servers, context)
+                .await
+        },
+    )
+    .await
 }
 
 /// Load an existing session (requires the agent's `loadSession` capability).
 #[tauri::command]
 pub async fn acp_load_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
     additional_directories: Option<Vec<String>>,
+    command_id: Option<String>,
 ) -> Result<SessionReopenOutcome, String> {
-    manager
-        .load_session(
-            &agent_id,
-            session_id,
-            cwd,
-            additional_directories.unwrap_or_default(),
-        )
-        .await
+    let payload = json!({
+        "agentId": &agent_id,
+        "sessionId": &session_id,
+        "cwd": &cwd,
+        "additionalDirectories": &additional_directories,
+    });
+    let manager = Arc::clone(manager.inner());
+    let opener = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_load_session",
+        command_id,
+        payload,
+        async move {
+            opener
+                .load_session(
+                    &agent_id,
+                    session_id,
+                    cwd,
+                    additional_directories.unwrap_or_default(),
+                )
+                .await
+        },
+    )
+    .await
 }
 
 /// Resume a session (requires the agent's `sessionCapabilities.resume`).
 #[tauri::command]
 pub async fn acp_resume_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
     additional_directories: Option<Vec<String>>,
+    command_id: Option<String>,
 ) -> Result<SessionReopenOutcome, String> {
-    manager
-        .resume_session(
-            &agent_id,
-            session_id,
-            cwd,
-            additional_directories.unwrap_or_default(),
-        )
-        .await
+    let payload = json!({
+        "agentId": &agent_id,
+        "sessionId": &session_id,
+        "cwd": &cwd,
+        "additionalDirectories": &additional_directories,
+    });
+    let manager = Arc::clone(manager.inner());
+    let opener = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_resume_session",
+        command_id,
+        payload,
+        async move {
+            opener
+                .resume_session(
+                    &agent_id,
+                    session_id,
+                    cwd,
+                    additional_directories.unwrap_or_default(),
+                )
+                .await
+        },
+    )
+    .await
 }
 
 /// Delete an agent-owned session (`session/delete`). Local history delete is separate.
 #[tauri::command]
 pub async fn acp_delete_agent_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     session_id: SessionId,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    match manager.delete_agent_session(&agent_id, session_id).await {
-        Ok(()) => {
-            log::info!("[acp] session/delete completed");
-            Ok(())
-        }
-        Err(error) => {
-            log::warn!("[acp] session/delete failed: {error}");
-            Err(error)
-        }
-    }
+    let payload = json!({ "agentId": &agent_id, "sessionId": &session_id });
+    let manager = Arc::clone(manager.inner());
+    let deleter = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_delete_agent_session",
+        command_id,
+        payload,
+        async move {
+            match deleter.delete_agent_session(&agent_id, session_id).await {
+                Ok(()) => {
+                    log::info!("[acp] session/delete completed");
+                    Ok(())
+                }
+                Err(error) => {
+                    log::warn!("[acp] session/delete failed: {error}");
+                    Err(error)
+                }
+            }
+        },
+    )
+    .await
 }
 
 /// Result of `codex login status`. `unavailable` means the `codex` binary
@@ -270,39 +366,82 @@ async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
 #[tauri::command]
 pub async fn acp_logout(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    match manager.logout(&agent_id).await {
-        Ok(()) => {
-            log::info!("[acp] logout completed for agent {agent_id}");
-            Ok(())
-        }
-        Err(error) => {
-            log::warn!("[acp] logout failed for agent {agent_id}: {error}");
-            Err(error)
-        }
-    }
+    let payload = json!({ "agentId": &agent_id });
+    let manager = Arc::clone(manager.inner());
+    let logger_out = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_logout",
+        command_id,
+        payload,
+        async move {
+            match logger_out.logout(&agent_id).await {
+                Ok(()) => {
+                    log::info!("[acp] logout completed for agent {agent_id}");
+                    Ok(())
+                }
+                Err(error) => {
+                    log::warn!("[acp] logout failed for agent {agent_id}: {error}");
+                    Err(error)
+                }
+            }
+        },
+    )
+    .await
 }
 
 /// Close a session (requires the agent's `sessionCapabilities.close`).
 #[tauri::command]
 pub async fn acp_close_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     session_id: SessionId,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    manager.close_session(&agent_id, session_id).await
+    let payload = json!({ "agentId": &agent_id, "sessionId": &session_id });
+    let manager = Arc::clone(manager.inner());
+    let closer = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_close_session",
+        command_id,
+        payload,
+        async move { closer.close_session(&agent_id, session_id).await },
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn acp_dispose_ephemeral_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     session_id: SessionId,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    manager
-        .dispose_ephemeral_session(&agent_id, session_id)
-        .await
+    let payload = json!({ "agentId": &agent_id, "sessionId": &session_id });
+    let manager = Arc::clone(manager.inner());
+    let disposer = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_dispose_ephemeral_session",
+        command_id,
+        payload,
+        async move {
+            disposer
+                .dispose_ephemeral_session(&agent_id, session_id)
+                .await
+        },
+    )
+    .await
 }
 
 /// Promote a backend-ephemeral warm-pool session to durable (story 8): the
@@ -312,10 +451,23 @@ pub async fn acp_dispose_ephemeral_session(
 #[tauri::command]
 pub async fn acp_promote_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     session_id: SessionId,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    manager.promote_session(&agent_id, session_id).await
+    let payload = json!({ "agentId": &agent_id, "sessionId": &session_id });
+    let manager = Arc::clone(manager.inner());
+    let promoter = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_promote_session",
+        command_id,
+        payload,
+        async move { promoter.promote_session(&agent_id, session_id).await },
+    )
+    .await
 }
 
 /// List sessions on an agent (requires `sessionCapabilities.list`).
@@ -332,8 +484,48 @@ pub async fn acp_list_sessions(
 
 /// Promote agent-owned discovered session metadata into host persistence.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_register_discovered_session(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
+    session_id: String,
+    agent_id: AgentId,
+    cwd: String,
+    title: Option<String>,
+    updated_at: Option<u64>,
+    project_id: Option<String>,
+    command_id: Option<String>,
+) -> Result<SessionIndexEntry, String> {
+    if session_id.trim().is_empty() || cwd.trim().is_empty() {
+        return Err("session id and cwd are required".to_string());
+    }
+    let payload = json!({
+        "sessionId": &session_id,
+        "agentId": &agent_id,
+        "cwd": &cwd,
+        "title": &title,
+        "updatedAt": updated_at,
+        "projectId": &project_id,
+    });
+    let manager = Arc::clone(manager.inner());
+    let registrar = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_register_discovered_session",
+        command_id,
+        payload,
+        async move {
+            register_discovered(&registrar, session_id, agent_id, cwd, title, updated_at, project_id)
+                .await
+        },
+    )
+    .await
+}
+
+/// The registration behind [`acp_register_discovered_session`].
+async fn register_discovered(
+    manager: &Arc<AcpManager>,
     session_id: String,
     agent_id: AgentId,
     cwd: String,
@@ -341,9 +533,6 @@ pub async fn acp_register_discovered_session(
     updated_at: Option<u64>,
     project_id: Option<String>,
 ) -> Result<SessionIndexEntry, String> {
-    if session_id.trim().is_empty() || cwd.trim().is_empty() {
-        return Err("session id and cwd are required".to_string());
-    }
     let persistence = manager
         .persistence()
         .ok_or_else(|| "session persistence unavailable".to_string())?;
@@ -472,13 +661,16 @@ pub(crate) async fn send_prompt_core(
 /// Boundary logging carries session ids + config ids only — never the
 /// summary text (it may quote user content).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_record_agent_switch(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     session_id: String,
     from_config_id: String,
     to_config_id: String,
     new_session_id: String,
     summary_text: String,
+    command_id: Option<String>,
 ) -> Result<(), String> {
     // Every identity field is required: a marker missing fromConfigId or
     // newSessionId is permanently unresolvable (CAP-7 reopen reads them).
@@ -491,6 +683,45 @@ pub async fn acp_record_agent_switch(
             "sessionId, fromConfigId, toConfigId, and newSessionId are required".to_string(),
         );
     }
+    // The summary text may quote user content: it is not fingerprinted.
+    let payload = json!({
+        "sessionId": &session_id,
+        "fromConfigId": &from_config_id,
+        "toConfigId": &to_config_id,
+        "newSessionId": &new_session_id,
+    });
+    let manager = Arc::clone(manager.inner());
+    let recorder = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_record_agent_switch",
+        command_id,
+        payload,
+        async move {
+            record_agent_switch(
+                &recorder,
+                session_id,
+                from_config_id,
+                to_config_id,
+                new_session_id,
+                summary_text,
+            )
+            .await
+        },
+    )
+    .await
+}
+
+/// The durable write behind [`acp_record_agent_switch`].
+async fn record_agent_switch(
+    manager: &Arc<AcpManager>,
+    session_id: String,
+    from_config_id: String,
+    to_config_id: String,
+    new_session_id: String,
+    summary_text: String,
+) -> Result<(), String> {
     // Not-found pre-check mirroring the WS route: surface an unknown session
     // BEFORE the durable write so the desktop error contract matches the web
     // path (the manager would otherwise return a generic write failure).
@@ -566,30 +797,61 @@ pub async fn acp_set_model(
 #[tauri::command]
 pub async fn acp_authenticate(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     method_id: String,
     gateway: Option<GatewayAuthInput>,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    manager.authenticate(&agent_id, method_id, gateway).await
+    // Credential-bearing (`gateway`): fingerprinted by agent + method only
+    // and receipt-only in the ledger.
+    let payload = json!({ "agentId": &agent_id, "methodId": &method_id });
+    let manager = Arc::clone(manager.inner());
+    let authenticator = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_authenticate",
+        command_id,
+        payload,
+        async move { authenticator.authenticate(&agent_id, method_id, gateway).await },
+    )
+    .await
 }
 
 /// Complete a pending elicitation form or URL prompt.
 #[tauri::command]
 pub async fn acp_respond_elicitation(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     request_id: String,
     action: String,
     content: Option<serde_json::Map<String, serde_json::Value>>,
+    command_id: Option<String>,
 ) -> Result<(), String> {
-    match manager
-        .respond_elicitation(&agent_id, request_id, action, content)
-        .await
-    {
-        Ok(()) => Ok(()),
-        Err(e) if e.starts_with("unknown elicitation request") => Ok(()),
-        Err(e) => Err(e),
-    }
+    // The answer (`content`) may hold secrets: receipt-only, never fingerprinted.
+    let payload = json!({ "agentId": &agent_id, "requestId": &request_id, "action": &action });
+    let manager = Arc::clone(manager.inner());
+    let responder = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_respond_elicitation",
+        command_id,
+        payload,
+        async move {
+            match responder
+                .respond_elicitation(&agent_id, request_id, action, content)
+                .await
+            {
+                Ok(()) => Ok(()),
+                Err(e) if e.starts_with("unknown elicitation request") => Ok(()),
+                Err(e) => Err(e),
+            }
+        },
+    )
+    .await
 }
 
 /// Replay a user-pasted loopback OAuth redirect against the agent's own
@@ -604,10 +866,24 @@ pub async fn acp_respond_elicitation(
 #[tauri::command]
 pub async fn acp_auth_deliver_redirect(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
     agent_id: AgentId,
     url: String,
+    command_id: Option<String>,
 ) -> Result<u16, String> {
-    manager.deliver_auth_redirect(&agent_id, url).await
+    // The redirect URL carries the auth code: receipt-only, never fingerprinted.
+    let payload = json!({ "agentId": &agent_id });
+    let manager = Arc::clone(manager.inner());
+    let deliverer = Arc::clone(&manager);
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_auth_deliver_redirect",
+        command_id,
+        payload,
+        async move { deliverer.deliver_auth_redirect(&agent_id, url).await },
+    )
+    .await
 }
 
 /// Respond to a pending permission request. `optionId == None` cancels it.
@@ -777,6 +1053,29 @@ pub async fn acp_set_catalog_opt_in(
 pub async fn acp_install_agent(
     request: serde_json::Value,
     store: State<'_, crate::commands::HostAcpInstallStore>,
+    manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<WsRelaySink>>,
+    command_id: Option<String>,
+) -> Result<crate::commands::IpcResult<crate::acp::install::InstallOutcome>, String> {
+    // `{ agentId }` only (unknown fields are refused): safe to fingerprint.
+    let payload = request.clone();
+    let service = store.store().map(Arc::clone);
+    let manager = Arc::clone(manager.inner());
+    run_ledgered(
+        relay.inner(),
+        &manager,
+        "acp_install_agent",
+        command_id,
+        payload,
+        install_agent(request, service),
+    )
+    .await
+}
+
+/// The install behind [`acp_install_agent`].
+async fn install_agent(
+    request: serde_json::Value,
+    service: Option<Arc<crate::acp::install::AcpInstallService>>,
 ) -> Result<crate::commands::IpcResult<crate::acp::install::InstallOutcome>, String> {
     let request: crate::acp::install::InstallRequest = match serde_json::from_value(request) {
         Ok(req) => req,
@@ -797,7 +1096,7 @@ pub async fn acp_install_agent(
         crate::logging::run_id(),
         agent_id_log
     );
-    let Some(service) = store.store().map(std::sync::Arc::clone) else {
+    let Some(service) = service else {
         log::warn!(
             "[acp-install] {} install_agent unavailable (no host store)",
             crate::logging::run_id()

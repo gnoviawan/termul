@@ -374,3 +374,240 @@ async fn record_agent_switch_unknown_session_fails_closed() {
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+// ---------------------------------------------------------------------------
+// Shared admission for the `acp_*` commands (`run_ledgered`)
+// ---------------------------------------------------------------------------
+
+mod ledgered {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::acp::commands::run_ledgered;
+
+    fn host() -> (Arc<WsRelaySink>, Arc<AcpManager>) {
+        (
+            Arc::new(WsRelaySink::new()),
+            Arc::new(AcpManager::new(vec![])),
+        )
+    }
+
+    /// Run `command` with `command_id` and a body that counts its executions.
+    async fn run<T>(
+        host: &(Arc<WsRelaySink>, Arc<AcpManager>),
+        command: &'static str,
+        command_id: Option<&str>,
+        payload: serde_json::Value,
+        runs: &Arc<AtomicUsize>,
+        result: Result<T, String>,
+    ) -> Result<T, String>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static,
+    {
+        let runs = Arc::clone(runs);
+        run_ledgered(
+            &host.0,
+            &host.1,
+            command,
+            command_id.map(str::to_string),
+            payload,
+            async move {
+                runs.fetch_add(1, Ordering::SeqCst);
+                result
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_resend_with_the_same_command_id_replays_the_outcome_without_running_again() {
+        let host = host();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let payload = json!({"agentId": "a", "sessionId": "s"});
+
+        let first = run(&host, "acp_close_session", Some("cmd-1"), payload.clone(), &runs, Ok(())).await;
+        let again = run(&host, "acp_close_session", Some("cmd-1"), payload, &runs, Ok(())).await;
+
+        assert_eq!(first, Ok(()));
+        assert_eq!(again, Ok(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_rejection_replays_as_the_same_error_and_a_reused_id_for_another_request_conflicts() {
+        let host = host();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let payload = json!({"agentId": "a", "sessionId": "s"});
+
+        let refused: Result<(), String> = run(
+            &host,
+            "acp_close_session",
+            Some("cmd-1"),
+            payload.clone(),
+            &runs,
+            Err("unknown agent: a".to_string()),
+        )
+        .await;
+        let replay = run(&host, "acp_close_session", Some("cmd-1"), payload, &runs, Ok(())).await;
+        let conflict = run(
+            &host,
+            "acp_close_session",
+            Some("cmd-1"),
+            json!({"agentId": "a", "sessionId": "other"}),
+            &runs,
+            Ok(()),
+        )
+        .await;
+
+        assert_eq!(refused, Err("unknown agent: a".to_string()));
+        assert_eq!(replay, Err("unknown agent: a".to_string()));
+        assert!(conflict.unwrap_err().starts_with("command_conflict"));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_command_without_an_id_runs_every_time_and_a_malformed_id_runs_nothing() {
+        let host = host();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let payload = json!({"agentId": "a", "sessionId": "s"});
+
+        for _ in 0..2 {
+            let ok = run(&host, "acp_close_session", None, payload.clone(), &runs, Ok(())).await;
+            assert_eq!(ok, Ok(()));
+        }
+        let malformed = run(&host, "acp_close_session", Some("not valid!"), payload, &runs, Ok(())).await;
+
+        assert!(malformed.unwrap_err().starts_with("invalid_command_id"));
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "only the id-less runs executed");
+        assert_eq!(host.0.ledger().counts(), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn an_idempotent_command_is_validated_but_never_ledgered() {
+        let host = host();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let payload = json!({"agentId": "a"});
+
+        for _ in 0..2 {
+            let ok = run(&host, "acp_logout", Some("cmd-1"), payload.clone(), &runs, Ok(())).await;
+            assert_eq!(ok, Ok(()));
+        }
+
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        assert_eq!(host.0.ledger().counts(), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn a_receipt_only_command_replays_as_accepted_when_its_result_is_not_retained() {
+        let host = host();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let payload = json!({"agentId": "a"});
+
+        // A status-returning body: nothing stored, so nothing to rebuild it from.
+        let first = run(&host, "acp_auth_deliver_redirect", Some("cmd-1"), payload.clone(), &runs, Ok(200u16)).await;
+        let replay = run(&host, "acp_auth_deliver_redirect", Some("cmd-1"), payload.clone(), &runs, Ok(200u16)).await;
+        assert_eq!(first, Ok(200));
+        assert!(replay.unwrap_err().starts_with("command_accepted"));
+
+        // A unit-returning body replays as the plain success it was.
+        let unit_payload = json!({"agentId": "a", "methodId": "oauth"});
+        let first = run(&host, "acp_authenticate", Some("cmd-2"), unit_payload.clone(), &runs, Ok(())).await;
+        let replay = run(&host, "acp_authenticate", Some("cmd-2"), unit_payload, &runs, Ok(())).await;
+        assert_eq!((first, replay), (Ok(()), Ok(())));
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "each command ran once");
+    }
+
+    #[tokio::test]
+    async fn a_struct_reply_over_the_storage_cap_replays_as_accepted() {
+        let host = host();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let payload = json!({"agentId": "a"});
+        let big = || {
+            Ok(crate::commands::IpcResult::success(crate::acp::install::InstallOutcome {
+                command: "bin".to_string(),
+                args: vec!["x".repeat(40 * 1024)],
+            }))
+        };
+
+        let first = run(&host, "acp_install_agent", Some("cmd-1"), payload.clone(), &runs, big()).await;
+        let replay = run(&host, "acp_install_agent", Some("cmd-1"), payload, &runs, big()).await;
+
+        assert!(first.unwrap().success);
+        assert!(replay.unwrap_err().starts_with("command_accepted"));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_create_returning_a_struct_replays_equal_through_the_serde_round_trip() {
+        let host = host();
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        let session = || -> crate::acp::manager::NewSessionOutcome {
+            serde_json::from_value(json!({
+                "sessionId": "mock-1",
+                "models": {"currentModelId": "m1", "availableModels": [{"modelId": "m1", "name": "M1"}]},
+            }))
+            .unwrap()
+        };
+        let payload = json!({"agentId": "a", "cwd": "/work"});
+        let first = run(&host, "acp_new_session", Some("cmd-new"), payload.clone(), &runs, Ok(session())).await.unwrap();
+        let replay = run(&host, "acp_new_session", Some("cmd-new"), payload, &runs, Ok(session())).await.unwrap();
+        assert_eq!(serde_json::to_value(&first).unwrap(), serde_json::to_value(&replay).unwrap());
+
+        let spawn = || -> crate::acp::manager::SpawnOutcome {
+            serde_json::from_value(json!({
+                "agentId": "agent-1",
+                "capabilities": {"loadSession": true},
+                "authMethods": [{"id": "oauth", "name": "OAuth", "type": "agent"}],
+                "hostAuthReady": true,
+                "stableNamespace": "config:mock",
+            }))
+            .unwrap()
+        };
+        let payload = json!({"config": {"name": "n", "command": "c", "configId": "mock"}});
+        let first = run(&host, "acp_spawn_agent", Some("cmd-spawn"), payload.clone(), &runs, Ok(spawn())).await.unwrap();
+        let replay = run(&host, "acp_spawn_agent", Some("cmd-spawn"), payload, &runs, Ok(spawn())).await.unwrap();
+        assert_eq!(serde_json::to_value(&first).unwrap(), serde_json::to_value(&replay).unwrap());
+        assert_eq!(replay.auth_methods.len(), 1);
+        assert!(replay.host_auth_ready);
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "each create ran once");
+    }
+
+    /// `value` -> typed -> JSON -> typed -> JSON is stable: nothing the
+    /// ledger stores is lost or reshaped by the round trip.
+    fn assert_round_trips<T: serde::Serialize + serde::de::DeserializeOwned>(value: serde_json::Value) {
+        let once: T = serde_json::from_value(value).unwrap();
+        let json = serde_json::to_value(&once).unwrap();
+        let twice: T = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&twice).unwrap(), json);
+    }
+
+    #[test]
+    fn the_replayed_reply_types_survive_a_serde_round_trip() {
+        let models = json!({"currentModelId": "m1", "availableModels": [{"modelId": "m1", "name": "M1", "description": "d"}]});
+        let modes = json!({"currentModeId": "ask", "availableModes": [{"id": "ask", "name": "Ask"}]});
+        assert_round_trips::<crate::acp::manager::SpawnOutcome>(json!({
+            "agentId": "agent-1",
+            "capabilities": {"loadSession": true},
+            "authMethods": [
+                {"id": "a", "name": "A", "type": "terminal", "args": ["login"], "env": {"K": "v"}},
+                {"id": "b", "name": "B", "description": "d", "type": "agent"},
+            ],
+            "hostAuthReady": false,
+        }));
+        assert_round_trips::<crate::acp::manager::NewSessionOutcome>(json!({
+            "sessionId": "s1", "modes": modes, "models": models,
+        }));
+        assert_round_trips::<crate::acp::manager::SessionReopenOutcome>(json!({
+            "modes": modes, "models": models,
+        }));
+        assert_round_trips::<crate::commands::IpcResult<crate::acp::install::InstallOutcome>>(json!({
+            "success": true, "data": {"command": "/bin/x", "args": ["--a"]},
+        }));
+        assert_round_trips::<crate::commands::IpcResult<crate::acp::install::InstallOutcome>>(json!({
+            "success": false, "error": "boom", "code": "INSTALL_FAILED",
+        }));
+    }
+}

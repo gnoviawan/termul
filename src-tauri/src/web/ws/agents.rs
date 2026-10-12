@@ -27,6 +27,7 @@ pub(super) async fn handle_spawn_agent(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
+    command_id: Option<String>,
 ) -> WsReply {
     let mut parsed: SpawnAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -38,30 +39,11 @@ pub(super) async fn handle_spawn_agent(
             )
         }
     };
-    // Mirror desktop `validateAgentConfig`: trim + require non-empty name/command.
-    parsed.config.name = parsed.config.name.trim().to_string();
-    parsed.config.command = parsed.config.command.trim().to_string();
-    if parsed.config.name.is_empty() {
-        return WsReply::err(
-            id,
-            WsErrorCode::Unsupported,
-            "spawn_agent requires a non-empty `config.name`",
-        );
+    // Shared with Tauri `acp_spawn_agent`: trim + non-empty name/command/configId.
+    if let Err(e) = crate::acp::config::validate_spawn_config(&mut parsed.config) {
+        return acp_err_to_reply(id, e);
     }
-    if parsed.config.command.is_empty() {
-        return WsReply::err(
-            id,
-            WsErrorCode::Unsupported,
-            "spawn_agent requires a non-empty `config.command`",
-        );
-    }
-    // OQ1: require a non-empty `config.configId` (mirrors `acp_spawn_agent`)
-    // so the spawn path derives a stable `config:{config_id}` namespace on web
-    // too. Shared guard lives in `acp::config::require_config_id`.
-    if let Err(msg) = crate::acp::config::require_config_id(&parsed.config) {
-        return WsReply::err(id, WsErrorCode::Unsupported, msg);
-    }
-    match acp.spawn(parsed.config).await {
+    match acp.spawn_with_command_id(parsed.config, command_id).await {
         Ok(outcome) => ok_with_payload(id, &outcome),
         Err(e) => acp_err_to_reply(id, e),
     }

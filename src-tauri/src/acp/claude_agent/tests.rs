@@ -574,7 +574,7 @@ async fn api_key_is_injected_only_for_the_managed_claude_install() {
             .prepare_managed_config(&mut managed)
             .await
             .unwrap_err(),
-        "Claude Agent ACP requires Node.js 22 or newer."
+        "ACP_AGENT_UNAVAILABLE: Claude Agent ACP requires Node.js 22 or newer."
     );
     let cli_service = ClaudeAgentService::with_adapters(
         Arc::clone(&store),

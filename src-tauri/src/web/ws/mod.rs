@@ -65,6 +65,7 @@ use crate::web::store::WebStore;
 
 mod access;
 mod agents;
+mod commands;
 mod dispatch;
 mod lifecycle;
 mod projects;
@@ -80,6 +81,7 @@ mod watch;
 // for `tests.rs`' `use super::*` without widening visibility past `ws`.
 use access::*;
 use agents::*;
+use commands::*;
 use dispatch::*;
 use lifecycle::*;
 use projects::*;
@@ -274,8 +276,10 @@ pub struct WsRequest {
     /// Request payload (shape depends on `type`).
     #[serde(default = "Value::default")]
     pub payload: Value,
-    /// Client-minted command id for a mutating request. The field name is
-    /// fixed here; dispatch ignores it until the command/receipt work lands.
+    /// Client-minted command id for a mutating request (1-128 characters of
+    /// `[A-Za-z0-9_-]`). Ledgered commands are recorded under it before they
+    /// run; `send_prompt`'s `turnId` is its command id. A request without one
+    /// keeps the pre-receipt behavior.
     #[serde(default)]
     pub command_id: Option<String>,
 }
@@ -293,8 +297,9 @@ pub struct WsReply {
     /// Failure detail (omitted on success).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub err: Option<WsError>,
-    /// Receipt visibility marker (watch revision or log seq). The field name
-    /// is fixed here; its semantics belong to the command/receipt work.
+    /// Receipt visibility marker: the session log seq the effect is visible
+    /// at, set on ok replies of session-scoped commands (other replies omit
+    /// it until watch revisions exist).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visible_at: Option<Value>,
 }
@@ -400,9 +405,8 @@ pub enum WsErrorCode {
     /// to the project are live. Handler behavior lands with the project
     /// registry work.
     ProjectBusy,
-    /// Reserved: a command resend found no stored outcome (evicted ledger
-    /// entry); the command is never re-executed. Handler behavior lands with
-    /// the command ledger work.
+    /// A command resend found no stored outcome (evicted ledger entry,
+    /// interrupted handler); the command is never re-executed (AD-5).
     OutcomeUnknown,
     /// Reserved: branch switch / worktree removal refused while a session
     /// with its cwd inside the target path has an active turn.
@@ -423,6 +427,19 @@ pub enum WsErrorCode {
     /// disconnect deny). Tombstones are bounded: an older ticket reads
     /// `stale`.
     AlreadyResolved,
+    /// A spawn failed deterministically: the agent binary is missing, not
+    /// installed, or cannot start (AD-5). Definite — never retried
+    /// automatically.
+    AgentUnavailable,
+    /// A spawn named an unusable agent config: empty name, command or
+    /// `configId` (AD-5). Definite — never retried automatically.
+    InvalidAgentConfig,
+    /// A `commandId` was resent with a different request than the one it was
+    /// first used for (AD-5). Never replayed, never executed.
+    CommandConflict,
+    /// A request's `commandId` is malformed: not 1-128 characters of
+    /// `[A-Za-z0-9_-]`.
+    InvalidCommandId,
 }
 
 impl WsErrorCode {
@@ -452,6 +469,10 @@ impl WsErrorCode {
             Self::ProviderRequestRejected => "provider_request_rejected",
             Self::Forbidden => "forbidden",
             Self::AlreadyResolved => "already_resolved",
+            Self::AgentUnavailable => "agent_unavailable",
+            Self::InvalidAgentConfig => "invalid_agent_config",
+            Self::CommandConflict => "command_conflict",
+            Self::InvalidCommandId => "invalid_command_id",
         }
     }
 }
@@ -689,6 +710,17 @@ pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
     if let Some(code) = map_prompt_error_code(&err) {
         return WsReply::err(id, code, err);
     }
+    // AD-5 deterministic spawn rejections: the stable code carries the verdict,
+    // so the message drops the manager's transport prefix.
+    if let Some((failure, message)) = crate::acp::manager::classify_spawn_error(&err) {
+        let code = match failure {
+            crate::acp::manager::SpawnFailure::AgentUnavailable => WsErrorCode::AgentUnavailable,
+            crate::acp::manager::SpawnFailure::InvalidAgentConfig => {
+                WsErrorCode::InvalidAgentConfig
+            }
+        };
+        return WsReply::err(id, code, message.to_string());
+    }
     // Issue #837 split-brain guard: the manager tags a rejected reopen with
     // `ACP_SESSION_OWNED_BY_OTHER` when the session belongs to a different
     // live agent mid-turn.
@@ -728,6 +760,8 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
 mod capability_tests;
 #[cfg(test)]
 mod project_binding_tests;
+#[cfg(test)]
+mod spawn_rejection_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

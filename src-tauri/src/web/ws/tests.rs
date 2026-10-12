@@ -2252,7 +2252,7 @@ fn handle_spawn_agent_rejects_empty_command() {
         &mut authed,
     );
     assert!(!reply.ok);
-    assert_eq!(reply.err.unwrap().code, "unsupported");
+    assert_eq!(reply.err.unwrap().code, "invalid_agent_config");
 }
 
 /// OQ1: `spawn_agent` rejects a config without a non-empty `configId`
@@ -2268,7 +2268,7 @@ fn handle_spawn_agent_rejects_missing_config_id() {
     );
     assert!(!reply.ok, "missing configId must fail");
     let err = reply.err.expect("err present on failure");
-    assert_eq!(err.code, "unsupported");
+    assert_eq!(err.code, "invalid_agent_config");
     assert!(
         err.message.contains("configId"),
         "err message should mention configId, got: {err:?}"

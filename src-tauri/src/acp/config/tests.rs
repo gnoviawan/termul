@@ -22,12 +22,12 @@ fn session_id_roundtrips_through_protocol_type() {
     assert_eq!(original, back);
 }
 
-/// OQ1: the shared `require_config_id` guard — rejects `None`, empty, and
+/// OQ1: the shared `validate_spawn_config` guard — rejects `None`, empty, and
 /// whitespace-only configId so the spawn path never falls back to the
 /// name+command hash for namespace derivation.
 #[test]
-fn require_config_id_rejects_missing() {
-    let config = AgentConfig {
+fn validate_spawn_config_rejects_missing() {
+    let mut config = AgentConfig {
         config_id: None,
         name: "H".to_string(),
         command: "node".to_string(),
@@ -35,7 +35,7 @@ fn require_config_id_rejects_missing() {
         env: HashMap::new(),
         allow_terminal: false,
     };
-    let err = require_config_id(&config).expect_err("None configId must be rejected");
+    let err = validate_spawn_config(&mut config).expect_err("None configId must be rejected");
     assert!(
         err.contains("configId"),
         "err should mention configId: {err}"
@@ -43,9 +43,9 @@ fn require_config_id_rejects_missing() {
 }
 
 #[test]
-fn require_config_id_rejects_empty() {
+fn validate_spawn_config_rejects_empty() {
     for bad in ["", "   ", "\t"] {
-        let config = AgentConfig {
+        let mut config = AgentConfig {
             config_id: Some(bad.to_string()),
             name: "H".to_string(),
             command: "node".to_string(),
@@ -53,13 +53,13 @@ fn require_config_id_rejects_empty() {
             env: HashMap::new(),
             allow_terminal: false,
         };
-        require_config_id(&config).expect_err("empty/whitespace configId must be rejected");
+        validate_spawn_config(&mut config).expect_err("empty/whitespace configId must be rejected");
     }
 }
 
 #[test]
-fn require_config_id_accepts_present() {
-    let config = AgentConfig {
+fn validate_spawn_config_accepts_present() {
+    let mut config = AgentConfig {
         config_id: Some("custom-abc".to_string()),
         name: "H".to_string(),
         command: "node".to_string(),
@@ -67,7 +67,38 @@ fn require_config_id_accepts_present() {
         env: HashMap::new(),
         allow_terminal: false,
     };
-    require_config_id(&config).expect("a non-empty configId must pass the guard");
+    validate_spawn_config(&mut config).expect("a non-empty configId must pass the guard");
+}
+
+/// A definite config rejection carries the stable `ACP_INVALID_AGENT_CONFIG`
+/// tag, and the guard trims `name`/`command` like the renderer's
+/// `validateAgentConfig`.
+#[test]
+fn validate_spawn_config_tags_blank_name_and_command_and_trims() {
+    let base = AgentConfig {
+        config_id: Some("custom-abc".to_string()),
+        name: "  H  ".to_string(),
+        command: " node ".to_string(),
+        args: vec![],
+        env: HashMap::new(),
+        allow_terminal: false,
+    };
+    let mut trimmed = base.clone();
+    validate_spawn_config(&mut trimmed).expect("padded name/command are valid");
+    assert_eq!((trimmed.name.as_str(), trimmed.command.as_str()), ("H", "node"));
+
+    for (name, command) in [("  ", "node"), ("H", " \t")] {
+        let mut config = AgentConfig {
+            name: name.to_string(),
+            command: command.to_string(),
+            ..base.clone()
+        };
+        let err = validate_spawn_config(&mut config).expect_err("blank field must be rejected");
+        assert!(
+            err.starts_with(crate::acp::manager::ACP_INVALID_AGENT_CONFIG),
+            "untagged rejection: {err}"
+        );
+    }
 }
 
 /// OQ3: `deny_unknown_fields` on `AgentConfig` rejects extra fields at the

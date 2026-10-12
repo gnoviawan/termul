@@ -50,6 +50,7 @@ pub(super) async fn handle_create_session(
     payload: &Value,
     acp: &Arc<AcpManager>,
     registry: &Arc<ProjectRegistry>,
+    command_id: Option<String>,
 ) -> WsReply {
     let parsed: CreateSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -99,6 +100,7 @@ pub(super) async fn handle_create_session(
                 ephemeral: parsed.ephemeral,
                 promotable: parsed.promotable,
                 additional_directories: parsed.additional_directories,
+                command_id,
                 ..Default::default()
             },
         )

@@ -238,7 +238,15 @@ pub(in crate::web::ws) async fn dispatch_connection_text(
 /// acceptance is not held for the whole turn.
 async fn run_request(request: WsRequest, env: HandlerEnv) {
     if request.type_ == "send_prompt" {
-        match accept_send_prompt(request.id, &request.payload, &env.acp, &env.relay).await {
+        // `turnId` is the prompt's commandId; `TurnWatermark` is its ledger.
+        let payload = match prompt_payload_with_turn_id(&request) {
+            Ok(payload) => payload,
+            Err(reply) => {
+                env.out_tx.reply(reply).await;
+                return;
+            }
+        };
+        match accept_send_prompt(request.id, &payload, &env.acp, &env.relay).await {
             Ok(accepted) => {
                 let acp = Arc::clone(&env.acp);
                 let out_tx = env.out_tx;
@@ -253,7 +261,9 @@ async fn run_request(request: WsRequest, env: HandlerEnv) {
         }
         return;
     }
-    let reply = route_request(request, &env).await;
+    // The single admission site: a `commandId` is recorded before the
+    // handler runs (after the capability check the read loop already made).
+    let reply = execute_request(request, &env).await;
     env.out_tx.reply(reply).await;
 }
 

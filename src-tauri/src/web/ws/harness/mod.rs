@@ -15,6 +15,8 @@ pub(crate) mod raw_client;
 #[cfg(test)]
 mod relay_execution_tests;
 #[cfg(test)]
+mod relay_command_tests;
+#[cfg(test)]
 mod relay_fault_tests;
 #[cfg(test)]
 mod relay_liveness_tests;
@@ -52,6 +54,16 @@ impl Host {
         relay.seed_session_for_test(SESSION);
         let acp = Arc::new(AcpManager::new(vec![relay.clone()]));
         install(&acp, HashSet::from([SESSION.to_string()]));
+        Self::from_parts(relay, acp, HistoryMode::LiveOnly)
+    }
+
+    /// A host over an existing relay + manager (tests that build their own,
+    /// e.g. with durable persistence or an injected ledger clock).
+    pub(crate) fn from_parts(
+        relay: Arc<WsRelaySink>,
+        acp: Arc<AcpManager>,
+        history_mode: HistoryMode,
+    ) -> Self {
         let pty = crate::web::test_pty_manager();
         let state = AppState {
             acp: Arc::clone(&acp),
@@ -64,7 +76,7 @@ impl Host {
             registry: Arc::new(ProjectRegistry::new()),
             registry_persistence: None,
             projects_file: None,
-            history_mode: HistoryMode::LiveOnly,
+            history_mode,
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,

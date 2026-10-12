@@ -234,11 +234,89 @@ export const WS_REQUEST_TYPES = [
   // unknown/archived project → `not_found`; `unwatch_project` is idempotent
   // (always ok for a well-formed request).
   'watch_project',
-  'unwatch_project'
+  'unwatch_project',
+  // Explicit host-default project change (updates `default_project_id`,
+  // persists on file-backed hosts, broadcasts `projects_changed`).
+  'set_default_project'
 ] as const
 
 /** Union of all WS request `type` strings. */
 export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
+
+/** How the host's receipt ledger treats a request type. Mirrors the Rust `ClassKind`. */
+export type WsCommandKind = 'create' | 'command' | 'idempotent' | 'read'
+
+/**
+ * How a settled command is answered on a same-id resend: `payload` replays the
+ * stored reply, `entity` rebuilds it from the entity stamped with the
+ * `commandId` (`send_prompt`: its `turnId` is its `commandId`), `receipt-only`
+ * never stores a payload (credential-bearing kinds). `null` for `idempotent`
+ * and `read`. Mirrors the Rust `Replay`.
+ */
+export type WsCommandReplay = 'payload' | 'entity' | 'receipt-only'
+
+/**
+ * The command class of every `/ws` request type — mirrors the Rust
+ * `WS_COMMAND_CLASSES` table row for row (pinned by the Rust
+ * `command_ledger::class_tests` parity test). `create` and `command` mint a
+ * `commandId`; `idempotent` and `read` never need one.
+ */
+export const WS_COMMAND_CLASSES: Readonly<
+  Record<WsRequestType, readonly [WsCommandKind, WsCommandReplay | null]>
+> = {
+  send_prompt: ['command', 'entity'],
+  cancel_prompt: ['idempotent', null],
+  set_config_option: ['idempotent', null],
+  set_mode: ['idempotent', null],
+  set_model: ['idempotent', null],
+  respond_permission: ['command', 'payload'],
+  answer_question: ['command', 'payload'],
+  create_session: ['create', 'entity'],
+  load_session: ['command', 'payload'],
+  resume_session: ['command', 'payload'],
+  close_session: ['command', 'payload'],
+  dispose_ephemeral_session: ['command', 'payload'],
+  promote_session: ['command', 'payload'],
+  list_sessions: ['read', null],
+  register_discovered_session: ['command', 'payload'],
+  spawn_agent: ['create', 'entity'],
+  kill_agent: ['idempotent', null],
+  list_agents: ['read', null],
+  authenticate: ['read', null],
+  authenticate_agent: ['command', 'receipt-only'],
+  logout_agent: ['idempotent', null],
+  delete_agent_session: ['idempotent', null],
+  respond_elicitation: ['command', 'receipt-only'],
+  subscribe: ['read', null],
+  ping: ['read', null],
+  list_persisted_sessions: ['read', null],
+  delete_session: ['idempotent', null],
+  open_persisted_session: ['read', null],
+  get_session_payload: ['read', null],
+  recover_session_snapshot: ['read', null],
+  get_session_cursor: ['read', null],
+  get_session_payload_tail: ['read', null],
+  list_acp_catalog: ['read', null],
+  set_catalog_opt_in: ['idempotent', null],
+  install_acp_agent: ['command', 'payload'],
+  acp_deliver_auth_redirect: ['command', 'receipt-only'],
+  store_read: ['read', null],
+  store_write: ['idempotent', null],
+  store_delete: ['idempotent', null],
+  add_project: ['idempotent', null],
+  update_project: ['idempotent', null],
+  remove_project: ['idempotent', null],
+  set_default_project: ['idempotent', null],
+  record_agent_switch: ['command', 'payload'],
+  watch_project: ['read', null],
+  unwatch_project: ['read', null]
+}
+
+/** Longest accepted `commandId`, in bytes. Mirrors the Rust `MAX_COMMAND_ID_LEN`. */
+export const MAX_COMMAND_ID_LEN = 128
+
+/** A well-formed `commandId`: 1-128 characters of `[A-Za-z0-9_-]`. */
+export const COMMAND_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 
 // ============================================================================
 // Session history lifecycle (CAP-11) — request payloads + reply contracts
@@ -407,7 +485,8 @@ export const WS_ERROR_CODES = {
   TERMINAL_LIMIT: 'terminal_limit',
   // Project remove/archive refused while bound sessions/PTYs are live.
   PROJECT_BUSY: 'project_busy',
-  // A command resend found no stored outcome; never re-executed.
+  // A command resend found no stored outcome (evicted ledger entry or an
+  // interrupted handler); never re-executed.
   OUTCOME_UNKNOWN: 'outcome_unknown',
   // Branch switch / worktree removal refused while a session in the target
   // path has an active turn.
@@ -423,7 +502,18 @@ export const WS_ERROR_CODES = {
   FORBIDDEN: 'forbidden',
   // respond_permission / answer_question named a ticket that was already
   // resolved (bounded tombstones; an older ticket reads `stale`).
-  ALREADY_RESOLVED: 'already_resolved'
+  ALREADY_RESOLVED: 'already_resolved',
+  // Spawn rejected deterministically: the agent binary is missing, not
+  // installed, or cannot start. Definite (AD-5): never auto-retried.
+  AGENT_UNAVAILABLE: 'agent_unavailable',
+  // Spawn rejected deterministically: empty/invalid agent name, command or
+  // configId. Definite (AD-5): never auto-retried.
+  INVALID_AGENT_CONFIG: 'invalid_agent_config',
+  // A `commandId` was resent with a different request than it was first used
+  // for. Never replayed, never executed.
+  COMMAND_CONFLICT: 'command_conflict',
+  // A request's `commandId` is malformed (not 1-128 chars of [A-Za-z0-9_-]).
+  INVALID_COMMAND_ID: 'invalid_command_id'
 } as const
 
 /** Union of all WS error code strings. */
