@@ -1478,7 +1478,9 @@ export class WsAcpTransport implements AcpTransport {
           }
         }
       }
-      await this.rewatchProjects()
+      // Off the critical path: a slow or failing watch re-request must never
+      // delay or fail the reconnect (it handles its own errors).
+      void this.rewatchProjects()
       if (obsoleteSessions.length > 0) {
         void logFrontendError({
           level: 'warn',
@@ -1526,24 +1528,31 @@ export class WsAcpTransport implements AcpTransport {
 
   /**
    * The host keeps no watch state across connections, so re-request every
-   * project watch on the fresh socket. A project the host no longer has is
-   * dropped; any other failure is logged and does not fail the reconnect.
+   * project watch on the fresh socket, in parallel and each bounded by the
+   * resubscribe timeout. A watch the host refuses (project archived/removed
+   * while disconnected) or cannot confirm in time is dropped here AND reported
+   * to listeners as a local `fs_watch_ended`, so the filesystem facade forgets
+   * it and re-requests on its next `watchDirectory` instead of believing it is
+   * live. If the socket itself died, the watches are kept for the next
+   * reconnect pass. Never rejects.
    */
   private async rewatchProjects(): Promise<void> {
-    for (const projectId of [...this.watchedProjects]) {
-      try {
-        await this.request('watch_project', { projectId })
-      } catch (error) {
-        if (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.NOT_FOUND) {
+    await Promise.all(
+      [...this.watchedProjects].map(async (projectId) => {
+        try {
+          await this.request('watch_project', { projectId }, RESUBSCRIBE_TIMEOUT_MS)
+        } catch (error) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'WsAcpTransport.rewatchProjects',
+            message: `Re-watching project ${projectId} after reconnect failed: ${String(error)}`
+          })
+          if (!this.isSocketLive()) return
           this.watchedProjects.delete(projectId)
+          this.emitLocal('fs_watch_ended', { projectId, reason: 'rewatch_failed' })
         }
-        void logFrontendError({
-          level: 'warn',
-          source: 'WsAcpTransport.rewatchProjects',
-          message: `Re-watching project ${projectId} after reconnect failed: ${String(error)}`
-        })
-      }
-    }
+      })
+    )
   }
 
   /** One per-session retry attempt (see {@link SessionResubscribeRetry}). */
@@ -1657,6 +1666,11 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   private async handleEvent(evt: WsEvent): Promise<void> {
+    // The host ended a project watch: stop re-requesting it after reconnects.
+    if (evt.type === 'fs_watch_ended') {
+      const endedProject = (evt.payload as { projectId?: unknown } | null)?.projectId
+      if (typeof endedProject === 'string') this.watchedProjects.delete(endedProject)
+    }
     // #907 / CodeQL hardening: validate the event type against the shared
     // protocol registry BEFORE branching on it — the token send is gated by
     // a registry-validated boolean plus connection state, never the raw

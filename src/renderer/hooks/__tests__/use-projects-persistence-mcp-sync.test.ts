@@ -4,7 +4,7 @@ import { useProjectStore } from '@/stores/project-store'
 
 const { syncMcpRegistryToProjectFile, syncProjectsMock } = vi.hoisted(() => ({
   syncMcpRegistryToProjectFile: vi.fn(async () => undefined),
-  syncProjectsMock: vi.fn(async () => ({ success: true }))
+  syncProjectsMock: vi.fn(async () => ({ success: true, data: 'p1' as string | null }))
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -69,7 +69,7 @@ import { useProjectsAutoSave } from '../use-projects-persistence'
 describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    syncProjectsMock.mockResolvedValue({ success: true })
+    syncProjectsMock.mockResolvedValue({ success: true, data: 'p1' })
 
     useProjectStore.setState({
       projects: [{ id: 'p1', name: 'P1', color: 'blue', path: '/p1' }],
@@ -138,6 +138,37 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
       })
     })
 
+    await waitFor(() => {
+      expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
+    })
+    unmount()
+  })
+
+  it('mirrors the MCP registry when the host falls back to a different effective default', async () => {
+    const { unmount } = renderHook(() => useProjectsAutoSave())
+    await initialize()
+
+    // First reply only establishes the baseline (host default p1).
+    await act(async () => {
+      useProjectStore.setState({
+        projects: [
+          { id: 'p1', name: 'P1', color: 'blue', path: '/p1' },
+          { id: 'p2', name: 'P2', color: 'green', path: '/p2' }
+        ]
+      })
+    })
+    await waitFor(() => {
+      expect(syncProjectsMock).toHaveBeenCalledTimes(1)
+    })
+    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
+
+    // p1 disappears: the host falls back to p2 without any stored flag moving.
+    syncProjectsMock.mockResolvedValue({ success: true, data: 'p2' })
+    await act(async () => {
+      useProjectStore.setState({
+        projects: [{ id: 'p2', name: 'P2', color: 'green', path: '/p2' }]
+      })
+    })
     await waitFor(() => {
       expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
     })

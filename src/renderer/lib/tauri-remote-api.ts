@@ -53,11 +53,14 @@ export const remoteServerApi: RemoteServerApi = {
  * while the server runs (a no-op when the server is stopped just returns ok).
  *
  * Desktop navigation never moves the host default: the push carries no
- * `defaultProjectId`. The host keeps the project the summaries flag as stored
- * default (`isDefault`), else its current default while it is still valid.
+ * `defaultProjectId`. The host keeps its current default while that project is
+ * still valid (so a default set from the web or via `setHostDefaultProject` is
+ * not reverted by a later list mutation), else the project the summaries flag
+ * as stored default (`isDefault`), else the first switchable one. The reply
+ * carries the resulting host default id (`null` when there is none).
  */
-export async function syncProjects(projects: ProjectSummary[]): Promise<IpcResult<void>> {
-  return invokeIpc<void>('remote_sync_projects', {
+export async function syncProjects(projects: ProjectSummary[]): Promise<IpcResult<string | null>> {
+  return invokeIpc<string | null>('remote_sync_projects', {
     payload: { projects }
   })
 }

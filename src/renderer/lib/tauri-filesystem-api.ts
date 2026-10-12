@@ -171,7 +171,8 @@ function resolveWatchProjectId(dirPath: string): string | null {
   for (const project of useProjectStore.getState().projects) {
     if (!project.path || project.isArchived) continue
     const root = normalizeWatchPath(project.path)
-    const contains = target === root || target.startsWith(`${root}/`)
+    const prefix = root.endsWith('/') ? root : `${root}/`
+    const contains = target === root || target.startsWith(prefix)
     if (contains && root.length > bestLength) {
       bestId = project.id
       bestLength = root.length
@@ -1054,25 +1055,62 @@ export const tauriFilesystemApi = createTauriFilesystemApi()
 // onFileChanged/onFileCreated/onFileDeleted callback chain.
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-project chain of host watch requests: a project's `watch_project` /
+ * `unwatch_project` run strictly in the order the refcount transitions
+ * happened, so an unwatch issued while a watch is still in flight cannot be
+ * lost (and vice versa).
+ */
+const webProjectHostOps = new Map<string, Promise<void>>()
+
+function enqueueProjectHostOp(
+  projectId: string,
+  op: () => Promise<void> | undefined
+): Promise<void> {
+  const previous = webProjectHostOps.get(projectId) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(async () => op())
+  webProjectHostOps.set(projectId, next)
+  const settle = (): void => {
+    if (webProjectHostOps.get(projectId) === next) webProjectHostOps.delete(projectId)
+  }
+  next.then(settle, settle)
+  return next
+}
+
+function logWebWatchFailure(source: string, projectId: string, err: unknown): void {
+  void logFrontendError({
+    level: 'warn',
+    source: `tauri-filesystem-api.${source}`,
+    message: `Host watch request for project ${projectId} failed: ${
+      err instanceof Error ? err.message : String(err)
+    }`
+  })
+}
+
+/**
+ * Web live refresh is best-effort: a host watch that cannot be set up (project
+ * gone, socket down) is logged and the call still succeeds, so the explorer
+ * root loads without a live-refresh subscription. The directory and its
+ * refcount are claimed synchronously BEFORE the request, so concurrent calls
+ * for one directory cannot double-count and an `fs_changed` that races the
+ * reply is not dropped; a failed first request rolls the claims back.
+ */
 async function watchWebDirectory(dirPath: string): Promise<IpcResult<void>> {
   const normalized = normalizeWatchPath(dirPath)
   if (webWatchedDirs.has(normalized)) return { success: true, data: undefined }
   const projectId = resolveWatchProjectId(dirPath)
   if (!projectId) return { success: true, data: undefined }
-  const refs = webProjectWatchRefs.get(projectId) ?? 0
-  if (refs === 0) {
+  webWatchedDirs.set(normalized, projectId)
+  const refs = (webProjectWatchRefs.get(projectId) ?? 0) + 1
+  webProjectWatchRefs.set(projectId, refs)
+  if (refs === 1) {
     try {
-      await getAcpTransport().watchProject?.(projectId)
+      await enqueueProjectHostOp(projectId, () => getAcpTransport().watchProject?.(projectId))
     } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-        code: 'WATCH_ERROR'
-      }
+      forgetWebProjectWatch(projectId)
+      logWebWatchFailure('watchWebDirectory', projectId, err)
     }
   }
-  webWatchedDirs.set(normalized, projectId)
-  webProjectWatchRefs.set(projectId, (webProjectWatchRefs.get(projectId) ?? 0) + 1)
   return { success: true, data: undefined }
 }
 
@@ -1088,15 +1126,11 @@ async function unwatchWebDirectory(dirPath: string): Promise<IpcResult<void>> {
   }
   webProjectWatchRefs.delete(projectId)
   try {
-    await getAcpTransport().unwatchProject?.(projectId)
-    return { success: true, data: undefined }
+    await enqueueProjectHostOp(projectId, () => getAcpTransport().unwatchProject?.(projectId))
   } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : String(err),
-      code: 'UNWATCH_ERROR'
-    }
+    logWebWatchFailure('unwatchWebDirectory', projectId, err)
   }
+  return { success: true, data: undefined }
 }
 
 /** Drop all client bookkeeping for a project whose host watch ended. */
@@ -1151,8 +1185,9 @@ function wireWebFsChangedBridge(): void {
   webFsChangedBridgeWired = true
   try {
     const transport = getAcpTransport()
-    // The host ended a watch (project archived/removed): forget it so the
-    // next watchDirectory re-requests it instead of assuming it is live.
+    // The host ended a watch (project archived/removed), or the transport could
+    // not re-establish it after a reconnect: forget it so the next
+    // watchDirectory re-requests it instead of assuming it is live.
     transport.onEvent<{ projectId?: string }>('acp:fs_watch_ended', (payload) => {
       if (payload?.projectId) forgetWebProjectWatch(payload.projectId)
     })
@@ -1187,6 +1222,7 @@ export function _resetFilesystemStateForTesting() {
   activeWatchers.clear()
   webWatchedDirs.clear()
   webProjectWatchRefs.clear()
+  webProjectHostOps.clear()
   activeCallbacks.clear()
   globalCallbacks.clear()
   webFileNameBatchCallbacks.clear()

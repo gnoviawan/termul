@@ -562,6 +562,9 @@ export function useProjectsLoader(): void {
  */
 export function useProjectsAutoSave(): void {
   const hasInitialized = useRef(false)
+  // The host default the last project-list sync reported (`undefined` until the
+  // first reply), used to detect fallback changes of the effective default.
+  const hostDefaultRef = useRef<string | null | undefined>(undefined)
 
   useEffect(() => {
     // Web/remote mode: the project list is persisted server-side (Option B:
@@ -705,11 +708,18 @@ export function useProjectsAutoSave(): void {
               console.warn('[projects] remote sync unsuccessful:', result.error)
             }
             // CAP-7 interim bridge: the web MCP registry file lives under the
-            // host default project, so mirror the MCP registry when the stored
-            // default itself changed (an explicit set-default) — never on
-            // navigation. Best-effort + non-fatal; only after the sync landed.
-            if (defaultChanged && result.success) {
-              void useAcpStore.getState().syncMcpRegistryToProjectFile()
+            // host default project, so mirror the MCP registry when the host's
+            // EFFECTIVE default changed — the stored default flag moved (an
+            // explicit set-default) or the host fell back to another project —
+            // never on navigation. Best-effort + non-fatal; only after the
+            // sync landed. The first reply only establishes the baseline.
+            if (result.success) {
+              const previous = hostDefaultRef.current
+              hostDefaultRef.current = result.data
+              const effectiveChanged = previous !== undefined && previous !== result.data
+              if (defaultChanged || effectiveChanged) {
+                void useAcpStore.getState().syncMcpRegistryToProjectFile()
+              }
             }
           })
           .catch((err: unknown) => {
