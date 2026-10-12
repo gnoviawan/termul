@@ -53,13 +53,10 @@ export function RemoteAccessPopover(): React.JSX.Element {
         // path in `useProjectsAutoSave` keeps it in sync on later mutations).
         // No env-var values cross the wire — redact-by-omission.
         if (enable) {
-          const { projects, activeProjectId } = useProjectStore.getState()
+          const { projects } = useProjectStore.getState()
           // Await + inspect: a failed seed leaves the web client without a
           // project list until the next desktop mutation re-syncs — surface it.
-          const syncResult = await syncProjects(
-            toProjectSummaries(projects, activeProjectId),
-            activeProjectId || null
-          )
+          const syncResult = await syncProjects(toProjectSummaries(projects))
           if (!syncResult.success) {
             toast.error(`Failed to seed remote project list: ${syncResult.error}`)
           }

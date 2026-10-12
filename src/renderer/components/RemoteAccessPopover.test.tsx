@@ -147,5 +147,7 @@ describe('RemoteAccessPopover', () => {
     await waitFor(() => {
       expect(syncProjects).toHaveBeenCalledTimes(1)
     })
+    // The seed pushes the project list only — never the active project as default.
+    expect(syncProjects).toHaveBeenCalledWith([])
   })
 })

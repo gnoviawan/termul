@@ -154,16 +154,34 @@ pub async fn remote_server_status(
 /// on server-start success + on every project-store mutation while the server
 /// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
 ///
-/// In desktop-hosted mode the desktop's `activeProjectId` IS the host default
-/// (the desktop user is the host operator), so it is pushed as `defaultProjectId`.
-/// The web client seeds its initial `activeProjectId` from it on the first
-/// `GET /projects` but preserves its own selection on subsequent refetches.
+/// Desktop navigation does not move the host default: the payload carries no
+/// `defaultProjectId`. The registry keeps the project the summaries flag as
+/// stored default (`isDefault`, set by the explicit set-default action), else
+/// its current default while that project is still switchable, else the first
+/// switchable project so the host always has a default to bridge MCP files to.
+/// The sync only mirrors the list — it rebinds nothing.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncProjectsPayload {
     pub projects: Vec<crate::web::ProjectSummary>,
-    #[serde(default)]
-    pub default_project_id: Option<String>,
+}
+
+/// The default a project-list sync keeps: the summary flagged `is_default`,
+/// else `current` while it is still a switchable project in `projects`, else
+/// the first switchable project.
+pub(super) fn default_after_sync(
+    projects: &[crate::web::ProjectSummary],
+    current: Option<&str>,
+) -> Option<String> {
+    let switchable = |p: &crate::web::ProjectSummary| {
+        !p.is_archived && p.path.as_deref().is_some_and(|path| !path.trim().is_empty())
+    };
+    projects
+        .iter()
+        .find(|p| p.is_default && switchable(p))
+        .or_else(|| projects.iter().find(|p| Some(p.id.as_str()) == current && switchable(p)))
+        .or_else(|| projects.iter().find(|p| switchable(p)))
+        .map(|p| p.id.clone())
 }
 
 #[tauri::command]
@@ -172,8 +190,10 @@ pub async fn remote_sync_projects(
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    project_registry.set(payload.projects, payload.default_project_id.clone());
-    crate::web::broadcast_projects_changed(ws_relay.inner(), payload.default_project_id.as_deref());
+    let current = project_registry.snapshot().default_project_id;
+    let default_id = default_after_sync(&payload.projects, current.as_deref());
+    project_registry.set(payload.projects, default_id.clone());
+    crate::web::broadcast_projects_changed(ws_relay.inner(), default_id.as_deref());
     Ok(IpcResult::success(()))
 }
 
@@ -182,10 +202,9 @@ pub async fn remote_sync_projects(
 /// this changes the host default that new web clients start with. Validates
 /// the project is switchable, updates `registry.set_default_project`, and
 /// broadcasts `projects_changed` to all connected web clients. Desktop-hosted
-/// mode has no `FileProjectRegistry` (the file registry is VPS-only); the
-/// desktop pushes its active selection as the default via `remote_sync_projects`,
-/// but this command lets the desktop set a default DIFFERENT from its own
-/// active project.
+/// mode has no `FileProjectRegistry` (the file registry is VPS-only). This is
+/// the only desktop path that moves the host default; it stores the default
+/// and rebinds nothing.
 #[tauri::command]
 pub async fn set_host_default_project(
     project_id: String,
@@ -270,17 +289,18 @@ pub async fn remote_sync_chat_history(
     Ok(IpcResult::success(()))
 }
 
-/// Mirror the desktop app-store MCP registry to the active project's
-/// `.termul/mcp-servers.json` (CAP-7 — registry sync gap).
+/// Mirror the desktop app-store MCP registry to the host default project's
+/// `.termul/mcp-servers.json` (CAP-7 — registry sync gap; interim bridge until
+/// per-project MCP naming).
 ///
 /// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`
 /// (tauri-plugin-store, app-data dir), while the web `GET /mcp-servers` route
-/// reads `{project_root}/.termul/mcp-servers.json`. Without this bridge the web
+/// reads `{default_project_root}/.termul/mcp-servers.json`. Without this bridge the web
 /// route never sees desktop-configured servers, so `McpBadge` stays hidden on
-/// web/mobile. Called best-effort after every desktop MCP save and on project
-/// switch — a sync failure is logged but never blocks the app-store save.
+/// web/mobile. Called best-effort after every desktop MCP save and when the
+/// host default project changes — a sync failure is logged but never blocks the app-store save.
 ///
-/// Resolves the active project root via the same chain `RemoteServerState::start`
+/// Resolves the root via the same chain `RemoteServerState::start`
 /// uses: the registry's default-project path (canonicalized), falling back to
 /// `default_project_root()` (`$TERMUL_PROJECT_ROOT` / `$HOME`) when the
 /// registry has no default (server stopped / never started). The write reuses
@@ -295,7 +315,7 @@ pub async fn remote_sync_mcp_registry(
 }
 
 /// Testable core of `remote_sync_mcp_registry`: writes `registry` to
-/// `{active_project_root}/.termul/mcp-servers.json` via `atomic_file::replace`.
+/// `{default_project_root}/.termul/mcp-servers.json` via `atomic_file::replace`.
 /// Extracted so a Rust unit test can exercise the write path without a Tauri
 /// `AppHandle` (CAP-7 regression guard).
 pub(crate) async fn sync_mcp_registry_to_project_file(

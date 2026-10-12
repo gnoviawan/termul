@@ -308,35 +308,18 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
  * the wire — redact-by-omission. Shared by the auto-save live-push path + the
  * `RemoteAccessPopover` server-start seed.
  *
- * In desktop-hosted mode the desktop's `activeProjectId` IS the host default
- * (the desktop user is the host operator), so the per-entry flag is
- * `isDefault` (the host default), not `isActive` (which is per-client and the
- * host cannot know). The param is named `defaultProjectId` because the value
- * the desktop renderer tracks (its active selection) is pushed as the default
- * for new web clients — the caller passes `state.activeProjectId` as the
- * `defaultProjectId` (P12: the param name now matches its wire semantics).
+ * The host default is each project's stored `isDefault` flag (the explicit
+ * set-default action) and nothing else: the desktop's active project is
+ * per-client navigation state and is never pushed as the default.
  */
-export function toProjectSummaries(
-  projects: Project[],
-  defaultProjectId: string
-): ProjectSummary[] {
-  // Derive the host default from each project's stored `isDefault` flag — NOT
-  // from `defaultProjectId`. At the autosave call site `defaultProjectId` is
-  // `state.activeProjectId`, but the active (per-connection) project and the
-  // host default are distinct: `handleSetDefault` flips the stored flags while
-  // `activeProjectId` still points at the switch target. Deriving from
-  // `activeProjectId` here would re-broadcast the active project as the host
-  // default and clobber an explicit `set_default_project`. Fall back to
-  // `defaultProjectId` only when no project carries a stored flag (legacy
-  // snapshots / initial load where the flag was never set).
-  const hasStoredDefault = projects.some((p) => p.isDefault === true)
+export function toProjectSummaries(projects: Project[]): ProjectSummary[] {
   return projects.map((p) => ({
     id: p.id,
     name: p.name,
     color: p.color,
     path: p.path ?? null,
     isArchived: p.isArchived ?? false,
-    isDefault: hasStoredDefault ? p.isDefault === true : p.id === defaultProjectId
+    isDefault: p.isDefault === true
   }))
 }
 
@@ -707,29 +690,25 @@ export function useProjectsAutoSave(): void {
       // the new project list into the in-memory registry + broadcast
       // `projects_changed` so connected web clients refetch `GET /projects`.
       // Fire-and-forget (replaces the snapshot — idempotent); no env-var values.
-      if (useRemoteStatusStore.getState().status?.running) {
-        const projectSwitched =
-          state.activeProjectId !== prevState.activeProjectId ||
+      // Navigation (`activeProjectId`) is NOT a list change: switching the
+      // active project pushes nothing and moves no host default.
+      if (
+        useRemoteStatusStore.getState().status?.running &&
+        state.projects !== prevState.projects
+      ) {
+        const defaultChanged =
           state.projects.find((p) => p.isDefault === true)?.id !==
-            prevState.projects.find((p) => p.isDefault === true)?.id
-        syncProjects(
-          toProjectSummaries(state.projects, state.activeProjectId),
-          state.activeProjectId || null
-        )
+          prevState.projects.find((p) => p.isDefault === true)?.id
+        syncProjects(toProjectSummaries(state.projects))
           .then((result) => {
             if (!result.success) {
               console.warn('[projects] remote sync unsuccessful:', result.error)
             }
-            // CAP-7: after the backend `ProjectRegistry` (and thus the resolved
-            // project root) reflects the new default, mirror the MCP registry to
-            // the new project's `.termul/mcp-servers.json`. Best-effort +
-            // non-fatal — the action logs failures and never throws, so a
-            // switch still completes even if the sync write fails. Only on a
-            // real project switch (not a projects/groups-only mutation), and
-            // only when the upstream sync succeeded (a failed syncProjects
-            // leaves the backend on the old default — syncing then would write
-            // to the wrong project's file).
-            if (projectSwitched && result.success) {
+            // CAP-7 interim bridge: the web MCP registry file lives under the
+            // host default project, so mirror the MCP registry when the stored
+            // default itself changed (an explicit set-default) — never on
+            // navigation. Best-effort + non-fatal; only after the sync landed.
+            if (defaultChanged && result.success) {
               void useAcpStore.getState().syncMcpRegistryToProjectFile()
             }
           })

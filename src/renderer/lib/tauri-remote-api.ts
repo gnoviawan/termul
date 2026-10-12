@@ -49,21 +49,16 @@ export const remoteServerApi: RemoteServerApi = {
  * Push the desktop renderer's current project list into the in-memory
  * `ProjectRegistry` (Epic-4 bridge) so the web/remote client can read it via
  * `GET /projects`. No env-var values cross the wire — `ProjectSummary` redacts
- * by omission. Call on server-start success + on every project-store mutation
+ * by omission. Call on server-start success + on every project-list mutation
  * while the server runs (a no-op when the server is stopped just returns ok).
  *
- * In desktop-hosted mode the desktop's `activeProjectId` IS the host default
- * (the desktop user is the host operator), so it is pushed as
- * `defaultProjectId`. The web client seeds its initial `activeProjectId` from
- * it on the first `GET /projects` but preserves its own selection on
- * subsequent refetches.
+ * Desktop navigation never moves the host default: the push carries no
+ * `defaultProjectId`. The host keeps the project the summaries flag as stored
+ * default (`isDefault`), else its current default while it is still valid.
  */
-export async function syncProjects(
-  projects: ProjectSummary[],
-  defaultProjectId: string | null
-): Promise<IpcResult<void>> {
+export async function syncProjects(projects: ProjectSummary[]): Promise<IpcResult<void>> {
   return invokeIpc<void>('remote_sync_projects', {
-    payload: { projects, defaultProjectId }
+    payload: { projects }
   })
 }
 
@@ -74,19 +69,18 @@ export async function syncProjects(
  * switchable, updates `registry.set_default_project`, and broadcasts
  * `projects_changed` to all connected web clients. Mirrors the
  * `set_default_project` WS request + the `POST /projects/default` HTTP route
- * (transport parity). Lets the desktop set a default DIFFERENT from its own
- * active project (the desktop's active IS pushed as the default via
- * `syncProjects`, but this command is the explicit override).
+ * (transport parity). The only desktop path that moves the host default; it
+ * stores the default and rebinds nothing.
  */
 export async function setHostDefaultProject(projectId: string): Promise<IpcResult<void>> {
   return invokeIpc<void>('set_host_default_project', { projectId })
 }
 
 /**
- * Mirror the desktop app-store MCP registry to the active project's
- * `.termul/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
- * `remote_sync_mcp_registry` command resolves the active project root via the
- * shared `ProjectRegistry` (same chain `RemoteServerState::start` uses) and
+ * Mirror the desktop app-store MCP registry to the host default project's
+ * `.termul/mcp-servers.json` (CAP-7 — registry sync gap; interim bridge until
+ * per-project MCP naming). The Rust `remote_sync_mcp_registry` command
+ * resolves the default project root via the shared `ProjectRegistry` and
  * writes the registry via `atomic_file::replace`, so the web `GET /mcp-servers`
  * route (file-based) serves the same registry the desktop app store holds.
  *

@@ -514,6 +514,10 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: this.setConfigOptionReply })
       return
     }
+    if (req.type === 'watch_project' || req.type === 'unwatch_project') {
+      this.emitReply({ id: req.id, ok: true, payload: req.payload })
+      return
+    }
     this.emitReply({
       id: req.id,
       ok: false,
@@ -1633,6 +1637,23 @@ describe('WsAcpTransport', () => {
       newSessionId: 's-new',
       summaryText: 'Handoff summary'
     })
+    transport.dispose()
+  })
+
+  it('watchProject / unwatchProject send the per-project watch requests', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const lastFrame = () =>
+      JSON.parse(sock.sent.at(-1)!) as { type: string; payload: Record<string, string> }
+
+    await transport.watchProject?.('p-1')
+    expect(lastFrame()).toMatchObject({ type: 'watch_project', payload: { projectId: 'p-1' } })
+    await transport.unwatchProject?.('p-1')
+    expect(lastFrame()).toMatchObject({ type: 'unwatch_project', payload: { projectId: 'p-1' } })
     transport.dispose()
   })
 

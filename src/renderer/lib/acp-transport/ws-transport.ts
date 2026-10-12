@@ -217,6 +217,8 @@ export class WsAcpTransport implements AcpTransport {
   private readonly lastSeq = new Map<string, number>()
   /** Sessions we should re-subscribe after reconnect. */
   private readonly subscribed = new Set<string>()
+  /** Projects whose `fs_changed` watch this connection must re-request after reconnect. */
+  private readonly watchedProjects = new Set<string>()
   /** Idempotent prompt_complete turn ids already delivered, scoped by session. */
   private readonly seenTurnIds = new Map<string, Set<string>>()
   private recoveryHandler?: (
@@ -774,6 +776,16 @@ export class WsAcpTransport implements AcpTransport {
         message: `promote_session succeeded for session ${sessionId} but the live subscribe failed; the next prompt will retry the subscribe: ${String(error)}`
       })
     }
+  }
+
+  async watchProject(projectId: string): Promise<void> {
+    await this.request('watch_project', { projectId })
+    this.watchedProjects.add(projectId)
+  }
+
+  async unwatchProject(projectId: string): Promise<void> {
+    this.watchedProjects.delete(projectId)
+    await this.request('unwatch_project', { projectId })
   }
 
   async loadSession(
@@ -1466,6 +1478,7 @@ export class WsAcpTransport implements AcpTransport {
           }
         }
       }
+      await this.rewatchProjects()
       if (obsoleteSessions.length > 0) {
         void logFrontendError({
           level: 'warn',
@@ -1508,6 +1521,28 @@ export class WsAcpTransport implements AcpTransport {
       })
       this.discardSocket('reconnect attempt failed')
       this.scheduleReconnect()
+    }
+  }
+
+  /**
+   * The host keeps no watch state across connections, so re-request every
+   * project watch on the fresh socket. A project the host no longer has is
+   * dropped; any other failure is logged and does not fail the reconnect.
+   */
+  private async rewatchProjects(): Promise<void> {
+    for (const projectId of [...this.watchedProjects]) {
+      try {
+        await this.request('watch_project', { projectId })
+      } catch (error) {
+        if (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.NOT_FOUND) {
+          this.watchedProjects.delete(projectId)
+        }
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.rewatchProjects',
+          message: `Re-watching project ${projectId} after reconnect failed: ${String(error)}`
+        })
+      }
     }
   }
 

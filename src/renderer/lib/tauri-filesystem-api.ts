@@ -24,6 +24,7 @@ import {
   watchImmediate,
   writeTextFile
 } from '@tauri-apps/plugin-fs'
+import { useProjectStore } from '@/stores/project-store'
 import { getAcpTransport } from './acp-transport'
 import { sortDirectoryEntries } from './filesystem-sort'
 import { logFrontendError } from './log-api'
@@ -144,6 +145,40 @@ function dispatchTypedEvent(
 }
 
 const activeWatchers = new Map<string, () => void>()
+
+/**
+ * Web/remote watch bookkeeping: normalized watched directory → the registered
+ * project whose host watch serves it, and a refcount per project so the host
+ * `watch_project` / `unwatch_project` pair is sent once per project, not once
+ * per directory.
+ */
+const webWatchedDirs = new Map<string, string>()
+const webProjectWatchRefs = new Map<string, number>()
+
+function normalizeWatchPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized
+}
+
+/**
+ * The registered, non-archived project whose root contains `dirPath` (the
+ * longest matching root wins), or `null` when none does.
+ */
+function resolveWatchProjectId(dirPath: string): string | null {
+  const target = normalizeWatchPath(dirPath)
+  let bestId: string | null = null
+  let bestLength = -1
+  for (const project of useProjectStore.getState().projects) {
+    if (!project.path || project.isArchived) continue
+    const root = normalizeWatchPath(project.path)
+    const contains = target === root || target.startsWith(`${root}/`)
+    if (contains && root.length > bestLength) {
+      bestId = project.id
+      bestLength = root.length
+    }
+  }
+  return bestId
+}
 const activeCallbacks = new Map<string, TypedCallbackRegistry>()
 const globalCallbacks: TypedCallbackRegistry = new Map()
 
@@ -889,12 +924,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
       // below — the facade dispatches them through the SAME
       // onFileChanged/onFileCreated/onFileDeleted chain this desktop
       // watcher feeds). There is nothing per-directory to set up on the
-      // client: the server watches the active project root and re-arms on
-      // switch. Report success so callers (WorkspaceLayout's project
-      // switch) complete the switch instead of treating the watcher as
-      // unavailable.
+      // client beyond asking the host to watch the project that contains the
+      // directory (`watch_project`, refcounted per project). A directory
+      // inside no registered project has no host watch (the explorer simply
+      // gets no live refresh) and still reports success.
       if (!isTauriContext()) {
-        return { success: true, data: undefined }
+        return watchWebDirectory(dirPath)
       }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
@@ -945,9 +980,10 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async unwatchDirectory(dirPath: string): Promise<IpcResult<void>> {
-      // Web/remote mode: nothing to unwatch (watchers are desktop-only).
+      // Web/remote mode: release the project's host watch when no watched
+      // directory needs it any more.
       if (!isTauriContext()) {
-        return { success: true, data: undefined }
+        return unwatchWebDirectory(dirPath)
       }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
@@ -1018,8 +1054,62 @@ export const tauriFilesystemApi = createTauriFilesystemApi()
 // onFileChanged/onFileCreated/onFileDeleted callback chain.
 // ---------------------------------------------------------------------------
 
-/** Payload of the control-WS `fs_changed` agent-level event (#856). */
+async function watchWebDirectory(dirPath: string): Promise<IpcResult<void>> {
+  const normalized = normalizeWatchPath(dirPath)
+  if (webWatchedDirs.has(normalized)) return { success: true, data: undefined }
+  const projectId = resolveWatchProjectId(dirPath)
+  if (!projectId) return { success: true, data: undefined }
+  const refs = webProjectWatchRefs.get(projectId) ?? 0
+  if (refs === 0) {
+    try {
+      await getAcpTransport().watchProject?.(projectId)
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+        code: 'WATCH_ERROR'
+      }
+    }
+  }
+  webWatchedDirs.set(normalized, projectId)
+  webProjectWatchRefs.set(projectId, (webProjectWatchRefs.get(projectId) ?? 0) + 1)
+  return { success: true, data: undefined }
+}
+
+async function unwatchWebDirectory(dirPath: string): Promise<IpcResult<void>> {
+  const normalized = normalizeWatchPath(dirPath)
+  const projectId = webWatchedDirs.get(normalized)
+  if (!projectId) return { success: true, data: undefined }
+  webWatchedDirs.delete(normalized)
+  const refs = (webProjectWatchRefs.get(projectId) ?? 1) - 1
+  if (refs > 0) {
+    webProjectWatchRefs.set(projectId, refs)
+    return { success: true, data: undefined }
+  }
+  webProjectWatchRefs.delete(projectId)
+  try {
+    await getAcpTransport().unwatchProject?.(projectId)
+    return { success: true, data: undefined }
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      code: 'UNWATCH_ERROR'
+    }
+  }
+}
+
+/** Drop all client bookkeeping for a project whose host watch ended. */
+function forgetWebProjectWatch(projectId: string): void {
+  webProjectWatchRefs.delete(projectId)
+  for (const [dir, id] of webWatchedDirs) {
+    if (id === projectId) webWatchedDirs.delete(dir)
+  }
+}
+
+/** Payload of the control-WS `fs_changed` agent-level event (per project). */
 interface FsChangedEventPayload {
+  projectId: string
   root: string
   paths: string[]
 }
@@ -1061,8 +1151,16 @@ function wireWebFsChangedBridge(): void {
   webFsChangedBridgeWired = true
   try {
     const transport = getAcpTransport()
+    // The host ended a watch (project archived/removed): forget it so the
+    // next watchDirectory re-requests it instead of assuming it is live.
+    transport.onEvent<{ projectId?: string }>('acp:fs_watch_ended', (payload) => {
+      if (payload?.projectId) forgetWebProjectWatch(payload.projectId)
+    })
     transport.onEvent<FsChangedEventPayload>('acp:fs_changed', (payload) => {
       if (!payload || !Array.isArray(payload.paths)) return
+      // Only projects this client asked to watch (the host already targets
+      // subscribed connections; this guards a stale/late event after unwatch).
+      if (!webProjectWatchRefs.has(payload.projectId)) return
       for (const event of fsChangedPathsToEvents(payload)) {
         // 'change' feeds every subscriber that registered for 'change';
         // the create/delete-typed subscribers are served by the desktop
@@ -1087,6 +1185,8 @@ function wireWebFsChangedBridge(): void {
  */
 export function _resetFilesystemStateForTesting() {
   activeWatchers.clear()
+  webWatchedDirs.clear()
+  webProjectWatchRefs.clear()
   activeCallbacks.clear()
   globalCallbacks.clear()
   webFileNameBatchCallbacks.clear()

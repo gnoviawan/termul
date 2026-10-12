@@ -26,8 +26,8 @@ import {
 import { WEB_TERMINAL_ERROR_CODES } from './web-terminal-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 24 event types including durable user prompts, switch markers + worktree renames', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(24)
+  it('exports exactly 25 event types including durable user prompts, switch markers + worktree renames', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(25)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -62,6 +62,7 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('agent_switch')
     // #856: server-side FS watcher change push (agent-level broadcast).
     expect(WS_EVENT_TYPES).toContain('fs_changed')
+    expect(WS_EVENT_TYPES).toContain('fs_watch_ended')
     // Story 16 (CAP-5): host worktree branch rename (agent-level broadcast).
     expect(WS_EVENT_TYPES).toContain('worktree_branch_renamed')
     expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
@@ -69,8 +70,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 43 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(43)
+  it('exports exactly 45 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(45)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -124,7 +125,10 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       // `acp_` prefix — the wire name is fixed by the contract.
       'acp_deliver_auth_redirect',
       // CAP-2 (spec-in-chat-agent-switch): host-authored durable marker.
-      'record_agent_switch'
+      'record_agent_switch',
+      // Per-project fs watch.
+      'watch_project',
+      'unwatch_project'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)

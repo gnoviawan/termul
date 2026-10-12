@@ -85,11 +85,17 @@ export const WS_EVENT_TYPES = [
   // transcript authority.
   'agent_switch',
   // #856 (web explorer live refresh): server-side FS watcher batch. Agent-
-  // level event (sid null, seq 0); payload `{ root, paths: string[] }` —
+  // level event (sid null, seq 0), delivered only to connections that sent
+  // `watch_project`; payload `{ projectId, root, paths: string[] }` —
   // the renderer's filesystem facade dispatches the paths through its
   // onFileChanged/onFileCreated/onFileDeleted chain (web parity with the
   // desktop notify watcher).
   'fs_changed',
+  // The host ended this connection's watch of a project because it is no
+  // longer watchable (archived/removed/root gone). Agent-level event (sid
+  // null, seq 0); payload `{ projectId, reason }` — the client forgets the
+  // watch so the next `watchDirectory` re-requests it.
+  'fs_watch_ended',
   // Shell revamp story 16 (CAP-5): the host renamed a worktree's git branch
   // and rewrote every session on it. Agent-level event (sid null, seq 0);
   // payload `{ worktreePath, oldBranch, newBranch }` — the renderer reconciles
@@ -216,7 +222,14 @@ export const WS_REQUEST_TYPES = [
   // writes ONE durable `agent_switch` record (writer-assigned seq) then fans
   // the synthetic `acp:agent_switch` event to live clients. Reply `{}`;
   // unknown session → `not_found`; live-only mode → `unsupported`.
-  'record_agent_switch'
+  'record_agent_switch',
+  // Per-project fs watch: `{ projectId }` subscribes/unsubscribes THIS
+  // connection to the host watcher of a registered project; `fs_changed`
+  // events then reach only subscribed connections. `watch_project` of an
+  // unknown/archived project → `not_found`; `unwatch_project` is idempotent
+  // (always ok for a well-formed request).
+  'watch_project',
+  'unwatch_project'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -467,6 +480,9 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   // recovered by the next batch or a manual refresh, but reliable keeps
   // the tree consistent without polling.
   fs_changed: WS_RELAY_TIERS.RELIABLE,
+  // One-shot host fact that a watch ended — dropping it would leave the
+  // client believing it still watches, so reliable.
+  fs_watch_ended: WS_RELAY_TIERS.RELIABLE,
   // Story 16: a one-shot host fact (every session on the worktree changed) —
   // dropping it would leave stale branch labels, so reliable.
   worktree_branch_renamed: WS_RELAY_TIERS.RELIABLE

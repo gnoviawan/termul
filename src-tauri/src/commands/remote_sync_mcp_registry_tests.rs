@@ -1,4 +1,4 @@
-use super::sync_mcp_registry_to_project_file;
+use super::{default_after_sync, sync_mcp_registry_to_project_file};
 use crate::web::mcp_servers_api::registry_path;
 use crate::web::{ProjectRegistry, ProjectSummary};
 use serde_json::json;
@@ -136,4 +136,43 @@ async fn falls_back_to_default_project_root_when_registry_has_no_default() {
         None => std::env::remove_var("TERMUL_PROJECT_ROOT"),
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> ProjectSummary {
+    ProjectSummary {
+        id: id.to_string(),
+        name: id.to_string(),
+        color: "blue".to_string(),
+        path: path.map(str::to_string),
+        is_archived: archived,
+        is_default: default,
+    }
+}
+
+/// A project-list sync never lets navigation move the host default: the
+/// stored `is_default` flag wins, else the current default while still
+/// switchable, else the first switchable project.
+#[test]
+fn sync_default_follows_stored_flag_then_current_then_first_switchable() {
+    let list = vec![
+        summary("a", Some("/a"), false, false),
+        summary("b", Some("/b"), false, true),
+        summary("c", Some("/c"), false, false),
+    ];
+    assert_eq!(default_after_sync(&list, Some("a")).as_deref(), Some("b"));
+
+    let unflagged = vec![
+        summary("a", Some("/a"), false, false),
+        summary("c", Some("/c"), false, false),
+    ];
+    assert_eq!(default_after_sync(&unflagged, Some("c")).as_deref(), Some("c"));
+    assert_eq!(default_after_sync(&unflagged, Some("gone")).as_deref(), Some("a"));
+
+    let unswitchable = vec![
+        summary("arch", Some("/x"), true, true),
+        summary("nopath", None, false, false),
+        summary("blank", Some("  "), false, false),
+    ];
+    assert_eq!(default_after_sync(&unswitchable, Some("arch")), None);
+    assert_eq!(default_after_sync(&[], None), None);
 }

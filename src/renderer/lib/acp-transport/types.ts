@@ -248,6 +248,14 @@ export interface AcpTransport {
    * `acp_auth_deliver_redirect`; WS: `acp_deliver_auth_redirect`.
    */
   deliverAuthRedirect(agentId: AgentId, url: string): Promise<number>
+  /**
+   * Web/remote only: subscribe THIS connection to a registered project's
+   * `fs_changed` events (`watch_project`). Unknown/archived project rejects
+   * with `not_found`. The transport re-sends it after a reconnect.
+   */
+  watchProject?(projectId: string): Promise<void>
+  /** Web/remote only: drop this connection's `watch_project` subscription. */
+  unwatchProject?(projectId: string): Promise<void>
   historyMode?(): HistoryMode | 'tauri_store'
   listPersistedSessions?(): Promise<PersistedSessionSummary[]>
   openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>
