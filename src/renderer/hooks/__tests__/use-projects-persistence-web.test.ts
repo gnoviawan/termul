@@ -2,16 +2,27 @@ import type { ProjectListPayload } from '@shared/types/web-projects.types'
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
-import { useProjectsLoader } from '../use-projects-persistence'
+import { useProjectsAutoSave, useProjectsLoader } from '../use-projects-persistence'
 
-const { mockList, mockSubscribe, mockPersistenceRead, mockPersistenceWrite, mockReconcile } =
-  vi.hoisted(() => ({
-    mockList: vi.fn(),
-    mockReconcile: vi.fn(),
-    mockSubscribe: vi.fn(),
-    mockPersistenceRead: vi.fn(),
-    mockPersistenceWrite: vi.fn()
-  }))
+const {
+  mockList,
+  mockAddProject,
+  mockRemoveProject,
+  mockUpdateProject,
+  mockSubscribe,
+  mockPersistenceRead,
+  mockPersistenceWrite,
+  mockReconcile
+} = vi.hoisted(() => ({
+  mockList: vi.fn(),
+  mockAddProject: vi.fn(),
+  mockRemoveProject: vi.fn(),
+  mockUpdateProject: vi.fn(),
+  mockReconcile: vi.fn(),
+  mockSubscribe: vi.fn(),
+  mockPersistenceRead: vi.fn(),
+  mockPersistenceWrite: vi.fn()
+}))
 
 // Web/remote mode: the loader must hit `GET /projects` (the in-memory registry
 // mirror), NOT the stubbed plugin-store (which returns nothing in a browser).
@@ -20,7 +31,14 @@ vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => false }))
 // These suites exercise the already-authed path — resolve the gate as ok.
 vi.mock('@/lib/web-auth-gate', () => ({ useWebAuthGateOk: () => true }))
 vi.mock('@/lib/worktree-reconciler', () => ({ reconcileProjectWorktrees: mockReconcile }))
-vi.mock('@/lib/web-server-api', () => ({ webServerProjects: { list: mockList } }))
+vi.mock('@/lib/web-server-api', () => ({
+  webServerProjects: {
+    list: mockList,
+    addProject: mockAddProject,
+    removeProject: mockRemoveProject,
+    updateProject: mockUpdateProject
+  }
+}))
 vi.mock('@/lib/acp-transport', () => ({
   // The loader subscribes to the `projects` watch through the transport.
   getAcpTransport: () => ({ watches: { subscribe: mockSubscribe } })
@@ -171,6 +189,31 @@ describe('useProjectsLoader (web/remote mode)', () => {
     expect(useProjectStore.getState().projects.find((p) => p.id === 'p1')?.isDefault).toBe(false)
     // No second HTTP read: the delta IS the new list.
     expect(mockList).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not write a host-sent list back as local add or remove edits', async () => {
+    mockList.mockResolvedValueOnce({ success: true, data: payload })
+    renderHook(() => {
+      useProjectsLoader()
+      useProjectsAutoSave()
+    })
+    await waitFor(() => expect(useProjectStore.getState().projects).toHaveLength(2))
+
+    // The host drops p1 and adds p3: neither is something this client did.
+    watchHandlers().onDelta({
+      projects: [
+        payload.projects[1]!,
+        { ...payload.projects[0]!, id: 'p3', name: 'Gamma', isDefault: false }
+      ],
+      defaultProjectId: 'p2'
+    })
+
+    await waitFor(() => {
+      expect(useProjectStore.getState().projects.map((p) => p.id)).toEqual(['p2', 'p3'])
+    })
+    expect(mockAddProject).not.toHaveBeenCalled()
+    expect(mockRemoveProject).not.toHaveBeenCalled()
+    expect(mockUpdateProject).not.toHaveBeenCalled()
   })
 
   it('rebuilds the list from a watch state (reconnect) without a refetch', async () => {

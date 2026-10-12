@@ -371,6 +371,24 @@ function summaryToProject(summary: ProjectSummary): Project {
   }
 }
 
+/**
+ * True while the web loader installs a list the host sent (HTTP read, watch
+ * state or delta). The web auto-save subscriber diffs every list change into
+ * add/update/remove writes, so it must not read a host-sent list as a local
+ * edit: an older watched list that lacks a project whose POST is still pending
+ * would otherwise turn into a DELETE of that project.
+ */
+let applyingHostList = false
+
+function applyHostList(install: () => void): void {
+  applyingHostList = true
+  try {
+    install()
+  } finally {
+    applyingHostList = false
+  }
+}
+
 export function useProjectsLoader(): void {
   const setProjects = useProjectStore((state) => state.setProjects)
   // #854: while the web auth gate reports unauthorized (missing/rotated
@@ -481,7 +499,7 @@ export function useProjectsLoader(): void {
             restored = persisted.data
           }
           if (cancelled || generation !== listGeneration) return
-          setProjects(projects, restored ?? validDefault)
+          applyHostList(() => setProjects(projects, restored ?? validDefault))
           for (const project of projects) {
             if (project.path) void reconcileProjectWorktrees(project.id)
           }
@@ -491,7 +509,7 @@ export function useProjectsLoader(): void {
           // default (or the first project if the default is also gone).
           const currentActive = useProjectStore.getState().activeProjectId
           const stillExists = !!currentActive && projects.some((p) => p.id === currentActive)
-          setProjects(projects, stillExists ? currentActive : validDefault)
+          applyHostList(() => setProjects(projects, stillExists ? currentActive : validDefault))
         }
       }
       const fetchMirror = async (): Promise<void> => {
@@ -655,6 +673,8 @@ export function useProjectsAutoSave(): void {
       const unsubscribe = useProjectStore.subscribe((state, prevState) => {
         if (!state.isLoaded || !prevState.isLoaded) return
         if (state.projects === prevState.projects) return
+        // A list the host sent is not a local edit (see `applyingHostList`).
+        if (applyingHostList) return
 
         const prevById = new Map(prevState.projects.map((p) => [p.id, p]))
         const nextById = new Map(state.projects.map((p) => [p.id, p]))
