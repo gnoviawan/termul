@@ -141,6 +141,7 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import { AcpTransportError } from '@/lib/acp-transport'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import {
   _addEphemeralSessionIdForTesting,
@@ -266,6 +267,52 @@ describe('applyAgentUpdate', () => {
     const installCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_install_agent')
     expect(installCalls).toHaveLength(1)
   })
+
+  it('installs under a commandId; a lost reply is resent with the SAME id (AD-5)', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:cursor',
+          templateId: 'cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: '/opt/cursor-agent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+    vi.mocked(invoke).mockReset()
+    let installs = 0
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd !== 'acp_install_agent') return undefined
+      installs += 1
+      // First attempt: the reply is lost to a transport drop.
+      if (installs === 1) throw new AcpTransportError('closed', 'ipc dropped')
+      return { success: true, data: { command: '/opt/cursor-2', args: ['acp'] } }
+    })
+    const result = await useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '2026.09.18',
+      description: 'Cursor',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            archive: 'https://downloads.cursor.com/agent.zip',
+            cmd: 'cursor-agent'
+          }
+        }
+      }
+    } as RegistryAgent)
+    expect(result).toBe('applied')
+    const calls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_install_agent')
+    expect(calls).toHaveLength(2)
+    const ids = calls.map(([, args]) => (args as { commandId?: string }).commandId)
+    expect(ids[0]).toEqual(expect.any(String))
+    expect(ids[1]).toBe(ids[0])
+  }, 15_000)
 
   it('kills idle warm processes on apply so the next chat spawns the applied version', async () => {
     vi.mocked(invoke).mockClear()

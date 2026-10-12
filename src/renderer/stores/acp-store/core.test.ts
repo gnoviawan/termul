@@ -219,7 +219,8 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       cwd: '/work',
       mcpServers: [],
-      ephemeral: true
+      ephemeral: true,
+      commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['commit-session']).toBeUndefined()
     expect(useAcpStore.getState().messages['commit-session']).toBeUndefined()

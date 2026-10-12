@@ -396,6 +396,12 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
  * ambiguous-methods error is translated into actionable guidance).
  * `op` is a static label for the redacted boundary logs — never raw errors or
  * method payloads.
+ *
+ * AD-5: the auth-required reply is a DEFINITE rejection, recorded by the host
+ * under that call's `commandId`; replaying the same id would replay the
+ * rejection. `fn` goes through the `acpApi` facade, whose command engine mints a
+ * NEW id for every try after a rejection (and reuses one only after an
+ * uncertain outcome), so the retry below is a new command by construction.
  */
 export async function withAuthRetry<T>(
   get: () => AcpState,
@@ -542,6 +548,12 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         const agentStatus = { ...s.agentStatus }
         delete agentStatus[tempKey]
         agentStatus[agentId] = 'connected'
+        // AD-6 exception (reply-driven agent state kept): `acp:agent_spawned`
+        // carries the same `authMethods` / `hostAuthReady`, but it is an
+        // agent-level event with no subscription anchoring its delivery to this
+        // client before the reply (a web client, or a resend answered after the
+        // event fired, may never see it). The reply is the one source that is
+        // guaranteed to reach the caller that needs the data now.
         // The spawn response is the authoritative source of capabilities +
         // authMethods (CAP-4: metadata delivery cannot depend on a session
         // subscription that does not yet exist). The `acp:agent_spawned` event

@@ -47,7 +47,10 @@ describe('acp-api command wrappers (Tauri transport)', () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(spawnResult)
     const config = { name: 'Gemini', command: 'gemini', args: [], env: {} }
     const result = await acpSpawnAgent(config)
-    expect(invoke).toHaveBeenCalledWith('acp_spawn_agent', { config })
+    expect(invoke).toHaveBeenCalledWith('acp_spawn_agent', {
+      config,
+      commandId: expect.any(String)
+    })
     expect(result).toEqual(spawnResult)
     expect(result.agentId).toBe('agent-1')
     expect(result.authMethods).toHaveLength(1)
@@ -59,7 +62,8 @@ describe('acp-api command wrappers (Tauri transport)', () => {
     expect(invoke).toHaveBeenCalledWith('acp_new_session', {
       agentId: 'agent-1',
       cwd: '/home/user',
-      mcpServers: [{ type: 'stdio', name: 'fs', command: 'npx' }]
+      mcpServers: [{ type: 'stdio', name: 'fs', command: 'npx' }],
+      commandId: expect.any(String)
     })
   })
 
@@ -100,7 +104,8 @@ describe('acp-api command wrappers (Tauri transport)', () => {
     await acpAuthenticate('agent-1', 'cursor_login')
     expect(invoke).toHaveBeenCalledWith('acp_authenticate', {
       agentId: 'agent-1',
-      methodId: 'cursor_login'
+      methodId: 'cursor_login',
+      commandId: expect.any(String)
     })
   })
 

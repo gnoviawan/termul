@@ -7,6 +7,7 @@ import {
   formatAcpSpawnError,
   isAgentAuthRequiredError,
   isAmbiguousAuthError,
+  isDefiniteSpawnRejection,
   SETUP_ERROR_LABELS
 } from './acp-spawn-errors'
 
@@ -185,5 +186,63 @@ describe('classifySetupError order and categories (P4)', () => {
     ]) {
       expect(classifySetupError(raw).label).not.toBe('Model unavailable')
     }
+  })
+})
+
+describe('definite spawn rejections (AD-5)', () => {
+  it('recognises the /ws codes and the desktop message prefixes, nothing else', () => {
+    expect(
+      isDefiniteSpawnRejection(Object.assign(new Error('x'), { code: 'agent_unavailable' }))
+    ).toBe(true)
+    expect(isDefiniteSpawnRejection({ code: 'invalid_agent_config' })).toBe(true)
+    expect(isDefiniteSpawnRejection('ACP_AGENT_UNAVAILABLE: program not found')).toBe(true)
+    expect(isDefiniteSpawnRejection(new Error('ACP_INVALID_AGENT_CONFIG: empty name'))).toBe(true)
+    expect(isDefiniteSpawnRejection(Object.assign(new Error('x'), { code: 'timeout' }))).toBe(false)
+    expect(isDefiniteSpawnRejection('agent initialize failed: eof')).toBe(false)
+  })
+
+  it('classifies a definite rejection as a spawn failure even when its text sounds like auth or transport', () => {
+    const unavailable = classifySetupError(
+      Object.assign(new Error('Claude Code CLI is not signed in; connection refused'), {
+        code: 'agent_unavailable'
+      })
+    )
+    expect(unavailable).toMatchObject({ category: 'spawn', definite: true })
+
+    const invalid = classifySetupError(
+      'ACP_INVALID_AGENT_CONFIG: spawn_agent requires a non-empty `config.command`'
+    )
+    expect(invalid).toMatchObject({
+      category: 'spawn',
+      definite: true,
+      detail: 'spawn_agent requires a non-empty `config.command`'
+    })
+  })
+
+  it('strips the desktop prefixes from the text the user reads, whichever formatter shows it', () => {
+    expect(formatAcpSpawnError('ACP_AGENT_UNAVAILABLE: program `gemini` not found')).toBe(
+      'program `gemini` not found'
+    )
+    expect(formatAcpSpawnError(new Error('ACP_INVALID_AGENT_CONFIG: empty name'))).toBe(
+      'empty name'
+    )
+    expect(formatAcpSpawnError(new Error('plain failure'))).toBe('plain failure')
+  })
+
+  it('shows the message of a serialized { code, message } error, never [object Object]', () => {
+    expect(formatAcpSpawnError({ code: 'agent_unavailable', message: 'not installed' })).toBe(
+      'not installed'
+    )
+    expect(
+      classifySetupError({ code: 'invalid_agent_config', message: 'empty command' })
+    ).toMatchObject({ category: 'spawn', definite: true, detail: 'empty command' })
+    expect(formatAcpSpawnError({ message: 'ACP_AGENT_UNAVAILABLE: agent exited at startup' })).toBe(
+      'agent exited at startup'
+    )
+  })
+
+  it('leaves ordinary spawn/transport failures retryable (no definite flag)', () => {
+    expect(classifySetupError(new Error('failed to spawn agent')).definite).toBeUndefined()
+    expect(classifySetupError(new Error('connection refused')).definite).toBeUndefined()
   })
 })

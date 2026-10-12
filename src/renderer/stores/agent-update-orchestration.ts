@@ -9,8 +9,7 @@
  * or middleware changes.
  */
 
-import type { AgentId, SessionId } from '@/lib/acp-api'
-import { getAcpTransport } from '@/lib/acp-transport'
+import { type AgentId, acpApi, type SessionId } from '@/lib/acp-api'
 import {
   agentPolicy,
   deriveAgentConfig,
@@ -179,7 +178,7 @@ export function applyAgentUpdateFlow(
         // Managed npm install (S2-TS policy): update through the same host
         // install seam as first install; never rewrite it back to an npx
         // launcher that can resolve an unpinned package at spawn.
-        const installed = await getAcpTransport().installAcpAgent(agent.id)
+        const installed = await acpApi.installAcpAgent(agent.id)
         const env = mergeEnv({})
         // Old Claude templates carried an unresolved/inline API-key value.
         // New auth is host-keychain-only, so do not migrate that value into
@@ -200,7 +199,7 @@ export function applyAgentUpdateFlow(
         if (!derived.archiveUrl) {
           throw new Error(`Agent ${agent.id} requires a manual install; update it outside Termul`)
         }
-        const installed = await getAcpTransport().installAcpAgent(agent.id)
+        const installed = await acpApi.installAcpAgent(agent.id)
         await get().saveAgentConfig({
           ...existing,
           name: agent.name,

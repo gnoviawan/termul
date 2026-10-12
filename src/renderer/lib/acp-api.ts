@@ -16,8 +16,11 @@
 
 import type { AgentCapabilities } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
-import { getAcpTransport } from '@/lib/acp-transport'
+import { type CommandCallOptions, getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import { type CommandRun, runCommand } from '@/lib/command-engine'
+import { keyDigest } from '@/lib/command-journal'
+import { waitUntilVisible } from '@/lib/command-visibility'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
@@ -314,6 +317,14 @@ export interface NewSessionOutcome {
   modes?: SessionModeState | null
   models?: SessionModelState | null
   configOptions?: SessionConfigOption[] | null
+  /**
+   * Client-side marker (never on the wire): this reply answers a RESEND and is
+   * the host's entity-lookup receipt (`{ sessionId }` only) — the session was
+   * created by an earlier attempt, so the reply says nothing about its state
+   * and the store opens it through the history-open flow instead of building
+   * the session from the reply.
+   */
+  lookup?: true
 }
 
 /** A session discovered via `session/list` (agent-native session). */
@@ -760,7 +771,10 @@ export async function acpInstallRegistryBinary(
 export async function acpInstallAcpAgent(
   agentId: string
 ): Promise<InstallAcpRegistryBinaryOutcome> {
-  return getAcpTransport().installAcpAgent(agentId)
+  const run = await ledgered('install_acp_agent', agentId, (call) =>
+    getAcpTransport().installAcpAgent(agentId, call)
+  )
+  return run.result
 }
 
 export async function acpProbeRuntime(): Promise<AcpRuntimeAvailability> {
@@ -868,12 +882,53 @@ export interface AcpRegistrySnapshot {
   fetchedAt?: string | null
 }
 
+// --- Ledgered commands (AD-5) ----------------------------------------------
+//
+// Every mutating command below runs through the command engine: its
+// `commandId` is minted and persisted BEFORE the send, a lost reply is resent
+// with the SAME id (the host answers by entity lookup / receipt ledger and
+// never runs it twice), a definite rejection ends the command (the next try
+// mints a new id), and `outcome_unknown` is never reported as a failure of
+// the command itself. The facades keep their reply shapes.
+
+type LedgeredSend<T> = (call: CommandCallOptions) => Promise<T>
+
+async function ledgered<T>(
+  kind: string,
+  entityKey: string,
+  send: LedgeredSend<T>,
+  extra?: { acceptedWithoutResult?: () => T; fresh?: boolean }
+): Promise<CommandRun<T>> {
+  return runCommand<T>({ kind, entityKey, send, ...extra })
+}
+
+/** Hold a created/reopened session back until its stream reached `visible_at`. */
+async function untilSessionVisible(
+  sessionId: SessionId,
+  visibleAt: number | undefined
+): Promise<void> {
+  const transport = getAcpTransport()
+  await waitUntilVisible(
+    transport.getSessionCursor ? () => transport.getSessionCursor?.(sessionId)?.lastSeq : undefined,
+    visibleAt
+  )
+}
+
 export async function acpFetchRegistrySnapshot(forceRefresh = false): Promise<AcpRegistrySnapshot> {
   return getAcpTransport().fetchRegistrySnapshot(forceRefresh)
 }
 
 export async function acpSpawnAgent(config: AgentConfig): Promise<SpawnAgentResult> {
-  return getAcpTransport().spawnAgent(config)
+  const run = await ledgered(
+    'spawn_agent',
+    // args/env are digested (env can hold credentials): a changed launch is a
+    // different spawn, and no raw value reaches the journal or engine state.
+    `${config.configId ?? ''}|${config.name}|${config.command}|${keyDigest(
+      JSON.stringify([config.args, config.env, config.allowTerminal ?? false])
+    )}`,
+    (call) => getAcpTransport().spawnAgent(config, call)
+  )
+  return run.result
 }
 
 export async function acpKillAgent(agentId: AgentId): Promise<void> {
@@ -899,7 +954,33 @@ export async function acpNewSession(
     additionalDirectories?: string[]
   }
 ): Promise<NewSessionOutcome> {
-  return getAcpTransport().newSession(agentId, cwd, mcpServers, options)
+  // The key names every field that distinguishes one create from another (the
+  // host fingerprints agent/cwd/project; the flags and worktree keep an earlier
+  // ephemeral / probe create from ever being reused for a durable one).
+  const createKey = [
+    agentId,
+    cwd,
+    options?.projectId ?? '',
+    options?.ephemeral ? 'e' : '',
+    options?.promotable ? 'p' : '',
+    options?.worktreePath ?? '',
+    options?.worktreeBranch ?? '',
+    // Content-derived parts (MCP servers can carry env / headers): digest only,
+    // so a different server set or extra roots is a different create.
+    keyDigest(JSON.stringify([mcpServers ?? null, options?.additionalDirectories ?? []]))
+  ].join('|')
+  const run = await ledgered('create_session', createKey, (call) =>
+    getAcpTransport().newSession(agentId, cwd, mcpServers, { ...options, ...call })
+  )
+  const outcome = run.result
+  // A resend answered by the host's entity lookup carries `{ sessionId }` only.
+  const lookup =
+    run.resent &&
+    outcome.modes === undefined &&
+    outcome.models === undefined &&
+    outcome.configOptions === undefined
+  if (!options?.ephemeral) await untilSessionVisible(outcome.sessionId, run.visibleAt)
+  return lookup ? { ...outcome, lookup: true } : outcome
 }
 
 export async function acpLoadSession(
@@ -908,7 +989,14 @@ export async function acpLoadSession(
   cwd: string,
   additionalDirectories?: string[]
 ): Promise<SessionReopenOutcome> {
-  return getAcpTransport().loadSession(agentId, sessionId, cwd, additionalDirectories)
+  const run = await ledgered(
+    'load_session',
+    `${agentId}|${sessionId}|${cwd}`,
+    (call) => getAcpTransport().loadSession(agentId, sessionId, cwd, additionalDirectories, call),
+    { acceptedWithoutResult: () => ({}) }
+  )
+  await untilSessionVisible(sessionId, run.visibleAt)
+  return run.result
 }
 
 export async function acpResumeSession(
@@ -917,15 +1005,24 @@ export async function acpResumeSession(
   cwd: string,
   additionalDirectories?: string[]
 ): Promise<SessionReopenOutcome> {
-  return getAcpTransport().resumeSession(agentId, sessionId, cwd, additionalDirectories)
+  const run = await ledgered(
+    'resume_session',
+    `${agentId}|${sessionId}|${cwd}`,
+    (call) => getAcpTransport().resumeSession(agentId, sessionId, cwd, additionalDirectories, call),
+    { acceptedWithoutResult: () => ({}) }
+  )
+  await untilSessionVisible(sessionId, run.visibleAt)
+  return run.result
 }
 
 export async function acpDeleteAgentSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
-  await getAcpTransport().deleteAgentSession(agentId, sessionId)
+  await ledgered('delete_agent_session', `${agentId}|${sessionId}`, (call) =>
+    getAcpTransport().deleteAgentSession(agentId, sessionId, call)
+  )
 }
 
 export async function acpLogout(agentId: AgentId): Promise<void> {
-  await getAcpTransport().logout(agentId)
+  await ledgered('logout_agent', agentId, (call) => getAcpTransport().logout(agentId, call))
 }
 
 export async function acpRespondElicitation(
@@ -935,18 +1032,30 @@ export async function acpRespondElicitation(
   // GH-935: `string[]` = multi-select (`multi-enum`) answers.
   content?: Record<string, string | number | boolean | string[]>
 ): Promise<void> {
-  await getAcpTransport().respondElicitation(agentId, requestId, action, content)
+  await ledgered('respond_elicitation', `${agentId}|${requestId}|${action}`, (call) =>
+    getAcpTransport().respondElicitation(agentId, requestId, action, content, call)
+  )
 }
 
 export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
-  await getAcpTransport().closeSession(agentId, sessionId)
+  await ledgered(
+    'close_session',
+    `${agentId}|${sessionId}`,
+    (call) => getAcpTransport().closeSession(agentId, sessionId, call),
+    { acceptedWithoutResult: () => undefined }
+  )
 }
 
 export async function acpDisposeEphemeralSession(
   agentId: AgentId,
   sessionId: SessionId
 ): Promise<void> {
-  await getAcpTransport().disposeEphemeralSession(agentId, sessionId)
+  await ledgered(
+    'dispose_ephemeral_session',
+    `${agentId}|${sessionId}`,
+    (call) => getAcpTransport().disposeEphemeralSession(agentId, sessionId, call),
+    { acceptedWithoutResult: () => undefined }
+  )
 }
 
 /**
@@ -963,7 +1072,12 @@ export async function acpPromoteSession(agentId: AgentId, sessionId: SessionId):
     throw new Error('promoteSession is not supported by this transport')
   }
   try {
-    await transport.promoteSession(agentId, sessionId)
+    await ledgered(
+      'promote_session',
+      `${agentId}|${sessionId}`,
+      (call) => transport.promoteSession?.(agentId, sessionId, call) ?? Promise.resolve(),
+      { acceptedWithoutResult: () => undefined }
+    )
     void logFrontendError({
       level: 'warn',
       source: 'acp-api.promoteSession',
@@ -994,7 +1108,12 @@ export async function acpRegisterDiscoveredSession(input: {
   updatedAt?: number
   projectId?: string
 }): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
-  return getAcpTransport().registerDiscoveredSession(input)
+  const run = await ledgered(
+    'register_discovered_session',
+    `${input.agentId}|${input.sessionId}|${input.cwd}|${input.projectId ?? ''}`,
+    (call) => getAcpTransport().registerDiscoveredSession(input, call)
+  )
+  return run.result
 }
 
 /**
@@ -1014,7 +1133,12 @@ export async function acpRecordAgentSwitch(
     summaryText: string
   }
 ): Promise<void> {
-  await getAcpTransport().recordAgentSwitch(sessionId, record)
+  await ledgered(
+    'record_agent_switch',
+    `${sessionId}|${record.fromConfigId}|${record.toConfigId}|${record.newSessionId}`,
+    (call) => getAcpTransport().recordAgentSwitch(sessionId, record, call),
+    { acceptedWithoutResult: () => undefined }
+  )
 }
 
 /**
@@ -1078,7 +1202,20 @@ export async function acpRespondPermission(
   requestId: string,
   optionId?: string
 ): Promise<void> {
-  await getAcpTransport().respondPermission(agentId, requestId, optionId)
+  // The desktop `acp_respond_permission` command takes no `commandId` (the
+  // approval is resolved in-process; a duplicate answer is already_resolved):
+  // claiming an id there would be false idempotency, so the desktop path sends
+  // the bare command.
+  if (isTauriContext()) {
+    await getAcpTransport().respondPermission(agentId, requestId, optionId)
+    return
+  }
+  await ledgered(
+    'respond_permission',
+    `${agentId}|${requestId}|${optionId ?? ''}`,
+    (call) => getAcpTransport().respondPermission(agentId, requestId, optionId, call),
+    { acceptedWithoutResult: () => undefined }
+  )
 }
 
 /**
@@ -1090,7 +1227,18 @@ export async function acpAnswerQuestion(
   questionId: string,
   values?: string[]
 ): Promise<void> {
-  await getAcpTransport().answerQuestion(agentId, questionId, values)
+  // Desktop `acp_answer_question` takes no `commandId` either (see
+  // `acpRespondPermission`): no id is claimed there.
+  if (isTauriContext()) {
+    await getAcpTransport().answerQuestion(agentId, questionId, values)
+    return
+  }
+  await ledgered(
+    'answer_question',
+    `${agentId}|${questionId}`,
+    (call) => getAcpTransport().answerQuestion(agentId, questionId, values, call),
+    { acceptedWithoutResult: () => undefined }
+  )
 }
 
 export async function acpAuthenticate(
@@ -1098,7 +1246,14 @@ export async function acpAuthenticate(
   methodId: string,
   gateway?: { baseUrl: string; apiKey?: string }
 ): Promise<void> {
-  await getAcpTransport().authenticate(agentId, methodId, gateway)
+  // `fresh`: the request may carry a gateway key the id cannot name, so a
+  // later try is never mistaken for a resend of an earlier one.
+  await ledgered(
+    'authenticate_agent',
+    `${agentId}|${methodId}`,
+    (call) => getAcpTransport().authenticate(agentId, methodId, gateway, call),
+    { fresh: true, acceptedWithoutResult: () => undefined }
+  )
 }
 
 /**
@@ -1109,7 +1264,18 @@ export async function acpAuthenticate(
  * received. Throws on validation failure / transport error.
  */
 export async function acpDeliverAuthRedirect(agentId: AgentId, url: string): Promise<number> {
-  return getAcpTransport().deliverAuthRedirect(agentId, url)
+  // `fresh`: the redirect URL (an auth code) cannot be named in the key, so
+  // each pasted URL is its own command.
+  const run = await ledgered(
+    'acp_deliver_auth_redirect',
+    agentId,
+    (call) => getAcpTransport().deliverAuthRedirect(agentId, url, call),
+    // `command_accepted` = the delivery ran on the first attempt but its HTTP
+    // status was not retained; the caller's success path (2xx) is the outcome
+    // the user is waiting for, so the replay resolves as delivered.
+    { fresh: true, acceptedWithoutResult: () => 200 }
+  )
+  return run.result
 }
 
 // Push the ACP turn (hard-cap) timeout override to the backend, in seconds,

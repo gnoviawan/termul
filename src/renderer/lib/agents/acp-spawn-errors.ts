@@ -1,4 +1,5 @@
 import type { AgentConfig, AuthMethod } from '@/lib/acp-api'
+import { DEFINITE_SPAWN_REJECTIONS } from '@/lib/acp-transport/tauri-verdicts'
 
 // Match only explicit process-spawn / executable-launch failures. Generic
 // "not found" / "cannot find" are intentionally excluded so messages about a
@@ -14,7 +15,9 @@ const ENOENT_PATTERN =
  * diagnostic is preserved.
  */
 export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'command'>): string {
-  const message = raw instanceof Error ? raw.message : String(raw)
+  // The desktop host's `ACP_AGENT_UNAVAILABLE:` / `ACP_INVALID_AGENT_CONFIG:`
+  // transport prefixes are not user-visible text.
+  const message = definiteSpawnRejectionMessage(raw)
   if (!ENOENT_PATTERN.test(message)) return message
 
   if (config?.command === 'npx') {
@@ -62,6 +65,12 @@ export interface PrepareChatError {
   category: SetupErrorCategory
   label: string
   detail: string
+  /**
+   * The host rejected the spawn deterministically (`agent_unavailable` /
+   * `invalid_agent_config`, AD-5): silent re-prepares must not retry it; only
+   * a user-initiated Retry may.
+   */
+  definite?: boolean
 }
 
 /** Short, actionable label for each setup-failure category. */
@@ -100,6 +109,47 @@ export function isAgentAuthRequiredError(raw: unknown): boolean {
   }
   const message = raw instanceof Error ? raw.message : typeof raw === 'string' ? raw : ''
   return message.startsWith(AGENT_AUTH_REQUIRED_PREFIX)
+}
+
+/**
+ * The host rejected a spawn deterministically (AD-5): the agent binary is
+ * missing / cannot start (`agent_unavailable`) or the config is unusable
+ * (`invalid_agent_config`). `/ws` carries the stable code; the Tauri `invoke`
+ * path carries the same verdict as a message prefix. Retrying the same request
+ * cannot succeed, so no code path may re-issue it automatically — only a user
+ * action (a new intent) may try again.
+ */
+export function isDefiniteSpawnRejection(raw: unknown): boolean {
+  if (typeof raw === 'object' && raw !== null) {
+    const code = (raw as { code?: unknown }).code
+    if (DEFINITE_SPAWN_REJECTIONS.some(([known]) => known === code)) return true
+  }
+  const message = rawErrorMessage(raw)
+  return DEFINITE_SPAWN_REJECTIONS.some(([, prefix]) => message.startsWith(`${prefix}: `))
+}
+
+/**
+ * The text of an error however it arrived: an `Error`, a bare string (Tauri), or
+ * a serialized `{ code, message }` object (it must read as its message, never
+ * `[object Object]`).
+ */
+function rawErrorMessage(raw: unknown): string {
+  if (raw instanceof Error) return raw.message
+  if (typeof raw === 'string') return raw
+  if (typeof raw === 'object' && raw !== null) {
+    const own = (raw as { message?: unknown }).message
+    if (typeof own === 'string') return own
+  }
+  return String(raw)
+}
+
+/** The human message of a definite spawn rejection, without the transport prefix. */
+function definiteSpawnRejectionMessage(raw: unknown): string {
+  const message = rawErrorMessage(raw)
+  for (const [, prefix] of DEFINITE_SPAWN_REJECTIONS) {
+    if (message.startsWith(`${prefix}: `)) return message.slice(prefix.length + 2)
+  }
+  return message
 }
 
 /**
@@ -196,6 +246,17 @@ export function classifySetupError(
           ? message
           : AGENT_AUTH_REQUIRED_CODE
     return { category: 'auth', label: SETUP_ERROR_LABELS.auth, detail }
+  }
+  // A definite host rejection (AD-5) is authoritative: it is a spawn failure
+  // whatever the wording, and it must never read as transport/auth (those
+  // categories evict and re-authenticate for a retry that cannot succeed).
+  if (isDefiniteSpawnRejection(raw)) {
+    return {
+      category: 'spawn',
+      label: SETUP_ERROR_LABELS.spawn,
+      detail: formatAcpSpawnError(definiteSpawnRejectionMessage(raw), config),
+      definite: true
+    }
   }
   if (ENOENT_PATTERN.test(message)) {
     return {

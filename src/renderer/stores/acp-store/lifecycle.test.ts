@@ -409,7 +409,8 @@ describe('failed session lifecycle (story 5)', () => {
     // a ghost chat.
     expect(invoke).toHaveBeenCalledWith('acp_close_session', {
       agentId: 'agent-retry',
-      sessionId: 'sess-late'
+      sessionId: 'sess-late',
+      commandId: expect.any(String)
     })
     expect(state.sessions['sess-late']?.status).toBe('closed')
     expect(state.sessionIndex.some((e) => e.id === 'sess-late')).toBe(false)

@@ -164,6 +164,17 @@ import {
 import { flushNextQueuedPrompt } from './slices/prompt'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
 
+/** Deliver the durable `prompt_complete` of the turn the last send dispatched. */
+function completeSentTurn(stopReason: string): void {
+  const userMessage = (useAcpStore.getState().messages.s1 ?? []).find((m) => m.role === 'user')
+  useAcpStore.getState()._onPromptComplete({
+    agentId: 'agent-1',
+    sessionId: 's1',
+    stopReason: stopReason as never,
+    turnId: userMessage?.id.slice('turn:'.length)
+  })
+}
+
 describe('acp-store', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -796,19 +807,23 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/boom/)
   })
 
-  it('sendPrompt clears the turn on command resolution even with no prompt_complete event', async () => {
+  it('a stop-reason reply resolves the command only: the turn ends from the durable prompt_complete', async () => {
     seedSession('s1', 'agent-1', false)
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('end_turn')
     await useAcpStore.getState().sendPrompt('s1', 'hello')
-    // no _onPromptComplete fired; the deferred safety-net must clear the turn
+    await flushTurnEnd()
+    // The reply is a receipt of the COMMAND; the log decides how the turn ended.
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+    completeSentTurn('end_turn')
     await flushTurnEnd()
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
-  it('sendPrompt surfaces a max_tokens stop reason as an error note', async () => {
+  it('a max_tokens prompt_complete surfaces as an error note', async () => {
     seedSession('s1', 'agent-1', false)
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('max_tokens')
     await useAcpStore.getState().sendPrompt('s1', 'hello')
+    completeSentTurn('max_tokens')
     await flushTurnEnd()
     expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/token limit/i)
   })
@@ -839,6 +854,7 @@ describe('acp-store', () => {
     // finalizeStreaming sees them (rAF fires async in jsdom).
     _flushCoalescedForTesting()
     await done
+    completeSentTurn('end_turn')
     await flushTurnEnd()
     const msgs = useAcpStore.getState().messages['s1']
     // user message + the streamed agent message (not dropped)

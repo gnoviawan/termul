@@ -91,6 +91,8 @@ import {
   type AcpTransport,
   AcpTransportError
 } from '@/lib/acp-transport'
+import { __detachedCommandCountForTesting, COMMAND_RESEND_DELAYS_MS } from '@/lib/command-engine'
+import { listUnresolvedCommands } from '@/lib/command-journal'
 import { logFrontendError } from '@/lib/log-api'
 import {
   _installTransportRecoveryForTesting,
@@ -103,8 +105,8 @@ import {
   initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
-import { activeWirePromptTurns, inFlightPromotions, pendingPromptCommands } from './shared-state'
-import { PROMPT_RECONCILE_RETRY_DELAYS_MS, resendPendingPrompts } from './slices/prompt-reconcile'
+import { activeWirePromptTurns, inFlightPromotions } from './shared-state'
+import { resendPendingPrompts } from './slices/prompt-reconcile'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
 
 type SendPromptFn = (
@@ -157,7 +159,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     expect(state.sessions.s1.activeTurn).toBe(true)
     expect(state.sessions.s1.openTurnId).toBeTruthy()
     expect(state.sessions.s1.lastError).toBeNull()
-    expect(state.pendingPromptReconcile.s1).toBe(true)
+    expect(state.promptCommandStates.s1?.phase).toBe('pending-reconcile')
     // The optimistic user message stays; nothing was re-queued for a new intent.
     expect(state.messages.s1).toHaveLength(1)
     expect(state.promptQueues.s1).toBeUndefined()
@@ -182,7 +184,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     // A receipt resolves the command only — never the turn.
     expect(state.sessions.s1.activeTurn).toBe(true)
     expect(state.sessions.s1.lastError).toBeNull()
-    expect(state.pendingPromptReconcile.s1).toBeUndefined()
+    expect(state.promptCommandStates.s1).toBeUndefined()
     // The durable terminator closes it (live or replayed).
     state._onPromptComplete({
       agentId: 'agent-1',
@@ -206,10 +208,10 @@ describe('prompt pending-reconcile (AD-6)', () => {
     resendPendingPrompts()
     await flushTurnEnd()
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
   })
 
-  it('a stop reason from the resend (turn ran on this call) closes the turn', async () => {
+  it('a stop reason from the resend resolves the command only; the turn ends from its durable prompt_complete', async () => {
     seedSession('s1', 'agent-1', false)
     let calls = 0
     installTransport(async () => {
@@ -222,8 +224,17 @@ describe('prompt pending-reconcile (AD-6)', () => {
     // The resend settles in microtasks; its deferred turn end is one macrotask later.
     await flushTurnEnd()
     await flushTurnEnd()
+    // The reply resolved the COMMAND; the turn view waits for the log.
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn',
+      turnId: activeWirePromptTurns.get('s1')
+    })
+    await flushTurnEnd()
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
   })
 
   it('a definite server rejection of the resend fails the turn (Retry = new intent)', async () => {
@@ -240,7 +251,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     const state = useAcpStore.getState()
     expect(state.sessions.s1.activeTurn).toBe(false)
     expect(state.sessions.s1.lastError).toContain('prompt rejected')
-    expect(state.pendingPromptReconcile.s1).toBeUndefined()
+    expect(state.promptCommandStates.s1).toBeUndefined()
   })
 
   it('a definite rejection on the FIRST dispatch is still failed and thrown', async () => {
@@ -250,7 +261,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     })
     await expect(useAcpStore.getState().sendPrompt('s1', 'x')).rejects.toThrow('bad prompt')
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
   })
 
   it('dedupes resends: one in flight at a time', async () => {
@@ -272,7 +283,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     expect(send).toHaveBeenCalledTimes(2) // first dispatch + ONE resend
     resendGate({ receipt: 'in_progress' })
     await vi.advanceTimersByTimeAsync(0)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     vi.useRealTimers()
   })
 
@@ -283,7 +294,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
       throw drop()
     })
     await useAcpStore.getState().sendPrompt('s1', 'deploy')
-    const ladder = PROMPT_RECONCILE_RETRY_DELAYS_MS
+    const ladder = COMMAND_RESEND_DELAYS_MS
     const slow = ladder[ladder.length - 1]
     for (const delay of ladder) {
       await vi.advanceTimersByTimeAsync(delay)
@@ -292,7 +303,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     // Ladder spent: the slow cap keeps retrying — one resend per slow interval.
     await vi.advanceTimersByTimeAsync(slow * 3)
     expect(send).toHaveBeenCalledTimes(1 + ladder.length + 3)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBe(true)
+    expect(useAcpStore.getState().promptCommandStates.s1?.phase).toBe('pending-reconcile')
     expect(useAcpStore.getState().sessions.s1.lastError).toBeNull()
     // Recovery events still resend at once; every call carries the one turn id.
     resendPendingPrompts()
@@ -308,7 +319,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
       throw drop()
     })
     await useAcpStore.getState().sendPrompt('s1', 'deploy')
-    const ladder = PROMPT_RECONCILE_RETRY_DELAYS_MS
+    const ladder = COMMAND_RESEND_DELAYS_MS
     for (const delay of ladder) await vi.advanceTimersByTimeAsync(delay)
     const before = send.mock.calls.length
     useAcpStore.getState()._onPromptComplete({
@@ -319,7 +330,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     })
     await vi.advanceTimersByTimeAsync(10 * ladder[ladder.length - 1])
     expect(send).toHaveBeenCalledTimes(before)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     vi.useRealTimers()
   })
 
@@ -330,13 +341,13 @@ describe('prompt pending-reconcile (AD-6)', () => {
       throw drop()
     })
     await useAcpStore.getState().sendPrompt('s1', 'deploy')
-    const ladder = PROMPT_RECONCILE_RETRY_DELAYS_MS
+    const ladder = COMMAND_RESEND_DELAYS_MS
     for (const delay of ladder) await vi.advanceTimersByTimeAsync(delay)
     const before = send.mock.calls.length
     useAcpStore.setState({ sessions: {} })
     await vi.advanceTimersByTimeAsync(3 * ladder[ladder.length - 1])
     expect(send).toHaveBeenCalledTimes(before)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     vi.useRealTimers()
   })
 
@@ -355,12 +366,12 @@ describe('prompt pending-reconcile (AD-6)', () => {
     const halted = useAcpStore.getState()
     expect(halted.sessions.s1.activeTurn).toBe(true)
     expect(halted.sessions.s1.lastError).toBeNull()
-    expect(halted.pendingPromptReconcile.s1).toBe(true)
+    expect(halted.promptCommandStates.s1?.phase).toBe('pending-reconcile')
     // Still resendable: the next recovery resolves it with the receipt.
     resendPendingPrompts()
     await flushTurnEnd()
     expect(calls).toBe(3)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
   })
 
@@ -392,12 +403,12 @@ describe('prompt pending-reconcile (AD-6)', () => {
       reconnectListener?.(false, false)
       await flushTurnEnd()
       expect(sendPrompt).toHaveBeenCalledTimes(1)
-      expect(useAcpStore.getState().pendingPromptReconcile.s1).toBe(true)
+      expect(useAcpStore.getState().promptCommandStates.s1?.phase).toBe('pending-reconcile')
       reconnectListener?.(true)
       reconnectListener?.(false, true)
       await flushTurnEnd()
       expect(sendPrompt).toHaveBeenCalledTimes(2)
-      expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+      expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     } finally {
       teardown()
     }
@@ -428,7 +439,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     reject(drop())
     await running
     await flushTurnEnd()
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     resendPendingPrompts()
     expect(send).toHaveBeenCalledTimes(1)
   })
@@ -455,7 +466,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     reject(drop())
     await running
     await flushTurnEnd()
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     expect(send).toHaveBeenCalledTimes(1)
   })
 
@@ -473,7 +484,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
       turnId,
       content: [{ type: 'text', text: 'deploy' }]
     })
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     await vi.advanceTimersByTimeAsync(60_000)
     expect(send).toHaveBeenCalledTimes(1)
     // …and the turn is still open until its terminator.
@@ -490,7 +501,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     await useAcpStore.getState().sendPrompt('s1', 'deploy')
     await useAcpStore.getState().cancelPrompt('s1')
     await vi.advanceTimersByTimeAsync(0)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
     await vi.advanceTimersByTimeAsync(60_000)
     resendPendingPrompts()
@@ -628,12 +639,12 @@ describe('prompt pending-reconcile (AD-6)', () => {
       throw drop()
     })
     await useAcpStore.getState().sendPrompt('s1', 'deploy')
-    expect(pendingPromptCommands.size).toBe(1)
+    expect(__detachedCommandCountForTesting()).toBe(1)
     expect(activeWirePromptTurns.size).toBe(1)
     useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' } as never)
-    expect(pendingPromptCommands.size).toBe(0)
+    expect(__detachedCommandCountForTesting()).toBe(0)
     expect(activeWirePromptTurns.size).toBe(0)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(send).toHaveBeenCalledTimes(1) // the cancelled timer never resends
     vi.useRealTimers()
@@ -656,7 +667,7 @@ describe('prompt pending-reconcile (AD-6)', () => {
     } as never)
     await flushTurnEnd()
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
-    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
   })
 
   it('snapshot recovery without a terminator resends the same turn id at once', async () => {
@@ -693,11 +704,11 @@ describe('prompt pending-reconcile (AD-6)', () => {
     })
     await useAcpStore.getState().sendPrompt('s1', 'one')
     await useAcpStore.getState().sendPrompt('s2', 'two')
-    expect(useAcpStore.getState().pendingPromptReconcile).toEqual({ s1: true, s2: true })
+    expect(Object.keys(useAcpStore.getState().promptCommandStates).sort()).toEqual(['s1', 's2'])
     expect(activeWirePromptTurns.size).toBe(2)
     const calls = send.mock.calls.length
     useAcpStore.getState()[handler]({ agentId: 'agent-1', message: 'boom' } as never)
-    expect(useAcpStore.getState().pendingPromptReconcile).toEqual({})
+    expect(useAcpStore.getState().promptCommandStates).toEqual({})
     expect(activeWirePromptTurns.size).toBe(0)
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
     expect(useAcpStore.getState().sessions.s2.activeTurn).toBe(false)
@@ -780,8 +791,15 @@ describe('turn terminators (AD-5): error / timeout / crashed', () => {
     })
     await flushTurnEnd()
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    const turnId = activeWirePromptTurns.get('s1')
     release('end_turn')
     await running
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn',
+      turnId
+    })
     await flushTurnEnd()
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
   })
@@ -809,5 +827,124 @@ describe('turn terminators (AD-5): error / timeout / crashed', () => {
     const session = useAcpStore.getState().sessions.s1
     expect(session.activeTurn).toBe(true)
     expect(session.lastError).toBeNull()
+  })
+})
+
+describe('command state surfaced to the chat (AD-6)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useRealTimers()
+    _resetAcpTransportForTests(null)
+    _resetAcpAuthForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetPromptReconcileForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  it('outcome_unknown on a resend holds the command ("outcome unknown — check"); a manual re-check resends the SAME turn id', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    const send = installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      if (calls === 2) throw new AcpTransportError('outcome_unknown', 'no longer known')
+      return { receipt: 'accepted' }
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    await vi.advanceTimersByTimeAsync(COMMAND_RESEND_DELAYS_MS[0])
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(useAcpStore.getState().promptCommandStates.s1).toMatchObject({
+      phase: 'pending-reconcile',
+      outcomeUnknown: true
+    })
+    // Not a failure, and nothing is resent on its own — not on the timer, not on recovery.
+    expect(useAcpStore.getState().sessions.s1.lastError).toBeNull()
+    await vi.advanceTimersByTimeAsync(10 * COMMAND_RESEND_DELAYS_MS[3])
+    resendPendingPrompts()
+    expect(send).toHaveBeenCalledTimes(2)
+
+    useAcpStore.getState().recheckPromptCommand('s1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(send).toHaveBeenCalledTimes(3)
+    expect(new Set(sentTurnIds(send)).size).toBe(1)
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
+    // Still open: the receipt resolved the command, the log ends the turn.
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    vi.useRealTimers()
+  })
+
+  it('a prompt turn id is never persisted: a reload cannot reuse it for another prompt, so nothing lingers', async () => {
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    expect(sentTurnIds(send)).toHaveLength(1)
+    // Even while the command waits to be confirmed, the journal holds nothing.
+    expect(listUnresolvedCommands()).toHaveLength(0)
+    expect(window.sessionStorage.length).toBe(0)
+  })
+
+  it('an ephemeral (warm-pool) create answered by lookup fails clearly instead of opening from history', async () => {
+    vi.useFakeTimers()
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: {} } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    let attempt = 0
+    _setAcpTransportForTests({
+      newSession: vi.fn(async () => {
+        attempt += 1
+        if (attempt === 1) throw drop()
+        return { sessionId: 's-ghost' }
+      }),
+      dispose: () => {}
+    } as unknown as AcpTransport)
+    const openHistorySession = vi.fn(async () => {})
+    useAcpStore.setState({ openHistorySession })
+    const creating = useAcpStore
+      .getState()
+      .createSession('agent-1', '/work', [], 'p1', { ephemeral: true, backendEphemeral: true })
+    const outcome = creating.then(
+      () => 'resolved',
+      (error: unknown) => error
+    )
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(String(await outcome)).toMatch(/temporary session could not be confirmed/)
+    expect(openHistorySession).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().sessions['s-ghost']).toBeUndefined()
+    vi.useRealTimers()
+  })
+
+  it('a reply-lost session create resent by the host lookup opens from history instead of building from the reply', async () => {
+    vi.useFakeTimers()
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: {} } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    const optionsSeen: Array<{ commandId?: string } | undefined> = []
+    let attempt = 0
+    _setAcpTransportForTests({
+      newSession: vi.fn(async (...args: unknown[]) => {
+        optionsSeen.push(args[3] as { commandId?: string })
+        attempt += 1
+        if (attempt === 1) throw drop()
+        return { sessionId: 's-late' }
+      }),
+      dispose: () => {}
+    } as unknown as AcpTransport)
+    const openHistorySession = vi.fn(async () => {})
+    useAcpStore.setState({ openHistorySession })
+    const creating = useAcpStore.getState().createSession('agent-1', '/work', [], 'p1')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await creating).toBe('s-late')
+    expect(optionsSeen[1]?.commandId).toBe(optionsSeen[0]?.commandId)
+    expect(openHistorySession).toHaveBeenCalledWith('s-late')
+    expect(useAcpStore.getState().sessions['s-late']).toBeUndefined()
+    vi.useRealTimers()
   })
 })

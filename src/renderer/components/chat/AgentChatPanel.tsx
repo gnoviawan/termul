@@ -209,7 +209,8 @@ export function AgentChatPanel({
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
   // uses the WS transport, so this stays `false` there.
   const transportReconnecting = useAcpStore((s) => s.transportReconnecting)
-  const promptUnconfirmed = useAcpStore((s) => Boolean(s.pendingPromptReconcile[sessionId]))
+  const promptCommand = useAcpStore((s) => s.promptCommandStates[sessionId])
+  const recheckPromptCommand = useAcpStore((s) => s.recheckPromptCommand)
 
   // Story 5.3 (AC1): OSK awareness on mobile web. On Tauri desktop, the hook
   // returns a no-OSK default and `useMobileWebShell()` is always false — the
@@ -815,13 +816,17 @@ export function AgentChatPanel({
         onEditMessage={seedComposer}
         onRetry={canOfferRetry ? handleRetry : undefined}
       />
-      {promptUnconfirmed && session.activeTurn && (
+      {promptCommand && session.activeTurn && (
         // AD-6: the host has not yet confirmed the last prompt (the connection
-        // dropped before the reply). Not an error — the same turn is resent.
+        // dropped before the reply). Not an error — the same turn id is resent, and
+        // the user can re-check it (same id; a new send only after a rejection).
         // In flow above the composer so it never covers the transcript.
         <div className={`${CHAT_GUTTER_X} pb-1 pt-2`}>
           <div className="mx-auto w-full max-w-3xl">
-            <PromptReconcileNotice />
+            <PromptReconcileNotice
+              state={promptCommand}
+              onRecheck={() => recheckPromptCommand(sessionId)}
+            />
           </div>
         </div>
       )}

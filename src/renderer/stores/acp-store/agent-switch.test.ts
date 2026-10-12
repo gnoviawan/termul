@@ -169,6 +169,7 @@ import {
   prepareChatKey,
   useAcpStore
 } from '@/stores/acp-store'
+import { activeWirePromptTurns } from './shared-state'
 import {
   FRESH,
   flushTurnEnd,
@@ -180,6 +181,16 @@ import {
 } from './testkit'
 
 // --- Story 3 (spec-in-chat-agent-switch): switchAgent orchestration --------
+
+/** Deliver the durable `prompt_complete` of the wire turn this client has open on `sessionId`. */
+function completeWireTurn(sessionId: string, agentId: string): void {
+  useAcpStore.getState()._onPromptComplete({
+    agentId,
+    sessionId,
+    stopReason: 'end_turn',
+    turnId: activeWirePromptTurns.get(sessionId)
+  })
+}
 
 describe('switchAgent (story 3)', () => {
   /** Read one field off a command's recorded invoke payloads. The field read
@@ -387,7 +398,8 @@ describe('switchAgent (story 3)', () => {
       fromConfigId: 'cfg-old',
       toConfigId: 'cfg-new',
       newSessionId: 's-new',
-      summaryText: expect.stringContaining('taking over')
+      summaryText: expect.stringContaining('taking over'),
+      commandId: expect.any(String)
     })
     // The tab was remapped old → new in the same pane.
     expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
@@ -587,6 +599,7 @@ describe('switchAgent (story 3)', () => {
     mockHappyPathInvoke()
     await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
     await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+    completeWireTurn('s-new', 'agent-new')
     await flushTurnEnd()
 
     // Second switch: cfg-new → cfg-3 from the NEW session. Rebind the old
@@ -1309,8 +1322,9 @@ describe('switchAgent (story 3)', () => {
     // No lost prompt: the queue drained by flushing (not by dropping).
     expect(state.promptQueues['s-old'] ?? []).toHaveLength(0)
 
-    // Drain the flushed turn's own deferred end (scheduleTurnEnd's
-    // setTimeout(0)) so the session is idle again, then send.
+    // The flushed turn ends from its durable prompt_complete (a command reply
+    // never ends a turn); drain its deferred end so the session is idle again.
+    completeWireTurn('s-old', 'agent-old')
     await flushTurnEnd()
     await flushTurnEnd()
     // The user's next send STILL executes the armed switch (the staged
@@ -1469,7 +1483,13 @@ describe('switchAgent (story 3)', () => {
 
     const state = useAcpStore.getState()
     // The redirect continued on the FINAL session/agent.
-    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-new',
+      's-new',
+      '/work',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     // The reinstall replaced the live-spliced projection wholesale, then the
     // chain re-spliced the durable old band — exactly one copy of every old
     // turn, no live/durable duplicates.
@@ -1905,7 +1925,13 @@ describe('switchAgent (story 3)', () => {
     const newOpen = useAcpStore.getState().openHistorySession('s-new')
     // Let s-new's open reach the parked loadSession before the source open
     await vi.waitFor(() =>
-      expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work', [])
+      expect(loadSession).toHaveBeenCalledWith(
+        'agent-new',
+        's-new',
+        '/work',
+        [],
+        expect.objectContaining({ commandId: expect.any(String) })
+      )
     )
     const oldOpen = useAcpStore.getState().openHistorySession('s-old')
     // Release s-new's parked resume so both opens can finish.
@@ -2059,7 +2085,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const state = useAcpStore.getState()
     // The continuation ran against the NEW session id — session/load carried
     // the new agent + new session, not the old pair.
-    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-new',
+      's-new',
+      '/work',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(loadSession).not.toHaveBeenCalledWith(
       expect.anything(),
       's-old',
@@ -2153,7 +2185,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
 
     const state = useAcpStore.getState()
     // Exactly the original path: load against the SAME session, no remap.
-    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain', '/work', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-plain',
+      's-plain',
+      '/work',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
     expect(state.sessions['s-plain']?.status).toBe('active')
     expect((state.messages['s-plain'] ?? []).length).toBe(2)
@@ -2221,7 +2259,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
 
     const state = useAcpStore.getState()
     // Degraded to the ORIGINAL path: the old agent/session reconnected.
-    expect(loadSession).toHaveBeenCalledWith('agent-corrupt', 's-corrupt', '/work', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-corrupt',
+      's-corrupt',
+      '/work',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
     expect(state.sessions['s-corrupt']?.status).toBe('active')
     // The corrupt marker still renders its separator on the old session.
@@ -2466,7 +2510,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const state = useAcpStore.getState()
     // ONE final target: the load ran for the FINAL session (C), never the
     // intermediate hop.
-    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-c', '/work', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-c',
+      's-c',
+      '/work',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(loadSession).not.toHaveBeenCalledWith(
       expect.anything(),
       's-b',
@@ -2574,7 +2624,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     // The caller's (pre-switch) agent was superseded: the continuation opened
     // the NEW session — no resume against the stale pair.
     expect(resumeSession).not.toHaveBeenCalledWith('agent-r', 's-res', '/w', expect.anything())
-    expect(loadSession).toHaveBeenCalledWith('agent-rn', 's-rnew', '/w', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-rn',
+      's-rnew',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     // The merged transcript + separator landed under the NEW id.
     const texts = (state.messages['s-rnew'] ?? []).map(
       (m) => m.blocks.find((b) => b.type === 'text')?.text
@@ -2715,7 +2771,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const state = useAcpStore.getState()
     // The FINAL session (the LAST marker's target) owns the reopen — never
     // the superseded first hop and never the original session.
-    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-final', '/work', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-c',
+      's-final',
+      '/work',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(loadSession).not.toHaveBeenCalledWith(
       expect.anything(),
       's-first-hop',
@@ -2807,7 +2869,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     // Exactly ONE load for the ORIGINAL pair — no chain walk (a second
     // loadSession or any other-session load means the redirect fired).
     expect(loadSession).toHaveBeenCalledTimes(1)
-    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain-un', '/work', [])
+    expect(loadSession).toHaveBeenCalledWith(
+      'agent-plain',
+      's-plain-un',
+      '/work',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     // Nothing switch-related: no remap, no tab surgery, no markers, and the
     // payload was fetched exactly once (no hop resolution re-read).
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()

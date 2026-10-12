@@ -141,6 +141,11 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import {
+  resetPersistedCatalogsForTests,
+  useOtherAgentCatalog
+} from '@/components/chat/agent-model-selector/use-model-catalog'
 import { _resetAcpTransportForTests } from '@/lib/acp-transport'
 import {
   _addEphemeralSessionIdForTesting,
@@ -568,7 +573,8 @@ describe('acp-store', () => {
       mcpServers: [],
       ephemeral: true,
       promotable: true,
-      projectId: 'p1'
+      projectId: 'p1',
+      commandId: expect.any(String)
     })
     // …and claiming it fires exactly one backend promote (durability handoff).
     expect(
@@ -601,6 +607,63 @@ describe('acp-store', () => {
 
     useAcpStore.getState().cancelPreparedChat(key)
     expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
+  })
+
+  it('background prepares never re-spawn a definitely rejected agent; the user Retry does (AD-5)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Ghost', command: 'ghost', args: [], env: {} })
+    const spawnCalls = () =>
+      (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(([cmd]) => cmd === 'acp_spawn_agent')
+        .length
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      'ACP_AGENT_UNAVAILABLE: agent failed to start: program not found'
+    )
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1', { silent: true })
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]).toMatchObject({
+        category: 'spawn',
+        definite: true
+      })
+    })
+    expect(spawnCalls()).toBe(1)
+
+    // Pool reseed / retarget / model-catalog seeds are silent: no second spawn.
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1', { silent: true })
+    await Promise.resolve()
+    expect(spawnCalls()).toBe(1)
+    expect(useAcpStore.getState().prepareChatErrors[key]?.definite).toBe(true)
+
+    // The user's Retry (cancel + non-silent prepare) is a new intent.
+    useAcpStore.getState().cancelPreparedChat(key)
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => expect(spawnCalls()).toBe(2))
+  })
+
+  it('useOtherAgentCatalog: the silent auto-load spawns a definitely rejected agent once; its Try again spawns again', async () => {
+    resetPersistedCatalogsForTests()
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Ghost', command: 'ghost', args: [], env: {} })
+    const spawnCalls = () =>
+      (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(([cmd]) => cmd === 'acp_spawn_agent')
+        .length
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
+      'ACP_AGENT_UNAVAILABLE: agent failed to start: program not found'
+    )
+    const { result, rerender } = renderHook(() =>
+      useOtherAgentCatalog({ cwd: '/work', projectId: 'p1' }, 'cfg-1', true)
+    )
+    await waitFor(() => expect(result.current.error?.definite).toBe(true))
+    expect(spawnCalls()).toBe(1)
+    rerender()
+    await Promise.resolve()
+    expect(spawnCalls()).toBe(1)
+
+    act(() => result.current.retry())
+    await waitFor(() => expect(spawnCalls()).toBe(2))
   })
 
   it('cancelPreparedChat does not close or delete an indexed persisted session (#882)', async () => {
@@ -755,7 +818,8 @@ describe('acp-store', () => {
     await vi.waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('acp_close_session', {
         agentId: 'agent-9',
-        sessionId: 'sess-stale'
+        sessionId: 'sess-stale',
+        commandId: expect.any(String)
       })
     })
     expect(useAcpStore.getState().sessions['sess-stale']?.status).toBe('closed')
@@ -811,7 +875,8 @@ describe('acp-store', () => {
     await vi.waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('acp_close_session', {
         agentId: 'agent-9',
-        sessionId: 'sess-stale'
+        sessionId: 'sess-stale',
+        commandId: expect.any(String)
       })
     })
   })
@@ -1209,7 +1274,8 @@ describe('acp-store', () => {
       agentId: 'agent-9',
       cwd: '/work',
       mcpServers: [],
-      projectId: 'p1'
+      projectId: 'p1',
+      commandId: expect.any(String)
     })
   })
 
@@ -1229,7 +1295,8 @@ describe('acp-store', () => {
       .testConnection({ name: 'X', command: 'x', args: [], env: {} })
     expect(caps).toEqual({ loadSession: true })
     expect(invoke).toHaveBeenNthCalledWith(1, 'acp_spawn_agent', {
-      config: { name: 'X', command: 'x', args: [], env: {} }
+      config: { name: 'X', command: 'x', args: [], env: {} },
+      commandId: expect.any(String)
     })
     expect(invoke).toHaveBeenNthCalledWith(2, 'acp_kill_agent', { agentId: 'agent-test' })
     expect(useAcpStore.getState().agents['agent-test']).toBeUndefined()

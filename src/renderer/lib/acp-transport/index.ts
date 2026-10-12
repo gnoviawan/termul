@@ -30,8 +30,12 @@ export {
   type AcpConnectionState,
   type AcpTransport,
   AcpTransportError,
-  isPendingPromptTransportError,
+  COMMAND_ACCEPTED_CODE,
+  COMMAND_IN_PROGRESS_CODE,
+  type CommandCallOptions,
+  isOutcomeUncertainError,
   isTransientAcpTransportError,
+  parseVisibleAt,
   type SessionCursor
 } from './types'
 export { resolveWsUrl, WsAcpTransport } from './ws-transport'

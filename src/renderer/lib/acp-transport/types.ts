@@ -33,15 +33,55 @@ import type {
 import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 
+/**
+ * What the user reads for a host `outcome_unknown` (the spec label): the host no
+ * longer knows whether the command took effect, and will not run it again.
+ */
+export const OUTCOME_UNKNOWN_MESSAGE = 'Outcome unknown — check whether it took effect'
+
 /** Thrown on WS (and mapped) failures — callers may toast `.message`. */
 export class AcpTransportError extends Error {
   readonly code: string
+  /**
+   * The session seq at which the host's reply became visible (`visible_at`),
+   * when the reply carried one. Absent on transport-local failures.
+   */
+  readonly visibleAt?: number
 
-  constructor(code: string, message: string) {
-    super(message)
+  constructor(code: string, message: string, visibleAt?: number) {
+    super(code === WS_ERROR_CODES.OUTCOME_UNKNOWN ? OUTCOME_UNKNOWN_MESSAGE : message)
     this.name = 'AcpTransportError'
     this.code = code
+    if (visibleAt !== undefined) this.visibleAt = visibleAt
   }
+}
+
+/**
+ * Local code for "the first run of this command is still going" — the `/ws`
+ * `{ receipt: "in_progress" }` payload and the Tauri `command_in_progress:`
+ * verdict. The command is neither accepted nor rejected: it stays pending.
+ */
+export const COMMAND_IN_PROGRESS_CODE = 'command_in_progress'
+/**
+ * Local code for the Tauri `command_accepted:` verdict: the command ran, its
+ * result is not retained. Resolves the command as accepted without a payload.
+ */
+export const COMMAND_ACCEPTED_CODE = 'command_accepted'
+
+/** Optional trailing bag on the ledgered mutating transport methods. */
+export interface CommandCallOptions {
+  /**
+   * Client-minted command id (AD-5): set on the frame (`/ws`) or passed as the
+   * `commandId` argument (Tauri) so the host can dedupe a same-id resend.
+   */
+  commandId?: string
+  /** Called with the host's `visible_at` session seq when the reply carries one. */
+  onVisibleAt?: (visibleAt: number) => void
+}
+
+/** `visible_at` is a session seq; anything else on the wire is ignored. */
+export function parseVisibleAt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
 export function isTransientAcpTransportError(error: unknown): error is AcpTransportError {
@@ -52,16 +92,21 @@ export function isTransientAcpTransportError(error: unknown): error is AcpTransp
 }
 
 /**
- * A prompt command failed in a way that says nothing about whether the host
- * accepted it: the socket dropped / timed out (transient) or the local
- * client refused to connect (`unauthorized` — the token-halt state). Such a
- * command stays pending-reconcile; only any OTHER code is an explicit host
- * rejection that fails the turn.
+ * A command failed in a way that says nothing about whether the host accepted
+ * it: the socket dropped / timed out (transient), the local client refused to
+ * connect (`unauthorized` — the token-halt state), the host no longer knows
+ * the outcome (`outcome_unknown`) or is still running the first attempt
+ * (`command_in_progress`). Such a command stays pending / pending-reconcile and
+ * is never reported as rejected; only any OTHER code is an explicit host
+ * rejection.
  */
-export function isPendingPromptTransportError(error: unknown): error is AcpTransportError {
+export function isOutcomeUncertainError(error: unknown): error is AcpTransportError {
   return (
     isTransientAcpTransportError(error) ||
-    (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.UNAUTHORIZED)
+    (error instanceof AcpTransportError &&
+      (error.code === WS_ERROR_CODES.UNAUTHORIZED ||
+        error.code === WS_ERROR_CODES.OUTCOME_UNKNOWN ||
+        error.code === COMMAND_IN_PROGRESS_CODE))
   )
 }
 
@@ -96,7 +141,10 @@ export interface AcpTransport {
    * `acp_install_agent` Tauri command. The request is `{ agentId }` only; the
    * host resolves everything from the trusted catalog.
    */
-  installAcpAgent(agentId: string): Promise<InstallAcpRegistryBinaryOutcome>
+  installAcpAgent(
+    agentId: string,
+    options?: CommandCallOptions
+  ): Promise<InstallAcpRegistryBinaryOutcome>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>
@@ -114,7 +162,7 @@ export interface AcpTransport {
    * failures throw `AcpTransportError`.
    */
   probeMcpServer(server: McpServerConfig): Promise<ProbeResult>
-  spawnAgent(config: AgentConfig): Promise<SpawnAgentResult>
+  spawnAgent(config: AgentConfig, options?: CommandCallOptions): Promise<SpawnAgentResult>
   killAgent(agentId: AgentId): Promise<void>
   listAgents(): Promise<AgentId[]>
   /**
@@ -153,48 +201,66 @@ export interface AcpTransport {
       worktreePath?: string
       worktreeBranch?: string
       additionalDirectories?: string[]
-    }
+    } & CommandCallOptions
   ): Promise<NewSessionOutcome>
   loadSession(
     agentId: AgentId,
     sessionId: SessionId,
     cwd: string,
-    additionalDirectories?: string[]
+    additionalDirectories?: string[],
+    options?: CommandCallOptions
   ): Promise<SessionReopenOutcome>
   resumeSession(
     agentId: AgentId,
     sessionId: SessionId,
     cwd: string,
-    additionalDirectories?: string[]
+    additionalDirectories?: string[],
+    options?: CommandCallOptions
   ): Promise<SessionReopenOutcome>
-  deleteAgentSession(agentId: AgentId, sessionId: SessionId): Promise<void>
-  logout(agentId: AgentId): Promise<void>
+  deleteAgentSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    options?: CommandCallOptions
+  ): Promise<void>
+  logout(agentId: AgentId, options?: CommandCallOptions): Promise<void>
   respondElicitation(
     agentId: AgentId,
     requestId: string,
     action: 'accept' | 'decline' | 'cancel',
     // GH-935: `string[]` = multi-select (`multi-enum`) answers; both
     // transports forward the map verbatim to the host.
-    content?: Record<string, string | number | boolean | string[]>
+    content?: Record<string, string | number | boolean | string[]>,
+    options?: CommandCallOptions
   ): Promise<void>
-  closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
-  disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
+  closeSession(agentId: AgentId, sessionId: SessionId, options?: CommandCallOptions): Promise<void>
+  disposeEphemeralSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    options?: CommandCallOptions
+  ): Promise<void>
   /**
    * Story 8: promote a backend-ephemeral warm-pool session to durable
    * (registers persistence metadata + clears the ephemeral mark server-side),
    * then (web) subscribe so subsequent turns stream to this client.
    * Idempotent for already-durable sessions.
    */
-  promoteSession?(agentId: AgentId, sessionId: SessionId): Promise<void>
+  promoteSession?(
+    agentId: AgentId,
+    sessionId: SessionId,
+    options?: CommandCallOptions
+  ): Promise<void>
   listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
-  registerDiscoveredSession(input: {
-    sessionId: SessionId
-    agentId: AgentId
-    cwd: string
-    title?: string | null
-    updatedAt?: number
-    projectId?: string
-  }): Promise<PersistedSessionSummary>
+  registerDiscoveredSession(
+    input: {
+      sessionId: SessionId
+      agentId: AgentId
+      cwd: string
+      title?: string | null
+      updatedAt?: number
+      projectId?: string
+    },
+    options?: CommandCallOptions
+  ): Promise<PersistedSessionSummary>
   /**
    * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch
    * marker. Host is the sole author — one `agent_switch` record that the
@@ -209,7 +275,8 @@ export interface AcpTransport {
       toConfigId: string
       newSessionId: string
       summaryText: string
-    }
+    },
+    options?: CommandCallOptions
   ): Promise<void>
   sendPrompt(
     agentId: AgentId,
@@ -241,13 +308,24 @@ export interface AcpTransport {
   ): Promise<SessionConfigOption[] | null>
   setMode(agentId: AgentId, sessionId: SessionId, modeId: string): Promise<void>
   setModel(agentId: AgentId, sessionId: SessionId, modelId: string): Promise<void>
-  respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void>
-  answerQuestion(agentId: AgentId, questionId: string, values?: string[]): Promise<void>
+  respondPermission(
+    agentId: AgentId,
+    requestId: string,
+    optionId?: string,
+    options?: CommandCallOptions
+  ): Promise<void>
+  answerQuestion(
+    agentId: AgentId,
+    questionId: string,
+    values?: string[],
+    options?: CommandCallOptions
+  ): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
   authenticate(
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string }
+    gateway?: { baseUrl: string; apiKey?: string },
+    options?: CommandCallOptions
   ): Promise<void>
   /**
    * Headless ACP auth paste-back (spec-acp-terminal-auth): deliver a
@@ -256,7 +334,7 @@ export interface AcpTransport {
    * (SSRF guard) and returns the replay's HTTP status. Tauri:
    * `acp_auth_deliver_redirect`; WS: `acp_deliver_auth_redirect`.
    */
-  deliverAuthRedirect(agentId: AgentId, url: string): Promise<number>
+  deliverAuthRedirect(agentId: AgentId, url: string, options?: CommandCallOptions): Promise<number>
   /**
    * Web/remote only: subscribe THIS connection to a registered project's
    * `fs_changed` events (`watch_project`). Unknown/archived project rejects

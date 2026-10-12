@@ -256,7 +256,13 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     // Degraded to ensureLiveAgent + decideResume: a fresh agent hosted a
     // normal session/load so the chat is usable again.
     expect(transport.spawnAgent).toHaveBeenCalledTimes(1)
-    expect(transport.loadSession).toHaveBeenCalledWith(FRESH_AGENT, 's-crashed', '/w', [])
+    expect(transport.loadSession).toHaveBeenCalledWith(
+      FRESH_AGENT,
+      's-crashed',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(false)
     expect(session?.openTurnId).toBeNull()
@@ -272,7 +278,9 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
       undefined
     )
     await flushTurnEnd()
-    expect(useAcpStore.getState().sessions['s-crashed']?.activeTurn).toBe(false)
+    // The reply resolved the command only; the turn ends from its durable
+    // `prompt_complete`, so it is still open here.
+    expect(useAcpStore.getState().sessions['s-crashed']?.activeTurn).toBe(true)
   })
 
   it('status:error + turnActive + trailing user + no owner still degrades (owner gate beats the persisted flag)', async () => {
@@ -313,7 +321,13 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     const session = useAcpStore.getState().sessions['s-stale']
     expect(transport.subscribeSession).not.toHaveBeenCalled()
     expect(transport.spawnAgent).toHaveBeenCalledTimes(1)
-    expect(transport.loadSession).toHaveBeenCalledWith(FRESH_AGENT, 's-stale', '/w', [])
+    expect(transport.loadSession).toHaveBeenCalledWith(
+      FRESH_AGENT,
+      's-stale',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(session?.status).toBe('active')
     expect(session?.agentId).toBe(FRESH_AGENT)
     expect(session?.activeTurn).toBe(false)
@@ -443,7 +457,13 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
 
     const session = useAcpStore.getState().sessions['s-closed-ok']
     expect(transport.subscribeSession).not.toHaveBeenCalled()
-    expect(transport.loadSession).toHaveBeenCalledWith(FRESH_AGENT, 's-closed-ok', '/w', [])
+    expect(transport.loadSession).toHaveBeenCalledWith(
+      FRESH_AGENT,
+      's-closed-ok',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(false)
     expect(session?.openTurnId).toBeNull()
@@ -496,7 +516,13 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
 
     const session = useAcpStore.getState().sessions['s-rerr']
     expect(transport.subscribeSession).not.toHaveBeenCalled()
-    expect(transport.resumeSession).toHaveBeenCalledWith('agent-r', 's-rerr', '/w', [])
+    expect(transport.resumeSession).toHaveBeenCalledWith(
+      'agent-r',
+      's-rerr',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(false)
     expect(session?.openTurnId).toBeNull()
@@ -515,7 +541,13 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     // The durable bug: previously this attached and waited on a dead agent's
     // prompt_complete forever. Now the resume-try runs instead.
     expect(transport.subscribeSession).not.toHaveBeenCalled()
-    expect(transport.resumeSession).toHaveBeenCalledWith('agent-r', 's-rstale', '/w', [])
+    expect(transport.resumeSession).toHaveBeenCalledWith(
+      'agent-r',
+      's-rstale',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(false)
     expect(session?.openTurnId).toBeNull()
@@ -574,7 +606,13 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
 
     const session = useAcpStore.getState().sessions['s-rclosed']
     expect(transport.subscribeSession).not.toHaveBeenCalled()
-    expect(transport.resumeSession).toHaveBeenCalledWith('agent-r', 's-rclosed', '/w', [])
+    expect(transport.resumeSession).toHaveBeenCalledWith(
+      'agent-r',
+      's-rclosed',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(false)
     expect(session?.openTurnId).toBeNull()
@@ -803,7 +841,13 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     // A full reopen ran: a fresh agent resolved through the config, agentId
     // repointed, and a normal session/load replayed the transcript.
     expect(transport.spawnAgent).toHaveBeenCalledTimes(1)
-    expect(transport.loadSession).toHaveBeenCalledWith(FRESH_AGENT, 's-stale-err', '/w', [])
+    expect(transport.loadSession).toHaveBeenCalledWith(
+      FRESH_AGENT,
+      's-stale-err',
+      '/w',
+      [],
+      expect.objectContaining({ commandId: expect.any(String) })
+    )
     expect(session?.agentId).toBe(FRESH_AGENT)
     expect(session?.status).toBe('active')
 

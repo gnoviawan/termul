@@ -9,6 +9,7 @@ import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 const {
   mockOpen,
   mockOpenDiscovered,
+  mockRecheckPromptCommand,
   mockRetryCrashed,
   mockRetryFailed,
   mockSendPromptBlocks,
@@ -31,7 +32,7 @@ const {
   launchingRef,
   oskRef,
   transportReconnectingRef,
-  pendingPromptReconcileRef,
+  promptCommandStatesRef,
   changedFilesPanelPropsRef,
   discoveredContextRef,
   messagesRef,
@@ -57,6 +58,7 @@ const {
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockOpenDiscovered: vi.fn(),
+  mockRecheckPromptCommand: vi.fn(),
   // Story 5: failed-launch retry routing (Retry must reach retryFailedLaunch,
   // never retryCrashedSession, and never toast a circular "Could not retry").
   mockRetryCrashed: vi.fn(),
@@ -111,7 +113,7 @@ const {
   // Story 5.3 (AC1/AC3): test seams for OSK + reconnect overlay.
   oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
   transportReconnectingRef: { current: false },
-  pendingPromptReconcileRef: { current: {} as Record<string, true> },
+  promptCommandStatesRef: { current: {} as Record<string, unknown> },
   changedFilesPanelPropsRef: {
     current: [] as Array<{
       cwd: string
@@ -243,7 +245,8 @@ vi.mock('@/stores/acp-store', () => {
     launchingSessionIds: launchingRef.current,
     discoveredReopenContexts: discoveredContextRef.current,
     transportReconnecting: transportReconnectingRef.current,
-    pendingPromptReconcile: pendingPromptReconcileRef.current,
+    promptCommandStates: promptCommandStatesRef.current,
+    recheckPromptCommand: mockRecheckPromptCommand,
     openHistorySession: mockOpen,
     openDiscoveredSession: mockOpenDiscovered,
     sendPrompt: vi.fn(),
@@ -450,6 +453,18 @@ function seedLiveSession(id: string, lastError: string | null = null): void {
   sessionRef.current = mockAcpSession({ id, cwd: '/w', status: 'closed', lastError })
 }
 
+/** A prompt command waiting to confirm (AD-6), as the store publishes it. */
+function pendingCommand(outcomeUnknown: boolean): Record<string, unknown> {
+  return {
+    commandId: 'turn-1',
+    kind: 'send_prompt',
+    entityKey: 's1',
+    phase: 'pending-reconcile',
+    outcomeUnknown,
+    attempts: 1
+  }
+}
+
 describe('AgentChatPanel restored-tab rehydration', () => {
   beforeEach(() => {
     sessionsMapRef.current = {}
@@ -634,7 +649,7 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
     launchingRef.current = {}
     oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
     transportReconnectingRef.current = false
-    pendingPromptReconcileRef.current = {}
+    promptCommandStatesRef.current = {}
     discoveredContextRef.current = {}
   })
 
@@ -688,7 +703,7 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
 
 describe('AgentChatPanel waiting-to-confirm state (AD-6)', () => {
   beforeEach(() => {
-    pendingPromptReconcileRef.current = {}
+    promptCommandStatesRef.current = {}
     transportReconnectingRef.current = false
   })
 
@@ -699,12 +714,43 @@ describe('AgentChatPanel waiting-to-confirm state (AD-6)', () => {
       activeTurn: true,
       openTurnId: 'turn-1'
     })
-    pendingPromptReconcileRef.current = { s1: true }
+    promptCommandStatesRef.current = { s1: pendingCommand(false) }
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(screen.getByRole('status')).toHaveTextContent('Waiting to confirm')
     // Not a failure: no error banner / Retry affordance.
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('labels a host-reported unknown outcome "Outcome unknown — check" and re-checks with the SAME command id', () => {
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      cwd: '/w',
+      activeTurn: true,
+      openTurnId: 'turn-1'
+    })
+    promptCommandStatesRef.current = { s1: pendingCommand(true) }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByRole('status')).toHaveTextContent('Outcome unknown — check')
+    // Still not a failure, and no new-send Retry while the command is unresolved.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check' }))
+    expect(mockRecheckPromptCommand).toHaveBeenCalledWith('s1')
+  })
+
+  it('shows "Checking…" and disables the re-check while the same-id resend runs', () => {
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      cwd: '/w',
+      activeTurn: true,
+      openTurnId: 'turn-1'
+    })
+    promptCommandStatesRef.current = {
+      s1: { ...pendingCommand(true), phase: 'pending', checking: true }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByRole('status')).toHaveTextContent('Checking…')
+    expect(screen.getByRole('button', { name: 'Re-check' })).toBeDisabled()
   })
 
   it('does not show it for a confirmed prompt or another session', () => {
@@ -714,7 +760,7 @@ describe('AgentChatPanel waiting-to-confirm state (AD-6)', () => {
       activeTurn: true,
       openTurnId: 'turn-1'
     })
-    pendingPromptReconcileRef.current = { other: true }
+    promptCommandStatesRef.current = { other: pendingCommand(false) }
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(screen.queryByText(/Waiting to confirm/)).toBeNull()
   })

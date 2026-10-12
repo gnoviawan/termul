@@ -7,7 +7,7 @@
 
 import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
-import type { AgentId, PromptDispatchResult, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
   maxPayloadSeq,
@@ -15,7 +15,10 @@ import {
   type SessionPayload
 } from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
+import { isDefiniteSpawnRejection } from '@/lib/agents/acp-spawn-errors'
 import { persistenceApi } from '@/lib/api'
+import { __resetCommandEngineForTesting } from '@/lib/command-engine'
+import { __clearCommandJournalForTesting } from '@/lib/command-journal'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { agentReuseKey, configIdFromReuseKey, detachedReuseKey } from '../acp-reuse-keys'
@@ -207,6 +210,33 @@ export function persistSession(
  * membership for the UI.
  */
 export const inFlightWarms = new Map<string, Promise<AgentId | null>>()
+/** The same spawns, un-swallowed: what a joining caller judges by its own options. */
+const inFlightWarmOutcomes = new Map<string, Promise<AgentId | null>>()
+
+/**
+ * Definite host spawn rejections (`agent_unavailable` / `invalid_agent_config`,
+ * AD-5) by reuse key, with the launch signature they were issued for. Silent
+ * (automatic) spawns skip a key whose config is unchanged — the same request
+ * cannot succeed — while a user-initiated spawn always tries again and a
+ * success or config edit clears the record. In-memory only; the signature
+ * never leaves the renderer.
+ */
+const definiteSpawnRejections = new Map<string, string>()
+
+function spawnSignature(config: AgentConfigLaunchFields): string {
+  return JSON.stringify([
+    config.name,
+    config.command,
+    config.args,
+    config.env,
+    config.allowTerminal
+  ])
+}
+
+/** Test-only: forget recorded definite spawn rejections between tests. */
+export function _resetDefiniteSpawnRejectionsForTesting(): void {
+  definiteSpawnRejections.clear()
+}
 
 /** In-flight `session/new` for a prepare key. */
 export const inFlightPrepared = new Map<string, Promise<SessionId | null>>()
@@ -373,35 +403,6 @@ export const sessionReopenGenerations = new Map<SessionId, number>()
 export const handoffOnlyTurnIds = new Set<string>()
 
 /**
- * AD-6: a prompt command whose reply was lost to a transport drop (outcome
- * unknown) — one per session, since a session runs one turn at a time. The
- * wire `turnId` is the command id (AD-5); every resend reuses it. The entry
- * lives until the host's answer (receipt / stop reason), the `user_prompt`
- * echo or `prompt_complete` for that turn, a definite rejection, or the user
- * cancelling. `resend` is bound to the original dispatch closure.
- */
-export interface PendingPromptCommand {
-  turnId: string
-  resend: () => Promise<PromptDispatchResult>
-  onResult: (result: PromptDispatchResult) => void
-  onDefiniteFailure: (err: unknown) => void
-  /**
-   * Timer-driven resends already spent. Picks the backoff delay (the ladder,
-   * then the last delay repeats as a slow cap) — NOT a limit: the timer keeps
-   * retrying until the command resolves. Recovery-driven resends do not count.
-   */
-  attempts: number
-  timer: ReturnType<typeof setTimeout> | undefined
-  inFlight: boolean
-  /** Stop abandoned the command: it must never be (re)dispatched again. */
-  cancelled?: boolean
-  /** Runs once a resend that was already in flight at Stop has settled. */
-  afterCancelSettled?: () => void
-}
-
-export const pendingPromptCommands = new Map<SessionId, PendingPromptCommand>()
-
-/**
  * Wire `turnId` of the turn THIS client dispatched and has not yet closed, per
  * session. A terminator citing a different turn id is a stale one (a replay of
  * an earlier turn) and must not end the current turn.
@@ -426,12 +427,11 @@ export function claimPromptTurnEnd(turnId: string): boolean {
   return true
 }
 
-/** Test-only: reset prompt-reconcile + turn-end tracking between tests. */
+/** Test-only: reset command engine + journal + definite-rejection + turn-end tracking between tests. */
 export function _resetPromptReconcileForTesting(): void {
-  for (const cmd of pendingPromptCommands.values()) {
-    clearTimeout(cmd.timer)
-  }
-  pendingPromptCommands.clear()
+  __resetCommandEngineForTesting()
+  __clearCommandJournalForTesting()
+  definiteSpawnRejections.clear()
   activeWirePromptTurns.clear()
   endedPromptTurnIds.clear()
 }
@@ -572,9 +572,25 @@ export async function adoptHostOwnedAgent(
 export type EnsureLiveAgentOptions = {
   /** Mirror membership in `warmingConfigs` for the prewarm UI. */
   registerWarmUi?: boolean
-  /** When true, spawn failures resolve to `null` instead of rejecting (prewarm). */
+  /**
+   * When true, spawn failures resolve to `null` instead of rejecting (prewarm),
+   * and a spawn the host already rejected definitively for the same config is
+   * not re-issued.
+   */
   silentSpawnFailure?: boolean
+  /**
+   * User-facing callers (history reopen) that stay silent about transient spawn
+   * failures but must show a definite rejection: it rejects even when
+   * `silentSpawnFailure` is set, and a recorded rejection does not block the
+   * attempt (the user's action is a new intent).
+   */
+  surfaceDefiniteRejection?: boolean
 }
+
+type AgentConfigLaunchFields = Pick<
+  AcpState['agentConfigs'][number],
+  'name' | 'command' | 'args' | 'env' | 'allowTerminal'
+>
 
 /**
  * Return a connected agent process for `configId + cwd`, spawning at most one
@@ -626,13 +642,28 @@ export function ensureLiveAgent(
   }
 
   const inFlight = inFlightWarms.get(reuseKey)
-  if (inFlight) return inFlight
+  if (inFlight) {
+    // Join the running spawn, but judge ITS failure by THIS caller's options: a
+    // prewarm (silent) started it, yet a user-initiated caller that joins must
+    // still see a definite rejection instead of a swallowed `null`.
+    const strict = inFlightWarmOutcomes.get(reuseKey)
+    return strict ? asCallerView(strict, reuseKey, configId, options) : inFlight
+  }
+
+  const signature = spawnSignature(config)
+  if (
+    options.silentSpawnFailure &&
+    !options.surfaceDefiniteRejection &&
+    definiteSpawnRejections.get(reuseKey) === signature
+  ) {
+    return Promise.resolve(null)
+  }
 
   if (options.registerWarmUi) {
     set((s) => ({ warmingConfigs: { ...s.warmingConfigs, [reuseKey]: true } }))
   }
 
-  const spawnPromise = (async (): Promise<AgentId | null> => {
+  const strictSpawn = (async (): Promise<AgentId | null> => {
     try {
       const agentId = await get().spawnAgent({
         configId,
@@ -642,6 +673,7 @@ export function ensureLiveAgent(
         env: config.env,
         allowTerminal: config.allowTerminal
       })
+      definiteSpawnRejections.delete(reuseKey)
       if (get().agentConfigs.some((c) => c.id === configId)) {
         set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
         return agentId
@@ -653,18 +685,11 @@ export function ensureLiveAgent(
       }
       return null
     } catch (err) {
-      if (options.silentSpawnFailure) {
-        console.warn('[acp] ensureLiveAgent failed for', reuseKey, err)
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp-store.ensureLiveAgent',
-          message: `Silent spawn failure for config ${configId} (${reuseKey}): ${err instanceof Error ? err.message : String(err)}`
-        })
-        return null
-      }
+      if (isDefiniteSpawnRejection(err)) definiteSpawnRejections.set(reuseKey, signature)
       throw err
     } finally {
       inFlightWarms.delete(reuseKey)
+      inFlightWarmOutcomes.delete(reuseKey)
       if (options.registerWarmUi) {
         set((s) => {
           const warming = { ...s.warmingConfigs }
@@ -675,8 +700,36 @@ export function ensureLiveAgent(
     }
   })()
 
+  const spawnPromise = asCallerView(strictSpawn, reuseKey, configId, options)
   inFlightWarms.set(reuseKey, spawnPromise)
+  inFlightWarmOutcomes.set(reuseKey, strictSpawn)
+  // Joiners derive their own view; this handle must never be an unhandled rejection.
+  strictSpawn.catch(() => undefined)
   return spawnPromise
+}
+
+/**
+ * The spawn's outcome as one caller sees it: a silent caller gets `null` for a
+ * failure (except a definite rejection it asked to surface); any other caller
+ * gets the rejection.
+ */
+function asCallerView(
+  strict: Promise<AgentId | null>,
+  reuseKey: string,
+  configId: string,
+  options: EnsureLiveAgentOptions
+): Promise<AgentId | null> {
+  if (!options.silentSpawnFailure) return strict
+  return strict.catch((err: unknown) => {
+    if (isDefiniteSpawnRejection(err) && options.surfaceDefiniteRejection) throw err
+    console.warn('[acp] ensureLiveAgent failed for', reuseKey, err)
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-store.ensureLiveAgent',
+      message: `Silent spawn failure for config ${configId} (${reuseKey}): ${err instanceof Error ? err.message : String(err)}`
+    })
+    return null
+  })
 }
 
 /**

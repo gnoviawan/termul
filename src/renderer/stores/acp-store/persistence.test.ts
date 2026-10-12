@@ -350,7 +350,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_load_session', {
       agentId: 'spawned-1',
       sessionId: 's-spawn',
-      cwd: '/w'
+      cwd: '/w',
+      commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')
     expect(useAcpStore.getState().sessions['s-spawn'].status).toBe('active')
@@ -1638,7 +1639,8 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       cwd: '/work',
       mcpServers: [{ type: 'stdio', name: 'Files', command: 'node', args: [], env: [] }],
-      projectId: 'p1'
+      projectId: 'p1',
+      commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions.derived.mcpServerCount).toBe(1)
     expect(toastWarning).toHaveBeenCalledWith(
@@ -1659,7 +1661,8 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       cwd: '/work',
       mcpServers: [],
-      projectId: 'p1'
+      projectId: 'p1',
+      commandId: expect.any(String)
     })
     expect(toastWarning).not.toHaveBeenCalled()
   })
@@ -1692,7 +1695,8 @@ describe('acp-store', () => {
       agentId: 'agent-9',
       cwd: '/work',
       mcpServers: servers,
-      projectId: 'p1'
+      projectId: 'p1',
+      commandId: expect.any(String)
     })
   })
 

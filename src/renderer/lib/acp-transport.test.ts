@@ -28,14 +28,19 @@ import { flagWebAuthUnauthorized } from '@/lib/web-auth-gate'
 import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
+  type AcpTransport,
   AcpTransportError,
+  COMMAND_ACCEPTED_CODE,
+  COMMAND_IN_PROGRESS_CODE,
   createAcpTransport,
+  isOutcomeUncertainError,
   isTransientAcpTransportError,
   resolveWsUrl,
   toTauriEventName,
   toWsEventType,
   WsAcpTransport
 } from './acp-transport'
+import { createTauriAcpTransport } from './acp-transport/tauri-transport'
 import { classifySetupError } from './agents/acp-spawn-errors'
 
 // Reconnect backoff carries ±25 % jitter; pin it to the neutral factor so the
@@ -4769,5 +4774,177 @@ describe('WsAcpTransport per-session degrade', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('WsAcpTransport commands (AD-5)', () => {
+  type Frame = { id: string; type: string; command_id?: string; payload: unknown }
+  /** Scripted host answers by request type; unscripted types use the stock fake. */
+  const script = new Map<string, (frame: Frame) => unknown>()
+  let socket: ScriptedSocket | undefined
+
+  class ScriptedSocket extends FakeWebSocket {
+    constructor(url: string) {
+      super(url)
+      socket = this
+    }
+    send(data: string): void {
+      const frame = JSON.parse(data) as Frame
+      let answer: unknown
+      for (const [type, handler] of script) {
+        if (type === frame.type) answer = handler(frame)
+      }
+      if (answer === undefined) {
+        super.send(data)
+        return
+      }
+      this.sent.push(data)
+      if (answer !== null) this.emitReply({ id: frame.id, ...(answer as object) })
+    }
+    framesOf(type: string): Frame[] {
+      return this.sent.map((raw) => JSON.parse(raw) as Frame).filter((f) => f.type === type)
+    }
+  }
+
+  async function connected(): Promise<WsAcpTransport> {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: ScriptedSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    return transport
+  }
+
+  afterEach(() => {
+    script.clear()
+    socket = undefined
+    _resetAcpTransportForTests(null)
+  })
+
+  it('sets frame.command_id (stable across resends) and keeps the per-attempt frame id fresh', async () => {
+    script.set('close_session', () => ({ ok: true, payload: {} }))
+    const transport = await connected()
+    await transport.closeSession('a1', 's1', { commandId: 'cmd-1' })
+    await transport.closeSession('a1', 's1', { commandId: 'cmd-1' })
+    const frames = socket?.framesOf('close_session') ?? []
+    expect(frames.map((f) => f.command_id)).toEqual(['cmd-1', 'cmd-1'])
+    expect(frames[0].id).not.toBe(frames[1].id)
+    transport.dispose()
+  })
+
+  it("sends no command_id when the caller has none (today's behavior)", async () => {
+    script.set('close_session', () => ({ ok: true, payload: {} }))
+    const transport = await connected()
+    await transport.closeSession('a1', 's1')
+    expect(socket?.framesOf('close_session')[0]).not.toHaveProperty('command_id')
+    transport.dispose()
+  })
+
+  it("hands the reply's visible_at to the caller and keeps the payload unwrapped", async () => {
+    script.set('load_session', () => ({ ok: true, payload: { models: null }, visible_at: 12 }))
+    const transport = await connected()
+    const seen: number[] = []
+    const outcome = await transport.loadSession('a1', 's1', '/w', undefined, {
+      commandId: 'cmd-2',
+      onVisibleAt: (v) => seen.push(v)
+    })
+    expect(outcome).toEqual({ models: null })
+    expect(seen).toEqual([12])
+    transport.dispose()
+  })
+
+  it('ignores a malformed visible_at', async () => {
+    script.set('load_session', () => ({ ok: true, payload: {}, visible_at: 'soon' }))
+    const transport = await connected()
+    const onVisibleAt = vi.fn()
+    await transport.loadSession('a1', 's1', '/w', undefined, { commandId: 'c', onVisibleAt })
+    expect(onVisibleAt).not.toHaveBeenCalled()
+    transport.dispose()
+  })
+
+  it('an in_progress receipt for a non-prompt command is "still pending", never a result', async () => {
+    script.set('spawn_agent', () => ({ ok: true, payload: { receipt: 'in_progress' } }))
+    const transport = await connected()
+    await expect(
+      transport.spawnAgent({ name: 'n', command: 'c', args: [], env: {} }, { commandId: 'cmd-3' })
+    ).rejects.toMatchObject({ code: COMMAND_IN_PROGRESS_CODE })
+    expect(isOutcomeUncertainError(new AcpTransportError(COMMAND_IN_PROGRESS_CODE, 'x'))).toBe(true)
+    transport.dispose()
+  })
+
+  it('carries visible_at on a rejection and the stable outcome_unknown code', async () => {
+    script.set('close_session', () => ({
+      ok: false,
+      err: { code: 'outcome_unknown', message: 'no longer known' },
+      visible_at: 4
+    }))
+    const transport = await connected()
+    const error = await transport.closeSession('a1', 's1', { commandId: 'c' }).catch((e) => e)
+    expect(error).toBeInstanceOf(AcpTransportError)
+    expect(error).toMatchObject({ code: 'outcome_unknown', visibleAt: 4 })
+    expect(isOutcomeUncertainError(error)).toBe(true)
+    transport.dispose()
+  })
+
+  it('outcome-uncertain covers transient, unauthorized and outcome_unknown only', () => {
+    for (const code of ['closed', 'timeout', 'unauthorized', 'outcome_unknown']) {
+      expect(isOutcomeUncertainError(new AcpTransportError(code, 'x'))).toBe(true)
+    }
+    for (const code of ['not_found', 'command_conflict', 'agent_unavailable', 'forbidden']) {
+      expect(isOutcomeUncertainError(new AcpTransportError(code, 'x'))).toBe(false)
+    }
+    expect(isOutcomeUncertainError(new Error('closed'))).toBe(false)
+  })
+})
+
+describe('TauriAcpTransport commands (AD-5)', () => {
+  const tauri = (): AcpTransport => createTauriAcpTransport()
+
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('passes commandId as the camelCase argument only when the caller has one', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await tauri().closeSession('a1', 's1', { commandId: 'cmd-1' })
+    await tauri().closeSession('a1', 's1')
+    expect(vi.mocked(invoke).mock.calls).toEqual([
+      ['acp_close_session', { agentId: 'a1', sessionId: 's1', commandId: 'cmd-1' }],
+      ['acp_close_session', { agentId: 'a1', sessionId: 's1' }]
+    ])
+  })
+
+  it.each([
+    ['outcome_unknown: the outcome is no longer known', 'outcome_unknown', true],
+    ['command_in_progress: first run still going', 'command_in_progress', true],
+    ['command_conflict: reused for another request', 'command_conflict', false],
+    ['invalid_command_id: bad id', 'invalid_command_id', false],
+    ['ACP_AGENT_UNAVAILABLE: program not found', 'agent_unavailable', false],
+    ['ACP_INVALID_AGENT_CONFIG: empty name', 'invalid_agent_config', false]
+  ])('maps the verdict "%s" to a typed %s error (uncertain=%s)', async (text, code, uncertain) => {
+    vi.mocked(invoke).mockRejectedValue(text)
+    const error = await tauri()
+      .spawnAgent({ name: 'n', command: 'c', args: [], env: {} }, { commandId: 'c1' })
+      .catch((e) => e)
+    expect(error).toBeInstanceOf(AcpTransportError)
+    expect(error.code).toBe(code)
+    // The prefix is stripped from the text the user reads.
+    expect(error.message).not.toMatch(/^(ACP_|outcome_|command_|invalid_)/)
+    expect(isOutcomeUncertainError(error)).toBe(uncertain)
+  })
+
+  it('command_accepted is the success of a no-result command, and a typed error where a result is needed', async () => {
+    vi.mocked(invoke).mockRejectedValue(
+      'command_accepted: the command ran; its result is not retained'
+    )
+    await expect(tauri().closeSession('a1', 's1', { commandId: 'c' })).resolves.toBeUndefined()
+    await expect(
+      tauri().spawnAgent({ name: 'n', command: 'c', args: [], env: {} }, { commandId: 'c' })
+    ).rejects.toMatchObject({ code: COMMAND_ACCEPTED_CODE })
+  })
+
+  it('leaves ordinary command errors untouched', async () => {
+    vi.mocked(invoke).mockRejectedValue('backend boom')
+    await expect(tauri().closeSession('a1', 's1', { commandId: 'c' })).rejects.toBe('backend boom')
   })
 })

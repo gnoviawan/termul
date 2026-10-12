@@ -775,7 +775,8 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       requestId: 'el-1',
       action: 'accept',
-      content: { q0: 'Red', q1: ['Logging', 'Tracing'] }
+      content: { q0: 'Red', q1: ['Logging', 'Tracing'] },
+      commandId: expect.any(String)
     })
   })
 

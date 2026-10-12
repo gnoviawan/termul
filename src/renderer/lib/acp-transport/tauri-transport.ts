@@ -21,7 +21,13 @@ import type {
   SpawnAgentResult
 } from '@/lib/acp-api'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
-import { type AcpTransport, AcpTransportError } from './types'
+import { mapTauriVerdict } from './tauri-verdicts'
+import {
+  type AcpTransport,
+  AcpTransportError,
+  COMMAND_ACCEPTED_CODE,
+  type CommandCallOptions
+} from './types'
 
 // --- Batched desktop events -------------------------------------------------
 //
@@ -74,6 +80,48 @@ export function _resetTauriEventRegistryForTests(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Ledgered commands (AD-5)
+// ---------------------------------------------------------------------------
+
+/**
+ * `invoke` a ledgered `acp_*` command: the client-minted `commandId` rides as
+ * the optional camelCase argument, and the host's verdict error strings
+ * (`outcome_unknown:`, `command_in_progress:`, ...) become typed
+ * {@link AcpTransportError}s with the same codes the `/ws` carrier uses.
+ */
+async function invokeCommand<T>(
+  command: string,
+  args: Record<string, unknown>,
+  options?: CommandCallOptions
+): Promise<T> {
+  try {
+    return await invoke<T>(
+      command,
+      options?.commandId ? { ...args, commandId: options.commandId } : args
+    )
+  } catch (error) {
+    throw mapTauriVerdict(error)
+  }
+}
+
+/**
+ * Like {@link invokeCommand} for commands with no result: a `command_accepted`
+ * verdict (the command ran, its reply is not retained) IS the success.
+ */
+async function invokeCommandVoid(
+  command: string,
+  args: Record<string, unknown>,
+  options?: CommandCallOptions
+): Promise<void> {
+  try {
+    await invokeCommand<unknown>(command, args, options)
+  } catch (error) {
+    if (error instanceof AcpTransportError && error.code === COMMAND_ACCEPTED_CODE) return
+    throw error
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tauri transport
 // ---------------------------------------------------------------------------
 
@@ -88,10 +136,12 @@ export function createTauriAcpTransport(): AcpTransport {
     // envelope so the launcher's `installedBinaryConfig(installed, ...)` gets
     // the bare `{ command, args }` (mirrors the web/WS transport). A failure
     // throws `AcpTransportError` carrying the install error code.
-    installAcpAgent: async (agentId) => {
-      const result = await invoke<IpcResult<InstallAcpRegistryBinaryOutcome>>('acp_install_agent', {
-        request: { agentId }
-      })
+    installAcpAgent: async (agentId, options) => {
+      const result = await invokeCommand<IpcResult<InstallAcpRegistryBinaryOutcome>>(
+        'acp_install_agent',
+        { request: { agentId } },
+        options
+      )
       if (result.success) {
         return result.data
       }
@@ -105,7 +155,8 @@ export function createTauriAcpTransport(): AcpTransport {
     fetchRegistrySnapshot: (forceRefresh = false) =>
       invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh }),
     probeMcpServer: (server) => invoke<ProbeResult>('acp_probe_mcp_server', { server }),
-    spawnAgent: (config) => invoke<SpawnAgentResult>('acp_spawn_agent', { config }),
+    spawnAgent: (config, options) =>
+      invokeCommand<SpawnAgentResult>('acp_spawn_agent', { config }, options),
     killAgent: async (agentId) => {
       await invoke('acp_kill_agent', { agentId })
     },
@@ -114,66 +165,79 @@ export function createTauriAcpTransport(): AcpTransport {
     // reply); `listAgents` above keeps returning bare ids.
     listAgentDetails: () => invoke<WsAgentSummary[]>('acp_list_agent_details'),
     newSession: (agentId, cwd, mcpServers, options) =>
-      invoke<NewSessionOutcome>('acp_new_session', {
-        agentId,
-        cwd,
-        mcpServers,
-        ...(options?.ephemeral ? { ephemeral: true } : {}),
-        ...(options?.promotable ? { promotable: true } : {}),
-        ...(options?.projectId ? { projectId: options.projectId } : {}),
-        ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
-        ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {}),
-        ...(options?.additionalDirectories?.length
-          ? { additionalDirectories: options.additionalDirectories }
-          : {})
-      }),
-    loadSession: (agentId, sessionId, cwd, additionalDirectories) =>
-      invoke<SessionReopenOutcome>('acp_load_session', {
-        agentId,
-        sessionId,
-        cwd,
-        ...(additionalDirectories?.length ? { additionalDirectories } : {})
-      }),
-    resumeSession: (agentId, sessionId, cwd, additionalDirectories) =>
-      invoke<SessionReopenOutcome>('acp_resume_session', {
-        agentId,
-        sessionId,
-        cwd,
-        ...(additionalDirectories?.length ? { additionalDirectories } : {})
-      }),
-    deleteAgentSession: async (agentId, sessionId) => {
-      await invoke('acp_delete_agent_session', { agentId, sessionId })
-    },
-    logout: async (agentId) => {
-      await invoke('acp_logout', { agentId })
-    },
-    respondElicitation: async (agentId, requestId, action, content) => {
-      await invoke('acp_respond_elicitation', { agentId, requestId, action, content })
-    },
-    closeSession: async (agentId, sessionId) => {
-      await invoke('acp_close_session', { agentId, sessionId })
-    },
-    disposeEphemeralSession: async (agentId, sessionId) => {
-      await invoke('acp_dispose_ephemeral_session', { agentId, sessionId })
-    },
-    promoteSession: async (agentId, sessionId) => {
-      await invoke('acp_promote_session', { agentId, sessionId })
-    },
+      invokeCommand<NewSessionOutcome>(
+        'acp_new_session',
+        {
+          agentId,
+          cwd,
+          mcpServers,
+          ...(options?.ephemeral ? { ephemeral: true } : {}),
+          ...(options?.promotable ? { promotable: true } : {}),
+          ...(options?.projectId ? { projectId: options.projectId } : {}),
+          ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
+          ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {}),
+          ...(options?.additionalDirectories?.length
+            ? { additionalDirectories: options.additionalDirectories }
+            : {})
+        },
+        options
+      ),
+    loadSession: (agentId, sessionId, cwd, additionalDirectories, options) =>
+      invokeCommand<SessionReopenOutcome>(
+        'acp_load_session',
+        {
+          agentId,
+          sessionId,
+          cwd,
+          ...(additionalDirectories?.length ? { additionalDirectories } : {})
+        },
+        options
+      ),
+    resumeSession: (agentId, sessionId, cwd, additionalDirectories, options) =>
+      invokeCommand<SessionReopenOutcome>(
+        'acp_resume_session',
+        {
+          agentId,
+          sessionId,
+          cwd,
+          ...(additionalDirectories?.length ? { additionalDirectories } : {})
+        },
+        options
+      ),
+    deleteAgentSession: (agentId, sessionId, options) =>
+      invokeCommandVoid('acp_delete_agent_session', { agentId, sessionId }, options),
+    logout: (agentId, options) => invokeCommandVoid('acp_logout', { agentId }, options),
+    respondElicitation: (agentId, requestId, action, content, options) =>
+      invokeCommandVoid(
+        'acp_respond_elicitation',
+        { agentId, requestId, action, content },
+        options
+      ),
+    closeSession: (agentId, sessionId, options) =>
+      invokeCommandVoid('acp_close_session', { agentId, sessionId }, options),
+    disposeEphemeralSession: (agentId, sessionId, options) =>
+      invokeCommandVoid('acp_dispose_ephemeral_session', { agentId, sessionId }, options),
+    promoteSession: (agentId, sessionId, options) =>
+      invokeCommandVoid('acp_promote_session', { agentId, sessionId }, options),
     // CAP-2: durable agent-switch marker — desktop parity with the WS
     // `record_agent_switch` route. The command validates + persists ONE
     // durable record then fans the synthetic event through its sinks.
-    recordAgentSwitch: (sessionId, record) =>
-      invoke<void>('acp_record_agent_switch', {
-        sessionId,
-        fromConfigId: record.fromConfigId,
-        toConfigId: record.toConfigId,
-        newSessionId: record.newSessionId,
-        summaryText: record.summaryText
-      }),
+    recordAgentSwitch: (sessionId, record, options) =>
+      invokeCommandVoid(
+        'acp_record_agent_switch',
+        {
+          sessionId,
+          fromConfigId: record.fromConfigId,
+          toConfigId: record.toConfigId,
+          newSessionId: record.newSessionId,
+          summaryText: record.summaryText
+        },
+        options
+      ),
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
-    registerDiscoveredSession: (input) =>
-      invoke<PersistedSessionSummary>('acp_register_discovered_session', input),
+    registerDiscoveredSession: (input, options) =>
+      invokeCommand<PersistedSessionSummary>('acp_register_discovered_session', input, options),
     sendPrompt: (agentId, sessionId, text, turnId, displayContent) =>
       invoke<PromptDispatchResult>('acp_send_prompt', {
         agentId,
@@ -206,17 +270,18 @@ export function createTauriAcpTransport(): AcpTransport {
     setModel: async (agentId, sessionId, modelId) => {
       await invoke('acp_set_model', { agentId, sessionId, modelId })
     },
+    // No `commandId`: the desktop commands for permission/question answers do not
+    // accept one (the facade claims no id for them on desktop).
     respondPermission: async (agentId, requestId, optionId) => {
       await invoke('acp_respond_permission', { agentId, requestId, optionId })
     },
     answerQuestion: async (agentId, questionId, values) => {
       await invoke('acp_answer_question', { agentId, questionId, values })
     },
-    authenticate: async (agentId, methodId, gateway) => {
-      await invoke('acp_authenticate', { agentId, methodId, gateway })
-    },
-    deliverAuthRedirect: (agentId, url) =>
-      invoke<number>('acp_auth_deliver_redirect', { agentId, url }),
+    authenticate: (agentId, methodId, gateway, options) =>
+      invokeCommandVoid('acp_authenticate', { agentId, methodId, gateway }, options),
+    deliverAuthRedirect: (agentId, url, options) =>
+      invokeCommand<number>('acp_auth_deliver_redirect', { agentId, url }, options),
     onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
       // Listener registry: one Tauri `listen` per event name, fanning out to
       // all subscribers. Required for `acp:events` batches — the fan-out is

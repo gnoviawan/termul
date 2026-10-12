@@ -63,6 +63,9 @@ import {
   type AcpConnectionState,
   type AcpTransport,
   AcpTransportError,
+  COMMAND_IN_PROGRESS_CODE,
+  type CommandCallOptions,
+  parseVisibleAt,
   type SessionCursor
 } from './types'
 import { SessionResubscribeRetry, type SessionRetryMode } from './ws-session-retry'
@@ -147,6 +150,11 @@ type Pending = {
    * extends past it. `undefined` when the server imposes no hard cap
    * (unlimited) or for non-send_prompt requests. */
   deadline?: number
+  /** AD-5: the request carries a `command_id` (an `in_progress` receipt then
+   * means "still pending", not a result). */
+  commandId?: string
+  /** Receives the reply's `visible_at` session seq. */
+  onVisibleAt?: (visibleAt: number) => void
 }
 
 type EventListener = (payload: unknown, eventSeq?: number) => void
@@ -723,8 +731,16 @@ export class WsAcpTransport implements AcpTransport {
    * HTTP `IpcBody.code`). The request is `{ agentId }` only; the host resolves
    * everything from the trusted catalog.
    */
-  async installAcpAgent(agentId: string): Promise<InstallAcpRegistryBinaryOutcome> {
-    return this.request<InstallAcpRegistryBinaryOutcome>('install_acp_agent', { agentId })
+  async installAcpAgent(
+    agentId: string,
+    options?: CommandCallOptions
+  ): Promise<InstallAcpRegistryBinaryOutcome> {
+    return this.request<InstallAcpRegistryBinaryOutcome>(
+      'install_acp_agent',
+      { agentId },
+      undefined,
+      options
+    )
   }
 
   /**
@@ -861,8 +877,8 @@ export class WsAcpTransport implements AcpTransport {
     }
   }
 
-  async spawnAgent(config: AgentConfig): Promise<SpawnAgentResult> {
-    return this.request<SpawnAgentResult>('spawn_agent', { config })
+  async spawnAgent(config: AgentConfig, options?: CommandCallOptions): Promise<SpawnAgentResult> {
+    return this.request<SpawnAgentResult>('spawn_agent', { config }, undefined, options)
   }
 
   async killAgent(agentId: AgentId): Promise<void> {
@@ -899,33 +915,42 @@ export class WsAcpTransport implements AcpTransport {
       worktreePath?: string
       worktreeBranch?: string
       additionalDirectories?: string[]
-    }
+    } & CommandCallOptions
   ): Promise<NewSessionOutcome> {
     // Web/remote: the host stamps `session.projectId` once — the explicit
     // `projectId` when registered (unknown → `not_found`), else the registry
     // project owning `cwd`, else the unassigned sentinel. Worktree fields are desktop-only (CAP-3) and ignored on the WS path —
     // the host-owned durable record keys state isolation on `cwd` regardless.
-    const outcome = await this.request<NewSessionOutcome>('create_session', {
-      agentId,
-      cwd,
-      mcpServers,
-      ephemeral: options?.ephemeral ?? false,
-      // Additive (story 8): sent only when set, so the wire shape is unchanged
-      // for every non-promotable create.
-      ...(options?.promotable ? { promotable: true } : {}),
-      ...(options?.projectId ? { projectId: options.projectId } : {}),
-      ...(options?.additionalDirectories?.length
-        ? { additionalDirectories: options.additionalDirectories }
-        : {})
-    })
+    const outcome = await this.request<NewSessionOutcome>(
+      'create_session',
+      {
+        agentId,
+        cwd,
+        mcpServers,
+        ephemeral: options?.ephemeral ?? false,
+        // Additive (story 8): sent only when set, so the wire shape is unchanged
+        // for every non-promotable create.
+        ...(options?.promotable ? { promotable: true } : {}),
+        ...(options?.projectId ? { projectId: options.projectId } : {}),
+        ...(options?.additionalDirectories?.length
+          ? { additionalDirectories: options.additionalDirectories }
+          : {})
+      },
+      undefined,
+      options
+    )
     if (outcome?.sessionId && !options?.ephemeral) {
       await this.subscribeSession(outcome.sessionId, null)
     }
     return outcome
   }
 
-  async disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
-    await this.request('dispose_ephemeral_session', { agentId, sessionId })
+  async disposeEphemeralSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('dispose_ephemeral_session', { agentId, sessionId }, undefined, options)
     this.subscribed.delete(sessionId)
     this.clearCursor(sessionId)
     this.seenTurnIds.delete(sessionId)
@@ -936,8 +961,12 @@ export class WsAcpTransport implements AcpTransport {
    * subscribe so the first real prompt + its stream reach this client
    * (ephemeral sessions intentionally skip the create-time subscribe).
    */
-  async promoteSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
-    await this.request('promote_session', { agentId, sessionId })
+  async promoteSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('promote_session', { agentId, sessionId }, undefined, options)
     // No lastSeq: the already-subscribed guard applies (a re-promote after a
     // reconnect must not force a duplicate live subscribe).
     //
@@ -984,14 +1013,20 @@ export class WsAcpTransport implements AcpTransport {
     agentId: AgentId,
     sessionId: SessionId,
     cwd: string,
-    additionalDirectories?: string[]
+    additionalDirectories?: string[],
+    options?: CommandCallOptions
   ): Promise<SessionReopenOutcome> {
-    const outcome = await this.request<SessionReopenOutcome>('load_session', {
-      agentId,
-      sessionId,
-      cwd,
-      ...(additionalDirectories?.length ? { additionalDirectories } : {})
-    })
+    const outcome = await this.request<SessionReopenOutcome>(
+      'load_session',
+      {
+        agentId,
+        sessionId,
+        cwd,
+        ...(additionalDirectories?.length ? { additionalDirectories } : {})
+      },
+      undefined,
+      options
+    )
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
   }
@@ -1000,20 +1035,30 @@ export class WsAcpTransport implements AcpTransport {
     agentId: AgentId,
     sessionId: SessionId,
     cwd: string,
-    additionalDirectories?: string[]
+    additionalDirectories?: string[],
+    options?: CommandCallOptions
   ): Promise<SessionReopenOutcome> {
-    const outcome = await this.request<SessionReopenOutcome>('resume_session', {
-      agentId,
-      sessionId,
-      cwd,
-      ...(additionalDirectories?.length ? { additionalDirectories } : {})
-    })
+    const outcome = await this.request<SessionReopenOutcome>(
+      'resume_session',
+      {
+        agentId,
+        sessionId,
+        cwd,
+        ...(additionalDirectories?.length ? { additionalDirectories } : {})
+      },
+      undefined,
+      options
+    )
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
   }
 
-  async closeSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
-    await this.request('close_session', { agentId, sessionId })
+  async closeSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('close_session', { agentId, sessionId }, undefined, options)
     this.subscribed.delete(sessionId)
     this.clearCursor(sessionId)
   }
@@ -1026,15 +1071,23 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<ListSessionsResponse>('list_sessions', { agentId, cwd, cursor })
   }
 
-  async registerDiscoveredSession(input: {
-    sessionId: SessionId
-    agentId: AgentId
-    cwd: string
-    title?: string | null
-    updatedAt?: number
-    projectId?: string
-  }): Promise<PersistedSessionSummary> {
-    return this.request<PersistedSessionSummary>('register_discovered_session', input)
+  async registerDiscoveredSession(
+    input: {
+      sessionId: SessionId
+      agentId: AgentId
+      cwd: string
+      title?: string | null
+      updatedAt?: number
+      projectId?: string
+    },
+    options?: CommandCallOptions
+  ): Promise<PersistedSessionSummary> {
+    return this.request<PersistedSessionSummary>(
+      'register_discovered_session',
+      input,
+      undefined,
+      options
+    )
   }
 
   // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker — the
@@ -1046,9 +1099,10 @@ export class WsAcpTransport implements AcpTransport {
       toConfigId: string
       newSessionId: string
       summaryText: string
-    }
+    },
+    options?: CommandCallOptions
   ): Promise<void> {
-    await this.request('record_agent_switch', { sessionId, ...record })
+    await this.request('record_agent_switch', { sessionId, ...record }, undefined, options)
   }
 
   async sendPrompt(
@@ -1097,12 +1151,16 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('cancel_prompt', { agentId, sessionId })
   }
 
-  async deleteAgentSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
-    await this.request('delete_agent_session', { agentId, sessionId })
+  async deleteAgentSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('delete_agent_session', { agentId, sessionId }, undefined, options)
   }
 
-  async logout(agentId: AgentId): Promise<void> {
-    await this.request('logout_agent', { agentId })
+  async logout(agentId: AgentId, options?: CommandCallOptions): Promise<void> {
+    await this.request('logout_agent', { agentId }, undefined, options)
   }
 
   async respondElicitation(
@@ -1110,9 +1168,15 @@ export class WsAcpTransport implements AcpTransport {
     requestId: string,
     action: 'accept' | 'decline' | 'cancel',
     // GH-935: `string[]` = multi-select (`multi-enum`) answers.
-    content?: Record<string, string | number | boolean | string[]>
+    content?: Record<string, string | number | boolean | string[]>,
+    options?: CommandCallOptions
   ): Promise<void> {
-    await this.request('respond_elicitation', { agentId, requestId, action, content })
+    await this.request(
+      'respond_elicitation',
+      { agentId, requestId, action, content },
+      undefined,
+      options
+    )
   }
 
   async setConfigOption(
@@ -1137,19 +1201,30 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('set_model', { agentId, sessionId, modelId })
   }
 
-  async respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void> {
-    await this.request('respond_permission', { agentId, requestId, optionId })
+  async respondPermission(
+    agentId: AgentId,
+    requestId: string,
+    optionId?: string,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('respond_permission', { agentId, requestId, optionId }, undefined, options)
   }
 
-  async answerQuestion(agentId: AgentId, questionId: string, values?: string[]): Promise<void> {
-    await this.request('answer_question', { agentId, questionId, values })
+  async answerQuestion(
+    agentId: AgentId,
+    questionId: string,
+    values?: string[],
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('answer_question', { agentId, questionId, values }, undefined, options)
   }
 
   /** Agent method auth — distinct from relay `authenticate` token gate. */
   async authenticate(
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string }
+    gateway?: { baseUrl: string; apiKey?: string },
+    options?: CommandCallOptions
   ): Promise<void> {
     // Await the authenticated relay socket before sending — `connect()`
     // resolves only after the WS token-gate handshake completes (openSocket
@@ -1163,7 +1238,7 @@ export class WsAcpTransport implements AcpTransport {
     // browser); Termul never invents a redirect URL or stores credentials.
     // Mirrors the desktop `acp_authenticate` Tauri command.
     await this.connect()
-    await this.request('authenticate_agent', { agentId, methodId, gateway })
+    await this.request('authenticate_agent', { agentId, methodId, gateway }, undefined, options)
   }
 
   /**
@@ -1174,12 +1249,18 @@ export class WsAcpTransport implements AcpTransport {
    * replay's HTTP status. Mirrors the desktop `acp_auth_deliver_redirect`
    * Tauri command.
    */
-  async deliverAuthRedirect(agentId: AgentId, url: string): Promise<number> {
+  async deliverAuthRedirect(
+    agentId: AgentId,
+    url: string,
+    options?: CommandCallOptions
+  ): Promise<number> {
     await this.connect()
-    const reply = await this.request<{ status: number }>('acp_deliver_auth_redirect', {
-      agentId,
-      url
-    })
+    const reply = await this.request<{ status: number }>(
+      'acp_deliver_auth_redirect',
+      { agentId, url },
+      undefined,
+      options
+    )
     // A malformed reply (older/buggy host) must not surface as "HTTP
     // undefined" — fail loudly instead of reporting a bogus status.
     if (typeof reply.status !== 'number') {
@@ -1888,10 +1969,31 @@ export class WsAcpTransport implements AcpTransport {
     // `timer` is `number | null`; the guard narrows to a live handle.
     if (pending.timer) clearTimeout(pending.timer)
     this.pending.delete(reply.id)
+    const visibleAt = parseVisibleAt(reply.visible_at)
     if (reply.ok) {
+      // A command resend that finds the first run still going answers
+      // `{ receipt: "in_progress" }` (prompts keep it as their ok payload):
+      // for any other command that is "still pending", never a result.
+      if (
+        pending.commandId &&
+        pending.type !== 'send_prompt' &&
+        isInProgressReceipt(reply.payload)
+      ) {
+        pending.reject(
+          new AcpTransportError(
+            COMMAND_IN_PROGRESS_CODE,
+            `${pending.type} is still running on the host`,
+            visibleAt
+          )
+        )
+        return
+      }
+      if (visibleAt !== undefined) pending.onVisibleAt?.(visibleAt)
       pending.resolve(reply.payload)
     } else {
-      pending.reject(new AcpTransportError(reply.err.code, reply.err.message || reply.err.code))
+      pending.reject(
+        new AcpTransportError(reply.err.code, reply.err.message || reply.err.code, visibleAt)
+      )
     }
   }
 
@@ -2137,24 +2239,33 @@ export class WsAcpTransport implements AcpTransport {
   private request<T = unknown>(
     type: WsRequestType,
     payload: unknown,
-    timeoutOverrideMs?: number
+    timeoutOverrideMs?: number,
+    command?: CommandCallOptions
   ): Promise<T> {
     // Ensure connected first (unless socket already open — avoids reconnect loops).
     if (this.socket?.readyState === WebSocket.OPEN) {
-      return this.sendWhenOpen(type, payload, timeoutOverrideMs)
+      return this.sendWhenOpen(type, payload, timeoutOverrideMs, command)
     }
-    return this.connect().then(() => this.sendWhenOpen(type, payload, timeoutOverrideMs))
+    return this.connect().then(() => this.sendWhenOpen(type, payload, timeoutOverrideMs, command))
   }
 
   /** Send a request assuming the socket is already OPEN (used during auth handshake). */
   private sendWhenOpen<T = unknown>(
     type: WsRequestType,
     payload: unknown,
-    timeoutOverrideMs?: number
+    timeoutOverrideMs?: number,
+    command?: CommandCallOptions
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const id = randomUUID()
-      const frame: WsRequest = { id, type, payload }
+      // `id` is a fresh per-attempt correlation id; `command_id` is the stable
+      // AD-5 command id every resend of one command reuses.
+      const frame: WsRequest = {
+        id,
+        type,
+        payload,
+        ...(command?.commandId ? { command_id: command.commandId } : {})
+      }
       const payloadRecord =
         payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null
       const sessionId =
@@ -2205,7 +2316,9 @@ export class WsAcpTransport implements AcpTransport {
         timer,
         type,
         sessionId,
-        deadline
+        deadline,
+        commandId: command?.commandId,
+        onVisibleAt: command?.onVisibleAt
       })
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
         if (timer) clearTimeout(timer)
@@ -2216,6 +2329,15 @@ export class WsAcpTransport implements AcpTransport {
       this.socket.send(JSON.stringify(frame))
     })
   }
+}
+
+/** The host's `{ receipt: "in_progress" }` answer to a resend of a running command. */
+function isInProgressReceipt(payload: unknown): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { receipt?: unknown }).receipt === 'in_progress'
+  )
 }
 
 function extractTurnId(payload: unknown): string | null {

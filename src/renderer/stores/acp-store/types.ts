@@ -58,7 +58,11 @@ import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import type { TurnEndNotice } from '@/lib/agent-chat-notify'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
+import type { CommandState } from '@/lib/command-engine'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
+
+/** A prompt command's state while the chat waits to confirm it (AD-6). */
+export type PromptCommandState = CommandState
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
@@ -474,11 +478,13 @@ export interface AcpState {
   /** Sessions whose auto-flush is suppressed during cancel+send-now. */
   suppressQueueFlush: Record<SessionId, true>
   /**
-   * AD-6: sessions whose in-flight prompt command lost its reply to a
-   * transport drop (outcome unknown). The chat shows a non-error "Waiting to
-   * confirm" state while the same `turnId` is resent; never a failure.
+   * AD-6: the command state of sessions whose in-flight prompt command lost
+   * its reply to a transport drop (`pending-reconcile`). The chat shows a
+   * non-error "Waiting to confirm" state while the same `turnId` is resent —
+   * or "outcome unknown — check" when the host no longer knows the outcome;
+   * never a failure. Absent once the command resolves.
    */
-  pendingPromptReconcile: Record<SessionId, true>
+  promptCommandStates: Record<SessionId, PromptCommandState>
 
   /**
    * Story 5.3 (AC3): WS transport-level reconnect flag. True while the WS
@@ -799,6 +805,11 @@ export interface AcpState {
     options?: { skipUserAppend?: boolean; displayBlocks?: ContentBlock[] }
   ) => Promise<void>
   cancelPrompt: (sessionId: SessionId) => Promise<void>
+  /**
+   * AD-6 manual re-check of a prompt waiting to confirm: resends the SAME turn
+   * id now (the only way out of an `outcome_unknown` hold besides Stop).
+   */
+  recheckPromptCommand: (sessionId: SessionId) => void
   removeQueuedPrompt: (sessionId: SessionId, queueId: string) => void
   /** Cancel the active turn if needed, then send a queued prompt immediately. */
   sendQueuedPromptNow: (sessionId: SessionId, queueId: string) => Promise<void>

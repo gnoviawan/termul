@@ -317,7 +317,19 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
     const authCall = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')
-    expect(authCall?.[1]).toEqual({ agentId: 'agent-1', methodId: 'cursor_login' })
+    expect(authCall?.[1]).toEqual({
+      agentId: 'agent-1',
+      methodId: 'cursor_login',
+      commandId: expect.any(String)
+    })
+    // The auth-required reply is a definite rejection: the retried session/new
+    // is a NEW command (a same-id resend would replay the rejection).
+    const newSessionIds = vi
+      .mocked(invoke)
+      .mock.calls.filter(([cmd]) => cmd === 'acp_new_session')
+      .map(([, args]) => (args as { commandId: string }).commandId)
+    expect(newSessionIds).toHaveLength(2)
+    expect(newSessionIds[1]).not.toBe(newSessionIds[0])
   })
 
   it('authenticates on demand even when the agent_spawned event never arrives (CAP-4 no no-auth fallback)', async () => {
@@ -436,7 +448,8 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
     expect(vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')?.[1]).toEqual({
       agentId: 'agent-factory',
-      methodId: 'factory-api-key'
+      methodId: 'factory-api-key',
+      commandId: expect.any(String)
     })
   })
   it('lets a fresh Factory process use an existing browser login without choosing a method', async () => {
@@ -599,7 +612,11 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().authenticateAgent('agent-9', 'api_key')
     const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
     expect(authCalls).toHaveLength(1)
-    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
+    expect(authCalls[0]?.[1]).toEqual({
+      agentId: 'agent-9',
+      methodId: 'api_key',
+      commandId: expect.any(String)
+    })
     // Success is remembered: the method id is persisted per-config (never a
     // credential) so future processes can auto-authenticate on demand.
     await vi.waitFor(() => {
@@ -620,7 +637,11 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().authenticateAgent('agent-9', 'chatgpt')
     const allAuthCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
     expect(allAuthCalls).toHaveLength(2)
-    expect(allAuthCalls[1]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'chatgpt' })
+    expect(allAuthCalls[1]?.[1]).toEqual({
+      agentId: 'agent-9',
+      methodId: 'chatgpt',
+      commandId: expect.any(String)
+    })
   })
 
   it('keeps the multi-auth agent live and reusable after the prepare failure', async () => {
@@ -736,7 +757,11 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().authenticateAgent('agent-2', 'late_method')
     const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
     expect(authCalls).toHaveLength(1)
-    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-2', methodId: 'late_method' })
+    expect(authCalls[0]?.[1]).toEqual({
+      agentId: 'agent-2',
+      methodId: 'late_method',
+      commandId: expect.any(String)
+    })
   })
 
   it('rejects an empty/whitespace method id without sending an authenticate frame', async () => {
@@ -782,7 +807,11 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().authenticateAgent('agent-1', '  cursor_login  ')
     const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
     expect(authCalls).toHaveLength(1)
-    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-1', methodId: 'cursor_login' })
+    expect(authCalls[0]?.[1]).toEqual({
+      agentId: 'agent-1',
+      methodId: 'cursor_login',
+      commandId: expect.any(String)
+    })
   })
 
   it('keeps a newer in-flight authenticate when a stale cleanup settles late', async () => {
@@ -1122,7 +1151,12 @@ describe('acp provider authentication & recovery', () => {
       expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
 
       await useAcpStore.getState().authenticateAgent('agent-1', 'devin-browser')
-      expect(authenticate).toHaveBeenCalledWith('agent-1', 'devin-browser', undefined)
+      expect(authenticate).toHaveBeenCalledWith(
+        'agent-1',
+        'devin-browser',
+        undefined,
+        expect.objectContaining({ commandId: expect.any(String) })
+      )
       expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
     } finally {
       teardown()
@@ -1337,7 +1371,11 @@ describe('acp provider authentication & recovery', () => {
     // session/new → authenticate(remembered) → session/new — and no picker.
     expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
     const authCall = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')
-    expect(authCall?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
+    expect(authCall?.[1]).toEqual({
+      agentId: 'agent-9',
+      methodId: 'api_key',
+      commandId: expect.any(String)
+    })
   })
 
   it('shows the picker for a multi-method agent with no remembered method', async () => {
@@ -1942,8 +1980,20 @@ describe('acp provider authentication & recovery', () => {
     await Promise.all([pending, click])
     const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
     expect(authCalls).toHaveLength(2)
-    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
-    expect(authCalls[1]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'chatgpt' })
+    expect(authCalls[0]?.[1]).toEqual({
+      agentId: 'agent-9',
+      methodId: 'api_key',
+      commandId: expect.any(String)
+    })
+    expect(authCalls[1]?.[1]).toEqual({
+      agentId: 'agent-9',
+      methodId: 'chatgpt',
+      commandId: expect.any(String)
+    })
+    // Two different methods are two different commands: never one shared id.
+    expect((authCalls[1]?.[1] as { commandId: string }).commandId).not.toBe(
+      (authCalls[0]?.[1] as { commandId: string }).commandId
+    )
   })
 
   it('does not persist a successful terminal-method sign-in as the remembered method', async () => {

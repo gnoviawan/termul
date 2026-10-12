@@ -573,6 +573,11 @@ async function redirectSwitchedReopen(
   return true
 }
 
+// AD-6 exception (reply-driven session state kept): `session/load` and
+// `session/resume` report the session's modes / models / config options ONLY in
+// the reply (the replayed updates carry changes, not the initial state), so the
+// reply is merged for exactly that data — and only over values nothing else
+// moved (`baseline`).
 function mergeReopenOutcomeIfUnchanged(
   set: TurnEndSetter,
   sessionId: SessionId,
@@ -901,9 +906,20 @@ async function openHistorySessionInner(
     // No owning agent — ensure one for the reopen anyway so the chat is
     // usable (covers the plain idle path AND the dead-turn degrade above:
     // the fresh agent hosts the resumed session, never the dead turn).
-    const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
-      silentSpawnFailure: true
-    })
+    let ensured: AgentId | null
+    try {
+      ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
+        silentSpawnFailure: true,
+        surfaceDefiniteRejection: true
+      })
+    } catch (err) {
+      // AD-5: a missing binary / invalid config is a definite rejection —
+      // reopening on the dead owner cannot work and a silent retry cannot fix
+      // it, so show the host's reason (the Retry button is a new intent).
+      if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+      set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
+      throw err
+    }
     if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
     if (ensured) liveAgentId = ensured
   }
@@ -1375,6 +1391,33 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         })
       )
       const sessionId = outcome.sessionId
+      // AD-5/AD-6: a RESEND answered by the host's entity lookup (`lookup`) is a
+      // receipt for a session an earlier, reply-lost attempt created. It carries
+      // no modes/models/options, so it resolves the COMMAND only: the entity is
+      // opened through the history-open flow (durable transcript + live attach),
+      // never built from the reply.
+      if (outcome.lookup) {
+        // A warm-pool / ephemeral session is live-only (not persisted until it is
+        // promoted), so there is no history to open it from: fail clearly and let
+        // the caller start over with a new intent instead of binding a ghost.
+        if (opts?.ephemeral || opts?.backendEphemeral) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.createSession.lookup',
+            message: `session/new for agent ${agentId} was answered by entity lookup (session ${sessionId}) but the session is ephemeral; it cannot be reopened from history`
+          })
+          throw new Error(
+            'The temporary session could not be confirmed after the connection dropped. Try again.'
+          )
+        }
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.createSession.lookup',
+          message: `session/new for agent ${agentId} was answered by entity lookup (session ${sessionId}); opening it from history`
+        })
+        await get().openHistorySession(sessionId)
+        return sessionId
+      }
       invalidateSessionReopen(sessionId)
       set((s) => {
         // Merge with any record an event may have created during the await window,

@@ -45,7 +45,7 @@ export const FRESH = {
   promptQueues: {},
   turnEndNotices: {},
   suppressQueueFlush: {},
-  pendingPromptReconcile: {},
+  promptCommandStates: {},
   transportReconnecting: false,
   pendingBrowserOpen: {}
 }

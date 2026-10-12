@@ -217,7 +217,8 @@ describe('warm session pool', () => {
       mcpServers: [],
       ephemeral: true,
       promotable: true,
-      projectId: 'p1'
+      projectId: 'p1',
+      commandId: expect.any(String)
     })
   })
 

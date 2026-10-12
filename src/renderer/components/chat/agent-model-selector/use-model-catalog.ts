@@ -149,10 +149,17 @@ export function useOtherAgentCatalog(
     })
   }, [error, configId])
 
+  // "Try again" is the user's new intent: drop the recorded failure first so a
+  // definite host rejection (AD-5) — which silent seeds never retry — runs again.
+  const retry = useCallback(() => {
+    if (key) useAcpStore.getState().cancelPreparedChat(key)
+    prepare()
+  }, [key, prepare])
+
   return {
     catalog: known ?? null,
     loading: loading && !known,
     error: known ? null : error,
-    retry: prepare
+    retry
   }
 }

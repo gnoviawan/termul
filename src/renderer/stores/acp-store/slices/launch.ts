@@ -201,6 +201,11 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
     if (!configId || trimmedCwd.length === 0) return
     const key = prepareChatKey(configId, trimmedCwd, mcpServers)
     if (get().preparedSessions[key] || inFlightPrepared.has(key)) return
+    // AD-5: a definite host rejection (missing binary / invalid config) is not
+    // retried by background (`silent`) seeds — pool reseed, retarget, model
+    // catalog. A user-initiated (non-silent) prepare, e.g. a Retry click, is a
+    // new intent and tries again.
+    if (opts?.silent && get().prepareChatErrors[key]?.definite) return
     set((s) => {
       const prepareChatErrors = { ...s.prepareChatErrors }
       delete prepareChatErrors[key]
