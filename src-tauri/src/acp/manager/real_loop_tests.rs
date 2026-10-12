@@ -51,12 +51,14 @@ for line in sys.stdin:
         # "hang": never answer
 "#;
 
-/// Serializes every test that reads or writes the process-global turn
-/// idle-timeout state (the in-process override and
-/// `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`): all real-loop tests plus the
-/// precedence test in `manager/tests.rs`. A real-loop test therefore never
-/// inherits another test's 1 s idle window, and vice versa.
-pub(super) static IDLE_TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> =
+/// Serializes every test that reads or writes process-global ACP timeout state:
+/// the in-process idle-timeout override and the environment variables
+/// `TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS`, `TERMUL_ACP_TURN_TIMEOUT_SECS`,
+/// `TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS` and
+/// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS`. It covers all real-loop tests and
+/// the override and precedence tests in `manager/tests.rs`. A real-loop test
+/// therefore never inherits another test's timeout, and vice versa.
+pub(super) static TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> =
     tokio::sync::Mutex::const_new(());
 
 /// Opt-out for hosts without a Python interpreter. Without it a missing
@@ -104,7 +106,7 @@ const TURN_TIMEOUT_ENV_VARS: [&str; 4] = [
 ];
 
 /// Clears the ambient turn-timeout env vars for the harness lifetime (the
-/// caller holds [`IDLE_TIMEOUT_TEST_LOCK`]) and restores them on drop.
+/// caller holds [`TIMEOUT_TEST_LOCK`]) and restores them on drop.
 struct TurnTimeoutEnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
 
 impl TurnTimeoutEnvGuard {
@@ -163,7 +165,7 @@ impl Harness {
                  agent; install it or set {SKIP_ENV}=1 to skip these tests explicitly"
             );
         };
-        let serial = IDLE_TIMEOUT_TEST_LOCK.lock().await;
+        let serial = TIMEOUT_TEST_LOCK.lock().await;
         let env = TurnTimeoutEnvGuard::clear();
         let dir = std::env::temp_dir().join(format!("termul-real-loop-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
