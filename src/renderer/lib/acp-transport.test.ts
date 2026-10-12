@@ -1200,11 +1200,13 @@ describe('WsAcpTransport', () => {
     await transport.connect()
     const calls: Array<{ seq?: number }> = []
     transport.onEvent('acp:tool_call', (_p, seq) => calls.push({ seq }))
-    // The fake host answers a cursor with that cursor as the head: head 6.
-    await transport.subscribeSession('s1', 6)
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    // Seqs 1..5 never reach the client (non-durable on the host): replay may
-    // start anywhere at or below the head, and 7 is the next live seq.
+    // The host's head is 6; this client holds seq 2. Seqs 3..5 never reach it
+    // (non-durable on the host): replay may skip them.
+    sock.hostHeadSeq = 6
+    transport.seedSessionCursor('s1', { lastSeq: 2, logEpoch: 'epoch-A' })
+    await transport.subscribeSession('s1')
+    // 6 is the last replayed seq; 7 is the next live seq.
     sock.emit({ sid: 's1', seq: 6, type: 'tool_call', payload: {} })
     sock.emit({ sid: 's1', seq: 7, type: 'tool_call', payload: {} })
     await flushEvents(transport)
@@ -1375,7 +1377,8 @@ describe('WsAcpTransport', () => {
     await transport.connect()
     const calls: unknown[] = []
     transport.onEvent('acp:tool_call', (p) => calls.push(p))
-    await transport.subscribeSession('s1', 2)
+    transport.seedSessionCursor('s1', { lastSeq: 2, logEpoch: 'epoch-A' })
+    await transport.subscribeSession('s1')
 
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
     // Live delivery at seq 3 (head 2) advances the cursor to 3.
@@ -1405,7 +1408,8 @@ describe('WsAcpTransport', () => {
       seen.push({ payload: p, eventSeq })
     })
 
-    await transport.subscribeSession('s1', 6)
+    transport.seedSessionCursor('s1', { lastSeq: 6, logEpoch: 'epoch-A' })
+    await transport.subscribeSession('s1')
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
     sock.emit({ sid: 's1', seq: 7, type: 'message_chunk', payload: { n: 7 } })
     await flushEvents(transport)
@@ -1441,7 +1445,8 @@ describe('WsAcpTransport', () => {
 
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
     const lastSeq = (transport as unknown as { lastSeq: Map<string, number> }).lastSeq
-    await transport.subscribeSession('s1', 3)
+    transport.seedSessionCursor('s1', { lastSeq: 3, logEpoch: 'epoch-A' })
+    await transport.subscribeSession('s1')
     sock.emit({
       type: 'events',
       events: [
