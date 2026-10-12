@@ -224,6 +224,16 @@ async fn events_before_registration_adopt_the_persisted_epoch() {
     let (_c, _rx, replay, head) = relay.subscribe("sess-p", Some(1), Some(&persisted)).await;
     assert!(matches!(replay, ReplayResult::Ok(_)), "{replay:?}");
     assert_eq!(head.unwrap().log_epoch, persisted);
+
+    // Both records reached the disk (the first through the pre-registration
+    // buffer), so the frontier is not ahead of it: the epoch survives a restart.
+    persistence.flush_session("sess-p").await.unwrap();
+    assert_eq!(persistence.last_seq("sess-p").unwrap(), 2);
+    drop((relay, persistence));
+    let reopened = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    assert_eq!(reopened.log_epoch("sess-p").unwrap(), persisted);
 }
 
 /// A non-durable event (permission_request) takes a seq that never reaches the

@@ -488,8 +488,9 @@ export class WsAcpTransport implements AcpTransport {
     if ((payload.lastSeq ?? 0) > 0 && !epoch) {
       // A nonzero cursor with no epoch to verify it against cannot be trusted:
       // applying events behind it would drop new ones as duplicates. Skip the
-      // replay (the host would stream events we would throw away) and install
-      // a snapshot, which also registers the live subscription.
+      // replay (the host would stream events we would throw away) and recover
+      // instead: a snapshot (which also registers the live subscription) in
+      // server history mode, or a live-only subscribe reported as degraded.
       this.clearCursor(sessionId)
       await this.recoverSession(sessionId, timeoutMs)
       return

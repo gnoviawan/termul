@@ -951,6 +951,7 @@ impl WsRelaySink {
         }
         let mut requeued: Vec<PersistedEventRecord> = Vec::new();
         let mut enqueued = 0usize;
+        let mut rejected = false;
         for record in drained {
             // Split the record so the enqueue (which consumes it) and the
             // requeue path (which keeps it) never fight over ownership.
@@ -969,8 +970,18 @@ impl WsRelaySink {
                         "[sessions] pre-registration buffer flush rejected an event for \
                          session {sid}: {error}"
                     );
+                    rejected = true;
                 }
             }
+        }
+        if rejected {
+            // A rejected record never reaches the disk: the seq frontier is
+            // ahead of it. (`sessions` is not held here: the writer queue is
+            // taken before it.)
+            if let Some(state) = self.sessions.lock().get_mut(sid) {
+                state.head_ahead_of_durable = true;
+            }
+            persistence.note_head_ahead_of_durable(sid);
         }
         if !requeued.is_empty() {
             let mut pending = self.pre_registration_events.lock();
