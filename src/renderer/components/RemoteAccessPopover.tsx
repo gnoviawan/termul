@@ -5,9 +5,15 @@ import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from '@/components/ico
 import { STATUS_BAR_HIT_GLYPH, STATUS_BAR_HIT_TARGET } from '@/components/status-bar-hit'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { toProjectSummaries } from '@/hooks/use-projects-persistence'
+import {
+  nextSyncSeq,
+  noteHostDefault,
+  resetHostDefault,
+  toProjectSummaries
+} from '@/hooks/use-projects-persistence'
 import { remoteServerApi, syncProjects } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
@@ -56,13 +62,21 @@ export function RemoteAccessPopover(): React.JSX.Element {
           const { projects } = useProjectStore.getState()
           // Await + inspect: a failed seed leaves the web client without a
           // project list until the next desktop mutation re-syncs — surface it.
+          const syncSeq = nextSyncSeq()
           const syncResult = await syncProjects(toProjectSummaries(projects))
           if (!syncResult.success) {
             toast.error(`Failed to seed remote project list: ${syncResult.error}`)
+          } else {
+            // Baseline for the auto-save sync's change detection, and copy the
+            // desktop MCP servers to the file of the default the host picked
+            // (best-effort, interim bridge).
+            noteHostDefault(syncSeq, syncResult.data)
+            void useAcpStore.getState().syncMcpRegistryToProjectFile()
           }
           // Desktop-hosted browser history reads the durable Rust provider
           // directly, so no renderer transcript seed is needed.
         }
+        if (!enable) resetHostDefault()
       } else {
         setRemoteError(result.error)
       }

@@ -35,18 +35,29 @@ vi.mock('@/stores/project-store', () => ({
   }
 }))
 
+const { syncMcpRegistryToProjectFile } = vi.hoisted(() => ({
+  syncMcpRegistryToProjectFile: vi.fn(async () => {})
+}))
 vi.mock('@/stores/acp-store', () => ({
   useAcpStore: {
     getState: () => ({
       loadSessionIndex: vi.fn(async () => {}),
       sessionIndex: [],
-      messages: {}
+      messages: {},
+      syncMcpRegistryToProjectFile
     })
   }
 }))
 
+const { noteHostDefault, resetHostDefault } = vi.hoisted(() => ({
+  noteHostDefault: vi.fn(() => true),
+  resetHostDefault: vi.fn()
+}))
 vi.mock('@/hooks/use-projects-persistence', () => ({
-  toProjectSummaries: vi.fn(() => [])
+  toProjectSummaries: vi.fn(() => []),
+  nextSyncSeq: vi.fn(() => 7),
+  noteHostDefault,
+  resetHostDefault
 }))
 
 vi.mock('@/lib/acp-history-persistence', () => ({
@@ -149,5 +160,9 @@ describe('RemoteAccessPopover', () => {
     })
     // The seed pushes the project list only — never the active project as default.
     expect(syncProjects).toHaveBeenCalledWith([])
+    // The seed is the baseline for the auto-save sync's change detection and
+    // mirrors the desktop MCP servers to the default the host picked.
+    expect(noteHostDefault).toHaveBeenCalledWith(7, undefined)
+    expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
   })
 })

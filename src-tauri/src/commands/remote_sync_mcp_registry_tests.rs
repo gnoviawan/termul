@@ -183,11 +183,13 @@ fn sync_default_keeps_current_then_stored_flag_then_first_switchable() {
     assert_eq!(default_after_sync(&[], None), None);
 }
 
-/// The sync derives the default under the registry lock, so a default set
-/// concurrently is kept, never overwritten by one derived from a stale read.
+/// The sync derives the default under the registry lock: a `set_default_project`
+/// that starts while the derivation is running waits for it, so it lands AFTER
+/// the sync and is never overwritten by a default derived from a stale read.
 #[test]
 fn sync_derives_the_default_under_the_registry_lock() {
-    let reg = ProjectRegistry::new();
+    use std::sync::{mpsc, Arc};
+    let reg = Arc::new(ProjectRegistry::new());
     let list = || {
         vec![
             summary("a", Some("/a"), false, true),
@@ -195,9 +197,25 @@ fn sync_derives_the_default_under_the_registry_lock() {
         ]
     };
     assert_eq!(reg.set_with_default_from(list(), default_after_sync).as_deref(), Some("a"));
-    assert!(reg.set_default_project("b"));
-    // The desktop's list still flags "a"; the registry's "b" must survive.
-    assert_eq!(reg.set_with_default_from(list(), default_after_sync).as_deref(), Some("b"));
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let setter = {
+        let reg = Arc::clone(&reg);
+        std::thread::spawn(move || {
+            entered_rx.recv().expect("derivation started");
+            // Starts while the sync still holds the registry lock.
+            reg.set_default_project("b")
+        })
+    };
+    let derived = reg.set_with_default_from(list(), |projects, current| {
+        entered_tx.send(()).expect("signal the setter");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        default_after_sync(projects, current)
+    });
+    assert_eq!(derived.as_deref(), Some("a"), "the sync derived from the default it saw");
+    assert!(setter.join().expect("setter thread"), "the explicit default was accepted");
+
+    // The explicit default landed after the sync and survives.
     let snap = reg.snapshot();
     assert_eq!(snap.default_project_id.as_deref(), Some("b"));
     assert!(snap.projects.iter().find(|p| p.id == "b").is_some_and(|p| p.is_default));

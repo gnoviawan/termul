@@ -582,11 +582,42 @@ export function useProjectsLoader(): void {
  * Hook to auto-save projects when the store changes
  * Subscribes to project store changes and triggers debounced writes
  */
+// The host default the latest project-list sync reply reported (`undefined`
+// until one arrived or after the server stopped), shared by the auto-save hook
+// and the server-start seed so a fallback change of the effective default is
+// detected against the right baseline. Replies are applied in request order:
+// IPC promises can resolve out of order, and a stale reply must not move it.
+let hostDefaultSeen: string | null | undefined
+let hostDefaultAppliedSeq = 0
+let syncRequestSeq = 0
+
+/** Number a project-list sync request (call before sending it). */
+export function nextSyncSeq(): number {
+  syncRequestSeq += 1
+  return syncRequestSeq
+}
+
+/**
+ * Record the host default a sync reply reported. Returns `true` when the
+ * effective default changed (or was unknown); a reply older than one already
+ * applied is ignored (`false`).
+ */
+export function noteHostDefault(seq: number, hostDefault: string | null | undefined): boolean {
+  if (seq < hostDefaultAppliedSeq) return false
+  hostDefaultAppliedSeq = seq
+  const changed = hostDefaultSeen !== hostDefault
+  hostDefaultSeen = hostDefault
+  return changed
+}
+
+/** Forget the host default (the server stopped; its registry was cleared). */
+export function resetHostDefault(): void {
+  hostDefaultSeen = undefined
+  hostDefaultAppliedSeq = syncRequestSeq
+}
+
 export function useProjectsAutoSave(): void {
   const hasInitialized = useRef(false)
-  // The host default the last project-list sync reported (`undefined` until the
-  // first reply), used to detect fallback changes of the effective default.
-  const hostDefaultRef = useRef<string | null | undefined>(undefined)
 
   useEffect(() => {
     // Web/remote mode: the project list is persisted server-side (Option B:
@@ -726,6 +757,7 @@ export function useProjectsAutoSave(): void {
         const defaultChanged =
           state.projects.find((p) => p.isDefault === true)?.id !==
           prevState.projects.find((p) => p.isDefault === true)?.id
+        const syncSeq = nextSyncSeq()
         syncProjects(summaries)
           .then((result) => {
             if (!result.success) {
@@ -739,9 +771,7 @@ export function useProjectsAutoSave(): void {
             // sync landed. The first reply counts as a change (the file for the
             // default the host picked has not been mirrored yet).
             if (result.success) {
-              const previous = hostDefaultRef.current
-              hostDefaultRef.current = result.data
-              const effectiveChanged = previous !== result.data
+              const effectiveChanged = noteHostDefault(syncSeq, result.data)
               if (defaultChanged || effectiveChanged) {
                 void useAcpStore.getState().syncMcpRegistryToProjectFile()
               }

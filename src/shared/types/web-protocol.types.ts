@@ -508,8 +508,6 @@ export interface AcpRuntimePolicy {
 /**
  * The `authenticate` protocol version this client speaks. Mirrors the Rust
  * `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
- * v2: `fs_changed` is per project and only delivered after `watch_project`
- * (a v1 client never subscribes), plus `fs_watch_ended`.
  */
 export const WS_PROTOCOL_VERSION = 2
 

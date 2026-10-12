@@ -64,11 +64,12 @@ vi.mock('@/lib/web-server-api', () => ({
   webServerProjects: { list: vi.fn() }
 }))
 
-import { useProjectsAutoSave } from '../use-projects-persistence'
+import { resetHostDefault, useProjectsAutoSave } from '../use-projects-persistence'
 
 describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetHostDefault()
     syncProjectsMock.mockResolvedValue({ success: true, data: 'p1' })
 
     useProjectStore.setState({
@@ -197,6 +198,44 @@ describe('useProjectsAutoSave host sync vs navigation (CAP-7 interim bridge)', (
     await waitFor(() => {
       expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(2)
     })
+    unmount()
+  })
+
+  it('ignores a stale sync reply that resolves after a newer one', async () => {
+    const { unmount } = renderHook(() => useProjectsAutoSave())
+    await initialize()
+    let releaseFirst: (value: { success: true; data: string }) => void = () => {}
+    syncProjectsMock.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseFirst = resolve)) as never
+    )
+
+    // Request 1 (slow) then request 2 (fast): 2 reports p2, then 1 reports p1.
+    await act(async () => {
+      useProjectStore.setState({
+        projects: [{ id: 'p1', name: 'P1', color: 'blue', path: '/p1' }]
+      })
+    })
+    syncProjectsMock.mockResolvedValue({ success: true, data: 'p2' })
+    await act(async () => {
+      useProjectStore.setState({
+        projects: [
+          { id: 'p1', name: 'P1', color: 'blue', path: '/p1' },
+          { id: 'p2', name: 'P2', color: 'green', path: '/p2' }
+        ]
+      })
+    })
+    await waitFor(() => {
+      expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
+    })
+    await act(async () => {
+      releaseFirst({ success: true, data: 'p1' })
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    // The stale p1 reply neither mirrors again nor rewinds the baseline.
+    expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
     unmount()
   })
 
