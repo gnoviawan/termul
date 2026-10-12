@@ -20,6 +20,16 @@ import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 const MERMAID_PLUGIN = mermaidPlugin
 const LANGUAGE_RE = /language-([^\s]+)/
 
+/**
+ * Streamdown re-highlights a block's FULL source on every change (the shiki
+ * plugin caches by content, so a growing fence never hits it) and every
+ * result stays cached. An open fence that grows past this size is therefore
+ * rendered unhighlighted until it closes — one highlight at close instead of
+ * O(commits x fence size) work (and cache growth) during the stream. Smaller
+ * open fences keep live highlighting.
+ */
+export const OPEN_FENCE_HIGHLIGHT_MAX_CHARS = 8_000
+
 /** Pull fenced-code text out of Streamdown's `code` children shapes. */
 function childrenToCode(children: ReactNode, node?: unknown): string {
   // Prefer the raw markdown node value — it preserves the original newlines
@@ -177,14 +187,16 @@ export function ChatMarkdownCode({
     )
   }
 
+  const blockLanguage = language || 'text'
+  const deferHighlight = isIncomplete && code.length > OPEN_FENCE_HIGHLIGHT_MAX_CHARS
   return (
     <CodeBlock
       code={code}
-      language={language || 'text'}
+      language={deferHighlight ? 'text' : blockLanguage}
       className={cn('[&_code>span]:block', className)}
       lineNumbers={lineNumbers}
     >
-      <CodeDownloadAction code={code} language={language || 'text'} />
+      <CodeDownloadAction code={code} language={blockLanguage} />
       <CodeCopyAction code={code} />
     </CodeBlock>
   )

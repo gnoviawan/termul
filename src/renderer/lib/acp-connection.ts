@@ -14,7 +14,7 @@ export interface AcpConnectionCoordinatorOptions {
    */
   recoveryGeneration?: (sessionId: SessionId) => number
   pendingPermissionSessions: () => SessionId[]
-  setReconnecting: (reconnecting: boolean) => void
+  setReconnecting: (reconnecting: boolean, recovered?: boolean) => void
 }
 
 /**

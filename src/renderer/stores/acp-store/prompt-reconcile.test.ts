@@ -1,0 +1,672 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { toastError, toastWarning } = vi.hoisted(() => ({
+  toastError: vi.fn(),
+  toastWarning: vi.fn()
+}))
+
+vi.mock('sonner', () => ({
+  toast: { error: toastError, warning: toastWarning }
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn()
+}))
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn()
+}))
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: vi.fn(() => false),
+  cleanupTauriListener: vi.fn()
+}))
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
+}))
+vi.mock('@/lib/acp-agents-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-agents-persistence')>()
+  return {
+    ...actual,
+    loadAgentConfigs: vi.fn(async () => []),
+    saveAgentConfigs: vi.fn(async () => {})
+  }
+})
+vi.mock('@/lib/acp-history-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-history-persistence')>()
+  return {
+    ...actual,
+    loadSessionIndex: vi.fn(async () => []),
+    saveSessionIndex: vi.fn(async () => {}),
+    saveSessionPayload: vi.fn(async () => {}),
+    queueSessionPayloadSave: vi.fn(async () => {}),
+    queueSessionPayloadDelete: vi.fn(async () => {}),
+    // Keep the REAL full loader: in server-history mode it reads through the
+    // fake transport's `getSessionPayload` (the "host-owned" durable record).
+    loadSessionPayload: actual.loadSessionPayload,
+    loadSessionPayloadTail: vi.fn(async () => null)
+  }
+})
+vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-mcp-persistence')>()
+  return {
+    ...actual,
+    loadMcpServers: vi.fn(async () => []),
+    saveMcpServers: vi.fn(async () => {}),
+    syncMcpRegistryToProjectBestEffort: vi.fn(async () => {})
+  }
+})
+
+vi.mock('@/stores/workspace-store', () => ({
+  agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+  getAllLeafPanes: () => [],
+  findPaneContainingTab: () => null,
+  useWorkspaceStore: {
+    getState: () => ({ addAgentChatTab: vi.fn(), root: null })
+  }
+}))
+
+vi.mock('@/lib/web-tab-session', () => ({
+  setTabFocusedSessionId: vi.fn(),
+  getTabFocusedSessionId: vi.fn(() => null)
+}))
+
+const { mockPersistenceApi } = vi.hoisted(() => ({
+  mockPersistenceApi: {
+    read: vi.fn(async () => ({ success: false })),
+    write: vi.fn(),
+    writeDebounced: vi.fn(async () => ({ success: true })),
+    delete: vi.fn(async () => ({ success: true }))
+  }
+}))
+vi.mock('@/lib/api', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    persistenceApi: mockPersistenceApi
+  }
+})
+
+import {
+  _resetAcpTransportForTests,
+  _setAcpTransportForTests,
+  type AcpTransport,
+  AcpTransportError
+} from '@/lib/acp-transport'
+import { logFrontendError } from '@/lib/log-api'
+import {
+  _installTransportRecoveryForTesting,
+  _resetAcpAuthForTesting,
+  _resetCoalesceForTesting,
+  _resetEphemeralSessionIdsForTesting,
+  _resetHistorySeqWatermarksForTesting,
+  _resetPromptReconcileForTesting,
+  _resetSessionIndexLoadGenerationForTesting,
+  initAcpEventListeners,
+  useAcpStore
+} from '@/stores/acp-store'
+import { activeWirePromptTurns } from './shared-state'
+import { PROMPT_RECONCILE_RETRY_DELAYS_MS, resendPendingPrompts } from './slices/prompt-reconcile'
+import { FRESH, flushTurnEnd, seedSession } from './testkit'
+
+type SendPromptFn = (
+  agentId: string,
+  sessionId: string,
+  text: string,
+  turnId?: string
+) => Promise<unknown>
+
+function installTransport(sendPrompt: SendPromptFn): ReturnType<typeof vi.fn> {
+  const spy = vi.fn(sendPrompt)
+  _setAcpTransportForTests({
+    sendPrompt: spy,
+    sendPromptBlocks: spy,
+    cancelPrompt: vi.fn(async () => {}),
+    dispose: () => {}
+  } as unknown as AcpTransport)
+  return spy
+}
+
+const drop = (): AcpTransportError => new AcpTransportError('closed', 'WebSocket closed')
+
+/** Wire turn id the store minted for the dispatch (3rd arg of sendPrompt). */
+function sentTurnIds(spy: ReturnType<typeof vi.fn>): string[] {
+  return spy.mock.calls.map((call) => String(call[3]))
+}
+
+describe('prompt pending-reconcile (AD-6)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useRealTimers()
+    _resetAcpTransportForTests(null)
+    _resetAcpAuthForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetPromptReconcileForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  it('a dropped reply is pending-reconcile, not failed: turn stays open, no error, no throw', async () => {
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    await flushTurnEnd()
+    const state = useAcpStore.getState()
+    expect(state.sessions.s1.activeTurn).toBe(true)
+    expect(state.sessions.s1.openTurnId).toBeTruthy()
+    expect(state.sessions.s1.lastError).toBeNull()
+    expect(state.pendingPromptReconcile.s1).toBe(true)
+    // The optimistic user message stays; nothing was re-queued for a new intent.
+    expect(state.messages.s1).toHaveLength(1)
+    expect(state.promptQueues.s1).toBeUndefined()
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('resends the SAME turn id on recovery; an in_progress receipt keeps the turn open', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    const send = installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      return { receipt: 'in_progress' }
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    resendPendingPrompts()
+    await flushTurnEnd()
+    const ids = sentTurnIds(send)
+    expect(ids).toHaveLength(2)
+    expect(ids[1]).toBe(ids[0])
+    const state = useAcpStore.getState()
+    // A receipt resolves the command only — never the turn.
+    expect(state.sessions.s1.activeTurn).toBe(true)
+    expect(state.sessions.s1.lastError).toBeNull()
+    expect(state.pendingPromptReconcile.s1).toBeUndefined()
+    // The durable terminator closes it (live or replayed).
+    state._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn',
+      turnId: ids[0]
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+  })
+
+  it('an accepted receipt (turn already finished) never ends the turn view itself', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      return { receipt: 'accepted' }
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    resendPendingPrompts()
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+  })
+
+  it('a stop reason from the resend (turn ran on this call) closes the turn', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      return 'end_turn'
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    resendPendingPrompts()
+    // The resend settles in microtasks; its deferred turn end is one macrotask later.
+    await flushTurnEnd()
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+  })
+
+  it('a definite server rejection of the resend fails the turn (Retry = new intent)', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      throw new AcpTransportError('invalid_request', 'prompt rejected')
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    resendPendingPrompts()
+    await flushTurnEnd()
+    const state = useAcpStore.getState()
+    expect(state.sessions.s1.activeTurn).toBe(false)
+    expect(state.sessions.s1.lastError).toContain('prompt rejected')
+    expect(state.pendingPromptReconcile.s1).toBeUndefined()
+  })
+
+  it('a definite rejection on the FIRST dispatch is still failed and thrown', async () => {
+    seedSession('s1', 'agent-1', false)
+    installTransport(async () => {
+      throw new AcpTransportError('invalid_request', 'bad prompt')
+    })
+    await expect(useAcpStore.getState().sendPrompt('s1', 'x')).rejects.toThrow('bad prompt')
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+  })
+
+  it('dedupes resends: one in flight at a time', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    let resendGate!: (v: unknown) => void
+    let calls = 0
+    const send = installTransport(() => {
+      calls += 1
+      if (calls === 1) return Promise.reject(drop())
+      return new Promise((resolve) => {
+        resendGate = resolve
+      })
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    resendPendingPrompts()
+    resendPendingPrompts()
+    resendPendingPrompts('s1')
+    expect(send).toHaveBeenCalledTimes(2) // first dispatch + ONE resend
+    resendGate({ receipt: 'in_progress' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    vi.useRealTimers()
+  })
+
+  it('timer-driven retries back off, then settle into a slow capped cadence while pending', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    const ladder = PROMPT_RECONCILE_RETRY_DELAYS_MS
+    const slow = ladder[ladder.length - 1]
+    for (const delay of ladder) {
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+    expect(send).toHaveBeenCalledTimes(1 + ladder.length)
+    // Ladder spent: the slow cap keeps retrying — one resend per slow interval.
+    await vi.advanceTimersByTimeAsync(slow * 3)
+    expect(send).toHaveBeenCalledTimes(1 + ladder.length + 3)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBe(true)
+    expect(useAcpStore.getState().sessions.s1.lastError).toBeNull()
+    // Recovery events still resend at once; every call carries the one turn id.
+    resendPendingPrompts()
+    expect(send).toHaveBeenCalledTimes(2 + ladder.length + 3)
+    expect(new Set(sentTurnIds(send)).size).toBe(1)
+    vi.useRealTimers()
+  })
+
+  it('the slow retry stops once the turn ends (terminator) — no resend after', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    const ladder = PROMPT_RECONCILE_RETRY_DELAYS_MS
+    for (const delay of ladder) await vi.advanceTimersByTimeAsync(delay)
+    const before = send.mock.calls.length
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn',
+      turnId: sentTurnIds(send)[0]
+    })
+    await vi.advanceTimersByTimeAsync(10 * ladder[ladder.length - 1])
+    expect(send).toHaveBeenCalledTimes(before)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    vi.useRealTimers()
+  })
+
+  it('the slow retry stops when the session is removed', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    const ladder = PROMPT_RECONCILE_RETRY_DELAYS_MS
+    for (const delay of ladder) await vi.advanceTimersByTimeAsync(delay)
+    const before = send.mock.calls.length
+    useAcpStore.setState({ sessions: {} })
+    await vi.advanceTimersByTimeAsync(3 * ladder[ladder.length - 1])
+    expect(send).toHaveBeenCalledTimes(before)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    vi.useRealTimers()
+  })
+
+  it('a locally raised failure of the resend (token halt / dropped socket) keeps the command pending', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      if (calls === 2) throw new AcpTransportError('unauthorized', 'web auth token rejected')
+      return { receipt: 'in_progress' }
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    resendPendingPrompts()
+    await flushTurnEnd()
+    const halted = useAcpStore.getState()
+    expect(halted.sessions.s1.activeTurn).toBe(true)
+    expect(halted.sessions.s1.lastError).toBeNull()
+    expect(halted.pendingPromptReconcile.s1).toBe(true)
+    // Still resendable: the next recovery resolves it with the receipt.
+    resendPendingPrompts()
+    await flushTurnEnd()
+    expect(calls).toBe(3)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+  })
+
+  it('a reconnect cycle that ends WITHOUT recovery (token halt) does not resend; a real recovery does', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    let reconnectListener: ((reconnecting: boolean, recovered?: boolean) => void) | undefined
+    const sendPrompt = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      return { receipt: 'in_progress' }
+    })
+    _setAcpTransportForTests({
+      setReconnectListener: (listener: typeof reconnectListener) => {
+        reconnectListener = listener
+      },
+      setReconnectPriorityProvider: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      onEvent: vi.fn(() => () => undefined),
+      sendPrompt,
+      sendPromptBlocks: sendPrompt,
+      cancelPrompt: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+    try {
+      await useAcpStore.getState().sendPrompt('s1', 'deploy')
+      reconnectListener?.(true)
+      reconnectListener?.(false, false)
+      await flushTurnEnd()
+      expect(sendPrompt).toHaveBeenCalledTimes(1)
+      expect(useAcpStore.getState().pendingPromptReconcile.s1).toBe(true)
+      reconnectListener?.(true)
+      reconnectListener?.(false, true)
+      await flushTurnEnd()
+      expect(sendPrompt).toHaveBeenCalledTimes(2)
+      expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    } finally {
+      teardown()
+    }
+  })
+
+  it('a dropped reply for a turn that already ended is not reconciled (nothing to confirm)', async () => {
+    seedSession('s1', 'agent-1', false)
+    let reject!: (e: unknown) => void
+    const send = installTransport(
+      () =>
+        new Promise((_, rej) => {
+          reject = rej
+        })
+    )
+    const running = useAcpStore.getState().sendPrompt('s1', 'deploy')
+    await flushTurnEnd()
+    const turnId = sentTurnIds(send)[0]
+    // The terminator lands while the command reply is still outstanding…
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn',
+      turnId
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    // …then the socket drops and the reply is lost.
+    reject(drop())
+    await running
+    await flushTurnEnd()
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    resendPendingPrompts()
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('a dropped reply after a newer turn took over is not reconciled against it', async () => {
+    seedSession('s1', 'agent-1', false)
+    let reject!: (e: unknown) => void
+    const send = installTransport(
+      () =>
+        new Promise((_, rej) => {
+          reject = rej
+        })
+    )
+    const running = useAcpStore.getState().sendPrompt('s1', 'first')
+    await flushTurnEnd()
+    // The first turn ends and a second one opens before the first reply drops.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: 'second-turn' }
+      }
+    }))
+    activeWirePromptTurns.set('s1', 'second-wire')
+    reject(drop())
+    await running
+    await flushTurnEnd()
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('the user_prompt echo for the turn resolves the command (accepted) without a resend', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    const turnId = sentTurnIds(send)[0]
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      turnId,
+      content: [{ type: 'text', text: 'deploy' }]
+    })
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(send).toHaveBeenCalledTimes(1)
+    // …and the turn is still open until its terminator.
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    vi.useRealTimers()
+  })
+
+  it('Stop abandons an unconfirmed prompt: no later resend, the turn view ends', async () => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    await useAcpStore.getState().cancelPrompt('s1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    resendPendingPrompts()
+    expect(send).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
+  it('snapshot recovery resolves it: the recovered terminator ends the turn', async () => {
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    const turnId = sentTurnIds(send)[0]
+    await _installTransportRecoveryForTesting({
+      sessionId: 's1',
+      watermark: 9,
+      events: [
+        { sid: 's1', seq: 5, type: 'user_prompt', payload: { turnId, content: [] } },
+        { sid: 's1', seq: 8, type: 'prompt_complete', payload: { turnId, stopReason: 'end_turn' } }
+      ]
+    } as never)
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    expect(useAcpStore.getState().pendingPromptReconcile.s1).toBeUndefined()
+  })
+
+  it('snapshot recovery without a terminator resends the same turn id at once', async () => {
+    seedSession('s1', 'agent-1', false)
+    let calls = 0
+    const send = installTransport(async () => {
+      calls += 1
+      if (calls === 1) throw drop()
+      return { receipt: 'in_progress' }
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    await _installTransportRecoveryForTesting({
+      sessionId: 's1',
+      watermark: 3,
+      events: []
+    } as never)
+    await flushTurnEnd()
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(sentTurnIds(send)[1]).toBe(sentTurnIds(send)[0])
+  })
+
+  it.each([
+    ['_onAgentError' as const],
+    ['_onAgentCrashed' as const]
+  ])('%s without a sessionId ends tracking for EVERY session of the agent (no zombie resend)', async (handler) => {
+    vi.useFakeTimers()
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s2: { ...s.sessions.s1, id: 's2' } },
+      messages: { ...s.messages, s2: [] }
+    }))
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'one')
+    await useAcpStore.getState().sendPrompt('s2', 'two')
+    expect(useAcpStore.getState().pendingPromptReconcile).toEqual({ s1: true, s2: true })
+    expect(activeWirePromptTurns.size).toBe(2)
+    const calls = send.mock.calls.length
+    useAcpStore.getState()[handler]({ agentId: 'agent-1', message: 'boom' } as never)
+    expect(useAcpStore.getState().pendingPromptReconcile).toEqual({})
+    expect(activeWirePromptTurns.size).toBe(0)
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    expect(useAcpStore.getState().sessions.s2.activeTurn).toBe(false)
+    await vi.advanceTimersByTimeAsync(120_000)
+    resendPendingPrompts()
+    expect(send).toHaveBeenCalledTimes(calls)
+    vi.useRealTimers()
+  })
+
+  it('never logs prompt content', async () => {
+    seedSession('s1', 'agent-1', false)
+    installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'SECRET-PROMPT-BODY')
+    for (const [entry] of vi.mocked(logFrontendError).mock.calls) {
+      expect(JSON.stringify(entry)).not.toContain('SECRET-PROMPT-BODY')
+    }
+  })
+})
+
+describe('turn terminators (AD-5): error / timeout / crashed', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    _resetCoalesceForTesting()
+    _resetPromptReconcileForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  it.each([
+    'error',
+    'timeout',
+    'crashed'
+  ])('%s ends the turn with an error-ish presentation and never leaves the UI busy', async (stopReason) => {
+    seedSession('s1', 'agent-1', true)
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason,
+      turnId: 't1'
+    })
+    await flushTurnEnd()
+    const session = useAcpStore.getState().sessions.s1
+    expect(session.activeTurn).toBe(false)
+    expect(session.openTurnId).toBeNull()
+    expect(session.lastError).toBeTruthy()
+  })
+
+  it('keeps the specific agent_error message instead of the generic terminator note', async () => {
+    seedSession('s1', 'agent-1', true)
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions.s1, lastError: 'rate limit exceeded' } }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'error',
+      turnId: 't1'
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.lastError).toBe('rate limit exceeded')
+  })
+
+  it('a stale terminator for an earlier turn cannot end the turn this client has open', async () => {
+    seedSession('s1', 'agent-1', false)
+    let release!: (v: unknown) => void
+    installTransport(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        })
+    )
+    const running = useAcpStore.getState().sendPrompt('s1', 'second turn')
+    await flushTurnEnd()
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'timeout',
+      turnId: 'earlier-turn'
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    release('end_turn')
+    await running
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+  })
+
+  it('is idempotent by turn id: a duplicate terminator cannot end the next turn', async () => {
+    seedSession('s1', 'agent-1', true)
+    const complete = (turnId: string): void =>
+      useAcpStore.getState()._onPromptComplete({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        stopReason: 'error',
+        turnId
+      })
+    complete('t1')
+    await flushTurnEnd()
+    // A new turn opens, then the duplicate (replay) of t1's terminator arrives.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: 'next', lastError: null }
+      }
+    }))
+    complete('t1')
+    await flushTurnEnd()
+    const session = useAcpStore.getState().sessions.s1
+    expect(session.activeTurn).toBe(true)
+    expect(session.lastError).toBeNull()
+  })
+})

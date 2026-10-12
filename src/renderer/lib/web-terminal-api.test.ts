@@ -10,6 +10,16 @@ import { resolveTerminalWsUrl, WebTerminalClient } from './web-terminal-api'
 const mockLogFrontendError = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
 
+// Reconnect backoff carries ±25 % jitter; pin it to the neutral factor so the
+// nominal 500ms/1s/2s delays are exact. The jitter bounds are covered in
+// `acp-transport/ws-transport-timing.test.ts`.
+beforeEach(() => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5)
+})
+afterEach(() => {
+  vi.mocked(Math.random).mockRestore()
+})
+
 /**
  * Minimal FakeWebSocket for the terminal protocol (`{id,type,payload}` requests
  * → `{id,success,data}` / `{id,success:false,error,code}` replies). Mirrors the
@@ -80,6 +90,7 @@ class FakeWebSocket {
       return
     }
     if (req.type === 'attach') {
+      if (holdAttachReply) return
       if (attachReply === 'unauthorized') {
         // The single generic rejection — no distinguishing detail. The real
         // host returns this for unknown terminal AND bad/rotated/revoked claim
@@ -149,6 +160,8 @@ let listPreservedEntries: Array<Record<string, unknown>> = []
 
 /** Test knob: make `attach` replies fail with the generic UNAUTHORIZED. */
 let attachReply: 'ok' | 'unauthorized' = 'ok'
+/** Test knob: record `attach` frames but never reply (lost/late attach reply). */
+let holdAttachReply = false
 
 /** Test knob: the spawn reply data (CAP-3 issuance carries the claim). */
 let spawnReplyData: Record<string, unknown> = mockSpawnedTerminal({
@@ -175,6 +188,7 @@ type Tracker = {
   refCount: number
   claim?: string
   disconnected: boolean
+  attachedSocket?: FakeWebSocket | null
 }
 
 type ClientInternals = {
@@ -357,7 +371,7 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     client.dispose()
   })
 
-  it('resets reconnectAttempt on visibility recovery so AFK never strands the terminal', async () => {
+  it('visibility recovery reconnects but keeps climbing the backoff ladder (only 60 s stable resets it)', async () => {
     vi.useFakeTimers()
     const client = new WebTerminalClient(
       'ws://test/terminal/ws',
@@ -368,9 +382,9 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     await client.attach('t1', 'claim-t1')
     const oldSocket = internals.socket
 
-    // Simulate prior suspensions having exhausted the backoff ceiling. At MAX,
-    // a normal `scheduleReconnect` (e.g. from `onclose`) would no-op.
-    internals.reconnectAttempt = 10 // RECONNECT_MAX_ATTEMPTS
+    // A flapping host: the ladder has climbed and the connection has not been
+    // stable for 60 s (the stability timer would have reset it).
+    internals.reconnectAttempt = 3
     internals.reconnectTimer = null
 
     // Long hide → return → visibility recovery path.
@@ -379,15 +393,15 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     dispatchVisibility('visible')
     await Promise.resolve()
 
-    // forceReconnect reset the counter (MAX → 0) and scheduleReconnect then
-    // scheduled a fresh reconnect (0 → 1) — at MAX this would have been a no-op.
-    expect(internals.reconnectAttempt).toBe(1)
+    // forceReconnect did NOT reset the counter: scheduleReconnect advanced it
+    // from 3 to 4 (a reset would have produced 1) and armed the backoff timer.
+    expect(internals.reconnectAttempt).toBe(4)
     expect(internals.reconnectTimer).not.toBeNull()
 
-    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(10_000)
     await Promise.resolve()
 
-    // A fresh socket re-opened despite the prior exhaustion.
+    // The terminal still recovers: a fresh socket re-attached.
     expect(internals.socket).not.toBe(oldSocket)
     expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
     expect(findSentRequest(internals.socket, 'attach')).toBeDefined()
@@ -1031,7 +1045,7 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     client.dispose()
   })
 
-  it('clears the reconnect budget only after authenticate completes, never on socket open', async () => {
+  it('clears the reconnect budget only after authenticate completes AND the connection stays stable for 60s', async () => {
     vi.useFakeTimers()
     window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
     const { client, internals } = newClient()
@@ -1053,14 +1067,18 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     expect(internals.reconnectAttempt).toBe(2)
     expect(internals.reconnectTimer).not.toBeNull()
 
-    // The gate accepts again: a fully authenticated reconnect clears the
-    // budget back to 0.
+    // The gate accepts again: a fully authenticated reconnect does NOT clear
+    // the budget immediately — only 60 s of stable connection does.
     authenticateMode = 'ok'
     await vi.advanceTimersByTimeAsync(1100)
     expect(internals.socket).not.toBeNull()
     expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
-    expect(internals.reconnectAttempt).toBe(0)
     expect(internals.reconnectTimer).toBeNull()
+    expect(internals.reconnectAttempt).toBe(2)
+    await vi.advanceTimersByTimeAsync(58_000)
+    expect(internals.reconnectAttempt).toBe(2)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(internals.reconnectAttempt).toBe(0)
 
     client.dispose()
   })
@@ -1244,6 +1262,87 @@ describe('WebTerminalClient connect timeout (Story 10, F9)', () => {
       internals.reconnectTimer = null
     }
     client.dispose()
+  })
+
+  it('bounds upgrade + authenticate by one ~10s handshake: a held authenticate reply fails at 10s', async () => {
+    vi.useFakeTimers()
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    holdAuthenticateReply = true
+    try {
+      const client = new WebTerminalClient(
+        'ws://test/terminal/ws',
+        FakeWebSocket as unknown as typeof WebSocket
+      )
+      const internals = client as unknown as ClientInternals
+
+      let settled = false
+      const reqPromise = client.request('spawn', { cols: 80, rows: 24 }).then((r) => {
+        settled = true
+        return r
+      })
+      // Upgrade completed instantly; only `authenticate` is unanswered.
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      const result = await reqPromise
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.code).toBe('NETWORK_ERROR')
+      expect(internals.socket).toBeNull()
+      client.dispose()
+    } finally {
+      holdAuthenticateReply = false
+      heldAuthenticateId = null
+      window.localStorage.removeItem('termul.webAuthToken')
+    }
+  })
+
+  it('recycles the connection when a re-attach times out on an OPEN socket, then re-attaches and flushes buffered input (D8-F1)', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+
+    // Drop → reconnect whose `attach` reply never arrives.
+    holdAttachReply = true
+    try {
+      internals.socket.close()
+      await vi.advanceTimersByTimeAsync(600)
+      const staleSocket = internals.socket
+      expect(staleSocket.readyState).toBe(FakeWebSocket.OPEN)
+      expect(findSentRequest(staleSocket, 'attach')).toBeDefined()
+
+      // The attach request times out (15s) on a still-OPEN socket: the
+      // connection is recycled so the reconnect cycle re-runs the attach —
+      // it must not stay OPEN with `attachedSocket` stale and input buffering.
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(staleSocket.readyState).toBe(FakeWebSocket.CLOSED)
+      expect(internals.socket).toBeNull()
+      expect(internals.reconnectTimer).not.toBeNull()
+
+      // Input typed meanwhile is buffered, never silently dropped.
+      const write = await client.write('t1', 'ls\n')
+      expect(write.success).toBe(true)
+      expect(internals.inputBuffers.get('t1')).toBe('ls\n')
+
+      // The server answers again: next cycle re-attaches and flushes.
+      holdAttachReply = false
+      await vi.advanceTimersByTimeAsync(1_100)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+      expect(internals.trackers.get('t1')?.attachedSocket).toBe(internals.socket)
+      expect(findSentRequest(internals.socket, 'write')?.payload).toEqual({
+        terminalId: 't1',
+        data: 'ls\n'
+      })
+      expect(internals.inputBuffers.get('t1')).toBeUndefined()
+    } finally {
+      holdAttachReply = false
+      client.dispose()
+    }
   })
 })
 

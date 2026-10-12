@@ -474,6 +474,12 @@ export interface AcpState {
   turnEndNotices: Record<SessionId, TurnEndNotice>
   /** Sessions whose auto-flush is suppressed during cancel+send-now. */
   suppressQueueFlush: Record<SessionId, true>
+  /**
+   * AD-6: sessions whose in-flight prompt command lost its reply to a
+   * transport drop (outcome unknown). The chat shows a non-error "Waiting to
+   * confirm" state while the same `turnId` is resent; never a failure.
+   */
+  pendingPromptReconcile: Record<SessionId, true>
 
   /**
    * Story 5.3 (AC3): WS transport-level reconnect flag. True while the WS

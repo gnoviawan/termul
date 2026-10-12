@@ -31,6 +31,7 @@ const {
   launchingRef,
   oskRef,
   transportReconnectingRef,
+  pendingPromptReconcileRef,
   changedFilesPanelPropsRef,
   discoveredContextRef,
   messagesRef,
@@ -110,6 +111,7 @@ const {
   // Story 5.3 (AC1/AC3): test seams for OSK + reconnect overlay.
   oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
   transportReconnectingRef: { current: false },
+  pendingPromptReconcileRef: { current: {} as Record<string, true> },
   changedFilesPanelPropsRef: {
     current: [] as Array<{
       cwd: string
@@ -241,6 +243,7 @@ vi.mock('@/stores/acp-store', () => {
     launchingSessionIds: launchingRef.current,
     discoveredReopenContexts: discoveredContextRef.current,
     transportReconnecting: transportReconnectingRef.current,
+    pendingPromptReconcile: pendingPromptReconcileRef.current,
     openHistorySession: mockOpen,
     openDiscoveredSession: mockOpenDiscovered,
     sendPrompt: vi.fn(),
@@ -631,6 +634,7 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
     launchingRef.current = {}
     oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
     transportReconnectingRef.current = false
+    pendingPromptReconcileRef.current = {}
     discoveredContextRef.current = {}
   })
 
@@ -679,6 +683,40 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
     const overlay = status.closest('[class*="pointer-events-none"]')
     expect(overlay).not.toBeNull()
     void container
+  })
+})
+
+describe('AgentChatPanel waiting-to-confirm state (AD-6)', () => {
+  beforeEach(() => {
+    pendingPromptReconcileRef.current = {}
+    transportReconnectingRef.current = false
+  })
+
+  it('shows a non-error "Waiting to confirm" status while the prompt is unconfirmed', () => {
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      cwd: '/w',
+      activeTurn: true,
+      openTurnId: 'turn-1'
+    })
+    pendingPromptReconcileRef.current = { s1: true }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByRole('status')).toHaveTextContent('Waiting to confirm')
+    // Not a failure: no error banner / Retry affordance.
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('does not show it for a confirmed prompt or another session', () => {
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      cwd: '/w',
+      activeTurn: true,
+      openTurnId: 'turn-1'
+    })
+    pendingPromptReconcileRef.current = { other: true }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByText(/Waiting to confirm/)).toBeNull()
   })
 })
 

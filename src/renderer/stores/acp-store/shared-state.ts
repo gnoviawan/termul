@@ -7,7 +7,7 @@
 
 import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
-import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AgentId, PromptDispatchResult, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
   maxPayloadSeq,
@@ -373,23 +373,59 @@ export const sessionReopenGenerations = new Map<SessionId, number>()
 export const handoffOnlyTurnIds = new Set<string>()
 
 /**
- * Issue #846: turn ids whose `user_prompt` echo from the server already
- * landed — proof the prompt was ACCEPTED (persist_user_prompt runs before the
- * agent dispatch), so a later transport drop leaves the outcome UNKNOWN, not
- * failed. `runPromptTurn`'s catch consults this before deciding whether the
- * Retry affordance may safely re-send. Entries are cleared once the dispatch
- * settles (either outcome) so the set stays small.
+ * AD-6: a prompt command whose reply was lost to a transport drop (outcome
+ * unknown) — one per session, since a session runs one turn at a time. The
+ * wire `turnId` is the command id (AD-5); every resend reuses it. The entry
+ * lives until the host's answer (receipt / stop reason), the `user_prompt`
+ * echo or `prompt_complete` for that turn, a definite rejection, or the user
+ * cancelling. `resend` is bound to the original dispatch closure.
  */
-export const acceptedServerPromptTurnIds = new Set<string>()
-
-/** Test-only: read the accepted-turn set (write-only to production code). */
-export function _acceptedServerPromptTurnIdsForTesting(): ReadonlySet<string> {
-  return acceptedServerPromptTurnIds
+export interface PendingPromptCommand {
+  turnId: string
+  resend: () => Promise<PromptDispatchResult>
+  onResult: (result: PromptDispatchResult) => void
+  onDefiniteFailure: (err: unknown) => void
+  /** Timer-driven resends already spent (bounded; reconnect resends are free). */
+  attempts: number
+  timer: ReturnType<typeof setTimeout> | undefined
+  inFlight: boolean
 }
 
-/** Test-only: clear the accepted-turn set between tests. */
-export function _resetAcceptedServerPromptTurnIdsForTesting(): void {
-  acceptedServerPromptTurnIds.clear()
+export const pendingPromptCommands = new Map<SessionId, PendingPromptCommand>()
+
+/**
+ * Wire `turnId` of the turn THIS client dispatched and has not yet closed, per
+ * session. A terminator citing a different turn id is a stale one (a replay of
+ * an earlier turn) and must not end the current turn.
+ */
+export const activeWirePromptTurns = new Map<SessionId, string>()
+
+const ENDED_PROMPT_TURN_LIMIT = 256
+const endedPromptTurnIds = new Set<string>()
+
+/**
+ * Idempotence guard for `prompt_complete`: returns true the first time a turn
+ * id is seen, false for every duplicate (live + replay, error + agent_error).
+ * Bounded so a long-lived tab does not grow without limit.
+ */
+export function claimPromptTurnEnd(turnId: string): boolean {
+  if (endedPromptTurnIds.has(turnId)) return false
+  endedPromptTurnIds.add(turnId)
+  if (endedPromptTurnIds.size > ENDED_PROMPT_TURN_LIMIT) {
+    const oldest = endedPromptTurnIds.values().next().value
+    if (oldest !== undefined) endedPromptTurnIds.delete(oldest)
+  }
+  return true
+}
+
+/** Test-only: reset prompt-reconcile + turn-end tracking between tests. */
+export function _resetPromptReconcileForTesting(): void {
+  for (const cmd of pendingPromptCommands.values()) {
+    clearTimeout(cmd.timer)
+  }
+  pendingPromptCommands.clear()
+  activeWirePromptTurns.clear()
+  endedPromptTurnIds.clear()
 }
 
 /**

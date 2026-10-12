@@ -1,4 +1,3 @@
-import { code as codePlugin } from '@streamdown/code'
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
@@ -29,6 +28,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 import { guessMimeType, uint8ToBase64 } from './chat-attachments'
+import { chatCodePlugin } from './chat-code-plugin'
 import { ChatMarkdownCode } from './chat-markdown-code'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
 import { remarkTermulImages, resolveLocalImagePath } from './chat-markdown-images'
@@ -57,7 +57,7 @@ const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
  * Shiki syntax-highlighting for fenced code blocks. Themes track the app's
  * light/dark mode via Streamdown's dual-theme output (github-light/dark).
  */
-const CODE_PLUGIN = codePlugin
+const CODE_PLUGIN = chatCodePlugin
 /** Live Mermaid diagram rendering for ```mermaid fences. */
 const MERMAID_PLUGIN = mermaidPlugin
 /**

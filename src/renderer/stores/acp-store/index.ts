@@ -105,6 +105,7 @@ import { createLaunchSlice } from './slices/launch'
 import { createMcpSlice } from './slices/mcp'
 import { createMiscSlice } from './slices/misc'
 import { createPromptSlice } from './slices/prompt'
+import { reconcilePromptAfterRecovery, resendPendingPrompts } from './slices/prompt-reconcile'
 import { createSessionSlice, recoverNotedLaunchChats } from './slices/session'
 import { createSwitchSlice } from './slices/switch'
 import { appendBlocks, createTranscriptSlice } from './slices/transcript'
@@ -126,15 +127,14 @@ export * from './helpers'
 export * from './live-turn'
 // Test + cross-module helpers living beside the slices (spec-04 PR B).
 export {
-  _acceptedServerPromptTurnIdsForTesting,
   _addEphemeralSessionIdForTesting,
   _handoffOnlyTurnIdsForTesting,
-  _resetAcceptedServerPromptTurnIdsForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
   _resetInFlightPreparedForTesting,
   _resetInFlightPromotionsForTesting,
   _resetLiveSwitchSourcesForTesting,
+  _resetPromptReconcileForTesting,
   isEphemeralAcpSession,
   persistComposerOptions
 } from './shared-state'
@@ -415,6 +415,8 @@ async function installTransportRecovery(
         : current.sessions
     }
   })
+  // AD-6: a prompt that lost its reply resolves from the recovered log.
+  reconcilePromptAfterRecovery(recovery.sessionId, recovery.events)
 }
 
 /** Test-only: drive the transport recovery path without wiring listeners. */
@@ -478,7 +480,7 @@ export function initAcpEventListeners(): () => void {
         )
       )
     ],
-    setReconnecting: (reconnecting) => {
+    setReconnecting: (reconnecting, recovered) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
       if (!reconnecting) {
         if (historyRetryTimer) {
@@ -487,6 +489,11 @@ export function initAcpEventListeners(): () => void {
         }
         historyRetryAttempt = 0
         refetchHistoryAfterReconnect()
+        // AD-6: the socket is back — resend every prompt command that lost its
+        // reply, with the same turn id (the host answers with a receipt). Only
+        // on a REAL recovery: the token-halt path also ends the reconnect
+        // cycle (`recovered === false`) but the host is unreachable then.
+        if (recovered === true) resendPendingPrompts()
       }
     }
   })

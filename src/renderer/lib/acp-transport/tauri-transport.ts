@@ -15,10 +15,10 @@ import type {
   ListSessionsResponse,
   NewSessionOutcome,
   ProbeResult,
+  PromptDispatchResult,
   SessionConfigOption,
   SessionReopenOutcome,
-  SpawnAgentResult,
-  StopReason
+  SpawnAgentResult
 } from '@/lib/acp-api'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { type AcpTransport, AcpTransportError } from './types'
@@ -175,7 +175,7 @@ export function createTauriAcpTransport(): AcpTransport {
     registerDiscoveredSession: (input) =>
       invoke<PersistedSessionSummary>('acp_register_discovered_session', input),
     sendPrompt: (agentId, sessionId, text, turnId, displayContent) =>
-      invoke<StopReason>('acp_send_prompt', {
+      invoke<PromptDispatchResult>('acp_send_prompt', {
         agentId,
         sessionId,
         text,
@@ -183,7 +183,7 @@ export function createTauriAcpTransport(): AcpTransport {
         displayContent
       }),
     sendPromptBlocks: (agentId, sessionId, content, turnId, displayContent) =>
-      invoke<StopReason>('acp_send_prompt', {
+      invoke<PromptDispatchResult>('acp_send_prompt', {
         agentId,
         sessionId,
         content,

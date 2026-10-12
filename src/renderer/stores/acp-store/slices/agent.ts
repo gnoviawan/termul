@@ -40,7 +40,7 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
-  acceptedServerPromptTurnIds,
+  activeWirePromptTurns,
   commitMessageCollectors,
   ephemeralSessionIds,
   persistSession,
@@ -49,6 +49,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpState, AgentStatus, SessionStatus } from '../types'
+import { clearPromptReconcile } from './prompt-reconcile'
 import { dropSessionTranscriptState, flushCoalescedSync } from './transcript'
 
 /**
@@ -496,6 +497,31 @@ type AgentSliceState = Pick<
   | 'respondBrowserConsent'
 >
 
+/**
+ * An agent-level failure ends the in-flight turn of the session it names — or,
+ * when the event carries no `sessionId`, of EVERY non-closed session of that
+ * agent (the reducers clear those turns). A prompt still waiting to confirm
+ * must stop resending for each of them, and its wire-turn tracking must go.
+ */
+function endPromptTrackingForAgentFailure(
+  state: AcpState,
+  agentId: AgentId,
+  sessionId: SessionId | null | undefined
+): void {
+  const ended = new Set<SessionId>()
+  if (sessionId) ended.add(sessionId)
+  const named = sessionId ? state.sessions[sessionId] : undefined
+  if (!named || named.status === 'closed') {
+    for (const [id, session] of Object.entries(state.sessions)) {
+      if (session.agentId === agentId && session.status !== 'closed') ended.add(id)
+    }
+  }
+  for (const id of ended) {
+    clearPromptReconcile(id)
+    activeWirePromptTurns.delete(id)
+  }
+}
+
 export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> = (set, get) => ({
   agents: {},
   agentStatus: {},
@@ -802,6 +828,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     if (hadAssist && sessionId)
       rejectTerminalAssistCollector(sessionId, e.message || 'The ACP agent reported an error')
     if (hadCommit || hadAssist) return
+    // The turn ends here (below) — a prompt still waiting to confirm must stop
+    // resending; the host's `error`/`timeout` terminator follows.
+    endPromptTrackingForAgentFailure(get(), e.agentId, sessionId)
     // Flush coalesced updates so the error reflects the final transcript state.
     flushCoalescedSync()
     const detail = parseAcpErrorDetail(e)
@@ -873,15 +902,10 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     if (hadAssist && sessionId)
       rejectTerminalAssistCollector(sessionId, e.message || 'The ACP agent crashed')
     if (hadCommit || hadAssist) return
-    // #846: a crashed agent can never complete an accepted prompt — clear
-    // the accepted-turn tracking so a future Retry (or reload) re-sends
-    // rather than silently "resubscribing" to a turn that will never produce
-    // a prompt_complete.
-    if (sessionId) {
-      acceptedServerPromptTurnIds.delete(sessionId)
-    } else {
-      acceptedServerPromptTurnIds.clear()
-    }
+    // A crashed agent can never complete an accepted prompt: stop waiting to
+    // confirm / resending it (the host closes the turn with a `crashed`
+    // terminator and the Retry path starts a new intent with a new id).
+    endPromptTrackingForAgentFailure(get(), e.agentId, sessionId)
     // Flush coalesced updates so the crash reflects the final transcript state.
     flushCoalescedSync()
     const detail = parseAcpErrorDetail(e)

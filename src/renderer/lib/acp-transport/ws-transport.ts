@@ -40,11 +40,11 @@ import type {
   McpServerConfig,
   NewSessionOutcome,
   ProbeResult,
+  PromptDispatchResult,
   SessionConfigOption,
   SessionId,
   SessionReopenOutcome,
-  SpawnAgentResult,
-  StopReason
+  SpawnAgentResult
 } from '@/lib/acp-api'
 import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
@@ -55,6 +55,16 @@ import { getWebAuthToken } from '@/lib/web-auth-token'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 import { toWsEventType } from './event-names'
 import { type AcpConnectionState, type AcpTransport, AcpTransportError } from './types'
+import { SessionResubscribeRetry, type SessionRetryMode } from './ws-session-retry'
+import {
+  HANDSHAKE_TIMEOUT_MS,
+  jitteredBackoffMs,
+  RECONNECT_EXPEDITE_MIN_INTERVAL_MS,
+  RECONNECT_STABLE_MS,
+  RESUBSCRIBE_TIMEOUT_MS,
+  RESUME_PROBE_TIMEOUT_MS,
+  requestTimeoutMs
+} from './ws-transport-timing'
 
 // ---------------------------------------------------------------------------
 // WS URL + client
@@ -68,7 +78,6 @@ export function resolveWsUrl(
   return `${proto}//${locationLike.host}/ws`
 }
 
-const REQUEST_TIMEOUT_MS = 60_000
 /**
  * Grace margin added on top of the server turn budget so the server's typed
  * `turn timeout` reply wins the race instead of the client's generic timeout.
@@ -91,20 +100,6 @@ const SEND_PROMPT_GRACE_MS = 10_000
  * client honours instead of this fallback.
  */
 const FALLBACK_SEND_PROMPT_INACTIVITY_MS = 3_600_000
-const RECONNECT_BASE_MS = 500
-const RECONNECT_MAX_MS = 8_000
-/** Bounded application round-trip check used for browser resume signals. */
-const RESUME_VALIDATION_TIMEOUT_MS = 5_000
-/**
- * Hidden duration above which the client skips round-trip validation and goes
- * directly to {@link WsAcpTransport.forceReconnect}. At 30s of hidden time
- * the heartbeat is throttled or paused by the OS, so the server will kill the
- * socket within ~45s (75s `PONG_TIMEOUT` minus 30s already elapsed). A ping
- * validation round-trip would waste `RESUME_VALIDATION_TIMEOUT_MS` on a link
- * that is dead or about to die. 30s is 40% of the 75s server timeout —
- * principled, not a workaround.
- */
-const VISIBILITY_STALE_THRESHOLD_MS = 30_000
 
 /**
  * Application-level heartbeat interval. A client-emitted `ping` text request
@@ -187,9 +182,6 @@ export class WsAcpTransport implements AcpTransport {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   /** Consecutive heartbeat ping failures — forces a reconnect at the threshold. */
   private consecutivePingFailures = 0
-  /** When the page became hidden (epoch-ms), or null while visible. Drives the
-   * visibility-triggered proactive reconnect on mobile idle/background resume. */
-  private lastHiddenAt: number | null = null
   /** Bound DOM-listener refs so `dispose()` can detach them. */
   private visibilityHandler: (() => void) | null = null
   private focusHandler: (() => void) | null = null
@@ -232,7 +224,7 @@ export class WsAcpTransport implements AcpTransport {
    * `AgentConnectionLamp` overlay in `AgentChatPanel`. Desktop Tauri never
    * uses the WS transport, so the listener stays unset there.
    */
-  private onReconnectStateChange?: (reconnecting: boolean) => void
+  private onReconnectStateChange?: (reconnecting: boolean, recovered?: boolean) => void
   /**
    * Story 10: coarse connection-health listener (feeds the connection-status
    * store). Fired at `openSocket` start ('connecting', skipped while a
@@ -259,6 +251,16 @@ export class WsAcpTransport implements AcpTransport {
    * after a token fix) so normal reconnect behavior resumes immediately.
    */
   private tokenHalted = false
+  /** Fires after 60 s of stable connection to reset the backoff attempt counter. */
+  private stableTimer: ReturnType<typeof setTimeout> | null = null
+  /** Epoch-ms of the last reconnect attempt start (rate-limits wake expedites). */
+  private lastReconnectAttemptAt = 0
+  /** Per-session resubscribe retry (CLI-F1): one failing session never tears the socket down. */
+  private readonly sessionRetry = new SessionResubscribeRetry({
+    run: (sid, mode) => this.retrySessionSubscription(sid, mode),
+    onGiveUp: (sid, err) => this.giveUpSessionSubscription(sid, err),
+    canRun: () => this.isSocketLive()
+  })
 
   constructor(opts?: { url?: string; WebSocketImpl?: typeof WebSocket }) {
     this.wsUrl =
@@ -272,7 +274,7 @@ export class WsAcpTransport implements AcpTransport {
    * on successful reconnect (after sessions are re-subscribed). Does NOT fire
    * on the initial `connect()` — only on reconnect transitions.
    */
-  setReconnectListener(listener: (reconnecting: boolean) => void): void {
+  setReconnectListener(listener: (reconnecting: boolean, recovered?: boolean) => void): void {
     this.onReconnectStateChange = listener
   }
   /**
@@ -376,6 +378,8 @@ export class WsAcpTransport implements AcpTransport {
     this.disposed = true
     this.detachVisibilityListeners()
     this.clearHeartbeat()
+    this.clearStableTimer()
+    this.sessionRetry.cancelAll()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -394,6 +398,20 @@ export class WsAcpTransport implements AcpTransport {
     lastSeq?: number | null,
     force = false
   ): Promise<void> {
+    return this.subscribeInternal(sessionId, lastSeq, force)
+  }
+
+  /**
+   * `subscribeSession` with an optional per-attempt `timeoutMs` override so the
+   * reconnect resubscribe pass can bound ONE session's `subscribe` more tightly
+   * than the generic request timer (CLI-F1/F3).
+   */
+  private async subscribeInternal(
+    sessionId: SessionId,
+    lastSeq?: number | null,
+    force = false,
+    timeoutMs?: number
+  ): Promise<void> {
     await this.connect()
     // Skip no-op re-subscribe when already live-subscribed (sendPrompt path).
     if (!force && lastSeq === undefined && this.subscribed.has(sessionId)) {
@@ -408,34 +426,48 @@ export class WsAcpTransport implements AcpTransport {
     }
     // lastSeq === null → omit field → server live-only (stale recovery).
     try {
-      await this.request('subscribe', payload)
+      await this.request('subscribe', payload, timeoutMs)
     } catch (err) {
       if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.STALE) {
-        // Capture the store's reopen generation BEFORE the recovery
-        // round-trip: a close/delete/reopen during the await invalidates it
-        // and the store rejects the late install so recovery cannot
-        // resurrect a torn-down or replaced session.
-        const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
-        if (this.negotiatedHistoryMode === 'server') {
-          const recovery = await this.request<SessionSnapshotEvent>('recover_session_snapshot', {
-            sessionId
-          })
-          this.lastSeq.set(sessionId, recovery.watermark)
-          this.seenTurnIds.delete(sessionId)
-          await this.recoveryHandler?.(recovery, reopenGeneration)
-          // handle_recover_session_snapshot server-side re-registers the
-          // subscription for continued live delivery — no separate subscribe
-          // call needed here.
-          return
-        }
-        this.lastSeq.delete(sessionId)
-        this.seenTurnIds.delete(sessionId)
-        await this.request('subscribe', { sessionId })
-        await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
+        await this.recoverSession(sessionId, timeoutMs)
         return
       }
       throw err
     }
+  }
+
+  /**
+   * Stale/degraded recovery for one session: install an atomic server-history
+   * snapshot (server history mode) or resubscribe live-only and report the
+   * degradation. Used by a `stale` subscribe reply and by the per-session
+   * retry once cursor resubscribes keep failing.
+   */
+  private async recoverSession(sessionId: SessionId, timeoutMs?: number): Promise<void> {
+    await this.connect()
+    this.subscribed.add(sessionId)
+    // Capture the store's reopen generation BEFORE the recovery
+    // round-trip: a close/delete/reopen during the await invalidates it
+    // and the store rejects the late install so recovery cannot
+    // resurrect a torn-down or replaced session.
+    const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
+    if (this.negotiatedHistoryMode === 'server') {
+      const recovery = await this.request<SessionSnapshotEvent>(
+        'recover_session_snapshot',
+        { sessionId },
+        timeoutMs
+      )
+      this.lastSeq.set(sessionId, recovery.watermark)
+      this.seenTurnIds.delete(sessionId)
+      await this.recoveryHandler?.(recovery, reopenGeneration)
+      // handle_recover_session_snapshot server-side re-registers the
+      // subscription for continued live delivery — no separate subscribe
+      // call needed here.
+      return
+    }
+    this.lastSeq.delete(sessionId)
+    this.seenTurnIds.delete(sessionId)
+    await this.request('subscribe', { sessionId }, timeoutMs)
+    await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
   }
 
   onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
@@ -798,7 +830,7 @@ export class WsAcpTransport implements AcpTransport {
     text: string,
     turnId?: string,
     displayContent?: ContentBlock[]
-  ): Promise<StopReason> {
+  ): Promise<PromptDispatchResult> {
     await this.subscribeSession(sessionId) // no-op if already subscribed
     // The turn-id is minted by the store (`runPromptTurn`) so the optimistic
     // user message can share the same `turn:<turnId>` id as the server's
@@ -807,7 +839,7 @@ export class WsAcpTransport implements AcpTransport {
     // the optimistic id (`newId('msg')`) never matched the echo's `turn:<uuid>`).
     // Fall back to a fresh UUID for callers that omit it (backward-compat / tests).
     const id = turnId ?? randomUUID()
-    return this.request<StopReason>('send_prompt', {
+    return this.request<PromptDispatchResult>('send_prompt', {
       agentId,
       sessionId,
       text,
@@ -822,10 +854,10 @@ export class WsAcpTransport implements AcpTransport {
     content: ContentBlock[],
     turnId?: string,
     displayContent?: ContentBlock[]
-  ): Promise<StopReason> {
+  ): Promise<PromptDispatchResult> {
     await this.subscribeSession(sessionId)
     const id = turnId ?? randomUUID()
-    return this.request<StopReason>('send_prompt', {
+    return this.request<PromptDispatchResult>('send_prompt', {
       agentId,
       sessionId,
       content,
@@ -989,21 +1021,36 @@ export class WsAcpTransport implements AcpTransport {
         this.socket = null
         this.authed = false
         this.clearHeartbeat()
+        this.clearStableTimer()
+        this.sessionRetry.cancelAll()
         this.rejectAllPending('closed', 'WebSocket closed')
         if (!this.disposed) this.scheduleReconnect()
         settleErr(new AcpTransportError('closed', 'WebSocket closed before auth'))
       }
 
+      // CLI-F4: one ~10 s budget for upgrade + `authenticate` (not the 60 s
+      // request bound). On expiry the stalled socket is discarded (its handlers
+      // detached so a late close cannot double-fire) and the normal backoff
+      // loop re-arms; the caller of `connect()` gets a typed timeout.
       authTimer = setTimeout(() => {
-        if (!this.authed) {
+        if (this.authed || settled) return
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.handshakeTimeout',
+          message: `WebSocket upgrade/authenticate did not complete within ${HANDSHAKE_TIMEOUT_MS}ms`
+        })
+        if (this.socket === ws) {
+          this.discardSocket('WebSocket handshake timeout')
+          if (!this.disposed) this.scheduleReconnect()
+        } else {
           try {
             ws.close()
           } catch {
             /* ignore */
           }
-          settleErr(new AcpTransportError('closed', 'WebSocket auth handshake timeout'))
         }
-      }, REQUEST_TIMEOUT_MS)
+        settleErr(new AcpTransportError('timeout', 'WebSocket handshake timed out'))
+      }, HANDSHAKE_TIMEOUT_MS)
     })
   }
 
@@ -1051,7 +1098,6 @@ export class WsAcpTransport implements AcpTransport {
     if (this.visibilityHandler || typeof document === 'undefined') return
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') {
-        this.lastHiddenAt = Date.now()
         // CAP-3: signal the server to extend its keepalive watchdog to the
         // 5-min background ceiling before the tab suspends (the OS will
         // throttle/pause this transport's timers).
@@ -1060,44 +1106,15 @@ export class WsAcpTransport implements AcpTransport {
       }
       // CAP-3: signal the server to resume the normal 75s watchdog ceiling
       // (a no-op if the socket is already dead — sendLifecycleSignal guards on
-      // readyState === OPEN). Then CAP-2's stale-threshold branching decides
-      // whether to validate the round trip or force-reconnect.
+      // readyState === OPEN). Then probe the held socket: the host keeps a
+      // backgrounded socket for 300 s after the `background` frame, so there is
+      // no hidden-duration cutoff — the probe decides whether to reconnect.
       this.sendLifecycleSignal('foreground')
-      // CAP-2: Skip round-trip ping validation on long background returns.
-      // After VISIBILITY_STALE_THRESHOLD_MS, the heartbeat is throttled and
-      // the server will kill the socket within ~45s, so a ping wastes up to
-      // 5s on a dead/dying link. Go directly to reconnect with backoff reset.
-      const hiddenFor = this.lastHiddenAt != null ? Date.now() - this.lastHiddenAt : 0
-      if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS) {
-        this.lastHiddenAt = null
-        void logFrontendError({
-          level: 'warn',
-          source: 'WsAcpTransport.visibilityStale',
-          message: `visibility return after ${Math.round(hiddenFor / 1000)}s: skipping ping validation, force-reconnecting`
-        })
-        this.forceReconnect('visibility return: long background')
-      } else {
-        this.validateOnResume('visibility return')
-      }
+      this.validateOnResume('visibility return')
     }
-    const onFocus = (): void => {
-      if (this.lastHiddenAt == null) return
-      // Same stale-threshold check as the visibility handler: if the tab was
-      // hidden long enough for the server to kill (or be about to kill) the
-      // socket, skip the ping round-trip and force-reconnect directly.
-      const hiddenFor = Date.now() - this.lastHiddenAt
-      if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS) {
-        void logFrontendError({
-          level: 'warn',
-          source: 'WsAcpTransport.focusStale',
-          message: `focus return after ${Math.round(hiddenFor / 1000)}s: skipping ping validation, force-reconnecting`
-        })
-        this.lastHiddenAt = null
-        this.forceReconnect('window focus: long background')
-      } else {
-        this.validateOnResume('window focus')
-      }
-    }
+    // Every return signal probes the held socket (or cuts a pending backoff
+    // short); a reconnect happens only if the probe fails.
+    const onFocus = (): void => this.validateOnResume('window focus')
     const onPageShow = (): void => this.validateOnResume('pageshow')
     const onResume = (): void => this.validateOnResume('browser resume')
     const onOnline = (): void => this.validateOnResume('network online')
@@ -1140,17 +1157,25 @@ export class WsAcpTransport implements AcpTransport {
     }
   }
 
+  /**
+   * Every return signal (visibilitychange, focus, pageshow, online, resume)
+   * lands here. There is no hidden-duration threshold: the host holds a
+   * backgrounded socket for 300 s after the `background` frame, so the held
+   * socket is PROBED and replaced only if the probe fails.
+   */
   private validateOnResume(reason: string): void {
-    if (
-      this.disposed ||
-      this.connecting ||
-      this.reconnecting ||
-      this.reconnectTimer ||
-      this.resumeValidation
-    ) {
+    if (this.disposed || this.tokenHalted) return
+    // A pending backoff is cut short by any wake signal (attempt counter kept).
+    if (this.expediteReconnect()) return
+    // Handshake in flight: bounded by HANDSHAKE_TIMEOUT_MS, nothing to probe.
+    if (this.connecting) return
+    if (this.reconnecting) {
+      // CLI-F3: a resume signal revalidates even in the resubscribe phase when
+      // the socket is no longer OPEN, instead of waiting out a request timer.
+      if (!this.isSocketLive()) this.forceReconnect(`${reason}: socket not open during resubscribe`)
       return
     }
-    this.lastHiddenAt = null
+    if (this.resumeValidation) return
     const validation = this.validateRoundTrip(reason).finally(() => {
       if (this.resumeValidation === validation) this.resumeValidation = null
     })
@@ -1162,22 +1187,9 @@ export class WsAcpTransport implements AcpTransport {
       if (this.socket?.readyState !== WebSocket.OPEN || !this.authed) {
         throw new AcpTransportError('closed', 'socket is not authenticated and open')
       }
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new AcpTransportError('timeout', 'resume health check timed out')),
-          RESUME_VALIDATION_TIMEOUT_MS
-        )
-        void this.request<void>('ping', {}).then(
-          () => {
-            clearTimeout(timer)
-            resolve()
-          },
-          (error) => {
-            clearTimeout(timer)
-            reject(error)
-          }
-        )
-      })
+      // Bounded probe: the ping request carries its own short timer, so a
+      // silent half-open socket fails within RESUME_PROBE_TIMEOUT_MS.
+      await this.request<void>('ping', {}, RESUME_PROBE_TIMEOUT_MS)
     } catch (error) {
       void logFrontendError({
         level: 'warn',
@@ -1190,28 +1202,24 @@ export class WsAcpTransport implements AcpTransport {
 
   /**
    * Force a clean reconnect, bypassing the `connect()` fast path that trusts
-   * `readyState === OPEN`. Used by the visibility-triggered path: a mobile
-   * browser backgrounded the tab, the server tore the socket down at its
-   * Pong-timeout, and the client's `onclose` may not have fired yet (or the
-   * link is half-open and still reports OPEN). Tears down the suspect socket
-   * (detaching its handlers so its eventual close does not double-trigger
-   * `scheduleReconnect`/`rejectAllPending`), cancels any pending reconnect
-   * timer (which may carry elevated backoff from prior failures), resets
-   * exponential backoff to zero (the visibility-triggered path must recover
-   * within the server's grace window), then reuses `scheduleReconnect()` so
-   * the `reconnect()` + cursor-resubscribe + `onReconnectStateChange`
-   * machinery runs unchanged.
+   * `readyState === OPEN`. Used when a resume probe fails: the socket is
+   * half-open (the host or the OS dropped it) and still reports OPEN. Tears
+   * down the suspect socket (detaching its handlers so its eventual close does
+   * not double-trigger `scheduleReconnect`/`rejectAllPending`), cancels any
+   * pending reconnect timer, then reuses `scheduleReconnect()` so the
+   * `reconnect()` + cursor-resubscribe + `onReconnectStateChange` machinery
+   * runs unchanged.
    */
   private forceReconnect(reason: string): void {
     if (this.disposed) return
     // An active reconnect that has already progressed past socket creation
-    // (in-flight `reconnect()` with no pending timer) means the socket is
-    // being re-established — don't interfere. A pending timer or an in-flight
-    // `connect()` that hasn't opened a socket yet are both safe to cancel:
-    // `scheduleReconnect` queued a future attempt (possibly with elevated
-    // backoff from prior failures), or `connect()` created a socket that the
-    // OS hasn't opened yet (half-open during background throttling).
-    if (this.reconnecting && !this.reconnectTimer && !this.connecting) return
+    // with a LIVE socket (resubscribe phase) is re-establishing the channel —
+    // don't interfere. A pending timer, an in-flight `connect()` that hasn't
+    // opened a socket yet, or a socket that is no longer OPEN in the
+    // resubscribe phase (CLI-F3: the OS dropped it without `onclose`) are all
+    // safe to replace. The attempt counter is NOT reset here — only 60 s of
+    // stable connection resets it (no flap loop can defeat the backoff).
+    if (this.reconnecting && !this.reconnectTimer && !this.connecting && this.isSocketLive()) return
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -1221,7 +1229,6 @@ export class WsAcpTransport implements AcpTransport {
     // pending Promise will reject via the detached handlers. Setting to null
     // allows `connect()` to start a fresh attempt from `scheduleReconnect`.
     this.connecting = null
-    this.reconnectAttempt = 0
     this.scheduleReconnect()
   }
 
@@ -1231,6 +1238,8 @@ export class WsAcpTransport implements AcpTransport {
     this.authed = false
     this.rejectAllPending('closed', reason)
     this.clearHeartbeat()
+    this.clearStableTimer()
+    this.sessionRetry.cancelAll()
     if (old) {
       // Detach so the old socket's close does not double-fire scheduleReconnect
       // / rejectAllPending on an already-tearing-down transport.
@@ -1242,6 +1251,27 @@ export class WsAcpTransport implements AcpTransport {
       } catch {
         /* ignore — already closed */
       }
+    }
+  }
+
+  /**
+   * Arm the 60 s stability timer for the connection that just authenticated.
+   * Only when it fires (the connection survived that long) does the backoff
+   * attempt counter reset — a connect that dies seconds later keeps climbing
+   * the backoff ladder instead of hammering the host at the base delay.
+   */
+  private startStableTimer(): void {
+    this.clearStableTimer()
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null
+      this.reconnectAttempt = 0
+    }, RECONNECT_STABLE_MS)
+  }
+
+  private clearStableTimer(): void {
+    if (this.stableTimer) {
+      clearTimeout(this.stableTimer)
+      this.stableTimer = null
     }
   }
 
@@ -1294,7 +1324,9 @@ export class WsAcpTransport implements AcpTransport {
     // authenticate, after which normal reconnect behavior resumes.
     if (this.tokenHalted) return
     if (this.disposed || this.reconnectTimer) return
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempt, RECONNECT_MAX_MS)
+    // Exponential backoff with ±25 % jitter. The attempt counter is reset only
+    // by `stableTimer` (60 s of stable connection), never merely on connect.
+    const delay = jitteredBackoffMs(this.reconnectAttempt)
     this.reconnectAttempt += 1
     // Story 5.3 (AC3): fire the reconnect listener BEFORE setting the timer so
     // the store can flip `transportReconnecting` immediately — the UI overlay
@@ -1309,35 +1341,88 @@ export class WsAcpTransport implements AcpTransport {
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
+      this.lastReconnectAttemptAt = Date.now()
       void this.reconnect()
     }, delay)
+  }
+
+  /**
+   * Wake/online/visibility/focus signal during a pending backoff: run the
+   * reconnect attempt now instead of waiting out the delay. Does NOT reset the
+   * attempt counter (the 60 s stability rule owns that) and is rate-limited so
+   * a burst of focus events cannot turn into a connect storm. Returns whether
+   * a backoff was pending.
+   */
+  private expediteReconnect(): boolean {
+    if (!this.reconnectTimer) return false
+    if (Date.now() - this.lastReconnectAttemptAt < RECONNECT_EXPEDITE_MIN_INTERVAL_MS) return true
+    clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    this.lastReconnectAttemptAt = Date.now()
+    void this.reconnect()
+    return true
+  }
+
+  private isSocketLive(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN && this.authed
+  }
+
+  private dropObsoleteSession(sid: string): void {
+    this.subscribed.delete(sid)
+    this.lastSeq.delete(sid)
+    this.seenTurnIds.delete(sid)
+    this.sessionRetry.cancel(sid)
   }
 
   private async reconnect(): Promise<void> {
     try {
       await this.connect()
+      // A fresh pass owns every session again; drop retries from a prior socket.
+      this.sessionRetry.cancelAll()
       const prioritized = this.reconnectPriorityProvider?.() ?? []
       const ordered = [
         ...prioritized.filter((sid) => this.subscribed.has(sid)),
         ...[...this.subscribed].filter((sid) => !prioritized.includes(sid))
       ]
-      const failedSessions: string[] = []
+      const retryingSessions: string[] = []
       const obsoleteSessions: string[] = []
       for (const sid of ordered) {
         const last = this.lastSeq.get(sid)
         // Force re-subscribe after reconnect; pass an explicit boundary.
-        // A single failing session must NOT abort the whole resubscribe pass —
-        // log + continue so remaining sessions still recover.
+        // A single failing session must NOT abort the whole resubscribe pass
+        // nor tear the socket down (CLI-F1): it is retried alone with its own
+        // bounded backoff while the socket and the other sessions stay up.
         try {
-          await this.subscribeSession(sid, last ?? 0, true)
+          await this.subscribeInternal(sid, last ?? 0, true, RESUBSCRIBE_TIMEOUT_MS)
         } catch (error) {
           if (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.NOT_FOUND) {
-            this.subscribed.delete(sid)
-            this.lastSeq.delete(sid)
-            this.seenTurnIds.delete(sid)
+            this.dropObsoleteSession(sid)
             obsoleteSessions.push(sid)
+          } else if (!this.isSocketLive()) {
+            // The socket itself died mid-pass: that is a connection failure,
+            // not a per-session one — fall through to the teardown path.
+            throw error
           } else {
-            failedSessions.push(sid)
+            // A subscribe TIMEOUT on a socket that still reads OPEN may be a
+            // half-open link: the resume probes and heartbeat `forceReconnect`
+            // return early mid-pass, so without this each remaining session
+            // would stall a further RESUBSCRIBE_TIMEOUT_MS. Probe once; if the
+            // socket cannot round-trip, treat it as a connection failure
+            // (the catch below tears it down and re-arms the backoff).
+            if (error instanceof AcpTransportError && error.code === 'timeout') {
+              try {
+                await this.request<void>('ping', {}, RESUME_PROBE_TIMEOUT_MS)
+              } catch (probeError) {
+                void logFrontendError({
+                  level: 'warn',
+                  source: 'WsAcpTransport.reconnect',
+                  message: `Resubscribe of ${sid} timed out and the socket failed its probe (half-open link): ${String(probeError)}`
+                })
+                throw error
+              }
+            }
+            retryingSessions.push(sid)
+            this.sessionRetry.schedule(sid, error)
           }
         }
       }
@@ -1348,27 +1433,25 @@ export class WsAcpTransport implements AcpTransport {
           message: `Dropped obsolete ACP subscription session ids: ${obsoleteSessions.join(', ')}`
         })
       }
-      if (failedSessions.length > 0) {
+      if (retryingSessions.length > 0) {
         void logFrontendError({
           level: 'warn',
           source: 'WsAcpTransport.reconnect',
-          message: `ACP subscription recovery failed for session ids: ${failedSessions.join(', ')}`
+          message: `ACP subscription recovery deferred to per-session retry for session ids: ${retryingSessions.join(', ')}`
         })
-        throw new AcpTransportError('closed', 'required ACP subscriptions did not recover')
       }
-      this.reconnectAttempt = 0
-      // Story 5.3 (AC3): fire `false` AFTER the socket re-opens and all
-      // sessions are re-subscribed so the overlay stays visible for the
-      // full reconnect window (drop → backoff → reopen → resubscribe).
+      // Story 5.3 (AC3): fire `false` AFTER the socket re-opens and every
+      // session was either re-subscribed or handed to its own retry so the
+      // overlay stays visible for the full reconnect window (drop → backoff →
+      // reopen → resubscribe). The attempt counter is NOT reset here: only
+      // `stableTimer` resets it after 60 s of stable connection.
       this.reconnecting = false
       // Story 10: the reconnect cycle is fully recovered — socket open,
-      // authed, and every required session re-subscribed. Only NOW is the
-      // control channel healthy (the auth handshake deliberately stays
-      // silent while `reconnecting` so a resubscription failure cannot
-      // briefly flip the store to 'connected' before the retry loop
-      // re-engages).
+      // authed, and every required session re-subscribed or retrying. Only NOW
+      // is the control channel healthy (the auth handshake deliberately stays
+      // silent while `reconnecting`).
       this.emitConnectionState('connected')
-      this.onReconnectStateChange?.(false)
+      this.onReconnectStateChange?.(false, true)
     } catch (err) {
       // Story 8 (web honesty): an idle client — no subscribed sessions and no
       // in-flight requests — has nothing to recover, so its reconnect churn
@@ -1386,6 +1469,40 @@ export class WsAcpTransport implements AcpTransport {
       this.discardSocket('reconnect attempt failed')
       this.scheduleReconnect()
     }
+  }
+
+  /** One per-session retry attempt (see {@link SessionResubscribeRetry}). */
+  private async retrySessionSubscription(sid: string, mode: SessionRetryMode): Promise<void> {
+    if (!this.subscribed.has(sid)) return
+    try {
+      if (mode === 'cursor') {
+        await this.subscribeInternal(sid, this.lastSeq.get(sid) ?? 0, true, RESUBSCRIBE_TIMEOUT_MS)
+      } else {
+        await this.recoverSession(sid, RESUBSCRIBE_TIMEOUT_MS)
+      }
+    } catch (error) {
+      if (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.NOT_FOUND) {
+        this.dropObsoleteSession(sid)
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.reconnect',
+          message: `Dropped obsolete ACP subscription session ids: ${sid}`
+        })
+        return
+      }
+      throw error
+    }
+  }
+
+  private giveUpSessionSubscription(sid: string, lastError: unknown): void {
+    // Clear the mark so the next explicit subscribe (e.g. the next prompt)
+    // re-subscribes instead of being skipped by the already-subscribed guard.
+    this.subscribed.delete(sid)
+    void logFrontendError({
+      level: 'warn',
+      source: 'WsAcpTransport.sessionResubscribe',
+      message: `ACP session ${sid} could not be re-subscribed after bounded retries; the next subscribe will retry: ${String(lastError)}`
+    })
   }
 
   private async onMessage(raw: string): Promise<void> {
@@ -1502,6 +1619,7 @@ export class WsAcpTransport implements AcpTransport {
         // + authed — it refreshes the server keepalive watchdog through proxies
         // that strip WS-level Ping/Pong so a focused tab stops dropping at ~75s.
         this.startHeartbeat()
+        this.startStableTimer()
         // CAP-3: if the tab is already hidden when auth completes (e.g. a
         // reconnect that finished while backgrounded), the hide event fired
         // before we were authed and was a no-op. Re-sync the server's watchdog
@@ -1529,7 +1647,7 @@ export class WsAcpTransport implements AcpTransport {
           // backoff instead of starting from the base delay.
           this.reconnecting = false
           this.reconnectAttempt = 0
-          this.onReconnectStateChange?.(false)
+          this.onReconnectStateChange?.(false, false)
           this.emitConnectionState('disconnected')
           flagWebAuthUnauthorized('WsAcpTransport')
           try {
@@ -1663,16 +1781,24 @@ export class WsAcpTransport implements AcpTransport {
     return 0
   }
 
-  private request<T = unknown>(type: WsRequestType, payload: unknown): Promise<T> {
+  private request<T = unknown>(
+    type: WsRequestType,
+    payload: unknown,
+    timeoutOverrideMs?: number
+  ): Promise<T> {
     // Ensure connected first (unless socket already open — avoids reconnect loops).
     if (this.socket?.readyState === WebSocket.OPEN) {
-      return this.sendWhenOpen(type, payload)
+      return this.sendWhenOpen(type, payload, timeoutOverrideMs)
     }
-    return this.connect().then(() => this.sendWhenOpen(type, payload))
+    return this.connect().then(() => this.sendWhenOpen(type, payload, timeoutOverrideMs))
   }
 
   /** Send a request assuming the socket is already OPEN (used during auth handshake). */
-  private sendWhenOpen<T = unknown>(type: WsRequestType, payload: unknown): Promise<T> {
+  private sendWhenOpen<T = unknown>(
+    type: WsRequestType,
+    payload: unknown,
+    timeoutOverrideMs?: number
+  ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const id = randomUUID()
       const frame: WsRequest = { id, type, payload }
@@ -1704,11 +1830,15 @@ export class WsAcpTransport implements AcpTransport {
       // and the `send_prompt` unlimited-policy pattern. A reply, disconnect,
       // or disposal resolves/rejects the pending request.
       const isAuthenticateAgent = type === 'authenticate_agent'
+      // Per-request-type table (CLI-F2): each timer is >= the host's own bound
+      // for that operation (install, catalog refresh, session open/reopen).
+      // `timeoutOverrideMs` lets the reconnect resubscribe pass bound a single
+      // `subscribe` more tightly than the generic timer.
       const timerMs = isSendPrompt
         ? this.computeSendPromptTimerMs(inactivityMs, deadline)
         : isAuthenticateAgent
           ? 0
-          : REQUEST_TIMEOUT_MS
+          : (timeoutOverrideMs ?? requestTimeoutMs(type))
       const timer =
         timerMs > 0
           ? setTimeout(() => {

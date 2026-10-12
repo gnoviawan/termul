@@ -29,6 +29,15 @@ import {
 } from './acp-transport'
 import { classifySetupError } from './agents/acp-spawn-errors'
 
+// Reconnect backoff carries ±25 % jitter; pin it to the neutral factor so the
+// nominal 500ms/1s/2s delays are exact. Jitter bounds have their own cases.
+beforeEach(() => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5)
+})
+afterEach(() => {
+  vi.mocked(Math.random).mockRestore()
+})
+
 class FakeWebSocket {
   static OPEN = 1
   static CONNECTING = 0
@@ -64,6 +73,8 @@ class FakeWebSocket {
   holdSendPrompt = false
   /** When true, application pings remain unanswered (stale OPEN socket). */
   holdPing = false
+  /** When true, `subscribe` requests stay unanswered (stale OPEN socket). */
+  holdSubscribe = false
   /** Session ids whose subscribe request fails. */
   failSubscribeSessions = new Set<string>()
   /** Per-session subscribe failures used to distinguish transient/permanent recovery. */
@@ -157,6 +168,7 @@ class FakeWebSocket {
       return
     }
     if (req.type === 'subscribe') {
+      if (this.holdSubscribe) return
       const payload = req.payload as { sessionId: string; lastSeq?: number }
       const failureCode = this.subscribeFailureCodes.get(payload.sessionId)
       if (this.failSubscribeSessions.has(payload.sessionId) || failureCode) {
@@ -2294,7 +2306,6 @@ type TransportInternals = {
   socket: FakeWebSocket
   connecting: Promise<void> | null
   reconnecting: boolean
-  lastHiddenAt: number | null
   visibilityHandler: (() => void) | null
   focusHandler: (() => void) | null
   pageShowHandler: (() => void) | null
@@ -2458,7 +2469,6 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     expect(states).toEqual([])
     expect(internals.socket).toBe(socketBefore)
     expect(findSentRequest(socketBefore, 'ping')).toBeDefined()
-    expect(internals.lastHiddenAt).toBeNull() // consumed
 
     const timerField = transport as unknown as {
       reconnectTimer: ReturnType<typeof setTimeout> | null
@@ -2543,7 +2553,7 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     })
   }
 
-  it('ignores lifecycle signals during reconnect backoff without resetting the retry', async () => {
+  it('does not start an extra probe or reconnect for lifecycle signals while the socket is healthy and a probe is in flight', async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -2551,17 +2561,16 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     })
     await transport.connect()
     const internals = transport as unknown as TransportInternals
-    internals.socket.close()
-    const timer = internals.reconnectTimer
-    const attempt = internals.reconnectAttempt
+    const socket = internals.socket
+    socket.holdPing = true
 
     window.dispatchEvent(new Event('pageshow'))
     document.dispatchEvent(new Event('resume'))
     window.dispatchEvent(new Event('online'))
 
-    expect(internals.reconnectTimer).toBe(timer)
-    expect(internals.reconnectAttempt).toBe(attempt)
-    expect(internals.reconnecting).toBe(true)
+    expect(socket.sent.filter((raw) => JSON.parse(raw).type === 'ping')).toHaveLength(1)
+    expect(internals.reconnectTimer).toBeNull()
+    expect(internals.socket).toBe(socket)
     transport.dispose()
   })
 
@@ -2628,10 +2637,37 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     expect(internals.onlineHandler).toBeNull()
   })
 
-  // CAP-2: stale-threshold skip — after >30s hidden, the client skips the
-  // round-trip ping validation and goes directly to forceReconnect with
-  // backoff reset, recovering within the server's grace window.
-  it('skips ping validation and force-reconnects on long background return (>30s hidden)', async () => {
+  // CLI-F4/AD Conventions › Reconnect: the 30 s hidden-duration forced
+  // reconnect is retired — the host holds a backgrounded socket for 300 s, so
+  // every return signal PROBES the held socket and reconnects only on failure.
+  it('probes the held socket after a long (>30s) background and keeps it when the probe succeeds', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const states: boolean[] = []
+    transport.setReconnectListener((r) => states.push(r))
+    await transport.subscribeSession('sess-A')
+    const internals = transport as unknown as TransportInternals
+    const oldSocket = internals.socket
+
+    dispatchVisibility('hidden')
+    await vi.advanceTimersByTimeAsync(120_000)
+    oldSocket.sent.length = 0
+    dispatchVisibility('visible')
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(findSentRequest(oldSocket, 'ping')).toBeDefined() // probed, not replaced
+    expect(internals.socket).toBe(oldSocket)
+    expect(oldSocket.readyState).toBe(FakeWebSocket.OPEN)
+    expect(states).toEqual([])
+    expect(internals.reconnectTimer).toBeNull()
+    transport.dispose()
+  })
+
+  it('reconnects after a long background only when the probe fails, cursor-resubscribing', async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -2650,37 +2686,140 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
       payload: { role: 'agent', content: { text: 'before background' } }
     })
     await Promise.resolve()
-    expect(internals.lastSeq.get('sess-A')).toBe(1)
 
-    // Simulate >30s of background time (exceeds VISIBILITY_STALE_THRESHOLD_MS).
     dispatchVisibility('hidden')
-    await vi.advanceTimersByTimeAsync(31_000)
-    // Clear sent buffer so heartbeat pings from the hidden period don't
-    // interfere — we only care about pings sent after visibility return.
-    oldSocket.sent.length = 0
+    await vi.advanceTimersByTimeAsync(120_000)
+    oldSocket.holdPing = true // the held socket died while backgrounded
     dispatchVisibility('visible')
-
-    // forceReconnect fires immediately — no ping request sent after visibility return.
-    expect(findSentRequest(oldSocket, 'ping')).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(4_900)
+    expect(states).toEqual([]) // still within the bounded probe
+    await vi.advanceTimersByTimeAsync(200)
+    expect(states).toEqual([true])
     expect(oldSocket.readyState).toBe(FakeWebSocket.CLOSED)
-    expect(oldSocket.onclose).toBeNull() // handlers detached
 
-    // Backoff was reset to 0, so the reconnect delay is RECONNECT_BASE_MS (500ms).
     await vi.advanceTimersByTimeAsync(600)
-    await Promise.resolve()
-    expect(states[0]).toBe(true) // reconnecting
     expect(internals.socket).not.toBe(oldSocket)
-    // Cursor-resubscribe with lastSeq.
-    const sub = findSentRequest(internals.socket, 'subscribe')
-    expect(sub?.payload).toMatchObject({ sessionId: 'sess-A', lastSeq: 1 })
-
+    expect(findSentRequest(internals.socket, 'subscribe')?.payload).toMatchObject({
+      sessionId: 'sess-A',
+      lastSeq: 1
+    })
     transport.dispose()
   })
 
-  // CAP-2: backoff reset — forceReconnect resets reconnectAttempt to 0 so the
-  // visibility-triggered path always starts with the minimum delay, regardless
-  // of how many prior reconnect failures elevated the backoff.
-  it('resets reconnect backoff to zero in forceReconnect after long background', async () => {
+  for (const signal of ['visibility', 'focus', 'pageshow', 'resume', 'online'] as const) {
+    it(`${signal} cuts a pending backoff short without resetting the attempt counter`, async () => {
+      vi.useFakeTimers()
+      const transport = new WsAcpTransport({
+        url: 'ws://test/ws',
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+      })
+      await transport.connect()
+      const states: boolean[] = []
+      transport.setReconnectListener((r) => states.push(r))
+      const internals = transport as unknown as TransportInternals
+      internals.reconnectAttempt = 4 // elevated: the pending delay would be the 8s cap
+      const oldSocket = internals.socket
+      oldSocket.close()
+      expect(internals.reconnectTimer).not.toBeNull()
+      expect(internals.reconnectAttempt).toBe(5)
+
+      if (signal === 'visibility') dispatchVisibility('visible')
+      else if (signal === 'resume') document.dispatchEvent(new Event('resume'))
+      else window.dispatchEvent(new Event(signal))
+      expect(internals.reconnectTimer).toBeNull() // backoff cut short
+
+      await vi.advanceTimersByTimeAsync(10)
+      expect(internals.socket).not.toBe(oldSocket)
+      expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+      expect(states).toEqual([true, false])
+      expect(internals.reconnectAttempt).toBe(5) // not reset by the wake
+      transport.dispose()
+    })
+  }
+
+  it('rate-limits wake-triggered early attempts so a focus burst is not a connect storm', async () => {
+    vi.useFakeTimers()
+    DelayedOpenWebSocket.pending = []
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: DelayedOpenWebSocket as unknown as typeof WebSocket
+    })
+    const connecting = transport.connect()
+    await Promise.resolve()
+    const internals = transport as unknown as TransportInternals
+    ;(internals.socket as DelayedOpenWebSocket).openAndAuthenticate()
+    await connecting
+    internals.reconnectAttempt = 3 // elevated so a self-fired timer cannot mask the wake
+    internals.socket.close()
+
+    window.dispatchEvent(new Event('focus')) // cuts the backoff → attempt starts
+    expect(DelayedOpenWebSocket.pending).toHaveLength(2)
+    // Further focus events join the in-flight handshake instead of adding sockets.
+    window.dispatchEvent(new Event('focus'))
+    expect(DelayedOpenWebSocket.pending).toHaveLength(2)
+
+    // The attempt dies at once; the next backoff is pending. A focus within the
+    // same second must NOT cut it short again…
+    DelayedOpenWebSocket.pending[1].close()
+    await Promise.resolve()
+    expect(internals.reconnectTimer).not.toBeNull()
+    window.dispatchEvent(new Event('focus'))
+    expect(internals.reconnectTimer).not.toBeNull()
+    expect(DelayedOpenWebSocket.pending).toHaveLength(2)
+
+    // …but once the minimum spacing has elapsed a wake signal does.
+    await vi.advanceTimersByTimeAsync(1_000)
+    window.dispatchEvent(new Event('focus'))
+    expect(DelayedOpenWebSocket.pending.length).toBeGreaterThanOrEqual(3)
+    transport.dispose()
+  })
+
+  it('a resume signal revalidates in the resubscribe phase when the socket is no longer OPEN (CLI-F3)', async () => {
+    vi.useFakeTimers()
+    class HoldResubscribeSocket extends FakeWebSocket {
+      static instances = 0
+      holdSubscribe = false
+
+      constructor(url: string) {
+        super(url)
+        HoldResubscribeSocket.instances += 1
+        this.holdSubscribe = HoldResubscribeSocket.instances > 1
+      }
+
+      send(data: string): void {
+        if (this.holdSubscribe && (JSON.parse(data) as { type: string }).type === 'subscribe') {
+          this.sent.push(data)
+          return
+        }
+        super.send(data)
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: HoldResubscribeSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    await transport.subscribeSession('sess-A')
+    const internals = transport as unknown as TransportInternals
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(600) // reconnect: auth ok, resubscribe in flight
+    expect(internals.reconnecting).toBe(true)
+    expect(internals.connecting).toBeNull()
+    expect(internals.reconnectTimer).toBeNull()
+
+    // The OS dropped the socket without delivering `onclose`.
+    const dead = internals.socket
+    dead.readyState = FakeWebSocket.CLOSED
+    window.dispatchEvent(new Event('online'))
+
+    // Recovery starts now, not after the 15s resubscribe bound / 60s timer.
+    expect(internals.socket).toBeNull()
+    expect(dead.onclose).toBeNull()
+    expect(internals.reconnectTimer).not.toBeNull()
+    transport.dispose()
+  })
+
+  it('resets the backoff counter only after 60s of stable connection, not on connect', async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -2688,73 +2827,179 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     })
     await transport.connect()
     const internals = transport as unknown as TransportInternals
+    internals.socket.close()
+    expect(internals.reconnectAttempt).toBe(1)
 
-    // Simulate elevated backoff from prior failures (auto-open sockets reset
-    // the counter on successful reconnect, so set it directly).
-    internals.reconnectAttempt = 5
-
-    // Simulate long background (>30s) which triggers forceReconnect.
-    dispatchVisibility('hidden')
-    await vi.advanceTimersByTimeAsync(31_000)
-    dispatchVisibility('visible')
-
-    // forceReconnect resets backoff to 0, then scheduleReconnect increments
-    // to 1. The delay used was RECONNECT_BASE_MS * 2^0 = 500ms (not 2^5 = 16s).
-    expect(internals.reconnectAttempt).toBe(1) // 0 (reset) + 1 (increment)
-    await vi.advanceTimersByTimeAsync(600) // base delay fires
-    await Promise.resolve()
-
+    await vi.advanceTimersByTimeAsync(600) // reconnected
+    expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    expect(internals.reconnectAttempt).toBe(1) // connect alone does not reset
+    await vi.advanceTimersByTimeAsync(58_000)
+    expect(internals.reconnectAttempt).toBe(1)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(internals.reconnectAttempt).toBe(0) // 60s stable
     transport.dispose()
   })
 
-  // Regression: forceReconnect must cancel a pending reconnect timer (from a
-  // prior close during backgrounding) instead of returning early. Without
-  // this, a stale-return after the socket closed in the background would be
-  // stranded on the old elevated backoff timer.
-  it('cancels pending reconnect timer and resets backoff on stale visibility return', async () => {
+  it('a connection that drops before 60s keeps climbing the backoff ladder', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as TransportInternals
+    internals.socket.close() // attempt 0 → 1, 500ms
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(30_000) // up for only 30s
+    internals.socket.close() // flap: attempt 1 → 2, 1000ms
+    expect(internals.reconnectAttempt).toBe(2)
+    await vi.advanceTimersByTimeAsync(900)
+    expect(internals.reconnectTimer).not.toBeNull() // 1s delay still pending
+    await vi.advanceTimersByTimeAsync(200)
+    expect(internals.reconnectTimer).toBeNull()
+    expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    transport.dispose()
+  })
+
+  for (const [randomValue, delayMs] of [
+    [0, 375],
+    [1, 625]
+  ] as const) {
+    it(`reconnect delay carries ±25% jitter (random=${randomValue} → ${delayMs}ms)`, async () => {
+      vi.useFakeTimers()
+      vi.mocked(Math.random).mockReturnValue(randomValue)
+      const transport = new WsAcpTransport({
+        url: 'ws://test/ws',
+        WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+      })
+      await transport.connect()
+      const internals = transport as unknown as TransportInternals
+      internals.socket.close()
+      await vi.advanceTimersByTimeAsync(delayMs - 1)
+      expect(internals.reconnectTimer).not.toBeNull()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(internals.reconnectTimer).toBeNull() // fired exactly at the jittered delay
+      transport.dispose()
+    })
+  }
+
+  // CLI-F4: upgrade + authenticate share one ~10 s handshake bound on /ws.
+  it('fails a stalled /ws upgrade at the 10s handshake bound and re-arms the backoff', async () => {
     vi.useFakeTimers()
     DelayedOpenWebSocket.pending = []
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: DelayedOpenWebSocket as unknown as typeof WebSocket
     })
-    // Open + authenticate the initial socket manually.
-    const connecting = transport.connect()
-    await Promise.resolve()
     const internals = transport as unknown as TransportInternals
-    const initSocket = internals.socket as DelayedOpenWebSocket
-    initSocket.openAndAuthenticate()
-    await connecting
-
-    // Simulate backgrounding.
-    dispatchVisibility('hidden')
-
-    // Close the socket — scheduleReconnect sets a timer.
-    initSocket.close()
+    let failure: unknown
+    void transport.connect().catch((error) => {
+      failure = error
+    })
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(failure).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(failure).toMatchObject({ code: 'timeout' })
+    expect(internals.socket).toBeNull()
+    expect(DelayedOpenWebSocket.pending[0].readyState).toBe(FakeWebSocket.CLOSED)
     expect(internals.reconnectTimer).not.toBeNull()
-    expect(internals.reconnecting).toBe(true)
-    const oldTimer = internals.reconnectTimer
+    transport.dispose()
+  })
 
-    // Manually elevate reconnectAttempt to simulate prior failures that
-    // happened before the background period.
-    internals.reconnectAttempt = 4
-
-    // Advance into background (>30s).
-    await vi.advanceTimersByTimeAsync(31_000)
-
-    // Stale visibility return should cancel the pending timer and force reconnect.
-    dispatchVisibility('visible')
-
-    // forceReconnect cancelled the old timer, reset backoff to 0, and
-    // scheduleReconnect created a new timer with RECONNECT_BASE_MS delay.
-    expect(internals.reconnectTimer).not.toBe(oldTimer)
-    // forceReconnect reset backoff to 0, scheduleReconnect incremented to 1.
-    expect(internals.reconnectAttempt).toBeLessThanOrEqual(1)
-
-    // The new timer fires at 500ms (base delay, not elevated).
-    await vi.advanceTimersByTimeAsync(600)
+  it('fails an unanswered authenticate at the 10s handshake bound', async () => {
+    vi.useFakeTimers()
+    class AuthSilentSocket extends DelayedOpenWebSocket {
+      send(data: string): void {
+        if ((JSON.parse(data) as { type: string }).type === 'authenticate') {
+          this.sent.push(data)
+          return
+        }
+        super.send(data)
+      }
+    }
+    DelayedOpenWebSocket.pending = []
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: AuthSilentSocket as unknown as typeof WebSocket
+    })
+    const internals = transport as unknown as TransportInternals
+    let failure: unknown
+    void transport.connect().catch((error) => {
+      failure = error
+    })
     await Promise.resolve()
+    DelayedOpenWebSocket.pending[0].openAndAuthenticate()
+    await vi.advanceTimersByTimeAsync(9_900)
+    expect(failure).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(failure).toMatchObject({ code: 'timeout' })
+    expect(internals.socket).toBeNull()
+    expect(internals.reconnectTimer).not.toBeNull()
+    transport.dispose()
+  })
 
+  // CLI-F2: per-type timers, each >= the host's own bound for that operation.
+  it('keeps install_acp_agent pending past the former 60s timer and times out at 330s', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const origSend = sock.send.bind(sock)
+    sock.send = (data: string) => {
+      if ((JSON.parse(data) as { type: string }).type === 'install_acp_agent') return
+      origSend(data)
+    }
+    let settled: unknown
+    void transport.installAcpAgent('agent-1').then(
+      (v) => {
+        settled = { ok: v }
+      },
+      (err) => {
+        settled = { err }
+      }
+    )
+    await vi.advanceTimersByTimeAsync(300_000) // host bound: 120s download + 180s child
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(settled).toMatchObject({ err: expect.objectContaining({ code: 'timeout' }) })
+    sock.send = origSend
+    transport.dispose()
+  })
+
+  it('keeps create_session pending through the 60s host cap and times out at 90s', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const origSend = sock.send.bind(sock)
+    sock.send = (data: string) => {
+      if ((JSON.parse(data) as { type: string }).type === 'create_session') return
+      origSend(data)
+    }
+    let settled: unknown
+    void transport.newSession('agent-1', '/tmp', undefined, { ephemeral: true }).then(
+      (v) => {
+        settled = { ok: v }
+      },
+      (err) => {
+        settled = { err }
+      }
+    )
+    await vi.advanceTimersByTimeAsync(60_000) // server SESSION_NEW_TIMEOUT: the reply would land here
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(settled).toMatchObject({ err: expect.objectContaining({ code: 'timeout' }) })
+    sock.send = origSend
     transport.dispose()
   })
 
@@ -2794,40 +3039,134 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     transport.dispose()
   })
 
-  it('retries a transient subscription failure with backoff and reports success after recovery', async () => {
+  it('keeps the socket and the other sessions up while one failing session retries alone, then degrades it to snapshot recovery (CLI-F1)', async () => {
     vi.useFakeTimers()
-    class TransientSubscribeFailureSocket extends FakeWebSocket {
+    class OneSessionFailsSocket extends FakeWebSocket {
       static instances = 0
 
       constructor(url: string) {
         super(url)
-        TransientSubscribeFailureSocket.instances += 1
-        if (TransientSubscribeFailureSocket.instances === 2) {
-          this.subscribeFailureCodes.set('sess-transient', 'closed')
+        OneSessionFailsSocket.instances += 1
+        if (OneSessionFailsSocket.instances === 2) {
+          this.subscribeFailureCodes.set('sess-slow', 'closed')
         }
       }
     }
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
-      WebSocketImpl: TransientSubscribeFailureSocket as unknown as typeof WebSocket
+      WebSocketImpl: OneSessionFailsSocket as unknown as typeof WebSocket
     })
     await transport.connect()
-    await transport.subscribeSession('sess-transient')
+    await transport.subscribeSession('sess-slow')
+    await transport.subscribeSession('sess-ok')
     const states: boolean[] = []
     transport.setReconnectListener((state) => states.push(state))
     const internals = transport as unknown as TransportInternals
     internals.socket.close()
 
-    await vi.advanceTimersByTimeAsync(600)
-    expect(states).toEqual([true])
-    expect(internals.reconnectAttempt).toBe(2)
-    expect(internals.reconnectTimer).not.toBeNull()
-
-    await vi.advanceTimersByTimeAsync(1_100)
-    await vi.waitFor(() => expect(states).toEqual([true, false]))
+    // The pass completes: sess-ok re-subscribed, sess-slow handed to its own
+    // retry. The reconnect is NOT failed and the socket is NOT torn down.
+    await vi.advanceTimersByTimeAsync(700)
     expect(states).toEqual([true, false])
-    expect(internals.reconnectAttempt).toBe(0)
-    expect(internals.subscribed.has('sess-transient')).toBe(true)
+    const kept = internals.socket
+    expect(kept.readyState).toBe(FakeWebSocket.OPEN)
+    expect(internals.reconnectTimer).toBeNull()
+    const subscribesFor = (sid: string) =>
+      kept.sent
+        .map((raw) => JSON.parse(raw) as { type: string; payload: { sessionId?: string } })
+        .filter((req) => req.type === 'subscribe' && req.payload.sessionId === sid)
+    expect(subscribesFor('sess-ok')).toHaveLength(1)
+    expect(subscribesFor('sess-slow')).toHaveLength(1)
+
+    // Two more cursor retries (1s, 2s backoff) keep failing on the same socket.
+    await vi.advanceTimersByTimeAsync(1_100)
+    await vi.advanceTimersByTimeAsync(2_100)
+    expect(subscribesFor('sess-slow')).toHaveLength(3)
+    expect(internals.socket).toBe(kept)
+    expect(subscribesFor('sess-ok')).toHaveLength(1) // other sessions untouched
+
+    // The next attempt (4s) degrades to snapshot + live recovery.
+    await vi.advanceTimersByTimeAsync(4_100)
+    expect(findSentRequest(kept, 'recover_session_snapshot')?.payload).toMatchObject({
+      sessionId: 'sess-slow'
+    })
+    expect(internals.socket).toBe(kept)
+    expect(internals.subscribed.has('sess-slow')).toBe(true)
+    expect(internals.lastSeq.get('sess-slow')).toBe(42) // snapshot watermark adopted
+    transport.dispose()
+  })
+})
+
+describe('WsAcpTransport half-open socket during the resubscribe pass', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+  })
+
+  it('probes after the first per-session timeout and tears down a dead socket instead of stalling N x 15s', async () => {
+    vi.useFakeTimers()
+    class HalfOpenOnReconnectSocket extends FakeWebSocket {
+      static instances: HalfOpenOnReconnectSocket[] = []
+
+      constructor(url: string) {
+        super(url)
+        HalfOpenOnReconnectSocket.instances.push(this)
+        if (HalfOpenOnReconnectSocket.instances.length === 2) {
+          // The reconnected socket authenticates, then goes silent (half-open).
+          this.holdSubscribe = true
+          this.holdPing = true
+        }
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: HalfOpenOnReconnectSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    for (const sid of ['sess-1', 'sess-2', 'sess-3']) await transport.subscribeSession(sid)
+    const internals = transport as unknown as TransportInternals
+    internals.socket.close()
+    // Backoff (<=~700ms) + one 15s subscribe timeout + one 5s probe timeout.
+    await vi.advanceTimersByTimeAsync(700)
+    const halfOpen = internals.socket
+    expect(HalfOpenOnReconnectSocket.instances).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 100)
+
+    // Without the probe the pass would still be waiting on sess-2/sess-3 (45s).
+    expect(halfOpen.readyState).toBe(FakeWebSocket.CLOSED)
+    const subscribes = halfOpen.sent
+      .map((raw) => JSON.parse(raw) as { type: string })
+      .filter((req) => req.type === 'subscribe')
+    expect(subscribes).toHaveLength(1)
+    expect(internals.reconnectTimer).not.toBeNull() // backoff re-armed, pass failed as a connection error
+    transport.dispose()
+  })
+
+  it('a timed-out session on a socket that still answers pings keeps the socket and retries alone', async () => {
+    vi.useFakeTimers()
+    class SlowSubscribeSocket extends FakeWebSocket {
+      static instances: SlowSubscribeSocket[] = []
+
+      constructor(url: string) {
+        super(url)
+        SlowSubscribeSocket.instances.push(this)
+        if (SlowSubscribeSocket.instances.length === 2) this.holdSubscribe = true
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: SlowSubscribeSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    await transport.subscribeSession('sess-1')
+    const internals = transport as unknown as TransportInternals
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(700)
+    const kept = internals.socket
+    await vi.advanceTimersByTimeAsync(15_000 + 100)
+    // Ping answered → healthy socket: not torn down.
+    expect(kept.readyState).toBe(FakeWebSocket.OPEN)
+    expect(internals.socket).toBe(kept)
     transport.dispose()
   })
 })
@@ -3368,7 +3707,7 @@ describe('WsAcpTransport connection-state listener (Story 10)', () => {
     vi.useRealTimers()
   })
 
-  it("stays 'reconnecting' when a required session resubscription fails — 'connected' fires only after recovery succeeds", async () => {
+  it("reports 'connected' once the resubscribe pass completes even when one session fails — that session retries alone on the same socket (CLI-F1)", async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -3383,31 +3722,28 @@ describe('WsAcpTransport connection-state listener (Story 10)', () => {
     // The reconnect attempt's fresh socket fails the resubscribe with a
     // TRANSIENT code (not_found would prune the session as obsolete instead).
     FakeWebSocket.transientSubscribeFailuresOnNextSocket = { 'sess-x': 'unavailable' }
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    sock.close()
+    const internals = transport as unknown as TransportInternals
+    internals.socket.close()
     expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
 
-    // Backoff → reconnect: socket opens, auth handshake completes — but the
-    // resubscribe fails, so 'connected' must NOT fire; the state stays
-    // 'reconnecting' and the retry loop re-arms.
+    // Backoff → reconnect: socket opens, auth handshake completes, the one
+    // failing session is handed to its own retry — the socket is NOT torn down
+    // and the channel is reported healthy.
     await vi.advanceTimersByTimeAsync(600)
     await Promise.resolve()
-    expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
-    const timerField = transport as unknown as {
-      reconnectTimer: ReturnType<typeof setTimeout> | null
-    }
-    expect(timerField.reconnectTimer).not.toBeNull()
-
-    // Next attempt recovers (the static failure was consumed by the previous
-    // socket) — 'connected' fires only now, after the resubscribe succeeds.
-    await vi.advanceTimersByTimeAsync(1100)
-    await Promise.resolve()
     expect(states).toEqual(['connecting', 'connected', 'reconnecting', 'connected'])
+    expect(internals.reconnectTimer).toBeNull()
+    const keptSocket = internals.socket
+    expect(keptSocket.readyState).toBe(FakeWebSocket.OPEN)
 
-    if (timerField.reconnectTimer) {
-      clearTimeout(timerField.reconnectTimer)
-      timerField.reconnectTimer = null
-    }
+    // The per-session retry recovers on the SAME socket once the host-side
+    // condition clears.
+    keptSocket.subscribeFailureCodes.clear()
+    await vi.advanceTimersByTimeAsync(1_300)
+    expect(internals.socket).toBe(keptSocket)
+    expect(keptSocket.sent.filter((raw) => JSON.parse(raw).type === 'subscribe')).toHaveLength(2)
+    expect(internals.subscribed.has('sess-x')).toBe(true)
+
     transport.dispose()
     vi.useRealTimers()
   })

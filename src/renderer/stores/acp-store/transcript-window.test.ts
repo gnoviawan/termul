@@ -1484,6 +1484,9 @@ describe('acp-store live window + lazy-load + coalescing', () => {
   it('(k) drains buffered updates via the timer backstop while rAF is suspended (hidden webview)', () => {
     const sid = 's-backstop'
     seedSession(sid, 'agent-1', true)
+    // The watched session rides rAF (background sessions use a 100 ms timer);
+    // the backstop must still drain it when the frame never fires.
+    useAcpStore.setState({ activeSessionId: sid })
     vi.useFakeTimers()
     // An occluded/minimized WebView suspends rAF indefinitely — the frame
     // callback arms but never fires (same precondition as #133). The

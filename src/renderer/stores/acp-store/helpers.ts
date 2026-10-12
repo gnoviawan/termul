@@ -404,9 +404,39 @@ export function noteForStopReason(reason: StopReason): string | null {
       // Issue #842: the server wrote this synthetic marker at shutdown —
       // the turn was cut off mid-flight, not finished or user-cancelled.
       return 'Interrupted by server restart.'
+    case 'error':
+      // AD-5 turn terminators: the host closes an errored / timed-out /
+      // crashed turn with exactly one `prompt_complete` so no client keeps a
+      // turn open. These are failures, not completions.
+      return 'The turn ended with an error.'
+    case 'timeout':
+      return 'The turn timed out.'
+    case 'crashed':
+      return 'The agent stopped unexpectedly.'
     default:
       return `Response stopped: ${reason}`
   }
+}
+
+/**
+ * Stop reasons the host writes for a turn that FAILED (as opposed to ending
+ * normally or by user cancel). The preceding `agent_error` / `agent_crashed`
+ * event carries the specific message; the terminator must not overwrite it.
+ */
+export function isFailedTurnStopReason(reason: StopReason): boolean {
+  return reason === 'error' || reason === 'timeout' || reason === 'crashed'
+}
+
+/**
+ * `lastError` after a turn terminator: a failed-turn terminator keeps the
+ * specific error already recorded by the preceding `agent_error` and only
+ * falls back to the generic note; every other reason keeps the existing
+ * `note ?? current` rule.
+ */
+export function lastErrorAfterStop(current: string | null, reason: StopReason): string | null {
+  const note = noteForStopReason(reason)
+  if (isFailedTurnStopReason(reason)) return current ?? note
+  return note ?? current
 }
 
 /**

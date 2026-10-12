@@ -38,10 +38,7 @@ import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { useProjectStore } from '@/stores/project-store'
-import {
-  isAgentDeadError,
-  isSendPromptOutcomeUnknownError
-} from '@/stores/prompt-queue-orchestration'
+import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
@@ -57,6 +54,7 @@ import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
+import { PromptReconcileNotice } from './PromptReconcileNotice'
 import { useApprovalDock } from './use-approval-dock'
 import { usePermissionDenialNotice } from './use-permission-denial-notice'
 
@@ -211,6 +209,7 @@ export function AgentChatPanel({
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
   // uses the WS transport, so this stays `false` there.
   const transportReconnecting = useAcpStore((s) => s.transportReconnecting)
+  const promptUnconfirmed = useAcpStore((s) => Boolean(s.pendingPromptReconcile[sessionId]))
 
   // Story 5.3 (AC1): OSK awareness on mobile web. On Tauri desktop, the hook
   // returns a no-OSK default and `useMobileWebShell()` is always false — the
@@ -314,17 +313,6 @@ export function AgentChatPanel({
     (queueId: string) => {
       void sendQueuedPromptNow(sessionId, queueId).catch((err) => {
         if (isAgentDeadError(err)) return
-        // #844: a timed-out send_prompt is "outcome unknown", not "send
-        // failed" — the server may still complete the turn and deliver
-        // prompt_complete on replay. Log transiently instead of toasting.
-        if (isSendPromptOutcomeUnknownError(err)) {
-          void logFrontendError({
-            level: 'info',
-            source: 'acp.sendPromptOutcomeUnknown',
-            message: `Queued prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
-          })
-          return
-        }
         toast.error('Could not send the queued message. Try again.')
       })
     },
@@ -335,15 +323,6 @@ export function AgentChatPanel({
     (text: string) => {
       void sendPrompt(sessionId, text).catch((err) => {
         if (isAgentDeadError(err)) return
-        // #844: see handleSendQueuedNow — a timeout is not a send failure.
-        if (isSendPromptOutcomeUnknownError(err)) {
-          void logFrontendError({
-            level: 'info',
-            source: 'acp.sendPromptOutcomeUnknown',
-            message: `Prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
-          })
-          return
-        }
         toast.error('Could not send your message. Try again.')
       })
     },
@@ -354,15 +333,6 @@ export function AgentChatPanel({
     (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => {
       void sendPromptBlocks(sessionId, blocks, { displayBlocks }).catch((err) => {
         if (isAgentDeadError(err)) return
-        // #844: see handleSendQueuedNow — a timeout is not a send failure.
-        if (isSendPromptOutcomeUnknownError(err)) {
-          void logFrontendError({
-            level: 'info',
-            source: 'acp.sendPromptOutcomeUnknown',
-            message: `Block prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
-          })
-          return
-        }
         toast.error('Could not send your message. Try again.')
       })
     },
@@ -845,6 +815,16 @@ export function AgentChatPanel({
         onEditMessage={seedComposer}
         onRetry={canOfferRetry ? handleRetry : undefined}
       />
+      {promptUnconfirmed && session.activeTurn && (
+        // AD-6: the host has not yet confirmed the last prompt (the connection
+        // dropped before the reply). Not an error — the same turn is resent.
+        // In flow above the composer so it never covers the transcript.
+        <div className={`${CHAT_GUTTER_X} pb-1 pt-2`}>
+          <div className="mx-auto w-full max-w-3xl">
+            <PromptReconcileNotice />
+          </div>
+        </div>
+      )}
       {/* Browser-automation consent (CAP-5): the in-chat card is the fallback
           surface for any non-browser focus — mounted once so it shows both
           next to the composer and while a structured question is pending.

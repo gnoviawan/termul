@@ -6,11 +6,12 @@
  */
 
 import type { SwitchProjectReply } from '@shared/types/web-projects.types'
-import type {
-  HistoryMode,
-  PersistedSessionSummary,
-  SessionSnapshotEvent,
-  WsAgentSummary
+import {
+  type HistoryMode,
+  type PersistedSessionSummary,
+  type SessionSnapshotEvent,
+  WS_ERROR_CODES,
+  type WsAgentSummary
 } from '@shared/types/web-protocol.types'
 import type {
   AcpRegistrySnapshot,
@@ -24,11 +25,11 @@ import type {
   McpServerConfig,
   NewSessionOutcome,
   ProbeResult,
+  PromptDispatchResult,
   SessionConfigOption,
   SessionId,
   SessionReopenOutcome,
-  SpawnAgentResult,
-  StopReason
+  SpawnAgentResult
 } from '@/lib/acp-api'
 import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
@@ -48,6 +49,20 @@ export function isTransientAcpTransportError(error: unknown): error is AcpTransp
   return (
     error instanceof AcpTransportError &&
     (error.code === 'closed' || error.code === 'timeout' || error.code === 'agent_crashed')
+  )
+}
+
+/**
+ * A prompt command failed in a way that says nothing about whether the host
+ * accepted it: the socket dropped / timed out (transient) or the local
+ * client refused to connect (`unauthorized` — the token-halt state). Such a
+ * command stays pending-reconcile; only any OTHER code is an explicit host
+ * rejection that fails the turn.
+ */
+export function isPendingPromptTransportError(error: unknown): error is AcpTransportError {
+  return (
+    isTransientAcpTransportError(error) ||
+    (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.UNAUTHORIZED)
   )
 }
 
@@ -201,14 +216,14 @@ export interface AcpTransport {
      * persisted verbatim.
      */
     displayContent?: ContentBlock[]
-  ): Promise<StopReason>
+  ): Promise<PromptDispatchResult>
   sendPromptBlocks(
     agentId: AgentId,
     sessionId: SessionId,
     content: ContentBlock[],
     turnId?: string,
     displayContent?: ContentBlock[]
-  ): Promise<StopReason>
+  ): Promise<PromptDispatchResult>
   cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void>
   setConfigOption(
     agentId: AgentId,
@@ -256,10 +271,14 @@ export interface AcpTransport {
   subscribeSession?(sessionId: SessionId, lastSeq?: number | null, force?: boolean): Promise<void>
   /**
    * Story 5.3 (AC3): register a listener for transport-level reconnect state.
+   * The second argument is only meaningful when `reconnecting` is `false`:
+   * `true` = the channel genuinely recovered (open, authed, re-subscribed);
+   * `false` = the cycle ended WITHOUT recovery (token-class halt), so
+   * nothing may assume the host is reachable.
    * Only on the WS transport — absent on Tauri IPC (desktop). The store
    * checks for the method before calling it.
    */
-  setReconnectListener?(listener: (reconnecting: boolean) => void): void
+  setReconnectListener?(listener: (reconnecting: boolean, recovered?: boolean) => void): void
   /**
    * Story 10: register a listener for coarse connection-health state (feeds
    * the global StatusBar indicator via the connection-status store). Only on

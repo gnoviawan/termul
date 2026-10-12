@@ -185,6 +185,8 @@ describe('perf-commit-counts (CAP-8)', () => {
       pendingQuestions: {},
       pendingElicitations: {},
       sessions: FRESH_SESSIONS,
+      // The watched session streams on the rAF clock the harness drives.
+      activeSessionId: SESSION_ID,
       messages: { [SESSION_ID]: [] },
       toolCalls: { [SESSION_ID]: [] },
       agentSwitches: {},

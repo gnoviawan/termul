@@ -48,7 +48,31 @@ export type StopReason =
   | 'refusal'
   | 'cancelled'
   | 'interrupted'
+  // Host-written terminators for a failed turn (AD-5): RPC error, idle/hard
+  // timeout, agent exit. Always accompanied by an `agent_error` / crash event.
+  | 'error'
+  | 'timeout'
+  | 'crashed'
   | string
+
+/**
+ * Non-terminal reply to a same-`turnId` prompt resend (AD-5/AD-6): the host
+ * already holds that turn. `in_progress` = still running (the stop reason
+ * arrives as `prompt_complete`); `accepted` = already finished (the terminator
+ * is on the session log/replay). A receipt resolves the COMMAND, never ends the
+ * turn view.
+ */
+export interface PromptReceipt {
+  receipt: 'in_progress' | 'accepted'
+}
+
+/** `send_prompt` / `acp_send_prompt` result: a stop reason or a receipt. */
+export type PromptDispatchResult = StopReason | PromptReceipt
+
+export function isPromptReceipt(value: unknown): value is PromptReceipt {
+  if (typeof value !== 'object' || value === null || !('receipt' in value)) return false
+  return value.receipt === 'in_progress' || value.receipt === 'accepted'
+}
 
 export interface SessionMode {
   id: string
@@ -1006,7 +1030,7 @@ export async function acpSendPrompt(
   text: string,
   turnId?: string,
   displayContent?: ContentBlock[]
-): Promise<StopReason> {
+): Promise<PromptDispatchResult> {
   return getAcpTransport().sendPrompt(agentId, sessionId, text, turnId, displayContent)
 }
 
@@ -1016,7 +1040,7 @@ export async function acpSendPromptBlocks(
   content: ContentBlock[],
   turnId?: string,
   displayContent?: ContentBlock[]
-): Promise<StopReason> {
+): Promise<PromptDispatchResult> {
   return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, displayContent)
 }
 

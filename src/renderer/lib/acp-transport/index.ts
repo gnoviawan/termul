@@ -30,6 +30,7 @@ export {
   type AcpConnectionState,
   type AcpTransport,
   AcpTransportError,
+  isPendingPromptTransportError,
   isTransientAcpTransportError
 } from './types'
 export { resolveWsUrl, WsAcpTransport } from './ws-transport'

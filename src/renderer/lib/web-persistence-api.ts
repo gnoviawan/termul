@@ -17,6 +17,8 @@ import type { IpcResult, PersistenceApi } from '@shared/types/ipc.types'
 import type { WsRequest, WsRequestType } from '@shared/types/web-protocol.types'
 import { randomUUID } from '@/lib/uuid'
 import { resolveWsUrl } from './acp-transport'
+import { HANDSHAKE_TIMEOUT_MS } from './acp-transport/ws-transport-timing'
+import { logFrontendError } from './log-api'
 import { getWebAuthToken } from './web-auth-token'
 
 const DEBOUNCE_MS = 500
@@ -96,14 +98,17 @@ export class WebStoreSocket {
   private open(): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false
+      let handshakeTimer: ReturnType<typeof setTimeout> | null = null
       const settleOk = () => {
         if (settled) return
         settled = true
+        if (handshakeTimer) clearTimeout(handshakeTimer)
         resolve()
       }
       const settleErr = (err: StoreError) => {
         if (settled) return
         settled = true
+        if (handshakeTimer) clearTimeout(handshakeTimer)
         reject(err)
       }
 
@@ -157,6 +162,39 @@ export class WebStoreSocket {
         this.rejectAll({ code: 'WS_ERROR', message: 'WebSocket closed' })
         settleErr({ code: 'WS_ERROR', message: 'WebSocket closed' })
       }
+
+      // D8-F2: one ~10 s budget for upgrade + `authenticate`. Without it a
+      // stalled upgrade or an unanswered authenticate leaves `connecting` set
+      // forever and every read/write/`flushPendingWrites` joins the hung
+      // promise. On expiry the socket is closed and every pending caller
+      // (including the authenticate request) settles with `WS_TIMEOUT`.
+      handshakeTimer = setTimeout(() => {
+        if (settled) return
+        const err: StoreError = {
+          code: 'WS_TIMEOUT',
+          message: 'persistence socket handshake timed out'
+        }
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebStoreSocket.handshakeTimeout',
+          message: `persistence socket upgrade/authenticate did not complete within ${HANDSHAKE_TIMEOUT_MS}ms`
+        })
+        ws.onopen = null
+        ws.onmessage = null
+        ws.onerror = null
+        ws.onclose = null
+        if (this.socket === ws) {
+          this.socket = null
+          this.authed = false
+        }
+        try {
+          ws.close()
+        } catch {
+          /* already closing */
+        }
+        this.rejectAll(err)
+        settleErr(err)
+      }, HANDSHAKE_TIMEOUT_MS)
     })
   }
 
