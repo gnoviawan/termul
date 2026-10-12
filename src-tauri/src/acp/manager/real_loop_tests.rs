@@ -144,6 +144,8 @@ struct Harness {
     session_id: SessionId,
     rx: mpsc::UnboundedReceiver<SequencedEvent>,
     dir: PathBuf,
+    /// Durable store shared by relay and manager (`start_with_persistence`).
+    persistence: Option<Arc<SessionPersistence>>,
     // Field order matters: the override is cleared and the env restored before
     // the serialization lock is released.
     _idle_timeout: Option<IdleTimeoutGuard>,
@@ -155,6 +157,16 @@ impl Harness {
     /// `None` only when the host opted out via `TERMUL_SKIP_REAL_LOOP_TESTS=1`;
     /// a missing interpreter otherwise panics rather than passing vacuously.
     async fn start() -> Option<Self> {
+        Self::start_inner(false).await
+    }
+
+    /// Like [`Self::start`], but relay and manager share a real
+    /// `SessionPersistence` in a temp dir, exactly as on the standalone server.
+    async fn start_with_persistence() -> Option<Self> {
+        Self::start_inner(true).await
+    }
+
+    async fn start_inner(durable: bool) -> Option<Self> {
         let Some(python) = find_python() else {
             if std::env::var(SKIP_ENV).as_deref() == Ok("1") {
                 eprintln!("SKIP real_loop_tests: no python interpreter ({SKIP_ENV}=1)");
@@ -171,8 +183,21 @@ impl Harness {
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("mock_agent.py");
         std::fs::write(&script, MOCK_AGENT).unwrap();
-        let relay = Arc::new(WsRelaySink::new());
-        let acp = Arc::new(AcpManager::new(vec![relay.clone()]));
+        let (persistence, relay, acp) = if durable {
+            let persistence = SessionPersistence::open(dir.join("sessions"))
+                .await
+                .expect("open session persistence");
+            let relay = Arc::new(WsRelaySink::with_persistence(64, persistence.clone()));
+            let acp = Arc::new(AcpManager::with_persistence(
+                vec![relay.clone()],
+                persistence.clone(),
+            ));
+            (Some(persistence), relay, acp)
+        } else {
+            let relay = Arc::new(WsRelaySink::new());
+            let acp = Arc::new(AcpManager::new(vec![relay.clone()]));
+            (None, relay, acp)
+        };
         let spawned = acp
             .spawn(AgentConfig {
                 config_id: None,
@@ -199,6 +224,7 @@ impl Harness {
             session_id,
             rx,
             dir,
+            persistence,
             _idle_timeout: None,
             _env: env,
             _serial: serial,
@@ -360,4 +386,75 @@ async fn agent_crash_mid_turn_emits_one_crashed_terminator() {
     // The resend of the crashed turn id is a completed-turn receipt.
     assert!(h.relay.turn_watermark().is_completed(&h.session_id.0, "t1"));
     h.finish().await;
+}
+
+/// Process shutdown with a REAL durable store while the agent is mid-turn: the
+/// connection-close teardown must leave the turn to the `interrupted` marker
+/// (no `crashed` terminator, via the `is_process_shutdown` arm in `driver.rs`),
+/// the turn task's transport-closed error must write no terminator either, and
+/// `SessionPersistence::shutdown` then appends exactly one `interrupted`
+/// `prompt_complete` naming the turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn process_shutdown_mid_turn_leaves_the_turn_to_the_interrupted_marker() {
+    let Some(h) = Harness::start_with_persistence().await else {
+        return;
+    };
+    let persistence = h.persistence.clone().expect("durable harness");
+    let admission = accept_prompt_turn(&h.acp, &h.relay, h.request("hang", "t1"))
+        .await
+        .unwrap_or_else(|_| panic!("accepted"));
+    let PromptAdmission::Running(running) = admission else {
+        panic!("first send must run");
+    };
+    // The turn is in flight and its `user_prompt` is durable (flushed by accept).
+    let waiter = {
+        let acp = h.acp.clone();
+        tokio::spawn(async move { complete_prompt_turn(&acp, running).await })
+    };
+
+    tokio::time::timeout(RUN_TIMEOUT, h.acp.kill_all_checked())
+        .await
+        .expect("kill_all finishes")
+        .expect("kill_all ok");
+    let reply = tokio::time::timeout(RUN_TIMEOUT, waiter)
+        .await
+        .expect("turn waiter resolves")
+        .expect("waiter joined");
+    assert!(reply.is_err(), "the dropped turn surfaces as an error: {reply:?}");
+
+    // Before the persistence close: nothing terminated the turn.
+    persistence.flush_all().await.unwrap();
+    let before = persistence
+        .replay_after_async(h.session_id.0.clone(), 0)
+        .await
+        .unwrap();
+    let stops = |records: &[crate::acp::session_persistence::PersistedEventRecord]| -> Vec<String> {
+        records
+            .iter()
+            .filter(|r| r.type_ == "prompt_complete")
+            .map(|r| r.payload["stopReason"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(
+        stops(&before).is_empty(),
+        "no terminator (crashed or otherwise) before the interrupted marker: {before:?}"
+    );
+
+    h.acp.shutdown_persistence().await.expect("persistence shutdown");
+    let after = persistence
+        .replay_after_async(h.session_id.0.clone(), 0)
+        .await
+        .unwrap();
+    assert_eq!(stops(&after), vec!["interrupted"], "{after:?}");
+    let marker = after
+        .iter()
+        .find(|r| r.type_ == "prompt_complete")
+        .expect("marker");
+    assert_eq!(marker.payload["turnId"], "t1");
+    assert_eq!(
+        after.iter().filter(|r| r.type_ == "user_prompt").count(),
+        1,
+        "{after:?}"
+    );
+    let _ = std::fs::remove_dir_all(&h.dir);
 }

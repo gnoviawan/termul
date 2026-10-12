@@ -188,6 +188,26 @@ impl AttachmentRelease {
     }
 }
 
+/// Owns a freshly taken `web_attachments` count between `add_web_attachment`
+/// and the moment the forwarder's [`Attachment`] is registered. Dropping it
+/// while still armed (early error return, failed replay send, or the
+/// connection task being cancelled mid-`await`) releases the count through the
+/// shared exactly-once [`AttachmentRelease`].
+struct PendingAttachCount {
+    release: AttachmentRelease,
+    pty: Arc<PtyManager>,
+    terminal_id: String,
+    armed: bool,
+}
+
+impl Drop for PendingAttachCount {
+    fn drop(&mut self) {
+        if self.armed {
+            self.release.release(&self.pty, &self.terminal_id);
+        }
+    }
+}
+
 struct ConnectionContext {
     /// Terminal IDs this connection is authorized to operate on.
     authorized: Arc<RwLock<HashSet<String>>>,
@@ -442,10 +462,21 @@ async fn handle(
                 // another connection's `list_preserved` reissue the claim and
                 // invalidate the generation this new forwarder holds).
                 instance.add_web_attachment();
+                // The count taken above is owned by this guard until the
+                // forwarder's `Attachment` is registered: an early return, a
+                // failed reply send, or this connection task being cancelled
+                // at the replay `.await` below drops it and releases the
+                // count — it can never leak a live attachment.
+                let release = AttachmentRelease::default();
+                let mut pending = PendingAttachCount {
+                    release: release.clone(),
+                    pty: state.pty.clone(),
+                    terminal_id: terminal_id.clone(),
+                    armed: true,
+                };
                 if let Some(previous) = ctx.attachments.remove(&terminal_id) {
                     previous.end(&state.pty, &terminal_id);
                 }
-                let release = AttachmentRelease::default();
                 instance.mark_web_listed();
                 // Sequenced replay: only unseen chunks, with gap detection.
                 let replay = instance.subscribe_from(last_seq);
@@ -463,6 +494,13 @@ async fn handle(
                         })
                     })
                     .collect();
+                // NOTE: the previous attachment is ended BEFORE this send, on
+                // purpose. Ending it after would leave the old forwarder
+                // streaming into the same socket while the new one is
+                // subscribed, delivering the chunks between the replay
+                // snapshot and the swap twice. A failed send here means this
+                // connection's outbound channel is closed (socket gone), so
+                // keeping the old attachment alive would protect nothing.
                 send_json(
                     tx,
                     json!({
@@ -475,11 +513,7 @@ async fn handle(
                     }),
                 )
                 .await
-                .map_err(|e| {
-                    // No forwarder will exist for this attach: release now.
-                    release.release(&state.pty, &terminal_id);
-                    ("NETWORK_ERROR", e)
-                })?;
+                .map_err(|e| ("NETWORK_ERROR", e))?;
 
                 let output_tx = tx.clone();
                 let attached_id = terminal_id.clone();
@@ -547,6 +581,9 @@ async fn handle(
                 });
                 ctx.attachments
                     .insert(terminal_id.clone(), Attachment { task, release });
+                // Registered: the attachment (and the forwarder's own release)
+                // owns the count from here.
+                pending.armed = false;
                 // Shared attach result — byte-identical camelCase shape to the
                 // desktop `terminal_attach` response (no claim key, ever).
                 serde_json::to_value(attach_result).map_err(|e| ("NETWORK_ERROR", e.to_string()))

@@ -1012,6 +1012,86 @@ async fn reattach_swap_never_exposes_a_zero_attachment_count() {
     let _ = state.pty.force_kill(&id).await;
 }
 
+/// An attach whose reply cannot be sent (outbound receiver already dropped)
+/// fails with `NETWORK_ERROR` and releases the attachment count it took — no
+/// forwarder exists, so a leaked count would pin the terminal forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attach_with_dead_reply_channel_releases_its_attachment_count() {
+    let state = gate_test_state(None);
+    let (tx, rx) = mpsc::channel(1024);
+    let mut conn = gate_test_ctx(true);
+    let spawned = handle(
+        gate_request("s", "spawn", json!({"projectId": "attach-dead-reply"})),
+        &state,
+        &tx,
+        &mut conn,
+    )
+    .await
+    .expect("spawn");
+    let id = spawned["id"].as_str().unwrap().to_string();
+    let claim = spawned["claim"].as_str().unwrap().to_string();
+    let before = live_attachments(&state, &id);
+    assert_eq!(before, 0);
+
+    drop(rx);
+    let attached = handle(
+        gate_request(
+            "attach",
+            "attach",
+            json!({"terminalId": id, "claim": claim, "lastSeq": 0}),
+        ),
+        &state,
+        &tx,
+        &mut conn,
+    )
+    .await;
+    assert_eq!(attached.unwrap_err().0, "NETWORK_ERROR");
+    assert_eq!(live_attachments(&state, &id), before);
+    assert!(conn.attachments.is_empty(), "no forwarder registered");
+
+    let _ = state.pty.force_kill(&id).await;
+}
+
+/// The connection task being cancelled at the replay `send` (outbound queue
+/// full, reader gone slow) must not leak the attachment count either.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_attach_during_replay_send_releases_its_attachment_count() {
+    let state = gate_test_state(None);
+    let (tx, _rx) = mpsc::channel(1);
+    let mut conn = gate_test_ctx(true);
+    // Spawn needs room for its own reply only; fill the queue afterwards.
+    let (setup_tx, _setup_rx) = mpsc::channel(1024);
+    let spawned = handle(
+        gate_request("s", "spawn", json!({"projectId": "attach-cancelled"})),
+        &state,
+        &setup_tx,
+        &mut conn,
+    )
+    .await
+    .expect("spawn");
+    let id = spawned["id"].as_str().unwrap().to_string();
+    let claim = spawned["claim"].as_str().unwrap().to_string();
+    tx.send(Message::Text("fill".into())).await.unwrap();
+
+    let attach = handle(
+        gate_request(
+            "attach",
+            "attach",
+            json!({"terminalId": id, "claim": claim, "lastSeq": 0}),
+        ),
+        &state,
+        &tx,
+        &mut conn,
+    );
+    // Parked on the full queue; the timeout drops (cancels) the future.
+    let outcome = tokio::time::timeout(std::time::Duration::from_millis(200), attach).await;
+    assert!(outcome.is_err(), "the replay send must be pending");
+    assert_eq!(live_attachments(&state, &id), 0);
+    assert!(conn.attachments.is_empty());
+
+    let _ = state.pty.force_kill(&id).await;
+}
+
 /// PTY-F1 / Q2: a connection whose socket dies has its forwarder self-release
 /// on the failed send; the connection cleanup that follows must NOT release
 /// that attachment a second time (it would clear another viewer's live
