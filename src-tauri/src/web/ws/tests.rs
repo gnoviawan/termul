@@ -4538,10 +4538,6 @@ async fn watch_requests_are_routed_by_handle_request() {
     let acp = Arc::new(AcpManager::new(vec![]));
     let project = crate::web::project_registry::SEEDED_PROJECT_ID;
     let mut subs = Vec::new();
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     for (type_, expect_subscribers) in [("watch_project", 1), ("unwatch_project", 0)] {
         let frame = json!({ "id": type_, "type": type_, "payload": { "projectId": project } });
@@ -4558,10 +4554,6 @@ async fn watch_requests_are_routed_by_handle_request() {
             None,
             &tx,
             &mut subs,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,

@@ -182,7 +182,7 @@ async fn post_projects_refuses_the_reserved_unassigned_id() {
 
     assert_eq!(body["success"], json!(false));
     assert_eq!(body["code"], json!("VALIDATION_ERROR"));
-    assert!(registry.snapshot().projects.is_empty());
+    assert!(!registry.contains(crate::acp::UNASSIGNED_PROJECT_ID));
 }
 
 #[test]
