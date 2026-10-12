@@ -167,13 +167,17 @@ async fn git_toplevel_resolves_the_work_tree_root_and_falls_back_outside_a_repo(
     let repo = root.path().join("repo");
     let sub = repo.join("a/b");
     std::fs::create_dir_all(&sub).unwrap();
-    let init = crate::trackers::git_tracker::GitTracker::run_git_command(
+    let Some(init) = crate::trackers::git_tracker::GitTracker::run_git_command(
         repo.to_str().unwrap(),
         &["init", "-q"],
+    ) else {
+        return; // git cannot run on this machine
+    };
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
     );
-    if init.is_none_or(|out| !out.status.success()) {
-        return; // git unavailable
-    }
     assert_eq!(
         std::fs::canonicalize(git_toplevel(&sub).await).unwrap(),
         std::fs::canonicalize(&repo).unwrap()

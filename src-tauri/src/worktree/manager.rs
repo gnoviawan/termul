@@ -351,8 +351,6 @@ impl WorktreeManager {
         })
     }
 
-    /// Remove all Termul-managed worktrees for a project.
-    /// Used during project cascade delete. Reports per-worktree success/failure.
     /// Whether `path` lies under a `.termul/worktrees` directory (a
     /// Termul-managed worktree). Compares path components, so it works with
     /// Windows backslashes too.
@@ -364,6 +362,8 @@ impl WorktreeManager {
             .any(|w| w[0].as_os_str() == ".termul" && w[1].as_os_str() == "worktrees")
     }
 
+    /// Remove all Termul-managed worktrees for a project.
+    /// Used during project cascade delete. Reports per-worktree success/failure.
     pub fn remove_all_managed(
         project_path: &str,
         worktrees_json: &str,
