@@ -43,7 +43,7 @@ impl TestPayload {
 async fn forget_session_removes_relay_subscription_and_replay_state() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("temp");
-    let (client, _rx, _, _) = ws.subscribe("temp", Some(0)).await;
+    let (client, _rx, _, _) = ws.subscribe("temp", Some(0), None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     fan_out(
         &sinks,
@@ -75,20 +75,20 @@ async fn forget_session_removes_relay_subscription_and_replay_state() {
 async fn subscribe_unknown_or_forgotten_session_is_not_found() {
     let ws = Arc::new(WsRelaySink::new());
 
-    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", None).await;
+    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", None, None).await;
     assert_eq!(replay, ReplayResult::NotFound);
-    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", Some(0)).await;
+    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", Some(0), None).await;
     assert_eq!(replay, ReplayResult::NotFound);
     assert_eq!(ws.session_subscriber_count("sess-absent"), 0);
 
     // Known → subscribe → forget → both paths now report not_found.
     ws.seed_session_for_test("sess-eph");
-    let (_c, _rx, replay, _) = ws.subscribe("sess-eph", None).await;
+    let (_c, _rx, replay, _) = ws.subscribe("sess-eph", None, None).await;
     assert_eq!(replay, ReplayResult::Ok(0));
     ws.forget_session("sess-eph").await;
-    let (_c, _rx, replay, _) = ws.subscribe("sess-eph", None).await;
+    let (_c, _rx, replay, _) = ws.subscribe("sess-eph", None, None).await;
     assert_eq!(replay, ReplayResult::NotFound);
-    let (_c, _rx, replay, _) = ws.subscribe("sess-eph", Some(0)).await;
+    let (_c, _rx, replay, _) = ws.subscribe("sess-eph", Some(0), None).await;
     assert_eq!(replay, ReplayResult::NotFound);
     assert_eq!(ws.session_subscriber_count("sess-eph"), 0);
 
@@ -100,9 +100,9 @@ async fn subscribe_unknown_or_forgotten_session_is_not_found() {
         .await
         .unwrap();
     let ws = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", None).await;
+    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", None, None).await;
     assert_eq!(replay, ReplayResult::NotFound);
-    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", Some(3)).await;
+    let (_c, _rx, replay, _) = ws.subscribe("sess-absent", Some(3), None).await;
     assert_eq!(replay, ReplayResult::NotFound);
     assert_eq!(ws.session_subscriber_count("sess-absent"), 0);
     persistence.shutdown().await.unwrap();
@@ -116,7 +116,7 @@ async fn ws_relay_sink_delivers_events_in_order() {
     let ws = Arc::new(WsRelaySink::new());
     // Subscribe BEFORE emitting so the client receives events live.
     ws.seed_session_for_test("sess-1");
-    let (client, mut rx, replay, _) = ws.subscribe("sess-1", None).await;
+    let (client, mut rx, replay, _) = ws.subscribe("sess-1", None, None).await;
     assert_eq!(replay, ReplayResult::Ok(0), "fresh session has no replay");
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     fan_out(
@@ -195,7 +195,7 @@ async fn fan_out_delivers_identical_payload_to_every_sink() {
 
     // Subscribe BEFORE emitting so the WS client receives the event live.
     ws.seed_session_for_test("sess-7");
-    let (_client, mut rx, _replay, _) = ws.subscribe("sess-7", None).await;
+    let (_client, mut rx, _replay, _) = ws.subscribe("sess-7", None, None).await;
 
     fan_out(
         &sinks,
@@ -240,7 +240,7 @@ fn fan_out_with_no_sinks_is_a_no_op() {
 async fn ws_relay_sink_live_drain_is_incremental() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("sess-d");
-    let (client, mut rx, _replay, _) = ws.subscribe("sess-d", None).await;
+    let (client, mut rx, _replay, _) = ws.subscribe("sess-d", None, None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     fan_out(
         &sinks,
@@ -292,7 +292,7 @@ impl Serialize for AlwaysFailsPayload {
 async fn fan_out_skips_emission_when_payload_fails_to_serialize() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("sess-nan");
-    let (_client, mut rx, _replay, _) = ws.subscribe("sess-nan", None).await;
+    let (_client, mut rx, _replay, _) = ws.subscribe("sess-nan", None, None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     fan_out(
         &sinks,
@@ -326,7 +326,7 @@ struct SkipIfPayload {
 async fn fan_out_preserves_skip_serializing_if_byte_identity() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("sess-skip");
-    let (_client, mut rx, _replay, _) = ws.subscribe("sess-skip", None).await;
+    let (_client, mut rx, _replay, _) = ws.subscribe("sess-skip", None, None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     let payload = SkipIfPayload {
         agent_id: "a1".to_string(),
@@ -356,7 +356,7 @@ async fn fan_out_agent_error_and_crashed_carry_code_and_data() {
 
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("sess-err");
-    let (_client, mut rx, _replay, _) = ws.subscribe("sess-err", None).await;
+    let (_client, mut rx, _replay, _) = ws.subscribe("sess-err", None, None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     let data = serde_json::json!({ "reason": "login" });
 
@@ -428,12 +428,12 @@ async fn event_log_evicts_oldest_when_over_capacity() {
     }
     // Cursor pointing at evicted seq 0 must be stale (base_seq is now 2;
     // next wanted seq 1 was evicted).
-    let (_c, mut rx, replay, _) = ws.subscribe("sess-evict", Some(0)).await;
+    let (_c, mut rx, replay, _) = ws.subscribe("sess-evict", Some(0), None).await;
     assert_eq!(replay, ReplayResult::Stale);
     assert!(drain_rx(&mut rx).is_empty());
 
     // Cursor at seq 1 → next wanted is 2, still in the ring → replay 2+3.
-    let (_c2, mut rx2, replay2, _) = ws.subscribe("sess-evict", Some(1)).await;
+    let (_c2, mut rx2, replay2, _) = ws.subscribe("sess-evict", Some(1), None).await;
     assert_eq!(replay2, ReplayResult::Ok(2));
     let drained2 = drain_rx(&mut rx2);
     assert_eq!(drained2.len(), 2);
@@ -441,7 +441,7 @@ async fn event_log_evicts_oldest_when_over_capacity() {
     assert_eq!(drained2[1].seq, 3);
 
     // Cursor at seq 2 → replay only seq 3.
-    let (_c3, mut rx3, replay3, _) = ws.subscribe("sess-evict", Some(2)).await;
+    let (_c3, mut rx3, replay3, _) = ws.subscribe("sess-evict", Some(2), None).await;
     assert_eq!(replay3, ReplayResult::Ok(1));
     let drained = drain_rx(&mut rx3);
     assert_eq!(drained.len(), 1);
@@ -494,7 +494,7 @@ async fn durable_replay_catches_more_than_ring_capacity_then_streams_live() {
     persistence.set_replay_test_hook(hook.clone());
     let subscribe_relay = relay.clone();
     let subscribe =
-        tokio::spawn(async move { subscribe_relay.subscribe("sess-durable", Some(0)).await });
+        tokio::spawn(async move { subscribe_relay.subscribe("sess-durable", Some(0), None).await });
     tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
         .await
         .unwrap();
@@ -545,7 +545,7 @@ async fn cursor_replay_then_live() {
         &TestPayload::new("a1", "sess-rp", "two"),
     );
 
-    let (_c, mut rx, replay, _) = ws.subscribe("sess-rp", Some(1)).await;
+    let (_c, mut rx, replay, _) = ws.subscribe("sess-rp", Some(1), None).await;
     assert_eq!(replay, ReplayResult::Ok(1));
     let replayed = drain_rx(&mut rx);
     assert_eq!(replayed.len(), 1);
@@ -568,7 +568,7 @@ async fn cursor_replay_then_live() {
 async fn lossy_ring_drop_oldest_under_pressure() {
     let ws = Arc::new(WsRelaySink::with_capacity(4096, 2));
     ws.seed_session_for_test("sess-lossy");
-    let (client, mut rx, _, _) = ws.subscribe("sess-lossy", None).await;
+    let (client, mut rx, _, _) = ws.subscribe("sess-lossy", None, None).await;
     for i in 1..=5 {
         let se = SequencedEvent::new(
             Some("sess-lossy".to_string()),
@@ -595,7 +595,7 @@ async fn lossy_ring_drop_oldest_under_pressure() {
 async fn reliable_events_never_dropped() {
     let ws = Arc::new(WsRelaySink::with_capacity(4096, 1));
     ws.seed_session_for_test("sess-rel");
-    let (client, mut rx, _, _) = ws.subscribe("sess-rel", None).await;
+    let (client, mut rx, _, _) = ws.subscribe("sess-rel", None, None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     // Fill lossy ring without flush, then emit a reliable event.
     ws.push_lossy_no_flush_for_test(
@@ -629,9 +629,9 @@ async fn reliable_events_never_dropped() {
 async fn cross_session_isolation() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("sess-a");
-    let (_ca, mut rx_a, _, _) = ws.subscribe("sess-a", None).await;
+    let (_ca, mut rx_a, _, _) = ws.subscribe("sess-a", None, None).await;
     ws.seed_session_for_test("sess-b");
-    let (_cb, mut rx_b, _, _) = ws.subscribe("sess-b", None).await;
+    let (_cb, mut rx_b, _, _) = ws.subscribe("sess-b", None, None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     fan_out(
         &sinks,
@@ -664,7 +664,7 @@ async fn broadcast_projects_changed_reaches_subscribed_client() {
     let relay = Arc::new(WsRelaySink::new());
     // Subscribe a client to a session so it is in the relay's client set.
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None).await;
 
     broadcast_projects_changed(&relay, Some("p-3"));
 
@@ -684,7 +684,7 @@ async fn broadcast_projects_changed_reaches_subscribed_client() {
 async fn broadcast_projects_changed_null_default_id() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None).await;
 
     broadcast_projects_changed(&relay, None);
 
@@ -705,7 +705,7 @@ async fn broadcast_projects_changed_null_default_id() {
 async fn broadcast_chat_history_changed_reaches_subscribed_client() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None).await;
 
     broadcast_chat_history_changed(&relay);
 
@@ -733,7 +733,7 @@ async fn session_lifecycle_broadcasts_history_changed_when_persistent() {
         .unwrap();
     let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None).await;
 
     for type_ in ["acp:session_created", "acp:session_closed"] {
         relay.emit(&AcpEvent {
@@ -762,7 +762,7 @@ async fn session_lifecycle_broadcasts_history_changed_when_persistent() {
 async fn session_lifecycle_is_silent_without_persistence() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None).await;
 
     relay.emit(&AcpEvent {
         sid: Some("sess-1".to_string()),
@@ -905,7 +905,7 @@ async fn deleted_session_event_is_skipped_without_failing_the_relay() {
         .unwrap();
     let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
     relay.seed_session_for_test("sess-gone");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-gone", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-gone", None, None).await;
 
     // Delete the durable record, then fan an event for the (now deleted)
     // session — the durable enqueue must reject with SessionNotFound,
@@ -975,7 +975,7 @@ async fn title_metadata_events_broadcast_history_changed_when_persistent() {
         .await
         .unwrap();
     let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-title", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-title", None, None).await;
 
     for type_ in ["acp:session_info_update", "acp:local_title_generated"] {
         relay.emit(&AcpEvent {
@@ -1098,7 +1098,7 @@ async fn subscribe_with_hole_below_durable_frontier_returns_promptly() {
     let subscribe_relay = relay2.clone();
     let outcome = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        subscribe_relay.subscribe("sess-hole", Some(0)),
+        subscribe_relay.subscribe("sess-hole", Some(0), None),
     )
     .await;
     assert!(outcome.is_ok(), "subscribe must terminate (issue #836)");
@@ -1170,7 +1170,7 @@ async fn pre_registration_events_are_buffered_and_flushed_on_registration() {
         "buffered seqs 1..=2 flush in order before live 3..=4"
     );
     // And lastSeq=0 now replays with no hole at all.
-    let (_client, mut rx, replay, _) = relay.subscribe("sess-prereg", Some(0)).await;
+    let (_client, mut rx, replay, _) = relay.subscribe("sess-prereg", Some(0), None).await;
     assert!(matches!(replay, ReplayResult::Ok(4)));
     let replayed = drain_rx(&mut rx);
     assert_eq!(
@@ -1234,9 +1234,9 @@ async fn registration_flush_reaches_sinks_through_the_event_sink_trait() {
 async fn agent_message_chunks_fan_out_to_every_subscriber() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("sess-fanout");
-    let (client_a, mut rx_a, replay_a, _) = ws.subscribe("sess-fanout", None).await;
+    let (client_a, mut rx_a, replay_a, _) = ws.subscribe("sess-fanout", None, None).await;
     assert!(matches!(replay_a, ReplayResult::Ok(0)));
-    let (client_b, mut rx_b, replay_b, _) = ws.subscribe("sess-fanout", None).await;
+    let (client_b, mut rx_b, replay_b, _) = ws.subscribe("sess-fanout", None, None).await;
     assert!(matches!(replay_b, ReplayResult::Ok(0)));
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     // The exact shape `emit_session_update` produces for an agent text chunk.
@@ -1425,7 +1425,7 @@ async fn unpaced_chunk_burst_persists_and_replays_in_order() {
         );
     }
 
-    let (_client, mut rx, replay, _) = relay.subscribe("sess-burst", Some(0)).await;
+    let (_client, mut rx, replay, _) = relay.subscribe("sess-burst", Some(0), None).await;
     assert_eq!(replay, ReplayResult::Ok(expected));
     let mut replayed = Vec::new();
     while let Ok(event) = rx.try_recv() {
@@ -1452,7 +1452,7 @@ fn prompt_complete_payload(session: &str, turn: &str, stop_reason: &str) -> Valu
 async fn duplicate_prompt_complete_for_a_turn_is_dropped() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("s1");
-    let (_client, mut rx, _, _) = ws.subscribe("s1", Some(0)).await;
+    let (_client, mut rx, _, _) = ws.subscribe("s1", Some(0), None).await;
     let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
     for stop in ["crashed", "end_turn"] {
         fan_out(
@@ -1522,7 +1522,7 @@ async fn prompt_complete_terminator_releases_the_turn_claim() {
 async fn record_user_prompt_fans_out_before_any_later_emit() {
     let ws = Arc::new(WsRelaySink::new());
     ws.seed_session_for_test("s1");
-    let (_client, mut rx, _, _) = ws.subscribe("s1", Some(0)).await;
+    let (_client, mut rx, _, _) = ws.subscribe("s1", Some(0), None).await;
     let event = ws.record_user_prompt("s1", serde_json::json!({"turnId": "t"}));
     // Delivered already — nothing was awaited.
     let delivered = drain_rx(&mut rx);

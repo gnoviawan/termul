@@ -17,6 +17,7 @@ import { Channel } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invokeIpc } from './ipc/tauri'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
+import { terminalCursorEpoch } from './terminal-cursor'
 
 /**
  * IPC Event names matching Rust commands in src-tauri/src/commands.rs
@@ -371,15 +372,15 @@ export function createTauriTerminalApi(): TerminalApi {
     async attach(
       terminalId: string,
       claim: string,
-      lastSeq: number
+      lastSeq: number,
+      logEpoch?: string
     ): Promise<IpcResult<TerminalAttachResult>> {
       // Never present an id-only attach — the credential is the gate.
       if (!claim) {
         return { success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }
       }
       const on_data = new Channel<ArrayBuffer>()
-      on_data.onmessage = (buf: ArrayBuffer) => {
-        const bytes = new Uint8Array(buf)
+      const deliver = (bytes: Uint8Array): void => {
         for (const callback of dataCallbacks) {
           try {
             callback(terminalId, bytes)
@@ -388,16 +389,38 @@ export function createTauriTerminalApi(): TerminalApi {
           }
         }
       }
+      // The host streams the replay through the channel BEFORE the attach
+      // result resolves, and only the result says whether the cursor was
+      // refused (`reset`). Hold the replay until then so a reset can clear the
+      // terminal first.
+      let held: Uint8Array[] | null = []
+      on_data.onmessage = (buf: ArrayBuffer) => {
+        const bytes = new Uint8Array(buf)
+        if (held) held.push(bytes)
+        else deliver(bytes)
+      }
       const result = await invokeIpc<TerminalAttachResult>(IPC_COMMANDS.ATTACH, {
         terminalId,
         claim,
         lastSeq,
+        // A nonzero cursor without its epoch is untrusted (see terminal-cursor).
+        logEpoch: terminalCursorEpoch(lastSeq, logEpoch),
         onData: on_data
       })
       if (!result.success) {
         // Rejected (or failed) — release the channel so it cannot leak.
+        held = null
         on_data.onmessage = () => {}
+        return result
       }
+      if (result.data.reset) {
+        // The cursor did not belong to this terminal's log: discard what was
+        // rendered (RIS, ESC c) before the full replay, as the web path does.
+        deliver(new Uint8Array([0x1b, 0x63]))
+      }
+      const replay = held
+      held = null
+      for (const bytes of replay) deliver(bytes)
       return result
     },
 

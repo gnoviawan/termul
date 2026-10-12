@@ -228,7 +228,7 @@ impl Harness {
             .expect("mock session");
         let session_id = session.session_id;
         relay.seed_session_for_test(&session_id.0);
-        let (_client, rx, replay, _) = relay.subscribe(&session_id.0, None).await;
+        let (_client, rx, replay, _) = relay.subscribe(&session_id.0, None, None).await;
         assert!(matches!(replay, ReplayResult::Ok(_)));
         Some(Self {
             acp,

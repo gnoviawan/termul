@@ -188,6 +188,53 @@ describe('tauri-terminal-api', () => {
       off()
     })
 
+    it('attach forwards the epoch with the cursor, and sends an untrusted marker for a nonzero cursor without one', async () => {
+      const { api } = await loadApi()
+      mockInvoke.mockResolvedValue({ success: true, data: ATTACHED })
+
+      await api.attach('terminal-1752-1', 'lease-claim-64-hex', 12, 'epoch-1')
+      expect(mockInvoke.mock.calls[0][1]).toMatchObject({ lastSeq: 12, logEpoch: 'epoch-1' })
+
+      await api.attach('terminal-1752-1', 'lease-claim-64-hex', 12)
+      expect(mockInvoke.mock.calls[1][1]).toMatchObject({ lastSeq: 12, logEpoch: '' })
+
+      await api.attach('terminal-1752-1', 'lease-claim-64-hex', 0)
+      expect(mockInvoke.mock.calls[2][1].logEpoch).toBeUndefined()
+    })
+
+    it('attach clears the terminal before a reset replay and keeps replay order', async () => {
+      const { api } = await loadApi()
+      // The host streams the replay through the channel before the result resolves.
+      mockInvoke.mockImplementation(async (_command: string, args: { onData: ChannelLike }) => {
+        args.onData.onmessage?.(new Uint8Array([97]).buffer)
+        args.onData.onmessage?.(new Uint8Array([98]).buffer)
+        return { success: true, data: { ...ATTACHED, reset: true, logEpoch: 'epoch-2' } }
+      })
+      const received: number[][] = []
+      const off = api.onData((_id, bytes) => received.push(Array.from(bytes)))
+
+      await api.attach('terminal-1752-1', 'lease-claim-64-hex', 500)
+
+      // RIS (ESC c) first, then the whole replay in order.
+      expect(received).toEqual([[0x1b, 0x63], [97], [98]])
+      off()
+    })
+
+    it('attach without a reset delivers the replay as-is', async () => {
+      const { api } = await loadApi()
+      mockInvoke.mockImplementation(async (_command: string, args: { onData: ChannelLike }) => {
+        args.onData.onmessage?.(new Uint8Array([97]).buffer)
+        return { success: true, data: { ...ATTACHED, reset: false, logEpoch: 'epoch-2' } }
+      })
+      const received: number[][] = []
+      const off = api.onData((_id, bytes) => received.push(Array.from(bytes)))
+
+      await api.attach('terminal-1752-1', 'lease-claim-64-hex', 12)
+
+      expect(received).toEqual([[97]])
+      off()
+    })
+
     it('never presents an id-only attach: empty claim fails without an invoke', async () => {
       const { api } = await loadApi()
 

@@ -76,6 +76,15 @@ export function isPendingPromptTransportError(error: unknown): error is AcpTrans
  */
 export type AcpConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
+/**
+ * A session replay cursor. `lastSeq` is only meaningful against the host log
+ * incarnation `logEpoch` names (`null` when the host did not report one).
+ */
+export interface SessionCursor {
+  lastSeq: number
+  logEpoch: string | null
+}
+
 export interface AcpTransport {
   installRegistryBinary(
     request: InstallAcpRegistryBinaryRequest
@@ -314,17 +323,17 @@ export interface AcpTransport {
    * that was torn down or replaced mid-recovery. WS only.
    */
   setRecoveryGenerationProvider?(provider: (sessionId: SessionId) => number): void
-  getSessionCursor?(sessionId: SessionId): number | null
+  getSessionCursor?(sessionId: SessionId): SessionCursor | null
   /** R2: fetch the server-authoritative replay watermark for a session
    * (without subscribing). Used by the refresh-resume hook to seed a fresh
    * transport's `lastSeq` BEFORE the first `subscribeSession` so the
    * reload-gap events replay instead of running live-only. Desktop: absent
    * (Tauri IPC resumes via `session/load` replay — no WS cursor). */
-  fetchSessionCursor?(sessionId: SessionId): Promise<number>
+  fetchSessionCursor?(sessionId: SessionId): Promise<SessionCursor>
   /** R2: seed the in-memory `lastSeq` from a server watermark without
    * subscribing (WS only). Call before `resumeSession` so its built-in
    * re-subscribe uses the server cursor, not a dead per-instance 0. */
-  seedSessionCursor?(sessionId: SessionId, cursor: number): void
+  seedSessionCursor?(sessionId: SessionId, cursor: SessionCursor): void
   setReconnectPriorityProvider?(provider: () => SessionId[]): void
   dispose(): void
 }

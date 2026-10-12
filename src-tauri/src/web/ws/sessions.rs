@@ -444,13 +444,16 @@ pub(super) async fn handle_recover_session_snapshot(
         Some(json!({
             "sessionId": parsed.session_id,
             "watermark": head.head_seq,
+            "headSeq": head.head_seq,
+            "logEpoch": head.log_epoch,
             "events": events,
         })),
     )
 }
 
 /// `get_session_cursor` (R2) — returns the server-authoritative replay
-/// watermark `{ sessionId, watermark }` for a session WITHOUT subscribing
+/// watermark `{ sessionId, watermark, logEpoch?, headSeq? }` for a session
+/// WITHOUT subscribing
 /// (contrast `recover_session_snapshot`, which re-registers a subscription
 /// and emits the snapshot payload). A refreshed WS transport seeds its
 /// per-session `lastSeq` from this before the first `subscribeSession`, so
@@ -516,10 +519,14 @@ pub(super) async fn handle_get_session_cursor(
         watermark,
         "get_session_cursor"
     );
-    WsReply::ok(
-        id,
-        Some(json!({ "sessionId": parsed.session_id, "watermark": watermark })),
-    )
+    // The epoch the watermark is valid under, and the allocated frontier. An
+    // unknown session has neither: the client subscribes live-only.
+    let mut reply = json!({ "sessionId": parsed.session_id, "watermark": watermark });
+    if let Some(head) = relay.log_head(&parsed.session_id) {
+        reply["logEpoch"] = json!(head.log_epoch);
+        reply["headSeq"] = json!(head.head_seq);
+    }
+    WsReply::ok(id, Some(reply))
 }
 
 pub(super) async fn handle_open_persisted_session(

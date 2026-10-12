@@ -60,6 +60,7 @@ fn host_entry_to_desktop_maps_renderer_shape() {
         worktree_branch: None,
         model_id: None,
         model_name: None,
+        log_epoch: None,
     };
     let desktop = host_entry_to_desktop(entry);
     assert_eq!(desktop.id, "s-1");
@@ -97,6 +98,7 @@ fn host_entry_to_desktop_maps_renderer_shape() {
         worktree_branch: None,
         model_id: None,
         model_name: None,
+        log_epoch: None,
     };
     let desktop = host_entry_to_desktop(bare);
     assert_eq!(desktop.agent_id, "");
@@ -138,6 +140,7 @@ fn host_entry_to_desktop_model_keys_match_ws_entry_serialization() {
         worktree_branch: None,
         model_id: Some("claude-opus".to_string()),
         model_name: Some("Claude Opus".to_string()),
+        log_epoch: None,
     };
     let ws = serde_json::to_value(&entry).unwrap();
     let desktop = serde_json::to_value(host_entry_to_desktop(entry.clone())).unwrap();

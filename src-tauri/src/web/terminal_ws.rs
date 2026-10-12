@@ -492,6 +492,7 @@ async fn handle(
                 // invalid claim" collapses into the one generic error).
                 let claim = request.payload["claim"].as_str().unwrap_or("");
                 let last_seq = request.payload["lastSeq"].as_u64().unwrap_or(0);
+                let log_epoch = request.payload["logEpoch"].as_str();
 
                 // Capture the generation BEFORE verifying (TOCTOU-safe ordering,
                 // same as the desktop command): captured-first means a rotate/
@@ -537,8 +538,10 @@ async fn handle(
                     previous.end(&state.pty, &terminal_id);
                 }
                 instance.mark_web_listed();
-                // Sequenced replay: only unseen chunks, with gap detection.
-                let replay = instance.subscribe_from(last_seq);
+                // Sequenced replay: only unseen chunks, with gap detection; a cursor
+                // from another epoch or ahead of the head replays from the start
+                // with `reset`.
+                let replay = instance.subscribe_from(last_seq, log_epoch);
                 let attach_result = state.pty.build_attach_result(&instance, &replay);
                 let snapshot = state.terminal_events.snapshot(&terminal_id);
 
@@ -567,6 +570,8 @@ async fn handle(
                         "terminalId": terminal_id,
                         "chunks": chunk_payloads,
                         "gap": replay.gap,
+                        "reset": replay.reset,
+                        "logEpoch": replay.log_epoch,
                         "latestSeq": replay.latest_seq,
                         "snapshot": serde_json::to_value(&snapshot).unwrap_or(json!({}))
                     }),

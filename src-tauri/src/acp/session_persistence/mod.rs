@@ -271,6 +271,8 @@ enum WriterCommand {
     /// A single-agent exit uses [`WriterCommand::Finalize`] instead and does
     /// not write that marker.
     ShutdownInterrupted(oneshot::Sender<Result<()>>),
+    /// Write the in-memory metadata (the `head_ahead_of_durable` mark) to disk.
+    PersistMetadata,
 }
 
 impl WriterCommand {
@@ -286,6 +288,7 @@ impl WriterCommand {
             Self::Finalize(status, ..) => format!("Finalize({status:?})"),
             Self::Shutdown(..) => "Shutdown".to_string(),
             Self::ShutdownInterrupted(..) => "ShutdownInterrupted".to_string(),
+            Self::PersistMetadata => "PersistMetadata".to_string(),
         }
     }
 }
@@ -416,6 +419,8 @@ impl SessionPersistence {
             worktree_branch_source: creator.then_some(WorktreeBranchSource::Auto),
             worktree_launch_branch: if creator { launch_branch } else { None },
             command_id: registration.command_id.filter(|id| !id.is_empty()),
+            log_epoch: Some(mint_log_epoch()),
+            head_ahead_of_durable: false,
         };
         self.persist_metadata(&metadata)?;
         if let Err(error) = self.install_runtime(metadata.clone()) {
@@ -521,6 +526,8 @@ impl SessionPersistence {
             worktree_branch_source: None,
             worktree_launch_branch: None,
             command_id: None,
+            log_epoch: Some(mint_log_epoch()),
+            head_ahead_of_durable: false,
         };
         if let Err(error) = self.persist_metadata(&metadata) {
             let _ = fs::remove_dir_all(self.session_dir(&metadata.storage_key)?);
@@ -591,6 +598,8 @@ impl SessionPersistence {
             worktree_branch_source: None,
             worktree_launch_branch: None,
             command_id: None,
+            log_epoch: Some(mint_log_epoch()),
+            head_ahead_of_durable: false,
         };
         self.persist_metadata(&metadata)?;
         if let Err(error) = self.install_runtime(metadata.clone()) {
@@ -1034,7 +1043,100 @@ impl SessionPersistence {
     }
 
     pub fn last_seq(&self, session_id: &str) -> Result<u64> {
-        Ok(self.metadata(session_id)?.last_seq)
+        self.with_metadata(session_id, |metadata| metadata.last_seq)
+    }
+
+    /// The session's log epoch (see [`SessionMetadata::log_epoch`]); `None`
+    /// for an unknown session.
+    #[must_use]
+    pub fn log_epoch(&self, session_id: &str) -> Option<String> {
+        self.with_metadata(session_id, |metadata| metadata.log_epoch.clone())
+            .ok()
+            .flatten()
+    }
+
+    /// Record that `session_id`'s allocated seq frontier is (or is about to be)
+    /// ahead of its durable log: a non-durable event took a seq. Cheap after
+    /// the first successful call (an in-memory flag); the first call also gets
+    /// the mark onto disk so a restart can tell and rotate the log epoch.
+    /// Never blocks on the writer. Unknown sessions are ignored (the relay
+    /// remembers the mark and calls again when the session registers).
+    ///
+    /// With a writer installed the write is queued on it: the writer is the one
+    /// thread that writes this session's metadata, so no stale inline write can
+    /// overtake its finalize. A failed write there leaves the mark set in
+    /// memory, and the writer's next metadata write carries it to disk. A queue
+    /// error (writer gone) clears the flag so the next call retries.
+    ///
+    /// Without a writer the metadata is written inline, under the catalog lock
+    /// and only while the session is still in the catalog: `delete_session`
+    /// drops the catalog entry before it removes the directory, so a delete in
+    /// progress is seen here and never gets its directory back. A failed inline
+    /// write clears the flag so the next call retries.
+    pub fn note_head_ahead_of_durable(&self, session_id: &str) {
+        let Some(entry) = self.inner.catalog.lock().get(session_id).cloned() else {
+            return;
+        };
+        {
+            let mut metadata = entry.lock();
+            if metadata.head_ahead_of_durable {
+                return;
+            }
+            metadata.head_ahead_of_durable = true;
+        }
+        let failed = match self.runtime(session_id) {
+            Ok(runtime) => self
+                .send_command(&runtime, session_id, WriterCommand::PersistMetadata)
+                .err(),
+            Err(_) => self.persist_mark_inline(session_id, &entry),
+        };
+        if let Some(error) = failed {
+            entry.lock().head_ahead_of_durable = false;
+            log::warn!(
+                "[acp-history] could not persist the head-ahead mark session_id={} error={error}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+    }
+
+    /// Write `entry`'s metadata for a session with no writer, holding the
+    /// catalog lock so a concurrent `delete_session` cannot remove the
+    /// directory between the check and the write. `None` = written, or the
+    /// session is gone (nothing to mark).
+    fn persist_mark_inline(
+        &self,
+        session_id: &str,
+        entry: &Arc<Mutex<SessionMetadata>>,
+    ) -> Option<SessionPersistenceError> {
+        let catalog = self.inner.catalog.lock();
+        if !catalog
+            .get(session_id)
+            .is_some_and(|current| Arc::ptr_eq(current, entry))
+        {
+            return None;
+        }
+        let snapshot = entry.lock().clone();
+        let dir_exists = self
+            .session_dir(&snapshot.storage_key)
+            .is_ok_and(|dir| dir.is_dir());
+        if !dir_exists {
+            return None;
+        }
+        persist_metadata_at_root(&self.inner.root, &snapshot).err()
+    }
+
+    /// Read from a session's catalog metadata without cloning it whole.
+    fn with_metadata<T>(
+        &self,
+        session_id: &str,
+        read: impl FnOnce(&SessionMetadata) -> T,
+    ) -> Result<T> {
+        self.inner
+            .catalog
+            .lock()
+            .get(session_id)
+            .map(|metadata| read(&metadata.lock()))
+            .ok_or(SessionPersistenceError::SessionNotFound)
     }
 
     /// Permanently remove a persisted session: drain the writer runtime when
@@ -1836,6 +1938,30 @@ impl SessionPersistence {
                     return Err(e);
                 }
             }
+            // A legacy record has no log epoch; one whose seq frontier ran ahead
+            // of the disk before the restart cannot keep its epoch (see
+            // `SessionMetadata::head_ahead_of_durable`). Mint a new one and
+            // persist it. A write failure keeps the new epoch in memory only:
+            // the next metadata write persists it, and a restart before that
+            // simply mints another.
+            if metadata.log_epoch.is_none() || metadata.head_ahead_of_durable {
+                let rotated = metadata.log_epoch.is_some();
+                metadata.log_epoch = Some(mint_log_epoch());
+                metadata.head_ahead_of_durable = false;
+                if let Err(error) = self.persist_metadata(&metadata) {
+                    log::warn!(
+                        "[acp-history] recover() could not persist the minted log epoch \
+                         session_id={} error={error}",
+                        crate::logging::redact_session_id(&metadata.session_id)
+                    );
+                } else if rotated {
+                    log::info!(
+                        "[acp-history] recover() rotated the log epoch of session_id={} \
+                         (its seq frontier had run ahead of the disk)",
+                        crate::logging::redact_session_id(&metadata.session_id)
+                    );
+                }
+            }
             recovered.insert(metadata.session_id.clone(), metadata);
         }
 
@@ -2034,6 +2160,11 @@ impl SessionPersistence {
         }
         Ok(self.inner.root.join(storage_key))
     }
+}
+
+/// A fresh log epoch: the identity of one incarnation of a session's log.
+fn mint_log_epoch() -> String {
+    Uuid::new_v4().to_string()
 }
 
 /// Issue #842: find the turn-id of the LAST `user_prompt` record that has no

@@ -37,6 +37,10 @@ pub struct TerminalInstance {
     pub output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
     pub output_log_bytes: Arc<AtomicUsize>,
     pub next_output_seq: Arc<AtomicU64>,
+    /// Identity of this spawn's output log. Chunk seqs restart at 1 with every
+    /// spawn, so a cursor `lastSeq` is only meaningful with the epoch it was
+    /// issued under.
+    pub log_epoch: String,
     /// Count of live web WS attachments (terminal_ws attach handlers
     /// increment; connection teardown decrements). `list_preserved`
     /// reattachment skips terminals with a live attachment so a second
@@ -224,25 +228,39 @@ impl TerminalInstance {
     }
 
     /// Atomically snapshot unseen sequenced chunks and subscribe to live output.
-    pub fn subscribe_from(&self, last_seq: u64) -> TerminalReplay {
+    ///
+    /// `log_epoch` is the epoch `last_seq` was issued under. A cursor from a
+    /// different epoch, or one ahead of the log's head, cannot be trusted
+    /// (the old stream is gone or the client is confused): the whole retained
+    /// log is replayed and `reset` is set so the client discards what it
+    /// rendered instead of silently skipping output.
+    pub fn subscribe_from(&self, last_seq: u64, log_epoch: Option<&str>) -> TerminalReplay {
         let guard = self.output_log.write();
         let receiver = self.broadcast_tx.subscribe();
         let earliest = guard.front().map(|chunk| chunk.seq);
-        let latest_seq = guard.back().map(|chunk| chunk.seq).unwrap_or(last_seq);
-        // Gap if the client's cursor is behind the earliest retained chunk,
-        // OR if the log is empty but the client expected prior output.
-        let gap = earliest
-            .map(|first| last_seq.saturating_add(1) < first)
-            .unwrap_or(last_seq > 0);
+        // The last allocated seq. A log emptied by eviction still has a head:
+        // reading 0 there would reset a valid cursor and rewind `latest_seq`.
+        let head_seq = guard.back().map_or_else(
+            || self.next_output_seq.load(Ordering::Relaxed),
+            |chunk| chunk.seq,
+        );
+        let reset = log_epoch.is_some_and(|epoch| epoch != self.log_epoch) || last_seq > head_seq;
+        let cursor = if reset { 0 } else { last_seq };
+        // Gap if the client's cursor is behind the earliest retained chunk.
+        // An empty log (eviction removed every chunk) has lost the output after
+        // a cursor that is behind the head too; a cursor AT the head is valid.
+        let gap = earliest.map_or(cursor < head_seq, |first| cursor.saturating_add(1) < first);
         let chunks = guard
             .iter()
-            .filter(|chunk| chunk.seq > last_seq)
+            .filter(|chunk| chunk.seq > cursor)
             .cloned()
             .collect();
         TerminalReplay {
             chunks,
             gap,
-            latest_seq,
+            reset,
+            latest_seq: head_seq,
+            log_epoch: self.log_epoch.clone(),
             receiver,
         }
     }

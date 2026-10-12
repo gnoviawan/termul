@@ -321,6 +321,37 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     expect(useAcpStore.getState().messages['s-listfail']).toHaveLength(1)
   })
 
+  it('seeds the live-turn cursor with the log epoch the payload carries', async () => {
+    const payload = seededPayload('s-epoch')
+    payload.metadata = {
+      ...(payload.metadata as Record<string, unknown>),
+      turnActive: true,
+      lastSeq: 75,
+      logEpoch: 'epoch-host-1',
+      status: 'active'
+    }
+    const transport = fakeWebTransport(
+      [
+        {
+          id: HOST_AGENT,
+          name: 'Claude',
+          configId: 'acp-registry:claude-acp',
+          capabilities: { loadSession: true },
+          ownsSession: ['s-epoch']
+        }
+      ],
+      { 's-epoch': payload }
+    )
+    _setAcpTransportForTests(transport)
+
+    await useAcpStore.getState().openHistorySession('s-epoch')
+
+    expect(transport.seedSessionCursor).toHaveBeenCalledWith('s-epoch', {
+      lastSeq: 75,
+      logEpoch: 'epoch-host-1'
+    })
+  })
+
   it('subscribes to a live turn instead of loading the session (#882)', async () => {
     const payload = seededPayload('s-live')
     payload.metadata = {
@@ -348,7 +379,10 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     const session = useAcpStore.getState().sessions['s-live']
     expect(transport.loadSession).not.toHaveBeenCalled()
     expect(transport.subscribeSession).toHaveBeenCalledWith('s-live', 75, true)
-    expect(transport.seedSessionCursor).toHaveBeenCalledWith('s-live', 75)
+    expect(transport.seedSessionCursor).toHaveBeenCalledWith('s-live', {
+      lastSeq: 75,
+      logEpoch: null
+    })
     expect(transport.spawnAgent).not.toHaveBeenCalled()
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)

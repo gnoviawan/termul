@@ -441,6 +441,7 @@ impl WsRelaySink {
         // clients, `mark_seen` + `is_seen` handle dedup independently.
         persistence.set_seq_authority(Arc::new(RelaySeqAuthority {
             sessions: Arc::clone(&sink.sessions),
+            persistence: Arc::downgrade(&persistence),
         }));
         sink.persistence = Some(persistence);
         sink
@@ -734,6 +735,8 @@ impl std::fmt::Display for HostRecordError {
 
 impl std::error::Error for HostRecordError {}
 
+#[cfg(test)]
+mod epoch_tests;
 #[cfg(test)]
 mod log_integrity_tests;
 #[cfg(test)]

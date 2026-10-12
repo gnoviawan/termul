@@ -14,7 +14,9 @@ import {
   type DeleteSessionPayload,
   type HistoryMode,
   type PersistedSessionSummary,
+  type SessionCursorReply,
   type SessionSnapshotEvent,
+  type SessionSubscribeReply,
   WS_ERROR_CODES,
   WS_EVENT_TYPES,
   type WsAgentSummary,
@@ -55,7 +57,12 @@ import {
 } from '@/lib/web-protocol-reload'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 import { toWsEventType } from './event-names'
-import { type AcpConnectionState, type AcpTransport, AcpTransportError } from './types'
+import {
+  type AcpConnectionState,
+  type AcpTransport,
+  AcpTransportError,
+  type SessionCursor
+} from './types'
 import { SessionResubscribeRetry, type SessionRetryMode } from './ws-session-retry'
 import {
   HANDSHAKE_TIMEOUT_MS,
@@ -177,8 +184,10 @@ interface AcpCatalogFromHost {
 /**
  * Multiplexed ACP WS client.
  *
- * On `stale` subscribe reply: clear per-session seq/buffer + turn-id dedup and
- * resubscribe live-only (omit `lastSeq`).
+ * Per session the cursor is `(logEpoch, lastSeq)`: the epoch identifies the host
+ * log incarnation `lastSeq` was issued under. A `stale` subscribe reply (another
+ * epoch, or a cursor ahead of the head) installs an atomic snapshot instead of
+ * replaying, and the snapshot's epoch + watermark become the new cursor.
  */
 export class WsAcpTransport implements AcpTransport {
   private socket: WebSocket | null = null
@@ -215,6 +224,8 @@ export class WsAcpTransport implements AcpTransport {
   private readonly listeners = new Map<string, Set<EventListener>>()
   /** Per-session last contiguous delivered seq. */
   private readonly lastSeq = new Map<string, number>()
+  /** Per-session epoch of the host log `lastSeq` belongs to. */
+  private readonly logEpochs = new Map<string, string>()
   /** Sessions we should re-subscribe after reconnect. */
   private readonly subscribed = new Set<string>()
   /** Projects whose `fs_changed` watch this connection must re-request after reconnect. */
@@ -349,26 +360,39 @@ export class WsAcpTransport implements AcpTransport {
     this.reconnectPriorityProvider = provider
   }
 
-  getSessionCursor(sessionId: SessionId): number | null {
-    return this.lastSeq.get(sessionId) ?? null
+  getSessionCursor(sessionId: SessionId): SessionCursor | null {
+    const lastSeq = this.lastSeq.get(sessionId)
+    if (lastSeq === undefined) return null
+    return { lastSeq, logEpoch: this.logEpochs.get(sessionId) ?? null }
   }
 
-  async fetchSessionCursor(sessionId: SessionId): Promise<number> {
+  async fetchSessionCursor(sessionId: SessionId): Promise<SessionCursor> {
     // R2: proactively fetch the server watermark (NOT only on a STALE error)
-    // so a refreshed transport seeds `lastSeq` before its first subscribe.
+    // so a refreshed transport seeds its cursor before its first subscribe.
     await this.connect()
-    const reply = await this.request<{ sessionId: string; watermark: number }>(
-      'get_session_cursor',
-      { sessionId }
-    )
-    return reply?.watermark ?? 0
+    const reply = await this.request<SessionCursorReply>('get_session_cursor', { sessionId })
+    return { lastSeq: reply?.watermark ?? 0, logEpoch: reply?.logEpoch ?? null }
   }
 
-  seedSessionCursor(sessionId: SessionId, cursor: number): void {
-    // Seed the in-memory watermark without subscribing so the subsequent
+  seedSessionCursor(sessionId: SessionId, cursor: SessionCursor): void {
+    // Seed the in-memory cursor without subscribing so the subsequent
     // `resumeSession`/`subscribeSession` built-in re-subscribe resumes from
     // the server cursor (replays only the gap), not a dead per-instance 0.
-    if (cursor > 0) this.lastSeq.set(sessionId, cursor)
+    // A zero cursor still names an epoch: keeping the old pair would pair a
+    // stale `lastSeq` with a new epoch (or the reverse).
+    if (cursor.lastSeq <= 0) {
+      this.lastSeq.delete(sessionId)
+    } else {
+      this.lastSeq.set(sessionId, cursor.lastSeq)
+    }
+    if (cursor.logEpoch) this.logEpochs.set(sessionId, cursor.logEpoch)
+    else this.logEpochs.delete(sessionId)
+  }
+
+  /** Forget a session's cursor (its next subscribe starts a fresh log view). */
+  private clearCursor(sessionId: string): void {
+    this.lastSeq.delete(sessionId)
+    this.logEpochs.delete(sessionId)
   }
 
   async connect(): Promise<void> {
@@ -451,15 +475,19 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
     this.subscribed.add(sessionId)
-    const payload: { sessionId: string; lastSeq?: number } = { sessionId }
+    const payload: { sessionId: string; lastSeq?: number; logEpoch?: string } = { sessionId }
     if (lastSeq != null) {
       payload.lastSeq = lastSeq
     } else if (lastSeq === undefined && this.lastSeq.has(sessionId)) {
       payload.lastSeq = this.lastSeq.get(sessionId)
     }
     // lastSeq === null → omit field → server live-only (stale recovery).
+    // A cursor is only meaningful with the epoch it was issued under.
+    const epoch = this.logEpochs.get(sessionId)
+    if (payload.lastSeq !== undefined && epoch) payload.logEpoch = epoch
+    let reply: SessionSubscribeReply | undefined
     try {
-      await this.request('subscribe', payload, timeoutMs)
+      reply = await this.request<SessionSubscribeReply>('subscribe', payload, timeoutMs)
     } catch (err) {
       if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.STALE) {
         await this.recoverSession(sessionId, timeoutMs)
@@ -467,6 +495,25 @@ export class WsAcpTransport implements AcpTransport {
       }
       throw err
     }
+    const replyEpoch = reply?.logEpoch
+    if (!replyEpoch) return
+    // A nonzero cursor went out with no epoch to verify it against.
+    const unverified = !payload.logEpoch && (payload.lastSeq ?? 0) > 0
+    if ((epoch && epoch !== replyEpoch && this.lastSeq.has(sessionId)) || unverified) {
+      // The host answered under a different log than our cursor (a subscribe
+      // sent without the epoch), or under an epoch our cursor was never
+      // issued under: `lastSeq` means nothing in it, and applying events
+      // behind it would drop new ones as duplicates. Snapshot instead.
+      void logFrontendError({
+        level: 'info',
+        source: 'WsAcpTransport.subscribe',
+        message: `Session ${sessionId} log epoch changed under the cursor; installing a snapshot`
+      })
+      this.clearCursor(sessionId)
+      await this.recoverSession(sessionId, timeoutMs)
+      return
+    }
+    this.logEpochs.set(sessionId, replyEpoch)
   }
 
   /**
@@ -490,6 +537,8 @@ export class WsAcpTransport implements AcpTransport {
         timeoutMs
       )
       this.lastSeq.set(sessionId, recovery.watermark)
+      if (recovery.logEpoch) this.logEpochs.set(sessionId, recovery.logEpoch)
+      else this.logEpochs.delete(sessionId)
       this.seenTurnIds.delete(sessionId)
       await this.recoveryHandler?.(recovery, reopenGeneration)
       // handle_recover_session_snapshot server-side re-registers the
@@ -497,9 +546,15 @@ export class WsAcpTransport implements AcpTransport {
       // call needed here.
       return
     }
-    this.lastSeq.delete(sessionId)
+    this.clearCursor(sessionId)
     this.seenTurnIds.delete(sessionId)
-    await this.request('subscribe', { sessionId }, timeoutMs)
+    const reply = await this.request<SessionSubscribeReply | undefined>(
+      'subscribe',
+      { sessionId },
+      timeoutMs
+    )
+    // Live events that follow carry this log's seqs: remember its epoch.
+    if (reply?.logEpoch) this.logEpochs.set(sessionId, reply.logEpoch)
     await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
   }
 
@@ -745,7 +800,7 @@ export class WsAcpTransport implements AcpTransport {
   async disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
     await this.request('dispose_ephemeral_session', { agentId, sessionId })
     this.subscribed.delete(sessionId)
-    this.lastSeq.delete(sessionId)
+    this.clearCursor(sessionId)
     this.seenTurnIds.delete(sessionId)
   }
 
@@ -833,7 +888,7 @@ export class WsAcpTransport implements AcpTransport {
   async closeSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
     await this.request('close_session', { agentId, sessionId })
     this.subscribed.delete(sessionId)
-    this.lastSeq.delete(sessionId)
+    this.clearCursor(sessionId)
   }
 
   async listSessions(
@@ -1431,7 +1486,7 @@ export class WsAcpTransport implements AcpTransport {
 
   private dropObsoleteSession(sid: string): void {
     this.subscribed.delete(sid)
-    this.lastSeq.delete(sid)
+    this.clearCursor(sid)
     this.seenTurnIds.delete(sid)
     this.sessionRetry.cancel(sid)
   }

@@ -285,7 +285,7 @@ async fn error_timeout_crash_and_cancel_turns_end_with_exactly_one_terminator() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_prompt_is_never_delivered_after_a_chunk_of_its_turn() {
     let env = env(Vec::new(), true).await;
-    let (_client, mut rx, replay, _) = env.relay.subscribe(SESSION, Some(0)).await;
+    let (_client, mut rx, replay, _) = env.relay.subscribe(SESSION, Some(0), None).await;
     assert!(matches!(replay, ReplayResult::Ok(_)));
 
     run_prompt_turn(&env.acp, &env.relay, request(Some("t1")))

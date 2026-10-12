@@ -167,6 +167,7 @@ pub async fn terminal_attach(
     terminal_id: String,
     claim: String,
     last_seq: u64,
+    log_epoch: Option<String>,
     on_data: Channel<Response>,
     pty_manager: State<'_, Arc<PtyManager>>,
 ) -> Result<IpcResult<TerminalAttachResult>, String> {
@@ -189,7 +190,7 @@ pub async fn terminal_attach(
 
     // Bounded replay + live subscription snapshot atomically (existing seq
     // infra, unchanged).
-    let replay = instance.subscribe_from(last_seq);
+    let replay = instance.subscribe_from(last_seq, log_epoch.as_deref());
     let result = pty_manager.build_attach_result(&instance, &replay);
 
     // Single-forwarder invariant: abort the predecessor BEFORE delivering the

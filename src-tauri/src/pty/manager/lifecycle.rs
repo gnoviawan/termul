@@ -263,6 +263,8 @@ impl PtyManager {
             rows: *instance.rows.read(),
             latest_seq: replay.latest_seq,
             gap: replay.gap,
+            reset: replay.reset,
+            log_epoch: replay.log_epoch.clone(),
             snapshot: self.terminal_events.snapshot(&instance.id),
         }
     }

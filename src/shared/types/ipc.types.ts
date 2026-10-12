@@ -85,6 +85,14 @@ export interface TerminalAttachResult {
   rows: number
   latestSeq: number
   gap: boolean
+  /**
+   * The cursor did not belong to this terminal's log (another epoch, or ahead
+   * of the head): the replay starts from the retained log's first chunk and the
+   * client must discard what it rendered.
+   */
+  reset: boolean
+  /** Epoch of this spawn's output log; the next cursor is `(logEpoch, latestSeq)`. */
+  logEpoch: string
   snapshot: TerminalStateSnapshot
 }
 
@@ -99,7 +107,8 @@ export type TerminalIpcChannels = {
   'terminal:attach': (
     terminalId: string,
     claim: string,
-    lastSeq: number
+    lastSeq: number,
+    logEpoch?: string
   ) => IpcResult<TerminalAttachResult>
   'terminal:rotate_claim': (terminalId: string, claim: string) => IpcResult<RotatedClaim>
   'terminal:revoke_claim': (terminalId: string, claim: string) => IpcResult<void>
@@ -296,14 +305,17 @@ export interface TerminalApi {
   spawn: (options?: TerminalSpawnOptions) => Promise<IpcResult<SpawnedTerminal>>
   /**
    * CAP-3: attach to a terminal's output stream with terminalId + claim +
-   * lastSeq. Verification is the gate — any failure (unknown terminal,
+   * lastSeq (+ the `logEpoch` the cursor was issued under; a nonzero cursor
+   * without one is refused as untrusted and replays everything with `reset`).
+   * Verification is the gate — any failure (unknown terminal,
    * missing/wrong/revoked credential) resolves to the same generic
    * UNAUTHORIZED error with no terminal metadata or output.
    */
   attach: (
     terminalId: string,
     claim: string,
-    lastSeq: number
+    lastSeq: number,
+    logEpoch?: string
   ) => Promise<IpcResult<TerminalAttachResult>>
   /** CAP-3: possession-based rotation — old credential invalidated atomically. */
   rotateClaim: (terminalId: string, claim: string) => Promise<IpcResult<RotatedClaim>>

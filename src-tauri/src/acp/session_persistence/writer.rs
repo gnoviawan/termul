@@ -43,6 +43,13 @@ pub(super) fn writer_loop(
                 let _ = reply.send(result.clone_for_reply());
                 result
             }
+            WriterCommand::PersistMetadata => {
+                let snapshot = metadata.lock().clone();
+                // A failure here marks the writer unhealthy. The mark stays set
+                // in memory, so the next metadata write this writer makes
+                // (append batch, finalize) carries it to disk.
+                persist_metadata_at_root(&inner.root, &snapshot)
+            }
             WriterCommand::Finalize(status, reply) => {
                 close_writer(&inner, &metadata, &mut tails, &unhealthy, Some(status), false, reply);
                 return;

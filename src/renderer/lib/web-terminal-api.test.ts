@@ -284,6 +284,97 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     vi.useRealTimers()
   })
 
+  it('an explicit cursor goes out with the epoch the caller names, or as untrusted without one', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+
+    await client.attachWithCursor('t1', 'lease-1', 40, 'epoch-caller')
+    expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
+      terminalId: 't1',
+      claim: 'lease-1',
+      lastSeq: 40,
+      logEpoch: 'epoch-caller'
+    })
+
+    // No epoch known for a nonzero cursor: '' matches no real epoch, so the
+    // host replays everything with `reset` instead of trusting the cursor.
+    await client.attachWithCursor('t2', 'lease-2', 40)
+    expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
+      terminalId: 't2',
+      claim: 'lease-2',
+      lastSeq: 40,
+      logEpoch: ''
+    })
+
+    // A zero cursor needs no epoch.
+    await client.attachWithCursor('t3', 'lease-3', 0)
+    expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
+      terminalId: 't3',
+      claim: 'lease-3',
+      lastSeq: 0
+    })
+    client.dispose()
+  })
+
+  it('re-attaches with the log epoch a replay frame set, alongside the cursor', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const oldSocket = internals.socket
+    oldSocket.emit({
+      type: 'replay',
+      terminalId: 't1',
+      chunks: [],
+      gap: false,
+      reset: false,
+      logEpoch: 'epoch-t1',
+      latestSeq: 0,
+      snapshot: mockTerminalStateSnapshot()
+    })
+    oldSocket.emit({ type: 'data', terminalId: 't1', seq: 7, data: [65] })
+    await Promise.resolve()
+
+    dispatchVisibility('hidden')
+    await vi.advanceTimersByTimeAsync(31_000)
+    dispatchVisibility('visible')
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+
+    expect(internals.socket).not.toBe(oldSocket)
+    expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
+      terminalId: 't1',
+      claim: 'claim-t1',
+      lastSeq: 7,
+      logEpoch: 'epoch-t1'
+    })
+
+    // A cursor handed in by a caller never borrows the tracker's epoch, even
+    // when its value equals the tracker's own cursor.
+    await client.attachWithCursor('t1', 'claim-t1', 7)
+    expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
+      terminalId: 't1',
+      claim: 'claim-t1',
+      lastSeq: 7,
+      logEpoch: ''
+    })
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
   it('reconnects + re-attaches trackers with their lastSeq after a long hide', async () => {
     vi.useFakeTimers()
     const client = new WebTerminalClient(
@@ -315,7 +406,12 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     // cursor (CAP-3: reattach requires the lease credential).
     const attachReq = findSentRequest(internals.socket, 'attach')
     expect(attachReq).toBeDefined()
-    expect(attachReq?.payload).toEqual({ terminalId: 't1', claim: 'claim-t1', lastSeq: 7 })
+    expect(attachReq?.payload).toEqual({
+      terminalId: 't1',
+      claim: 'claim-t1',
+      lastSeq: 7,
+      logEpoch: ''
+    })
 
     if (internals.reconnectTimer) {
       clearTimeout(internals.reconnectTimer)
@@ -813,10 +909,12 @@ describe('WebTerminalClient frame handling & request lifecycle', () => {
       // the supplied claim + cursor to the server.
       const result = await client.attachWithCursor('t1', 'handoff-claim', 87)
       expect(result.success).toBe(true)
+      // A nonzero cursor with no known epoch is untrusted (`''` matches no epoch).
       expect(findSentRequest(sock, 'attach')?.payload).toEqual({
         terminalId: 't1',
         claim: 'handoff-claim',
-        lastSeq: 87
+        lastSeq: 87,
+        logEpoch: ''
       })
 
       // Server confirmed → the credential is adopted, terminal attachable.
@@ -837,7 +935,8 @@ describe('WebTerminalClient frame handling & request lifecycle', () => {
       expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
         terminalId: 't1',
         claim: 'handoff-claim',
-        lastSeq: 90
+        lastSeq: 90,
+        logEpoch: ''
       })
 
       if (internals.reconnectTimer) {
@@ -1020,6 +1119,47 @@ describe('WebTerminalClient attach/replay snapshot dispatch', () => {
     })
 
     expect(branchCb).toHaveBeenCalledWith('t3', null)
+
+    client.dispose()
+  })
+
+  it('clears the terminal before a reset replay and adopts the new log epoch + cursor', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    await client.connect()
+    const written: number[][] = []
+    client.onData((_id, bytes) => written.push([...bytes]))
+    const internals = client as unknown as ClientInternals
+    // A cursor from a previous incarnation of the log.
+    const tracker = internals.trackers.get('t4') ?? { lastSeq: 0 }
+    internals.trackers.set('t4', {
+      ...tracker,
+      lastSeq: 90,
+      logEpoch: 'epoch-old',
+      exited: false,
+      refCount: 1,
+      disconnected: false
+    } as never)
+
+    internals.socket.emit({
+      type: 'replay',
+      terminalId: 't4',
+      chunks: [
+        { seq: 1, data: [0x61] },
+        { seq: 2, data: [0x62] }
+      ],
+      gap: false,
+      reset: true,
+      logEpoch: 'epoch-new',
+      latestSeq: 2,
+      snapshot: mockTerminalStateSnapshot()
+    })
+
+    // RIS first (discard what the old log rendered), then the whole replay.
+    expect(written).toEqual([[0x1b, 0x63], [0x61], [0x62]])
+    expect(internals.trackers.get('t4')).toMatchObject({ lastSeq: 2, logEpoch: 'epoch-new' })
 
     client.dispose()
   })

@@ -28,6 +28,8 @@ fn metadata() -> SessionMetadata {
         worktree_branch_source: None,
         worktree_launch_branch: None,
         command_id: None,
+        log_epoch: None,
+        head_ahead_of_durable: false,
     }
 }
 
@@ -181,6 +183,21 @@ fn metadata_maps_agent_config_prefix_and_fallbacks() {
             "worktreePath": "/work/project/.termul/worktrees/chat/abc123",
             "worktreeBranch": "chat/abc123",
         })
+    );
+}
+
+#[test]
+fn metadata_carries_the_log_epoch_when_the_session_has_one() {
+    let mut meta = metadata();
+    meta.log_epoch = Some("epoch-7".to_string());
+    let value = serde_json::to_value(materialize_session_payload(&meta, &[]).metadata).unwrap();
+    assert_eq!(value["logEpoch"], "epoch-7");
+
+    meta.log_epoch = None;
+    let value = serde_json::to_value(materialize_session_payload(&meta, &[]).metadata).unwrap();
+    assert!(
+        value.get("logEpoch").is_none(),
+        "absent, never null: {value}"
     );
 }
 

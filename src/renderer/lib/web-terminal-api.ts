@@ -31,6 +31,7 @@ import {
 } from './acp-transport/ws-transport-timing'
 import { logFrontendError } from './log-api'
 
+import { terminalCursorEpoch } from './terminal-cursor'
 import { getWebAuthToken } from './web-auth-token'
 import { buildAuthenticatePayload } from './web-client-identity'
 import { clearProtocolMismatchLatch, handleProtocolVersionMismatch } from './web-protocol-reload'
@@ -66,6 +67,12 @@ type Pending = {
 interface TerminalTracker {
   /** Last received output sequence number (0 = no output yet). */
   lastSeq: number
+  /**
+   * Epoch of the output log `lastSeq` belongs to (from the attach `replay`
+   * frame). Presented with the cursor on every re-attach so the host can tell
+   * a cursor from another spawn / a confused cursor from a valid one.
+   */
+  logEpoch?: string
   /** Whether the terminal has exited (stop reconnecting). */
   exited: boolean
   /** Active renderer reference count (detach when it reaches 0). */
@@ -444,7 +451,8 @@ export class WebTerminalClient {
       void this.request('attach', {
         terminalId,
         claim: tracker.claim,
-        lastSeq: tracker.lastSeq
+        lastSeq: tracker.lastSeq,
+        logEpoch: terminalCursorEpoch(tracker.lastSeq, tracker.logEpoch)
       }).then((r) => {
         if (r.success) {
           tracker.disconnected = false
@@ -578,7 +586,8 @@ export class WebTerminalClient {
   private async performAttach(
     terminalId: string,
     claim: string | undefined,
-    lastSeq: number | undefined
+    lastSeq: number | undefined,
+    logEpoch?: string
   ): Promise<IpcResult<TerminalAttachResult>> {
     const tracker = this.getOrCreate(terminalId)
     const credential = claim ?? tracker.claim
@@ -594,10 +603,18 @@ export class WebTerminalClient {
     // rejection, clear ONLY when `tracker.claim` is unchanged since the
     // snapshot — a newer claim installed by `severClaim` is preserved.
     const claimAtRequest = tracker.claim
+    // The tracker's own cursor travels with the epoch this client learned for
+    // it. A cursor handed in by a caller travels with the epoch the caller
+    // names, or none.
+    const cursor = lastSeq ?? tracker.lastSeq
+    // (Provenance, not value: a caller's cursor never borrows the tracker's epoch.)
+    const epoch = lastSeq === undefined ? tracker.logEpoch : logEpoch
+    const sentEpoch = terminalCursorEpoch(cursor, epoch)
     const result = await this.request<TerminalAttachResult>('attach', {
       terminalId,
       claim: credential,
-      lastSeq: lastSeq ?? tracker.lastSeq
+      lastSeq: cursor,
+      ...(sentEpoch !== undefined ? { logEpoch: sentEpoch } : {})
     })
     if (result.success) {
       // Increment — never `= 1`: in-flight attaches must not discard refs.
@@ -647,9 +664,10 @@ export class WebTerminalClient {
   async attachWithCursor(
     terminalId: string,
     claim: string,
-    lastSeq: number
+    lastSeq: number,
+    logEpoch?: string
   ): Promise<IpcResult<TerminalAttachResult>> {
-    return this.performAttach(terminalId, claim, lastSeq)
+    return this.performAttach(terminalId, claim, lastSeq, logEpoch)
   }
 
   /**
@@ -887,11 +905,21 @@ export class WebTerminalClient {
     if (frame.type === 'replay') {
       // Sequenced replay: write each chunk in order, update cursor.
       const tracker = this.getOrCreate(frame.terminalId)
+      tracker.logEpoch = frame.logEpoch
+      if (frame.reset) {
+        // The cursor did not belong to this terminal's log: what we rendered is
+        // not its output. RIS (ESC c) clears the terminal before the full replay.
+        tracker.lastSeq = 0
+        for (const callback of this.dataCallbacks) {
+          callback(frame.terminalId, new Uint8Array([0x1b, 0x63]))
+        }
+      }
       for (const chunk of frame.chunks) {
         const bytes = Uint8Array.from(chunk.data)
         for (const callback of this.dataCallbacks) callback(frame.terminalId, bytes)
         tracker.lastSeq = chunk.seq
       }
+      if (frame.reset) tracker.lastSeq = frame.latestSeq
       // If a gap was reported, write a visible marker.
       if (frame.gap) {
         const marker = new Uint8Array([
@@ -1217,7 +1245,8 @@ export function createWebTerminalApi(): TerminalApi {
       }
       return result
     },
-    attach: (terminalId, claim, lastSeq) => client.attachWithCursor(terminalId, claim, lastSeq),
+    attach: (terminalId, claim, lastSeq, logEpoch) =>
+      client.attachWithCursor(terminalId, claim, lastSeq, logEpoch),
     async rotateClaim(terminalId: string, claim: string): Promise<IpcResult<RotatedClaim>> {
       const result = await client.request<RotatedClaim>('rotate_claim', { terminalId, claim })
       if (result.success) {

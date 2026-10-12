@@ -88,7 +88,7 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
 
   it('resumes a still-running turn with the server cursor + records succeeded', async () => {
     state.sessionIndex = [eligibleSession()]
-    transportMocks.fetchSessionCursor.mockResolvedValue(7)
+    transportMocks.fetchSessionCursor.mockResolvedValue({ lastSeq: 7, logEpoch: 'epoch-1' })
     state.openHistorySession.mockImplementation(async () => {
       state.sessions = { s1: { status: 'active' } }
     })
@@ -100,7 +100,10 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
     })
     // R2: server-authoritative cursor seeded before resume (web parity).
     expect(transportMocks.fetchSessionCursor).toHaveBeenCalledWith('s1')
-    expect(transportMocks.seedSessionCursor).toHaveBeenCalledWith('s1', 7)
+    expect(transportMocks.seedSessionCursor).toHaveBeenCalledWith('s1', {
+      lastSeq: 7,
+      logEpoch: 'epoch-1'
+    })
     expect(events.find((e) => e.name === 'acp-resume-attempted')?.terminalId).toBe('s1')
     expect(events.find((e) => e.name === 'acp-resume-succeeded')?.terminalId).toBe('s1')
     expect(events.some((e) => e.name === 'acp-resume-skipped')).toBe(false)
@@ -110,7 +113,7 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
     // `openHistorySession` rejects (agent exited, no resume capability, or
     // spawn failed) → read-only local, no spawn.
     state.sessionIndex = [eligibleSession()]
-    transportMocks.fetchSessionCursor.mockResolvedValue(3)
+    transportMocks.fetchSessionCursor.mockResolvedValue({ lastSeq: 3, logEpoch: null })
     state.openHistorySession.mockRejectedValue(new Error('resume not supported'))
 
     renderHook(() => useAcpSessionResume())
@@ -126,7 +129,7 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
 
   it('records skipped (not succeeded) when openHistorySession resolves but session stays closed (local strategy)', async () => {
     state.sessionIndex = [eligibleSession()]
-    transportMocks.fetchSessionCursor.mockResolvedValue(0)
+    transportMocks.fetchSessionCursor.mockResolvedValue({ lastSeq: 0, logEpoch: null })
     state.openHistorySession.mockResolvedValue(undefined)
     state.sessions = { s1: { status: 'closed' } }
 
@@ -148,7 +151,7 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
       eligibleSession({ id: 's-dead', status: 'error' }),
       eligibleSession({ id: 's-live' })
     ]
-    transportMocks.fetchSessionCursor.mockResolvedValue(1)
+    transportMocks.fetchSessionCursor.mockResolvedValue({ lastSeq: 1, logEpoch: null })
     state.openHistorySession.mockImplementation(async (id: string) => {
       state.sessions = { ...state.sessions, [id]: { status: 'active' } }
     })
@@ -170,7 +173,7 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
       eligibleSession({ id: 'other-project', projectId: 'p2' }),
       eligibleSession({ id: 'closed', status: 'closed' })
     ]
-    transportMocks.fetchSessionCursor.mockResolvedValue(0)
+    transportMocks.fetchSessionCursor.mockResolvedValue({ lastSeq: 0, logEpoch: null })
     state.openHistorySession.mockResolvedValue(undefined)
 
     renderHook(() => useAcpSessionResume())

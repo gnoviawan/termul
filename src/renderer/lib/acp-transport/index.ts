@@ -31,7 +31,8 @@ export {
   type AcpTransport,
   AcpTransportError,
   isPendingPromptTransportError,
-  isTransientAcpTransportError
+  isTransientAcpTransportError,
+  type SessionCursor
 } from './types'
 export { resolveWsUrl, WsAcpTransport } from './ws-transport'
 

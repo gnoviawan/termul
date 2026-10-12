@@ -121,6 +121,20 @@ pub struct SessionMetadata {
     /// any wire type. Additive: old metadata loads with `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_id: Option<String>,
+    /// Identity of this session's log incarnation: a replay cursor
+    /// `(logEpoch, lastSeq)` is only valid against the epoch it was issued
+    /// under. Minted when the session is created; a legacy record without one
+    /// is minted when first loaded and written back at that load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_epoch: Option<String>,
+    /// Set once this log's allocated seq frontier has run ahead of what is on
+    /// disk (a non-durable event such as `permission_request` took a seq that
+    /// never reaches the JSONL). After a restart the allocator resumes from the
+    /// durable frontier and would reuse those seqs for different events, so a
+    /// load that finds this set rotates `log_epoch` and clears it. Host-internal:
+    /// never on `SessionIndexEntry` or any wire type.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub head_ahead_of_durable: bool,
 }
 
 /// Provenance of a worktree branch name (story 16): `Auto` is the launcher's
@@ -167,6 +181,9 @@ pub struct SessionIndexEntry {
     /// Display-name snapshot of `model_id` taken when it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// The session log's epoch (see [`SessionMetadata::log_epoch`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_epoch: Option<String>,
 }
 
 impl From<&SessionMetadata> for SessionIndexEntry {
@@ -192,6 +209,7 @@ impl From<&SessionMetadata> for SessionIndexEntry {
             worktree_branch: metadata.worktree_branch.clone(),
             model_id: metadata.model_id.clone(),
             model_name: metadata.model_name.clone(),
+            log_epoch: metadata.log_epoch.clone(),
         }
     }
 }

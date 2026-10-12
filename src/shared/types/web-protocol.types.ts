@@ -176,8 +176,9 @@ export const WS_REQUEST_TYPES = [
   'recover_session_snapshot',
   // R2: lightweight server-authoritative replay cursor (no snapshot payload).
   // Unlike `recover_session_snapshot` (which re-registers a subscription),
-  // this only returns the durable `{ sessionId, watermark }` so a refreshed
-  // transport can seed `lastSeq` before its first subscribe.
+  // this only returns the durable `{ sessionId, watermark }` (plus the log's
+  // `logEpoch`/`headSeq`, see `SessionCursorReply`) so a refreshed transport
+  // can seed its `(logEpoch, lastSeq)` cursor before its first subscribe.
   'get_session_cursor',
   // Tail-first variant of `get_session_payload`: fetches only the last `limit`
   // messages + matching tool calls so the renderer can install the recent
@@ -607,7 +608,7 @@ export interface AcpRuntimePolicy {
  * The `authenticate` protocol version this client speaks. Mirrors the Rust
  * `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
  */
-export const WS_PROTOCOL_VERSION = 2
+export const WS_PROTOCOL_VERSION = 3
 
 /** Longest accepted `deviceId` / `clientInstanceId`, in bytes. */
 export const MAX_CLIENT_ID_LEN = 128
@@ -633,11 +634,45 @@ export interface AcpAuthenticateReply {
   protocolVersion?: number
 }
 
-/** Atomic stale-recovery payload emitted before post-watermark live events. */
+/**
+ * Atomic stale-recovery payload emitted before post-watermark live events.
+ * `logEpoch` + `headSeq` are read under the host's seq lock at registration:
+ * the client's next cursor is `(logEpoch, watermark)`.
+ */
 export interface SessionSnapshotEvent {
   sessionId: string
   watermark: number
+  /** The allocated seq frontier at registration (equals `watermark`). */
+  headSeq: number
+  /** Identity of the log incarnation the cursor belongs to. */
+  logEpoch: string
   events: WsEvent[]
+}
+
+/**
+ * `subscribe` reply. A cursor (`lastSeq`, optionally with the `logEpoch` it was
+ * issued under) from another epoch or ahead of `headSeq` is answered with a
+ * `stale` error instead and registers nothing. Events with `seq <= headSeq` are
+ * replay (durable replay may skip non-durable seqs); anything above is live and
+ * must be contiguous.
+ */
+export interface SessionSubscribeReply {
+  sessionId: string
+  replayed: number
+  logEpoch: string
+  headSeq: number
+}
+
+/**
+ * `get_session_cursor` reply: the durable `watermark` plus, for a session the
+ * host knows, the log's epoch and allocated frontier. An unknown session has
+ * neither (the client subscribes live-only).
+ */
+export interface SessionCursorReply {
+  sessionId: string
+  watermark: number
+  logEpoch?: string
+  headSeq?: number
 }
 
 export interface PersistedSessionSummary {

@@ -53,6 +53,10 @@ pub(super) struct SessionState {
     /// Identity of this log incarnation. A cursor is only meaningful against
     /// the epoch it was issued under.
     pub(super) log_epoch: String,
+    /// A live-only event took a seq the durable log will never hold, so the
+    /// allocated frontier is ahead of the disk. Remembered here because the
+    /// session may not be registered with persistence yet; applied when it is.
+    pub(super) head_ahead_of_durable: bool,
     /// Bounded ring; oldest evicted when `len > capacity`.
     pub(super) events: VecDeque<SequencedEvent>,
     /// `seq` of the oldest event currently in the ring (for cursor-gap detect).
@@ -61,25 +65,45 @@ pub(super) struct SessionState {
 
 impl SessionState {
     /// Fresh state whose next seq follows `last_seq` (the durable frontier of
-    /// a session this process has not published to yet).
-    fn new(last_seq: u64) -> Self {
+    /// a session this process has not published to yet), under `log_epoch`.
+    fn new(last_seq: u64, log_epoch: String) -> Self {
         Self {
             last_seq,
-            log_epoch: Uuid::new_v4().to_string(),
+            log_epoch,
+            head_ahead_of_durable: false,
             events: VecDeque::new(),
             base_seq: last_seq.saturating_add(1),
         }
     }
 
-    /// Existing state for `sid`, or a fresh one seeded at `durable_last`.
+    /// Existing state for `sid`, or a fresh one seeded at `durable_last`. A
+    /// durable session's epoch is the one persisted in its metadata (so
+    /// cursors survive a host restart); a session with none (non-durable)
+    /// mints one per process.
     pub(super) fn entry<'a>(
         sessions: &'a mut HashMap<String, SessionState>,
         sid: &str,
         durable_last: u64,
+        persistence: Option<&SessionPersistence>,
     ) -> &'a mut SessionState {
-        sessions
-            .entry(sid.to_string())
-            .or_insert_with(|| SessionState::new(durable_last))
+        sessions.entry(sid.to_string()).or_insert_with(|| {
+            let log_epoch = persistence
+                .and_then(|persistence| persistence.log_epoch(sid))
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            SessionState::new(durable_last, log_epoch)
+        })
+    }
+
+    /// Adopt the durable session's persisted epoch. The agent's first events
+    /// can beat `register_session` and create this state under a
+    /// process-minted epoch; the persisted one is what a cursor must survive a
+    /// restart under, so it wins as soon as the session is registered.
+    fn adopt_persisted_epoch(&mut self, sid: &str, persistence: Option<&SessionPersistence>) {
+        if let Some(epoch) = persistence.and_then(|persistence| persistence.log_epoch(sid)) {
+            if epoch != self.log_epoch {
+                self.log_epoch = epoch;
+            }
+        }
     }
 
     pub(super) fn head(&self) -> LogHead {
@@ -114,12 +138,15 @@ fn is_host_record_type(type_: &str) -> bool {
 /// counter live events use.
 pub(super) struct RelaySeqAuthority {
     pub(super) sessions: Arc<Mutex<HashMap<String, SessionState>>>,
+    /// Weak: the persistence owns this authority.
+    pub(super) persistence: std::sync::Weak<SessionPersistence>,
 }
 
 impl SeqAuthority for RelaySeqAuthority {
     fn allocate_after(&self, session_id: &str, floor: u64) -> u64 {
         let mut sessions = self.sessions.lock();
-        let state = SessionState::entry(&mut sessions, session_id, floor);
+        let persistence = self.persistence.upgrade();
+        let state = SessionState::entry(&mut sessions, session_id, floor, persistence.as_deref());
         state.last_seq = state.last_seq.max(floor).saturating_add(1);
         state.last_seq
     }
@@ -184,6 +211,39 @@ impl WsRelaySink {
             .unwrap_or(0)
     }
 
+    /// The epoch of `sid`'s log: the durable session's persisted epoch when it
+    /// has one, else this process's state.
+    fn current_log_epoch(&self, sid: &str) -> Option<String> {
+        self.persistence
+            .as_ref()
+            .and_then(|persistence| persistence.log_epoch(sid))
+            .or_else(|| {
+                self.sessions
+                    .lock()
+                    .get(sid)
+                    .map(|state| state.log_epoch.clone())
+            })
+    }
+
+    /// Where `sid`'s log stands right now, without creating any state: this
+    /// process's log when it has one, else the durable session's persisted
+    /// epoch and frontier. `None` for a session nothing knows.
+    #[must_use]
+    pub fn log_head(&self, sid: &str) -> Option<LogHead> {
+        if let Some(state) = self.sessions.lock().get(sid) {
+            let mut head = state.head();
+            if let Some(epoch) = self.persistence.as_ref().and_then(|p| p.log_epoch(sid)) {
+                head.log_epoch = epoch;
+            }
+            return Some(head);
+        }
+        let persistence = self.persistence.as_ref()?;
+        Some(LogHead {
+            log_epoch: persistence.log_epoch(sid)?,
+            head_seq: persistence.last_seq(sid).ok()?,
+        })
+    }
+
     /// Head of `sid`'s log under the already-held `sessions` lock, creating
     /// the state (seeded at the durable frontier) when this process has not
     /// published to the session yet.
@@ -193,7 +253,9 @@ impl WsRelaySink {
         sid: &str,
     ) -> LogHead {
         let durable_last = self.durable_last_seq(sid);
-        SessionState::entry(sessions, sid, durable_last).head()
+        let state = SessionState::entry(sessions, sid, durable_last, self.persistence.as_deref());
+        state.adopt_persisted_epoch(sid, self.persistence.as_deref());
+        state.head()
     }
 
     /// Assign a seq to a relay event, persist it, append it to the ring and
@@ -243,14 +305,26 @@ impl WsRelaySink {
                     ),
                 }
             }
-            _ => self.publish_locked(
-                sid,
-                type_,
-                payload,
-                tier,
-                Persist::Skip,
-                Self::absorb_persist_error,
-            ),
+            persistence => {
+                let result = self.publish_locked(
+                    sid,
+                    type_,
+                    payload,
+                    tier,
+                    Persist::Skip,
+                    Self::absorb_persist_error,
+                );
+                // A live-only event took a seq the JSONL will never hold: the
+                // frontier is now ahead of the disk. Recorded outside the
+                // `sessions` lock (the writer queue is taken before it).
+                if let Some(persistence) = persistence {
+                    if let Some(state) = self.sessions.lock().get_mut(sid) {
+                        state.head_ahead_of_durable = true;
+                    }
+                    persistence.note_head_ahead_of_durable(sid);
+                }
+                result
+            }
         };
         match result {
             Ok(event) => event,
@@ -325,7 +399,9 @@ impl WsRelaySink {
     ) -> Result<SequencedEvent, E> {
         let mut sessions = self.sessions.lock();
         let durable_last = self.durable_last_seq(sid);
-        let state = SessionState::entry(&mut sessions, sid, durable_last);
+        let state =
+            SessionState::entry(&mut sessions, sid, durable_last, self.persistence.as_deref());
+        state.adopt_persisted_epoch(sid, self.persistence.as_deref());
         if durable_last > state.last_seq {
             // Nothing but the relay allocates seqs, so the durable frontier
             // can never lead. Adopt it rather than collide with the log.
@@ -468,11 +544,19 @@ impl WsRelaySink {
     /// (`logEpoch`, `headSeq`) read under that same lock comes back too:
     /// events with `seq <= head_seq` are replay, anything above is live.
     ///
+    /// `log_epoch` is the epoch the cursor was issued under. A cursor from a
+    /// different epoch (the host restarted without durable history), or one
+    /// ahead of the log's head, replays nothing meaningful: that is
+    /// [`ReplayResult::Stale`] too, with no registration, and the client
+    /// takes a snapshot instead. Without a cursor the epoch is ignored; a
+    /// cursor sent without one is checked against the head only.
+    ///
     /// Returns the new client id + the receiver the write loop drains.
     pub async fn subscribe(
         &self,
         sid: &str,
         last_seq: Option<u64>,
+        log_epoch: Option<&str>,
     ) -> (
         ClientId,
         mpsc::UnboundedReceiver<SequencedEvent>,
@@ -502,6 +586,17 @@ impl WsRelaySink {
         // at registration below, closing the `forget_session` race.
         if !self.knows_session(sid) {
             return (client_id, rx, ReplayResult::NotFound, None);
+        }
+        // A cursor from another epoch cannot be replayed: answer before any
+        // disk read. Re-checked under the lock at registration.
+        if let Some(epoch) = log_epoch {
+            if self.current_log_epoch(sid).is_some_and(|current| current != epoch) {
+                info!(
+                    "[ws] subscribe cursor under a stale log epoch for session {}",
+                    crate::logging::redact_session_id(sid)
+                );
+                return (client_id, rx, ReplayResult::Stale, None);
+            }
         }
 
         let gate = self.replay_gate(sid).await;
@@ -648,6 +743,15 @@ impl WsRelaySink {
                 return (client_id, rx, ReplayResult::NotFound, None);
             }
             let head = self.session_head_locked(&mut sessions, sid);
+            if log_epoch.is_some_and(|epoch| epoch != head.log_epoch) || cursor > head.head_seq {
+                info!(
+                    "[ws] subscribe cursor {cursor} does not belong to the log of session {} \
+                     (head {})",
+                    crate::logging::redact_session_id(sid),
+                    head.head_seq
+                );
+                return (client_id, rx, ReplayResult::Stale, None);
+            }
             self.register(client_id, sid, tx.clone());
             let count = by_seq.len() as u64;
             for event in by_seq.into_values() {
@@ -790,6 +894,16 @@ impl WsRelaySink {
             return;
         };
         let persistence = Arc::clone(persistence);
+        // A live-only event that beat registration found no catalog entry to
+        // mark: apply the remembered mark now (outside the `sessions` lock).
+        let head_ahead = self
+            .sessions
+            .lock()
+            .get(sid)
+            .is_some_and(|state| state.head_ahead_of_durable);
+        if head_ahead {
+            persistence.note_head_ahead_of_durable(sid);
+        }
         // No writer yet (registration raced a delete): the buffer stays put.
         let _ = persistence.with_ordered_sender(sid, (), |()| {
             self.flush_pre_registration_locked(&persistence, sid);

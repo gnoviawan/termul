@@ -1809,7 +1809,7 @@ async fn record_agent_switch_shares_one_seq_with_the_live_event() {
         Arc::clone(&persistence),
     ));
     let sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-coll", None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-coll", None, None).await;
     let chunk = |text: &str| TestPayload {
         agent_id: "a".to_string(),
         session_id: "sess-coll".to_string(),
@@ -1887,7 +1887,7 @@ async fn record_agent_switch_reaches_other_sinks_once_and_stays_one_durable_reco
     ));
     let capture = Arc::new(CapturingSink::default());
     let sinks: Vec<Arc<dyn EventSink>> = vec![capture.clone(), relay.clone()];
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-fan", None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-fan", None, None).await;
 
     record_agent_switch(
         &persistence,

@@ -202,7 +202,7 @@ describe('web-protocol.types — error codes (AC2)', () => {
 
 describe('web-protocol.types — versioned handshake contract (AD-15)', () => {
   it('pins the protocol version and client id length cap shared with the Rust host', () => {
-    expect(WS_PROTOCOL_VERSION).toBe(2)
+    expect(WS_PROTOCOL_VERSION).toBe(3)
     expect(MAX_CLIENT_ID_LEN).toBe(128)
   })
 

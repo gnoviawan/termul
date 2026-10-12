@@ -60,6 +60,11 @@ pub struct SessionPayloadMetadata {
     pub last_activity_at: u64,
     pub message_count: u64,
     pub last_seq: u64,
+    /// Identity of the log incarnation `last_seq` belongs to (host-minted;
+    /// absent only for a metadata value that carries none). A replay cursor
+    /// is `(logEpoch, lastSeq)`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_epoch: Option<String>,
     pub status: PersistedSessionStatus,
     /// Issue #838: true while a prompt turn is in progress — the LAST
     /// `user_prompt` still unmatched by `prompt_complete` (later prompts
@@ -210,6 +215,7 @@ pub fn materialize_session_payload(
         last_seq: records
             .last()
             .map_or(metadata.last_seq, |record| record.seq),
+        log_epoch: metadata.log_epoch.clone(),
         status: metadata.status.clone(),
         // Issue #838: "turn in progress" = the LAST `user_prompt` is still
         // unmatched (see `open_turn_from_records`), derived from the same

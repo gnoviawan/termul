@@ -105,6 +105,8 @@ export function mockAttachResult(
     rows: 24,
     latestSeq: 0,
     gap: false,
+    reset: false,
+    logEpoch: 'epoch-1',
     snapshot: mockTerminalStateSnapshot(),
     ...overrides
   }

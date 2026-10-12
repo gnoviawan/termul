@@ -209,7 +209,10 @@ async function attachLiveTurn(
 ): Promise<void> {
   const cursor = Math.max(payload.metadata.lastSeq ?? 0, maxPayloadSeq(payload))
   const transport = getAcpTransport()
-  transport.seedSessionCursor?.(id, cursor)
+  transport.seedSessionCursor?.(id, {
+    lastSeq: cursor,
+    logEpoch: payload.metadata.logEpoch ?? null
+  })
   let missing = false
   set((s) => {
     const session = s.sessions[id]

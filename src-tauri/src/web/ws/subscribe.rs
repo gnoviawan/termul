@@ -12,6 +12,11 @@ pub(super) struct SubscribePayload {
     /// Note: `Some(0)` is still a cursor and can be [`ReplayResult::Stale`] after ring eviction.
     #[serde(default)]
     last_seq: Option<u64>,
+    /// The log epoch `last_seq` was issued under (from an earlier subscribe,
+    /// snapshot or cursor reply). A different epoch — or a cursor ahead of the
+    /// log's head — is answered `stale` without registering.
+    #[serde(default)]
+    log_epoch: Option<String>,
 }
 
 /// Forward a subscription's events into the connection's outbound queue until
@@ -44,7 +49,7 @@ pub(super) async fn handle_subscribe(
             return WsReply::err(
                 id,
                 WsErrorCode::Unsupported,
-                format!("malformed subscribe payload (want sessionId, lastSeq): {e}"),
+                format!("malformed subscribe payload (want sessionId, lastSeq?, logEpoch?): {e}"),
             );
         }
     };
@@ -73,7 +78,13 @@ pub(super) async fn handle_subscribe(
     // stale/failure and lets grace cancellation happen only after resubscribe.
     let prior_clients = subscribed_clients.clients_for(&parsed.session_id);
 
-    let (client_id, rx, replay, _head) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
+    let (client_id, rx, replay, head) = relay
+        .subscribe(
+            &parsed.session_id,
+            parsed.last_seq,
+            parsed.log_epoch.as_deref(),
+        )
+        .await;
     match replay {
         ReplayResult::NotFound => {
             // Durable failure record for the desktop log sink (ws.rs runs on
@@ -91,7 +102,7 @@ pub(super) async fn handle_subscribe(
             WsReply::err(
                 id,
                 WsErrorCode::Stale,
-                "cursor is older than the event log; request an atomic session snapshot",
+                "cursor does not belong to the event log; request an atomic session snapshot",
             )
         }
         ReplayResult::Ok(replayed) => {
@@ -105,13 +116,16 @@ pub(super) async fn handle_subscribe(
                 question_rendezvous.cancel_disconnect_grace(&parsed.session_id);
             }
             spawn_event_forwarder(rx, out_tx.clone());
-            WsReply::ok(
-                id,
-                Some(json!({
-                    "sessionId": parsed.session_id,
-                    "replayed": replayed,
-                })),
-            )
+            let mut reply = json!({
+                "sessionId": parsed.session_id,
+                "replayed": replayed,
+            });
+            // Registration returns the head on every `Ok`.
+            if let Some(head) = head {
+                reply["logEpoch"] = json!(head.log_epoch);
+                reply["headSeq"] = json!(head.head_seq);
+            }
+            WsReply::ok(id, Some(reply))
         }
     }
 }

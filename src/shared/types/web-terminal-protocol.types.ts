@@ -87,6 +87,9 @@ export interface WebTerminalReplayFrame {
   terminalId: string
   chunks: Array<{ seq: number; data: number[] }>
   gap: boolean
+  /** Cursor from another epoch / ahead of the head: discard rendered output first. */
+  reset: boolean
+  logEpoch: string
   latestSeq: number
   snapshot: TerminalStateSnapshot
 }

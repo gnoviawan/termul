@@ -75,7 +75,7 @@ async fn reaper_keeps_agent_with_subscribed_durable_session() {
         false,
     );
     relay.seed_session_for_test("sess-chat");
-    let _keep = relay.subscribe("sess-chat", None).await;
+    let _keep = relay.subscribe("sess-chat", None, None).await;
 
     let mut unpinned = HashMap::new();
     unpinned.insert(
@@ -144,7 +144,7 @@ async fn still_unpinned_recheck_observes_late_pins() {
     relay.seed_session_for_test("sess-chat");
 
     assert!(agent_still_unpinned(&manager, &relay, &agent_id, &[]).await);
-    let keep = relay.subscribe("sess-chat", None).await;
+    let keep = relay.subscribe("sess-chat", None, None).await;
     assert!(
         !agent_still_unpinned(&manager, &relay, &agent_id, &[]).await,
         "a subscriber that arrived after the first pin check pins the agent"
@@ -170,7 +170,7 @@ async fn still_unpinned_recheck_sees_subscriber_on_disposed_session() {
     let swept = vec!["sess-gone".to_string()];
 
     assert!(agent_still_unpinned(&manager, &relay, &agent_id, &swept).await);
-    let keep = relay.subscribe("sess-gone", None).await;
+    let keep = relay.subscribe("sess-gone", None, None).await;
     assert!(
         !agent_still_unpinned(&manager, &relay, &agent_id, &swept).await,
         "a subscriber on a disposed session still pins the agent"
@@ -243,7 +243,7 @@ async fn reaper_disposes_unsubscribed_ephemeral_session_and_stops_agent() {
     let manager = Arc::new(AcpManager::new(vec![]));
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-warm");
-    let _keep = relay.subscribe("sess-warm", None).await;
+    let _keep = relay.subscribe("sess-warm", None, None).await;
     manager.install_test_agent_with_reap_state(
         AgentId("agent-warm".to_string()),
         set(&["sess-warm"]),

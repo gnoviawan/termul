@@ -81,7 +81,7 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
     relay.set_rendezvous(Arc::clone(&permissions));
     relay.set_question_rendezvous(Arc::clone(&questions));
     relay.seed_session_for_test("session-cleanup");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-cleanup", None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-cleanup", None, None).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     permissions.register(
         "permission-cleanup".to_string(),
@@ -154,7 +154,7 @@ async fn question_disconnect_grace_defers_cancel_until_expiry() {
     ));
     relay.set_question_rendezvous(Arc::clone(&questions));
     relay.seed_session_for_test("session-q-grace");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-q-grace", None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-q-grace", None, None).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     questions.register(
         "question-grace".to_string(),
@@ -201,7 +201,7 @@ async fn question_disconnect_grace_cancelled_by_resubscribe() {
     ));
     relay.set_question_rendezvous(Arc::clone(&questions));
     relay.seed_session_for_test("session-q-resub");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-q-resub", None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-q-resub", None, None).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     questions.register(
         "question-resub".to_string(),
@@ -219,7 +219,7 @@ async fn question_disconnect_grace_cancelled_by_resubscribe() {
     assert_eq!(relay.session_subscriber_count("session-q-resub"), 0);
 
     // A new subscriber arrives within the grace window.
-    let (_client2, _rx2, replay2, _) = relay.subscribe("session-q-resub", None).await;
+    let (_client2, _rx2, replay2, _) = relay.subscribe("session-q-resub", None, None).await;
     assert!(matches!(replay2, ReplayResult::Ok(0)));
     questions.cancel_disconnect_grace("session-q-resub");
 
@@ -236,7 +236,7 @@ async fn question_disconnect_grace_cancelled_by_resubscribe() {
 async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("session-cancelled-relay");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-cancelled-relay", None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-cancelled-relay", None, None).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     let subscribed = subscriptions_with("session-cancelled-relay", client_id);
 
@@ -560,7 +560,7 @@ async fn accepted_prompt_survives_disconnect_and_persists_completion_for_reconne
         event.type_ == "prompt_complete" && event.payload["turnId"] == "turn-resume"
     }));
 
-    let (_client_id, _events, reconnect_replay, _) = relay.subscribe("session-resume", Some(0)).await;
+    let (_client_id, _events, reconnect_replay, _) = relay.subscribe("session-resume", Some(0), None).await;
     assert!(matches!(reconnect_replay, ReplayResult::Ok(replayed) if replayed >= 2));
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
@@ -1980,7 +1980,7 @@ async fn delete_session_removes_host_persisted_record() {
     // the observer session first — otherwise its channel never lives to
     // receive the broadcast.
     relay.seed_session_for_test("s-other");
-    let (_client, mut rx, _replay, _) = relay.subscribe("s-other", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("s-other", None, None).await;
 
     let reply = handle_delete_session(
         "r1".to_string(),
@@ -2623,7 +2623,7 @@ fn relay_with_subscribed_permission(
     // Subscribe a client to the session (populates subscribed_clients via
     // the production subscribe path).
     relay.seed_session_for_test(session_id);
-    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None));
+    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None, None));
     let subs = subscriptions_with(session_id, client_id);
     // Emit a permission_request event through the sink (production path) so
     // the rendezvous snapshots a ticket.
@@ -2682,7 +2682,7 @@ fn handle_respond_permission_needs_no_subscription() {
         crate::web::permissions::PermissionRendezvous::default(),
     ));
     relay.seed_session_for_test("sess-B");
-    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None));
+    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None, None));
     let subs = subscriptions_with("sess-B", ClientId::new());
     relay.emit(&AcpEvent {
         sid: Some("sess-A".to_string()),
@@ -2747,7 +2747,7 @@ fn relay_with_subscribed_question(
         crate::web::permissions::QuestionRendezvous::default(),
     ));
     relay.seed_session_for_test(session_id);
-    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None));
+    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None, None));
     let subs = subscriptions_with(session_id, client_id);
     let options_value = serde_json::Value::Array(
         options
@@ -2823,7 +2823,7 @@ fn handle_answer_question_needs_no_subscription() {
         crate::web::permissions::QuestionRendezvous::default(),
     ));
     relay.seed_session_for_test("sess-B");
-    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None));
+    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None, None));
     let subs = subscriptions_with("sess-B", ClientId::new());
     relay.emit(&AcpEvent {
         sid: Some("sess-A".to_string()),
@@ -3917,7 +3917,7 @@ async fn handle_set_default_project_broadcasts_to_all_clients() {
     );
     // Subscribe a client to prove the broadcast reaches it.
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None).await;
 
     let reply = handle_set_default_project(
         "r1".to_string(),
@@ -4157,4 +4157,139 @@ async fn watch_requests_are_routed_by_handle_request() {
         assert_eq!(relay.fs_watches().subscriber_count(project), expect_subscribers);
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The log epoch travels on the wire: `subscribe`, `recover_session_snapshot`
+/// and `get_session_cursor` all report `(logEpoch, headSeq)`, and a cursor
+/// under another epoch or ahead of the head is answered `stale` without
+/// registering anything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn log_epoch_rides_subscribe_snapshot_and_cursor_replies() {
+    use crate::web::sink::{AcpEvent, EventSink};
+    let root = std::env::temp_dir().join(format!("termul-ws-epoch-{}", uuid::Uuid::new_v4()));
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(crate::acp::SessionRegistration {
+            session_id: "session-epoch".to_string(),
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+    for n in 0..3 {
+        relay.emit(&AcpEvent {
+            sid: Some("session-epoch".to_string()),
+            type_: "acp:tool_call",
+            payload: json!({"sessionId": "session-epoch", "n": n}),
+        });
+    }
+    let epoch = persistence.log_epoch("session-epoch").unwrap();
+    let (tx, _rx) = test_outbound();
+    let subs = Arc::new(Subscriptions::default());
+
+    // Cursor reply: the epoch the watermark is valid under + the allocated frontier.
+    let reply = handle_get_session_cursor(
+        "c1".to_string(),
+        &json!({ "sessionId": "session-epoch" }),
+        &relay,
+        HistoryMode::Server,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    let payload = reply.payload.unwrap();
+    assert_eq!(payload["logEpoch"], json!(epoch));
+    assert_eq!(payload["headSeq"], 3);
+
+    // A session the host does not know has no log: neither epoch nor head.
+    let reply = handle_get_session_cursor(
+        "c2".to_string(),
+        &json!({ "sessionId": "session-never-seen" }),
+        &relay,
+        HistoryMode::Server,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    let payload = reply.payload.unwrap();
+    assert_eq!(payload["watermark"], 0);
+    assert!(payload.get("logEpoch").is_none(), "{payload}");
+    assert!(payload.get("headSeq").is_none(), "{payload}");
+
+    // Same epoch, cursor below the head: resumes and reports the head.
+    let reply = handle_subscribe(
+        "s1".to_string(),
+        &json!({"sessionId": "session-epoch", "lastSeq": 1, "logEpoch": epoch}),
+        &relay,
+        &tx,
+        &subs,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    let payload = reply.payload.unwrap();
+    assert_eq!(payload["logEpoch"], json!(epoch));
+    assert_eq!(payload["headSeq"], 3);
+    assert_eq!(payload["replayed"], 2);
+    assert_eq!(subs.len(), 1);
+
+    // Another epoch, and a cursor ahead of the head: stale, nothing registered.
+    let other_subs = Arc::new(Subscriptions::default());
+    for (id, body) in [
+        ("s2", json!({"sessionId": "session-epoch", "lastSeq": 1, "logEpoch": "epoch-from-before-restart"})),
+        ("s3", json!({"sessionId": "session-epoch", "lastSeq": 50, "logEpoch": epoch})),
+    ] {
+        let reply = handle_subscribe(id.to_string(), &body, &relay, &tx, &other_subs).await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "stale", "{id}");
+    }
+    assert!(other_subs.is_empty());
+    assert_eq!(relay.session_subscriber_count("session-epoch"), 1);
+
+    // Snapshot reply: the epoch to continue under.
+    let reply = handle_recover_session_snapshot(
+        "r1".to_string(),
+        &json!({ "sessionId": "session-epoch" }),
+        &relay,
+        &tx,
+        &subs,
+        HistoryMode::Server,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    let payload = reply.payload.unwrap();
+    assert_eq!(payload["logEpoch"], json!(epoch));
+    assert_eq!(payload["headSeq"], 3);
+    assert_eq!(payload["watermark"], 3);
+
+    // A cursor sent without an epoch is checked against the head only.
+    let bare_subs = Arc::new(Subscriptions::default());
+    let reply = handle_subscribe(
+        "s0".to_string(),
+        &json!({"sessionId": "session-epoch", "lastSeq": 1}),
+        &relay,
+        &tx,
+        &bare_subs,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    let payload = reply.payload.unwrap();
+    assert_eq!(payload["logEpoch"], json!(epoch));
+    assert_eq!(payload["headSeq"], 3);
+    assert_eq!(payload["replayed"], 2);
+    let reply = handle_subscribe(
+        "s0b".to_string(),
+        &json!({"sessionId": "session-epoch", "lastSeq": 50}),
+        &relay,
+        &tx,
+        &bare_subs,
+    )
+    .await;
+    assert!(!reply.ok, "{reply:?}");
+    assert_eq!(reply.err.unwrap().code, "stale");
+
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }

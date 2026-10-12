@@ -337,16 +337,40 @@ async fn authenticate_refuses_bad_version_and_identity_with_screaming_codes() {
         let (tx, _rx) = mpsc::channel(8);
         for (payload, code) in [
             // Missing version, wrong version, non-numeric version.
-            (json!({"deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}), "PROTOCOL_VERSION_MISMATCH"),
-            (json!({"protocolVersion": 99, "deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}), "PROTOCOL_VERSION_MISMATCH"),
-            (json!({"protocolVersion": "1", "deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}), "PROTOCOL_VERSION_MISMATCH"),
+            (
+                json!({"deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}),
+                "PROTOCOL_VERSION_MISMATCH",
+            ),
+            (
+                json!({"protocolVersion": 99, "deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}),
+                "PROTOCOL_VERSION_MISMATCH",
+            ),
+            (
+                json!({"protocolVersion": "1", "deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}),
+                "PROTOCOL_VERSION_MISMATCH",
+            ),
             // Version wins over a bad identity AND a wrong token.
-            (json!({"deviceId": "", "clientInstanceId": "", "token": "WRONG"}), "PROTOCOL_VERSION_MISMATCH"),
+            (
+                json!({"deviceId": "", "clientInstanceId": "", "token": "WRONG"}),
+                "PROTOCOL_VERSION_MISMATCH",
+            ),
             // Identity beats a wrong token.
-            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "", "clientInstanceId": "c", "token": "WRONG"}), "INVALID_CLIENT_IDENTITY"),
-            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": 5, "clientInstanceId": "c", "token": "s3cret"}), "INVALID_CLIENT_IDENTITY"),
-            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "d", "token": "s3cret"}), "INVALID_CLIENT_IDENTITY"),
-            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "d", "clientInstanceId": oversized, "token": "s3cret"}), "INVALID_CLIENT_IDENTITY"),
+            (
+                json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "", "clientInstanceId": "c", "token": "WRONG"}),
+                "INVALID_CLIENT_IDENTITY",
+            ),
+            (
+                json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": 5, "clientInstanceId": "c", "token": "s3cret"}),
+                "INVALID_CLIENT_IDENTITY",
+            ),
+            (
+                json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "d", "token": "s3cret"}),
+                "INVALID_CLIENT_IDENTITY",
+            ),
+            (
+                json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "d", "clientInstanceId": oversized, "token": "s3cret"}),
+                "INVALID_CLIENT_IDENTITY",
+            ),
         ] {
             let mut ctx = gate_test_ctx(false);
             let reply = handle(
@@ -922,7 +946,8 @@ async fn list_preserved_live_attachment_offers_shared_claim_and_second_device_at
     assert!(!shared_claim.is_empty());
     assert_ne!(shared_claim, owner_claim, "the shared claim is distinct");
     assert_eq!(
-        terminals[0]["hasLiveAttachment"], json!(true),
+        terminals[0]["hasLiveAttachment"],
+        json!(true),
         "ownership info marks the live attachment"
     );
     // The owner's claim still verifies — the shared issuance did NOT
@@ -946,12 +971,19 @@ async fn list_preserved_live_attachment_offers_shared_claim_and_second_device_at
         &mut second_device,
     )
     .await;
-    assert!(second_attach.is_ok(), "second device attach: {second_attach:?}");
+    assert!(
+        second_attach.is_ok(),
+        "second device attach: {second_attach:?}"
+    );
     // The second device is now authorized for write access on the terminal.
     assert!(second_device.is_authorized(&id));
     // The write succeeds (the second device co-owns the PTY).
     let write_ok = handle(
-        gate_request("w2", "write", json!({"terminalId": id, "data": "echo hi\r"})),
+        gate_request(
+            "w2",
+            "write",
+            json!({"terminalId": id, "data": "echo hi\r"}),
+        ),
         &state,
         &tx,
         &mut second_device,
@@ -1234,14 +1266,21 @@ async fn audit_f1_dead_socket_releases_once_and_never_another_viewers_attachment
 
     // Second viewer joins through list_preserved's shared claim.
     let listed = handle(
-        gate_request("lp", "list_preserved", json!({"projectId": "audit-f1-dead"})),
+        gate_request(
+            "lp",
+            "list_preserved",
+            json!({"projectId": "audit-f1-dead"}),
+        ),
         &state,
         &tx_b,
         &mut b,
     )
     .await
     .expect("list");
-    let claim_b = listed["terminals"][0]["claim"].as_str().unwrap().to_string();
+    let claim_b = listed["terminals"][0]["claim"]
+        .as_str()
+        .unwrap()
+        .to_string();
     attach_terminal(&state, &tx_b, &mut b, &id, &claim_b).await;
     assert_eq!(live_attachments(&state, &id), 2);
 
@@ -1303,7 +1342,10 @@ async fn authenticate_resolves_capabilities_from_the_peer_and_registers_presence
     for (peer, allow, denied, may_write) in cases {
         let mut ctx = gate_test_ctx(false);
         ctx.capability_policy = capability_policy(peer, allow, denied);
-        assert!(!ctx.capabilities.write, "nothing granted before authenticate");
+        assert!(
+            !ctx.capabilities.write,
+            "nothing granted before authenticate"
+        );
         assert!(state.relay.presence().device("phone").is_none());
         handle(
             gate_request("a", "authenticate", handshake_payload("phone")),
@@ -1313,7 +1355,10 @@ async fn authenticate_resolves_capabilities_from_the_peer_and_registers_presence
         )
         .await
         .expect("authenticate");
-        assert_eq!(ctx.capabilities.write, may_write, "peer={peer:?} allow={allow} denied={denied}");
+        assert_eq!(
+            ctx.capabilities.write, may_write,
+            "peer={peer:?} allow={allow} denied={denied}"
+        );
         assert_eq!(ctx.capabilities.carrier, Carrier::TerminalWs);
         let presence = state.relay.presence().device("phone").expect("registered");
         assert_eq!(presence.connections, 1);
@@ -1346,7 +1391,11 @@ async fn view_only_terminal_connection_is_refused_every_mutation() {
         "list_preserved",
     ] {
         let refused = handle(
-            gate_request("m", mutation, json!({ "terminalId": "t1", "projectId": "p" })),
+            gate_request(
+                "m",
+                mutation,
+                json!({ "terminalId": "t1", "projectId": "p" }),
+            ),
             &state,
             &tx,
             &mut ctx,
@@ -1377,7 +1426,13 @@ async fn view_only_terminal_connection_is_refused_every_mutation() {
         "attach must reach claim verification: {attach:?}"
     );
     // Reads and detach bookkeeping stay available.
-    for view in ["get_cwd", "get_git_branch", "get_git_status", "get_exit_code", "detach"] {
+    for view in [
+        "get_cwd",
+        "get_git_branch",
+        "get_git_status",
+        "get_exit_code",
+        "detach",
+    ] {
         let outcome = handle(
             gate_request("v", view, json!({ "terminalId": "t1", "projectId": "p" })),
             &state,
@@ -1478,7 +1533,10 @@ async fn host_stop_closes_the_terminal_socket_and_releases_its_attachment_once()
     assert_eq!(live_attachments(&state, &id), 1);
 
     state.connections.shutdown.begin();
-    assert_eq!(state.connections.shutdown.drain(SOCKET_DRAIN_BOUND).await, 0);
+    assert_eq!(
+        state.connections.shutdown.drain(SOCKET_DRAIN_BOUND).await,
+        0
+    );
     let close = peer.wait_close().await.expect("close frame");
     assert_eq!(close, (1001, "host stopping".to_string()));
     tokio::time::timeout(Duration::from_secs(5), task)
@@ -1504,8 +1562,111 @@ async fn host_stop_does_not_wait_forever_on_a_stalled_terminal_peer() {
 
     state.connections.shutdown.begin();
     let started = tokio::time::Instant::now();
-    assert_eq!(state.connections.shutdown.drain(SOCKET_DRAIN_BOUND).await, 0);
+    assert_eq!(
+        state.connections.shutdown.drain(SOCKET_DRAIN_BOUND).await,
+        0
+    );
     assert_eq!(started.elapsed(), CLOSE_DRAIN_TIMEOUT);
     task.await.expect("terminal socket task did not panic");
-    assert!(peer.close.is_none(), "a stalled peer cannot have received a close");
+    assert!(
+        peer.close.is_none(),
+        "a stalled peer cannot have received a close"
+    );
+}
+
+/// An attach whose cursor belongs to another epoch replays the WHOLE retained
+/// log with `reset: true` and the terminal's current `logEpoch`, instead of
+/// skipping to the foreign cursor; the same cursor under the current epoch
+/// resumes without a reset.
+#[tokio::test]
+async fn attach_with_a_foreign_log_epoch_replays_everything_with_reset() {
+    let state = gate_test_state(None);
+    let (tx, mut rx) = mpsc::channel(64);
+    let mut owner = gate_test_ctx(true);
+    let spawned = handle(
+        gate_request("s", "spawn", json!({"projectId": "project-epoch"})),
+        &state,
+        &tx,
+        &mut owner,
+    )
+    .await
+    .expect("spawn");
+    let id = spawned["id"].as_str().unwrap().to_string();
+    let claim = spawned["claim"].as_str().unwrap().to_string();
+    let instance = state.pty.get(&id).expect("instance");
+    // Seed the retained log with chunks allocated like the flusher's.
+    let mut last = 0;
+    for byte in b"ab".iter().copied() {
+        let mut log = instance.output_log.write();
+        last = instance
+            .next_output_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        log.push_back(crate::pty::manager::TerminalOutputChunk {
+            seq: last,
+            data: vec![byte],
+        });
+    }
+    let retained: Vec<u64> = instance.output_log.read().iter().map(|c| c.seq).collect();
+
+    async fn replay_frame(rx: &mut mpsc::Receiver<Message>) -> Value {
+        loop {
+            let Message::Text(text) = rx.recv().await.expect("a frame") else {
+                continue;
+            };
+            let frame: Value = serde_json::from_str(&text).unwrap();
+            if frame["type"] == "replay" {
+                return frame;
+            }
+        }
+    }
+    let chunk_seqs = |frame: &Value| -> Vec<u64> {
+        frame["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chunk| chunk["seq"].as_u64().unwrap())
+            .collect()
+    };
+
+    let reply = handle(
+        gate_request(
+            "at-foreign",
+            "attach",
+            json!({"terminalId": id, "claim": claim, "lastSeq": last, "logEpoch": "epoch-of-another-spawn"}),
+        ),
+        &state,
+        &tx,
+        &mut owner,
+    )
+    .await
+    .expect("attach");
+    let frame = replay_frame(&mut rx).await;
+    assert_eq!(frame["reset"], true);
+    assert_eq!(frame["logEpoch"], json!(instance.log_epoch));
+    assert!(
+        chunk_seqs(&frame).starts_with(&retained),
+        "every retained chunk is replayed from the start: {:?} vs {retained:?}",
+        chunk_seqs(&frame)
+    );
+    assert_eq!(reply["reset"], true);
+    assert_eq!(reply["logEpoch"], json!(instance.log_epoch));
+
+    // The same cursor under the current epoch resumes: no reset, nothing at or below it.
+    let reply = handle(
+        gate_request(
+            "at-current",
+            "attach",
+            json!({"terminalId": id, "claim": claim, "lastSeq": last, "logEpoch": instance.log_epoch}),
+        ),
+        &state,
+        &tx,
+        &mut owner,
+    )
+    .await
+    .expect("attach");
+    let frame = replay_frame(&mut rx).await;
+    assert_eq!(frame["reset"], false);
+    assert!(chunk_seqs(&frame).iter().all(|seq| *seq > last));
+    assert_eq!(reply["reset"], false);
 }

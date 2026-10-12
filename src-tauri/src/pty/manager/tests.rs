@@ -34,12 +34,79 @@ async fn spawn_to_attach_snapshot_carries_spawn_time_cwd() {
     // Attach before any cwd-tracking event: the snapshot must already
     // carry the seeded spawn-time cwd.
     let instance = manager.get(&spawned.info.id).expect("spawned instance");
-    let replay = instance.subscribe_from(0);
+    let replay = instance.subscribe_from(0, None);
     let attach = manager.build_attach_result(&instance, &replay);
     assert_eq!(attach.snapshot.cwd.as_deref(), Some(cwd.as_str()));
 
     manager.kill(&spawned.info.id).await.expect("kill pty");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A terminal log cursor is `(logEpoch, lastSeq)` per spawn: a cursor from
+/// another epoch, or ahead of the head, replays from the start with `reset`
+/// instead of silently skipping output.
+#[tokio::test]
+async fn subscribe_from_resets_a_cursor_from_another_epoch_or_ahead_of_the_head() {
+    let manager = crate::web::test_pty_manager();
+    let first = manager
+        .spawn(SpawnOptions::default(), None)
+        .await
+        .expect("spawn first pty");
+    let second = manager
+        .spawn(SpawnOptions::default(), None)
+        .await
+        .expect("spawn second pty");
+    let a = manager.get(&first.info.id).expect("first instance");
+    let b = manager.get(&second.info.id).expect("second instance");
+    assert_ne!(a.log_epoch, b.log_epoch, "every spawn mints its own epoch");
+
+    let fresh = a.subscribe_from(0, None);
+    assert!(!fresh.reset);
+    assert_eq!(fresh.log_epoch, a.log_epoch);
+
+    let same_epoch = a.subscribe_from(0, Some(&a.log_epoch));
+    assert!(
+        !same_epoch.reset,
+        "a cursor under the current epoch resumes"
+    );
+
+    let other_epoch = a.subscribe_from(0, Some(&b.log_epoch));
+    assert!(other_epoch.reset, "another spawn's epoch cannot be resumed");
+
+    let ahead = a.subscribe_from(u64::MAX, Some(&a.log_epoch));
+    assert!(ahead.reset, "a cursor ahead of the head cannot be resumed");
+
+    manager.kill(&first.info.id).await.expect("kill first");
+    manager.kill(&second.info.id).await.expect("kill second");
+}
+
+/// A log emptied by eviction keeps its head: a cursor at the head resumes
+/// (no spurious reset) and `latest_seq` does not rewind to 0.
+#[tokio::test]
+async fn subscribe_from_keeps_the_head_when_eviction_emptied_the_log() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(SpawnOptions::default(), None)
+        .await
+        .expect("spawn pty");
+    let instance = manager.get(&spawned.info.id).expect("instance");
+    // Stop the shell first so no late output races the manipulated log.
+    manager.kill(&spawned.info.id).await.expect("kill pty");
+    instance.output_log.write().clear();
+    instance.next_output_seq.store(7, Ordering::Relaxed);
+
+    let replay = instance.subscribe_from(7, Some(&instance.log_epoch));
+
+    assert!(!replay.reset, "a cursor at the head is valid");
+    assert_eq!(replay.latest_seq, 7);
+    assert!(replay.chunks.is_empty());
+    assert!(instance.subscribe_from(8, Some(&instance.log_epoch)).reset);
+
+    // A cursor BEHIND the head of an emptied log lost output: a gap, no reset.
+    let behind = instance.subscribe_from(3, Some(&instance.log_epoch));
+    assert!(!behind.reset);
+    assert!(behind.gap, "eviction emptied the log after the cursor");
+    assert!(!replay.gap, "a cursor at the head has lost nothing");
 }
 
 #[cfg(target_os = "windows")]
@@ -572,6 +639,8 @@ fn test_terminal_attach_result_serializes_camelcase_without_claim() {
         rows: 32,
         latest_seq: 87,
         gap: false,
+        reset: false,
+        log_epoch: "epoch-1".to_string(),
         snapshot: TerminalStateSnapshot {
             cwd: Some("/repo".to_string()),
             git_branch: Some("dev".to_string()),
@@ -638,6 +707,8 @@ fn test_terminal_attach_result_serializes_camelcase_without_claim() {
             "rows",
             "latestSeq",
             "gap",
+            "reset",
+            "logEpoch",
             "snapshot"
         ]
         .into_iter()
@@ -897,8 +968,7 @@ async fn web_listed_reap_flips_with_listing_age_on_live_instance() {
     assert!(!instance.is_orphan_reapable(ordinary_timeout));
 
     // Backdate the listing stamp past a tiny window: the web rule fires.
-    *instance.last_web_listed.write() =
-        Some(std::time::Instant::now() - Duration::from_secs(120));
+    *instance.last_web_listed.write() = Some(std::time::Instant::now() - Duration::from_secs(120));
     let tiny_window = Duration::from_secs(60);
     assert!(instance.is_web_listed_reapable(tiny_window));
 
@@ -937,8 +1007,7 @@ async fn detaching_last_web_attachment_restarts_the_web_listed_window() {
     // Attached (and last stamped) 10 minutes ago: observable only because of
     // the live attachment.
     instance.add_web_attachment();
-    *instance.last_web_listed.write() =
-        Some(std::time::Instant::now() - Duration::from_secs(600));
+    *instance.last_web_listed.write() = Some(std::time::Instant::now() - Duration::from_secs(600));
     assert!(!instance.is_web_listed_reapable(window));
 
     // The viewer detaches: the window restarts NOW, so the PTY is not reapable
@@ -950,8 +1019,7 @@ async fn detaching_last_web_attachment_restarts_the_web_listed_window() {
         "a just-detached terminal keeps a full window"
     );
     // After a full window with nobody listing it, it is reapable again.
-    *instance.last_web_listed.write() =
-        Some(std::time::Instant::now() - Duration::from_secs(301));
+    *instance.last_web_listed.write() = Some(std::time::Instant::now() - Duration::from_secs(301));
     assert!(instance.is_web_listed_reapable(window));
 
     manager.force_kill(&spawned.info.id).await.unwrap();

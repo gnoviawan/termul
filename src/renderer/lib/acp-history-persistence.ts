@@ -49,6 +49,11 @@ export interface SessionIndexEntry {
    * `get_session_cursor` remains the authoritative functional cursor.
    */
   lastSeq?: number
+  /**
+   * Identity of the session log incarnation `lastSeq` belongs to. Host-minted
+   * (absent on entries from older hosts); a cursor is only valid with it.
+   */
+  logEpoch?: string
   status: SessionStatus
   /** Agent-owned metadata mirror created from ACP `session/list`; no local transcript. */
   discovered?: boolean

@@ -68,6 +68,13 @@ pub struct TerminalAttachResult {
     pub rows: u16,
     pub latest_seq: u64,
     pub gap: bool,
+    /// The cursor did not belong to this terminal's log (another epoch, or
+    /// ahead of the head): the replay starts from the retained log's first
+    /// chunk and the client must discard what it has rendered.
+    pub reset: bool,
+    /// Epoch of this spawn's output log; the client's next cursor is
+    /// `(logEpoch, latestSeq)`.
+    pub log_epoch: String,
     pub snapshot: TerminalStateSnapshot,
 }
 
@@ -103,7 +110,9 @@ pub struct TerminalOutputChunk {
 pub struct TerminalReplay {
     pub chunks: Vec<TerminalOutputChunk>,
     pub gap: bool,
+    pub reset: bool,
     pub latest_seq: u64,
+    pub log_epoch: String,
     pub receiver: tokio::sync::broadcast::Receiver<TerminalOutputChunk>,
 }
 

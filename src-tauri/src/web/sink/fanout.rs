@@ -266,7 +266,7 @@ impl WsRelaySink {
     /// first event seed the session first.
     #[cfg(test)]
     pub(crate) fn seed_session_for_test(&self, sid: &str) {
-        SessionState::entry(&mut self.sessions.lock(), sid, 0);
+        SessionState::entry(&mut self.sessions.lock(), sid, 0, self.persistence.as_deref());
     }
 
     /// Test helper: fill the lossy ring without flushing (exercises drop-oldest).

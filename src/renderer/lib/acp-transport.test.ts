@@ -144,6 +144,14 @@ class FakeWebSocket {
     pongTimeoutMs: 75_000
   }
   snapshotEvents: unknown[] = []
+  /** Epoch of the fake host's session logs; a cursor under another epoch is `stale`. */
+  logEpoch = 'epoch-A'
+  /**
+   * The fake host's allocated seq frontier, independent of any cursor. `null`
+   * keeps the permissive default (reply head = the cursor, no ahead-of-head
+   * `stale`); a number makes a cursor above it `stale` like the real host.
+   */
+  hostHeadSeq: number | null = null
   snapshotFailureCodes = new Map<string, string>()
   /** Session payloads served by `get_session_payload`; unknown ids → not_found. */
   sessionPayloads: Record<string, unknown> = {}
@@ -208,7 +216,7 @@ class FakeWebSocket {
     }
     if (req.type === 'subscribe') {
       if (this.holdSubscribe) return
-      const payload = req.payload as { sessionId: string; lastSeq?: number }
+      const payload = req.payload as { sessionId: string; lastSeq?: number; logEpoch?: string }
       const failureCode = this.subscribeFailureCodes.get(payload.sessionId)
       if (this.failSubscribeSessions.has(payload.sessionId) || failureCode) {
         this.emitReply({
@@ -218,7 +226,11 @@ class FakeWebSocket {
         })
         return
       }
-      if (payload.lastSeq === 99) {
+      if (
+        payload.lastSeq === 99 ||
+        (payload.logEpoch && payload.logEpoch !== this.logEpoch) ||
+        (this.hostHeadSeq !== null && (payload.lastSeq ?? 0) > this.hostHeadSeq)
+      ) {
         this.emitReply({
           id: req.id,
           ok: false,
@@ -229,7 +241,12 @@ class FakeWebSocket {
       this.emitReply({
         id: req.id,
         ok: true,
-        payload: { sessionId: payload.sessionId, replayed: 0 }
+        payload: {
+          sessionId: payload.sessionId,
+          replayed: 0,
+          logEpoch: this.logEpoch,
+          headSeq: this.hostHeadSeq ?? payload.lastSeq ?? 0
+        }
       })
       return
     }
@@ -247,7 +264,13 @@ class FakeWebSocket {
       this.emitReply({
         id: req.id,
         ok: true,
-        payload: { sessionId: payload.sessionId, watermark: 42, events: this.snapshotEvents }
+        payload: {
+          sessionId: payload.sessionId,
+          watermark: 42,
+          headSeq: 42,
+          logEpoch: this.logEpoch,
+          events: this.snapshotEvents
+        }
       })
       return
     }
@@ -1310,10 +1333,178 @@ describe('WsAcpTransport', () => {
 
     await transport.subscribeSession('s1', 99)
 
-    expect(recoveries).toEqual([{ sessionId: 's1', watermark: 42, events: sock.snapshotEvents }])
-    expect(transport.getSessionCursor('s1')).toBe(42)
+    expect(recoveries).toEqual([
+      {
+        sessionId: 's1',
+        watermark: 42,
+        headSeq: 42,
+        logEpoch: 'epoch-A',
+        events: sock.snapshotEvents
+      }
+    ])
+    expect(transport.getSessionCursor('s1')).toEqual({ lastSeq: 42, logEpoch: 'epoch-A' })
     const types = sock.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)
     expect(types).toContain('recover_session_snapshot')
+    transport.dispose()
+  })
+
+  it('sends the stored log epoch with the cursor', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    transport.seedSessionCursor('s1', { lastSeq: 7, logEpoch: 'epoch-A' })
+    await transport.subscribeSession('s1', undefined, true)
+
+    expect(findSentRequest(sock, 'subscribe')?.payload).toEqual({
+      sessionId: 's1',
+      lastSeq: 7,
+      logEpoch: 'epoch-A'
+    })
+    transport.dispose()
+  })
+
+  it('stores the epoch a cursor-less subscribe is answered with', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const logEpochs = (transport as unknown as { logEpochs: Map<string, string> }).logEpochs
+
+    await transport.subscribeSession('s1', null, true)
+
+    expect(logEpochs.get('s1')).toBe('epoch-A')
+    transport.dispose()
+  })
+
+  it('a nonzero cursor sent without an epoch is unverified: the host answers with an epoch and a snapshot replaces the cursor', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const recoveries: unknown[] = []
+    transport.setRecoveryHandler(async (recovery) => {
+      recoveries.push(recovery)
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.subscribeSession('s1', 5, true)
+
+    expect(findSentRequest(sock, 'subscribe')?.payload).toEqual({ sessionId: 's1', lastSeq: 5 })
+    expect(recoveries).toHaveLength(1)
+    expect(transport.getSessionCursor('s1')).toEqual({ lastSeq: 42, logEpoch: 'epoch-A' })
+    transport.dispose()
+  })
+
+  it('a cursor above the host head is stale even under the right epoch', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const recoveries: unknown[] = []
+    transport.setRecoveryHandler(async (recovery) => {
+      recoveries.push(recovery)
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.hostHeadSeq = 10
+    transport.seedSessionCursor('s1', { lastSeq: 30, logEpoch: 'epoch-A' })
+
+    await transport.subscribeSession('s1', undefined, true)
+
+    expect(recoveries).toHaveLength(1)
+    transport.dispose()
+  })
+
+  it('a cursor from an old host epoch gets stale, installs a snapshot and keeps delivering new events', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const recoveries: unknown[] = []
+    transport.setRecoveryHandler(async (recovery) => {
+      recoveries.push(recovery)
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    // The host restarted without durable history: it now serves epoch-B while
+    // this client holds cursor 500 from epoch-A.
+    sock.logEpoch = 'epoch-B'
+    transport.seedSessionCursor('s1', { lastSeq: 500, logEpoch: 'epoch-A' })
+
+    await transport.subscribeSession('s1', undefined, true)
+
+    expect(recoveries).toHaveLength(1)
+    expect(transport.getSessionCursor('s1')).toEqual({ lastSeq: 42, logEpoch: 'epoch-B' })
+    // Seqs of the new log restart low: they must not be dropped as duplicates of epoch-A's 500.
+    const chunks: unknown[] = []
+    transport.onEvent('acp:message_chunk', (p) => chunks.push(p))
+    sock.emit({ sid: 's1', seq: 43, type: 'message_chunk', payload: { n: 43 } })
+    await flushEvents(transport)
+    expect(chunks).toEqual([{ n: 43 }])
+    transport.dispose()
+  })
+
+  it('snapshots when a subscribe sent without an epoch is answered under another epoch', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const recoveries: unknown[] = []
+    transport.setRecoveryHandler(async (recovery) => {
+      recoveries.push(recovery)
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    transport.seedSessionCursor('s1', { lastSeq: 9, logEpoch: 'epoch-A' })
+    // A cursor-less live subscribe (explicit null) carries no epoch, so the host cannot refuse it.
+    sock.logEpoch = 'epoch-B'
+    await transport.subscribeSession('s1', null, true)
+
+    expect(recoveries).toHaveLength(1)
+    expect(transport.getSessionCursor('s1')?.logEpoch).toBe('epoch-B')
+    transport.dispose()
+  })
+
+  it('drops the stored cursor when the host answers under another epoch and the snapshot fails', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    transport.setRecoveryHandler(async () => {})
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.snapshotFailureCodes.set('s1', 'agent_crashed')
+    transport.seedSessionCursor('s1', { lastSeq: 9, logEpoch: 'epoch-A' })
+    // The cursor-less subscribe cannot be refused by the host; its reply names epoch-B.
+    sock.logEpoch = 'epoch-B'
+    ;(transport as unknown as { logEpochs: Map<string, string> }).logEpochs.set('s1', 'epoch-OLD')
+
+    await expect(transport.subscribeSession('s1', null, true)).rejects.toBeDefined()
+
+    // The old pair must not survive to be re-presented against another log.
+    expect(transport.getSessionCursor('s1')).toBeNull()
+    transport.dispose()
+  })
+
+  it('a zero cursor still records the epoch and clears the previous pair', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    transport.seedSessionCursor('s1', { lastSeq: 9, logEpoch: 'epoch-A' })
+    transport.seedSessionCursor('s1', { lastSeq: 0, logEpoch: 'epoch-B' })
+    const internals = transport as unknown as {
+      lastSeq: Map<string, number>
+      logEpochs: Map<string, string>
+    }
+    expect(internals.lastSeq.has('s1')).toBe(false)
+    expect(internals.logEpochs.get('s1')).toBe('epoch-B')
     transport.dispose()
   })
 
@@ -1353,6 +1544,34 @@ describe('WsAcpTransport', () => {
     expect(recoveries).toEqual([{ sessionId: 's1', degraded: true }])
     transport.dispose()
   })
+  it('a degraded recovery remembers the epoch the host answered with, so the next cursor goes out verified', async () => {
+    class LiveOnlySocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.historyMode = 'live_only'
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: LiveOnlySocket as unknown as typeof WebSocket
+    })
+    transport.setRecoveryHandler(async () => {})
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.subscribeSession('s1', 99)
+    // Events of the new log advance the cursor; only the stored epoch can verify it.
+    ;(transport as unknown as { lastSeq: Map<string, number> }).lastSeq.set('s1', 4)
+    await transport.subscribeSession('s1', undefined, true)
+
+    expect(findSentRequest(sock, 'subscribe')?.payload).toEqual({
+      sessionId: 's1',
+      lastSeq: 4,
+      logEpoch: 'epoch-A'
+    })
+    transport.dispose()
+  })
+
   it('captures the reopen generation before the snapshot round-trip and threads it to recovery', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',

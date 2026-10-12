@@ -22,7 +22,10 @@ fn temp_dir(label: &str) -> PathBuf {
     path
 }
 
-async fn relay_with_session(label: &str, sid: &str) -> (Arc<WsRelaySink>, Arc<SessionPersistence>, PathBuf) {
+async fn relay_with_session(
+    label: &str,
+    sid: &str,
+) -> (Arc<WsRelaySink>, Arc<SessionPersistence>, PathBuf) {
     let root = temp_dir(label);
     let cwd = root.join("cwd");
     std::fs::create_dir_all(&cwd).unwrap();
@@ -65,7 +68,7 @@ fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<SequencedEvent>) -> Vec<S
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_host_record_and_relay_events_get_distinct_contiguous_seqs() {
     let (relay, persistence, root) = relay_with_session("concurrent", "sess-c").await;
-    let (_client, mut rx, _replay, head) = relay.subscribe("sess-c", None).await;
+    let (_client, mut rx, _replay, head) = relay.subscribe("sess-c", None, None).await;
     assert_eq!(head.unwrap().head_seq, 0);
 
     let mut workers = Vec::new();
@@ -97,7 +100,11 @@ async fn concurrent_host_record_and_relay_events_get_distinct_contiguous_seqs() 
     titler.join().unwrap();
 
     let live: Vec<u64> = drain(&mut rx).iter().map(|event| event.seq).collect();
-    assert_eq!(live, (1..=220).collect::<Vec<u64>>(), "live stream is the contiguous seq run, in order");
+    assert_eq!(
+        live,
+        (1..=220).collect::<Vec<u64>>(),
+        "live stream is the contiguous seq run, in order"
+    );
     assert_eq!(relay.session_watermark("sess-c"), 220);
 
     persistence.flush_session("sess-c").await.unwrap();
@@ -118,7 +125,7 @@ async fn concurrent_host_record_and_relay_events_get_distinct_contiguous_seqs() 
 async fn host_record_without_a_writer_allocates_nothing() {
     let (relay, persistence, root) = relay_with_session("no-writer", "sess-w").await;
     persistence.shutdown().await.unwrap();
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-w", None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-w", None, None).await;
 
     let error = relay
         .record_host_event("sess-w", "agent_switch", json!({"sessionId": "sess-w"}))
@@ -158,14 +165,21 @@ async fn snapshot_and_live_stream_partition_the_log_exactly() {
     let snapshot_seqs: Vec<u64> = snapshot.iter().map(|event| event.seq).collect();
     assert!(snapshot_seqs.iter().all(|seq| *seq <= head.head_seq));
     let live_seqs: Vec<u64> = drain(&mut rx).iter().map(|event| event.seq).collect();
-    assert!(live_seqs.iter().all(|seq| *seq > head.head_seq), "no live event at or below the head");
+    assert!(
+        live_seqs.iter().all(|seq| *seq > head.head_seq),
+        "no live event at or below the head"
+    );
     let all: BTreeSet<u64> = snapshot_seqs.iter().chain(&live_seqs).copied().collect();
     assert_eq!(
         all.len(),
         snapshot_seqs.len() + live_seqs.len(),
         "no event is delivered twice"
     );
-    assert_eq!(all, (1..=230).collect::<BTreeSet<u64>>(), "no hole between snapshot and live");
+    assert_eq!(
+        all,
+        (1..=230).collect::<BTreeSet<u64>>(),
+        "no hole between snapshot and live"
+    );
 
     // Quiesced: the snapshot of the full log equals the durable replay.
     persistence.flush_session("sess-s").await.unwrap();
@@ -213,11 +227,14 @@ async fn interrupted_marker_seq_comes_from_the_relay_allocator() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_record_notifies_history_changed_exactly_once() {
     let (relay, persistence, root) = relay_with_session("history-nudge", "sess-h").await;
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-h", None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-h", None, None).await;
 
     for (type_, payload) in [
         ("agent_switch", json!({"sessionId": "sess-h"})),
-        ("local_title_generated", json!({"sessionId": "sess-h", "title": "t"})),
+        (
+            "local_title_generated",
+            json!({"sessionId": "sess-h", "title": "t"}),
+        ),
     ] {
         relay.record_host_event("sess-h", type_, payload).unwrap();
         let mut nudges = 0;
