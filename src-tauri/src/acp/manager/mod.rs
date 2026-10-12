@@ -1494,15 +1494,23 @@ impl AcpManager {
 
     /// Kill an agent: stop its driver thread and join it. Idempotent.
     pub async fn kill(&self, agent_id: &AgentId) -> Result<(), String> {
-        let entry = self.agents.lock().remove(agent_id);
+        // The intentional-kill flag is set under the same `agents` lock the
+        // driver's self-reap removes its entry under, so a teardown that races
+        // this kill either removed the entry first (nothing to kill) or reads
+        // the flag set: no `acp:agent_disconnected` for a kill we initiated (L4).
+        let entry = {
+            let mut agents = self.agents.lock();
+            let entry = agents.remove(agent_id);
+            if let Some(entry) = &entry {
+                entry.killed.store(true, Ordering::Release);
+            }
+            entry
+        };
         let Some(mut entry) = entry else {
             // Already gone — idempotent success.
             return Ok(());
         };
         log::info!("[acp] killing agent {agent_id}");
-        // Mark this as an intentional kill so the driver teardown stays silent
-        // (no `acp:agent_disconnected` for a kill we initiated — L4).
-        entry.killed.store(true, Ordering::Release);
 
         // That kill emits no lifecycle event, so a watcher of the roster is
         // told directly that the agent is gone. The flag is set first: a
