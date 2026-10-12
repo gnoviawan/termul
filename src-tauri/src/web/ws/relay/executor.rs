@@ -86,7 +86,7 @@ pub(in crate::web::ws) struct KeyedExecutor {
 
 /// Why a job was not accepted.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Saturated;
+pub(in crate::web::ws) struct Saturated;
 
 impl KeyedExecutor {
     pub(in crate::web::ws) fn new(fault: CancellationToken) -> Self {

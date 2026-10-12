@@ -178,14 +178,9 @@ impl OutboundSender {
     }
 
     /// The signal the relay supervisor ends the connection on: raised by an
-    /// overflow, or by [`Self::close`].
+    /// overflow or an executor fault.
     pub(crate) fn closing(&self) -> &CancellationToken {
         &self.overflow.closing
-    }
-
-    /// Ask the supervisor to end the connection (no `Close` frame is sent).
-    pub(crate) fn close(&self) {
-        self.overflow.closing.cancel();
     }
 
     /// Whether both senders feed the same connection queue (watch-hub

@@ -28,14 +28,17 @@ mod reader;
 mod watchdog;
 mod writer;
 
-pub(super) use conn::{dispatch_connection_text, ConnState, HandlerEnv, Subscriptions};
+pub(super) use conn::{ConnState, HandlerEnv, Subscriptions};
+#[cfg(test)]
+pub(super) use conn::dispatch_connection_text;
+#[cfg(test)]
 pub(super) use executor::KeyedExecutor;
 pub(crate) use outbound::{
     outbound_channel, EnqueueOutcome, OutboundSender, OUTBOUND_QUEUE_CAPACITY,
 };
-pub(super) use watchdog::{
-    watchdog_is_stale, BACKGROUND_TIMEOUT, PING_INTERVAL, PONG_TIMEOUT, WATCHDOG_TICK,
-};
+pub(super) use watchdog::{PING_INTERVAL, PONG_TIMEOUT};
+#[cfg(test)]
+pub(super) use watchdog::{watchdog_is_stale, BACKGROUND_TIMEOUT, WATCHDOG_TICK};
 
 // ---------------------------------------------------------------------------
 // WS upgrade handler + relay loop (AC1 + AC9 + AC10)
