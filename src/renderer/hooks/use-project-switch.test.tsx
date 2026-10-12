@@ -1,5 +1,6 @@
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useChatHistoryEntries } from '@/components/chat/use-chat-history-entries'
 import { mockProject, seedProjectStore } from '@/lib/test-utils/store'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { _resetEphemeralSessionIdsForTesting, useAcpStore } from '@/stores/acp-store'
@@ -120,5 +121,38 @@ describe('useProjectSwitch (client-only)', () => {
     const lifetime = useAgentChatLifetimeStore.getState()
     expect(lifetime.focusSessionByProject.p2).toBeUndefined()
     expect(lifetime.retainedByProject.p2).toEqual(['kept'])
+  })
+})
+
+describe('useChatHistoryEntries (Unassigned bucket)', () => {
+  const DAY = 24 * 60 * 60 * 1000
+
+  beforeEach(() => {
+    useAcpStore.setState(FRESH)
+    seedProjectStore([mockProject({ id: 'p1', name: 'Alpha', path: '/work' })], 'p1')
+  })
+
+  it('lists host-unassigned chats in their own group after every recency group', () => {
+    const now = Date.now()
+    useAcpStore.setState({
+      sessionIndex: [
+        { ...indexEntry('today-chat', 'p1', now), cwd: '/work' },
+        { ...indexEntry('yesterday-chat', 'p1', now - DAY), cwd: '/work' },
+        { ...indexEntry('earlier-chat', 'p1', now - 7 * DAY), cwd: '/work' },
+        { ...indexEntry('stray', '__unassigned__', now), cwd: '/elsewhere' },
+        { ...indexEntry('other', 'p2', now), cwd: '/work' }
+      ]
+    })
+    const { result } = renderHook(() => useChatHistoryEntries({ query: '' }))
+
+    expect(result.current.groups.map((g) => g.group)).toEqual([
+      'Today',
+      'Yesterday',
+      'Earlier',
+      'Unassigned'
+    ])
+    const bucket = result.current.groups.find((g) => g.group === 'Unassigned')
+    expect(bucket?.entries.map((e) => e.id)).toEqual(['stray'])
+    expect(result.current.mergedEntries.map((e) => e.id)).not.toContain('other')
   })
 })
