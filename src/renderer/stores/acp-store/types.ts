@@ -489,7 +489,7 @@ export interface AcpState {
    * (which fires when `openHistorySession` is in flight — both can show).
    */
   transportReconnecting: boolean
-  /** Sessions recovered live-only after stale because no server snapshot exists. */
+  /** Sessions whose stream could not be fully re-synced: recovered live-only (no server snapshot exists) or resubscribe retries ran out. */
   degradedRecoverySessions: Record<SessionId, true>
 
   // Actions — lifecycle

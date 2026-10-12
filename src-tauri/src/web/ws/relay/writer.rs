@@ -1,5 +1,5 @@
 //! The write loop: drains the bounded outbound queue into the socket and
-//! emits keepalive Pings. It owns the sink, so it also owns the close
+//! emits keepalive Pings and `heartbeat` frames. It owns the sink, so it also owns the close
 //! handshakes (the CAP-11 protocol-error close and the host-stop
 //! `Close(1001)`). Liveness is NOT checked here: a send to a peer that stopped
 //! reading blocks this loop, which is exactly when the independent watchdog
@@ -12,7 +12,7 @@ use crate::web::connection_runtime::{send_close, send_going_away};
 
 use super::super::*;
 use super::outbound::OutboundReceiver;
-use super::watchdog::{PING_INTERVAL, PING_PAYLOAD};
+use super::watchdog::{HEARTBEAT_INTERVAL, PING_INTERVAL, PING_PAYLOAD};
 
 /// A socket send that gave way to the host stopping or failed.
 enum SendEnd {
@@ -60,11 +60,19 @@ where
     // interval after connect (a fresh connection needs no keepalive yet and the
     // auth_required frame has just been queued).
     ping.tick().await;
+    // The heartbeat has its own timer arm and goes straight to the socket,
+    // never through the queue: the client reads liveness from it while the
+    // queue is busy or full. It does not touch the watchdog, which only reads
+    // what the peer sends.
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    heartbeat.tick().await;
     loop {
         // `biased` fixes the poll order: the stop first (ahead of everything
-        // queued), then the keepalive, then the queue. The Ping must precede
-        // the queue: a queue that never empties would otherwise starve the
-        // keepalive and the watchdog would reap a healthy, merely busy peer.
+        // queued), then the keepalive and the heartbeat, then the queue. They
+        // must precede the queue: a queue that never empties would otherwise
+        // starve the keepalive and the watchdog would reap a healthy, merely
+        // busy peer.
         let sent = tokio::select! {
             biased;
             () = stop.cancelled() => Err(SendEnd::Stopping),
@@ -72,6 +80,13 @@ where
                 // The browser auto-pongs at the protocol layer; that Pong (or
                 // any client→server frame) is what the watchdog watches.
                 send(&mut sink, Message::Ping(PING_PAYLOAD.to_vec().into()), &stop).await
+            }
+            _ = heartbeat.tick() => {
+                let frame = json!({ "type": WS_HEARTBEAT_TYPE });
+                match encode(&frame, || "heartbeat".to_string()) {
+                    Some(text) => send(&mut sink, Message::Text(text.into()), &stop).await,
+                    None => Ok(()),
+                }
             }
             frame = out_rx.recv() => match frame {
                 None => return,
@@ -126,6 +141,12 @@ where
                     })
                 };
                 if let Some(text) = text {
+                    send(sink, Message::Text(text.into()), stop).await?;
+                }
+            }
+            Outbound::Gap(sid) => {
+                let frame = json!({ "type": WS_GAP_TYPE, "sid": sid });
+                if let Some(text) = encode(&frame, || "gap frame".to_string()) {
                     send(sink, Message::Text(text.into()), stop).await?;
                 }
             }

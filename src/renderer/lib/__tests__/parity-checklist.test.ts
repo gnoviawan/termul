@@ -2168,3 +2168,30 @@ describe('Client identity boot parity (AD-4)', () => {
     }
   })
 })
+
+describe('Bounded delivery parity (host heartbeat, gap frame)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const RELAY = join(SRC_TAURI, 'web', 'ws', 'relay')
+
+  it('the client reads the host heartbeat interval the Rust write loop uses', () => {
+    const watchdog = readFileSync(join(RELAY, 'watchdog.rs'), 'utf-8')
+    const seconds = /HEARTBEAT_INTERVAL: Duration = Duration::from_secs\((\d+)\)/.exec(watchdog)
+    expect(seconds).not.toBeNull()
+    const liveness = readFileSync(join(LIB_DIR, 'acp-transport', 'liveness.ts'), 'utf-8')
+    const clientMs = /HOST_HEARTBEAT_INTERVAL_MS = ([\d_]+)/.exec(liveness)
+    expect(clientMs).not.toBeNull()
+    expect(Number(clientMs?.[1].replaceAll('_', ''))).toBe(Number(seconds?.[1]) * 1000)
+  })
+
+  it('the gap and heartbeat frame type names match on both ends', () => {
+    const relay = readFileSync(join(RELAY, 'mod.rs'), 'utf-8')
+    expect(relay).toMatch(/WS_GAP_TYPE: &str = "gap"/)
+    expect(relay).toMatch(/WS_HEARTBEAT_TYPE: &str = "heartbeat"/)
+    const protocol = readFileSync(
+      join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts'),
+      'utf-8'
+    )
+    expect(protocol).toMatch(/type: 'gap'/)
+    expect(protocol).toMatch(/type: 'heartbeat'/)
+  })
+})

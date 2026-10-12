@@ -179,8 +179,11 @@ async fn a_reply_that_cannot_be_queued_closes_the_connection() {
     // attempt yet).
     emit_chunk(&host);
     Conn::settle().await;
+    // The subscription's own channel sits between the sink and the queue: let
+    // the forwarder move each chunk across so the queue itself fills.
     for _ in 0..OUTBOUND_QUEUE_CAPACITY {
         emit_chunk(&host);
+        tokio::task::yield_now().await;
     }
     Conn::settle().await;
     assert!(!conn.relay_finished().await);

@@ -59,7 +59,8 @@ use crate::web::connection_runtime::ConnectionRuntime;
 use crate::web::permissions::DEFAULT_PERMISSION_RECONNECT_GRACE;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::{
-    broadcast_chat_history_changed, broadcast_projects_changed, ClientId, ReplayResult, WsRelaySink,
+    broadcast_chat_history_changed, broadcast_projects_changed, ClientId, EventStream, ReplayResult,
+    StreamItem, WsRelaySink,
 };
 use crate::web::store::WebStore;
 
@@ -93,7 +94,7 @@ use subscribe::*;
 use watch::*;
 
 // The wire-contract `pub` surface stays reachable at `web::ws::*`.
-pub use relay::{ws_upgrade, AUTH_REQUIRED_TYPE, WS_BATCH_TYPE};
+pub use relay::{ws_upgrade, AUTH_REQUIRED_TYPE, WS_BATCH_TYPE, WS_GAP_TYPE, WS_HEARTBEAT_TYPE};
 pub(crate) use relay::{EnqueueOutcome, Outbound, OutboundSender};
 #[cfg(test)]
 pub(crate) use relay::{outbound_channel, OutboundReceiver, OUTBOUND_QUEUE_CAPACITY};
@@ -141,9 +142,11 @@ impl SequencedEvent {
 /// `WS_RELAY_TIERS` const.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReliabilityTier {
-    /// Drop-oldest on a slow client (high-frequency streams).
+    /// Dropped for a slow client, followed by a `gap` frame (high-frequency
+    /// streams the client can rebuild from a snapshot).
     Lossy,
-    /// Never dropped (unbounded per-client queue in this story).
+    /// Never dropped silently: a subscriber that cannot take it loses its
+    /// connection and resumes by cursor.
     Reliable,
     /// Dedup by turn-id before enqueue.
     Idempotent,
@@ -174,7 +177,7 @@ pub fn tier_of(type_: &str) -> ReliabilityTier {
 
 /// The `authenticate` protocol version this host speaks. Mirrors the TS
 /// `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
-pub const WS_PROTOCOL_VERSION: u32 = 3;
+pub const WS_PROTOCOL_VERSION: u32 = 4;
 
 /// Longest accepted `deviceId` / `clientInstanceId`, in bytes.
 pub const MAX_CLIENT_ID_LEN: usize = 128;

@@ -45,7 +45,7 @@ mod fanout;
 mod session_log;
 mod watch_bridge;
 
-pub use fanout::ClientId;
+pub use fanout::{ClientId, EventStream, StreamItem};
 pub use watch_bridge::{broadcast_chat_history_changed, broadcast_projects_changed};
 
 use fanout::ClientSub;
@@ -243,18 +243,23 @@ impl EventSink for TauriEventSink {
 /// events and host-authored records alike are numbered here (see
 /// `session_log`). `emit` is called from the per-agent driver thread (via
 /// [`fan_out`]) and is NON-blocking: it assigns `seq`, persists, appends to
-/// the log, and fans out to each subscribed client's
-/// `tokio::sync::mpsc::UnboundedSender` in one critical section.
+/// the log, and fans out to each subscribed client's bounded
+/// `tokio::sync::mpsc::Sender` in one critical section.
 ///
 /// # Tier handling (AC5)
 ///
+/// Fan-out never waits: a subscription's channel holds
+/// `DEFAULT_CLIENT_QUEUE_CAPACITY` items (plus room for the replay it started
+/// with, capped at the event-log capacity) and a slow peer cannot grow it.
+///
 /// - **Lossy** events (`message_chunk`, `tool_call_update`, `commands_update`,
-///   `plan_update`) are buffered in a per-client bounded ring; when the ring
-///   is full the OLDEST lossy event is dropped. The write loop drains the ring
-///   via [`Self::flush_lossy`]. Under a slow WS peer the write loop stalls, the
-///   ring fills, and drop-oldest triggers — the lossy backpressure path.
-/// - **Reliable** events are sent on the unbounded per-client channel and are
-///   never dropped (full ack/backpressure + timeout=deny lands in Story 1.7).
+///   `plan_update`) that find the channel full are dropped, and one
+///   [`StreamItem::Gap`] is queued ahead of the next event of that session
+///   once the channel has room again. The client answers a gap with an atomic
+///   snapshot (and notices a hole by seq even without one).
+/// - **Reliable** events that find the channel full close the peer's
+///   connection (through the token handed to `subscribe`) instead of being
+///   dropped: the client reconnects and resumes by cursor.
 /// - **Idempotent** (`prompt_complete`) is deduped by turn-id when the payload
 ///   carries one; the current `PromptCompleteEvent` has no turn-id field, so
 ///   the relay sends it through (like reliable) and the client dedups by
@@ -275,8 +280,8 @@ pub struct WsRelaySink {
     session_subs: Mutex<HashMap<String, HashSet<ClientId>>>,
     /// Bounded per-session ring capacity (default 4096, AC4).
     event_log_capacity: usize,
-    /// Per-client lossy ring capacity (drop-oldest threshold, AC5).
-    lossy_capacity: usize,
+    /// Capacity of each subscription's bounded channel into its connection.
+    client_queue_capacity: usize,
     /// Server-side permission rendezvous (Story 1.7). `None` on the desktop
     /// path (the browser-less flow uses the `acp_respond_permission` Tauri
     /// command directly). When set, `emit` snapshots `acp:permission_request`
@@ -354,26 +359,28 @@ const DEFAULT_PRE_REGISTRATION_CAPACITY: usize = 256;
 
 /// Default per-session event-log capacity (AC4).
 pub const DEFAULT_EVENT_LOG_CAPACITY: usize = 4096;
-/// Default per-client lossy ring capacity (drop-oldest threshold).
-const DEFAULT_LOSSY_CAPACITY: usize = 256;
+/// Default capacity of each subscription's bounded channel into its
+/// connection (the bound a slow peer can add to the host's memory).
+const DEFAULT_CLIENT_QUEUE_CAPACITY: usize = 256;
 
 impl WsRelaySink {
     /// Create a live relay sink with default capacities
-    /// (`event_log_capacity = 4096`, `lossy_capacity = 256`).
+    /// (`event_log_capacity = 4096`, `client_queue_capacity = 256`).
     #[must_use]
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_EVENT_LOG_CAPACITY, DEFAULT_LOSSY_CAPACITY)
+        Self::with_capacity(DEFAULT_EVENT_LOG_CAPACITY, DEFAULT_CLIENT_QUEUE_CAPACITY)
     }
 
-    /// Create a live relay sink with explicit capacities (AC4 + AC5).
+    /// Create a live relay sink with explicit capacities: the per-session
+    /// event log and each subscription's bounded channel.
     #[must_use]
-    pub fn with_capacity(event_log_capacity: usize, lossy_capacity: usize) -> Self {
+    pub fn with_capacity(event_log_capacity: usize, client_queue_capacity: usize) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             clients: Mutex::new(HashMap::new()),
             session_subs: Mutex::new(HashMap::new()),
             event_log_capacity: event_log_capacity.max(1),
-            lossy_capacity: lossy_capacity.max(1),
+            client_queue_capacity: client_queue_capacity.max(1),
             rendezvous: Mutex::new(None),
             question_rendezvous: Mutex::new(None),
             turn_watermark: crate::web::permissions::TurnWatermark::new(),
@@ -419,11 +426,11 @@ impl WsRelaySink {
     }
 
     /// Create a live relay sink with a custom per-session event-log capacity and
-    /// the default per-client lossy ring capacity (AC4 + AC5). Used by
+    /// the default per-subscription channel capacity. Used by
     /// `termul-server` to thread `ServerConfig::event_log_capacity`.
     #[must_use]
     pub fn with_log_capacity(event_log_capacity: usize) -> Self {
-        Self::with_capacity(event_log_capacity, DEFAULT_LOSSY_CAPACITY)
+        Self::with_capacity(event_log_capacity, DEFAULT_CLIENT_QUEUE_CAPACITY)
     }
 
     #[must_use]
@@ -431,7 +438,7 @@ impl WsRelaySink {
         event_log_capacity: usize,
         persistence: Arc<SessionPersistence>,
     ) -> Self {
-        let mut sink = Self::with_capacity(event_log_capacity, DEFAULT_LOSSY_CAPACITY);
+        let mut sink = Self::with_capacity(event_log_capacity, DEFAULT_CLIENT_QUEUE_CAPACITY);
         // Eagerly restoring completed turn IDs for every session on startup
         // requires a full JSONL scan of all sessions (completed_turn_ids →
         // replay_after → load_jsonl per session). With 1000+ sessions this

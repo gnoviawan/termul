@@ -5,12 +5,13 @@
 //! goes through the shared prompt-turn service exactly as on `/ws` and desktop.
 //! A missing interpreter fails loudly; `TERMUL_SKIP_REAL_LOOP_TESTS=1` skips.
 
+use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::web::prompt_turn::{
     accept_prompt_turn, complete_prompt_turn, PromptAdmission, PromptTurnRequest,
 };
 use crate::web::sink::ReplayResult;
-use crate::web::{SequencedEvent, WsRelaySink};
+use crate::web::{EventStream, StreamItem, WsRelaySink};
 use std::time::Duration;
 
 const MOCK_AGENT: &str = r#"
@@ -141,7 +142,7 @@ struct Harness {
     relay: Arc<WsRelaySink>,
     agent_id: AgentId,
     session_id: SessionId,
-    rx: mpsc::UnboundedReceiver<SequencedEvent>,
+    rx: EventStream,
     dir: PathBuf,
     /// Durable store shared by relay and manager (`start_with_persistence`).
     persistence: Option<Arc<SessionPersistence>>,
@@ -228,7 +229,7 @@ impl Harness {
             .expect("mock session");
         let session_id = session.session_id;
         relay.seed_session_for_test(&session_id.0);
-        let (_client, rx, replay, _) = relay.subscribe(&session_id.0, None, None).await;
+        let (_client, rx, replay, _) = relay.subscribe(&session_id.0, None, None, &CancellationToken::new()).await;
         assert!(matches!(replay, ReplayResult::Ok(_)));
         Some(Self {
             acp,
@@ -285,17 +286,20 @@ impl Harness {
     async fn events_through_terminator(&mut self) -> Vec<(String, serde_json::Value)> {
         let mut seen = Vec::new();
         loop {
-            let event = tokio::time::timeout(Duration::from_secs(30), self.rx.recv())
-                .await
-                .expect("terminator arrives")
-                .expect("subscription open");
+            let Some(StreamItem::Event(event)) =
+                tokio::time::timeout(Duration::from_secs(30), self.rx.recv())
+                    .await
+                    .expect("terminator arrives")
+            else {
+                panic!("subscription ended or produced a gap before the terminator");
+            };
             let done = event.type_ == "prompt_complete";
             seen.push((event.type_.clone(), event.payload.clone()));
             if done {
                 break;
             }
         }
-        while let Ok(Some(event)) =
+        while let Ok(Some(StreamItem::Event(event))) =
             tokio::time::timeout(Duration::from_millis(400), self.rx.recv()).await
         {
             seen.push((event.type_.clone(), event.payload.clone()));

@@ -404,8 +404,11 @@ pub(super) async fn handle_recover_session_snapshot(
         return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
     }
     let prior_clients = subscribed_clients.clients_for(&parsed.session_id);
-    let (client_id, rx, events, head) =
-        match relay.subscribe_snapshot(&parsed.session_id).await {
+    let (client_id, stream, events, head) =
+        match relay
+            .subscribe_snapshot(&parsed.session_id, out_tx.closing())
+            .await
+        {
             Ok(result) => result,
             Err(error) => {
                 if relay.persistence().is_some_and(|persistence| {
@@ -438,7 +441,7 @@ pub(super) async fn handle_recover_session_snapshot(
     if let Some(question_rendezvous) = relay.question_rendezvous() {
         question_rendezvous.cancel_disconnect_grace(&parsed.session_id);
     }
-    spawn_event_forwarder(rx, out_tx.clone());
+    spawn_event_forwarder(stream, out_tx.clone());
     WsReply::ok(
         id,
         Some(json!({

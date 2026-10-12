@@ -19,16 +19,17 @@ pub(super) struct SubscribePayload {
     log_epoch: Option<String>,
 }
 
-/// Forward a subscription's events into the connection's outbound queue until
-/// the subscription or the connection ends. Reliable: an event waits for room
+/// Forward a subscription's stream into the connection's outbound queue until
+/// the subscription or the connection ends. Reliable: an item waits for room
 /// (the connection closes if the peer stays full), it is never dropped.
-pub(super) fn spawn_event_forwarder(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<SequencedEvent>,
-    out_tx: OutboundSender,
-) {
+pub(super) fn spawn_event_forwarder(mut stream: EventStream, out_tx: OutboundSender) {
     tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            if out_tx.enqueue(Outbound::Event(event)).await != EnqueueOutcome::Enqueued {
+        while let Some(item) = stream.recv().await {
+            let frame = match item {
+                StreamItem::Event(event) => Outbound::Event(event),
+                StreamItem::Gap(sid) => Outbound::Gap(sid),
+            };
+            if out_tx.enqueue(frame).await != EnqueueOutcome::Enqueued {
                 break;
             }
         }
@@ -78,11 +79,12 @@ pub(super) async fn handle_subscribe(
     // stale/failure and lets grace cancellation happen only after resubscribe.
     let prior_clients = subscribed_clients.clients_for(&parsed.session_id);
 
-    let (client_id, rx, replay, head) = relay
+    let (client_id, stream, replay, head) = relay
         .subscribe(
             &parsed.session_id,
             parsed.last_seq,
             parsed.log_epoch.as_deref(),
+            out_tx.closing(),
         )
         .await;
     match replay {
@@ -115,7 +117,7 @@ pub(super) async fn handle_subscribe(
             if let Some(question_rendezvous) = relay.question_rendezvous() {
                 question_rendezvous.cancel_disconnect_grace(&parsed.session_id);
             }
-            spawn_event_forwarder(rx, out_tx.clone());
+            spawn_event_forwarder(stream, out_tx.clone());
             let mut reply = json!({
                 "sessionId": parsed.session_id,
                 "replayed": replayed,

@@ -25,6 +25,12 @@ use super::elapsed_ms;
 /// (60–300s) yet light enough not to spam a recovering link.
 pub(in crate::web::ws) const PING_INTERVAL: Duration = Duration::from_secs(20);
 
+/// Host heartbeat interval: the write loop sends a `heartbeat` frame this
+/// often, straight to the socket, so a client can tell a live host from a dead
+/// link without a ping round trip. The client treats 2.5 intervals of silence
+/// as a dead link.
+pub(in crate::web::ws) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+
 /// How long without ANY client→server frame (a Pong answering our keepalive
 /// Ping, a request, or a client Ping) before the server declares the
 /// connection half-open and tears it down. ~3.5× the ping interval to absorb

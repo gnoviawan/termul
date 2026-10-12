@@ -29,8 +29,8 @@ import {
 import { WEB_TERMINAL_ERROR_CODES } from './web-terminal-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 26 event types including durable user prompts, host records, switch markers + worktree renames', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(26)
+  it('exports exactly 28 event types including durable user prompts, host records, switch markers, worktree renames + delivery frames', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(28)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -70,6 +70,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('fs_watch_ended')
     // Story 16 (CAP-5): host worktree branch rename (agent-level broadcast).
     expect(WS_EVENT_TYPES).toContain('worktree_branch_renamed')
+    // Delivery frames (no seq): gap after a LOSSY drop, host heartbeat.
+    expect(WS_EVENT_TYPES).toContain('gap')
+    expect(WS_EVENT_TYPES).toContain('heartbeat')
     expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
     expect(WS_REQUEST_TYPES).toContain('open_persisted_session')
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
@@ -202,7 +205,7 @@ describe('web-protocol.types — error codes (AC2)', () => {
 
 describe('web-protocol.types — versioned handshake contract (AD-15)', () => {
   it('pins the protocol version and client id length cap shared with the Rust host', () => {
-    expect(WS_PROTOCOL_VERSION).toBe(3)
+    expect(WS_PROTOCOL_VERSION).toBe(4)
     expect(MAX_CLIENT_ID_LEN).toBe(128)
   })
 
@@ -276,7 +279,9 @@ describe('web-protocol.types — reliability tier registry (AC5)', () => {
       'usage_update',
       'auth_required',
       'projects_changed',
-      'worktree_branch_renamed'
+      'worktree_branch_renamed',
+      'gap',
+      'heartbeat'
     ]
     for (const type of reliable) {
       expect(WS_EVENT_TIERS[type]).toBe('reliable')

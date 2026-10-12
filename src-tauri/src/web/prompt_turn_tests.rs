@@ -2,6 +2,7 @@
 //! the in-crate fake agent (`FakeDriver`: real `DriverState` single-flight,
 //! accept hook, and the same terminator helpers as the real command loop).
 
+use tokio_util::sync::CancellationToken;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,7 +18,7 @@ use crate::acp::session_persistence::{
 use crate::acp::{AcpManager, AgentId, SessionId};
 use crate::web::permissions::TurnClaim;
 use crate::web::sink::ReplayResult;
-use crate::web::WsRelaySink;
+use crate::web::{StreamItem, WsRelaySink};
 
 const AGENT: &str = "agent-turns";
 const SESSION: &str = "sess-turns";
@@ -285,7 +286,7 @@ async fn error_timeout_crash_and_cancel_turns_end_with_exactly_one_terminator() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_prompt_is_never_delivered_after_a_chunk_of_its_turn() {
     let env = env(Vec::new(), true).await;
-    let (_client, mut rx, replay, _) = env.relay.subscribe(SESSION, Some(0), None).await;
+    let (_client, mut rx, replay, _) = env.relay.subscribe(SESSION, Some(0), None, &CancellationToken::new()).await;
     assert!(matches!(replay, ReplayResult::Ok(_)));
 
     run_prompt_turn(&env.acp, &env.relay, request(Some("t1")))
@@ -294,7 +295,7 @@ async fn user_prompt_is_never_delivered_after_a_chunk_of_its_turn() {
 
     let mut order = Vec::new();
     while let Ok(event) = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await {
-        let Some(event) = event else { break };
+        let Some(StreamItem::Event(event)) = event else { break };
         order.push((event.seq, event.type_.clone()));
         if event.type_ == "prompt_complete" {
             break;

@@ -41,6 +41,8 @@ pub(crate) use outbound::{
 pub(crate) use outbound::{OutboundReceiver, FULL_QUEUE_ATTEMPT};
 pub(super) use watchdog::{PING_INTERVAL, PONG_TIMEOUT};
 #[cfg(test)]
+pub(super) use watchdog::HEARTBEAT_INTERVAL;
+#[cfg(test)]
 pub(super) use watchdog::{watchdog_is_stale, BACKGROUND_TIMEOUT, WATCHDOG_TICK};
 
 // ---------------------------------------------------------------------------
@@ -54,6 +56,9 @@ pub(crate) enum Outbound {
     Event(SequencedEvent),
     /// A reply to a client request.
     Reply(WsReply),
+    /// LOSSY events of this session were dropped for the peer: the top-level
+    /// `{"type":"gap","sid":..}` frame tells it to install a snapshot.
+    Gap(String),
     /// Terminal close handshake (CAP-11: after a binary-frame protocol error).
     /// The channel is FIFO, so everything enqueued ahead of it (the
     /// `unsupported` error reply) is flushed first; the write loop then sends
@@ -68,6 +73,14 @@ pub const AUTH_REQUIRED_TYPE: &str = "auth_required";
 /// — the write loop packs a drained burst into one frame; the client unwraps
 /// inner events through the same `handleEvent` path (per-event seq intact).
 pub const WS_BATCH_TYPE: &str = "events";
+
+/// Top-level frame type telling a client that LOSSY events of a session were
+/// dropped for it: `{"type":"gap","sid":"..."}`. It carries no `seq`.
+pub const WS_GAP_TYPE: &str = "gap";
+
+/// Top-level host liveness frame, `{"type":"heartbeat"}`, written straight to
+/// the socket every `HEARTBEAT_INTERVAL` (`watchdog.rs`). It carries no `seq`.
+pub const WS_HEARTBEAT_TYPE: &str = "heartbeat";
 
 /// Max events per batched frame — a burst drains in ≤this-sized slices so a
 /// sustained flood still yields progressively (no unbounded flush latency).

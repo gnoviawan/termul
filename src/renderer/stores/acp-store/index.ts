@@ -206,7 +206,7 @@ async function installTransportRecovery(
               [recovery.sessionId]: {
                 ...session,
                 lastError:
-                  'Connection recovered live-only; events emitted while disconnected may be missing.'
+                  'This session could not be fully re-synced; events emitted while disconnected may be missing.'
               }
             }
           : state.sessions

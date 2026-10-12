@@ -1,4 +1,5 @@
 use super::*;
+use tokio_util::sync::CancellationToken;
 use crate::acp::PersistedEventRecord;
 
 #[test]
@@ -1809,7 +1810,7 @@ async fn record_agent_switch_shares_one_seq_with_the_live_event() {
         Arc::clone(&persistence),
     ));
     let sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-coll", None, None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-coll", None, None, &CancellationToken::new()).await;
     let chunk = |text: &str| TestPayload {
         agent_id: "a".to_string(),
         session_id: "sess-coll".to_string(),
@@ -1836,7 +1837,7 @@ async fn record_agent_switch_shares_one_seq_with_the_live_event() {
     persistence.flush_session("sess-coll").await.unwrap();
 
     let mut live = Vec::new();
-    while let Ok(event) = rx.try_recv() {
+    while let Ok(crate::web::StreamItem::Event(event)) = rx.try_recv() {
         // `seq = 0` nudges (chat_history_changed) are not log events.
         if event.seq > 0 {
             live.push((event.seq, event.type_));
@@ -1887,7 +1888,7 @@ async fn record_agent_switch_reaches_other_sinks_once_and_stays_one_durable_reco
     ));
     let capture = Arc::new(CapturingSink::default());
     let sinks: Vec<Arc<dyn EventSink>> = vec![capture.clone(), relay.clone()];
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-fan", None, None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-fan", None, None, &CancellationToken::new()).await;
 
     record_agent_switch(
         &persistence,
@@ -1925,7 +1926,7 @@ async fn record_agent_switch_reaches_other_sinks_once_and_stays_one_durable_reco
     }
 
     let mut live_switches = Vec::new();
-    while let Ok(event) = rx.try_recv() {
+    while let Ok(crate::web::StreamItem::Event(event)) = rx.try_recv() {
         if event.type_ == "agent_switch" {
             live_switches.push(event.seq);
         }

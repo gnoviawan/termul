@@ -56,7 +56,9 @@ import {
   handleProtocolVersionMismatch
 } from '@/lib/web-protocol-reload'
 import { webServerMcpProbe } from '@/lib/web-server-api'
+import { judgeEvent, SyncGate } from './cursor'
 import { toWsEventType } from './event-names'
+import { HOST_SILENCE_LIMIT_MS, HostLiveness } from './liveness'
 import {
   type AcpConnectionState,
   type AcpTransport,
@@ -123,23 +125,15 @@ const SEND_PROMPT_GRACE_MS = 10_000
 const FALLBACK_SEND_PROMPT_INACTIVITY_MS = 3_600_000
 
 /**
- * Application-level heartbeat interval. A client-emitted `ping` text request
- * refreshes the server keepalive watchdog (`last_activity`) through proxies
- * that strip WS-level Ping/Pong control frames (Cloudflare tunnels, etc.), so
- * a focused tab no longer false-positive drops at the server's ~75s
+ * Keepalive interval for the host's watchdog. A client-emitted `ping` text
+ * request refreshes the server keepalive watchdog (`last_activity`) through
+ * proxies that strip WS-level Ping/Pong control frames (Cloudflare tunnels,
+ * etc.), so a focused tab no longer false-positive drops at the server's ~75s
  * `PONG_TIMEOUT`. ~30s sits under both the 75s timeout and the 20s Ping
- * interval, so even a single tick keeps a healthy peer alive. Tunable.
+ * interval, so even a single tick keeps a healthy peer alive. The reply is NOT
+ * judged: liveness of the host comes from the frames it sends (`liveness.ts`).
  */
 const HEARTBEAT_INTERVAL_MS = 30_000
-
-/**
- * Consecutive ping failures that trigger a forced reconnect. A single missed
- * reply can be transient (slow link); two in a row (~60s+ of no round-trip) is
- * a strong half-open signal — the inbound ping keeps the *server's* watchdog
- * fresh, so without this the client could sit on a dead socket whose `onclose`
- * never fires (the server→client reply path is broken but client→server works).
- */
-const HEARTBEAT_FAILURE_THRESHOLD = 2
 
 type Pending = {
   resolve: (value: unknown) => void
@@ -203,8 +197,12 @@ export class WsAcpTransport implements AcpTransport {
   /** Application-level heartbeat timer (`setInterval`) — cleared on close /
    * dispose / force-reconnect. `null` while no socket is live. */
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
-  /** Consecutive heartbeat ping failures — forces a reconnect at the threshold. */
-  private consecutivePingFailures = 0
+  /** Judges host liveness from received frames (heartbeat included). */
+  private readonly liveness = new HostLiveness({
+    onSilent: (silentMs) => this.probeSilentHost(silentMs),
+    // A hidden tab throttles its timers; the return-from-background probe owns it.
+    canJudge: () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  })
   /** Bound DOM-listener refs so `dispose()` can detach them. */
   private visibilityHandler: (() => void) | null = null
   private focusHandler: (() => void) | null = null
@@ -226,6 +224,10 @@ export class WsAcpTransport implements AcpTransport {
   private readonly lastSeq = new Map<string, number>()
   /** Per-session epoch of the host log `lastSeq` belongs to. */
   private readonly logEpochs = new Map<string, string>()
+  /** Per-session `headSeq` of the last subscribe/snapshot reply: seqs up to it are replay. */
+  private readonly headSeqs = new Map<string, number>()
+  /** Holds events that overtake an in-flight subscribe/snapshot reply. */
+  private readonly syncGate = new SyncGate()
   /** Sessions we should re-subscribe after reconnect. */
   private readonly subscribed = new Set<string>()
   /** Projects whose `fs_changed` watch this connection must re-request after reconnect. */
@@ -393,6 +395,7 @@ export class WsAcpTransport implements AcpTransport {
   private clearCursor(sessionId: string): void {
     this.lastSeq.delete(sessionId)
     this.logEpochs.delete(sessionId)
+    this.headSeqs.delete(sessionId)
   }
 
   async connect(): Promise<void> {
@@ -474,6 +477,23 @@ export class WsAcpTransport implements AcpTransport {
     if (!force && lastSeq === undefined && this.subscribed.has(sessionId)) {
       return
     }
+    // Events can overtake the reply on the wire: hold them until the reply
+    // says where the replay ends.
+    this.beginSync(sessionId)
+    let completed = false
+    try {
+      await this.requestSubscription(sessionId, lastSeq, timeoutMs)
+      completed = true
+    } finally {
+      this.endSync(sessionId, completed)
+    }
+  }
+
+  private async requestSubscription(
+    sessionId: SessionId,
+    lastSeq: number | null | undefined,
+    timeoutMs?: number
+  ): Promise<void> {
     this.subscribed.add(sessionId)
     const payload: { sessionId: string; lastSeq?: number; logEpoch?: string } = { sessionId }
     if (lastSeq != null) {
@@ -522,48 +542,139 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
     this.logEpochs.set(sessionId, replyEpoch)
+    // Seqs up to the head are replay (holes allowed); above it they must be
+    // contiguous. Without a head the cursor itself is the frontier.
+    if (typeof reply?.headSeq === 'number') this.headSeqs.set(sessionId, reply.headSeq)
   }
 
   /**
    * Stale/degraded recovery for one session: install an atomic server-history
    * snapshot (server history mode) or resubscribe live-only and report the
-   * degradation. Used by a `stale` subscribe reply and by the per-session
-   * retry once cursor resubscribes keep failing.
+   * degradation. Used by a `stale` subscribe reply, by a discontinuity in the
+   * live stream and by the per-session retry once cursor resubscribes keep
+   * failing.
    */
   private async recoverSession(sessionId: SessionId, timeoutMs?: number): Promise<void> {
-    await this.connect()
-    this.subscribed.add(sessionId)
-    // Capture the store's reopen generation BEFORE the recovery
-    // round-trip: a close/delete/reopen during the await invalidates it
-    // and the store rejects the late install so recovery cannot
-    // resurrect a torn-down or replaced session.
-    const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
-    if (this.negotiatedHistoryMode === 'server') {
-      const recovery = await this.request<SessionSnapshotEvent>(
-        'recover_session_snapshot',
-        { sessionId },
-        timeoutMs
-      )
-      this.lastSeq.set(sessionId, recovery.watermark)
-      if (recovery.logEpoch) this.logEpochs.set(sessionId, recovery.logEpoch)
-      else this.logEpochs.delete(sessionId)
-      this.seenTurnIds.delete(sessionId)
-      await this.recoveryHandler?.(recovery, reopenGeneration)
-      // handle_recover_session_snapshot server-side re-registers the
-      // subscription for continued live delivery — no separate subscribe
-      // call needed here.
+    // First statement, before any await: events that arrive from here on wait
+    // for the snapshot instead of racing it.
+    this.beginSync(sessionId)
+    let completed = false
+    try {
+      await this.connect()
+      this.subscribed.add(sessionId)
+      // Capture the store's reopen generation BEFORE the recovery
+      // round-trip: a close/delete/reopen during the await invalidates it
+      // and the store rejects the late install so recovery cannot
+      // resurrect a torn-down or replaced session.
+      const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
+      if (this.negotiatedHistoryMode === 'server') {
+        const recovery = await this.request<SessionSnapshotEvent>(
+          'recover_session_snapshot',
+          { sessionId },
+          timeoutMs
+        )
+        this.lastSeq.set(sessionId, recovery.watermark)
+        this.headSeqs.set(sessionId, recovery.headSeq ?? recovery.watermark)
+        if (recovery.logEpoch) this.logEpochs.set(sessionId, recovery.logEpoch)
+        else this.logEpochs.delete(sessionId)
+        this.seenTurnIds.delete(sessionId)
+        await this.recoveryHandler?.(recovery, reopenGeneration)
+        this.syncGate.noteSnapshotInstalled(sessionId)
+        // handle_recover_session_snapshot server-side re-registers the
+        // subscription for continued live delivery — no separate subscribe
+        // call needed here.
+      } else {
+        this.clearCursor(sessionId)
+        this.seenTurnIds.delete(sessionId)
+        const reply = await this.request<SessionSubscribeReply | undefined>(
+          'subscribe',
+          { sessionId },
+          timeoutMs
+        )
+        if (typeof reply?.headSeq === 'number') this.headSeqs.set(sessionId, reply.headSeq)
+        if (reply?.logEpoch) this.logEpochs.set(sessionId, reply.logEpoch)
+        await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
+      }
+      completed = true
+    } finally {
+      this.endSync(sessionId, completed)
+    }
+  }
+
+  private beginSync(sessionId: string): void {
+    this.syncGate.begin(sessionId, this.lastSeq.get(sessionId) ?? 0)
+  }
+
+  /**
+   * End one sync level. When the outermost one ends successfully, the held
+   * events are judged against the cursor the reply installed; a failed sync
+   * drops them (its reply never named a replay boundary, and a hole they leave
+   * is caught by the next live event).
+   */
+  private endSync(sessionId: string, completed: boolean): void {
+    const result = this.syncGate.end(sessionId)
+    if (!result || !completed) return
+    if (result.lost) {
+      this.recoverInBackground(sessionId, 'the held-event buffer overflowed during a sync')
+    }
+    for (const item of result.held) {
+      if (item.kind === 'gap') {
+        // A snapshot installed in this sync already repairs the drop; one that
+        // happened after its head shows up as a skipped seq.
+        if (!result.snapshotInstalled) {
+          this.recoverInBackground(sessionId, 'gap frame during a sync')
+        }
+        continue
+      }
+      this.applyHeldEvent(sessionId, item.evt, result.floorSeq)
+    }
+  }
+
+  /**
+   * Apply an event held during a sync. A `permission_request` is not in the
+   * durable log, so a snapshot never carries it even when its seq is below the
+   * snapshot's head: one that arrived during the sync and was not applied before
+   * it is still delivered (without a seq, which the store would read as covered
+   * by the snapshot) so the user can answer it.
+   */
+  private applyHeldEvent(sessionId: string, evt: WsEvent, floorSeq: number): void {
+    const last = this.lastSeq.get(sessionId) ?? 0
+    const head = this.headSeqs.get(sessionId) ?? last
+    if (
+      evt.type === 'permission_request' &&
+      evt.seq > floorSeq &&
+      judgeEvent(last, head, evt.seq) === 'duplicate'
+    ) {
+      this.emitLocal(evt.type, evt.payload)
       return
     }
-    this.clearCursor(sessionId)
-    this.seenTurnIds.delete(sessionId)
-    const reply = await this.request<SessionSubscribeReply | undefined>(
-      'subscribe',
-      { sessionId },
-      timeoutMs
-    )
-    // Live events that follow carry this log's seqs: remember its epoch.
-    if (reply?.logEpoch) this.logEpochs.set(sessionId, reply.logEpoch)
-    await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
+    this.applySessionEvent(sessionId, evt)
+  }
+
+  /**
+   * A discontinuity in the live stream (a skipped seq or a `gap` frame): install
+   * a snapshot in the background, one in flight per session. A failure hands the
+   * session to its own bounded retry, which degrades it to snapshot + live; it
+   * never takes the socket down.
+   */
+  private recoverInBackground(sessionId: string, reason: string): void {
+    if (this.disposed || !this.subscribed.has(sessionId) || this.syncGate.isSyncing(sessionId)) {
+      return
+    }
+    void logFrontendError({
+      level: 'info',
+      source: 'WsAcpTransport.discontinuity',
+      message: `Session ${sessionId} stream is discontinuous (${reason}); installing a snapshot`
+    })
+    this.recoverSession(sessionId).catch((error) => {
+      if (this.disposed || !this.subscribed.has(sessionId)) return
+      if (error instanceof AcpTransportError && error.code === WS_ERROR_CODES.NOT_FOUND) {
+        this.dropObsoleteSession(sessionId)
+        return
+      }
+      if (this.isSocketLive()) this.sessionRetry.schedule(sessionId, error)
+      // A dead socket: the reconnect pass resubscribes every session.
+    })
   }
 
   onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
@@ -1401,45 +1512,48 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   /**
-   * Start the application-level heartbeat that keeps the server's keepalive
-   * watchdog fresh through proxies that strip WS-level Ping/Pong control
-   * frames. A periodic `ping` text request lands in the server read loop,
-   * which stamps `last_activity` on every inbound frame — so a focused tab no
-   * longer false-positive drops at the ~75s `PONG_TIMEOUT`. Idempotent: clears
-   * any prior timer first. Stopped on close / dispose / force-reconnect.
+   * Start the keepalive and the liveness judge. The periodic `ping` text
+   * request lands in the server read loop, which stamps `last_activity` on every
+   * inbound frame, so a focused tab no longer false-positive drops at the ~75s
+   * `PONG_TIMEOUT` through proxies that strip WS-level Ping/Pong. Its reply is
+   * not judged: the host's `heartbeat` frames (any host frame) are. Idempotent:
+   * clears any prior timers first. Stopped on close / dispose / force-reconnect.
    */
   private startHeartbeat(): void {
     this.clearHeartbeat()
+    this.liveness.start()
     this.heartbeatTimer = setInterval(() => {
       if (this.disposed) return
-      // Only tick while OPEN; the reconnect path owns recovery otherwise. A
-      // failed ping (half-open link) is swallowed per-tick but counted — at the
-      // threshold, force a reconnect so a dead reply path doesn't strand the
-      // client on a socket whose onclose may never fire.
       if (this.socket?.readyState === WebSocket.OPEN) {
-        void this.request<void>('ping', {})
-          .then(() => {
-            this.consecutivePingFailures = 0
-          })
-          .catch(() => {
-            this.consecutivePingFailures += 1
-            if (!this.disposed && this.consecutivePingFailures >= HEARTBEAT_FAILURE_THRESHOLD) {
-              this.forceReconnect(
-                `ping heartbeat: ${this.consecutivePingFailures} consecutive failures (half-open link)`
-              )
-            }
-          })
+        this.request<void>('ping', {}).catch(() => {
+          /* liveness is judged from host frames, not from this reply */
+        })
       }
     }, HEARTBEAT_INTERVAL_MS)
   }
 
-  /** Stop the heartbeat timer (on close / dispose / force-reconnect). */
+  /** Stop the keepalive and the liveness judge (on close / dispose / force-reconnect). */
   private clearHeartbeat(): void {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
     }
-    this.consecutivePingFailures = 0
+    this.liveness.stop()
+  }
+
+  /**
+   * The host sent no frame for {@link HOST_SILENCE_LIMIT_MS}: probe it with one
+   * bounded round trip and replace the socket if the probe fails (half-open
+   * link). Shares the resume probe's coalescing.
+   */
+  private probeSilentHost(silentMs: number): void {
+    if (this.disposed || this.resumeValidation || this.connecting || this.reconnecting) return
+    const validation = this.validateRoundTrip(
+      `no host frame for ${Math.round(silentMs / 1000)}s (limit ${HOST_SILENCE_LIMIT_MS / 1000}s)`
+    ).finally(() => {
+      if (this.resumeValidation === validation) this.resumeValidation = null
+    })
+    this.resumeValidation = validation
   }
 
   private scheduleReconnect(): void {
@@ -1655,6 +1769,20 @@ export class WsAcpTransport implements AcpTransport {
     // Clear the mark so the next explicit subscribe (e.g. the next prompt)
     // re-subscribes instead of being skipped by the already-subscribed guard.
     this.subscribed.delete(sid)
+    // Surface it through the store's degraded-recovery flow: this session lost
+    // its stream while every other session keeps running.
+    void Promise.resolve(
+      this.recoveryHandler?.(
+        { sessionId: sid, degraded: true },
+        this.recoveryGenerationProvider?.(sid)
+      )
+    ).catch((error) => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'WsAcpTransport.sessionResubscribe',
+        message: `Reporting degraded session ${sid} failed: ${String(error)}`
+      })
+    })
     void logFrontendError({
       level: 'warn',
       source: 'WsAcpTransport.sessionResubscribe',
@@ -1663,6 +1791,7 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   private async onMessage(raw: string): Promise<void> {
+    this.liveness.touch()
     let parsed: unknown
     try {
       parsed = JSON.parse(raw)
@@ -1675,6 +1804,15 @@ export class WsAcpTransport implements AcpTransport {
     // Reply frame: has `ok` boolean + `id`
     if (typeof obj.id === 'string' && typeof obj.ok === 'boolean') {
       this.handleReply(obj as unknown as WsReply)
+      return
+    }
+
+    // Delivery frames carry no seq. Any host frame proves the link is alive.
+    if (obj.type === 'heartbeat') return
+    if (obj.type === 'gap' && typeof obj.sid === 'string') {
+      const gapSid = obj.sid
+      // Queued behind the events already received so it lands in wire order.
+      this.eventTail = this.eventTail.then(() => this.handleGap(gapSid))
       return
     }
 
@@ -1723,6 +1861,17 @@ export class WsAcpTransport implements AcpTransport {
       })
       return chained
     }
+  }
+
+  /**
+   * The host dropped LOSSY events of `sid` for this connection. Install a
+   * snapshot; this is an accelerator (the next event would expose the hole
+   * anyway) so a gap for a session being synced is simply judged afterwards.
+   */
+  private handleGap(sid: string): void {
+    if (!this.subscribed.has(sid)) return
+    if (this.syncGate.hold(sid, { kind: 'gap' })) return
+    this.recoverInBackground(sid, 'host gap frame')
   }
 
   private handleReply(reply: WsReply): void {
@@ -1875,34 +2024,40 @@ export class WsAcpTransport implements AcpTransport {
 
     const sid = evt.sid
     this.refreshPromptActivity(sid)
-    const tier = wsTierOf(evt.type)
-    const last = this.lastSeq.get(sid) ?? 0
+    this.applySessionEvent(sid, evt)
+  }
 
-    if (evt.seq <= last) {
-      // Duplicate — ignore.
+  /**
+   * Apply one session event against the contiguous cursor: a duplicate is
+   * dropped, replay (`seq <= headSeq`) and the next live seq are delivered, and
+   * a skipped seq is NOT applied — the session installs a snapshot instead of
+   * waiting for the missing event.
+   */
+  private applySessionEvent(sid: string, evt: WsEvent): void {
+    if (this.syncGate.hold(sid, { kind: 'event', evt })) return
+    const last = this.lastSeq.get(sid) ?? 0
+    const verdict = judgeEvent(last, this.headSeqs.get(sid) ?? last, evt.seq)
+    if (verdict === 'duplicate') return
+    if (verdict === 'gap') {
+      this.recoverInBackground(
+        sid,
+        `seq ${evt.seq} arrived after ${Math.max(last, this.headSeqs.get(sid) ?? 0)}`
+      )
+      // The event that exposed the hole is judged again once the snapshot is in.
+      this.syncGate.hold(sid, { kind: 'event', evt })
       return
     }
 
     // Idempotent prompt_complete: drop a duplicate turn-id but advance the
-    // cursor unconditionally so the seq pipeline cannot stall. A single FIFO
-    // WebSocket never reorders (see the deliver-on-arrival model below), so
-    // advancing only when contiguous would strand a replayed duplicate behind
-    // an unfillable pre-subscribe gap.
-    if (tier === 'idempotent' && evt.type === 'prompt_complete') {
+    // cursor so the seq pipeline cannot stall.
+    if (wsTierOf(evt.type) === 'idempotent' && evt.type === 'prompt_complete') {
       const turnId = extractTurnId(evt.payload)
       if (turnId && this.seenTurnIds.get(sid)?.has(turnId)) {
         this.lastSeq.set(sid, evt.seq)
         return
       }
     }
-
-    // Deliver on arrival (desktop parity). A single FIFO WebSocket never
-    // reorders, so the only gap sources (missed pre-subscribe emits, server
-    // lossy drop-oldest) never fill later — an indefinite hold can only strand.
-    // Advance the cursor to the delivered seq so live + reconnect-replay events
-    // flow without duplication.
     this.deliverContiguous(sid, evt)
-    return
   }
 
   private deliverContiguous(sid: string, evt: WsEvent): void {

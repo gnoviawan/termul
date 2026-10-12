@@ -1,6 +1,7 @@
 //! AD-7 / AD-16: one seq authority, atomic assign + fan-out, registration
 //! under the seq lock behind a writer barrier.
 
+use tokio_util::sync::CancellationToken;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,9 +53,9 @@ fn chunk(sid: &str, text: &str) -> AcpEvent {
     }
 }
 
-fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<SequencedEvent>) -> Vec<SequencedEvent> {
+fn drain(rx: &mut EventStream) -> Vec<SequencedEvent> {
     let mut out = Vec::new();
-    while let Ok(event) = rx.try_recv() {
+    while let Ok(StreamItem::Event(event)) = rx.try_recv() {
         // Agent-level `seq = 0` nudges (chat_history_changed) are not log events.
         if event.seq > 0 {
             out.push(event);
@@ -68,7 +69,7 @@ fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<SequencedEvent>) -> Vec<S
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_host_record_and_relay_events_get_distinct_contiguous_seqs() {
     let (relay, persistence, root) = relay_with_session("concurrent", "sess-c").await;
-    let (_client, mut rx, _replay, head) = relay.subscribe("sess-c", None, None).await;
+    let (_client, mut rx, _replay, head) = relay.subscribe("sess-c", None, None, &CancellationToken::new()).await;
     assert_eq!(head.unwrap().head_seq, 0);
 
     let mut workers = Vec::new();
@@ -125,7 +126,7 @@ async fn concurrent_host_record_and_relay_events_get_distinct_contiguous_seqs() 
 async fn host_record_without_a_writer_allocates_nothing() {
     let (relay, persistence, root) = relay_with_session("no-writer", "sess-w").await;
     persistence.shutdown().await.unwrap();
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-w", None, None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-w", None, None, &CancellationToken::new()).await;
 
     let error = relay
         .record_host_event("sess-w", "agent_switch", json!({"sessionId": "sess-w"}))
@@ -159,7 +160,7 @@ async fn snapshot_and_live_stream_partition_the_log_exactly() {
             }
         })
     };
-    let (_client, mut rx, snapshot, head) = relay.subscribe_snapshot("sess-s").await.unwrap();
+    let (_client, mut rx, snapshot, head) = relay.subscribe_snapshot("sess-s", &CancellationToken::new()).await.unwrap();
     publisher.join().unwrap();
 
     let snapshot_seqs: Vec<u64> = snapshot.iter().map(|event| event.seq).collect();
@@ -183,7 +184,7 @@ async fn snapshot_and_live_stream_partition_the_log_exactly() {
 
     // Quiesced: the snapshot of the full log equals the durable replay.
     persistence.flush_session("sess-s").await.unwrap();
-    let (_c2, _rx2, again, head2) = relay.subscribe_snapshot("sess-s").await.unwrap();
+    let (_c2, _rx2, again, head2) = relay.subscribe_snapshot("sess-s", &CancellationToken::new()).await.unwrap();
     assert_eq!(head2.head_seq, 230);
     assert_eq!(head2.log_epoch, head.log_epoch);
     assert_eq!(
@@ -227,7 +228,7 @@ async fn interrupted_marker_seq_comes_from_the_relay_allocator() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn host_record_notifies_history_changed_exactly_once() {
     let (relay, persistence, root) = relay_with_session("history-nudge", "sess-h").await;
-    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-h", None, None).await;
+    let (_client, mut rx, _replay, _head) = relay.subscribe("sess-h", None, None, &CancellationToken::new()).await;
 
     for (type_, payload) in [
         ("agent_switch", json!({"sessionId": "sess-h"})),
@@ -239,7 +240,7 @@ async fn host_record_notifies_history_changed_exactly_once() {
         relay.record_host_event("sess-h", type_, payload).unwrap();
         let mut nudges = 0;
         let mut logged = Vec::new();
-        while let Ok(event) = rx.try_recv() {
+        while let Ok(StreamItem::Event(event)) = rx.try_recv() {
             if event.seq == 0 {
                 assert_eq!(event.type_, "chat_history_changed");
                 nudges += 1;

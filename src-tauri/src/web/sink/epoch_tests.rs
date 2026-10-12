@@ -1,6 +1,7 @@
 //! Log epochs: a replay cursor `(logEpoch, lastSeq)` is only honoured against
 //! the log incarnation it was issued under.
 
+use tokio_util::sync::CancellationToken;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -76,7 +77,7 @@ async fn cursor_under_the_current_epoch_resumes_and_returns_the_head() {
     }
     let epoch = relay.log_head("s").unwrap().log_epoch;
 
-    let (_client, _rx, replay, head) = relay.subscribe("s", Some(2), Some(&epoch)).await;
+    let (_client, _rx, replay, head) = relay.subscribe("s", Some(2), Some(&epoch), &CancellationToken::new()).await;
 
     assert_eq!(replay, ReplayResult::Ok(1));
     let head = head.expect("a registered subscription reports the head");
@@ -91,7 +92,7 @@ async fn cursor_under_another_epoch_is_stale_and_unregistered() {
     relay.emit(&event("s"));
 
     let (_client, _rx, replay, head) = relay
-        .subscribe("s", Some(1), Some("epoch-from-before-restart"))
+        .subscribe("s", Some(1), Some("epoch-from-before-restart"), &CancellationToken::new())
         .await;
 
     assert_eq!(replay, ReplayResult::Stale);
@@ -108,7 +109,7 @@ async fn cursor_ahead_of_the_head_is_stale_without_registering() {
         relay.emit(&event("s"));
     }
 
-    let (_client, _rx, replay, _) = relay.subscribe("s", Some(10), None).await;
+    let (_client, _rx, replay, _) = relay.subscribe("s", Some(10), None, &CancellationToken::new()).await;
 
     assert_eq!(replay, ReplayResult::Stale);
     assert_eq!(relay.session_subscriber_count("s"), 0);
@@ -127,7 +128,7 @@ async fn durable_epoch_is_persisted_and_survives_a_restart() {
     assert_eq!(relay.log_head("sess-d").unwrap().log_epoch, epoch);
     persistence.flush_session("sess-d").await.unwrap();
 
-    let (_c, _rx, replay, _) = relay.subscribe("sess-d", Some(9), Some(&epoch)).await;
+    let (_c, _rx, replay, _) = relay.subscribe("sess-d", Some(9), Some(&epoch), &CancellationToken::new()).await;
     assert_eq!(
         replay,
         ReplayResult::Stale,
@@ -142,7 +143,7 @@ async fn durable_epoch_is_persisted_and_survives_a_restart() {
         Some(epoch.as_str())
     );
     let restarted = WsRelaySink::with_persistence(64, reopened);
-    let (_c, _rx, replay, head) = restarted.subscribe("sess-d", Some(1), Some(&epoch)).await;
+    let (_c, _rx, replay, head) = restarted.subscribe("sess-d", Some(1), Some(&epoch), &CancellationToken::new()).await;
     assert_eq!(replay, ReplayResult::Ok(0));
     assert_eq!(head.unwrap().log_epoch, epoch);
 }
@@ -221,7 +222,7 @@ async fn events_before_registration_adopt_the_persisted_epoch() {
     );
     assert_eq!(relay.log_head("sess-p").unwrap().log_epoch, persisted);
     relay.emit(&event("sess-p"));
-    let (_c, _rx, replay, head) = relay.subscribe("sess-p", Some(1), Some(&persisted)).await;
+    let (_c, _rx, replay, head) = relay.subscribe("sess-p", Some(1), Some(&persisted), &CancellationToken::new()).await;
     assert!(matches!(replay, ReplayResult::Ok(_)), "{replay:?}");
     assert_eq!(head.unwrap().log_epoch, persisted);
 
@@ -273,7 +274,7 @@ async fn restart_rotates_the_epoch_when_the_frontier_had_run_ahead_of_the_disk()
         "a cursor at the old seq 2 must not resume in the new log"
     );
     let restarted = WsRelaySink::with_persistence(64, reopened);
-    let (_c, _rx, replay, _) = restarted.subscribe("sess-a", Some(2), Some(&before)).await;
+    let (_c, _rx, replay, _) = restarted.subscribe("sess-a", Some(2), Some(&before), &CancellationToken::new()).await;
     assert_eq!(replay, ReplayResult::Stale);
 
     let again = SessionPersistence::open(root.join("sessions"))

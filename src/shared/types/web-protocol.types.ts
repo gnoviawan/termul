@@ -105,7 +105,15 @@ export const WS_EVENT_TYPES = [
   // and rewrote every session on it. Agent-level event (sid null, seq 0);
   // payload `{ worktreePath, oldBranch, newBranch }` — the renderer reconciles
   // worktrees and refreshes the session index.
-  'worktree_branch_renamed'
+  'worktree_branch_renamed',
+  // Top-level frame `{ type: 'gap', sid }` (no `seq`): LOSSY events of `sid`
+  // were dropped for this connection because it could not keep up. The client
+  // installs an atomic snapshot of the session.
+  'gap',
+  // Top-level frame `{ type: 'heartbeat' }` (no `seq`): the host writes one
+  // every 10 s straight to the socket, so the client judges liveness from any
+  // host frame instead of a ping round trip.
+  'heartbeat'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -538,13 +546,12 @@ export type ReliabilityTier = (typeof WS_RELAY_TIERS)[keyof typeof WS_RELAY_TIER
  * The single tier registry: maps each `WsEventType` to its `ReliabilityTier`.
  * Mirrors the Rust `tier_of(type_: &str) -> ReliabilityTier`.
  *
- * - `lossy` (drop-oldest on slow client): `message_chunk`, `tool_call_update`,
+ * - `lossy` (dropped for a slow client, followed by a `gap` frame): `message_chunk`, `tool_call_update`,
  *   `commands_update`, `plan_update`.
  * - `idempotent` (dedup by turn-id): `prompt_complete`.
- * - `reliable` (never dropped; unbounded per-client queue in this story):
- *   everything else, including `permission_request` and all request↔reply.
- *
- * Full ack/backpressure + timeout=deny lands in Story 1.7.
+ * - `reliable` (never dropped silently; a subscriber that cannot take one loses
+ *   its connection and resumes by cursor): everything else, including
+ *   `permission_request` and all request↔reply.
  */
 export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   // Lossy — high-frequency, low-value streams.
@@ -584,7 +591,11 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   fs_watch_ended: WS_RELAY_TIERS.RELIABLE,
   // Story 16: a one-shot host fact (every session on the worktree changed) —
   // dropping it would leave stale branch labels, so reliable.
-  worktree_branch_renamed: WS_RELAY_TIERS.RELIABLE
+  worktree_branch_renamed: WS_RELAY_TIERS.RELIABLE,
+  // Frames about delivery itself: a gap must reach the client in order, and a
+  // heartbeat is never queued, so neither may be a lossy event.
+  gap: WS_RELAY_TIERS.RELIABLE,
+  heartbeat: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'
@@ -608,7 +619,7 @@ export interface AcpRuntimePolicy {
  * The `authenticate` protocol version this client speaks. Mirrors the Rust
  * `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
  */
-export const WS_PROTOCOL_VERSION = 3
+export const WS_PROTOCOL_VERSION = 4
 
 /** Longest accepted `deviceId` / `clientInstanceId`, in bytes. */
 export const MAX_CLIENT_ID_LEN = 128
@@ -793,6 +804,17 @@ export interface WsEvent {
   type: WsEventType
   /** The camelCase ACP event struct value (passed through verbatim). */
   payload: unknown
+}
+
+/** Top-level `gap` frame: LOSSY events of `sid` were dropped for this connection. */
+export interface WsGapFrame {
+  type: 'gap'
+  sid: string
+}
+
+/** Top-level `heartbeat` frame: the host is alive. */
+export interface WsHeartbeatFrame {
+  type: 'heartbeat'
 }
 
 /**

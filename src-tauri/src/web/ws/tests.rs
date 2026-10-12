@@ -81,7 +81,7 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
     relay.set_rendezvous(Arc::clone(&permissions));
     relay.set_question_rendezvous(Arc::clone(&questions));
     relay.seed_session_for_test("session-cleanup");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-cleanup", None, None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-cleanup", None, None, &CancellationToken::new()).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     permissions.register(
         "permission-cleanup".to_string(),
@@ -154,7 +154,7 @@ async fn question_disconnect_grace_defers_cancel_until_expiry() {
     ));
     relay.set_question_rendezvous(Arc::clone(&questions));
     relay.seed_session_for_test("session-q-grace");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-q-grace", None, None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-q-grace", None, None, &CancellationToken::new()).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     questions.register(
         "question-grace".to_string(),
@@ -201,7 +201,7 @@ async fn question_disconnect_grace_cancelled_by_resubscribe() {
     ));
     relay.set_question_rendezvous(Arc::clone(&questions));
     relay.seed_session_for_test("session-q-resub");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-q-resub", None, None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-q-resub", None, None, &CancellationToken::new()).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     questions.register(
         "question-resub".to_string(),
@@ -219,7 +219,7 @@ async fn question_disconnect_grace_cancelled_by_resubscribe() {
     assert_eq!(relay.session_subscriber_count("session-q-resub"), 0);
 
     // A new subscriber arrives within the grace window.
-    let (_client2, _rx2, replay2, _) = relay.subscribe("session-q-resub", None, None).await;
+    let (_client2, _rx2, replay2, _) = relay.subscribe("session-q-resub", None, None, &CancellationToken::new()).await;
     assert!(matches!(replay2, ReplayResult::Ok(0)));
     questions.cancel_disconnect_grace("session-q-resub");
 
@@ -236,7 +236,7 @@ async fn question_disconnect_grace_cancelled_by_resubscribe() {
 async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("session-cancelled-relay");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-cancelled-relay", None, None).await;
+    let (client_id, _rx, replay, _) = relay.subscribe("session-cancelled-relay", None, None, &CancellationToken::new()).await;
     assert!(matches!(replay, ReplayResult::Ok(0)));
     let subscribed = subscriptions_with("session-cancelled-relay", client_id);
 
@@ -323,7 +323,7 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     .expect("ping remains processable during prompt");
     let ping = match rx.recv().await.expect("ping reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Close(_) => panic!("expected ping reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected ping reply"),
     };
     assert!(ping.ok);
 
@@ -365,7 +365,7 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     let _ = release.send(());
     let completed = match rx.recv().await.expect("prompt reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Close(_) => panic!("expected prompt reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected prompt reply"),
     };
     assert!(completed.ok);
     assert_eq!(completed.id, "prompt-long");
@@ -431,11 +431,11 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
 
     let first = match rx.recv().await.expect("first reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Close(_) => panic!("expected reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected reply"),
     };
     let second = match rx.recv().await.expect("second reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Close(_) => panic!("expected reply"),
+        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Close(_) => panic!("expected reply"),
     };
     let replies = [first, second];
     let cancel = replies
@@ -560,7 +560,7 @@ async fn accepted_prompt_survives_disconnect_and_persists_completion_for_reconne
         event.type_ == "prompt_complete" && event.payload["turnId"] == "turn-resume"
     }));
 
-    let (_client_id, _events, reconnect_replay, _) = relay.subscribe("session-resume", Some(0), None).await;
+    let (_client_id, _events, reconnect_replay, _) = relay.subscribe("session-resume", Some(0), None, &CancellationToken::new()).await;
     assert!(matches!(reconnect_replay, ReplayResult::Ok(replayed) if replayed >= 2));
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
@@ -1980,7 +1980,7 @@ async fn delete_session_removes_host_persisted_record() {
     // the observer session first — otherwise its channel never lives to
     // receive the broadcast.
     relay.seed_session_for_test("s-other");
-    let (_client, mut rx, _replay, _) = relay.subscribe("s-other", None, None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("s-other", None, None, &CancellationToken::new()).await;
 
     let reply = handle_delete_session(
         "r1".to_string(),
@@ -2005,6 +2005,9 @@ async fn delete_session_removes_host_persisted_record() {
         .await
         .expect("chat_history_changed broadcast arrives")
         .expect("client channel open");
+    let StreamItem::Event(event) = event else {
+        panic!("expected an event, got a gap");
+    };
     assert_eq!(event.type_, "chat_history_changed");
 
     // Unknown id → typed idempotent delete contract: success with
@@ -2623,7 +2626,7 @@ fn relay_with_subscribed_permission(
     // Subscribe a client to the session (populates subscribed_clients via
     // the production subscribe path).
     relay.seed_session_for_test(session_id);
-    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None, None));
+    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None, None, &CancellationToken::new()));
     let subs = subscriptions_with(session_id, client_id);
     // Emit a permission_request event through the sink (production path) so
     // the rendezvous snapshots a ticket.
@@ -2682,7 +2685,7 @@ fn handle_respond_permission_needs_no_subscription() {
         crate::web::permissions::PermissionRendezvous::default(),
     ));
     relay.seed_session_for_test("sess-B");
-    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None, None));
+    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None, None, &CancellationToken::new()));
     let subs = subscriptions_with("sess-B", ClientId::new());
     relay.emit(&AcpEvent {
         sid: Some("sess-A".to_string()),
@@ -2747,7 +2750,7 @@ fn relay_with_subscribed_question(
         crate::web::permissions::QuestionRendezvous::default(),
     ));
     relay.seed_session_for_test(session_id);
-    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None, None));
+    let (client_id, _rx, _replay, _) = block_on(relay.subscribe(session_id, None, None, &CancellationToken::new()));
     let subs = subscriptions_with(session_id, client_id);
     let options_value = serde_json::Value::Array(
         options
@@ -2823,7 +2826,7 @@ fn handle_answer_question_needs_no_subscription() {
         crate::web::permissions::QuestionRendezvous::default(),
     ));
     relay.seed_session_for_test("sess-B");
-    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None, None));
+    let (_other_client, _rx, _replay, _) = block_on(relay.subscribe("sess-B", None, None, &CancellationToken::new()));
     let subs = subscriptions_with("sess-B", ClientId::new());
     relay.emit(&AcpEvent {
         sid: Some("sess-A".to_string()),
@@ -3417,6 +3420,64 @@ async fn recover_session_snapshot_reply_watermark_is_the_log_head() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// The subscription a snapshot registers feeds the connection through the same
+/// bounded channel: a reliable event that finds it full closes THIS connection
+/// (the phone resumes by cursor) instead of vanishing.
+#[tokio::test]
+async fn recover_session_snapshot_subscription_closes_the_connection_on_reliable_overflow() {
+    use crate::web::sink::{AcpEvent, EventSink};
+    let root = std::env::temp_dir().join(format!("termul-ws-snap-overflow-{}", uuid::Uuid::new_v4()));
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(crate::acp::SessionRegistration {
+            session_id: "session-overflow".to_string(),
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+    relay.emit(&AcpEvent {
+        sid: Some("session-overflow".to_string()),
+        type_: "acp:tool_call",
+        payload: json!({"sessionId": "session-overflow", "n": 0}),
+    });
+    let subs = Arc::new(Subscriptions::default());
+    let (out_tx, _out_rx) = test_outbound();
+    let reply = handle_recover_session_snapshot(
+        "r1".to_string(),
+        &json!({ "sessionId": "session-overflow" }),
+        &relay,
+        &out_tx,
+        &subs,
+        HistoryMode::Server,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    assert!(!out_tx.closing().is_cancelled());
+
+    // No await between emits: the forwarder cannot drain the channel.
+    for n in 1..=400 {
+        relay.emit(&AcpEvent {
+            sid: Some("session-overflow".to_string()),
+            type_: "acp:tool_call",
+            payload: json!({"sessionId": "session-overflow", "n": n}),
+        });
+    }
+    assert!(
+        out_tx.closing().is_cancelled(),
+        "a reliable event that finds the subscription full must close the connection"
+    );
+    assert_eq!(relay.session_subscriber_count("session-overflow"), 0);
+
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// CAP-2 classification parity: a catalog-known session whose writer
 /// runtime is gone (post-restart recovered session — the metadata
 /// pre-check PASSES) surfaces a typed `not_found` reply via the manager's
@@ -3917,7 +3978,7 @@ async fn handle_set_default_project_broadcasts_to_all_clients() {
     );
     // Subscribe a client to prove the broadcast reaches it.
     relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None).await;
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
 
     let reply = handle_set_default_project(
         "r1".to_string(),
@@ -3931,7 +3992,7 @@ async fn handle_set_default_project_broadcasts_to_all_clients() {
     assert!(reply.ok, "{:?}", reply.err);
     // P13: inspect the broadcast event type + payload (not just count).
     let mut drained = Vec::new();
-    while let Ok(evt) = rx.try_recv() {
+    while let Ok(StreamItem::Event(evt)) = rx.try_recv() {
         drained.push(evt);
     }
     assert_eq!(drained.len(), 1, "exactly one projects_changed broadcast");

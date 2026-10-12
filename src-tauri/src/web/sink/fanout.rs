@@ -1,12 +1,20 @@
 //! Per-client subscription registry and delivery of the relay: who is
-//! subscribed to what, the lossy ring, the non-blocking per-client enqueue
-//! used inside the publish critical section, and the [`EventSink`] entry
-//! point the ACP dispatcher emits through.
+//! subscribed to what, the bounded per-subscription channel, the non-blocking
+//! per-client push used inside the publish critical section, and the
+//! [`EventSink`] entry point the ACP dispatcher emits through.
+//!
+//! Every subscription owns a BOUNDED channel into the connection's forwarder
+//! (`ws/subscribe.rs`). Fan-out never waits for it: a full channel drops a
+//! LOSSY event and queues one `gap` frame once there is room again (the client
+//! then installs a snapshot), and closes the connection for any other tier (the
+//! client resumes by cursor). No unbounded queue stands behind a slow peer.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -16,15 +24,142 @@ use crate::web::ws::{tier_of, ReliabilityTier, SequencedEvent};
 use super::session_log::SessionState;
 use super::{AcpEvent, EventSink, WsRelaySink};
 
+/// One item of a subscription's stream towards its connection.
+#[derive(Debug, Clone)]
+pub enum StreamItem {
+    /// A sequenced session event.
+    Event(SequencedEvent),
+    /// LOSSY events for this session were dropped ahead of this point: the
+    /// client must install a snapshot.
+    Gap(String),
+}
+
+impl StreamItem {
+    /// The session the item belongs to.
+    fn into_sid(self) -> Option<String> {
+        match self {
+            Self::Event(event) => event.sid,
+            Self::Gap(sid) => Some(sid),
+        }
+    }
+}
+
+/// What a subscription yields to its connection: the replay found at
+/// registration (all `seq <= headSeq`), then the live items. The replay is
+/// handed over as a batch because it can exceed the live channel's bound; the
+/// forwarder waits on the connection queue for it, so a stalled peer is still
+/// closed by the overflow tolerance.
+pub struct EventStream {
+    replay: VecDeque<SequencedEvent>,
+    live: mpsc::Receiver<StreamItem>,
+}
+
+impl EventStream {
+    pub(super) fn new(replay: Vec<SequencedEvent>, live: mpsc::Receiver<StreamItem>) -> Self {
+        Self {
+            replay: replay.into(),
+            live,
+        }
+    }
+
+    /// The next item, waiting for one. `None` once the subscription ended and
+    /// everything it held was drained.
+    pub async fn recv(&mut self) -> Option<StreamItem> {
+        if let Some(event) = self.replay.pop_front() {
+            return Some(StreamItem::Event(event));
+        }
+        self.live.recv().await
+    }
+
+    /// The next item if one is ready.
+    ///
+    /// # Errors
+    ///
+    /// [`mpsc::error::TryRecvError::Empty`] while nothing is ready,
+    /// `Disconnected` once the subscription ended and was drained.
+    pub fn try_recv(&mut self) -> Result<StreamItem, mpsc::error::TryRecvError> {
+        if let Some(event) = self.replay.pop_front() {
+            return Ok(StreamItem::Event(event));
+        }
+        self.live.try_recv()
+    }
+}
+
 /// Per-client subscription state.
 pub(super) struct ClientSub {
-    /// Outbound channel (reliable + idempotent events). Lossy events are
-    /// buffered in `lossy_ring` and flushed here by the write loop.
-    tx: mpsc::UnboundedSender<SequencedEvent>,
+    /// Bounded channel into the connection's forwarder.
+    tx: mpsc::Sender<StreamItem>,
+    /// Closes the connection this subscription belongs to.
+    closing: CancellationToken,
     /// Sessions this client is subscribed to.
     sessions: HashSet<String>,
-    /// Bounded buffer for lossy events (drop-oldest when full).
-    lossy_ring: VecDeque<SequencedEvent>,
+    /// Sessions whose LOSSY events were dropped since the last `gap` frame
+    /// reached the channel.
+    gap_pending: HashSet<String>,
+}
+
+/// What one push into a client's channel did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Push {
+    /// The event is queued.
+    Delivered,
+    /// The channel was full and the event was LOSSY: dropped, `gap` pending.
+    Dropped,
+    /// The channel was full and the event must not be lost: the peer is
+    /// hopelessly behind.
+    Overflow,
+    /// The forwarder is gone (the connection ended).
+    Gone,
+}
+
+impl ClientSub {
+    /// Queue one event without waiting. A pending `gap` frame goes first so
+    /// the client learns about the hole before it sees the next event.
+    fn push(&mut self, se: SequencedEvent, tier: ReliabilityTier) -> Push {
+        let pending_gap = se
+            .sid
+            .as_deref()
+            .filter(|sid| self.gap_pending.contains(*sid))
+            .map(str::to_string);
+        if let Some(sid) = pending_gap {
+            match self.tx.try_send(StreamItem::Gap(sid.clone())) {
+                Ok(()) => {
+                    self.gap_pending.remove(&sid);
+                }
+                Err(TrySendError::Full(_)) => return self.full(Some(sid), tier),
+                Err(TrySendError::Closed(_)) => return Push::Gone,
+            }
+        }
+        match self.tx.try_send(StreamItem::Event(se)) {
+            Ok(()) => Push::Delivered,
+            Err(TrySendError::Full(item)) => self.full(item.into_sid(), tier),
+            Err(TrySendError::Closed(_)) => Push::Gone,
+        }
+    }
+
+    /// The channel had no room for an item of session `sid`.
+    fn full(&mut self, sid: Option<String>, tier: ReliabilityTier) -> Push {
+        let label = sid.as_deref().map_or_else(
+            || "-".to_string(),
+            crate::logging::redact_session_id,
+        );
+        if tier != ReliabilityTier::Lossy {
+            warn!(
+                "[ws] subscriber for session {label} cannot keep up with a {tier:?} event; \
+                 closing its connection so it resumes by cursor"
+            );
+            return Push::Overflow;
+        }
+        if let Some(sid) = sid {
+            if self.gap_pending.insert(sid) {
+                warn!(
+                    "[ws] slow subscriber for session {label}: dropped a lossy event; \
+                     a gap frame follows once it drains"
+                );
+            }
+        }
+        Push::Dropped
+    }
 }
 
 /// Opaque per-connection client id (uuid v4).
@@ -46,15 +181,6 @@ impl Default for ClientId {
 }
 
 impl WsRelaySink {
-    /// Push a lossy event into a client's bounded ring, evicting the oldest
-    /// when over capacity (drop-oldest, AC5).
-    pub(super) fn push_lossy(&self, sub: &mut ClientSub, se: SequencedEvent) {
-        sub.lossy_ring.push_back(se);
-        while sub.lossy_ring.len() > self.lossy_capacity {
-            sub.lossy_ring.pop_front(); // drop-oldest
-        }
-    }
-
     /// Fan one just-assigned event out to every subscriber of `sid`. Runs
     /// inside the publish critical section (`sessions` held): lock order
     /// `sessions` → `clients`, with `session_subs` read first and released.
@@ -73,7 +199,7 @@ impl WsRelaySink {
         {
             let mut clients = self.clients.lock();
             for client_id in targets {
-                if let Some(sids) = self.enqueue_in(&mut clients, client_id, event.clone(), tier) {
+                if let Some(sids) = self.push_in(&mut clients, client_id, event.clone(), tier) {
                     dead.push((client_id, sids));
                 }
             }
@@ -83,17 +209,13 @@ impl WsRelaySink {
         }
     }
 
-    /// Enqueue an event to one client according to its tier (AC5 + AC6).
-    ///
-    /// Lossy events are pushed into the bounded ring (drop-oldest) then flushed
-    /// to the outbound channel so a pure-lossy stream still reaches subscribers.
-    /// Reliable/idempotent events flush any buffered lossy events first so
-    /// emission order is preserved across tiers. A failed send (peer gone)
-    /// unregisters the client from fan-out.
+    /// Push an event to one client according to its tier. A full channel
+    /// drops a LOSSY event (a `gap` frame follows) and closes the connection
+    /// for any other tier; a gone peer unregisters the client from fan-out.
     pub(super) fn enqueue(&self, client_id: ClientId, se: SequencedEvent, tier: ReliabilityTier) {
         let dead_sids = {
             let mut clients = self.clients.lock();
-            self.enqueue_in(&mut clients, client_id, se, tier)
+            self.push_in(&mut clients, client_id, se, tier)
         };
         if let Some(sids) = dead_sids {
             self.remove_client_from_session_subs(client_id, &sids);
@@ -101,9 +223,9 @@ impl WsRelaySink {
     }
 
     /// [`Self::enqueue`] against an already-locked client map. Returns the
-    /// dead client's sessions when the peer is gone and was removed (the
+    /// removed client's sessions when the peer is gone or overflowed (the
     /// caller then clears the reverse index, after releasing `clients`).
-    fn enqueue_in(
+    fn push_in(
         &self,
         clients: &mut HashMap<ClientId, ClientSub>,
         client_id: ClientId,
@@ -111,22 +233,16 @@ impl WsRelaySink {
         tier: ReliabilityTier,
     ) -> Option<Vec<String>> {
         let sub = clients.get_mut(&client_id)?;
-        let send_ok = match tier {
-            ReliabilityTier::Lossy => {
-                self.push_lossy(sub, se);
-                self.flush_lossy_sub(sub)
+        match sub.push(se, tier) {
+            Push::Delivered | Push::Dropped => None,
+            Push::Overflow | Push::Gone => {
+                if let Some(sub) = clients.remove(&client_id) {
+                    // Idempotent for a connection that is already ending.
+                    sub.closing.cancel();
+                    return Some(sub.sessions.into_iter().collect());
+                }
+                None
             }
-            ReliabilityTier::Reliable | ReliabilityTier::Idempotent => {
-                let flushed_ok = self.flush_lossy_sub(sub);
-                flushed_ok && sub.tx.send(se).is_ok()
-            }
-        };
-        if send_ok {
-            None
-        } else {
-            clients
-                .remove(&client_id)
-                .map(|sub| sub.sessions.into_iter().collect::<Vec<_>>())
         }
     }
 
@@ -142,17 +258,27 @@ impl WsRelaySink {
             }
         }
     }
-    /// Register a client + its sender under a session and the reverse index.
-    /// Lock order: `clients` then `session_subs` (see module lock-order note).
-    pub(super) fn register(&self, client_id: ClientId, sid: &str, tx: mpsc::UnboundedSender<SequencedEvent>) {
+
+    /// Register a client + its bounded channel under a session and the
+    /// reverse index. `closing` ends the connection the subscription belongs
+    /// to. Lock order: `clients` then `session_subs` (see module lock-order
+    /// note).
+    pub(super) fn register(
+        &self,
+        client_id: ClientId,
+        sid: &str,
+        tx: mpsc::Sender<StreamItem>,
+        closing: &CancellationToken,
+    ) {
         {
             let mut clients = self.clients.lock();
             clients.insert(
                 client_id,
                 ClientSub {
                     tx,
+                    closing: closing.clone(),
                     sessions: HashSet::from([sid.to_string()]),
-                    lossy_ring: VecDeque::new(),
+                    gap_pending: HashSet::new(),
                 },
             );
         }
@@ -172,6 +298,7 @@ impl WsRelaySink {
                 return;
             };
             sub.sessions.remove(sid);
+            sub.gap_pending.remove(sid);
             if sub.sessions.is_empty() {
                 clients.remove(&client_id);
             }
@@ -195,6 +322,7 @@ impl WsRelaySink {
             for client_id in affected_clients {
                 if let Some(client) = clients.get_mut(&client_id) {
                     client.sessions.remove(sid);
+                    client.gap_pending.remove(sid);
                     if client.sessions.is_empty() {
                         clients.remove(&client_id);
                     }
@@ -218,48 +346,6 @@ impl WsRelaySink {
         self.remove_client_from_session_subs(client_id, &sids);
     }
 
-    /// Flush a client's buffered lossy events into its outbound channel (AC5).
-    ///
-    /// Called by the WS write loop (and by tests). Under a slow peer the write
-    /// loop can stall before flush; the ring fills and drop-oldest triggers in
-    /// [`Self::push_lossy`]. Returns the number of events flushed.
-    pub fn flush_lossy(&self, client_id: ClientId) -> usize {
-        let (n, dead_sids) = {
-            let mut clients = self.clients.lock();
-            let Some(sub) = clients.get_mut(&client_id) else {
-                return 0;
-            };
-            let pending = sub.lossy_ring.len();
-            let ok = self.flush_lossy_sub(sub);
-            if ok {
-                (pending, None)
-            } else {
-                (
-                    pending,
-                    clients
-                        .remove(&client_id)
-                        .map(|s| s.sessions.into_iter().collect::<Vec<_>>()),
-                )
-            }
-        };
-        if let Some(sids) = dead_sids {
-            self.remove_client_from_session_subs(client_id, &sids);
-        }
-        n
-    }
-
-    /// Flush the lossy ring for a borrowed client sub.
-    /// Returns `true` if every event was sent (or the ring was empty).
-    pub(super) fn flush_lossy_sub(&self, sub: &mut ClientSub) -> bool {
-        while let Some(evt) = sub.lossy_ring.pop_front() {
-            if sub.tx.send(evt).is_err() {
-                sub.lossy_ring.clear();
-                return false;
-            }
-        }
-        true
-    }
-
     /// Test helper: mark a session as known (empty log, next emit gets seq 1)
     /// without emitting — `subscribe` rejects unknown sessions with
     /// [`ReplayResult::NotFound`], so fan-out tests that subscribe before the
@@ -267,25 +353,6 @@ impl WsRelaySink {
     #[cfg(test)]
     pub(crate) fn seed_session_for_test(&self, sid: &str) {
         SessionState::entry(&mut self.sessions.lock(), sid, 0, self.persistence.as_deref());
-    }
-
-    /// Test helper: fill the lossy ring without flushing (exercises drop-oldest).
-    #[cfg(test)]
-    pub(super) fn push_lossy_no_flush_for_test(&self, client_id: ClientId, se: SequencedEvent) {
-        let mut clients = self.clients.lock();
-        if let Some(sub) = clients.get_mut(&client_id) {
-            self.push_lossy(sub, se);
-        }
-    }
-
-    /// Test helper: current lossy-ring length for a client.
-    #[cfg(test)]
-    pub(super) fn lossy_ring_len_for_test(&self, client_id: ClientId) -> usize {
-        self.clients
-            .lock()
-            .get(&client_id)
-            .map(|s| s.lossy_ring.len())
-            .unwrap_or(0)
     }
 }
 

@@ -564,6 +564,16 @@ A replay cursor is `(logEpoch, lastSeq)`: `lastSeq` only means something against
 - `recover_session_snapshot` replies `{sessionId, watermark, headSeq, logEpoch, events}`; `get_session_cursor` replies `{sessionId, watermark, logEpoch?, headSeq?}` (the epoch fields are absent for a session the host does not know). `get_session_payload` carries `metadata.logEpoch` (omitted when the session has none).
 - Terminal `attach{terminalId, claim, lastSeq, logEpoch?}`: a cursor from another spawn's epoch, or ahead of the log head, replays the whole retained log with `reset: true` (the `replay` frame and the attach reply both carry `reset` and `logEpoch`); the client clears the terminal first. Clients send the epoch they learned with the cursor; a nonzero cursor with no known epoch goes out as `logEpoch: ""`, which matches no epoch, so it replays everything with `reset`. The host applies the same rule itself: a nonzero cursor with no `logEpoch` is refused too. The desktop `terminal_attach` command takes the same optional `logEpoch`.
 
+### Bounded delivery, gap frames and heartbeat
+
+Every session subscription holds a bounded channel (256 items, plus room for the replay it started with) into its connection's outbound queue; the host never grows a queue for a slow peer. Fan-out does not wait:
+
+- A LOSSY event (`message_chunk`, `tool_call_update`, `commands_update`, `plan_update`) that finds the channel full is dropped. Once the channel has room, the host queues one top-level `{"type":"gap","sid":"..."}` frame (no `seq`) ahead of the next event of that session; a session that then goes quiet is caught by its next event's seq. The client answers with `recover_session_snapshot`.
+- A reliable or idempotent event that finds the channel full is never dropped: the host closes the connection and the client resumes by `(logEpoch, lastSeq)`. The connection queue's own overflow tolerance (`ServerConfig::overflow_tolerance`, default 15) applies behind the channel.
+- The write loop sends `{"type":"heartbeat"}` every 10 s straight to the socket (no `seq`, never queued behind events). The client treats any host frame as proof of life; 2.5 heartbeat intervals without one start a probe, then a reconnect. The client's own `ping` request now only keeps the host's watchdog fed.
+- The client applies events with `seq <= headSeq` (replay, holes allowed) in order, and events above `headSeq` only when they are `last + 1`. Any other seq is not applied: the session installs a snapshot (one in flight per session) and resumes at its watermark. Events that overtake a `subscribe` or snapshot reply are held until the reply names the replay boundary. A session whose resubscribe keeps failing degrades alone (cursor retries, then snapshot, then `degradedRecoverySessions`); the reconnect never fails as a whole.
+- `WS_PROTOCOL_VERSION` is 4.
+
 ## Notes
 
 - This is an **internal desktop IPC API**, not a third-party/public integration API.
