@@ -407,7 +407,10 @@ fn boundary_admits_every_registered_root_regardless_of_default() {
 fn boundary_cache_follows_set_upsert_update_remove_clear() {
     let (a, b) = (tempdir_like("ca"), tempdir_like("cb"));
     let reg = ProjectRegistry::new();
-    assert!(!reg.is_within_any_registered_root(&a), "empty registry admits nothing");
+    assert!(
+        !reg.is_within_any_registered_root(&a),
+        "empty registry admits nothing"
+    );
 
     reg.upsert(sample("p-a", Some(path_str(&a)), false));
     assert!(reg.is_within_any_registered_root(&a));
@@ -471,7 +474,10 @@ fn seed_root_registers_one_default_project_only_when_empty() {
     assert_eq!(reg.default_canonical_root().as_deref(), Some(dir.as_path()));
 
     let other = tempdir_like("seed2");
-    assert!(!reg.seed_root_if_no_usable_project(&other), "non-empty registry is left alone");
+    assert!(
+        !reg.seed_root_if_no_usable_project(&other),
+        "non-empty registry is left alone"
+    );
     assert_eq!(reg.len(), 1);
     for d in [dir, other] {
         let _ = std::fs::remove_dir_all(d);
@@ -504,7 +510,10 @@ fn seed_never_overwrites_a_concurrent_set() {
             let (reg, dir) = (Arc::clone(&reg), dir.clone());
             std::thread::spawn(move || reg.seed_root_if_no_usable_project(&dir))
         };
-        reg.set(vec![sample("synced", Some(path_str(&dir)), false)], Some("synced".to_string()));
+        reg.set(
+            vec![sample("synced", Some(path_str(&dir)), false)],
+            Some("synced".to_string()),
+        );
         seeder.join().expect("seeder thread");
         let snap = reg.snapshot();
         assert_eq!(snap.projects.len(), 1);
@@ -521,20 +530,35 @@ fn seed_is_retired_by_a_real_project_and_planted_when_none_is_usable() {
     let (seed_dir, real_dir) = (tempdir_like("sd"), tempdir_like("rl"));
     let reg = ProjectRegistry::new();
     reg.set(
-        vec![sample("arch", Some(path_str(&real_dir)), true), sample("nopath", None, false)],
+        vec![
+            sample("arch", Some(path_str(&real_dir)), true),
+            sample("nopath", None, false),
+        ],
         None,
     );
-    assert!(reg.seed_root_if_no_usable_project(&seed_dir), "no usable project ⇒ seed");
+    assert!(
+        reg.seed_root_if_no_usable_project(&seed_dir),
+        "no usable project ⇒ seed"
+    );
     assert_eq!(reg.len(), 3);
     assert!(reg.is_within_any_registered_root(&seed_dir));
-    assert!(!reg.is_within_any_registered_root(&real_dir), "archived project stays outside");
+    assert!(
+        !reg.is_within_any_registered_root(&real_dir),
+        "archived project stays outside"
+    );
 
     reg.upsert(sample("real", Some(path_str(&real_dir)), false));
     let snap = reg.snapshot();
-    assert!(snap.projects.iter().all(|p| p.id != SEEDED_PROJECT_ID), "seed retired");
+    assert!(
+        snap.projects.iter().all(|p| p.id != SEEDED_PROJECT_ID),
+        "seed retired"
+    );
     assert_eq!(snap.default_project_id.as_deref(), Some("real"));
     assert!(reg.is_within_any_registered_root(&real_dir));
-    assert!(!reg.is_within_any_registered_root(&seed_dir), "retired seed leaves the boundary");
+    assert!(
+        !reg.is_within_any_registered_root(&seed_dir),
+        "retired seed leaves the boundary"
+    );
     for d in [seed_dir, real_dir] {
         let _ = std::fs::remove_dir_all(d);
     }
@@ -556,7 +580,10 @@ fn boundary_read_rebuilds_a_cache_that_is_behind_a_mutation() {
         g.projects[0].is_archived = true;
         reg.epoch.fetch_add(1, Ordering::AcqRel);
     }
-    assert!(!reg.is_within_any_registered_root(&dir), "archived project must not be admitted");
+    assert!(
+        !reg.is_within_any_registered_root(&dir),
+        "archived project must not be admitted"
+    );
     assert_eq!(reg.canonical_root("p-1"), None);
     let _ = std::fs::remove_dir_all(&dir);
 }

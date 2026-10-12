@@ -238,7 +238,12 @@ async fn no_default_project_has_no_mcp_registry() {
 
     let response = app
         .clone()
-        .oneshot(Request::builder().uri("/mcp-servers").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/mcp-servers")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let value: Value =
@@ -263,7 +268,10 @@ async fn no_default_project_has_no_mcp_registry() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(value["success"], false);
     assert_eq!(value["code"], "NO_ACTIVE_PROJECT_ROOT");
-    assert!(!dir.join(".termul").exists(), "nothing may be written without a default project");
+    assert!(
+        !dir.join(".termul").exists(),
+        "nothing may be written without a default project"
+    );
 
     let response = app
         .oneshot(

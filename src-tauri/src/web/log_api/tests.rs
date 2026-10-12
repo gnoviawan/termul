@@ -18,9 +18,11 @@ fn test_state() -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&std::env::temp_dir()
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
+            &std::env::temp_dir()
                 .canonicalize()
-                .unwrap_or_else(|_| std::env::temp_dir()),),
+                .unwrap_or_else(|_| std::env::temp_dir()),
+        ),
         registry_persistence: None,
         projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,

@@ -6,12 +6,20 @@
 use super::*;
 use serde_json::json;
 
-
 #[test]
 fn reportable_paths_pass() {
-    assert!(is_reportable_below_root(std::path::Path::new("/root/proj/src/main.rs"), std::path::Path::new("/root/proj")));
-    assert!(is_reportable_below_root(std::path::Path::new("/root/proj/README.md"), std::path::Path::new("/root/proj")));
-    assert!(is_reportable_below_root(std::path::Path::new("/root/proj/.termul/worktrees/a"), std::path::Path::new("/root/proj")));
+    assert!(is_reportable_below_root(
+        std::path::Path::new("/root/proj/src/main.rs"),
+        std::path::Path::new("/root/proj")
+    ));
+    assert!(is_reportable_below_root(
+        std::path::Path::new("/root/proj/README.md"),
+        std::path::Path::new("/root/proj")
+    ));
+    assert!(is_reportable_below_root(
+        std::path::Path::new("/root/proj/.termul/worktrees/a"),
+        std::path::Path::new("/root/proj")
+    ));
 }
 
 #[test]
@@ -25,7 +33,10 @@ fn ignored_directories_are_suppressed() {
         "/root/proj/src/__pycache__/mod.cpython-311.pyc",
     ] {
         assert!(
-            !is_reportable_below_root(std::path::Path::new(ignored), std::path::Path::new("/root/proj")),
+            !is_reportable_below_root(
+                std::path::Path::new(ignored),
+                std::path::Path::new("/root/proj")
+            ),
             "{ignored} must be suppressed"
         );
     }
@@ -35,7 +46,10 @@ fn ignored_directories_are_suppressed() {
 fn ignored_name_as_plain_file_is_not_suppressed() {
     // A file literally NAMED "dist" (not a directory component on the
     // path) is still a reportable tree change.
-    assert!(is_reportable_below_root(std::path::Path::new("/root/proj/dist"), std::path::Path::new("/root/proj")));
+    assert!(is_reportable_below_root(
+        std::path::Path::new("/root/proj/dist"),
+        std::path::Path::new("/root/proj")
+    ));
 }
 
 #[test]
@@ -156,9 +170,15 @@ async fn subscribe_rejects_unknown_and_archived_projects() {
     let hub = FsWatchHub::default();
     let (tx, _rx) = conn();
 
-    assert_eq!(hub.subscribe(&registry, "nope", &tx), Err(WatchError::NotFound));
+    assert_eq!(
+        hub.subscribe(&registry, "nope", &tx),
+        Err(WatchError::NotFound)
+    );
     assert!(registry.update("p-1", None, None, Some(true)));
-    assert_eq!(hub.subscribe(&registry, "p-1", &tx), Err(WatchError::NotFound));
+    assert_eq!(
+        hub.subscribe(&registry, "p-1", &tx),
+        Err(WatchError::NotFound)
+    );
     assert_eq!(hub.watched_project_count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -172,7 +192,8 @@ async fn watcher_is_refcounted_and_dropped_on_last_unsubscribe() {
     let (b, _rb) = conn();
 
     hub.subscribe(&registry, "p-1", &a).expect("a subscribes");
-    hub.subscribe(&registry, "p-1", &a).expect("re-subscribe is idempotent");
+    hub.subscribe(&registry, "p-1", &a)
+        .expect("re-subscribe is idempotent");
     hub.subscribe(&registry, "p-1", &b).expect("b subscribes");
     assert_eq!(hub.subscriber_count("p-1"), 2);
     assert_eq!(hub.watched_project_count(), 1, "one watcher shared by both");
@@ -181,7 +202,11 @@ async fn watcher_is_refcounted_and_dropped_on_last_unsubscribe() {
     assert!(!hub.unsubscribe("p-1", &a), "second unsubscribe is a no-op");
     assert_eq!(hub.watched_project_count(), 1, "still watched for b");
     assert!(hub.unsubscribe("p-1", &b));
-    assert_eq!(hub.watched_project_count(), 0, "last unsubscribe drops the watcher");
+    assert_eq!(
+        hub.watched_project_count(),
+        0,
+        "last unsubscribe drops the watcher"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -200,7 +225,11 @@ async fn connection_cleanup_drops_every_watch_of_that_connection() {
 
     assert_eq!(hub.subscriber_count("p-1"), 0);
     assert_eq!(hub.subscriber_count("p-2"), 1);
-    assert_eq!(hub.watched_project_count(), 1, "p-1 dropped, p-2 kept for the other connection");
+    assert_eq!(
+        hub.watched_project_count(),
+        1,
+        "p-1 dropped, p-2 kept for the other connection"
+    );
     for d in [d1, d2] {
         let _ = std::fs::remove_dir_all(d);
     }
@@ -232,11 +261,15 @@ async fn fs_changed_reaches_only_connections_subscribed_to_that_project() {
         .iter()
         .any(|p| p.as_str().is_some_and(|p| p.ends_with("/hello.txt"))));
     assert!(
-        next_fs_changed(&mut rx2, Duration::from_millis(800)).await.is_none(),
+        next_fs_changed(&mut rx2, Duration::from_millis(800))
+            .await
+            .is_none(),
         "a connection watching ANOTHER project gets nothing"
     );
     assert!(
-        next_fs_changed(&mut rx3, Duration::from_millis(100)).await.is_none(),
+        next_fs_changed(&mut rx3, Duration::from_millis(100))
+            .await
+            .is_none(),
         "an unsubscribed connection gets nothing"
     );
     drop(unsubscribed);
@@ -261,7 +294,11 @@ async fn closed_subscriber_is_pruned_and_watcher_dropped_on_next_change() {
     while hub.watched_project_count() != 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(hub.watched_project_count(), 0, "delivery to a closed channel drops the watch");
+    assert_eq!(
+        hub.watched_project_count(),
+        0,
+        "delivery to a closed channel drops the watch"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -286,7 +323,11 @@ async fn archiving_or_removing_the_project_drops_its_watch() {
     while hub.watched_project_count() != 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(hub.watched_project_count(), 0, "archive/remove drops the watchers");
+    assert_eq!(
+        hub.watched_project_count(),
+        0,
+        "archive/remove drops the watchers"
+    );
     assert_eq!(hub.subscriber_count("p-1"), 0);
     for d in [d1, d2] {
         let _ = std::fs::remove_dir_all(d);
@@ -306,7 +347,10 @@ async fn backoff_ends_promptly_when_the_project_is_removed_or_moved() {
     registry.remove("p-1");
     let outcome = backoff("p-1", &d1, long, &registry, &cancel).await;
     assert!(matches!(outcome, BackoffOutcome::ProjectGone));
-    assert!(started.elapsed() < Duration::from_secs(5), "must not wait out the delay");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "must not wait out the delay"
+    );
 
     let registry = registry_with(&[("p-1", &d2)]);
     let outcome = backoff("p-1", &d1, long, &registry, &cancel).await;

@@ -119,7 +119,11 @@ struct RootsCache {
 
 /// `true` for a project the boundary can use: not archived, with a non-empty path.
 fn is_usable(project: &ProjectSummary) -> bool {
-    !project.is_archived && project.path.as_deref().is_some_and(|p| !p.trim().is_empty())
+    !project.is_archived
+        && project
+            .path
+            .as_deref()
+            .is_some_and(|p| !p.trim().is_empty())
 }
 
 /// A project's canonical root as cached for boundary checks. `canonical` is
@@ -491,9 +495,9 @@ impl ProjectRegistry {
             })
             .cloned()
             .collect();
-        candidates.iter().any(|root| {
-            std::fs::canonicalize(&root.raw).is_ok_and(|fresh| path.starts_with(fresh))
-        })
+        candidates
+            .iter()
+            .any(|root| std::fs::canonicalize(&root.raw).is_ok_and(|fresh| path.starts_with(fresh)))
     }
 
     /// Canonical root of a registered, non-archived project, or `None` when

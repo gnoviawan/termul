@@ -32,7 +32,9 @@ fn test_state(root: &std::path::Path) -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
+            &root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+        ),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,

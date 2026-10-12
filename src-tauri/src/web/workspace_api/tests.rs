@@ -75,7 +75,9 @@ async fn state_with_store(root: &std::path::Path) -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&std::env::temp_dir()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
+            &std::env::temp_dir(),
+        ),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
@@ -107,7 +109,9 @@ async fn state_without_store() -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&std::env::temp_dir()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
+            &std::env::temp_dir(),
+        ),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,

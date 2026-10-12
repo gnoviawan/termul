@@ -124,7 +124,9 @@ fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&std::path::PathBuf::from("/tmp")),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
+            &std::path::PathBuf::from("/tmp"),
+        ),
         registry_persistence: None,
         projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,

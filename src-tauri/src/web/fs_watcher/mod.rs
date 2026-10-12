@@ -161,14 +161,21 @@ impl FsWatchHub {
         conn: &UnboundedSender<Outbound>,
     ) -> Result<(), WatchError> {
         if registry.canonical_root(project_id).is_none() {
-            warn!(project_id, "[fs-watch] watch refused: project not found or not watchable");
+            warn!(
+                project_id,
+                "[fs-watch] watch refused: project not found or not watchable"
+            );
             return Err(WatchError::NotFound);
         }
         let mut watches = self.watches.lock();
         if let Some(watch) = watches.get_mut(project_id) {
             if !watch.subscribers.iter().any(|s| s.same_channel(conn)) {
                 watch.subscribers.push(conn.clone());
-                info!(project_id, subscribers = watch.subscribers.len(), "[fs-watch] subscriber added");
+                info!(
+                    project_id,
+                    subscribers = watch.subscribers.len(),
+                    "[fs-watch] subscriber added"
+                );
             }
             return Ok(());
         }
@@ -185,7 +192,10 @@ impl FsWatchHub {
             },
         );
         drop(watches);
-        info!(project_id, "[fs-watch] first subscriber; arming project watcher");
+        info!(
+            project_id,
+            "[fs-watch] first subscriber; arming project watcher"
+        );
         tokio::spawn(run_project_watch(
             project_id.to_string(),
             generation,
@@ -210,7 +220,10 @@ impl FsWatchHub {
         if watch.subscribers.is_empty() {
             if let Some(watch) = watches.remove(project_id) {
                 watch.cancel.cancel();
-                info!(project_id, "[fs-watch] last subscriber left; watcher dropped");
+                info!(
+                    project_id,
+                    "[fs-watch] last subscriber left; watcher dropped"
+                );
             }
         }
         removed
@@ -273,13 +286,24 @@ impl FsWatchHub {
 /// Deliver one `fs_changed` batch to `project_id`'s subscribers. Subscribers
 /// whose channel is closed are pruned; when none remain the watcher is dropped.
 /// Returns `false` when this generation no longer owns the project's watch.
-fn deliver(watches: &WatchMap, project_id: &str, generation: u64, payload: &FsChangedPayload) -> bool {
+fn deliver(
+    watches: &WatchMap,
+    project_id: &str,
+    generation: u64,
+    payload: &FsChangedPayload,
+) -> bool {
     let Ok(payload) = serde_json::to_value(payload) else {
-        warn!(project_id, "[fs-watch] failed to serialize fs_changed payload");
+        warn!(
+            project_id,
+            "[fs-watch] failed to serialize fs_changed payload"
+        );
         return true;
     };
     let mut guard = watches.lock();
-    let Some(watch) = guard.get_mut(project_id).filter(|w| w.generation == generation) else {
+    let Some(watch) = guard
+        .get_mut(project_id)
+        .filter(|w| w.generation == generation)
+    else {
         return false;
     };
     watch.subscribers.retain(|subscriber| {
@@ -295,7 +319,10 @@ fn deliver(watches: &WatchMap, project_id: &str, generation: u64, payload: &FsCh
     if watch.subscribers.is_empty() {
         if let Some(watch) = guard.remove(project_id) {
             watch.cancel.cancel();
-            info!(project_id, "[fs-watch] all subscribers gone; watcher dropped");
+            info!(
+                project_id,
+                "[fs-watch] all subscribers gone; watcher dropped"
+            );
         }
         return false;
     }
@@ -364,7 +391,10 @@ async fn run_project_watch(
         }
     }
     let mut guard = watches.lock();
-    if guard.get(&project_id).is_some_and(|w| w.generation == generation) {
+    if guard
+        .get(&project_id)
+        .is_some_and(|w| w.generation == generation)
+    {
         if let Some(watch) = guard.remove(&project_id) {
             notify_watch_ended(&project_id, &watch.subscribers);
         }
@@ -444,7 +474,11 @@ async fn watch_root(
     armed: &tokio::sync::watch::Sender<bool>,
 ) -> WatchOutcome {
     if !root.is_dir() {
-        warn!(project_id, "[fs-watch] project root is not a directory: {}", root.display());
+        warn!(
+            project_id,
+            "[fs-watch] project root is not a directory: {}",
+            root.display()
+        );
         return WatchOutcome::Failed;
     }
 
@@ -470,10 +504,18 @@ async fn watch_root(
     };
 
     if let Err(error) = watcher.watch(&root, RecursiveMode::Recursive) {
-        warn!(project_id, "[fs-watch] failed to watch {}: {error}", root.display());
+        warn!(
+            project_id,
+            "[fs-watch] failed to watch {}: {error}",
+            root.display()
+        );
         return WatchOutcome::Failed;
     }
-    info!(project_id, "[fs-watch] watching project root: {}", root.display());
+    info!(
+        project_id,
+        "[fs-watch] watching project root: {}",
+        root.display()
+    );
     armed.send_replace(true);
 
     // Validity tick: re-resolve the project's root against the registry so an
