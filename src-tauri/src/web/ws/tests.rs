@@ -272,10 +272,11 @@ async fn requests_past_the_inflight_cap_are_refused_without_rate_limited() {
         exec.submit(None, std::future::pending::<()>()).expect("under the cap");
     }
 
+    let env = test_env(&acp, &relay, &registry, &tx, &conn.subscriptions);
     let alive = dispatch_connection_text(
         r#"{"id":"flood","type":"ping","payload":{}}"#,
         &mut conn,
-        &test_env(&acp, &relay, &registry, &tx, &conn.subscriptions),
+        &env,
         &exec,
     )
     .await;

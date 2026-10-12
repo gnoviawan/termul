@@ -28,7 +28,7 @@ use super::WsRequest;
 /// Requests queued or running on one connection before new ones are refused
 /// with `rate_limited`. A well-behaved client has a handful in flight; the cap
 /// only bounds a flooding peer (the read loop used to be the throttle).
-pub(super) const MAX_INFLIGHT_REQUESTS: usize = 256;
+pub(in crate::web::ws) const MAX_INFLIGHT_REQUESTS: usize = 256;
 
 type Job = Pin<Box<dyn Future<Output = ()> + Send>>;
 
