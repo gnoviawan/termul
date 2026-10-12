@@ -55,7 +55,6 @@ where
     run_command_with(
         relay.ledger(),
         command,
-        true,
         || lookup_created(kind, id, acp, relay),
         execute,
     )
@@ -63,18 +62,14 @@ where
 }
 
 /// [`run_command`] for a create whose entity is found by `lookup` (called only
-/// for classes that create an entity) instead of the ACP stamp index: PTYs by
-/// `commandId`, worktrees and branches by existence, commits by their trailer.
-///
-/// `lookup_on_fresh`: whether a first-sight id also consults `lookup`. Only a
-/// lookup that matches the entity THIS command stamped (ACP stamp index, commit
-/// trailer, PTY) may; an existence lookup (branch, worktree) would answer a new
-/// id for an already-existing entity as success and swallow the real error, so
-/// it runs only for an id the ledger already knows (evicted outcome).
+/// for classes that create an entity) instead of the ACP stamp index: PTYs and
+/// commits by the `commandId` stamped on them. A lookup must match the entity
+/// THIS command stamped, never mere existence (a branch or worktree cannot
+/// carry a stamp, so those commands have no lookup): an existence match would
+/// turn an original rejection into success.
 pub async fn run_command_with<L, LF, F>(
     ledger: &Arc<CommandLedger>,
     command: Command<'_>,
-    lookup_on_fresh: bool,
     lookup: L,
     execute: F,
 ) -> CommandResult
@@ -83,7 +78,7 @@ where
     LF: Future<Output = Option<Settled>>,
     F: Future<Output = Settled> + Send + 'static,
 {
-    run_command_released(ledger, command, lookup_on_fresh, lookup, async move {
+    run_command_released(ledger, command, lookup, async move {
         Ran::Settled(execute.await)
     })
     .await
@@ -103,7 +98,6 @@ pub enum Ran {
 pub async fn run_command_released<L, LF, F>(
     ledger: &Arc<CommandLedger>,
     command: Command<'_>,
-    lookup_on_fresh: bool,
     lookup: L,
     execute: F,
 ) -> CommandResult
@@ -122,7 +116,7 @@ where
     loop {
         match ledger.begin(id, fingerprint) {
             Begin::Fresh(guard) => {
-                if lookup_on_fresh && class.creates_entity() {
+                if class.creates_entity() {
                     if let Some(found) = lookup().await {
                         info!(
                             target: "termul::web::command_ledger",

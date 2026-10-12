@@ -363,12 +363,13 @@ impl PtyManager {
 
     /// The reply for a RESENT spawn whose PTY already exists: its metadata and
     /// a FRESH claim for the resender. The claim of the first reply is never
-    /// stored anywhere (the reply was lost), so the resender gets a new one
-    /// exactly as `list_preserved` would hand out: a shared credential when a
-    /// viewer is attached (the holder keeps its stream), otherwise a replace-
-    /// and-reissue. `None` when no live terminal of `project_id` carries
-    /// `command_id`, or no credential can be issued (revoked record) — the
-    /// caller then answers `outcome_unknown` instead of respawning.
+    /// stored anywhere (the reply was lost), but the first reply may still be
+    /// in flight or its client about to attach, so the resender's claim is
+    /// always SHARED (`issue_shared` appends a credential and invalidates no
+    /// existing holder). `None` when no live terminal of `project_id` carries
+    /// `command_id`, or no credential can be issued — a revoked (or missing)
+    /// claim record is never resurrected by a resend — and the caller then
+    /// answers `outcome_unknown` instead of respawning.
     pub fn replay_spawn(
         &self,
         command_id: &str,
@@ -378,14 +379,10 @@ impl PtyManager {
         if instance.project_id.as_deref() != project_id {
             return None;
         }
-        let claim = if instance.has_web_attachment() {
-            self.claims
-                .issue_shared(&instance.id, instance.project_id.as_deref())
-                .ok()?
-        } else {
-            self.claims
-                .issue(&instance.id, instance.project_id.as_deref())
-        };
+        let claim = self
+            .claims
+            .issue_shared(&instance.id, instance.project_id.as_deref())
+            .ok()?;
         let cols = *instance.cols.read();
         let rows = *instance.rows.read();
         Some(SpawnedTerminal {

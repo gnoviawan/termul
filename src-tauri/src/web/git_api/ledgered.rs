@@ -1,6 +1,7 @@
-//! The ledgered git routes' shared pieces: the commit effect (stamp +
-//! `expectedHead`) and the by-existence entity lookups of a resend, used by
-//! `/git/commit`, `/git/create-branch` and the desktop `git_*` commands.
+//! The ledgered git commit: the effect (stamp + `expectedHead`) and the
+//! trailer lookup of a resend, used by `/git/commit` and the desktop
+//! `git_commit` command. Only the commit is found by a stamp; a branch cannot
+//! carry one, so create-branch has no entity lookup.
 
 use axum::http::HeaderMap;
 
@@ -12,6 +13,21 @@ use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
 
 use super::GitCommitRequest;
+
+/// The identity of a `git_commit` request, shared by the HTTP route and the
+/// Tauri command: where, whether it amends, and the head it expects (an empty
+/// `expectedHead` is the unborn branch, distinct from none). Never the message.
+pub(crate) fn commit_fingerprint(
+    cwd: &str,
+    amend: bool,
+    expected_head: Option<&str>,
+) -> crate::web::command_ledger::Fingerprint {
+    let mut fields = vec![("cwd", cwd), ("amend", if amend { "true" } else { "false" })];
+    if let Some(head) = expected_head {
+        fields.push(("expectedHead", if head.trim().is_empty() { "unborn" } else { head }));
+    }
+    fingerprint_of("git_commit", &fields)
+}
 
 /// Whether a request's `expectedHead` is present but malformed.
 pub(crate) fn expected_head_malformed(head: Option<&str>) -> bool {
@@ -33,14 +49,6 @@ pub(crate) async fn commit_entity(
     .ok()
     .flatten()
     .map(|_| found_entity())
-}
-
-/// The branch a resend created: a local branch of that name exists.
-pub(crate) async fn branch_entity(cwd: String, branch: String) -> Option<Settled> {
-    tokio::task::spawn_blocking(move || git_tracker::local_branch_exists(&cwd, &branch))
-        .await
-        .ok()?
-        .then(found_entity)
 }
 
 /// `POST /git/commit` after the guard and path resolution: refuse a stale
@@ -71,7 +79,7 @@ pub(super) async fn commit(
         state.relay.ledger(),
         headers,
         "git_commit",
-        fingerprint_of("git_commit", &[("cwd", &raw_cwd)]),
+        commit_fingerprint(&raw_cwd, amend, expected_head.as_deref()),
         lookup,
         async move {
             let result = tokio::task::spawn_blocking({

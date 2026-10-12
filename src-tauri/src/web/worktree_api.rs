@@ -48,7 +48,7 @@ use crate::worktree::{
 };
 
 mod ledgered;
-pub(crate) use ledgered::existing_entity as existing_worktree;
+pub(crate) use ledgered::create_fingerprint;
 mod scope;
 
 /// `POST /worktree/list { projectPath }` body.

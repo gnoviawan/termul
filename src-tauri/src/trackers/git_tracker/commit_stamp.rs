@@ -1,13 +1,17 @@
 //! The command stamp of a commit: the `Termul-Command-Id: <id>` trailer that
 //! lets a resend find the commit it made, and the `expectedHead` precondition
-//! that refuses a commit when `HEAD` moved since the caller looked. Also the
-//! by-existence lookup of a created branch.
+//! that refuses a commit when `HEAD` moved since the caller looked.
+//!
+//! The stamp is a real git trailer (parsed by git, exact value match): a prose
+//! line that merely looks like one is not a stamp. A commit and its head check
+//! run under one in-process lock per git dir, so two Termul commits naming one
+//! `expectedHead` cannot both pass the check.
 //!
 //! Limits of the stamp: a resend is found within the commits between
-//! `expectedHead` and `HEAD`, or the [`SEARCH_DEPTH`] most recent commits when
-//! the request names no `expectedHead`; an older commit is not found. An amend
-//! replaces the message, so the commit keeps only the trailer of the amend that
-//! last rewrote it (an earlier command's trailer is dropped).
+//! `expectedHead` and `HEAD` (no cap), or the [`SEARCH_DEPTH`] most recent
+//! commits when the request names no `expectedHead`; an older commit is not
+//! found. An amend replaces the message, so the commit keeps only the trailer
+//! of the amend that last rewrote it (an earlier command's trailer is dropped).
 
 use std::fmt;
 
@@ -104,34 +108,53 @@ pub fn find_stamped_commit(
         .map(str::trim)
         .filter(|head| !head.is_empty())
         .map(|head| format!("{head}..HEAD"));
-    let mut args = vec![
-        "log",
-        "-n",
-        SEARCH_DEPTH,
-        "--format=%H%x1f%B%x1e",
-    ];
+    // The trailer values come from git's own trailer parser (only the final
+    // paragraph of a message counts), never from scanning message lines.
+    let format = format!(
+        "--format=%H%x1f%(trailers:key={TRAILER_KEY},valueonly,unfold,separator=%x1d)%x1e"
+    );
+    let mut args = vec!["log", &format];
+    // An explicit `expectedHead..HEAD` bound is searched whole; the cap only
+    // limits an unbounded search.
+    if range.is_none() {
+        args.extend(["-n", SEARCH_DEPTH]);
+    }
     args.push(range.as_deref().unwrap_or("HEAD"));
     // Revisions end here: nothing after is ever read as a path or an option.
     args.push("--");
     let output = GitTracker::run_git_command(cwd, &args).filter(|o| o.status.success())?;
-    let wanted = format!("{TRAILER_KEY}: {command_id}");
     String::from_utf8_lossy(&output.stdout)
         .split('\u{1e}')
         .find_map(|record| {
-            let (sha, body) = record.split_once('\u{1f}')?;
-            body.lines()
-                .any(|line| line.trim_end() == wanted)
+            let (sha, values) = record.split_once('\u{1f}')?;
+            values
+                .split('\u{1d}')
+                .any(|value| value.trim() == command_id)
                 .then(|| sha.trim().to_string())
         })
 }
 
-/// Whether the local branch `branch` exists (the entity of a create-branch).
-#[must_use]
-pub fn local_branch_exists(cwd: &str, branch: &str) -> bool {
-    if branch.trim().is_empty() || branch.starts_with('-') {
-        return false;
+/// One lock per git dir (a linked worktree has its own), so the `expectedHead`
+/// check and the commit it guards are atomic against other Termul commits.
+static REPO_LOCKS: std::sync::LazyLock<
+    parking_lot::Mutex<HashMap<std::path::PathBuf, Arc<parking_lot::Mutex<()>>>>,
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+const REPO_LOCKS_PRUNE_ABOVE: usize = 64;
+
+/// The lock serializing commits to the repository at `cwd`.
+pub(super) fn repo_lock(cwd: &str) -> Arc<parking_lot::Mutex<()>> {
+    let key = GitTracker::run_git_command(cwd, &["rev-parse", "--absolute-git-dir"])
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| std::path::PathBuf::from(cwd), std::path::PathBuf::from);
+    let mut locks = REPO_LOCKS.lock();
+    if locks.len() > REPO_LOCKS_PRUNE_ABOVE {
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
     }
-    let reference = format!("refs/heads/{branch}");
-    GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", &reference])
-        .is_some_and(|output| output.status.success())
+    Arc::clone(locks.entry(key).or_default())
 }
+
+#[cfg(test)]
+#[path = "commit_stamp_tests.rs"]
+mod tests;

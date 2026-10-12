@@ -73,17 +73,56 @@ async fn create_branch_guards_only_a_start_ref_other_than_head() {
     let dir = tempfile::tempdir().unwrap();
     let Some(repo) = repo(&dir) else { return };
     let cwd = repo.to_string_lossy().to_string();
-    let busy = manager_with_session(&repo, true);
+    let busy = Arc::new(manager_with_session(&repo, true));
+    let ledger = Arc::new(crate::web::command_ledger::CommandLedger::new(
+        std::time::Duration::from_secs(600),
+    ));
+    let create = |name: String, start_ref: Option<String>, id: Option<&str>| {
+        create_branch_ledgered(
+            &ledger,
+            Arc::clone(&busy),
+            cwd.clone(),
+            name,
+            start_ref,
+            id.map(str::to_string),
+        )
+    };
 
-    assert_blocked(
-        create_branch_guarded(&busy, cwd.clone(), "topic".into(), Some("feature".into())).await,
-    );
+    assert_blocked(create("topic".into(), Some("feature".into()), None).await);
     for head_ref in [None, Some("HEAD".to_string()), Some("  ".to_string())] {
         let name = format!("from-head-{}", head_ref.as_deref().unwrap_or("none").trim());
-        create_branch_guarded(&busy, cwd.clone(), name, head_ref)
+        create(name, head_ref, None)
             .await
             .expect("branching from HEAD leaves the tree alone");
     }
+}
+
+/// A refusal is released, not recorded: the same `commandId` runs once the turn
+/// ends, and a settled success replays before the guard is consulted.
+#[tokio::test]
+async fn create_branch_refusal_is_released_and_a_settled_success_replays_past_the_guard() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some(repo) = repo(&dir) else { return };
+    let cwd = repo.to_string_lossy().to_string();
+    let ledger = Arc::new(crate::web::command_ledger::CommandLedger::new(
+        std::time::Duration::from_secs(600),
+    ));
+    let run = |active: bool| {
+        create_branch_ledgered(
+            &ledger,
+            Arc::new(manager_with_session(&repo, active)),
+            cwd.clone(),
+            "topic".into(),
+            Some("feature".into()),
+            Some("cmd-1".into()),
+        )
+    };
+
+    assert_blocked(run(true).await);
+    assert_eq!(ledger.counts(), (0, 0, 0), "a refusal must not be recorded");
+    run(false).await.expect("the id is free once the turn ended");
+    assert_eq!(head(&repo), "topic");
+    run(true).await.expect("a settled success replays before the guard runs");
 }
 
 #[test]

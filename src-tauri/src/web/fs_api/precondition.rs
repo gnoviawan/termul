@@ -132,6 +132,17 @@ pub fn write_checked(
     Ok(CheckedWrite::Written)
 }
 
+/// A write without `expected`: same symlink resolution, per-path lock and
+/// atomic replace as [`write_checked`], so it cannot land between a checked
+/// writer's hash check and its rename and be lost.
+pub fn write_unchecked(path: &Path, content: &[u8]) -> io::Result<()> {
+    let resolved = resolve_symlink(path);
+    let lock = lock_for(&resolved);
+    let _held = lock.lock();
+    let existed = resolved.exists();
+    write_atomic(&resolved, content, existed)
+}
+
 /// The file a write to `path` must update: the symlink's target when `path` is
 /// a link (a dangling link resolves to where it points), else `path` itself.
 fn resolve_symlink(path: &Path) -> PathBuf {
@@ -162,18 +173,29 @@ fn write_atomic(path: &Path, content: &[u8], keep_permissions: bool) -> io::Resu
         Some(dir) => dir.join(&temp_name),
         None => PathBuf::from(&temp_name),
     };
+    let existing = if keep_permissions {
+        fs::metadata(path).ok().map(|metadata| metadata.permissions())
+    } else {
+        None
+    };
     let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // The temp file is born with the destination's mode (never wider, the
+        // umask can only narrow it), so no moment holds the new content under a
+        // wider mode; a new file gets the same 0o666-minus-umask `fs::write` does.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            options.mode(existing.as_ref().map_or(0o666, |p| p.mode() & 0o7777));
+        }
+        let mut file = options.open(&temp)?;
         file.write_all(content)?;
         file.sync_all()?;
         drop(file);
-        if keep_permissions {
-            if let Ok(metadata) = fs::metadata(path) {
-                fs::set_permissions(&temp, metadata.permissions())?;
-            }
+        // Exact bits (and non-unix attributes) after the umask-narrowed create.
+        if let Some(permissions) = existing {
+            fs::set_permissions(&temp, permissions)?;
         }
         fs::rename(&temp, path)
     })();
@@ -193,7 +215,7 @@ pub async fn write_effect(
     has_command_id: bool,
 ) -> IpcBody<()> {
     let result = tokio::task::spawn_blocking(move || match expected {
-        None => fs::write(&path, content.as_bytes()).map(|()| CheckedWrite::Written),
+        None => write_unchecked(&path, content.as_bytes()).map(|()| CheckedWrite::Written),
         Some(expected) => write_checked(&path, content.as_bytes(), &expected, has_command_id),
     })
     .await;

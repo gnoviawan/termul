@@ -1,6 +1,7 @@
 //! `POST /worktree/create` under the command ledger: one effect shared by the
-//! plain JSON reply and the NDJSON progress stream, the by-existence entity
-//! lookup of a resend, and the admission (`X-Command-Id`).
+//! plain JSON reply and the NDJSON progress stream, and the admission
+//! (`X-Command-Id`). A worktree cannot carry a command stamp, so there is no
+//! entity lookup: an evicted resend is `OUTCOME_UNKNOWN`.
 //!
 //! A resend of a create that already ran is answered with a plain `IpcBody`
 //! even when it asked for the stream (the client reads a non-NDJSON reply as
@@ -20,7 +21,7 @@ use tracing::{error, info, warn};
 
 use super::scope::path_key;
 use super::worktree_err;
-use crate::web::command_ledger::{fingerprint_of, run_http, Settled};
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_http};
 use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
 use crate::worktree::{GitWorktreeEntry, WorktreeManager};
@@ -42,39 +43,37 @@ pub(super) struct CreateArgs {
     pub stream_progress: bool,
 }
 
+/// The identity of a `worktree_create` request, shared by the HTTP route and
+/// the Tauri command so one id means one request on both carriers: where, what
+/// branch, new or existing, from which ref. (Names only; no secrets.)
+pub(crate) fn create_fingerprint(
+    project_path: &str,
+    name: &str,
+    branch: &str,
+    is_new_branch: bool,
+    start_ref: Option<&str>,
+    target_path: Option<&str>,
+) -> crate::web::command_ledger::Fingerprint {
+    let mut fields = vec![
+        ("projectPath", project_path),
+        ("name", name),
+        ("branch", branch),
+        ("isNewBranch", if is_new_branch { "true" } else { "false" }),
+    ];
+    if let Some(start_ref) = start_ref {
+        fields.push(("startRef", start_ref));
+    }
+    if let Some(target) = target_path {
+        fields.push(("targetPath", target));
+    }
+    fingerprint_of("worktree_create", &fields)
+}
+
 /// A comparison key for a worktree path: canonical when it exists (git lists
 /// resolved paths; the request may name a symlinked one), else as given.
 fn canonical_key(path: &str) -> String {
     let canonical = std::fs::canonicalize(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
     path_key(&canonical)
-}
-
-/// The worktree a resend created: one on `branch` at the path `create` uses.
-pub(crate) async fn existing_entity(
-    project_path: String,
-    name: String,
-    branch: String,
-    target_path: Option<String>,
-) -> Option<Settled> {
-    let entries = tokio::task::spawn_blocking({
-        let project_path = project_path.clone();
-        move || WorktreeManager::list(&project_path)
-    })
-    .await
-    .ok()?
-    .ok()?;
-    let target = canonical_key(&WorktreeManager::target_path(
-        &project_path,
-        &name,
-        target_path.as_deref(),
-    ));
-    let entry = entries
-        .into_iter()
-        .find(|entry| entry.branch == branch && canonical_key(&entry.path) == target)?;
-    Some(Settled::Accepted {
-        payload: serde_json::to_value(entry).ok(),
-        visible_at: None,
-    })
 }
 
 /// Create the worktree. `frames` receives the NDJSON frames (`preparing`,
@@ -94,7 +93,7 @@ async fn create_effect(
         ..
     } = args;
     let path_for_log = project_path.clone();
-    info!(path = %path_for_log, name = %name, branch = %branch, is_new_branch = %is_new_branch, start_ref = ?start_ref, target_path = ?target_path, progress_id = ?progress_id, "worktree create start");
+    info!(path = %path_for_log, name = ?name, branch = ?branch, is_new_branch = %is_new_branch, start_ref = ?start_ref, target_path = ?target_path, progress_id = ?progress_id, "worktree create start");
     let (log_name, log_branch, log_start, log_target) = (
         name.clone(),
         branch.clone(),
@@ -128,15 +127,15 @@ async fn create_effect(
     .await;
     let body = match joined {
         Ok(Ok(entry)) => {
-            info!(path = %path_for_log, name = %log_name, branch = %entry.branch, "worktree create ok");
+            info!(path = %path_for_log, name = ?log_name, branch = ?entry.branch, "worktree create ok");
             IpcBody::ok(entry)
         }
         Ok(Err(e)) => {
-            warn!(path = %path_for_log, name = %log_name, branch = %log_branch, is_new_branch = %is_new_branch, start_ref = ?log_start, target_path = ?log_target, error = %e, "worktree create failed");
+            warn!(path = %path_for_log, name = ?log_name, branch = ?log_branch, is_new_branch = %is_new_branch, start_ref = ?log_start, target_path = ?log_target, error = %e, "worktree create failed");
             worktree_err::<GitWorktreeEntry>(e)
         }
         Err(e) => {
-            error!(path = %path_for_log, name = %log_name, branch = %log_branch, is_new_branch = %is_new_branch, start_ref = ?log_start, target_path = ?log_target, error = %e, "worktree create task panicked");
+            error!(path = %path_for_log, name = ?log_name, branch = ?log_branch, is_new_branch = %is_new_branch, start_ref = ?log_start, target_path = ?log_target, error = %e, "worktree create task panicked");
             IpcBody::<GitWorktreeEntry>::err(
                 format!("worktree create task failed: {e}"),
                 "WORKTREE_CREATE_ERROR",
@@ -158,26 +157,15 @@ async fn admit(
     frames: Option<mpsc::UnboundedSender<String>>,
     started: Option<oneshot::Sender<()>>,
 ) -> IpcBody<GitWorktreeEntry> {
-    let lookup = {
-        let (project, name, branch, target) = (
-            args.project_path.clone(),
-            args.name.clone(),
-            args.branch.clone(),
-            args.target_path.clone(),
-        );
-        move || existing_entity(project.clone(), name.clone(), branch.clone(), target.clone())
-    };
-    let mut fields = vec![
-        ("projectPath", args.raw_project_path.clone()),
-        ("name", args.name.clone()),
-        ("branch", args.branch.clone()),
-    ];
-    if let Some(target) = &args.raw_target_path {
-        fields.push(("targetPath", target.clone()));
-    }
-    let fields: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    let fingerprint = fingerprint_of("worktree_create", &fields);
-    run_http(ledger, headers, "worktree_create", fingerprint, lookup, async move {
+    let fingerprint = create_fingerprint(
+        &args.raw_project_path,
+        &args.name,
+        &args.branch,
+        args.is_new_branch,
+        args.start_ref.as_deref(),
+        args.raw_target_path.as_deref(),
+    );
+    run_http(ledger, headers, "worktree_create", fingerprint, no_entity(), async move {
         if let Some(started) = started {
             let _ = started.send(());
         }

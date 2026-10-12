@@ -31,10 +31,9 @@ use commands::{
 #[cfg(test)]
 use polling::PollingGuard;
 pub use commit_stamp::{
-    find_stamped_commit, head_sha, is_valid_expected_head, local_branch_exists, CommitFailure,
-    CommitStamp,
+    find_stamped_commit, head_sha, is_valid_expected_head, CommitFailure, CommitStamp,
 };
-use commit_stamp::with_command_trailer;
+use commit_stamp::{repo_lock, with_command_trailer};
 use resolve::backend_command;
 
 // `crate::trackers::git_tracker` public surface preserved via re-export.

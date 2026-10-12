@@ -387,3 +387,67 @@ async fn list_preserved_is_never_replayed_even_with_a_command_id() {
 
     state.pty.force_kill(&id).await.unwrap();
 }
+
+#[tokio::test]
+async fn a_spawn_resend_after_its_claim_was_revoked_is_outcome_unknown_and_never_respawns() {
+    let (state, clock) = state_with_clock();
+    let mut conn = gate_test_ctx(true);
+    let spawned = spawn(&state, &mut conn, "spawn-1", "p").await.unwrap();
+    let id = str_of(&spawned, "id");
+    let revoke = request(
+        "revoke_claim",
+        json!({ "terminalId": id, "claim": str_of(&spawned, "claim") }),
+        None,
+    );
+    call(&state, &mut conn, revoke).await.unwrap();
+
+    // Ledger still holds the spawn, then it is evicted entirely: neither path
+    // resurrects the record or spawns a second PTY.
+    assert_eq!(code(spawn(&state, &mut conn, "spawn-1", "p").await), "OUTCOME_UNKNOWN");
+    clock.advance(RETENTION * 8);
+    assert_eq!(code(spawn(&state, &mut conn, "spawn-1", "p").await), "OUTCOME_UNKNOWN");
+    assert_eq!(state.pty.get_all().len(), 1);
+    assert!(state.pty.verify_claim(&id, &str_of(&spawned, "claim")).is_err());
+
+    state.pty.force_kill(&id).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_replayed_revoke_never_detaches_a_connection_that_re_attached_since() {
+    let (state, _) = state_with_clock();
+    let (tx, _rx) = mpsc::channel(8);
+    let mut conn = gate_test_ctx(true);
+    let spawned = spawn(&state, &mut conn, "spawn-1", "p").await.unwrap();
+    let id = str_of(&spawned, "id");
+    let revoke = || {
+        request(
+            "revoke_claim",
+            json!({ "terminalId": id, "claim": str_of(&spawned, "claim") }),
+            Some("rev-1"),
+        )
+    };
+
+    // The executing revoke detaches the connection.
+    assert_eq!(call(&state, &mut conn, revoke()).await, Ok(Value::Null));
+    assert!(!conn.is_authorized(&id));
+
+    // It recovers a fresh claim and re-attaches.
+    let listed = call(
+        &state,
+        &mut conn,
+        request("list_preserved", json!({ "projectId": "p" }), None),
+    )
+    .await
+    .unwrap();
+    let fresh = str_of(&listed["terminals"][0], "claim");
+    attach_terminal(&state, &tx, &mut conn, &id, &fresh).await;
+    assert!(conn.is_authorized(&id));
+
+    // A late retry of the old revoke answers ok and detaches nothing.
+    assert_eq!(call(&state, &mut conn, revoke()).await, Ok(Value::Null));
+    assert!(conn.is_authorized(&id));
+    assert!(conn.attachments.contains_key(&id));
+    assert!(state.pty.verify_claim(&id, &fresh).is_ok());
+
+    state.pty.force_kill(&id).await.unwrap();
+}

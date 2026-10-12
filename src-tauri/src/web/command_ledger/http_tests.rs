@@ -657,7 +657,7 @@ async fn a_create_branch_for_an_existing_branch_with_a_fresh_id_keeps_its_real_e
 }
 
 #[tokio::test]
-async fn a_create_branch_resend_after_eviction_finds_the_branch() {
+async fn a_create_branch_resend_after_eviction_is_outcome_unknown_not_found_by_existence() {
     let dir = TempDir::new("branch");
     let repo = repo(&dir);
     let body = json!({ "cwd": path_str(&repo), "branch": "feature/x" });
@@ -666,17 +666,18 @@ async fn a_create_branch_resend_after_eviction_finds_the_branch() {
 
     assert!(ok(&send(&app, "POST", "/git/create-branch", body.clone(), Some("br-1")).await));
     evict(&clock);
-    // Creating it again would fail (`already exists`); the branch is the entity.
+    // A branch cannot carry a command stamp: existence proves nothing about
+    // THIS command, so the evicted resend is unknown, not "found".
     let resend = send(&app, "POST", "/git/create-branch", body.clone(), Some("br-1")).await;
-    assert!(ok(&resend), "{}", resend.text);
+    assert_eq!(code(&resend), "OUTCOME_UNKNOWN", "{}", resend.text);
 
-    // An id the ledger never saw gets no such shortcut.
+    // An id the ledger never saw runs and gets the real error.
     let other = send(&app, "POST", "/git/create-branch", body, Some("br-2")).await;
     assert_eq!(code(&other), "GIT_CREATE_BRANCH_ERROR");
 }
 
 #[tokio::test]
-async fn a_worktree_create_resend_returns_the_existing_worktree() {
+async fn a_worktree_create_resend_replays_and_never_finds_a_worktree_by_existence() {
     let dir = TempDir::new("worktree");
     let repo = repo(&dir);
     let body = json!({
@@ -697,14 +698,30 @@ async fn a_worktree_create_resend_returns_the_existing_worktree() {
     let resend = send(&host_one, "POST", "/worktree/create", body.clone(), Some("wt-1")).await;
     assert_eq!(resend.json()["data"], entry);
 
-    // Outcome evicted: git already has the worktree, so a second create would
-    // fail with BRANCH_ALREADY_HAS_WORKTREE. The existing worktree is the answer.
+    // Outcome evicted: a worktree cannot carry a command stamp, so the resend
+    // is unknown and not run (never "found by existence").
     evict(&clock);
     let after_eviction = send(&host_one, "POST", "/worktree/create", body.clone(), Some("wt-1")).await;
-    assert!(ok(&after_eviction), "{}", after_eviction.text);
-    // (git lists the path without the trailing slash the create reply carried.)
-    let trim = |value: &Value| value.as_str().unwrap().trim_end_matches('/').to_string();
-    assert_eq!(trim(&after_eviction.json()["data"]["path"]), trim(&entry["path"]));
+    assert_eq!(code(&after_eviction), "OUTCOME_UNKNOWN", "{}", after_eviction.text);
+
+    // The same id with a changed request (here the start ref) is a conflict.
+    let changed = json!({
+        "projectPath": path_str(&repo),
+        "name": "wt1",
+        "branch": "chat/one",
+        "isNewBranch": true,
+        "startRef": "main",
+    });
+    let conflict = send(&host_one, "POST", "/worktree/create", changed, Some("wt-1")).await;
+    assert_eq!(code(&conflict), "COMMAND_CONFLICT");
+    let flipped = json!({
+        "projectPath": path_str(&repo),
+        "name": "wt1",
+        "branch": "chat/one",
+        "isNewBranch": false,
+    });
+    let conflict = send(&host_one, "POST", "/worktree/create", flipped, Some("wt-1")).await;
+    assert_eq!(code(&conflict), "COMMAND_CONFLICT");
 
     // A NEW id for the same branch is a real conflict, not a resend: the
     // original refusal stands (with or without an id).

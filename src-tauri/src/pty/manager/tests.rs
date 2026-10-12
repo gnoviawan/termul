@@ -993,13 +993,15 @@ async fn replayed_spawn_finds_the_stamped_pty_and_issues_a_fresh_claim() {
     assert!(manager.verify_claim(&spawned.info.id, &replay.claim).is_ok());
     assert_eq!(manager.get_all().len(), 1, "a replay never spawns again");
 
-    // Nobody attached: the claim is replaced, the first reply's claim dies.
+    // Nobody attached (e.g. a concurrent resend before the first client
+    // attaches): the first reply's claim must keep working too.
     found.remove_web_attachment();
-    let reissued = manager
+    let again = manager
         .replay_spawn("cmd-spawn-1", Some("p"))
         .expect("replayed spawn");
-    assert!(manager.verify_claim(&spawned.info.id, &reissued.claim).is_ok());
-    assert!(manager.verify_claim(&spawned.info.id, &spawned.claim).is_err());
+    assert!(manager.verify_claim(&spawned.info.id, &again.claim).is_ok());
+    assert!(manager.verify_claim(&spawned.info.id, &spawned.claim).is_ok());
+    assert!(manager.verify_claim(&spawned.info.id, &replay.claim).is_ok());
 
     manager.force_kill(&spawned.info.id).await.unwrap();
 }
@@ -1027,4 +1029,31 @@ async fn replayed_spawn_is_none_for_a_foreign_project_and_after_the_pty_is_gone(
     manager.force_kill(&spawned.info.id).await.unwrap();
     assert!(manager.find_by_command_id("cmd-spawn-2").is_none());
     assert!(manager.replay_spawn("cmd-spawn-2", Some("p")).is_none());
+}
+
+/// A resend never resurrects a revoked claim record: after the spawn's claim
+/// was revoked the replay issues nothing (the carrier answers
+/// `OUTCOME_UNKNOWN`) and no credential verifies.
+#[tokio::test]
+async fn replayed_spawn_does_not_resurrect_a_revoked_claim() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(
+            SpawnOptions {
+                project_id: Some("p".to_string()),
+                command_id: Some("cmd-spawn-3".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("spawn");
+    manager
+        .revoke_claim(&spawned.info.id, &spawned.claim)
+        .expect("revoke");
+
+    assert!(manager.replay_spawn("cmd-spawn-3", Some("p")).is_none());
+    assert!(manager.verify_claim(&spawned.info.id, &spawned.claim).is_err());
+
+    manager.force_kill(&spawned.info.id).await.unwrap();
 }

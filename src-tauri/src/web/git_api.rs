@@ -31,13 +31,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 mod ledgered;
-pub(crate) use ledgered::{branch_entity, commit_entity, expected_head_malformed};
+pub(crate) use ledgered::{commit_entity, commit_fingerprint, expected_head_malformed};
 
 use crate::trackers::git_tracker::{
     self, GitCommit, GitCommitContext, GitStatusDetail, GitTracker,
 };
 use crate::acp::destructive_guard::{ensure_no_active_turn_under, DESTRUCTIVE_OP_BLOCKED};
-use crate::web::command_ledger::{fingerprint_of, no_entity, run_http};
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_http, run_http_released, HttpRan};
 use crate::web::fs_api::{check_local_only, resolve_request_path, IpcBody};
 use crate::web::ws::AppState;
 
@@ -575,24 +575,24 @@ pub async fn create_branch(
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    // Branching from HEAD leaves the work tree alone; branching from another
-    // `start_ref` checks that ref out, which rewrites it.
-    if crate::acp::destructive_guard::start_ref_rewrites_tree(req.start_ref.as_deref()) {
-        if let Some(blocked) = checkout_refusal(&state, &resolved).await {
-            return blocked;
-        }
-    }
-    let lookup = {
-        let (cwd, branch) = (cwd.clone(), req.branch.clone());
-        move || branch_entity(cwd.clone(), branch.clone())
-    };
-    let body = run_http(
+    let guard_state = state.clone();
+    let body = run_http_released(
         state.relay.ledger(),
         &headers,
         "git_create_branch",
         fingerprint_of("git_create_branch", &[("cwd", &req.cwd), ("branch", &req.branch)]),
-        lookup,
+        no_entity(),
         async move {
+            // Branching from HEAD leaves the work tree alone; branching from
+            // another `start_ref` checks that ref out, which rewrites it. The
+            // guard runs INSIDE the ledgered effect: a settled outcome replays
+            // before it, and a refusal is released, not recorded, so a retry
+            // after the turn ends runs.
+            if crate::acp::destructive_guard::start_ref_rewrites_tree(req.start_ref.as_deref()) {
+                if let Some((_, Json(blocked))) = checkout_refusal(&guard_state, &resolved).await {
+                    return HttpRan::Released(blocked);
+                }
+            }
             let cwd_for_log = cwd.clone();
             let branch = req.branch;
             let branch_for_log = branch.clone();
@@ -602,13 +602,13 @@ pub async fn create_branch(
             })
             .await
             .map_err(|e| format!("git create-branch task failed: {e}"));
-            match result {
+            HttpRan::Settled(match result {
                 Ok(Ok(())) => {
-                    tracing::info!(path = %cwd_for_log, branch = %branch_for_log, "git create-branch ok");
+                    tracing::info!(path = %cwd_for_log, branch = ?branch_for_log, "git create-branch ok");
                     IpcBody::<()>::ok(())
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!(path = %cwd_for_log, branch = %branch_for_log, error = %e, "git create-branch failed");
+                    tracing::warn!(path = %cwd_for_log, branch = ?branch_for_log, error = %e, "git create-branch failed");
                     IpcBody::<()>::err(e, "GIT_CREATE_BRANCH_ERROR")
                 }
                 Err(e) => {
@@ -618,7 +618,7 @@ pub async fn create_branch(
                         "GIT_CREATE_BRANCH_ERROR",
                     )
                 }
-            }
+            })
         },
     )
     .await;
@@ -1048,27 +1048,13 @@ async fn run_branch_name_write(
         }
     }
     let (raw_cwd, req_name) = (req.cwd, req.name);
-    let creates = kind == "git_create_branch";
-    let lookup = {
-        let (cwd, name) = (cwd.clone(), req_name.clone());
-        move || {
-            let (cwd, name) = (cwd.clone(), name.clone());
-            async move {
-                if creates {
-                    branch_entity(cwd, name).await
-                } else {
-                    None
-                }
-            }
-        }
-    };
-    let name_field = if creates { "branch" } else { "name" };
+    let name_field = if kind == "git_create_branch" { "branch" } else { "name" };
     let body = run_http(
         state.relay.ledger(),
         headers,
         kind,
         fingerprint_of(kind, &[("cwd", &raw_cwd), (name_field, &req_name)]),
-        lookup,
+        no_entity(),
         async move {
             let cwd_for_log = cwd.clone();
             let name = req_name;
@@ -1078,11 +1064,11 @@ async fn run_branch_name_write(
                 .map_err(|e| format!("git {label} task failed: {e}"));
             match result {
                 Ok(Ok(())) => {
-                    tracing::info!(path = %cwd_for_log, op = label, name = %name_for_log, "git {label} ok");
+                    tracing::info!(path = %cwd_for_log, op = label, name = ?name_for_log, "git {label} ok");
                     IpcBody::<()>::ok(())
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!(path = %cwd_for_log, op = label, name = %name_for_log, error = %e, "git {label} failed");
+                    tracing::warn!(path = %cwd_for_log, op = label, name = ?name_for_log, error = %e, "git {label} failed");
                     IpcBody::<()>::err(e, code)
                 }
                 Err(e) => {

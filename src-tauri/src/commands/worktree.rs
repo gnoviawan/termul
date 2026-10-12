@@ -1,8 +1,8 @@
 use super::{validate_project_path, IpcResult};
 use crate::acp::destructive_guard::{ensure_no_active_turn_under, DESTRUCTIVE_OP_BLOCKED};
 use crate::acp::AcpManager;
-use crate::web::command_ledger::{fingerprint_of, no_entity, run_domain, Settled};
-use crate::web::worktree_api::existing_worktree;
+use crate::web::command_ledger::{fingerprint_of, no_entity, run_domain};
+use crate::web::worktree_api::create_fingerprint;
 use crate::web::WsRelaySink;
 use crate::worktree::{
     BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult, RemoveResult,
@@ -43,8 +43,9 @@ pub async fn worktree_list(project_path: String) -> Result<IpcResult<Vec<Worktre
 /// show live preparation output while the blocking `git worktree add` runs.
 /// Emit failures are logged and ignored — they must not fail the create.
 ///
-/// A `command_id` makes a resend answer with the worktree that already exists
-/// at the target (same branch) instead of failing with `BranchAlreadyHasWorktree`.
+/// A `command_id` makes a resend answer with the recorded outcome instead of
+/// creating again; a resend whose outcome was evicted is `outcome_unknown`
+/// (a worktree cannot carry a command stamp, so it is never found by existence).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn worktree_create(
@@ -59,37 +60,22 @@ pub async fn worktree_create(
     progress_id: Option<String>,
     command_id: Option<String>,
 ) -> Result<IpcResult<WorktreeInfo>, String> {
-    // The lookup and the effect both use the validated (canonical) path.
+    // Validate before admission: a bad path is refused without a ledger entry.
     let validated_path = validate_and_stringify!(&project_path);
-    let lookup = {
-        let (project, name, branch, target) = (
-            validated_path.clone(),
-            name.clone(),
-            branch.clone(),
-            target_path.clone(),
-        );
-        move || {
-            let (project, name, branch, target) =
-                (project.clone(), name.clone(), branch.clone(), target.clone());
-            async move { existing_worktree(project, name, branch, target).await.map(as_ipc_result) }
-        }
-    };
-    let mut fields = vec![
-        ("projectPath", project_path.clone()),
-        ("name", name.clone()),
-        ("branch", branch.clone()),
-    ];
-    if let Some(target) = &target_path {
-        fields.push(("targetPath", target.clone()));
-    }
-    let fields: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    let print = fingerprint_of("worktree_create", &fields);
+    let print = create_fingerprint(
+        &project_path,
+        &name,
+        &branch,
+        is_new_branch,
+        start_ref.as_deref(),
+        target_path.as_deref(),
+    );
     run_domain(
         relay.ledger(),
         "worktree_create",
         command_id,
         print,
-        lookup,
+        no_entity(),
         worktree_create_effect(
             app,
             validated_path,
@@ -102,18 +88,6 @@ pub async fn worktree_create(
         ),
     )
     .await
-}
-
-/// The replayed reply of a found worktree: the whole `IpcResult`, not just its
-/// data (what a ledgered `worktree_create` answers on a resend).
-pub(crate) fn as_ipc_result(found: Settled) -> Settled {
-    match found {
-        Settled::Accepted { payload, visible_at } => Settled::Accepted {
-            payload: payload.map(|data| serde_json::json!({ "success": true, "data": data })),
-            visible_at,
-        },
-        rejected => rejected,
-    }
 }
 
 /// `project_path` is already validated.

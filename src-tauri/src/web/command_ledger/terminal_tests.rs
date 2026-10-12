@@ -211,7 +211,10 @@ async fn a_waiting_resend_becomes_the_next_run_when_the_first_is_released() {
     let waiter_ledger = ledger.clone();
     let waiter_runs = runs.clone();
     let waiter = tokio::spawn(async move { run_kill(&waiter_ledger, "k1", &waiter_runs, "t1").await });
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    // Release only once the resend is really parked on the in-flight run.
+    while ledger.waiting_resends("k1") == 0 {
+        tokio::task::yield_now().await;
+    }
     release.send(()).unwrap();
 
     assert!(matches!(first.await.unwrap(), Outcome::Rejected { .. }));

@@ -5,9 +5,9 @@ use crate::trackers::git_tracker::{DiffStatError, GitDiffStat};
 use crate::trackers::git_tracker::{CommitFailure, CommitStamp};
 use crate::trackers::{GitCommit, GitStatusDetail};
 use crate::web::command_ledger::{
-    fingerprint_of, no_entity, run_domain, PRECONDITION_FAILED_PREFIX,
+    fingerprint_of, no_entity, run_domain, run_domain_released, DomainRan, PRECONDITION_FAILED_PREFIX,
 };
-use crate::web::git_api::{branch_entity, commit_entity, expected_head_malformed};
+use crate::web::git_api::{commit_entity, commit_fingerprint, expected_head_malformed};
 use crate::web::WsRelaySink;
 use std::sync::Arc;
 use tauri::State;
@@ -158,7 +158,7 @@ pub async fn git_commit(
         let (cwd, id, head) = (cwd.clone(), command_id.clone(), expected_head.clone());
         move || commit_entity(cwd.clone(), id.clone(), head.clone())
     };
-    let print = fingerprint_of("git_commit", &[("cwd", &cwd)]);
+    let print = commit_fingerprint(&cwd, amend, expected_head.as_deref());
     let stamp_id = command_id.clone();
     run_domain(
         relay.ledger(),
@@ -282,38 +282,68 @@ pub async fn git_create_branch(
     start_ref: Option<String>,
     command_id: Option<String>,
 ) -> Result<(), String> {
-    // A resend finds the branch by existence instead of creating it again.
-    let lookup = {
-        let (cwd, branch) = (cwd.clone(), branch.clone());
-        move || branch_entity(cwd.clone(), branch.clone())
-    };
-    let print = fingerprint_of("git_create_branch", &[("cwd", &cwd), ("branch", &branch)]);
-    let manager = Arc::clone(manager.inner());
-    run_domain(
+    create_branch_ledgered(
         relay.ledger(),
-        "git_create_branch",
+        Arc::clone(manager.inner()),
+        cwd,
+        branch,
+        start_ref,
         command_id,
-        print,
-        lookup,
-        async move { create_branch_guarded(&manager, cwd, branch, start_ref).await },
     )
     .await
 }
 
-/// Body of [`git_create_branch`], see [`checkout_branch_guarded`].
-pub(crate) async fn create_branch_guarded(
+/// Body of [`git_create_branch`] taking the ledger and manager directly so
+/// tests can drive the desktop entry point without a Tauri app.
+pub(crate) async fn create_branch_ledgered(
+    ledger: &Arc<crate::web::command_ledger::CommandLedger>,
+    manager: Arc<AcpManager>,
+    cwd: String,
+    branch: String,
+    start_ref: Option<String>,
+    command_id: Option<String>,
+) -> Result<(), String> {
+    let print = fingerprint_of("git_create_branch", &[("cwd", &cwd), ("branch", &branch)]);
+    run_domain_released(
+        ledger,
+        "git_create_branch",
+        command_id,
+        print,
+        no_entity(),
+        async move {
+            // The guard runs INSIDE the ledgered effect: a settled outcome
+            // replays before it, and a refusal is released (not recorded) so a
+            // retry after the turn ends runs.
+            if let Err(blocked) = guard_create_branch(&manager, &cwd, start_ref.as_deref()).await {
+                return DomainRan::Released(blocked);
+            }
+            DomainRan::Settled(create_branch_unguarded(cwd, branch, start_ref).await)
+        },
+    )
+    .await
+}
+
+/// The destructive-op guard of [`git_create_branch`]: `Err` is the refusal text.
+async fn guard_create_branch(
     acp: &AcpManager,
+    cwd: &str,
+    start_ref: Option<&str>,
+) -> Result<(), String> {
+    // Branching from HEAD leaves the work tree alone; branching from another
+    // `start_ref` checks that ref out, which rewrites it.
+    if start_ref_rewrites_tree(start_ref) {
+        ensure_no_active_turn_in_checkout(acp, std::path::Path::new(cwd))
+            .await
+            .map_err(|blocked| blocked.to_string())?;
+    }
+    Ok(())
+}
+
+async fn create_branch_unguarded(
     cwd: String,
     branch: String,
     start_ref: Option<String>,
 ) -> Result<(), String> {
-    // Branching from HEAD leaves the work tree alone; branching from another
-    // `start_ref` checks that ref out, which rewrites it.
-    if start_ref_rewrites_tree(start_ref.as_deref()) {
-        ensure_no_active_turn_in_checkout(acp, std::path::Path::new(&cwd))
-            .await
-            .map_err(|blocked| blocked.to_string())?;
-    }
     tauri::async_runtime::spawn_blocking(move || {
         crate::trackers::git_tracker::git_create_branch(&cwd, &branch, start_ref.as_deref())
     })

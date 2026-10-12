@@ -38,7 +38,8 @@ pub use class::{
     class_of, tauri_request_type, ClassKind, CommandClass, Fingerprint, Replay, WS_COMMAND_CLASSES,
 };
 pub use http::{
-    command_id_from_headers, domain_class, fingerprint_of, found_entity, no_entity, run_domain, run_http,
+    command_id_from_headers, domain_class, fingerprint_of, found_entity, no_entity, run_domain,
+    run_domain_released, run_http, run_http_released, DomainRan, HttpRan,
     COMMAND_CONFLICT_CODE, COMMAND_ID_HEADER, INVALID_COMMAND_ID_CODE, IN_PROGRESS_RECEIPT,
     OUTCOME_UNKNOWN_CODE, PRECONDITION_FAILED_CODE, PRECONDITION_FAILED_PREFIX,
 };
@@ -273,6 +274,16 @@ impl CommandLedger {
         let bare = store.bare.len();
         let outcomes = store.outcomes.len();
         (store.entries.len() - bare - outcomes, outcomes, bare)
+    }
+
+    /// Resends currently waiting on the in-flight run of `id` (tests only:
+    /// lets a test release the first run once the waiter is really parked).
+    #[cfg(test)]
+    pub(crate) fn waiting_resends(&self, id: &str) -> usize {
+        match self.store.lock().entries.get(id).map(|entry| &entry.state) {
+            Some(State::InProgress(sender)) => sender.receiver_count(),
+            _ => 0,
+        }
     }
 
     /// Remove an entry that is still in progress (dropping its sender wakes

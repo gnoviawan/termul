@@ -1,6 +1,6 @@
 //! The domain-command carriers of the ledger: HTTP routes (`X-Command-Id`
 //! header, `IpcBody` replies) and Tauri commands (`commandId` argument,
-//! `Result<T, String>` replies) admit through the same [`run_command_with`]
+//! `Result<T, String>` replies) admit through the same [`run_command_released`]
 //! as `/ws`, with one class table for the domain kinds below.
 //!
 //! * Ledgered (`Command`/`Create`): fs write/rename/copy, git commit,
@@ -38,8 +38,8 @@ use crate::acp::commands::{
 use crate::web::fs_api::IpcBody;
 
 use super::{
-    class_of, is_valid_command_id, run_command_with, ClassKind, Command, CommandClass, CommandLedger,
-    CommandResult, Fingerprint, Replay, Settled, MAX_COMMAND_ID_LEN,
+    class_of, is_valid_command_id, run_command_released, ClassKind, Command, CommandClass, CommandLedger,
+    CommandResult, Fingerprint, Ran, Replay, Settled, MAX_COMMAND_ID_LEN,
 };
 
 /// The request header that carries the `commandId` of an HTTP route.
@@ -83,8 +83,11 @@ const DOMAIN_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("git_stash_drop", CommandClass::command(Replay::Payload)),
     ("git_stage_hunk", CommandClass::command(Replay::ReceiptOnly)),
     ("git_unstage_hunk", CommandClass::command(Replay::ReceiptOnly)),
-    ("git_create_branch", CommandClass::create()),
-    ("worktree_create", CommandClass::create()),
+    // A branch or worktree cannot carry a command stamp, so these are plain
+    // commands: an evicted resend is `OUTCOME_UNKNOWN`, never "found by
+    // existence" (which could turn an original rejection into success).
+    ("git_create_branch", CommandClass::command(Replay::Payload)),
+    ("worktree_create", CommandClass::command(Replay::Payload)),
     ("workspace_write", CommandClass::command(Replay::Payload)),
     (
         "worktree_rename_branch",
@@ -101,14 +104,6 @@ pub fn domain_class(kind: &str) -> Option<(&'static str, CommandClass)> {
         .find(|(name, _)| *name == kind)
         .map(|(name, class)| (*name, *class))
         .or_else(|| class_of(kind))
-}
-
-/// Whether a first-sight id also consults the entity lookup: only for a lookup
-/// of the entity THIS command stamped (the commit trailer). Branch and
-/// worktree lookups are by existence, so they run only for an id the ledger
-/// already knows (see [`run_command_with`]).
-fn lookup_on_fresh(kind: &str) -> bool {
-    kind == "git_commit"
 }
 
 /// The fingerprint of a `kind` request from its identifying `fields` (entity
@@ -208,12 +203,30 @@ fn body_of<T: DeserializeOwned>(kind: &str, result: CommandResult) -> IpcBody<T>
     }
 }
 
+/// How an HTTP effect ended, for [`run_http_released`].
+pub enum HttpRan<T> {
+    /// Record the reply and replay it to resends.
+    Settled(IpcBody<T>),
+    /// Refused before any effect (a destructive-op guard): the caller gets the
+    /// refusal, nothing is recorded, and the id is free for a retry to run.
+    Released(IpcBody<T>),
+}
+
+/// How a Tauri effect ended, for [`run_domain_released`].
+pub enum DomainRan<T> {
+    /// Record the result and replay it to resends.
+    Settled(Result<T, String>),
+    /// Refused before any effect: the error text goes to the caller, nothing
+    /// is recorded, and the id is free for a retry to run.
+    Released(String),
+}
+
 /// Run `execute` for the HTTP route `kind` under the ledger.
 ///
 /// Call it INSIDE the handler, after the route's write guard and request
 /// validation, so a refused request records nothing. `fingerprint` is
 /// [`fingerprint_of`] the identifying request fields. `lookup` finds
-/// the entity a create made (see [`no_entity`]).
+/// the entity a create stamped (see [`no_entity`]).
 pub fn run_http<'a, T, L, LF, F>(
     ledger: &'a Arc<CommandLedger>,
     headers: &HeaderMap,
@@ -228,6 +241,28 @@ where
     LF: Future<Output = Option<Settled>>,
     F: Future<Output = IpcBody<T>> + Send + 'static,
 {
+    run_http_released(ledger, headers, kind, fingerprint, lookup, async move {
+        HttpRan::Settled(execute.await)
+    })
+}
+
+/// [`run_http`] whose effect may [`HttpRan::Released`] the id: put a guard
+/// that can refuse (`destructive_op_blocked`) INSIDE `execute`, so a settled
+/// outcome replays before the guard runs and a refusal is never recorded.
+pub fn run_http_released<'a, T, L, LF, F>(
+    ledger: &'a Arc<CommandLedger>,
+    headers: &HeaderMap,
+    kind: &'static str,
+    fingerprint: Fingerprint,
+    lookup: L,
+    execute: F,
+) -> impl Future<Output = IpcBody<T>> + 'a
+where
+    T: Serialize + DeserializeOwned + Send + 'static,
+    L: Fn() -> LF + 'a,
+    LF: Future<Output = Option<Settled>>,
+    F: Future<Output = HttpRan<T>> + Send + 'static,
+{
     // Everything borrowed from the request is read here, so the returned
     // future owns its inputs and the caller can move its fields into `execute`.
     let admission = match command_id_from_headers::<T>(headers) {
@@ -241,7 +276,11 @@ where
     async move {
         let (command_id, kind, class, fingerprint) = match admission {
             Ok(admitted) => admitted,
-            Err(None) => return execute.await,
+            Err(None) => {
+                return match execute.await {
+                    HttpRan::Settled(body) | HttpRan::Released(body) => body,
+                }
+            }
             Err(Some(refusal)) => return refusal,
         };
         let command = Command {
@@ -250,8 +289,11 @@ where
             class,
             fingerprint,
         };
-        let result = run_command_with(ledger, command, lookup_on_fresh(kind), lookup, async move {
-            settled_of(&execute.await)
+        let result = run_command_released(ledger, command, lookup, async move {
+            match execute.await {
+                HttpRan::Settled(body) => Ran::Settled(settled_of(&body)),
+                HttpRan::Released(body) => Ran::Released(settled_of(&body)),
+            }
         })
         .await;
         body_of(kind, result)
@@ -280,6 +322,27 @@ where
     LF: Future<Output = Option<Settled>>,
     F: Future<Output = Result<T, String>> + Send + 'static,
 {
+    run_domain_released(ledger, kind, command_id, fingerprint, lookup, async move {
+        DomainRan::Settled(execute.await)
+    })
+}
+
+/// [`run_domain`] whose effect may [`DomainRan::Released`] the id (see
+/// [`run_http_released`]).
+pub fn run_domain_released<'a, T, L, LF, F>(
+    ledger: &'a Arc<CommandLedger>,
+    kind: &'static str,
+    command_id: Option<String>,
+    fingerprint: Fingerprint,
+    lookup: L,
+    execute: F,
+) -> impl Future<Output = Result<T, String>> + 'a
+where
+    T: Serialize + DeserializeOwned + Send + 'static,
+    L: Fn() -> LF + 'a,
+    LF: Future<Output = Option<Settled>>,
+    F: Future<Output = DomainRan<T>> + Send + 'static,
+{
     let admission = match command_id {
         None => Err(None),
         Some(id) if !is_valid_command_id(&id) => Err(Some(format!(
@@ -293,7 +356,12 @@ where
     async move {
         let (command_id, kind, class, fingerprint) = match admission {
             Ok(admitted) => admitted,
-            Err(None) => return execute.await,
+            Err(None) => {
+                return match execute.await {
+                    DomainRan::Settled(result) => result,
+                    DomainRan::Released(message) => Err(message),
+                }
+            }
             Err(Some(refusal)) => return Err(refusal),
         };
         let command = Command {
@@ -302,9 +370,13 @@ where
             class,
             fingerprint,
         };
-        let result = run_command_with(ledger, command, lookup_on_fresh(kind), lookup, async move {
+        let result = run_command_released(ledger, command, lookup, async move {
             match execute.await {
-                Ok(value) => match serde_json::to_value(&value) {
+                DomainRan::Released(message) => Ran::Released(Settled::Rejected {
+                    code: REJECTED.to_string(),
+                    message,
+                }),
+                DomainRan::Settled(Ok(value)) => Ran::Settled(match serde_json::to_value(&value) {
                     Ok(payload) => Settled::Accepted {
                         payload: Some(payload),
                         visible_at: None,
@@ -313,8 +385,8 @@ where
                         code: REJECTED.to_string(),
                         message: format!("reply could not be serialized: {error}"),
                     },
-                },
-                Err(message) => Settled::Rejected {
+                }),
+                DomainRan::Settled(Err(message)) => Ran::Settled(Settled::Rejected {
                     // A stable code prefix survives a receipt-only kind's
                     // dropped error text.
                     code: if message.starts_with(PRECONDITION_FAILED_PREFIX) {
@@ -323,7 +395,7 @@ where
                         REJECTED.to_string()
                     },
                     message,
-                },
+                }),
             }
         })
         .await;

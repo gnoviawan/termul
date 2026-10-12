@@ -59,7 +59,13 @@ pub const REVOKE_CLAIM: &str = "terminal_revoke_claim";
 
 /// Rejection codes a terminal command records; replays map the stored string
 /// back to one of these.
-const REJECTION_CODES: &[&str] = &["SPAWN_FAILED", "WRITE_FAILED", "KILL_FAILED", "UNAUTHORIZED"];
+const REJECTION_CODES: &[&str] = &[
+    "SPAWN_FAILED",
+    "WRITE_FAILED",
+    "KILL_FAILED",
+    "UNAUTHORIZED",
+    OUTCOME_UNKNOWN_CODE,
+];
 
 /// Every ledgered terminal kind and its class. The spawn is a create whose
 /// reply carries a claim, so it is receipt-only: its payload is never stored
@@ -296,7 +302,6 @@ where
             class,
             fingerprint,
         },
-        true,
         move || {
             let found = lookup().map(|value| {
                 *found_slot.lock() = Some(Produced::Found(value));
@@ -384,6 +389,7 @@ pub async fn spawn(
     let lookup_id = id.clone();
     let project_id = options.project_id.clone();
     let run_pty = Arc::clone(pty);
+    let run_id = id.clone();
     admit(
         ledger,
         SPAWN,
@@ -391,6 +397,14 @@ pub async fn spawn(
         print,
         move || lookup_pty.replay_spawn(&lookup_id, project_id.as_deref()),
         async move {
+            // A PTY already carries this id but no claim could be issued for
+            // it (revoked): never spawn a second one for the same command.
+            if run_pty.find_by_command_id(&run_id).is_some() {
+                return Effect::Released {
+                    code: OUTCOME_UNKNOWN_CODE,
+                    message: "the terminal of this spawn exists but its credential was revoked; list preserved terminals to recover one".to_string(),
+                };
+            }
             match run_pty.spawn(options, on_data).await {
                 Ok(spawned) => Effect::Done(spawned),
                 Err(message) => Effect::Released {

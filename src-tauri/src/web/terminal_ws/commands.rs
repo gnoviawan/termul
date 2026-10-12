@@ -12,7 +12,7 @@
 
 use crate::web::command_ledger::is_valid_command_id;
 use crate::web::command_ledger::terminal::{
-    self as ledgered, Done, Effect, Outcome, INVALID_COMMAND_ID_CODE, OUTCOME_UNKNOWN_CODE,
+    self as ledgered, Done, Effect, INVALID_COMMAND_ID_CODE, OUTCOME_UNKNOWN_CODE,
 };
 
 use super::*;
@@ -333,10 +333,14 @@ pub(super) async fn revoke_claim(
                 },
             )
             .await;
-            if matches!(outcome, Outcome::InProgress) {
-                return Ok(in_progress_reply());
+            match outcome.into_result(ledgered::REVOKE_CLAIM)? {
+                Done::Executed(()) => {}
+                Done::InProgress => return Ok(in_progress_reply()),
+                // A replay: the revocation already happened. The connection
+                // may have re-attached with a fresh claim since, so it must
+                // not be detached again.
+                Done::Found(()) | Done::Receipt => return Ok(Value::Null),
             }
-            outcome.into_result(ledgered::REVOKE_CLAIM)?;
         }
     }
     // Teardown (amendment R1): same severing as rotate — the revoked

@@ -669,10 +669,13 @@ pub fn git_commit_stamped(
             "Commit summary cannot be empty".to_string(),
         ));
     }
+    if stamp.expected_head.is_some_and(|head| !is_valid_expected_head(head)) {
+        return Err(CommitFailure::InvalidExpectedHead);
+    }
+    // The head check and the commit are one step against other Termul commits.
+    let repo_lock = repo_lock(cwd);
+    let _held = repo_lock.lock();
     if let Some(expected) = stamp.expected_head {
-        if !is_valid_expected_head(expected) {
-            return Err(CommitFailure::InvalidExpectedHead);
-        }
         let actual = head_sha(cwd);
         if !expected.trim().eq_ignore_ascii_case(&actual) {
             return Err(CommitFailure::PreconditionFailed {
