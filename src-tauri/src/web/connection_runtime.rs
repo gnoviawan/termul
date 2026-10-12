@@ -144,6 +144,13 @@ pub struct ConnectionRuntime {
 }
 
 impl ConnectionRuntime {
+    /// The runtime for a host started with `cfg`: `ServerConfig` is the single
+    /// definition of the overflow tolerance.
+    #[must_use]
+    pub fn from_config(cfg: &crate::web::ServerConfig) -> Self {
+        Self::new(cfg.overflow_tolerance)
+    }
+
     #[must_use]
     pub fn new(overflow_tolerance: usize) -> Self {
         Self {

@@ -129,7 +129,10 @@ async fn send_prompt_then_cancel_prompt_on_one_session_stay_ordered() {
 /// same session is unaffected.
 #[tokio::test(start_paused = true)]
 async fn a_peer_whose_queue_stays_full_is_closed_and_a_healthy_peer_is_not() {
-    let host = slow_auth_host();
+    let mut host = slow_auth_host();
+    // The tolerance comes from the host's connection runtime (AppState), not a
+    // constant: a small one closes the peer after that many full windows.
+    host.state.connections = crate::web::connection_runtime::ConnectionRuntime::new(3);
     let mut stalled = host.connect();
     stalled.authenticate().await;
     stalled.subscribe("sub").await;
@@ -147,9 +150,10 @@ async fn a_peer_whose_queue_stays_full_is_closed_and_a_healthy_peer_is_not() {
     assert!(!stalled.relay_finished().await, "closed before the tolerance elapsed");
 
     let tolerance = host.state.connections.overflow_tolerance;
+    assert_eq!(tolerance, 3);
     healthy
         .peer
-        .read_for(FULL_QUEUE_ATTEMPT * tolerance as u32 + Duration::from_secs(2))
+        .read_for(FULL_QUEUE_ATTEMPT * tolerance as u32 + Duration::from_secs(1))
         .await;
     assert!(
         stalled.relay_finished().await,
@@ -189,6 +193,23 @@ async fn a_reply_that_cannot_be_queued_closes_the_connection() {
         conn.relay_finished().await,
         "the reply neither queued nor closed the connection"
     );
+}
+
+/// A handler that panics closes the connection (a request without a reply
+/// cannot be left dangling); other connections are unaffected.
+#[tokio::test(start_paused = true)]
+async fn a_panicking_handler_closes_the_connection() {
+    let host = slow_auth_host();
+    let mut bystander = host.connect();
+    bystander.authenticate().await;
+    let mut conn = host.connect();
+    conn.authenticate().await;
+
+    conn.send_request("boom", "panic_for_test", json!({}));
+    conn.peer.read_for(Duration::from_secs(1)).await;
+    assert!(conn.relay_finished().await, "the connection survived a handler panic");
+    let pong = bystander.request("ping", "ping", json!({})).await;
+    assert_eq!(pong["ok"], true, "{pong}");
 }
 
 /// Host stop on the `/ws` carrier: the socket gets `Close(1001)` ahead of its

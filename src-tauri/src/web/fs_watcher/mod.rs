@@ -435,13 +435,25 @@ fn notify_watch_ended(project_id: &str, subscribers: &[OutboundSender]) {
         "projectId": project_id,
         "reason": "project_unavailable",
     });
-    for subscriber in subscribers {
-        subscriber.try_enqueue(Outbound::Event(SequencedEvent::new(
+    let ended = || {
+        Outbound::Event(SequencedEvent::new(
             None,
             0,
             "fs_watch_ended",
             payload.clone(),
-        )));
+        ))
+    };
+    for subscriber in subscribers {
+        // The client re-requests its watch only on this one-shot notice, so a
+        // full queue must delay it, not lose it: wait for room (the
+        // connection closes if the peer never drains).
+        if subscriber.try_enqueue(ended()) == EnqueueOutcome::Full {
+            let subscriber = subscriber.clone();
+            let frame = ended();
+            tokio::spawn(async move {
+                subscriber.enqueue(frame).await;
+            });
+        }
     }
 }
 

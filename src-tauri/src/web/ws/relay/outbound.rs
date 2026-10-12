@@ -3,9 +3,12 @@
 //! Everything a connection sends — replies, pushed events, the close
 //! handshake — goes through one bounded queue into the write loop. A peer that
 //! stops draining it is closed rather than buffered: every enqueue that finds
-//! the queue full counts as a failed attempt, a successful enqueue resets the
-//! count, and `overflow_tolerance` consecutive failures trip the connection's
-//! close signal. Frames that must not be lost (replies, reliable events) wait
+//! the queue full is a failed attempt, a successful enqueue resets the count,
+//! and `overflow_tolerance` consecutive failures trip the connection's close
+//! signal. At most one failure is counted per [`FULL_QUEUE_ATTEMPT`] window per
+//! connection, however many producers (one forwarder per subscribed session,
+//! reply tasks, watch pushes) hit the full queue at once, so the tolerance
+//! measures how long the peer stays full, not how many producers it has. Frames that must not be lost (replies, reliable events) wait
 //! for room instead of being dropped; the lossy tiers can build on
 //! [`OutboundSender::try_enqueue`].
 
@@ -24,8 +27,8 @@ use super::Outbound;
 /// socket frame, so this bounds a stalled peer to a few thousand events.
 pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 1024;
 
-/// How long a reliable enqueue waits for room before that wait counts as one
-/// failed attempt against the overflow tolerance.
+/// The window one failed attempt is counted over: a reliable enqueue waits this
+/// long for room, and a full queue counts at most one failure per window.
 pub(crate) const FULL_QUEUE_ATTEMPT: Duration = Duration::from_secs(1);
 
 /// Result of a non-blocking enqueue.
@@ -47,17 +50,28 @@ pub(crate) type OutboundReceiver = mpsc::Receiver<Outbound>;
 /// Overflow accounting shared by every clone of one connection's sender.
 struct Overflow {
     tolerance: usize,
-    /// Consecutive failed enqueues since the last successful one.
+    /// Consecutive failed attempts since the last successful enqueue.
     consecutive_full: AtomicUsize,
+    /// When the last failed attempt was counted (the window start).
+    last_failure: parking_lot::Mutex<Option<tokio::time::Instant>>,
     /// Fires when the peer overflowed or the connection must close for another
     /// reason; the relay supervisor ends the connection on it.
     closing: CancellationToken,
 }
 
 impl Overflow {
-    /// Record one failed enqueue; `true` when the tolerance is reached (the
-    /// close signal has then been raised).
+    /// Record a full-queue hit; `true` when the tolerance is reached (the close
+    /// signal has then been raised). A hit inside the window of the last
+    /// counted failure is the same failed attempt and counts nothing.
     fn record_full(&self) -> bool {
+        {
+            let mut last = self.last_failure.lock();
+            let now = tokio::time::Instant::now();
+            if last.is_some_and(|at| now.duration_since(at) < FULL_QUEUE_ATTEMPT) {
+                return self.closing.is_cancelled();
+            }
+            *last = Some(now);
+        }
         let failures = self.consecutive_full.fetch_add(1, Ordering::AcqRel) + 1;
         if failures >= self.tolerance {
             if !self.closing.is_cancelled() {
@@ -100,6 +114,7 @@ pub(crate) fn outbound_channel(
             overflow: Arc::new(Overflow {
                 tolerance: tolerance.max(1),
                 consecutive_full: AtomicUsize::new(0),
+                last_failure: parking_lot::Mutex::new(None),
                 closing: CancellationToken::new(),
             }),
         },

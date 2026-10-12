@@ -32,7 +32,7 @@ pub(super) use conn::{ConnState, HandlerEnv, Subscriptions};
 #[cfg(test)]
 pub(super) use conn::dispatch_connection_text;
 #[cfg(test)]
-pub(super) use executor::KeyedExecutor;
+pub(super) use executor::{KeyedExecutor, MAX_INFLIGHT_REQUESTS};
 pub(crate) use outbound::{
     outbound_channel, EnqueueOutcome, OutboundSender, OUTBOUND_QUEUE_CAPACITY,
 };

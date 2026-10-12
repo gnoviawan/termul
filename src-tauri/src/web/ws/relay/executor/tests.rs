@@ -37,6 +37,13 @@ fn entity_keys_name_the_first_entity_and_never_collide_across_kinds() {
         key("kill_agent", json!({"agentId": "same"})),
         "an agent and a session sharing an id are different entities"
     );
+    for answer in ["respond_permission", "answer_question", "respond_elicitation"] {
+        assert_eq!(
+            key(answer, json!({"agentId": "a", "requestId": "r", "questionId": "q"})),
+            None,
+            "{answer} must not queue behind a long handler on its agent"
+        );
+    }
     assert_eq!(key("ping", json!({})), None);
     assert_eq!(key("list_agents", json!({})), None);
     assert_eq!(key("subscribe", json!({"sessionId": ""})), None, "an empty id names nothing");

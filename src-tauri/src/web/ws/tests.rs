@@ -258,6 +258,38 @@ async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
     assert!(subscribed.is_empty());
 }
 
+/// A flooding connection past the in-flight cap is refused with a code the
+/// client does not read as "a prompt turn is in progress" (`rate_limited`).
+#[tokio::test]
+async fn requests_past_the_inflight_cap_are_refused_without_rate_limited() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let registry = Arc::new(ProjectRegistry::new());
+    let (tx, mut rx) = test_outbound();
+    let mut conn = ConnState::authenticated(test_access());
+    let exec = KeyedExecutor::new(CancellationToken::new());
+    for _ in 0..MAX_INFLIGHT_REQUESTS {
+        exec.submit(None, std::future::pending::<()>()).expect("under the cap");
+    }
+
+    let alive = dispatch_connection_text(
+        r#"{"id":"flood","type":"ping","payload":{}}"#,
+        &mut conn,
+        &test_env(&acp, &relay, &registry, &tx, &conn.subscriptions),
+        &exec,
+    )
+    .await;
+    assert!(alive, "a refused request does not close the connection");
+    let Some(Outbound::Reply(reply)) = rx.recv().await else {
+        panic!("expected a reply frame");
+    };
+    assert!(!reply.ok);
+    let err = reply.err.expect("error");
+    assert_eq!(err.code, "unsupported");
+    assert_ne!(err.code, "rate_limited");
+    assert!(err.message.contains("too many requests"), "{}", err.message);
+}
+
 #[tokio::test]
 async fn long_prompt_dispatch_does_not_block_ping_request() {
     let relay = Arc::new(WsRelaySink::new());

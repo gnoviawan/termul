@@ -28,34 +28,80 @@ fn try_enqueue_distinguishes_full_from_closed() {
     );
 }
 
-#[test]
-fn consecutive_full_enqueues_close_the_peer_at_the_tolerance() {
+#[tokio::test(start_paused = true)]
+async fn full_windows_close_the_peer_at_the_tolerance() {
     let (tx, _rx) = outbound_channel(1, 3);
     assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
     assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+    tokio::time::sleep(FULL_QUEUE_ATTEMPT).await;
     assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
-    assert!(!tx.closing().is_cancelled(), "two failures are within the tolerance of 3");
+    assert!(!tx.closing().is_cancelled(), "two failed windows are within the tolerance of 3");
+    tokio::time::sleep(FULL_QUEUE_ATTEMPT).await;
     assert_eq!(
         tx.try_enqueue(event_frame()),
         EnqueueOutcome::Closed,
-        "the third consecutive failure closes the peer"
+        "the third consecutive failed window closes the peer"
     );
     assert!(tx.closing().is_cancelled());
     assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Closed);
 }
 
-#[test]
-fn a_successful_enqueue_resets_the_failure_count() {
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_failures_inside_one_window_counts_once() {
+    let (tx, _rx) = outbound_channel(1, 3);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    for _ in 0..50 {
+        assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+    }
+    assert!(
+        !tx.closing().is_cancelled(),
+        "fifty hits in one window are one failed attempt, not fifty"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn many_concurrent_producers_do_not_amplify_the_failure_count() {
+    let tolerance = 15;
+    let (tx, mut rx) = outbound_channel(1, tolerance);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    let producers: Vec<_> = (0..40)
+        .map(|_| {
+            let tx = tx.clone();
+            tokio::spawn(async move { tx.enqueue(event_frame()).await })
+        })
+        .collect();
+
+    // 40 producers wait on the full queue; the peer has been full for only a
+    // few windows, far below 15.
+    tokio::time::sleep(FULL_QUEUE_ATTEMPT * 5).await;
+    assert!(
+        !tx.closing().is_cancelled(),
+        "40 concurrent waiters closed a peer that was full for only 5 windows"
+    );
+
+    // The peer stays full for the whole tolerance: now it is closed.
+    tokio::time::sleep(FULL_QUEUE_ATTEMPT * (tolerance as u32 + 1)).await;
+    assert!(tx.closing().is_cancelled());
+    for producer in producers {
+        assert_eq!(producer.await.unwrap(), EnqueueOutcome::Closed);
+    }
+    rx.close();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_successful_enqueue_resets_the_failure_count() {
     let (tx, mut rx) = outbound_channel(1, 3);
     assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
     for _ in 0..2 {
         assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+        tokio::time::sleep(FULL_QUEUE_ATTEMPT).await;
     }
     // The peer drains, then fills again: the earlier failures no longer count.
     rx.try_recv().expect("queued frame");
     assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
     for _ in 0..2 {
         assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+        tokio::time::sleep(FULL_QUEUE_ATTEMPT).await;
     }
     assert!(
         !tx.closing().is_cancelled(),

@@ -94,3 +94,9 @@ async fn the_close_attempt_gives_up_on_a_peer_that_stopped_reading() {
     send_going_away(&mut Stalled).await;
     assert_eq!(started.elapsed(), CLOSE_DRAIN_TIMEOUT);
 }
+
+#[test]
+fn the_runtime_takes_its_overflow_tolerance_from_the_server_config() {
+    let cfg = crate::web::ServerConfig::from_args(["--overflow-tolerance", "7"]).expect("parse");
+    assert_eq!(ConnectionRuntime::from_config(&cfg).overflow_tolerance, 7);
+}

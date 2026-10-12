@@ -61,19 +61,22 @@ where
     // auth_required frame has just been queued).
     ping.tick().await;
     loop {
+        // `biased` fixes the poll order: the stop first (ahead of everything
+        // queued), then the keepalive, then the queue. The Ping must precede
+        // the queue: a queue that never empties would otherwise starve the
+        // keepalive and the watchdog would reap a healthy, merely busy peer.
         let sent = tokio::select! {
             biased;
-            // Ahead of everything queued: the host is stopping.
             () = stop.cancelled() => Err(SendEnd::Stopping),
-            frame = out_rx.recv() => match frame {
-                None => return,
-                Some(frame) => write_frame(&mut sink, &mut out_rx, frame, &stop).await,
-            },
             _ = ping.tick() => {
                 // The browser auto-pongs at the protocol layer; that Pong (or
                 // any client→server frame) is what the watchdog watches.
                 send(&mut sink, Message::Ping(PING_PAYLOAD.to_vec().into()), &stop).await
             }
+            frame = out_rx.recv() => match frame {
+                None => return,
+                Some(frame) => write_frame(&mut sink, &mut out_rx, frame, &stop).await,
+            },
         };
         match sent {
             Ok(()) => {}
@@ -143,3 +146,6 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

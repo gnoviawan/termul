@@ -163,11 +163,14 @@ async fn audit_stale_peer_during_stream_is_reaped_by_the_watchdog() {
     drop(release_tx);
 }
 
-/// Stopping the host sends `Close(1001)` to an open socket and the upgraded
-/// task ends with it: after the `Close` the socket reaches EOF (the host
-/// dropped it), so `kill_all` / process exit never races a live relay.
-#[tokio::test]
-async fn audit_stop_with_open_socket_sends_close_1001_and_drains() {
+/// A started shared-live host on an OS-assigned port, with its scratch dirs.
+struct StartedHost {
+    host: RemoteServerState,
+    addr: std::net::SocketAddr,
+    _dirs: (tempfile::TempDir, tempfile::TempDir),
+}
+
+async fn start_host() -> StartedHost {
     let acp = Arc::new(AcpManager::new(vec![]));
     let pty = crate::web::test_pty_manager();
     let relay = Arc::new(WsRelaySink::new());
@@ -210,17 +213,18 @@ async fn audit_stop_with_open_socket_sends_close_1001_and_drains() {
         )
         .await
         .expect("host starts on an OS-assigned port");
-    let addr: std::net::SocketAddr = ([127, 0, 0, 1], status.port.expect("bound port")).into();
+    let addr = ([127, 0, 0, 1], status.port.expect("bound port")).into();
+    StartedHost {
+        host,
+        addr,
+        _dirs: (root, data_dir),
+    }
+}
 
-    let mut client = RawWsClient::connect(addr, "/ws").await;
-    let first = client
-        .read_json_within(Duration::from_secs(5))
-        .await
-        .expect("auth_required event not delivered in time")
-        .expect("auth_required event");
-    assert_eq!(first["type"], "auth_required", "{first}");
-
-    tokio::time::timeout(Duration::from_secs(10), host.stop())
+/// Stop `started` and require the open `client` to get `Close(1001)` and then
+/// EOF: the upgraded task finished instead of lingering.
+async fn assert_stop_closes_with_1001(started: &StartedHost, client: &mut RawWsClient) {
+    tokio::time::timeout(Duration::from_secs(10), started.host.stop())
         .await
         .expect("stop must not hang on an open socket")
         .expect("stop succeeds");
@@ -236,4 +240,43 @@ async fn audit_stop_with_open_socket_sends_close_1001_and_drains() {
         .await
         .expect("the upgraded socket stayed open after its Close frame");
     assert!(eof.is_none(), "unexpected frame after Close: {eof:?}");
+}
+
+/// Stopping the host sends `Close(1001)` to an open socket and the upgraded
+/// task ends with it: after the `Close` the socket reaches EOF (the host
+/// dropped it), so `kill_all` / process exit never races a live relay.
+#[tokio::test]
+async fn audit_stop_with_open_socket_sends_close_1001_and_drains() {
+    let started = start_host().await;
+    let mut client = RawWsClient::connect(started.addr, "/ws").await;
+    let first = client
+        .read_json_within(Duration::from_secs(5))
+        .await
+        .expect("auth_required event not delivered in time")
+        .expect("auth_required event");
+    assert_eq!(first["type"], "auth_required", "{first}");
+
+    assert_stop_closes_with_1001(&started, &mut client).await;
+}
+
+/// The same through the real `/terminal/ws` upgrade handler (its shutdown
+/// lease, `serve_socket` and the host's drain), with `/ws` open alongside.
+#[tokio::test]
+async fn stop_with_an_open_terminal_socket_sends_close_1001() {
+    let started = start_host().await;
+    let mut terminal = RawWsClient::connect(started.addr, "/terminal/ws").await;
+    let mut relay = RawWsClient::connect(started.addr, "/ws").await;
+    relay
+        .read_json_within(Duration::from_secs(5))
+        .await
+        .expect("/ws auth_required")
+        .expect("/ws auth_required");
+
+    assert_stop_closes_with_1001(&started, &mut terminal).await;
+    // `/ws` got its close from the same stop (already delivered by now).
+    let close = relay
+        .close_code_within(Duration::from_millis(500))
+        .await
+        .expect("the /ws socket was not closed by the same stop");
+    assert_eq!(close, Some(1001));
 }

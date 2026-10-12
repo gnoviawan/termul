@@ -274,6 +274,9 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "set_mode" => handle_set_mode(id, &req.payload, acp).await,
         "set_model" => handle_set_model(id, &req.payload, acp).await,
         "set_config_option" => handle_set_config_option(id, &req.payload, acp).await,
+        // Test hook: a handler that panics (the connection must be closed).
+        #[cfg(test)]
+        "panic_for_test" => panic!("handler panic injected by a test"),
         // OS caps (AC8): server-fulfilled; reject browser requests.
         t if is_os_fulfilled_cap(t) => WsReply::err(
             id,

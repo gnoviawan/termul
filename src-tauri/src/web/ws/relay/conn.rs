@@ -9,7 +9,7 @@
 use crate::web::presence::PresenceGuard;
 
 use super::super::*;
-use super::executor::{entity_key, KeyedExecutor};
+use super::executor::{entity_key, KeyedExecutor, MAX_INFLIGHT_REQUESTS};
 use super::outbound::OutboundSender;
 
 /// The `(session, client)` registrations a connection made through `subscribe`
@@ -217,10 +217,14 @@ pub(in crate::web::ws) async fn dispatch_connection_text(
         );
         return env
             .out_tx
+            // Not `rate_limited`: the client reads that code as "a prompt turn
+            // is already in progress" and silently queues the prompt.
             .reply(WsReply::err(
                 id,
-                WsErrorCode::RateLimited,
-                "too many requests in flight on this connection",
+                WsErrorCode::Unsupported,
+                format!(
+                    "too many requests in flight on this connection (limit {MAX_INFLIGHT_REQUESTS})"
+                ),
             ))
             .await;
     }

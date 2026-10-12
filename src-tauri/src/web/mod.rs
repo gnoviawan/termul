@@ -349,7 +349,7 @@ pub async fn serve_router(
     }
     // AD-19: one shutdown handle + overflow tolerance for every socket this
     // host upgrades.
-    let connections = ConnectionRuntime::new(cfg.overflow_tolerance);
+    let connections = ConnectionRuntime::from_config(&cfg);
     let socket_shutdown = connections.shutdown.clone();
     let watch_relay = Arc::clone(&ws_relay);
     let app = router::router(
