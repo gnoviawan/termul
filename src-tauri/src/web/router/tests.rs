@@ -63,6 +63,7 @@ async fn factory_key_http_requires_active_gate_even_on_loopback() {
                     .method(method)
                     .uri("/acp/factory-key")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                     .body(Body::from(r#"{"config":{},"key":"candidate"}"#))
                     .unwrap(),
             )
@@ -99,6 +100,7 @@ async fn factory_key_http_requires_correct_bearer_when_gated() {
                     .method(method)
                     .uri("/acp/factory-key")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                     .body(Body::from("{}"))
                     .unwrap(),
             )
@@ -117,6 +119,97 @@ async fn factory_key_http_requires_correct_bearer_when_gated() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// Gated router (active bearer) with the given write posture, for the
+/// factory-key write-guard cases below.
+fn gated_router(dir: &Path, allow_remote_writes: bool, shared_live_denied: bool) -> Router {
+    let auth = Arc::new(WebAuth::new(
+        crate::web::auth::WebAuthToken::new("test-token").unwrap(),
+    ));
+    router_with_static(
+        Arc::new(AcpManager::new(vec![])),
+        crate::web::test_pty_manager(),
+        Arc::new(WsRelaySink::new()),
+        Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        dir,
+        std::env::temp_dir(),
+        allow_remote_writes,
+        shared_live_denied,
+        Some(auth),
+        OriginPolicy::default(),
+    )
+}
+
+async fn factory_key_post(app: Router, peer: SocketAddr, body: &str) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/acp/factory-key")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer test-token")
+                .extension(ConnectInfo(peer))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+}
+
+/// D8-F2: an authenticated but non-loopback peer without the opt-in must be
+/// refused with `FORBIDDEN` BEFORE the body is parsed (an invalid body would
+/// otherwise be a 400) and before any agent is spawned / credential written.
+#[tokio::test]
+async fn factory_key_save_refuses_remote_peer_without_opt_in() {
+    let dir = TempDir::new("factory-key-remote");
+    let (status, body) = factory_key_post(
+        gated_router(dir.path(), false, false),
+        SocketAddr::from(([203, 0, 113, 9], 40000)),
+        "{}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "FORBIDDEN");
+}
+
+/// D8-F2: shared-live mode denies ALL writes, including from a loopback peer
+/// (cloudflared forwards public traffic from loopback) and even with the
+/// `--allow-remote-writes` opt-in.
+#[tokio::test]
+async fn factory_key_save_refused_in_shared_live_mode() {
+    let dir = TempDir::new("factory-key-shared-live");
+    for allow_remote in [false, true] {
+        let (status, body) = factory_key_post(
+            gated_router(dir.path(), allow_remote, true),
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            "{}",
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "allow_remote={allow_remote}");
+        assert_eq!(body["code"], "FORBIDDEN");
+    }
+}
+
+/// Admitted postures (loopback; remote with the opt-in) pass the write guard
+/// and reach body validation (400, nothing spawned for an invalid body).
+#[tokio::test]
+async fn factory_key_save_admitted_postures_reach_body_validation() {
+    let dir = TempDir::new("factory-key-admitted");
+    for (peer, allow_remote) in [
+        (SocketAddr::from(([127, 0, 0, 1], 54321)), false),
+        (SocketAddr::from(([203, 0, 113, 9], 40000)), true),
+    ] {
+        let (status, body) =
+            factory_key_post(gated_router(dir.path(), allow_remote, false), peer, "{}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "peer={peer}");
+        assert_eq!(body["error"], "Invalid Factory key request");
+    }
 }
 
 #[tokio::test]

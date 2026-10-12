@@ -103,7 +103,7 @@ async fn reaper_keeps_agent_with_subscribed_durable_session() {
 async fn reaper_removes_agent_with_idle_durable_session() {
     let manager = Arc::new(AcpManager::new(vec![]));
     let relay = Arc::new(WsRelaySink::new());
-    manager.install_test_agent_with_reap_state(
+    let record = manager.install_test_agent_with_reap_state(
         AgentId("agent-idle-durable".to_string()),
         set(&["sess-chat"]),
         false,
@@ -125,6 +125,11 @@ async fn reaper_removes_agent_with_idle_durable_session() {
     .await;
     assert_eq!(reaped.len(), 1);
     assert!(manager.list_agents().is_empty(), "idle durable owner reaped");
+    // Durable sessions are never disposed (the driver would refuse with
+    // `session is not ephemeral`); the process stop alone reaps them.
+    assert!(record.disposed.lock().is_empty());
+    let_fake_driver_drain().await;
+    assert!(*record.shut_down.lock());
 }
 
 /// A mid-turn session pins the agent even when the session is ephemeral (a

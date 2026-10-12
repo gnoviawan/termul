@@ -123,13 +123,34 @@ pub(crate) async fn reap_idle_agents(
             continue;
         }
         // Reap: dispose every owned ephemeral session, then stop the agent.
-        // A disposal failure means the session's state changed after the pin
-        // check (a prompt arrived, or an ephemeral session was promoted to
-        // durable) — do NOT kill the agent in that case; the next sweep
-        // re-evaluates it with fresh pin state (CodeRabbit: kill on
-        // disposal failure can stop a newly active agent).
+        // Durable sessions have nothing to dispose (the driver answers
+        // `session is not ephemeral`), so they are skipped — the process stop
+        // alone releases them (SINK-F2). A disposal failure of an ephemeral
+        // session means its state changed after the pin check (a prompt
+        // arrived, or it was promoted to durable) — do NOT kill the agent in
+        // that case; the next sweep re-evaluates it with fresh pin state
+        // (CodeRabbit: kill on disposal failure can stop a newly active agent).
         let mut disposal_failed = false;
         for session_id in &summary.owns_session {
+            match acp
+                .is_ephemeral_session(&agent_id, SessionId(session_id.clone()))
+                .await
+            {
+                Ok(true) => {}
+                // Durable: nothing to dispose.
+                Ok(false) => continue,
+                Err(error) => {
+                    disposal_failed = true;
+                    warn!(
+                        target: "termul::web::agent_reaper",
+                        agent_id = %agent_id.0,
+                        session_id = %session_id,
+                        error = %error,
+                        "idle reaper: ephemeral check failed; deferring the agent stop to the next sweep"
+                    );
+                    continue;
+                }
+            }
             if let Err(error) = acp
                 .dispose_ephemeral_session(&agent_id, SessionId(session_id.clone()))
                 .await

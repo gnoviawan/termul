@@ -551,6 +551,7 @@ pub(super) async fn run_command_loop(
                 session_id,
                 content,
                 turn_id,
+                on_accept,
                 accepted,
                 reply,
             } => {
@@ -579,6 +580,19 @@ pub(super) async fn run_command_loop(
                 };
                 let cancel_rx = handles.cancel_rx;
                 let mut idle_rx = handles.idle_rx;
+                driver_state
+                    .lock()
+                    .set_active_turn_id(&session_id.0, turn_id.clone());
+                // Sequence + fan out the carrier's `user_prompt` NOW — the
+                // driver has accepted the prompt and nothing of its turn has
+                // been emitted yet, so the record can never trail one of its
+                // own chunks. A rejected prompt returned above without
+                // running the hook.
+                let hook_ran = on_accept.is_some();
+                if let Some(hook) = on_accept {
+                    hook();
+                }
+                let spawn_turn_id = turn_id.clone();
 
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
@@ -680,24 +694,33 @@ pub(super) async fn run_command_loop(
                     }
 
                     let is_ephemeral = turn_state.lock().is_ephemeral(&session_id.0);
+                    // Exactly one session-scoped terminator per accepted turn
+                    // (AD-5): the ACP stop reason, or `error`/`timeout` for a
+                    // failed turn. The `agent_error` event still goes out
+                    // first for the failure cases. The driver teardown owns
+                    // the `crashed` terminator when this task is dropped, and
+                    // on process shutdown the `interrupted` marker owns a
+                    // transport-closed turn (same rule as the teardown).
+                    if outcome_owned_by_process_shutdown(turn_persistence.as_ref(), &outcome) {
+                        log::info!(
+                            "[acp] session {} turn ended by shutdown: terminator left to the interrupted marker",
+                            crate::logging::redact_session_id(&log_session.0)
+                        );
+                    } else {
+                        emit_turn_outcome(
+                            &turn_sinks,
+                            &turn_agent_id,
+                            &session_id,
+                            turn_turn_id.clone(),
+                            &outcome,
+                        );
+                    }
                     match outcome {
                         Ok(stop_reason) => {
-                            let event = PromptCompleteEvent {
-                                agent_id: turn_agent_id,
-                                session_id,
-                                stop_reason,
-                                turn_id: turn_turn_id.clone(),
-                            };
-                            events::fan_out(
-                                &turn_sinks,
-                                Some(event.session_id.0.as_str()),
-                                events::EVENT_PROMPT_COMPLETE,
-                                &event,
-                            );
                             if !is_ephemeral {
                                 if let Some(persistence) = &turn_persistence {
                                     if let Err(error) =
-                                        persistence.flush_session(&event.session_id.0).await
+                                        persistence.flush_session(&session_id.0).await
                                     {
                                         send_reply(
                                             &task_slot,
@@ -712,29 +735,19 @@ pub(super) async fn run_command_loop(
                             send_reply(&task_slot, Ok(stop_reason));
                         }
                         Err(detail) => {
-                            let message = detail.message.clone();
-                            let event = detail.into_agent_error(turn_agent_id, Some(session_id));
-                            // Turn-scoped error → sid is the session id.
-                            events::fan_out(
-                                &turn_sinks,
-                                event.session_id.as_ref().map(|s| s.0.as_str()),
-                                events::EVENT_AGENT_ERROR,
-                                &event,
-                            );
+                            let message = detail.message;
                             if !is_ephemeral {
                                 if let Some(persistence) = &turn_persistence {
-                                    if let Some(session_id) = event.session_id.as_ref() {
-                                        if let Err(error) =
-                                            persistence.flush_session(&session_id.0).await
-                                        {
-                                            send_reply(
-                                                &task_slot,
-                                                Err(format!(
-                                                    "{message}; history flush failed: {error}"
-                                                )),
-                                            );
-                                            return Ok(());
-                                        }
+                                    if let Err(error) =
+                                        persistence.flush_session(&session_id.0).await
+                                    {
+                                        send_reply(
+                                            &task_slot,
+                                            Err(format!(
+                                                "{message}; history flush failed: {error}"
+                                            )),
+                                        );
+                                        return Ok(());
                                     }
                                 }
                             }
@@ -749,6 +762,18 @@ pub(super) async fn run_command_loop(
                     host_plan_server.end_turn(&agent_id.0, &turn_session.0);
                     driver_state.lock().finish_turn(&turn_session.0);
                     let error = format!("failed to start prompt turn: {e}");
+                    // The accept hook already published a durable
+                    // `user_prompt`: close that turn with an `error`
+                    // terminator so reopen never reports it as open.
+                    if hook_ran {
+                        emit_turn_terminator(
+                            &sinks,
+                            &agent_id,
+                            &turn_session,
+                            spawn_turn_id,
+                            events::TurnFailureStop::Error.into(),
+                        );
+                    }
                     let _ = accepted.send(Err(error.clone()));
                     send_reply(&slot, Err(error));
                 } else {

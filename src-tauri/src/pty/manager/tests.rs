@@ -909,3 +909,50 @@ async fn web_listed_reap_flips_with_listing_age_on_live_instance() {
     // Cleanup.
     manager.force_kill(&spawned.info.id).await.unwrap();
 }
+
+/// Detach re-stamp (interim fix): a web terminal attached for longer than the
+/// reap window must survive a full window AFTER its last viewer detaches —
+/// the release restarts the window instead of leaving the stale attach-time
+/// stamp that made the next sweep reap it immediately.
+#[tokio::test]
+async fn detaching_last_web_attachment_restarts_the_web_listed_window() {
+    let events = crate::trackers::TerminalEventHub::standalone();
+    let cwd = Arc::new(crate::trackers::CwdTracker::new(events.clone()));
+    let git = Arc::new(crate::trackers::GitTracker::new(None, events.clone()));
+    let exit = Arc::new(crate::trackers::ExitCodeTracker::new(events.clone()));
+    let manager = PtyManager::new(events, cwd, git, exit);
+    let spawned = manager
+        .spawn(
+            SpawnOptions {
+                project_id: Some("web-project".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("spawn");
+    let instance = manager.get(&spawned.info.id).expect("instance");
+    let window = Duration::from_secs(300);
+
+    // Attached (and last stamped) 10 minutes ago: observable only because of
+    // the live attachment.
+    instance.add_web_attachment();
+    *instance.last_web_listed.write() =
+        Some(std::time::Instant::now() - Duration::from_secs(600));
+    assert!(!instance.is_web_listed_reapable(window));
+
+    // The viewer detaches: the window restarts NOW, so the PTY is not reapable
+    // (it would be on the stale 10-minute-old stamp).
+    instance.remove_web_attachment();
+    assert!(!instance.has_web_attachment());
+    assert!(
+        !instance.is_web_listed_reapable(window),
+        "a just-detached terminal keeps a full window"
+    );
+    // After a full window with nobody listing it, it is reapable again.
+    *instance.last_web_listed.write() =
+        Some(std::time::Instant::now() - Duration::from_secs(301));
+    assert!(instance.is_web_listed_reapable(window));
+
+    manager.force_kill(&spawned.info.id).await.unwrap();
+}

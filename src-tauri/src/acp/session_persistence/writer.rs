@@ -239,11 +239,38 @@ pub(super) fn append_record(
     });
     let mut file = fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
-        .open(path)?;
-    let bytes = serde_json::to_vec(&record)?;
-    file.write_all(&bytes)?;
-    file.write_all(b"\n")?;
+        .open(&path)?;
+    // Never concatenate onto an unterminated tail (ACPM-F7): a tail left
+    // without `\n` by a crash or a failed rollback would otherwise fuse with
+    // this record into one permanently unparseable line. Repair it inline
+    // (terminate an intact record / quarantine + truncate a torn fragment —
+    // the same repair the open path runs) so a live writer never wedges until
+    // the next restart; refuse only if the tail is still unterminated.
+    let mut len = file.metadata()?.len();
+    if !ends_with_newline_or_empty(&mut file, len)? {
+        repair_jsonl_torn_tail(&path);
+        len = file.metadata()?.len();
+        if !ends_with_newline_or_empty(&mut file, len)? {
+            return Err(SessionPersistenceError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "refusing to append after an unterminated JSONL tail",
+            )));
+        }
+    }
+    // Record + newline in ONE write: a crash can no longer land between them,
+    // and a failed (e.g. ENOSPC) partial write is rolled back to the last
+    // terminated record when the platform allows it; when the rollback is
+    // refused (Windows append-only handle) the tail is repaired inline.
+    let mut bytes = serde_json::to_vec(&record)?;
+    bytes.push(b'\n');
+    if let Err(error) = file.write_all(&bytes) {
+        if file.set_len(len).is_err() {
+            repair_jsonl_torn_tail(&path);
+        }
+        return Err(error.into());
+    }
     file.flush()?;
     current.last_seq = record.seq;
     current.last_activity_at = record.recorded_at;
@@ -326,6 +353,18 @@ pub(super) fn append_record(
         );
     }
     Ok(())
+}
+
+/// Whether the log is empty or its last byte is `\n` (a terminated tail).
+fn ends_with_newline_or_empty(file: &mut fs::File, len: u64) -> io::Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    if len == 0 {
+        return Ok(true);
+    }
+    let mut last = [0u8; 1];
+    file.seek(SeekFrom::End(-1))?;
+    file.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
 }
 
 pub(super) fn sync_session_files(

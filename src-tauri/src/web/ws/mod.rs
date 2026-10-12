@@ -47,7 +47,7 @@ use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContex
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::auth::WebAuth;
-use crate::web::permissions::{TurnClaim, DEFAULT_PERMISSION_RECONNECT_GRACE};
+use crate::web::permissions::DEFAULT_PERMISSION_RECONNECT_GRACE;
 use crate::web::project_registry::{ProjectRegistry, ProjectSwitchContext};
 use crate::web::sink::{
     broadcast_chat_history_changed, broadcast_projects_changed, ClientId, ReplayResult, WsRelaySink,

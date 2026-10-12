@@ -656,6 +656,32 @@ fn all_completed_prompts_yield_no_open_turn() {
     assert_eq!(open_turn_from_records(&records), None);
 }
 
+/// ACPM-F1: a host terminator (`error` / `timeout` / `crashed`
+/// `prompt_complete`, matched by turn id) closes the turn exactly like an ACP
+/// stop reason — reopening shows no open turn and the session is not busy.
+#[test]
+fn host_terminators_close_the_open_turn_on_reopen() {
+    for stop_reason in ["error", "timeout", "crashed"] {
+        let records = vec![
+            user_prompt(1, Some("turn-1"), "ran into trouble"),
+            chunk(2, "agent", "partial"),
+            record(
+                3,
+                "prompt_complete",
+                json!({"sessionId": "session-1", "turnId": "turn-1", "stopReason": stop_reason}),
+            ),
+        ];
+        assert_eq!(open_turn_from_records(&records), None, "{stop_reason}");
+        let payload = materialize_session_payload(&metadata(), &records);
+        assert!(!payload.metadata.turn_active, "{stop_reason}");
+        // Without the terminator the same log IS open (the pre-fix state).
+        assert_eq!(
+            open_turn_from_records(&records[..2]).as_deref(),
+            Some("turn-1")
+        );
+    }
+}
+
 #[test]
 fn null_turn_id_prompt_is_unnameable_not_uncloseable() {
     // Producers serialize `Option<String>` inside `json!`, so a client that

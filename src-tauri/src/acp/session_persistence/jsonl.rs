@@ -33,7 +33,7 @@ pub(super) fn jsonl_first_record_is_valid(path: &Path, expected_session_id: &str
 /// the full transcript — and prevents later appends from landing after a
 /// torn line (which would make `replay_after` return `CorruptSession`).
 pub(super) fn repair_jsonl_torn_tail(path: &Path) {
-    use std::io::{Read, Seek, SeekFrom};
+    use std::io::{Read, Seek, SeekFrom, Write};
 
     let mut file = match fs::OpenOptions::new().read(true).write(true).open(path) {
         Ok(f) => f,
@@ -56,19 +56,40 @@ pub(super) fn repair_jsonl_torn_tail(path: &Path) {
     if file.read_exact(&mut buf).is_err() {
         return;
     }
+    // A final record longer than the 4 KiB window leaves no newline in the
+    // block: widen to the whole file so the tail is the real last line (and
+    // is never mistaken for torn and the file truncated to zero).
+    let mut start = start;
+    if start > 0 && !buf.contains(&b'\n') {
+        buf.clear();
+        start = 0;
+        if file.seek(SeekFrom::Start(0)).is_err() || file.read_to_end(&mut buf).is_err() {
+            return;
+        }
+    }
     // Data after the last newline is the (possibly torn) tail.
     let last_nl = buf.iter().rposition(|&b| b == b'\n');
     let (valid_end, tail): (u64, &[u8]) = match last_nl {
         Some(pos) if pos + 1 < buf.len() => (start + pos as u64 + 1, &buf[pos + 1..]),
         Some(_) => return,     // file ends with newline — no tail
-        None => (0, &buf[..]), // no newline — entire block is tail
+        None => (0, &buf[..]), // no newline — entire file is the tail
     };
     if tail.is_empty() || tail.iter().all(|b| b.is_ascii_whitespace()) {
         return;
     }
-    // If the tail deserializes as a valid record, it is just missing a
-    // trailing newline — not torn, leave it for the next append to terminate.
+    // If the tail deserializes as a valid record it is only missing its
+    // trailing newline (death between record and newline, or a failed newline
+    // write): terminate it durably now. `append_record` refuses to write after
+    // an unterminated tail, and leaving it would fuse the next record onto it.
     if serde_json::from_slice::<PersistedEventRecord>(tail).is_ok() {
+        let terminated = file.seek(SeekFrom::End(0)).is_ok()
+            && file.write_all(b"\n").is_ok()
+            && file.sync_all().is_ok();
+        if !terminated {
+            // The record itself is intact, so it is left in place; appends
+            // are refused until a later repair succeeds.
+            log::warn!("[acp-history] could not terminate unterminated JSONL tail record");
+        }
         return;
     }
     // Torn tail — backup and truncate.

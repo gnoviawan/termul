@@ -13,7 +13,7 @@
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::pty::manager::SpawnOptions;
+use crate::pty::manager::{PtyManager, SpawnOptions};
 use crate::web::ws::AppState;
 
 const MAX_RECONNECT_FRAMES: usize = 64;
@@ -69,7 +69,7 @@ async fn run(socket: WebSocket, state: AppState) {
     // logs. Never exposed to the peer.
     let client_id = format!("termconn-{}", NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed));
     // Per-terminal output forwarding tasks.
-    let attachments: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+    let attachments: HashMap<String, Attachment> = HashMap::new();
 
     if state.web_auth.is_some() {
         info!("[terminal-ws] client connected (web auth gate ON — authenticate required)");
@@ -145,16 +145,7 @@ async fn run(socket: WebSocket, state: AppState) {
 
     // Cleanup: abort all output forwarding tasks. PTYs are preserved.
     event_task.abort();
-    for (attached_id, task) in ctx.attachments.iter() {
-        task.abort();
-        // Aborted forwarder tasks never reach their release path — release
-        // the live-attachment accounting here so a later `list_preserved`
-        // can reissue claims for this connection's terminals (CodeRabbit:
-        // preserve live attachments when reissuing claims).
-        if let Some(instance) = state.pty.get(attached_id) {
-            instance.remove_web_attachment();
-        }
-    }
+    ctx.release_all(&state);
     info!(
         "[terminal-ws] client disconnected; {} PTY(s) preserved",
         ctx.authorized.read().len()
@@ -163,11 +154,45 @@ async fn run(socket: WebSocket, state: AppState) {
     let _ = write_task.await;
 }
 
+/// A live output-forwarding attachment: the forwarder task plus the one-shot
+/// release of its `web_attachments` count. Every path that ends an attachment
+/// (forwarder exit, re-attach replacement, detach/rotate/revoke, connection
+/// cleanup) goes through [`AttachmentRelease::release`], so the count is
+/// decremented exactly once per attach — never twice for a forwarder that
+/// self-released before cleanup ran, and never for another viewer's attach.
+struct Attachment {
+    task: tokio::task::JoinHandle<()>,
+    release: AttachmentRelease,
+}
+
+impl Attachment {
+    /// Abort the forwarder and release its attachment count (idempotent).
+    fn end(self, pty: &PtyManager, terminal_id: &str) {
+        self.task.abort();
+        self.release.release(pty, terminal_id);
+    }
+}
+
+/// Exactly-once release flag shared between an [`Attachment`] and its
+/// forwarder task.
+#[derive(Clone, Default)]
+struct AttachmentRelease(Arc<AtomicBool>);
+
+impl AttachmentRelease {
+    fn release(&self, pty: &PtyManager, terminal_id: &str) {
+        if !self.0.swap(true, Ordering::AcqRel) {
+            if let Some(instance) = pty.get(terminal_id) {
+                instance.remove_web_attachment();
+            }
+        }
+    }
+}
+
 struct ConnectionContext {
     /// Terminal IDs this connection is authorized to operate on.
     authorized: Arc<RwLock<HashSet<String>>>,
-    /// Per-terminal output forwarding tasks (terminal_id -> task).
-    attachments: HashMap<String, tokio::task::JoinHandle<()>>,
+    /// Per-terminal output forwarding attachments (terminal_id -> attachment).
+    attachments: HashMap<String, Attachment>,
     /// Whether this connection has passed the web auth gate (`authenticate`
     /// request). Initialized to `true` on ungated servers so legacy behavior
     /// is byte-identical; a gated server starts every connection un-authed.
@@ -212,17 +237,23 @@ impl ConnectionContext {
     }
 
     fn detach(&mut self, terminal_id: &str, state: &AppState) {
-        if let Some(task) = self.attachments.remove(terminal_id) {
-            task.abort();
-            // The aborted forwarder never reaches its release path —
-            // release the live-attachment accounting here (rotate/revoke
-            // tear-down path; the claim is already invalid, but accounting
-            // must stay balanced for `list_preserved` skip decisions).
-            if let Some(instance) = state.pty.get(terminal_id) {
-                instance.remove_web_attachment();
-            }
+        // The aborted forwarder never reaches its own release path — end()
+        // releases the live-attachment accounting (rotate/revoke tear-down;
+        // the claim is already invalid, but accounting must stay balanced
+        // for `list_preserved` skip decisions).
+        if let Some(attachment) = self.attachments.remove(terminal_id) {
+            attachment.end(&state.pty, terminal_id);
         }
         self.authorized.write().remove(terminal_id);
+    }
+
+    /// Connection teardown: end every attachment, releasing each exactly once
+    /// so a later `list_preserved` can reissue claims for this connection's
+    /// terminals (CodeRabbit: preserve live attachments when reissuing claims).
+    fn release_all(&mut self, state: &AppState) {
+        for (terminal_id, attachment) in self.attachments.drain() {
+            attachment.end(&state.pty, &terminal_id);
+        }
     }
 }
 
@@ -405,7 +436,16 @@ async fn handle(
                 // one's credential. The forwarder task below releases on exit.
                 // #851b: an attach IS a web listing — stamp it so the
                 // web-listed reaper window restarts for this terminal.
+                // A re-attach on this connection replaces its previous
+                // attachment. Count the new one BEFORE ending the old one so
+                // the count never touches zero mid-swap (a zero would let
+                // another connection's `list_preserved` reissue the claim and
+                // invalidate the generation this new forwarder holds).
                 instance.add_web_attachment();
+                if let Some(previous) = ctx.attachments.remove(&terminal_id) {
+                    previous.end(&state.pty, &terminal_id);
+                }
+                let release = AttachmentRelease::default();
                 instance.mark_web_listed();
                 // Sequenced replay: only unseen chunks, with gap detection.
                 let replay = instance.subscribe_from(last_seq);
@@ -435,15 +475,16 @@ async fn handle(
                     }),
                 )
                 .await
-                .map_err(|e| ("NETWORK_ERROR", e))?;
+                .map_err(|e| {
+                    // No forwarder will exist for this attach: release now.
+                    release.release(&state.pty, &terminal_id);
+                    ("NETWORK_ERROR", e)
+                })?;
 
-                // Replace prior attachment task if any.
-                if let Some(previous) = ctx.attachments.remove(&terminal_id) {
-                    previous.abort();
-                }
                 let output_tx = tx.clone();
                 let attached_id = terminal_id.clone();
                 let pty = state.pty.clone();
+                let task_release = release.clone();
                 let task = tokio::spawn(async move {
                     let mut receiver = replay.receiver;
                     let mut current_seq = replay.latest_seq;
@@ -502,11 +543,10 @@ async fn handle(
                     // Release this connection's live-attachment accounting so a
                     // later `list_preserved` may reissue the claim (CodeRabbit:
                     // preserve live attachments when reissuing claims).
-                    if let Some(instance) = pty.get(&attached_id) {
-                        instance.remove_web_attachment();
-                    }
+                    task_release.release(&pty, &attached_id);
                 });
-                ctx.attachments.insert(terminal_id.clone(), task);
+                ctx.attachments
+                    .insert(terminal_id.clone(), Attachment { task, release });
                 // Shared attach result — byte-identical camelCase shape to the
                 // desktop `terminal_attach` response (no claim key, ever).
                 serde_json::to_value(attach_result).map_err(|e| ("NETWORK_ERROR", e.to_string()))

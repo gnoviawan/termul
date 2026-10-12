@@ -2,14 +2,17 @@
 //! Factory key management endpoints. Mirrors the other `*_api.rs` modules —
 //! `router.rs` only registers routes.
 
+use std::net::SocketAddr;
+
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::web::fs_api::check_local_only;
 use crate::web::ws::AppState;
 
 /// `GET /acp/factory-key` response body.
@@ -56,10 +59,29 @@ pub(crate) async fn factory_key_status(State(state): State<AppState>) -> Respons
 
 pub(crate) async fn factory_key_save(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     if let Some(refusal) = require_active_web_auth(&state, "save").await {
         return refusal;
+    }
+    // Replacing the host credential is a host-state write: same guard as every
+    // other mutation route (loopback peer or `--allow-remote-writes`; never in
+    // shared-live mode). Runs BEFORE the body is parsed or any agent is spawned.
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/acp/factory-key",
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": forbidden.error,
+                "code": forbidden.code,
+            })),
+        )
+            .into_response();
     }
     let request: FactoryKeySave = match serde_json::from_value(body) {
         Ok(request) => request,

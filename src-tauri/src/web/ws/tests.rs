@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
 use crate::acp::SpawnOutcome;
-use crate::web::permissions::{PermissionRendezvous, QuestionRendezvous};
+use crate::web::permissions::{PermissionRendezvous, QuestionRendezvous, TurnClaim};
 use std::collections::HashSet;
 
 #[tokio::test]
@@ -379,6 +379,26 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     assert!(!concurrent.ok);
     assert_eq!(concurrent.err.expect("busy error").code, "rate_limited");
 
+    // Same turnId resent while the turn is running (a dropped reply): a
+    // receipt, never rate_limited.
+    let resend_in_flight = handle_send_prompt(
+        "prompt-resend".to_string(),
+        &json!({
+            "agentId": "agent-long",
+            "sessionId": "session-long",
+            "text": "long",
+            "turnId": "turn-long"
+        }),
+        &acp,
+        &relay,
+    )
+    .await;
+    assert!(resend_in_flight.ok, "{:?}", resend_in_flight.err);
+    assert_eq!(
+        resend_in_flight.payload,
+        Some(json!({"receipt": "in_progress"}))
+    );
+
     let _ = release.send(());
     let completed = match rx.recv().await.expect("prompt reply") {
         Outbound::Reply(reply) => reply,
@@ -386,9 +406,11 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     };
     assert!(completed.ok);
     assert_eq!(completed.id, "prompt-long");
+    assert_eq!(completed.payload, Some(json!("end_turn")));
 
-    let stale = handle_send_prompt(
-        "prompt-stale".to_string(),
+    // Same turnId after completion: `accepted`, never stale.
+    let resend_done = handle_send_prompt(
+        "prompt-done-resend".to_string(),
         &json!({
             "agentId": "agent-long",
             "sessionId": "session-long",
@@ -399,8 +421,8 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
         &relay,
     )
     .await;
-    assert!(!stale.ok);
-    assert_eq!(stale.err.expect("stale error").code, "stale");
+    assert!(resend_done.ok, "{:?}", resend_done.err);
+    assert_eq!(resend_done.payload, Some(json!({"receipt": "accepted"})));
 
     let next = handle_send_prompt(
         "prompt-next".to_string(),

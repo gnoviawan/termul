@@ -69,6 +69,12 @@ impl TerminalInstance {
     }
 
     /// Release a web attachment (connection teardown / detach).
+    ///
+    /// Releasing also re-stamps `last_web_listed`: a terminal that was
+    /// observable until this instant gets a fresh web-listed window from the
+    /// moment of detach. Without the re-stamp the stamp still carried the
+    /// attach time, so a PTY attached for longer than the window was reaped
+    /// on the very next sweep after its last viewer closed the tab.
     pub fn remove_web_attachment(&self) {
         // fetch_update always returns Ok (closure never fails); the result
         // value carries the previous count, which is not needed here.
@@ -81,6 +87,7 @@ impl TerminalInstance {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
                 Some(v.saturating_sub(1))
             });
+        self.mark_web_listed();
     }
 
     /// #851: stamp that a web client just listed/subscribed to this

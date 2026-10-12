@@ -95,6 +95,22 @@ pub(super) fn run_agent(
         }));
     }
 
+    // The SDK dropped the command loop and every spawned turn task when the
+    // connection closed, so a turn that was still active never reached its own
+    // terminator. Append one `crashed` `prompt_complete` per active turn
+    // BEFORE the writers are finalized, so reopen never reports the turn open
+    // (ACPM-F1). On process shutdown the `interrupted` marker owns that role
+    // (`SessionPersistence::shutdown` scans for the unterminated turn), so the
+    // markers are only drained.
+    if persistence
+        .as_ref()
+        .is_some_and(|persistence| persistence.is_process_shutdown())
+    {
+        driver_state.lock().drain_active_turns();
+    } else {
+        emit_crash_terminators(&driver_state, &sinks, &agent_id);
+    }
+
     // Self-reap: remove our own registry entry so a crashed/EOFed agent does
     // not linger in `list_agents` with a dead command channel. We do NOT join
     // our own handle here (a thread cannot join itself); `kill`/`kill_all` may

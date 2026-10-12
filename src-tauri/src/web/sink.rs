@@ -1120,20 +1120,14 @@ impl WsRelaySink {
     }
 
     /// Authoritative server-authored user prompt: assign the relay sequence,
-    /// persist it, and synchronously wait for the durability boundary before
-    /// ACP dispatch.
-    pub async fn persist_user_prompt(
-        &self,
-        sid: &str,
-        payload: Value,
-    ) -> Result<SequencedEvent, String> {
+    /// enqueue it to the durable writer and fan it out to the session's
+    /// subscribers, all synchronously. Called on the agent driver thread at
+    /// the moment the driver ACCEPTS the prompt (before the turn task exists),
+    /// so the record is delivered before any event of its own turn
+    /// (`emit`'s "assign seq, then fan out" order, never an await in between —
+    /// SINK-F3). The durability boundary is [`Self::flush_prompt_record`].
+    pub fn record_user_prompt(&self, sid: &str, payload: Value) -> SequencedEvent {
         let event = self.assign_and_append(sid, "user_prompt", payload);
-        if let Some(persistence) = &self.persistence {
-            persistence
-                .flush_session(sid)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
         let targets: Vec<ClientId> = self
             .session_subs
             .lock()
@@ -1143,7 +1137,19 @@ impl WsRelaySink {
         for client_id in targets {
             self.enqueue(client_id, event.clone(), ReliabilityTier::Reliable);
         }
-        Ok(event)
+        event
+    }
+
+    /// Await the durable flush of everything queued for `sid` (including a
+    /// just-recorded `user_prompt`). A no-op without persistence.
+    pub async fn flush_prompt_record(&self, sid: &str) -> Result<(), String> {
+        match &self.persistence {
+            Some(persistence) => persistence
+                .flush_session(sid)
+                .await
+                .map_err(|error| error.to_string()),
+            None => Ok(()),
+        }
     }
 
     /// Register a client + its sender under a session and the reverse index.
@@ -1314,6 +1320,30 @@ impl EventSink for WsRelaySink {
 
         match &event.sid {
             Some(sid) => {
+                // Turn terminator (AD-5): a second `prompt_complete` for the
+                // same turn id is dropped (idempotent by turn id), and the
+                // first one records the turn as completed + releases its
+                // claim, so the next `send_prompt` is accepted and a resend of
+                // this id gets an `accepted` receipt — regardless of which
+                // path (turn task, crash teardown, spawn failure) produced it.
+                let terminated_turn = (type_ == "prompt_complete")
+                    .then(|| {
+                        event
+                            .payload
+                            .get("turnId")
+                            .and_then(Value::as_str)
+                            .filter(|turn_id| !turn_id.is_empty())
+                            .map(str::to_string)
+                    })
+                    .flatten();
+                if let Some(turn_id) = &terminated_turn {
+                    if !self.turn_watermark.mark_seen(sid, turn_id) {
+                        warn!(
+                            "[sessions] dropped duplicate prompt_complete for an already-terminated turn (session {sid})"
+                        );
+                        return;
+                    }
+                }
                 // Session-scoped: assign seq + append atomically, then fan out.
                 let se = self.assign_and_append(sid, type_, event.payload.clone());
                 let targets: Vec<ClientId> = self
@@ -1324,6 +1354,9 @@ impl EventSink for WsRelaySink {
                     .unwrap_or_default();
                 for client_id in targets {
                     self.enqueue(client_id, se.clone(), tier);
+                }
+                if let Some(turn_id) = &terminated_turn {
+                    self.turn_watermark.record_completed(sid, turn_id);
                 }
             }
             None => {

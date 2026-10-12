@@ -127,7 +127,7 @@ fn prompt_complete_serializes_stop_reason_snake_case() {
     let event = PromptCompleteEvent {
         agent_id: AgentId("a".to_string()),
         session_id: SessionId::new("s"),
-        stop_reason: StopReason::EndTurn,
+        stop_reason: StopReason::EndTurn.into(),
         turn_id: None,
     };
     let value = serde_json::to_value(&event).unwrap();
@@ -140,12 +140,69 @@ fn prompt_complete_serializes_stop_reason_snake_case() {
     );
 }
 
+/// Every ACP stop reason serializes exactly as the bare ACP value did before
+/// the host terminators were added (untagged wrapper), and the host
+/// terminators are plain lowercase strings.
+#[test]
+fn prompt_stop_reason_keeps_acp_wire_shape_and_adds_host_terminators() {
+    for stop in [
+        StopReason::EndTurn,
+        StopReason::MaxTokens,
+        StopReason::MaxTurnRequests,
+        StopReason::Refusal,
+        StopReason::Cancelled,
+    ] {
+        assert_eq!(
+            serde_json::to_value(PromptStopReason::from(stop)).unwrap(),
+            serde_json::to_value(stop).unwrap()
+        );
+    }
+    for (stop, wire) in [
+        (TurnFailureStop::Error, "error"),
+        (TurnFailureStop::Timeout, "timeout"),
+        (TurnFailureStop::Crashed, "crashed"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(PromptStopReason::from(stop)).unwrap(),
+            wire
+        );
+    }
+}
+
+/// The timeout marker is a typed flag: only a deadline sets it, never an RPC
+/// failure whose message happens to mention a timeout.
+#[test]
+fn turn_stop_is_timeout_only_for_the_typed_marker() {
+    let rpc = AcpErrorDetail::from("upstream idle timeout: please retry".to_string());
+    assert_eq!(rpc.turn_stop(), TurnFailureStop::Error);
+    let mut deadline = rpc.clone();
+    deadline.timed_out = true;
+    assert_eq!(deadline.turn_stop(), TurnFailureStop::Timeout);
+    assert_eq!(deadline.masked("generic").turn_stop(), TurnFailureStop::Timeout);
+}
+
+/// A request that fails because the agent transport closed mid-turn is a
+/// `crashed` terminator (typed SDK discriminator), while an ordinary RPC error
+/// with a similar-looking message stays `error`.
+#[test]
+fn turn_stop_is_crashed_when_the_agent_transport_closed() {
+    let closed = agent_client_protocol::Error::internal_error()
+        .data(serde_json::json!({ "reason": agent_client_protocol::INCOMING_TRANSPORT_CLOSED_REASON }));
+    assert_eq!(
+        AcpErrorDetail::from(closed).turn_stop(),
+        TurnFailureStop::Crashed
+    );
+    let lookalike = agent_client_protocol::Error::internal_error()
+        .data(serde_json::json!({ "message": "Incoming transport closed" }));
+    assert_eq!(AcpErrorDetail::from(lookalike).turn_stop(), TurnFailureStop::Error);
+}
+
 #[test]
 fn prompt_complete_serializes_turn_id_when_set() {
     let event = PromptCompleteEvent {
         agent_id: AgentId("a".to_string()),
         session_id: SessionId::new("s"),
-        stop_reason: StopReason::EndTurn,
+        stop_reason: StopReason::EndTurn.into(),
         turn_id: Some("turn-123".to_string()),
     };
     let value = serde_json::to_value(&event).unwrap();

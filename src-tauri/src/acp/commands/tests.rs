@@ -16,26 +16,22 @@ fn zero_overrides_are_rejected_for_strictly_positive_timeouts() {
     assert!(acp_set_session_reopen_timeout(Some(0)).is_err());
 }
 
-/// Regression: the desktop `acp_send_prompt` command persists an accepted
-/// non-ephemeral prompt through `WsRelaySink` before dispatch (matching the
-/// WS `send_prompt` handler ordering). This exercises the extracted
-/// `persist_accepted_prompt` helper directly: it must write one durable
-/// `user_prompt` record whose payload shape (`{agentId, sessionId, turnId,
-/// content}`) matches the web path byte-for-byte — including the
-/// client-minted `turnId`, which the payload fold uses to materialize the
-/// `turn:<turnId>` bubble id the optimistic renderer bubble already holds.
-/// The command body calls this helper BEFORE `AcpManager::send_prompt` and
-/// only when `is_ephemeral_session` returns `false`; those ordering +
-/// ephemeral-skip invariants are enforced by the command body structure (a
-/// full `acp_send_prompt` unit test would need a real `AcpManager` + Tauri
-/// `State`, which is not constructible here).
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persist_accepted_prompt_writes_durable_user_prompt_with_desktop_payload() {
+/// Desktop prompt harness: a durable-persistence relay that is also a sink of
+/// the manager (as in the app), plus the in-crate fake agent driver, which
+/// reproduces the real command loop's `SendPrompt` replies.
+struct DesktopEnv {
+    manager: Arc<AcpManager>,
+    relay: Arc<WsRelaySink>,
+    persistence: Arc<SessionPersistence>,
+    root: std::path::PathBuf,
+}
+
+async fn desktop_env(session: &str, turns: Vec<crate::acp::manager::FakeTurn>) -> DesktopEnv {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("termul-acp-prompt-persist-{stamp}"));
+    let root = std::env::temp_dir().join(format!("termul-acp-prompt-{session}-{stamp}"));
     std::fs::create_dir_all(&root).unwrap();
     let cwd = root.join("cwd");
     std::fs::create_dir_all(&cwd).unwrap();
@@ -44,7 +40,7 @@ async fn persist_accepted_prompt_writes_durable_user_prompt_with_desktop_payload
         .unwrap();
     persistence
         .register_session(SessionRegistration {
-            session_id: "sess-desktop".to_string(),
+            session_id: session.to_string(),
             stable_agent_namespace: None,
             runtime_agent_id: None,
             project_id: None,
@@ -54,98 +50,183 @@ async fn persist_accepted_prompt_writes_durable_user_prompt_with_desktop_payload
         .await
         .unwrap();
     let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    let blocks = vec![ContentBlock::Text(TextContent::new("hello world"))];
-    persist_accepted_prompt(
-        &relay,
-        &AgentId("agent-1".to_string()),
-        &SessionId("sess-desktop".to_string()),
-        &blocks,
+    let manager = Arc::new(AcpManager::new(vec![relay.clone()]));
+    manager.install_test_agent_with_turns(
+        AgentId("agent-1".to_string()),
+        std::collections::HashSet::from([session.to_string()]),
+        turns,
+        false,
+    );
+    DesktopEnv {
+        manager,
+        relay,
+        persistence,
+        root,
+    }
+}
+
+async fn send(
+    env: &DesktopEnv,
+    session: &str,
+    text: &str,
+    turn_id: Option<&str>,
+    display: Option<Vec<ContentBlock>>,
+) -> Result<PromptReply, String> {
+    send_prompt_core(
+        &env.manager,
+        &env.relay,
+        AgentId("agent-1".to_string()),
+        SessionId(session.to_string()),
+        vec![ContentBlock::Text(TextContent::new(text))],
+        turn_id.map(str::to_string),
+        display,
+    )
+    .await
+}
+
+/// Regression: the desktop `acp_send_prompt` persists the accepted prompt as
+/// one durable `user_prompt` whose payload shape (`{agentId, sessionId,
+/// turnId, content}`) matches the web path byte-for-byte — including the
+/// client-minted `turnId` (the payload fold materializes the `turn:<turnId>`
+/// bubble id the optimistic renderer bubble already holds) and the display-side
+/// content override.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_send_prompt_writes_durable_user_prompt_with_desktop_payload() {
+    let env = desktop_env("sess-desktop", Vec::new()).await;
+    let reply = send(
+        &env,
+        "sess-desktop",
+        "wire text with handoff summary",
         Some("turn-desktop-1"),
+        Some(vec![ContentBlock::Text(TextContent::new("hello world"))]),
     )
     .await
     .unwrap();
+    assert_eq!(serde_json::to_value(reply).unwrap(), "end_turn");
 
-    // The durable frontier advanced: one user_prompt record at seq 1.
-    assert_eq!(persistence.last_seq("sess-desktop").unwrap(), 1);
-    let metadata = persistence.metadata("sess-desktop").unwrap();
-    assert_eq!(metadata.message_count, 1);
-    // First-message title provenance is established from the user_prompt.
-    assert!(metadata.title.is_some(), "title derived from user_prompt");
-
-    // The durable record carries the desktop payload shape (matches the
-    // WS `send_prompt` handler): agentId, sessionId, turnId, content.
-    let records = persistence
+    env.persistence.flush_session("sess-desktop").await.unwrap();
+    let records = env
+        .persistence
         .replay_after_async("sess-desktop".to_string(), 0)
         .await
         .unwrap();
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
-    assert_eq!(record.type_, "user_prompt");
-    assert_eq!(record.seq, 1);
+    let record = records
+        .iter()
+        .find(|r| r.type_ == "user_prompt")
+        .expect("durable user_prompt");
+    assert_eq!(record.seq, 1, "user_prompt is sequenced first");
     assert_eq!(record.payload["agentId"], "agent-1");
     assert_eq!(record.payload["sessionId"], "sess-desktop");
-    assert_eq!(
-        record.payload["turnId"], "turn-desktop-1",
-        "desktop path persists the client-minted turnId so the materialized \
-             bubble id-matches the renderer's optimistic `turn:<turnId>` bubble"
-    );
+    assert_eq!(record.payload["turnId"], "turn-desktop-1");
     let content = record.payload["content"].as_array().unwrap();
     assert_eq!(content.len(), 1);
-    assert_eq!(content[0]["text"], "hello world");
+    assert_eq!(
+        content[0]["text"], "hello world",
+        "display content, not the wire framing, is persisted"
+    );
+    let metadata = env.persistence.metadata("sess-desktop").unwrap();
+    assert!(metadata.title.is_some(), "title derived from user_prompt");
 
-    persistence.shutdown().await.unwrap();
-    let _ = std::fs::remove_dir_all(root);
+    env.persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(env.root);
 }
 
-/// A caller that omits the client turn-id (`None`) keeps the legacy
-/// `turnId: null` shape — the payload fold then materializes the
-/// `user:seq-*` fallback id.
+/// A caller that omits the client turn-id keeps the legacy behavior: the
+/// durable record has `turnId: null`, there is no dedupe, and consecutive
+/// turnless prompts each run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persist_accepted_prompt_without_turn_id_writes_null() {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!("termul-acp-prompt-persist-null-{stamp}"));
-    std::fs::create_dir_all(&root).unwrap();
-    let cwd = root.join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let persistence = SessionPersistence::open(root.join("sessions"))
-        .await
-        .unwrap();
-    persistence
-        .register_session(SessionRegistration {
-            session_id: "sess-no-turn".to_string(),
-            stable_agent_namespace: None,
-            runtime_agent_id: None,
-            project_id: None,
-            cwd,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
-    let blocks = vec![ContentBlock::Text(TextContent::new("hi"))];
-    persist_accepted_prompt(
-        &relay,
-        &AgentId("agent-1".to_string()),
-        &SessionId("sess-no-turn".to_string()),
-        &blocks,
-        None,
-    )
-    .await
-    .unwrap();
-
-    let records = persistence
+async fn acp_send_prompt_without_turn_id_keeps_legacy_behavior() {
+    let env = desktop_env("sess-no-turn", Vec::new()).await;
+    for _ in 0..2 {
+        let reply = send(&env, "sess-no-turn", "hi", None, None).await.unwrap();
+        assert_eq!(serde_json::to_value(reply).unwrap(), "end_turn");
+    }
+    env.persistence.flush_session("sess-no-turn").await.unwrap();
+    let records = env
+        .persistence
         .replay_after_async("sess-no-turn".to_string(), 0)
         .await
         .unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].type_, "user_prompt");
-    assert!(records[0].payload["turnId"].is_null());
+    let prompts: Vec<_> = records
+        .iter()
+        .filter(|r| r.type_ == "user_prompt")
+        .collect();
+    assert_eq!(prompts.len(), 2);
+    assert!(prompts.iter().all(|r| r.payload["turnId"].is_null()));
 
-    persistence.shutdown().await.unwrap();
-    let _ = std::fs::remove_dir_all(root);
+    env.persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(env.root);
+}
+
+/// Dropped reply on the desktop transport: resending the same `turnId` while
+/// the turn runs returns an `in_progress` receipt, after it finished an
+/// `accepted` receipt — never an error, never a second run/`user_prompt`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_send_prompt_resend_of_same_turn_id_returns_a_receipt() {
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let env = desktop_env(
+        "sess-resend",
+        vec![crate::acp::manager::FakeTurn::Hold {
+            release: release_rx,
+            entered: entered_tx,
+        }],
+    )
+    .await;
+    let manager = env.manager.clone();
+    let relay = env.relay.clone();
+    let first = tokio::spawn(async move {
+        send_prompt_core(
+            &manager,
+            &relay,
+            AgentId("agent-1".to_string()),
+            SessionId("sess-resend".to_string()),
+            vec![ContentBlock::Text(TextContent::new("go"))],
+            Some("turn-r".to_string()),
+            None,
+        )
+        .await
+    });
+    entered_rx.await.unwrap();
+
+    let in_flight = send(&env, "sess-resend", "go", Some("turn-r"), None)
+        .await
+        .expect("resend while running must not error");
+    assert_eq!(
+        serde_json::to_value(in_flight).unwrap(),
+        serde_json::json!({"receipt": "in_progress"})
+    );
+    // A different turn id while it runs is still a busy rejection.
+    let busy = send(&env, "sess-resend", "other", Some("turn-other"), None)
+        .await
+        .unwrap_err();
+    assert!(busy.starts_with("ACP_TURN_IN_PROGRESS"), "{busy}");
+
+    release_tx.send(()).unwrap();
+    let first = first.await.unwrap().unwrap();
+    assert_eq!(serde_json::to_value(first).unwrap(), "end_turn");
+
+    let done = send(&env, "sess-resend", "go", Some("turn-r"), None)
+        .await
+        .expect("resend after completion must not error");
+    assert_eq!(
+        serde_json::to_value(done).unwrap(),
+        serde_json::json!({"receipt": "accepted"})
+    );
+    env.persistence.flush_session("sess-resend").await.unwrap();
+    let records = env
+        .persistence
+        .replay_after_async("sess-resend".to_string(), 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        records.iter().filter(|r| r.type_ == "user_prompt").count(),
+        1,
+        "resends never add a user_prompt"
+    );
+
+    env.persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(env.root);
 }
 
 /// CAP-2 (spec-in-chat-agent-switch): the desktop command writes the

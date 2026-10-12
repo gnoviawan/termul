@@ -625,13 +625,50 @@ pub struct QuestionOption {
     pub cardinality: Option<String>,
 }
 
+/// Host-authored turn terminators (story 1 / AD-5): a turn that ends without
+/// an ACP stop reason still gets exactly one durable `prompt_complete`.
+/// Serialized lowercase (`error`, `timeout`, `crashed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TurnFailureStop {
+    /// The agent RPC failed, or the turn could not be started after the host
+    /// accepted it.
+    Error,
+    /// The idle or hard turn deadline elapsed.
+    Timeout,
+    /// The agent connection ended with the turn still active.
+    Crashed,
+}
+
+/// `acp:prompt_complete` stop reason: an ACP stop reason (unchanged wire
+/// shape, e.g. `end_turn`) or a host terminator ([`TurnFailureStop`]).
+/// Untagged so existing ACP stop reasons serialize byte-identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum PromptStopReason {
+    Acp(StopReason),
+    Host(TurnFailureStop),
+}
+
+impl From<StopReason> for PromptStopReason {
+    fn from(value: StopReason) -> Self {
+        Self::Acp(value)
+    }
+}
+
+impl From<TurnFailureStop> for PromptStopReason {
+    fn from(value: TurnFailureStop) -> Self {
+        Self::Host(value)
+    }
+}
+
 /// `acp:prompt_complete`
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCompleteEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
-    pub stop_reason: StopReason,
+    pub stop_reason: PromptStopReason,
     /// Story 1.8 T3.2 (FR11): the client turn-id echoed back so the renderer's
     /// `seenTurnIds` dedup fires (no duplicate completion on reconnect replay).
     /// `None` for the desktop path + older clients (dedup is a no-op). Serialized
@@ -653,6 +690,15 @@ pub struct AcpErrorDetail {
     pub message: String,
     pub code: Option<i32>,
     pub data: Option<serde_json::Value>,
+    /// Typed marker for an idle/hard turn deadline (set only by
+    /// `From<TurnTimeout>`); the turn terminator is `timeout` instead of
+    /// `error`. Never derived from the message text.
+    pub timed_out: bool,
+    /// Typed marker for a request that failed because the agent's transport
+    /// closed before it answered (the SDK's `is_incoming_transport_closed`
+    /// discriminator, not message text): the agent went away mid-turn, so the
+    /// terminator is `crashed`.
+    pub connection_closed: bool,
 }
 
 impl From<&agent_client_protocol::Error> for AcpErrorDetail {
@@ -661,6 +707,8 @@ impl From<&agent_client_protocol::Error> for AcpErrorDetail {
             message: error.to_string(),
             code: Some(i32::from(error.code)),
             data: error.data.clone(),
+            timed_out: false,
+            connection_closed: agent_client_protocol::is_incoming_transport_closed(error),
         }
     }
 }
@@ -677,6 +725,8 @@ impl From<String> for AcpErrorDetail {
             message,
             code: None,
             data: None,
+            timed_out: false,
+            connection_closed: false,
         }
     }
 }
@@ -690,6 +740,20 @@ impl AcpErrorDetail {
             message: generic_message.to_string(),
             code: None,
             data: None,
+            timed_out: self.timed_out,
+            connection_closed: self.connection_closed,
+        }
+    }
+
+    /// The host terminator for a turn that ended with this error.
+    #[must_use]
+    pub fn turn_stop(&self) -> TurnFailureStop {
+        if self.timed_out {
+            TurnFailureStop::Timeout
+        } else if self.connection_closed {
+            TurnFailureStop::Crashed
+        } else {
+            TurnFailureStop::Error
         }
     }
 

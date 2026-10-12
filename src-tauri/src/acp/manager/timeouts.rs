@@ -172,12 +172,39 @@ pub fn resolved_turn_timeout() -> Option<Duration> {
         })
 }
 
+/// Typed marker for an idle/hard turn deadline. `race_turn` builds this (never
+/// a bare string) so the caller can tell a timeout from an RPC failure
+/// without matching message text: `AcpErrorDetail` sets `timed_out`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TurnTimeout {
+    pub(super) message: String,
+}
+
+impl From<TurnTimeout> for String {
+    fn from(timeout: TurnTimeout) -> Self {
+        timeout.message
+    }
+}
+
+impl From<TurnTimeout> for events::AcpErrorDetail {
+    fn from(timeout: TurnTimeout) -> Self {
+        Self {
+            message: timeout.message,
+            code: None,
+            data: None,
+            timed_out: true,
+            connection_closed: false,
+        }
+    }
+}
+
 /// Race an in-flight ACP prompt turn against completion, a cancel signal, an
 /// optional idle deadline (reset on agent activity via `idle_rx`), and an
 /// optional hard wall-clock cap. On idle/hard timeout, invoke `on_timeout_cancel`
 /// (the caller's cancel hook — updates DriverState cancel/timeout state so the
 /// in-flight turn winds down), await `CANCEL_GRACE`, then return a typed timeout
-/// error. Extracted so the deadline loop is unit-testable with mock futures. A
+/// error ([`TurnTimeout`]). Extracted so the deadline loop is unit-testable with
+/// mock futures. A
 /// pre-iteration deadline check bounds a continuously-ready activity arm (under
 /// `biased`) so a streaming-but-non-completing agent can't slip past a cap. When
 /// a deadline is `None` (the unlimited default for idle and/or hard), it imposes
@@ -193,7 +220,7 @@ pub(super) async fn race_turn<P, E>(
 ) -> Result<StopReason, E>
 where
     P: Future<Output = Result<StopReason, E>>,
-    E: From<String>,
+    E: From<TurnTimeout>,
 {
     tokio::pin!(prompt);
     let hard_deadline = hard.map(|d| tokio::time::Instant::now() + d);
@@ -217,13 +244,17 @@ where
                     Ok(result) => result,
                     Err(_) if idle_deadline == Some(nd) => {
                         let idle_dur = idle.unwrap_or(Duration::ZERO);
-                        Err(E::from(format!(
-                            "turn idle timeout: no agent activity for {idle_dur:?}"
-                        )))
+                        Err(E::from(TurnTimeout {
+                            message: format!(
+                                "turn idle timeout: no agent activity for {idle_dur:?}"
+                            ),
+                        }))
                     }
                     Err(_) => {
                         let hard_dur = hard.unwrap_or(Duration::ZERO);
-                        Err(E::from(format!("turn hard timeout: exceeded {hard_dur:?}")))
+                        Err(E::from(TurnTimeout {
+                            message: format!("turn hard timeout: exceeded {hard_dur:?}"),
+                        }))
                     }
                 };
             }

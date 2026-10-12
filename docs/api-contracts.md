@@ -525,18 +525,32 @@ duplicate plan UI.
 
 ### `acp_send_prompt` errors
 
-When a second prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`). Do not reword this prefix without updating both sides.
+When a *different* prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`; on `/ws` the same case is `err.code: "rate_limited"`). Do not reword this prefix without updating both sides.
+
+### `acp_send_prompt` / WS `send_prompt` reply and `turnId` dedupe
+
+Both carriers run the same shared service (`src-tauri/src/web/prompt_turn.rs`). The reply is either the ACP stop reason string (the turn ran on this call) or a receipt object for a resend of a `turnId` the host already saw:
+
+- `{"receipt":"in_progress"}` — the same `turnId` is still running;
+- `{"receipt":"accepted"}` — the same `turnId` already finished (including by error, timeout or crash).
+
+A same-`turnId` resend is never `rate_limited`/`stale`. A different `turnId` while a turn runs stays `ACP_TURN_IN_PROGRESS` / `rate_limited`. Callers that omit `turnId` get no dedupe.
+
+### Turn terminators
+
+Every accepted turn ends with exactly one durable, session-scoped `acp:prompt_complete {sessionId, turnId?, stopReason}`. `stopReason` is an ACP stop reason (`end_turn`, `cancelled`, …) or a host terminator: `error` (agent RPC failure, or the turn could not start after acceptance), `timeout` (idle/hard turn deadline), `crashed` (the agent connection closed with the turn active). The existing `acp:agent_error` is still emitted for `error`/`timeout`. A second terminator for the same `turnId` is dropped, and any terminator releases the turn claim. Host shutdown keeps its separate `interrupted` marker.
 
 ### `acp_send_prompt` durability ordering
 
-Desktop prompt persistence mirrors the WS `send_prompt` handler (`src-tauri/src/web/ws.rs`) so a transport failure can never erase an accepted user message. Before dispatching through `AcpManager::send_prompt`, the command:
+Desktop prompt persistence mirrors the WS `send_prompt` handler so a transport failure can never erase an accepted user message. The command:
 
 1. verifies authoritative session ownership (`AcpManager::owns_session`) — rejects a cross-agent session id before any durable write;
-2. resolves the ephemeral flag (`AcpManager::is_ephemeral_session`) — backend-ephemeral utility sessions are skipped (no durable history or sidebar row);
-3. for non-ephemeral sessions, persists the accepted prompt through `WsRelaySink::persist_user_prompt` (the relay sequence authority + durability barrier) with the same payload shape as the web path (`{agentId, sessionId, turnId, content}`; `turnId` is `null` on the desktop path);
-4. only then dispatches through `AcpManager::send_prompt`.
+2. claims the turn by `turnId` (above);
+3. resolves the ephemeral flag (`AcpManager::is_ephemeral_session`) — backend-ephemeral utility sessions never get a `user_prompt` record (no durable history or sidebar row);
+4. starts the prompt on the driver with a one-shot accept hook: the driver thread runs it the moment it ACCEPTS the prompt, before the turn task exists, and the hook sequences + fans out the durable `user_prompt` (`WsRelaySink::record_user_prompt`; payload `{agentId, sessionId, turnId, content}`) — so it can never be delivered after a chunk of its own turn, and a prompt the driver rejects (`ACP_TURN_IN_PROGRESS`) leaves no `user_prompt`;
+5. awaits the durable flush (`WsRelaySink::flush_prompt_record`) after acceptance; a flush failure is logged with session context only (never prompt content) and does not unwind the accepted turn.
 
-A persistence failure rejects dispatch (the prompt is not erased) and is logged with session context only — never prompt content. This establishes first-message title provenance on restore: a reopened chat materializes the user bubble (from the durable `user_prompt` record) and derives the title, even for agents (e.g. OpenCode) that do not reliably send a live `session_info_update` title.
+A reopened chat materializes the user bubble (from the durable `user_prompt` record) and derives the title, even for agents (e.g. OpenCode) that do not reliably send a live `session_info_update` title.
 
 ## Notes
 

@@ -8,9 +8,8 @@
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ListSessionsResponse, McpServer, SessionConfigOption, StopReason, TextContent,
+    ContentBlock, ListSessionsResponse, McpServer, SessionConfigOption, TextContent,
 };
-use serde_json::json;
 use tauri::State;
 
 use crate::acp::config::{require_config_id, AgentConfig, AgentId, SessionId};
@@ -19,6 +18,7 @@ use crate::acp::manager::{
     SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
 };
 use crate::acp::session_persistence::{AgentSwitchRecord, SessionIndexEntry, SessionRegistration};
+use crate::web::prompt_turn::{run_prompt_turn, PromptReply, PromptTurnRequest};
 use crate::web::WsRelaySink;
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
@@ -371,19 +371,17 @@ pub async fn acp_register_discovered_session(
 /// Send a prompt turn. Accepts either structured ACP content blocks or, for
 /// convenience, a plain text string (wrapped into a single text block).
 ///
-/// Desktop durability parity (CAP-2): before dispatching through
-/// `AcpManager::send_prompt`, a non-ephemeral session's accepted prompt is
-/// persisted through the `WsRelaySink` durability boundary — the same
-/// ordering the WS `send_prompt` handler uses (`web/ws.rs`). A transport
-/// failure after acceptance can therefore never erase the user message, and a
-/// restored chat materializes the user bubble + derives first-message title
-/// provenance. Ephemeral utility sessions are skipped (no durable history).
-/// The payload shape (`{agentId, sessionId, turnId, content}`) matches the
-/// web path byte-for-byte; `turnId` carries the client-minted turn id so the
-/// restored user bubble materializes as `turn:<turnId>` — the same id the
-/// renderer's optimistic bubble already holds, which lets scroll-up backfill
-/// anchor by id instead of relying on content dedup across the display/wire
-/// text dialects.
+/// Runs the same shared prompt-turn service as the WS `send_prompt` handler
+/// (`web::prompt_turn`): ownership check, the `turnId` claim, the durable
+/// `user_prompt` sequenced on the driver thread at acceptance (never for
+/// ephemeral utility sessions), then the stop reason. A resend of a
+/// `turnId` the host already saw returns a receipt
+/// (`{"receipt":"in_progress"|"accepted"}`) instead of an error; callers that
+/// omit `turnId` keep the pre-receipt behavior. The `user_prompt` payload
+/// (`{agentId, sessionId, turnId, content}`) matches the web path
+/// byte-for-byte; `turnId` carries the client-minted turn id so the restored
+/// user bubble materializes as `turn:<turnId>` — the same id the renderer's
+/// optimistic bubble already holds.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn acp_send_prompt(
@@ -395,7 +393,7 @@ pub async fn acp_send_prompt(
     text: Option<String>,
     turn_id: Option<String>,
     display_content: Option<Vec<ContentBlock>>,
-) -> Result<StopReason, String> {
+) -> Result<PromptReply, String> {
     let blocks = match (content, text) {
         (Some(blocks), _) if !blocks.is_empty() => blocks,
         // Empty `content` falls back to `text` when provided.
@@ -403,96 +401,59 @@ pub async fn acp_send_prompt(
         (Some(_), None) => return Err("prompt content must not be empty".to_string()),
         (None, None) => return Err("send_prompt requires either content or text".to_string()),
     };
-    // Ownership is authoritative driver state, not client input. Reject a
-    // cross-agent session id before persisting any durable prompt record
-    // (mirrors the WS `send_prompt` handler ordering).
-    match manager.owns_session(&agent_id, session_id.clone()).await {
-        Ok(true) => {}
-        Ok(false) => return Err("session does not belong to the supplied live agent".to_string()),
-        Err(error) => return Err(error),
-    }
-    // Skip backend-ephemeral sessions — they have no durable history and must
-    // not produce a sidebar row. Matches the WS handler's ephemeral gate.
-    let ephemeral = match manager
-        .is_ephemeral_session(&agent_id, session_id.clone())
-        .await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            log::warn!(
-                "[acp] failed to resolve ephemeral state for session {} (agent {}): {error}",
-                crate::logging::redact_session_id(&session_id.0),
-                agent_id.0
-            );
-            return Err(error);
-        }
-    };
-    if !ephemeral {
-        // Display-side override (spec-agent-switch-separator-redesign): the
-        // durable `user_prompt` records what the transcript should show — the
-        // pending draft — not the wire framing (handoff summary + `---`).
-        // Empty `display_content` means "no display override" — persisting a
-        // zero-block user_prompt would replay as a ghost row and hide the
-        // whole turn in the transcript partition.
-        let record_blocks: &[ContentBlock] = display_content
-            .as_deref()
-            .filter(|d| !d.is_empty())
-            .unwrap_or(&blocks);
-        if let Err(error) = persist_accepted_prompt(
-            relay.inner(),
-            &agent_id,
-            &session_id,
-            record_blocks,
-            turn_id.as_deref(),
-        )
-        .await
-        {
-            // Persistence failure rejects dispatch so a transport failure
-            // cannot erase an accepted user message. Log session context only
-            // — never the prompt content.
-            log::warn!(
-                "[acp] failed to persist accepted prompt for session {} (agent {}): {error}",
-                crate::logging::redact_session_id(&session_id.0),
-                agent_id.0
-            );
-            return Err(format!("failed to persist accepted prompt: {error}"));
-        }
-    }
-    // `turn_id` is echoed on `prompt_complete` (a no-op for the desktop
-    // renderer, which dedups on Tauri events, not wire turn-ids) and — more
-    // importantly here — lands on the durable `user_prompt` record so the
-    // materialized `turn:<turnId>` bubble id-matches the optimistic bubble.
-    manager
-        .send_prompt(&agent_id, session_id, blocks, turn_id)
-        .await
+    send_prompt_core(
+        manager.inner(),
+        relay.inner(),
+        agent_id,
+        session_id,
+        blocks,
+        turn_id,
+        display_content,
+    )
+    .await
 }
 
-/// Persist an accepted desktop prompt through the `WsRelaySink` durability
-/// boundary before ACP dispatch. Mirrors the WS `send_prompt` handler
-/// (`web/ws.rs`) payload shape (`{agentId, sessionId, turnId, content}`) so
-/// the durable `user_prompt` record and the restored user bubble are
-/// byte-identical across transports. `turnId` is the client-minted turn id
-/// (`None` only for callers that omit it — legacy parity).
-/// Returns `Ok(())` when persisted (or when the relay has no durability
-/// attached — live-only mode), or `Err` when the flush failed; the caller
-/// must NOT dispatch on `Err`.
-pub(crate) async fn persist_accepted_prompt(
+/// State-free core of [`acp_send_prompt`] (testable without a Tauri `State`).
+pub(crate) async fn send_prompt_core(
+    manager: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
-    agent_id: &AgentId,
-    session_id: &SessionId,
-    blocks: &[ContentBlock],
-    turn_id: Option<&str>,
-) -> Result<(), String> {
-    let payload = json!({
-        "agentId": agent_id.clone(),
-        "sessionId": session_id.clone(),
-        "turnId": turn_id,
-        "content": blocks,
-    });
-    relay
-        .persist_user_prompt(session_id.0.as_str(), payload)
-        .await
-        .map(|_| ())
+    agent_id: AgentId,
+    session_id: SessionId,
+    blocks: Vec<ContentBlock>,
+    turn_id: Option<String>,
+    display_content: Option<Vec<ContentBlock>>,
+) -> Result<PromptReply, String> {
+    // Display-side override (spec-agent-switch-separator-redesign): the
+    // durable `user_prompt` records what the transcript should show — the
+    // pending draft — not the wire framing (handoff summary + `---`).
+    // Empty `display_content` means "no display override" — persisting a
+    // zero-block user_prompt would replay as a ghost row and hide the
+    // whole turn in the transcript partition.
+    let record_content = display_content
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| blocks.clone());
+    let log_session = session_id.clone();
+    run_prompt_turn(
+        manager,
+        relay,
+        PromptTurnRequest {
+            agent_id,
+            session_id,
+            content: blocks,
+            record_content,
+            turn_id,
+        },
+    )
+    .await
+    .map_err(|error| {
+        let message = error.into_message();
+        // Session context only — never the prompt content.
+        log::debug!(
+            "[acp] prompt for session {} not run: {message}",
+            crate::logging::redact_session_id(&log_session.0)
+        );
+        message
+    })
 }
 
 /// `acp_record_agent_switch` — durably record an agent-switch marker (CAP-2)

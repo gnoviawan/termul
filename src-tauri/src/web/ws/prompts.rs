@@ -2,12 +2,17 @@
 //! `cancel_prompt`, and session `set_mode`/`set_model`/`set_config_option`.
 
 use super::*;
+use crate::web::prompt_turn::{
+    accept_prompt_turn, complete_prompt_turn, PromptAdmission, PromptReply, PromptTurnError,
+    PromptTurnRequest, RunningPrompt,
+};
 
-/// `send_prompt` → `AcpManager::send_prompt(agent_id, session_id, content)`.
-/// Story 1.7 T7.1: the concurrent-turn rejection (`ACP_TURN_IN_PROGRESS`) maps
-/// to `err.code: "rate_limited"` via `map_prompt_error_code`. Story 1.8 T3:
-/// the client `turnId` is extracted + stashed for the `prompt_complete`
-/// idempotent-by-turn-id dedup (see `TurnWatermark`).
+/// `send_prompt` → the shared prompt-turn service (`web::prompt_turn`), the
+/// same claim→start→wait logic the desktop `acp_send_prompt` uses. Story 1.7
+/// T7.1: the concurrent-turn rejection (`ACP_TURN_IN_PROGRESS`) maps to
+/// `err.code: "rate_limited"` via `map_prompt_error_code`. The client `turnId`
+/// dedupes resends: the reply is the stop reason, or a receipt
+/// (`{"receipt":"in_progress"|"accepted"}`) for a same-`turnId` resend.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SendPromptPayload {
@@ -34,40 +39,7 @@ pub(super) struct SendPromptPayload {
 
 pub(super) struct AcceptedSendPrompt {
     id: String,
-    started: crate::acp::manager::StartedPrompt,
-    claim: PromptClaim,
-}
-
-pub(super) struct PromptClaim {
-    relay: Arc<WsRelaySink>,
-    session_id: String,
-    turn_id: Option<String>,
-    armed: bool,
-}
-
-impl PromptClaim {
-    fn complete(mut self) {
-        if let Some(turn_id) = self.turn_id.as_deref() {
-            self.relay
-                .turn_watermark()
-                .record_completed(&self.session_id, turn_id);
-        } else {
-            self.relay
-                .turn_watermark()
-                .release_claim(&self.session_id, None);
-        }
-        self.armed = false;
-    }
-}
-
-impl Drop for PromptClaim {
-    fn drop(&mut self) {
-        if self.armed {
-            self.relay
-                .turn_watermark()
-                .release_claim(&self.session_id, self.turn_id.as_deref());
-        }
-    }
+    running: RunningPrompt,
 }
 
 // clippy 1.98 (`result_large_err`): `WsReply` is ≥128 bytes — it carries the
@@ -75,6 +47,9 @@ impl Drop for PromptClaim {
 // is consumed immediately by the enclosing send path; boxing would add an
 // allocation per WS reply and ripple through all call sites for no functional
 // gain. Allowed pending a dedicated WsReply refactor.
+/// Parse, claim and start the prompt via the shared prompt-turn service.
+/// `Err` carries a FINAL reply: an error, or the receipt for a resend of an
+/// already-seen `turnId` (`{"receipt":"in_progress"|"accepted"}`).
 #[allow(clippy::result_large_err)]
 pub(super) async fn accept_send_prompt(
     id: String,
@@ -104,99 +79,52 @@ pub(super) async fn accept_send_prompt(
             ))
         }
     };
-
-    match acp
-        .owns_session(&parsed.agent_id, parsed.session_id.clone())
-        .await
-    {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(WsReply::err(
-                id,
-                WsErrorCode::NotFound,
-                "session does not belong to the supplied live agent",
-            ))
-        }
-        Err(error) => return Err(acp_err_to_reply(id, error)),
-    }
-
-    match relay
-        .turn_watermark()
-        .claim_turn(parsed.session_id.0.as_str(), parsed.turn_id.as_deref())
-    {
-        TurnClaim::Claimed => {}
-        TurnClaim::Completed => {
-            return Err(WsReply::err(
-                id,
-                WsErrorCode::Stale,
-                "this turn already completed (stale turn-id)",
-            ))
-        }
-        TurnClaim::DuplicateInFlight | TurnClaim::Busy => {
-            return Err(WsReply::err(
-                id,
-                WsErrorCode::RateLimited,
-                "a prompt turn is already in progress",
-            ))
-        }
-    }
-    let claim = PromptClaim {
-        relay: Arc::clone(relay),
-        session_id: parsed.session_id.0.clone(),
-        turn_id: parsed.turn_id.clone(),
-        armed: true,
-    };
-
-    let ephemeral = acp
-        .is_ephemeral_session(&parsed.agent_id, parsed.session_id.clone())
-        .await
-        .map_err(|error| acp_err_to_reply(id.clone(), error))?;
     // Display-side override (spec-agent-switch-separator-redesign): the
     // durable `user_prompt` records the pending draft, not the wire framing
     // (handoff summary + `---`) when the caller supplies displayContent.
     // Empty display_content = no override (a zero-block record would replay
     // as a ghost row and hide the turn).
-    let persisted_content = parsed
+    let record_content = parsed
         .display_content
-        .clone()
         .filter(|d| !d.is_empty())
         .unwrap_or_else(|| content.clone());
-    let prompt_payload = json!({
-        "agentId": parsed.agent_id.clone(),
-        "sessionId": parsed.session_id.clone(),
-        "turnId": parsed.turn_id.clone(),
-        "content": persisted_content,
-    });
-    if !ephemeral {
-        relay
-            .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)
-            .await
-            .map_err(|error| {
-                WsReply::err(
-                    id.clone(),
-                    WsErrorCode::NotImplemented,
-                    format!("failed to persist accepted prompt: {error}"),
-                )
-            })?;
-    }
 
-    let started = acp
-        .start_prompt(&parsed.agent_id, parsed.session_id, content, parsed.turn_id)
-        .await
-        .map_err(|error| acp_err_to_reply(id.clone(), error))?;
-    Ok(AcceptedSendPrompt { id, started, claim })
+    match accept_prompt_turn(
+        acp,
+        relay,
+        PromptTurnRequest {
+            agent_id: parsed.agent_id,
+            session_id: parsed.session_id,
+            content,
+            record_content,
+            turn_id: parsed.turn_id,
+        },
+    )
+    .await
+    {
+        Ok(PromptAdmission::Running(running)) => Ok(AcceptedSendPrompt { id, running }),
+        Ok(PromptAdmission::Receipt(reply)) => Err(ok_with_payload(id, &reply)),
+        Err(PromptTurnError::NotOwned) => Err(WsReply::err(
+            id,
+            WsErrorCode::NotFound,
+            "session does not belong to the supplied live agent",
+        )),
+        Err(PromptTurnError::Busy { .. }) => Err(WsReply::err(
+            id,
+            WsErrorCode::RateLimited,
+            "a prompt turn is already in progress",
+        )),
+        Err(PromptTurnError::Failed(error)) => Err(acp_err_to_reply(id, error)),
+    }
 }
 
 pub(super) async fn complete_send_prompt(
     accepted: AcceptedSendPrompt,
     acp: &Arc<AcpManager>,
 ) -> WsReply {
-    let AcceptedSendPrompt { id, started, claim } = accepted;
-    match acp.wait_prompt(started).await {
-        Ok(stop_reason) => {
-            claim.complete();
-            ok_with_payload(id, &stop_reason)
-        }
+    let AcceptedSendPrompt { id, running } = accepted;
+    match complete_prompt_turn(acp, running).await {
+        Ok(stop_reason) => ok_with_payload(id, &PromptReply::Stop(stop_reason)),
         Err(error) => acp_err_to_reply(id, error),
     }
 }

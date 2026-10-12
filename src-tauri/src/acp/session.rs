@@ -71,6 +71,9 @@ pub(crate) struct DriverState {
     /// signalled, but the key remains until the turn task finishes so a
     /// concurrent turn cannot slip in during the post-cancel grace window.
     active_turns: HashMap<String, Option<oneshot::Sender<()>>>,
+    /// Client turn id of each active turn (`None` for turnless callers).
+    /// Same lifecycle as `active_turns`; read by the teardown terminator.
+    active_turn_ids: HashMap<String, Option<String>>,
     /// In-flight idle-reset signal senders per active turn. The
     /// `session/update`/`tool_call` notification callback fires these
     /// (non-blocking) so the turn task's idle deadline resets on agent
@@ -613,6 +616,32 @@ impl DriverState {
         Some(TurnHandles { cancel_rx, idle_rx })
     }
 
+    /// Record the client turn id of the turn just admitted by
+    /// [`Self::try_begin_turn`] (`None` for turnless callers). Lets the
+    /// teardown path append a `crashed` terminator that names the turn.
+    pub(crate) fn set_active_turn_id(&mut self, session_id: &str, turn_id: Option<String>) {
+        if self.active_turns.contains_key(session_id) {
+            self.active_turn_ids.insert(session_id.to_string(), turn_id);
+        }
+    }
+
+    /// Remove and return every session that still has an active turn, with
+    /// its turn id. Used when the connection ends: the turn tasks were
+    /// dropped before emitting their terminator, so the teardown owns it.
+    /// Draining makes the terminator exactly-once.
+    pub(crate) fn drain_active_turns(&mut self) -> Vec<(String, Option<String>)> {
+        let sessions: Vec<String> = self.active_turns.keys().cloned().collect();
+        sessions
+            .into_iter()
+            .map(|session| {
+                let turn_id = self.active_turn_ids.remove(&session).flatten();
+                self.active_turns.remove(&session);
+                self.idle_resets.remove(&session);
+                (session, turn_id)
+            })
+            .collect()
+    }
+
     /// Whether the session currently has an active turn, including cancel grace.
     #[must_use]
     pub(crate) fn is_turn_active(&self, session_id: &str) -> bool {
@@ -673,6 +702,7 @@ impl DriverState {
     /// for that session (to be resolved cancelled). Idempotent.
     pub(crate) fn finish_turn(&mut self, session_id: &str) -> Vec<PendingPermission> {
         self.active_turns.remove(session_id);
+        self.active_turn_ids.remove(session_id);
         self.idle_resets.remove(session_id);
         if let Some(waiters) = self.turn_idle_waiters.remove(session_id) {
             for waiter in waiters {

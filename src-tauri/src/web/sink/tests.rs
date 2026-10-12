@@ -1436,3 +1436,108 @@ async fn unpaced_chunk_burst_persists_and_replays_in_order() {
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+fn prompt_complete_payload(session: &str, turn: &str, stop_reason: &str) -> Value {
+    serde_json::json!({
+        "agentId": "a1",
+        "sessionId": session,
+        "stopReason": stop_reason,
+        "turnId": turn,
+    })
+}
+
+/// AD-5: a second `prompt_complete` for the same turn is dropped (one
+/// durable/live terminator per turn), while a different turn is kept.
+#[tokio::test]
+async fn duplicate_prompt_complete_for_a_turn_is_dropped() {
+    let ws = Arc::new(WsRelaySink::new());
+    ws.seed_session_for_test("s1");
+    let (_client, mut rx, _) = ws.subscribe("s1", Some(0)).await;
+    let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+    for stop in ["crashed", "end_turn"] {
+        fan_out(
+            &sinks,
+            Some("s1"),
+            "acp:prompt_complete",
+            &prompt_complete_payload("s1", "turn-1", stop),
+        );
+    }
+    fan_out(
+        &sinks,
+        Some("s1"),
+        "acp:prompt_complete",
+        &prompt_complete_payload("s1", "turn-2", "end_turn"),
+    );
+    let events = drain_rx(&mut rx);
+    let seen: Vec<(String, String)> = events
+        .iter()
+        .map(|e| {
+            (
+                e.payload["turnId"].as_str().unwrap().to_string(),
+                e.payload["stopReason"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("turn-1".to_string(), "crashed".to_string()),
+            ("turn-2".to_string(), "end_turn".to_string())
+        ]
+    );
+}
+
+/// Any terminator (here a host `timeout`) releases the turn claim and records
+/// the turn as completed, so the next prompt is admitted and a resend of the
+/// terminated id is a completed-turn receipt.
+#[tokio::test]
+async fn prompt_complete_terminator_releases_the_turn_claim() {
+    let ws = Arc::new(WsRelaySink::new());
+    ws.seed_session_for_test("s1");
+    let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+    assert_eq!(
+        ws.turn_watermark().claim_turn("s1", Some("turn-1")),
+        crate::web::permissions::TurnClaim::Claimed
+    );
+    fan_out(
+        &sinks,
+        Some("s1"),
+        "acp:prompt_complete",
+        &prompt_complete_payload("s1", "turn-1", "timeout"),
+    );
+    assert_eq!(
+        ws.turn_watermark().claim_turn("s1", Some("turn-1")),
+        crate::web::permissions::TurnClaim::Completed
+    );
+    assert_eq!(
+        ws.turn_watermark().claim_turn("s1", Some("turn-2")),
+        crate::web::permissions::TurnClaim::Claimed
+    );
+}
+
+/// SINK-F3: `record_user_prompt` assigns the seq and fans out to the
+/// session's subscribers synchronously (no await between), so a following
+/// driver emit always lands after it on the wire.
+#[tokio::test]
+async fn record_user_prompt_fans_out_before_any_later_emit() {
+    let ws = Arc::new(WsRelaySink::new());
+    ws.seed_session_for_test("s1");
+    let (_client, mut rx, _) = ws.subscribe("s1", Some(0)).await;
+    let event = ws.record_user_prompt("s1", serde_json::json!({"turnId": "t"}));
+    // Delivered already — nothing was awaited.
+    let delivered = drain_rx(&mut rx);
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].type_, "user_prompt");
+    assert_eq!(delivered[0].seq, event.seq);
+
+    let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+    fan_out(
+        &sinks,
+        Some("s1"),
+        "acp:message_chunk",
+        &TestPayload::new("a1", "s1", "chunk"),
+    );
+    let later = drain_rx(&mut rx);
+    assert_eq!(later.len(), 1);
+    assert!(later[0].seq > event.seq);
+}

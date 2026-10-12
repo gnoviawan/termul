@@ -39,6 +39,9 @@ pub mod permissions;
 pub mod project_icon_api;
 pub mod project_registry;
 pub mod projects_api;
+pub mod prompt_turn;
+#[cfg(test)]
+mod prompt_turn_tests;
 pub mod router;
 pub mod search_api;
 pub mod sink;
