@@ -12,7 +12,7 @@
 //! for room instead of being dropped; the lossy tiers can build on
 //! [`OutboundSender::try_enqueue`].
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,13 +50,24 @@ pub(crate) type OutboundReceiver = mpsc::Receiver<Outbound>;
 /// Overflow accounting shared by every clone of one connection's sender.
 struct Overflow {
     tolerance: usize,
-    /// Consecutive failed attempts since the last successful enqueue.
-    consecutive_full: AtomicUsize,
-    /// When the last failed attempt was counted (the window start).
-    last_failure: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    /// The failure streak: its count and the start of the last counted window
+    /// live under ONE lock, so a success ends both together and a concurrent
+    /// failure cannot land between the two.
+    streak: parking_lot::Mutex<Streak>,
+    /// Whether `streak` may be non-empty: lets the common success path skip the
+    /// lock. Only ever set under the `streak` lock.
+    streak_active: AtomicBool,
     /// Fires when the peer overflowed or the connection must close for another
     /// reason; the relay supervisor ends the connection on it.
     closing: CancellationToken,
+}
+
+/// Consecutive failed windows since the last successful enqueue.
+#[derive(Default)]
+struct Streak {
+    failures: usize,
+    /// When the last failed attempt was counted (the window start).
+    last_counted: Option<tokio::time::Instant>,
 }
 
 impl Overflow {
@@ -64,15 +75,20 @@ impl Overflow {
     /// signal has then been raised). A hit inside the window of the last
     /// counted failure is the same failed attempt and counts nothing.
     fn record_full(&self) -> bool {
-        {
-            let mut last = self.last_failure.lock();
+        let failures = {
+            let mut streak = self.streak.lock();
             let now = tokio::time::Instant::now();
-            if last.is_some_and(|at| now.duration_since(at) < FULL_QUEUE_ATTEMPT) {
+            if streak
+                .last_counted
+                .is_some_and(|at| now.duration_since(at) < FULL_QUEUE_ATTEMPT)
+            {
                 return self.closing.is_cancelled();
             }
-            *last = Some(now);
-        }
-        let failures = self.consecutive_full.fetch_add(1, Ordering::AcqRel) + 1;
+            streak.last_counted = Some(now);
+            streak.failures += 1;
+            self.streak_active.store(true, Ordering::Release);
+            streak.failures
+        };
         if failures >= self.tolerance {
             if !self.closing.is_cancelled() {
                 warn!(
@@ -88,13 +104,16 @@ impl Overflow {
         }
     }
 
+    /// Progress ends the failure streak and its window together: a full hit
+    /// right after it starts a new streak instead of being absorbed into the
+    /// old window. The lock is only taken when there was a streak to end.
     fn record_success(&self) {
-        // Progress ends the failure streak and its window: a full hit right
-        // after it starts a new streak instead of being absorbed into the old
-        // window. The lock is only taken when there was a streak to end.
-        if self.consecutive_full.swap(0, Ordering::AcqRel) != 0 {
-            *self.last_failure.lock() = None;
+        if !self.streak_active.load(Ordering::Acquire) {
+            return;
         }
+        let mut streak = self.streak.lock();
+        *streak = Streak::default();
+        self.streak_active.store(false, Ordering::Release);
     }
 }
 
@@ -118,8 +137,8 @@ pub(crate) fn outbound_channel(
             tx,
             overflow: Arc::new(Overflow {
                 tolerance: tolerance.max(1),
-                consecutive_full: AtomicUsize::new(0),
-                last_failure: parking_lot::Mutex::new(None),
+                streak: parking_lot::Mutex::new(Streak::default()),
+                streak_active: AtomicBool::new(false),
                 closing: CancellationToken::new(),
             }),
         },
