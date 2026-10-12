@@ -571,3 +571,29 @@ async fn spawn_failure_after_accept_hook_retry_is_accepted_without_second_user_p
         .expect("next turn accepted");
     assert_eq!(receipt(&next), serde_json::json!("end_turn"));
 }
+
+/// Same spawn failure but the prompt carried NO accept hook (an ephemeral
+/// session: nothing durable was published): the driver emits no terminator and
+/// the log stays empty — mirrors the production `hook_ran` guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_failure_without_accept_hook_emits_no_terminator() {
+    let env = env(vec![FakeTurn::SpawnFail], false).await;
+    let blocks = vec![ContentBlock::Text(TextContent::new("hello"))];
+    let started = env
+        .acp
+        .start_prompt(
+            &AgentId(AGENT.to_string()),
+            SessionId(SESSION.to_string()),
+            blocks,
+            Some("t1".to_string()),
+            None,
+        )
+        .await;
+    match started {
+        Err(message) => assert!(message.starts_with("failed to start prompt turn"), "{message}"),
+        Ok(_) => panic!("spawn failure must surface as an error"),
+    }
+    let log = records(&env).await;
+    assert_eq!(count(&log, "user_prompt"), 0);
+    assert_eq!(count(&log, "prompt_complete"), 0, "no hook, no terminator");
+}

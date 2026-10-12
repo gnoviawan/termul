@@ -91,13 +91,16 @@ impl Drop for IdleTimeoutGuard {
     }
 }
 
-/// Turn-timeout env vars `turn_idle_timeout()` / `resolved_turn_timeout()` read.
+/// Timeout env vars the harness exercises (`turn_idle_timeout()`,
+/// `resolved_turn_timeout()`, `session_new_timeout()`, `session_reopen_timeout()`).
 /// They take precedence over the in-process override the idle-timeout test
 /// sets, so a developer/CI environment that configures one would change every
 /// real-loop turn's deadlines.
-const TURN_TIMEOUT_ENV_VARS: [&str; 2] = [
+const TURN_TIMEOUT_ENV_VARS: [&str; 4] = [
     "TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS",
     "TERMUL_ACP_TURN_TIMEOUT_SECS",
+    "TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS",
+    "TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS",
 ];
 
 /// Clears the ambient turn-timeout env vars for the harness lifetime (the

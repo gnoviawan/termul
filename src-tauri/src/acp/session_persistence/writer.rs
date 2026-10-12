@@ -235,11 +235,12 @@ impl CloneForReply<()> for Result<()> {
 
 /// Which JSONL logs the writer has already proven newline-terminated.
 ///
-/// `Some(len)` = the log is known to be exactly `len` bytes and to end with
-/// `\n` (set by this writer's own last successful append), so the next append
-/// needs no `metadata()` + seek + read probe. `None` = unknown (a fresh
-/// writer, or any failed append / rollback): the next append re-verifies the
-/// tail and repairs it inline before writing.
+/// `Some(len)` = the log was exactly `len` bytes and ended with `\n` after
+/// this writer's own last successful append, so while the file is still that
+/// long the next append needs no seek + read probe (the length itself is
+/// re-checked with one `fstat`, which also catches a salvage rewrite of the
+/// file). `None` = unknown (a fresh writer, or any failed append / rollback):
+/// the next append re-verifies the tail and repairs it inline before writing.
 #[derive(Default)]
 pub(super) struct TailState {
     pub(super) messages: Option<u64>,
@@ -291,10 +292,16 @@ pub(super) fn append_record(
     // open, or after any failed append); a successful append leaves the tail
     // terminated and records its end offset, so the hot path skips it.
     let slot = tails.slot(tool_event);
+    // The cached end offset is only trusted while the file is still exactly
+    // that long: a replay-triggered salvage atomically REPLACES the live log
+    // with a shorter one (and a rollback `set_len(len)` against a stale,
+    // larger offset would zero-extend it). One `fstat` validates the cache;
+    // any mismatch (or unknown state) falls back to the full tail probe.
+    let current_len = file.metadata()?.len();
     let len = match *slot {
-        Some(len) => len,
-        None => {
-            let mut len = file.metadata()?.len();
+        Some(cached) if cached == current_len => current_len,
+        _ => {
+            let mut len = current_len;
             if !ends_with_newline_or_empty(&mut file, len)? {
                 let preserved_seq = repair_jsonl_torn_tail(&path);
                 len = file.metadata()?.len();

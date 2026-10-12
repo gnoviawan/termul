@@ -674,6 +674,11 @@ async fn repair_handles_last_line_larger_than_scan_blocks() {
     assert_eq!(repair_jsonl_torn_tail(&log), Some(2));
     let repaired = fs::read(&log).unwrap();
     assert_eq!(repaired.len(), content.len() + 1);
+    assert_eq!(
+        &repaired[..content.len()],
+        &content[..],
+        "the repaired prefix is byte-identical to the original content"
+    );
     assert_eq!(repaired.last(), Some(&b'\n'));
     assert!(corrupt_backups(log.parent().unwrap()).is_empty());
 
@@ -692,7 +697,10 @@ async fn repair_handles_last_line_larger_than_scan_blocks() {
     // start of the file) is still preserved, not truncated to zero.
     fs::write(&log, &huge_bytes).unwrap();
     assert_eq!(repair_jsonl_torn_tail(&log), Some(2));
-    assert_eq!(fs::read(&log).unwrap().len(), huge_bytes.len() + 1);
+    let repaired = fs::read(&log).unwrap();
+    assert_eq!(repaired.len(), huge_bytes.len() + 1);
+    assert_eq!(&repaired[..huge_bytes.len()], &huge_bytes[..]);
+    assert_eq!(repaired.last(), Some(&b'\n'));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -778,6 +786,46 @@ async fn interrupted_marker_never_reuses_seq_of_unterminated_tail() {
             (3, "prompt_complete".to_string()),
         ]
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A replay-triggered salvage atomically replaces the live log with a SHORTER
+/// file while the writer's cached tail offset still names the old length. The
+/// cache must be revalidated against the file: the next append lands on the
+/// replaced file cleanly (no zero-filled gap, parseable log) and the cache is
+/// re-synced to the new length.
+#[tokio::test]
+async fn tail_cache_is_revalidated_after_salvage_replaces_the_log() {
+    let root = temp_dir("append-tail-cache-salvage");
+    let (persistence, metadata) = registered(&root).await;
+    persistence.shutdown().await.unwrap();
+    let store = root.join("store");
+    let log = store.join(&metadata.storage_key).join(MESSAGES_FILE);
+    let shared = Arc::new(Mutex::new(persistence.metadata("session-1").unwrap()));
+    let mut tails = TailState::default();
+    for seq in 1..=3 {
+        append_record(&store, &shared, &mut tails, record(seq, "message_chunk")).unwrap();
+    }
+    let stale_len = fs::metadata(&log).unwrap().len();
+    assert_eq!(tails.messages, Some(stale_len));
+
+    // Salvage-like rewrite: only record 1 survives (atomic replace).
+    let mut kept = serde_json::to_vec(&record(1, "message_chunk")).unwrap();
+    kept.push(b'\n');
+    crate::acp::atomic_file::replace(&log, &kept).unwrap();
+    assert!((kept.len() as u64) < stale_len);
+
+    append_record(&store, &shared, &mut tails, record(4, "message_chunk")).unwrap();
+    let bytes = fs::read(&log).unwrap();
+    assert!(!bytes.contains(&0u8), "no zero-filled bytes in the log");
+    assert_eq!(bytes.last(), Some(&b'\n'));
+    let seqs: Vec<u64> = bytes
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_slice::<PersistedEventRecord>(l).unwrap().seq)
+        .collect();
+    assert_eq!(seqs, vec![1, 4]);
+    assert_eq!(tails.messages, Some(bytes.len() as u64), "cache re-synced");
     let _ = fs::remove_dir_all(root);
 }
 

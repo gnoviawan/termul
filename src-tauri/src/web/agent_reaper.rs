@@ -97,11 +97,22 @@ async fn session_pins_agent(
 /// Fresh pin evaluation for one agent, from a freshly listed session set (so a
 /// session created since the sweep's snapshot is covered too). `false` when the
 /// agent is gone (nothing left to stop) or any owned session is pinned.
+///
+/// `swept_sessions` are the sessions the sweep saw before it disposed any
+/// ephemeral ones. A disposed session no longer appears in the fresh listing,
+/// so a subscriber that registered on it during disposal is checked here by id.
 pub(crate) async fn agent_still_unpinned(
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     agent_id: &AgentId,
+    swept_sessions: &[String],
 ) -> bool {
+    if swept_sessions
+        .iter()
+        .any(|session_id| relay.session_subscriber_count(session_id) > 0)
+    {
+        return false;
+    }
     let summaries = acp.list_agent_summaries_with_ownership().await;
     let Some(summary) = summaries.iter().find(|summary| summary.id == *agent_id) else {
         return false;
@@ -194,7 +205,7 @@ pub(crate) async fn reap_idle_agents(
         // subscriber or a new session time to land. Killing on the stale
         // snapshot would stop a now-active agent mid-turn. The next sweep
         // re-evaluates from a fresh idle window.
-        if !agent_still_unpinned(acp, relay, &agent_id).await {
+        if !agent_still_unpinned(acp, relay, &agent_id, &summary.owns_session).await {
             unpinned_since.remove(&agent_id);
             continue;
         }

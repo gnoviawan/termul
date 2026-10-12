@@ -317,6 +317,9 @@ async fn session_reopen_times_out_instead_of_hanging() {
 /// mutating process env in a test would race other tests.
 #[test]
 fn session_reopen_timeout_defaults_to_constant() {
+    // Shared with the real-loop harness, which clears/restores these env vars
+    // and resolves these timeouts while a mock agent runs: never interleave.
+    let _serial = super::real_loop_tests::IDLE_TIMEOUT_TEST_LOCK.blocking_lock();
     if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_err() {
         assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
     }
@@ -781,7 +784,11 @@ async fn race_turn_honored_timeout_cancel_maps_to_typed_timeout() {
 }
 
 /// Contrast: a USER cancel that the agent honors with `Cancelled` stays a
-/// `Cancelled` stop reason and never invokes the timeout cancel hook.
+/// `Cancelled` stop reason and never invokes the timeout cancel hook. The
+/// prompt is released only AFTER the cancel signal has fired (well inside
+/// `CANCEL_GRACE`), so the `biased` select cannot return the prompt first: the
+/// cancel arm is what is entered and its grace wait is what observes the
+/// agent's `Cancelled` reply.
 #[tokio::test(start_paused = true)]
 async fn race_turn_honored_user_cancel_stays_cancelled() {
     let (_idle_tx, mut idle_rx) = watch::channel(());
@@ -793,6 +800,9 @@ async fn race_turn_honored_user_cancel_stays_cancelled() {
     let canceller = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(20)).await;
         let _ = cancel_tx.send(());
+        // Let race_turn observe the cancel and enter its grace wait before
+        // the agent answers.
+        tokio::time::sleep(Duration::from_millis(50)).await;
         notify.notify_one();
     });
     let result = race_turn(
@@ -905,6 +915,9 @@ async fn race_turn_unlimited_hard_cap_active_turn_only_ends_on_cancel() {
 /// now `None` (unlimited).
 #[test]
 fn turn_timeout_override_takes_effect_when_no_env_var() {
+    // Shared with the real-loop harness, which clears/restores these env vars
+    // and resolves these timeouts while a mock agent runs: never interleave.
+    let _serial = super::real_loop_tests::IDLE_TIMEOUT_TEST_LOCK.blocking_lock();
     // The env var is usually absent in the test runner; when it IS set
     // (operator machine), it correctly masks the UI override — skip there.
     if std::env::var("TERMUL_ACP_TURN_TIMEOUT_SECS").is_ok() {
@@ -952,6 +965,9 @@ fn turn_idle_timeout_precedence_env_beats_override_beats_default() {
 /// also filters it defensively).
 #[test]
 fn session_new_timeout_override_takes_effect_when_no_env_var() {
+    // Shared with the real-loop harness, which clears/restores these env vars
+    // and resolves these timeouts while a mock agent runs: never interleave.
+    let _serial = super::real_loop_tests::IDLE_TIMEOUT_TEST_LOCK.blocking_lock();
     if std::env::var("TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS").is_ok() {
         return;
     }
@@ -967,6 +983,9 @@ fn session_new_timeout_override_takes_effect_when_no_env_var() {
 /// A zero override is ignored (same defensive filter as session/new).
 #[test]
 fn session_reopen_timeout_override_takes_effect_when_no_env_var() {
+    // Shared with the real-loop harness, which clears/restores these env vars
+    // and resolves these timeouts while a mock agent runs: never interleave.
+    let _serial = super::real_loop_tests::IDLE_TIMEOUT_TEST_LOCK.blocking_lock();
     if std::env::var("TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS").is_ok() {
         return;
     }

@@ -199,17 +199,22 @@ async fn admitted_postures_still_run_the_probe() {
         assert_eq!(value["success"], true, "{label}");
         assert_ne!(value["code"], "FORBIDDEN", "{label}");
         // The canary proves the admitted probe really spawned the command (a
-        // probe that "succeeded" without spawning would pass the asserts above).
-        let mut spawned = false;
-        for _ in 0..50 {
-            if marker.exists() {
-                spawned = true;
-                break;
+        // probe that "succeeded" without spawning would pass the asserts
+        // above). The canary command is `sh -c touch`, so the marker check is
+        // unix-only; the FORBIDDEN/admitted assertions run everywhere.
+        #[cfg(unix)]
+        {
+            let mut spawned = false;
+            for _ in 0..50 {
+                if marker.exists() {
+                    spawned = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert!(spawned, "{label}: admitted probe must spawn the command");
         }
         let _ = std::fs::remove_file(&marker);
-        assert!(spawned, "{label}: admitted probe must spawn the command");
     }
 }
 

@@ -90,24 +90,29 @@ impl FakeDriver {
         self.state
             .lock()
             .set_active_turn_id(&session_id.0, turn_id.clone());
+        let hook_ran = on_accept.is_some();
         if let Some(hook) = on_accept {
             hook();
         }
-        // Mirror of the command loop's `cx.spawn` failure after the accept
-        // hook ran: markers cleared, an `error` terminator closes the already
-        // published `user_prompt`, and the caller sees the spawn error.
+        // Mirror of the command loop's `cx.spawn` failure: markers cleared and
+        // the caller sees the spawn error. The `error` terminator closes the
+        // already published `user_prompt` ONLY when the accept hook ran (the
+        // production `hook_ran` guard) — with no hook there is no durable
+        // turn to close, so no terminator is emitted.
         let spawn_fails = matches!(self.turns.lock().front(), Some(FakeTurn::SpawnFail));
         if spawn_fails {
             self.turns.lock().pop_front();
             self.state.lock().finish_turn(&session_id.0);
             let error = "failed to start prompt turn: connection closed".to_string();
-            emit_turn_terminator(
-                &self.sinks,
-                &self.agent_id,
-                &session_id,
-                turn_id,
-                events::TurnFailureStop::Error.into(),
-            );
+            if hook_ran {
+                emit_turn_terminator(
+                    &self.sinks,
+                    &self.agent_id,
+                    &session_id,
+                    turn_id,
+                    events::TurnFailureStop::Error.into(),
+                );
+            }
             let _ = accepted.send(Err(error.clone()));
             let _ = reply.send(Err(error));
             return;
