@@ -86,6 +86,8 @@ fn fs_changed_payload_serializes_camelcase_project_root_and_paths() {
 
 // ---- Hub: refcount, targeted delivery, lifecycle ----
 
+const ARM_WAIT: Duration = Duration::from_secs(10);
+
 type Conn = (
     UnboundedSender<Outbound>,
     tokio::sync::mpsc::UnboundedReceiver<Outbound>,
@@ -214,8 +216,8 @@ async fn fs_changed_reaches_only_connections_subscribed_to_that_project() {
     let (unsubscribed, mut rx3) = conn();
     hub.subscribe(&registry, "p-1", &watching_p1).unwrap();
     hub.subscribe(&registry, "p-2", &watching_p2).unwrap();
-    // Let the watchers arm before touching the tree.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "p-1 watcher armed");
+    assert!(hub.wait_armed("p-2", ARM_WAIT).await, "p-2 watcher armed");
 
     std::fs::write(d1.join("hello.txt"), "x").expect("write file");
 
@@ -250,7 +252,7 @@ async fn closed_subscriber_is_pruned_and_watcher_dropped_on_next_change() {
     let hub = FsWatchHub::default();
     let (tx, rx) = conn();
     hub.subscribe(&registry, "p-1", &tx).unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "watcher armed");
     drop(rx); // the connection's write half is gone
 
     std::fs::write(dir.join("a.txt"), "x").expect("write file");
@@ -272,6 +274,10 @@ async fn archiving_or_removing_the_project_drops_its_watch() {
     hub.subscribe(&registry, "p-1", &tx).unwrap();
     hub.subscribe(&registry, "p-2", &tx).unwrap();
     assert_eq!(hub.watched_project_count(), 2);
+    // Archive/remove only counts once both watchers are live (otherwise the
+    // tasks would just see the project gone on their first lookup).
+    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "p-1 watcher armed");
+    assert!(hub.wait_armed("p-2", ARM_WAIT).await, "p-2 watcher armed");
 
     assert!(registry.update("p-1", None, None, Some(true)));
     assert!(registry.remove("p-2"));
@@ -282,6 +288,33 @@ async fn archiving_or_removing_the_project_drops_its_watch() {
     }
     assert_eq!(hub.watched_project_count(), 0, "archive/remove drops the watchers");
     assert_eq!(hub.subscriber_count("p-1"), 0);
+    for d in [d1, d2] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// A backing-off watcher notices an archived/removed project within a registry
+/// tick, not after the whole (up to 30 s) delay.
+#[tokio::test]
+async fn backoff_ends_promptly_when_the_project_is_removed_or_moved() {
+    let (d1, d2) = (temp_project_dir("bo1"), temp_project_dir("bo2"));
+    let registry = registry_with(&[("p-1", &d1)]);
+    let cancel = CancellationToken::new();
+    let long = Duration::from_secs(30);
+
+    let started = tokio::time::Instant::now();
+    registry.remove("p-1");
+    let outcome = backoff("p-1", &d1, long, &registry, &cancel).await;
+    assert!(matches!(outcome, BackoffOutcome::ProjectGone));
+    assert!(started.elapsed() < Duration::from_secs(5), "must not wait out the delay");
+
+    let registry = registry_with(&[("p-1", &d2)]);
+    let outcome = backoff("p-1", &d1, long, &registry, &cancel).await;
+    assert!(matches!(outcome, BackoffOutcome::RootChanged));
+
+    cancel.cancel();
+    let outcome = backoff("p-1", &d2, long, &registry, &cancel).await;
+    assert!(matches!(outcome, BackoffOutcome::Stopped));
     for d in [d1, d2] {
         let _ = std::fs::remove_dir_all(d);
     }

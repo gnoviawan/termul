@@ -56,15 +56,16 @@ pub(super) fn handle_watch_project(
     }
 }
 
-/// `unwatch_project{projectId}`: drop this connection's subscription (the
-/// watcher is dropped on the last one). Idempotent for a registered project;
-/// an id the registry does not know and this connection never watched →
-/// `not_found`.
+/// `unwatch_project{projectId}`: release this connection's subscription (the
+/// watcher is dropped on the last one). Always succeeds for a well-formed
+/// request: afterwards the connection no longer watches the project, whether
+/// it was subscribed, never subscribed, or the project was archived/removed
+/// meanwhile (which already dropped the subscription). A client tearing down
+/// after such a removal must not see an error.
 pub(super) fn handle_unwatch_project(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    registry: &Arc<ProjectRegistry>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
 ) -> WsReply {
     let parsed = match parse_payload(payload, "unwatch_project") {
@@ -72,13 +73,9 @@ pub(super) fn handle_unwatch_project(
         Err(message) => return WsReply::err(id, WsErrorCode::Unsupported, message),
     };
     let was_subscribed = relay.fs_watches().unsubscribe(&parsed.project_id, out_tx);
-    if !was_subscribed && registry.canonical_root(&parsed.project_id).is_none() {
-        log::warn!(
-            "[ws] unwatch_project failed failure=not_found project_id={}",
-            parsed.project_id
-        );
-        return WsReply::err(id, WsErrorCode::NotFound, "project not found");
-    }
-    log::info!("[ws] unwatch_project project_id={}", parsed.project_id);
+    log::info!(
+        "[ws] unwatch_project project_id={} was_subscribed={was_subscribed}",
+        parsed.project_id
+    );
     WsReply::ok(id, Some(json!({ "projectId": parsed.project_id })))
 }

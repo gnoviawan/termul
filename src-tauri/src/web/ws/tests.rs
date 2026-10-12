@@ -5469,38 +5469,27 @@ async fn watch_and_unwatch_project_manage_the_connections_subscription() {
     assert!(reply.ok, "watch of a registered project succeeds");
     assert_eq!(relay.fs_watches().subscriber_count(project), 1);
 
-    let reply = handle_unwatch_project(
-        "u1".into(),
-        &json!({ "projectId": project }),
-        &relay,
-        &registry,
-        &tx,
-    );
+    let reply = handle_unwatch_project("u1".into(), &json!({ "projectId": project }), &relay, &tx);
     assert!(reply.ok);
     assert_eq!(relay.fs_watches().watched_project_count(), 0);
 
     // Idempotent for a registered project.
-    let again = handle_unwatch_project(
-        "u2".into(),
-        &json!({ "projectId": project }),
-        &relay,
-        &registry,
-        &tx,
-    );
+    let again = handle_unwatch_project("u2".into(), &json!({ "projectId": project }), &relay, &tx);
     assert!(again.ok);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
-async fn watch_and_unwatch_project_refuse_unknown_archived_and_malformed() {
+async fn watch_refuses_unknown_archived_and_malformed_and_unwatch_is_idempotent() {
     let (relay, registry, dir, tx, _rx) = watch_fixture("refuse");
     let project = crate::web::project_registry::SEEDED_PROJECT_ID;
 
     let unknown = json!({ "projectId": "nope" });
     let w = handle_watch_project("w".into(), &unknown, &relay, &registry, &tx);
     assert_eq!(reply_code(&w).as_deref(), Some("not_found"));
-    let u = handle_unwatch_project("u".into(), &unknown, &relay, &registry, &tx);
-    assert_eq!(reply_code(&u).as_deref(), Some("not_found"));
+    // Unwatch is idempotent: an id the connection never watched is a success.
+    let u = handle_unwatch_project("u".into(), &unknown, &relay, &tx);
+    assert!(u.ok);
     assert!(registry.update(project, None, None, Some(true)));
     let w = handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx);
     assert_eq!(reply_code(&w).as_deref(), Some("not_found"), "archived project");
@@ -5508,6 +5497,8 @@ async fn watch_and_unwatch_project_refuse_unknown_archived_and_malformed() {
     for payload in [json!({}), json!({ "projectId": "  " })] {
         let w = handle_watch_project("w".into(), &payload, &relay, &registry, &tx);
         assert_eq!(reply_code(&w).as_deref(), Some("unsupported"));
+        let u = handle_unwatch_project("u".into(), &payload, &relay, &tx);
+        assert_eq!(reply_code(&u).as_deref(), Some("unsupported"));
     }
     assert_eq!(relay.fs_watches().watched_project_count(), 0);
     let _ = std::fs::remove_dir_all(&dir);
@@ -5536,5 +5527,24 @@ async fn connection_cleanup_releases_fs_watch_subscriptions() {
         assert_eq!(relay.fs_watches().subscriber_count(project), 0);
         assert_eq!(relay.fs_watches().watched_project_count(), 0);
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A client that unwatches after its project was archived/removed (which
+/// already dropped the subscription) still gets a success.
+#[tokio::test]
+async fn unwatch_after_the_project_was_archived_succeeds() {
+    let (relay, registry, dir, tx, _rx) = watch_fixture("gone");
+    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
+    assert!(handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx).ok);
+    assert!(registry.update(project, None, None, Some(true)));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while relay.fs_watches().watched_project_count() != 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(relay.fs_watches().watched_project_count(), 0);
+
+    let u = handle_unwatch_project("u".into(), &json!({ "projectId": project }), &relay, &tx);
+    assert!(u.ok, "unwatch after the project vanished must succeed");
     let _ = std::fs::remove_dir_all(&dir);
 }

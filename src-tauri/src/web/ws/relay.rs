@@ -447,8 +447,11 @@ where
         }
     });
 
-    // Drop the original sender so the write loop ends when the read task
-    // (which owns the only remaining sender clone) finishes.
+    // Drop the original sender. The read task and `ConnectionCleanup` (for its
+    // fs-watch identity) still hold clones, so the write loop does NOT end by
+    // channel close: the `select!` below aborts whichever task loses, and
+    // `cleanup.run()` then releases the clones. Never keep an `out_tx` clone
+    // alive past that cleanup.
     drop(out_tx);
     // Patch L: the `tokio::select!` completes the WINNING branch's JoinHandle
     // (it is polled to completion inside select). Re-awaiting the winner

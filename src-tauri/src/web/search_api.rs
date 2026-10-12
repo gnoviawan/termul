@@ -136,12 +136,9 @@ pub async fn content(
             );
         }
     };
-    // CAP-1: lock-read the live boundary (may have been rebound by a project
-    // switch). Scope the guard in a block so it is provably dropped before the
-    // `spawn_blocking` `.await` (the guard is `!Send` — keeping it alive across
-    // an `.await` would make the handler future `!Send`, failing axum's
-    // `Handler` trait). CAP-2: also check all registered project roots so a
-    // web client that switched to a non-default project can search.
+    // Registry boundary: the search root must be inside ANY registered,
+    // non-archived project (cached canonical roots; no lock is held across
+    // the `.await` below).
     if let Some(err) = crate::web::git_api::ensure_within_project_boundary::<FileSearchResponse>(
         &canonical_root,
         &state.registry,

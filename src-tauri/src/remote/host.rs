@@ -401,8 +401,9 @@ impl RemoteServerState {
                 })?;
                 warn!(
                     "shared-live started with no usable registry default; seed root \
-                     fell back to home ({}). /skills, /git/*, /search/* will \
-                     reject any project outside this tree until a project is synced.",
+                     fell back to home ({}). If the registry is empty, /skills, /git/*, \
+                     /search/* reject any project outside this tree until a project is \
+                     synced; registered projects are unaffected.",
                     raw_root.display()
                 );
                 crate::web::config::resolve_and_validate_project_root(&raw_root).map_err(|e| {

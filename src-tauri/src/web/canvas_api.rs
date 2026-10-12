@@ -85,7 +85,8 @@ pub struct CanvasProjectBoundary {
 /// Validate a canvas doc path against the project boundary — mirrors the
 /// fs/git route validation (`fs_api::resolve_request_path` canonicalization +
 /// `git_api::ensure_within_project_boundary` containment): the doc a web
-/// client opens must live inside the registered project root, exactly like every other web fs operation. Returns the
+/// client opens must live inside a registered, non-archived project root,
+/// exactly like every other web fs operation. Returns the
 /// canonicalized, verbatim-stripped doc path on success; a typed
 /// `PATH_VALIDATION_FAILED` pair on rejection. `None` boundary (test
 /// compositions) skips validation and returns the verbatim-stripped path.

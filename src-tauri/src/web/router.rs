@@ -68,9 +68,10 @@ use super::assets;
 /// browse/read routes (`ls`/`browse`/`read`) are intentionally broader — no
 /// boundary check — for desktop parity, the directory picker, and editor
 /// reads; `/fs/*` writes (`mkdir`/`write`/`delete`/`rename`/`copy`) and
-/// `/fs/info` are loopback-guarded (`check_local_only`, `FORBIDDEN`), and a
+/// `/fs/info` are loopback-guarded (`check_local_only`, `FORBIDDEN`). A
 /// non-loopback peer admitted by `--allow-remote-writes` is confined to the
-/// registered project roots. See ADR-007 for the recorded policy.
+/// registered project roots for the writes only; `/fs/info` stays unconfined
+/// like the other `/fs` reads. See ADR-007 for the recorded policy.
 ///
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see

@@ -123,21 +123,6 @@ fn removed_flag_warning(flag: &str, value: Option<&str>) -> String {
 /// CWD-relative `termul/sessions` dir; a RELATIVE `XDG_STATE_HOME` is
 /// likewise ignored (the XDG base-dir spec requires an absolute path) —
 /// the same guard as [`default_projects_file`] (issue #839).
-///
-/// Resolve the default seed root registered as the one project when the
-/// registry is empty. The `/fs/*` routes are intentionally unconfined
-/// (ADR-007); the operation routes are bounded by the registry via
-/// `git_api::ensure_within_project_boundary`.
-///
-/// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
-/// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
-/// Windows). The fallback is intentionally permissive enough to allow
-/// ordinary project-creation flows under the user's own account — tightening
-/// to a per-project subtree is left to the host application or a future
-/// per-request override.
-///
-/// `None` is returned only when no home directory is discoverable and the
-/// env var is unset; callers should treat that as a fatal startup error.
 pub fn default_sessions_dir() -> Option<PathBuf> {
     if let Some(path) = trimmed_env_path("TERMUL_SESSIONS_DIR") {
         return Some(path);
@@ -235,6 +220,20 @@ pub fn default_projects_file() -> Option<PathBuf> {
     None
 }
 
+/// Resolve the default seed root registered as the one project when the
+/// registry is empty. The `/fs/*` routes are intentionally unconfined
+/// (ADR-007); the operation routes are bounded by the registry via
+/// `git_api::ensure_within_project_boundary`.
+///
+/// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
+/// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
+/// Windows). The fallback is intentionally permissive enough to allow
+/// ordinary project-creation flows under the user's own account — tightening
+/// to a per-project subtree is left to the host application or a future
+/// per-request override.
+///
+/// `None` is returned only when no home directory is discoverable and the
+/// env var is unset; callers should treat that as a fatal startup error.
 pub fn default_project_root() -> Option<PathBuf> {
     if let Ok(env_root) = std::env::var("TERMUL_PROJECT_ROOT") {
         let trimmed = env_root.trim();

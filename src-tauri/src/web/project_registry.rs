@@ -363,27 +363,31 @@ impl ProjectRegistry {
     /// request on a standalone `--project-root` server or a freshly started
     /// desktop host that has not received its project list yet. Returns
     /// `true` when a project was seeded; a non-empty registry is left alone.
+    /// The empty check and the insert happen under one lock, so a concurrent
+    /// `set` (renderer sync) either lands first and the seed is skipped, or
+    /// lands after and supersedes the seed — it is never overwritten by it.
     pub fn seed_root_if_empty(&self, root: &Path) -> bool {
-        if !self.is_empty() {
-            return false;
-        }
         let name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Project".to_string());
-        let id = SEEDED_PROJECT_ID.to_string();
-        self.set(
-            vec![ProjectSummary {
-                id: id.clone(),
+        {
+            let mut g = self.inner.lock();
+            if !g.projects.is_empty() {
+                return false;
+            }
+            g.projects.push(ProjectSummary {
+                id: SEEDED_PROJECT_ID.to_string(),
                 name,
                 color: "blue".to_string(),
                 path: Some(root.to_string_lossy().into_owned()),
                 is_archived: false,
                 is_default: true,
-            }],
-            Some(id),
-        );
+            });
+            g.default_project_id = Some(SEEDED_PROJECT_ID.to_string());
+        }
+        self.rebuild_roots();
         tracing::info!(root = %root.display(), "seeded one registered project from the configured project root");
         true
     }
@@ -426,31 +430,44 @@ impl ProjectRegistry {
     /// (non-archived) project root. This is the single containment boundary
     /// for the web fs/git/worktree/search/skills/canvas routes.
     ///
-    /// Reads the cached canonical roots (no per-call canonicalize of every
-    /// project). Only roots that could not be resolved at the last rebuild
-    /// (deleted/moved directories) are retried here, so a directory that
-    /// appears later is accepted without a registry mutation.
+    /// The cached canonical roots pre-filter the candidates, so a request
+    /// never canonicalizes the whole project list. A candidate is then
+    /// re-verified with one `canonicalize` of its registered path, so a root
+    /// that was deleted or moved after the last rebuild stops matching at
+    /// once, and a root that could not be resolved at the last rebuild (and
+    /// appeared later) is admitted without a registry mutation. All
+    /// filesystem calls run after the `roots` guard is released.
     #[must_use]
     pub fn is_within_any_registered_root(&self, path: &Path) -> bool {
-        self.roots.read().iter().any(|root| match &root.canonical {
-            Some(canonical) => path.starts_with(canonical),
-            None => std::fs::canonicalize(&root.raw).is_ok_and(|c| path.starts_with(c)),
+        let candidates: Vec<CachedRoot> = self
+            .roots
+            .read()
+            .iter()
+            .filter(|root| match &root.canonical {
+                Some(canonical) => path.starts_with(canonical),
+                None => true,
+            })
+            .cloned()
+            .collect();
+        candidates.iter().any(|root| {
+            std::fs::canonicalize(&root.raw).is_ok_and(|fresh| path.starts_with(fresh))
         })
     }
 
     /// Canonical root of a registered, non-archived project, or `None` when
     /// the id is unknown/archived/pathless or its directory cannot be
-    /// resolved. Used by the per-project fs watch.
+    /// resolved right now. Resolved fresh from the registered path (outside
+    /// the `roots` guard), so a deleted or moved root is never returned
+    /// stale. Used by the per-project fs watch and the MCP bridge.
     #[must_use]
     pub fn canonical_root(&self, project_id: &str) -> Option<PathBuf> {
-        let root = self
+        let raw = self
             .roots
             .read()
             .iter()
             .find(|r| r.project_id == project_id)
-            .cloned()?;
-        root.canonical
-            .or_else(|| std::fs::canonicalize(&root.raw).ok())
+            .map(|r| r.raw.clone())?;
+        std::fs::canonicalize(raw).ok()
     }
 
     /// Canonical root of the host default project, or `None` when there is no

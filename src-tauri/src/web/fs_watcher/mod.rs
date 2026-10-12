@@ -47,6 +47,10 @@ const BATCH_WINDOW: Duration = Duration::from_millis(200);
 const RETRY_BASE: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(30);
 
+/// How often a running or backing-off watch re-resolves its project in the
+/// registry, so archive/remove/path changes take effect within a second.
+const REGISTRY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Directory names commonly git-ignored; changes under them are noise for
 /// an explorer tree (build churn, caches). Mirrors the renderer facade's
 /// `ALWAYS_IGNORE` semantics so the web tree does not refresh itself to
@@ -129,6 +133,10 @@ struct ProjectWatch {
     generation: u64,
     subscribers: Vec<UnboundedSender<Outbound>>,
     cancel: CancellationToken,
+    /// `true` while the notify watcher is armed on the project's root (read by
+    /// `FsWatchHub::wait_armed`, which tests use to act only once it is live).
+    #[cfg_attr(not(test), allow(dead_code))]
+    armed: tokio::sync::watch::Receiver<bool>,
 }
 
 type WatchMap = Arc<Mutex<HashMap<String, ProjectWatch>>>;
@@ -166,12 +174,14 @@ impl FsWatchHub {
         }
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         let cancel = CancellationToken::new();
+        let (armed_tx, armed_rx) = tokio::sync::watch::channel(false);
         watches.insert(
             project_id.to_string(),
             ProjectWatch {
                 generation,
                 subscribers: vec![conn.clone()],
                 cancel: cancel.clone(),
+                armed: armed_rx,
             },
         );
         drop(watches);
@@ -182,6 +192,7 @@ impl FsWatchHub {
             Arc::clone(registry),
             Arc::clone(&self.watches),
             cancel,
+            armed_tx,
         ));
         Ok(())
     }
@@ -223,6 +234,24 @@ impl FsWatchHub {
                 info!(project_id = %project_id, "[fs-watch] connection closed; watcher dropped");
             }
         }
+    }
+
+    /// Wait until `project_id`'s notify watcher is armed (events under the
+    /// root are observed from then on). `false` on timeout or when the project
+    /// has no watch. Lets tests act only once the watcher is live.
+    #[cfg(test)]
+    pub(crate) async fn wait_armed(&self, project_id: &str, wait: Duration) -> bool {
+        let Some(mut armed) = self
+            .watches
+            .lock()
+            .get(project_id)
+            .map(|watch| watch.armed.clone())
+        else {
+            return false;
+        };
+        tokio::time::timeout(wait, armed.wait_for(|armed| *armed))
+            .await
+            .is_ok_and(|result| result.is_ok())
     }
 
     /// Number of subscribed connections for `project_id` (0 when unwatched).
@@ -294,10 +323,22 @@ async fn run_project_watch(
     registry: Arc<ProjectRegistry>,
     watches: WatchMap,
     cancel: CancellationToken,
+    armed: tokio::sync::watch::Sender<bool>,
 ) {
     let mut retry_delay = RETRY_BASE;
     while let Some(root) = registry.canonical_root(&project_id) {
-        match watch_root(&project_id, generation, root, &registry, &watches, &cancel).await {
+        let outcome = watch_root(
+            &project_id,
+            generation,
+            root.clone(),
+            &registry,
+            &watches,
+            &cancel,
+            &armed,
+        )
+        .await;
+        armed.send_replace(false);
+        match outcome {
             WatchOutcome::Stopped => return,
             WatchOutcome::ProjectGone => break,
             WatchOutcome::RootChanged => {
@@ -309,9 +350,14 @@ async fn run_project_watch(
                     project_id = %project_id,
                     "[fs-watch] watcher failed; retrying in {:?}", retry_delay
                 );
-                tokio::select! {
-                    () = cancel.cancelled() => return,
-                    () = tokio::time::sleep(retry_delay) => {}
+                match backoff(&project_id, &root, retry_delay, &registry, &cancel).await {
+                    BackoffOutcome::Stopped => return,
+                    BackoffOutcome::ProjectGone => break,
+                    BackoffOutcome::RootChanged => {
+                        retry_delay = RETRY_BASE;
+                        continue;
+                    }
+                    BackoffOutcome::Elapsed => {}
                 }
                 retry_delay = std::cmp::min(retry_delay * 2, RETRY_MAX);
             }
@@ -324,6 +370,48 @@ async fn run_project_watch(
     }
 }
 
+/// Why a retry backoff ended.
+enum BackoffOutcome {
+    /// Unsubscribed / connections gone — stop for good.
+    Stopped,
+    /// The project was archived/removed/unresolvable during the wait.
+    ProjectGone,
+    /// The project's root moved during the wait — re-arm at once.
+    RootChanged,
+    /// The delay ran out — retry the same root.
+    Elapsed,
+}
+
+/// Wait out `delay` before a retry, re-checking the registry every second so
+/// an archived/removed project drops its subscriptions, and a moved root
+/// re-arms, without waiting for the full (up to 30 s) backoff.
+async fn backoff(
+    project_id: &str,
+    root: &std::path::Path,
+    delay: Duration,
+    registry: &Arc<ProjectRegistry>,
+    cancel: &CancellationToken,
+) -> BackoffOutcome {
+    let deadline = tokio::time::Instant::now() + delay;
+    loop {
+        let step = deadline
+            .saturating_duration_since(tokio::time::Instant::now())
+            .min(REGISTRY_CHECK_INTERVAL);
+        tokio::select! {
+            () = cancel.cancelled() => return BackoffOutcome::Stopped,
+            () = tokio::time::sleep(step) => {}
+        }
+        match registry.canonical_root(project_id) {
+            None => return BackoffOutcome::ProjectGone,
+            Some(current) if current != root => return BackoffOutcome::RootChanged,
+            Some(_) => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return BackoffOutcome::Elapsed;
+        }
+    }
+}
+
 /// Watch `root` until cancelled, the project goes away or moves, or the
 /// watcher errors. Events are debounced into targeted `fs_changed` frames.
 async fn watch_root(
@@ -333,6 +421,7 @@ async fn watch_root(
     registry: &Arc<ProjectRegistry>,
     watches: &WatchMap,
     cancel: &CancellationToken,
+    armed: &tokio::sync::watch::Sender<bool>,
 ) -> WatchOutcome {
     if !root.is_dir() {
         warn!(project_id, "[fs-watch] project root is not a directory: {}", root.display());
@@ -365,11 +454,12 @@ async fn watch_root(
         return WatchOutcome::Failed;
     }
     info!(project_id, "[fs-watch] watching project root: {}", root.display());
+    armed.send_replace(true);
 
     // Validity tick: re-resolve the project's root against the registry so an
     // archive/remove/path change (from any mutation path) ends or re-arms the
     // watch within a second.
-    let mut root_check = tokio::time::interval(Duration::from_secs(1));
+    let mut root_check = tokio::time::interval(REGISTRY_CHECK_INTERVAL);
     root_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let root_display = root.display().to_string();

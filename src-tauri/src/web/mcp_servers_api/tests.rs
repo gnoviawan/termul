@@ -153,6 +153,8 @@ async fn put_refused_in_shared_live_mode() {
     let dir =
         std::env::temp_dir().join(format!("termul-mcp-api-sharedlive-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir).await;
+    // The registered default project's directory must exist (same shape as `test_app`).
+    std::fs::create_dir_all(&dir).expect("create project dir");
     let pty = test_pty_manager();
     let state = AppState {
         acp: Arc::new(AcpManager::new(vec![])),
@@ -162,7 +164,7 @@ async fn put_refused_in_shared_live_mode() {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir.clone()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,

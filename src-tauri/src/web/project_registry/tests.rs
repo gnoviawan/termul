@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 fn sample(id: &str, path: Option<&str>, archived: bool) -> ProjectSummary {
     ProjectSummary {
@@ -469,7 +470,46 @@ fn seed_root_registers_one_default_project_only_when_empty() {
     assert!(reg.is_within_any_registered_root(&dir));
     assert_eq!(reg.default_canonical_root().as_deref(), Some(dir.as_path()));
 
-    assert!(!reg.seed_root_if_empty(&tempdir_like("seed2")), "non-empty registry is left alone");
+    let other = tempdir_like("seed2");
+    assert!(!reg.seed_root_if_empty(&other), "non-empty registry is left alone");
     assert_eq!(reg.len(), 1);
+    for d in [dir, other] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// A root deleted AFTER the last cache rebuild stops matching (and stops
+/// resolving) at once, instead of staying admitted from a stale cache.
+#[test]
+fn root_deleted_after_caching_stops_matching() {
+    let dir = tempdir_like("stale");
+    let reg = ProjectRegistry::new();
+    reg.set(vec![sample("p-1", Some(path_str(&dir)), false)], None);
+    assert!(reg.is_within_any_registered_root(&dir));
+    assert_eq!(reg.canonical_root("p-1").as_deref(), Some(dir.as_path()));
+
+    std::fs::remove_dir_all(&dir).expect("remove project dir");
+    assert!(!reg.is_within_any_registered_root(&dir.join("src")));
+    assert_eq!(reg.canonical_root("p-1"), None);
+}
+
+/// A seed racing a renderer sync never overwrites the synced list: whichever
+/// order they land in, the synced projects win.
+#[test]
+fn seed_never_overwrites_a_concurrent_set() {
+    let dir = tempdir_like("race");
+    for _ in 0..50 {
+        let reg = Arc::new(ProjectRegistry::new());
+        let seeder = {
+            let (reg, dir) = (Arc::clone(&reg), dir.clone());
+            std::thread::spawn(move || reg.seed_root_if_empty(&dir))
+        };
+        reg.set(vec![sample("synced", Some(path_str(&dir)), false)], Some("synced".to_string()));
+        seeder.join().expect("seeder thread");
+        let snap = reg.snapshot();
+        assert_eq!(snap.projects.len(), 1);
+        assert_eq!(snap.projects[0].id, "synced");
+        assert_eq!(snap.default_project_id.as_deref(), Some("synced"));
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -327,7 +327,7 @@ pub(super) async fn handle_request(
         // connections): refcounted in `relay.fs_watches()`, released on
         // `unwatch_project`, connection close, or project archive/remove.
         "watch_project" => handle_watch_project(id, &req.payload, relay, registry, out_tx),
-        "unwatch_project" => handle_unwatch_project(id, &req.payload, relay, registry, out_tx),
+        "unwatch_project" => handle_unwatch_project(id, &req.payload, relay, out_tx),
         "set_default_project" => {
             handle_set_default_project(
                 id,
