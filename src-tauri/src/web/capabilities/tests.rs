@@ -72,6 +72,8 @@ fn view_only_may_read_but_not_mutate() {
         "authenticate",
         "ping",
         "subscribe",
+        "watch_project",
+        "unwatch_project",
         "list_persisted_sessions",
         "open_persisted_session",
         "get_session_payload",

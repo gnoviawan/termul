@@ -43,9 +43,28 @@ fn canonical_or_self(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Component-wise containment (`/a/b-other` is NOT inside `/a/b`).
-fn is_inside(candidate: &Path, target: &Path) -> bool {
-    canonical_or_self(candidate).starts_with(target)
+/// Whether `git checkout -b <branch> <start_ref>` rewrites the work tree:
+/// branching from HEAD (omitted, blank or an explicit `HEAD`) leaves it
+/// alone; any other start ref is checked out.
+#[must_use]
+pub fn start_ref_rewrites_tree(start_ref: Option<&str>) -> bool {
+    start_ref
+        .map(str::trim)
+        .is_some_and(|r| !r.is_empty() && r != "HEAD")
+}
+
+/// The git work-tree root containing `dir`, or `None` outside a repository
+/// (or when git cannot run). Blocking: call from `spawn_blocking`.
+fn try_git_toplevel(dir: &Path) -> Option<PathBuf> {
+    let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+        dir.to_str()?,
+        &["rev-parse", "--show-toplevel"],
+    )?;
+    if !output.status.success() {
+        return None;
+    }
+    let top = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!top.is_empty()).then(|| PathBuf::from(top))
 }
 
 /// The git work-tree root containing `dir` (`dir` itself when it is not in a
@@ -55,21 +74,11 @@ fn is_inside(candidate: &Path, target: &Path) -> bool {
 pub async fn git_toplevel(dir: &Path) -> PathBuf {
     let dir = dir.to_path_buf();
     let fallback = dir.clone();
-    tokio::task::spawn_blocking(move || {
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
-            dir.to_str()?,
-            &["rev-parse", "--show-toplevel"],
-        )?;
-        if !output.status.success() {
-            return None;
-        }
-        let top = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        (!top.is_empty()).then(|| PathBuf::from(top))
-    })
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(fallback)
+    tokio::task::spawn_blocking(move || try_git_toplevel(&dir))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(fallback)
 }
 
 /// [`ensure_no_active_turn_under`] for a checkout run from `cwd`: the target
@@ -84,10 +93,29 @@ pub async fn ensure_no_active_turn_in_checkout(
     ensure_no_active_turn_under(acp, &git_toplevel(cwd).await).await
 }
 
+/// Whether the session directory `dir` lies inside `target` AND is rewritten
+/// by an operation on it. Containment is component-wise (`/a/b-other` is NOT
+/// inside `/a/b`). A directory that belongs to a different, nested git work
+/// tree (a linked worktree under `<repo>/.termul/worktrees/…`) has its own
+/// index and HEAD, so an operation on the enclosing tree does not touch it.
+/// Blocking: canonicalizes and may run git.
+fn is_rewritten_by(dir: &Path, target: &Path) -> bool {
+    let dir = canonical_or_self(dir);
+    if !dir.starts_with(target) {
+        return false;
+    }
+    match try_git_toplevel(&dir).map(|top| canonical_or_self(&top)) {
+        Some(top) => !(top != target && top.starts_with(target)),
+        None => true,
+    }
+}
+
 /// Refuse when any session whose working directory lies inside `target` has
 /// an active turn. A session's directory is read from its driver-held
 /// workspace root and from its persisted metadata. Idle sessions never block;
 /// an agent whose driver cannot answer is skipped (a dead driver has no turn).
+/// A session in a linked worktree nested inside `target` is not counted (see
+/// [`is_rewritten_by`]).
 ///
 /// This is a point-in-time check: it refuses an operation requested while a
 /// turn is already running. It does not reserve the target against a prompt
@@ -100,26 +128,39 @@ pub async fn ensure_no_active_turn_under(
     acp: &AcpManager,
     target: &Path,
 ) -> Result<(), DestructiveOpBlocked> {
-    let target = canonical_or_self(target);
+    let target_path = target.to_path_buf();
+    let target = tokio::task::spawn_blocking(move || canonical_or_self(&target_path))
+        .await
+        .unwrap_or_else(|_| target.to_path_buf());
     let persistence = acp.persistence();
     for agent_id in acp.list_agents() {
         let sessions = session_dirs(acp, &agent_id).await;
-        for (session_id, driver_root) in sessions {
-            let persisted_cwd = persistence
-                .as_ref()
-                .and_then(|store| store.metadata(&session_id).ok())
-                .map(|metadata| PathBuf::from(metadata.cwd));
-            let inside = driver_root
-                .iter()
-                .chain(persisted_cwd.iter())
-                .any(|dir| is_inside(dir, &target));
-            if !inside {
-                continue;
-            }
-            match acp
-                .is_turn_active(&agent_id, SessionId(session_id.clone()))
-                .await
-            {
+        // Filesystem and git work (canonicalize, metadata, rev-parse) stays
+        // off the async runtime.
+        let candidates = {
+            let target = target.clone();
+            let persistence = persistence.clone();
+            tokio::task::spawn_blocking(move || {
+                sessions
+                    .into_iter()
+                    .filter(|(session_id, driver_root)| {
+                        let persisted_cwd = persistence
+                            .as_ref()
+                            .and_then(|store| store.metadata(session_id).ok())
+                            .map(|metadata| PathBuf::from(metadata.cwd));
+                        driver_root
+                            .iter()
+                            .chain(persisted_cwd.iter())
+                            .any(|dir| is_rewritten_by(dir, &target))
+                    })
+                    .map(|(session_id, _)| session_id)
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default()
+        };
+        for session_id in candidates {
+            match acp.is_turn_active(&agent_id, SessionId(session_id)).await {
                 Ok(true) => {
                     log::warn!(
                         "[destructive-guard] blocked: agent {agent_id} has an active turn inside {}",

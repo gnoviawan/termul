@@ -1127,6 +1127,7 @@ async fn web_canvas_api_routes_bypass_the_canvas_token_gate() {
             Request::builder()
                 .method(Method::GET)
                 .uri("/canvas/mcp")
+                .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .body(Body::empty())
                 .expect("build request"),
         )
@@ -1461,6 +1462,7 @@ async fn web_canvas_mcp_accepts_bearer_or_cookie() {
         let mut builder = Request::builder()
             .method(Method::POST)
             .uri("/canvas/mcp")
+            .extension(axum::extract::ConnectInfo(web_test_peer()))
             .header("content-type", "application/json");
         for (name, value) in headers {
             builder = builder.header(*name, value);
@@ -1728,6 +1730,7 @@ async fn web_root_routes_are_referer_scoped_per_canvas() {
             Request::builder()
                 .method(Method::POST)
                 .uri("/canvas/mcp")
+                .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
                 .header("cookie", &cookie_a)
                 .header("referer", &referer_a)

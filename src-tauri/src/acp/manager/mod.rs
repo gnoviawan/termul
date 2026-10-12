@@ -1765,6 +1765,43 @@ impl AcpManager {
         );
     }
 
+    /// Fixture for the "agent already resolved it" race: the fake driver
+    /// answers every permission response / question answer with the driver's
+    /// `unknown … request` error (no outstanding `Responder`).
+    #[cfg(test)]
+    pub(crate) fn install_test_agent_without_responders(&self, agent_id: AgentId) {
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    AcpCommand::RespondPermission {
+                        request_id, reply, ..
+                    } => {
+                        let _ = reply.send(Err(format!("unknown permission request: {request_id}")));
+                    }
+                    AcpCommand::AnswerQuestion {
+                        question_id, reply, ..
+                    } => {
+                        let _ = reply.send(Err(format!("unknown question request: {question_id}")));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        self.agents.lock().insert(
+            agent_id,
+            AgentEntry {
+                command_tx,
+                capabilities: AgentCapabilities::default(),
+                stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
+                join_handle: None,
+                killed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+    }
+
     /// Destructive-op guard fixture: the fake driver owns `sessions`, each
     /// with its own workspace root and turn state (`(session id, root,
     /// active turn)`). Answers `SessionIds`/`SessionRoots`/`IsTurnActive`.

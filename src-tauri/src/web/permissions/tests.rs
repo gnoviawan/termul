@@ -791,8 +791,10 @@ fn same_client_double_respond_is_rejected() {
             rdz.try_respond(client, "perm-dup", Some("allow")),
             rdz.try_respond(client, "perm-dup", Some("allow")),
         );
-        // Exactly one wins; the other is rejected (`AlreadyResolved` on this
-        // runtime, `Duplicate` under a real race).
+        // Exactly one wins. On this single-threaded runtime the winner's
+        // eviction completes before the loser's recheck, so the loser always
+        // reads the tombstone (`AlreadyResolved`); `Duplicate` needs a real
+        // multi-threaded race and is asserted by its own wire-code test.
         let loser = if a.is_ok() { b } else { a };
         let winner = if a.is_ok() { a } else { b };
         assert!(winner.is_ok(), "one response must win: ({a:?}, {b:?})");
@@ -828,5 +830,55 @@ fn queued_permission_denied_on_disconnect_reads_already_resolved() {
                 "{id}"
             );
         }
+    });
+}
+
+/// The agent reports no outstanding responder (it resolved the request
+/// elsewhere, e.g. at turn completion): THIS answer is `stale`, but the ticket
+/// is remembered so any later answer reads `already_resolved`.
+#[test]
+fn agent_reported_unknown_request_leaves_a_tombstone() {
+    block_on(async {
+        let acp = Arc::new(AcpManager::new(vec![]));
+        acp.install_test_agent_without_responders(AgentId("a1".to_string()));
+
+        let permissions = Arc::new(PermissionRendezvous::with_timeout(
+            Arc::clone(&acp),
+            Duration::from_secs(60),
+        ));
+        permissions.register(
+            "perm-gone".to_string(),
+            AgentId("a1".to_string()),
+            "sess-1".to_string(),
+            options_value(&["allow"]),
+        );
+        assert_eq!(
+            permissions.try_respond(ClientId::new(), "perm-gone", Some("allow")).await,
+            Err(RespondError::NotFound)
+        );
+        assert_eq!(
+            permissions.try_respond(ClientId::new(), "perm-gone", Some("allow")).await,
+            Err(RespondError::AlreadyResolved)
+        );
+
+        let questions = Arc::new(QuestionRendezvous::with_timeout(
+            Arc::clone(&acp),
+            Duration::from_secs(60),
+        ));
+        questions.register(
+            "q-gone".to_string(),
+            AgentId("a1".to_string()),
+            "sess-1".to_string(),
+            question_options_value(&["plan-a"]),
+        );
+        let answer = vec!["plan-a".to_string()];
+        assert_eq!(
+            questions.try_respond(ClientId::new(), "q-gone", Some(&answer)).await,
+            Err(QuestionRespondError::NotFound)
+        );
+        assert_eq!(
+            questions.try_respond(ClientId::new(), "q-gone", Some(&answer)).await,
+            Err(QuestionRespondError::AlreadyResolved)
+        );
     });
 }

@@ -85,6 +85,8 @@ fn view_only_connection_keeps_reads_ping_and_subscribe() {
         ("list_persisted_sessions", json!({})),
         ("store_read", json!({ "key": "settings/theme" })),
         ("subscribe", json!({ "sessionId": "missing" })),
+        ("watch_project", json!({ "projectId": "missing" })),
+        ("unwatch_project", json!({ "projectId": "missing" })),
     ] {
         let mut authed = true;
         let reply = handle_sync_with_access(

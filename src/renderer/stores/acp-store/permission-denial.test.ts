@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AcpTransportError } from '@/lib/acp-transport'
 
 const { toastError, toastWarning } = vi.hoisted(() => ({
   toastError: vi.fn(),
@@ -495,6 +496,30 @@ describe('permission denial tracking (L-09)', () => {
       completeTurn()
 
       expect(notices().s1).toEqual({ requestId: 'r1', tool: TOOL })
+    })
+
+    it('drops an already_resolved ticket instead of restoring an unanswerable modal', async () => {
+      seedSession('s1', 'agent-1')
+      requestPermission('r1')
+      vi.mocked(invoke).mockRejectedValue(
+        new AcpTransportError('already_resolved', 'resolved by another connection')
+      )
+
+      await expect(useAcpStore.getState().respondPermission('r1', 'allow')).resolves.toBeUndefined()
+
+      expect(useAcpStore.getState().pendingPermissions.r1).toBeUndefined()
+    })
+
+    it('restores the modal when the host answers forbidden (view-only connection)', async () => {
+      seedSession('s1', 'agent-1')
+      requestPermission('r1')
+      vi.mocked(invoke).mockRejectedValue(new AcpTransportError('forbidden', 'view-only'))
+
+      await expect(useAcpStore.getState().respondPermission('r1', 'allow')).rejects.toThrow(
+        'view-only'
+      )
+
+      expect(useAcpStore.getState().pendingPermissions.r1).toBeDefined()
     })
 
     it('does not track a request that was never tracked', async () => {

@@ -195,3 +195,59 @@ async fn git_toplevel_resolves_the_work_tree_root_and_falls_back_outside_a_repo(
     assert!(ensure_no_active_turn_in_checkout(&acp, &sub).await.is_err());
     assert!(ensure_no_active_turn_under(&acp, &sub).await.is_ok());
 }
+
+#[tokio::test]
+async fn a_session_in_a_nested_linked_worktree_does_not_block_the_enclosing_tree() {
+    use crate::trackers::git_tracker::GitTracker;
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let run = |args: &[&str]| {
+        GitTracker::run_git_command(repo.to_str().unwrap(), args)
+            .filter(|out| out.status.success())
+            .is_some()
+    };
+    if !(run(&["init", "-q"])
+        && run(&["config", "user.email", "t@example.com"])
+        && run(&["config", "user.name", "T"])
+        && run(&["config", "commit.gpgsign", "false"])
+        && run(&["commit", "--allow-empty", "-qm", "init"]))
+    {
+        return; // git unavailable
+    }
+    let repo = std::fs::canonicalize(&repo).unwrap();
+    let nested = repo.join(".termul/worktrees/wt");
+    std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    assert!(
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["worktree", "add", "-q", "-b", "wt", nested.to_str().unwrap()],
+        )
+        .is_some_and(|out| out.status.success()),
+        "git worktree add"
+    );
+    let nested = std::fs::canonicalize(&nested).unwrap();
+
+    // Busy only inside the nested linked worktree.
+    let acp = manager();
+    acp.install_test_agent_with_session_roots(
+        agent("a1"),
+        vec![("s1".to_string(), nested.join("."), true)],
+    );
+    ensure_no_active_turn_under(&acp, &repo)
+        .await
+        .expect("a checkout in the main tree does not rewrite the linked worktree");
+    ensure_no_active_turn_in_checkout(&acp, &repo)
+        .await
+        .expect("same through the checkout entry point");
+    // Removing the nested worktree itself IS blocked by that session.
+    assert!(ensure_no_active_turn_under(&acp, &nested).await.is_err());
+
+    // Busy in the main tree: still blocks.
+    let main_busy = manager();
+    main_busy.install_test_agent_with_session_roots(
+        agent("a2"),
+        vec![("s2".to_string(), repo.clone(), true)],
+    );
+    assert!(ensure_no_active_turn_under(&main_busy, &repo).await.is_err());
+}

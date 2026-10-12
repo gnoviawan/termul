@@ -39,7 +39,11 @@ export const WEB_TERMINAL_ERROR_CODES = {
   PROTOCOL_VERSION_MISMATCH: 'PROTOCOL_VERSION_MISMATCH',
   // `authenticate` carried a missing, empty or oversized `deviceId` /
   // `clientInstanceId`.
-  INVALID_CLIENT_IDENTITY: 'INVALID_CLIENT_IDENTITY'
+  INVALID_CLIENT_IDENTITY: 'INVALID_CLIENT_IDENTITY',
+  // The connection is view-only (shared-live deployment, or a non-loopback
+  // peer without `--allow-remote-writes`) and the request mutates the host.
+  // Per-request refusal: the connection stays open and keeps its reads.
+  FORBIDDEN: 'FORBIDDEN'
 } as const
 
 export interface WebTerminalRequest {

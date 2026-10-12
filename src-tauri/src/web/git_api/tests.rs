@@ -712,22 +712,31 @@ async fn idle_or_sibling_sessions_do_not_block_a_branch_switch() {
     assert!(body.success, "idle session must not block: {:?}", body.error);
     assert_eq!(head_branch(&repo), "feature");
 
-    // Busy session in a sibling directory sharing a name prefix.
+    // Busy session in a sibling directory sharing a name prefix: the switch
+    // back to the original branch must succeed (not merely "not blocked").
+    let original = GitTracker::run_git_command(
+        repo.to_str().unwrap(),
+        &["rev-parse", "--abbrev-ref", "@{-1}"],
+    )
+    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    .filter(|name| !name.is_empty())
+    .expect("previous branch");
     let sibling = PathBuf::from(format!("{}-other", repo.to_string_lossy()));
     std::fs::create_dir_all(&sibling).expect("sibling");
     let state = state_with_session(&repo, sibling.clone(), true);
     let resp = post_json(
         state,
         "/git/checkout-branch",
-        &serde_json::json!({ "cwd": repo.to_string_lossy(), "branch": "master", "isRemote": false }),
+        &serde_json::json!({ "cwd": repo.to_string_lossy(), "branch": original, "isRemote": false }),
     )
     .await;
     let body: IpcBody<()> = body_as(resp.into_body()).await;
-    assert_ne!(
-        body.code.as_deref(),
-        Some("destructive_op_blocked"),
-        "a sibling path sharing a prefix is not inside the target"
+    assert!(
+        body.success,
+        "a sibling path sharing a prefix is not inside the target: {:?}",
+        body.error
     );
+    assert_eq!(head_branch(&repo), original);
     let _ = std::fs::remove_dir_all(sibling);
 }
 

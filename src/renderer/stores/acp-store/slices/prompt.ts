@@ -2,6 +2,7 @@
  * Prompt slice — extracted from ../acp-store.ts (spec-04 PR B). Pure move, no logic changes.
  */
 
+import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import {
@@ -14,7 +15,7 @@ import {
   type StopReason
 } from '@/lib/acp-api'
 import { getCachedSessionPayload, setCachedSessionPayload } from '@/lib/acp-history-persistence'
-import { isTransientAcpTransportError } from '@/lib/acp-transport'
+import { AcpTransportError, isTransientAcpTransportError } from '@/lib/acp-transport'
 import { bumpTurnEndNotice } from '@/lib/agent-chat-notify'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
@@ -561,6 +562,12 @@ type PromptSliceState = Pick<
   | '_onPromptComplete'
 >
 
+/** The host's stable `already_resolved` reply: the approval/question ticket was
+ *  resolved by another connection, a timeout or a disconnect deny. */
+function isAlreadyResolved(err: unknown): boolean {
+  return err instanceof AcpTransportError && err.code === WS_ERROR_CODES.ALREADY_RESOLVED
+}
+
 export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState> = (set, get) => ({
   pendingPermissions: {},
   pendingQuestions: {},
@@ -839,6 +846,10 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.respondPermission(pending.agentId, requestId, optionId)
     } catch (err) {
+      // Another connection (or a timeout) already resolved this ticket: the
+      // request is gone for good, so restoring it would resurrect a modal
+      // nobody can answer. Mirrors the desktop command's idempotent resolve.
+      if (isAlreadyResolved(err)) return
       // Restore the entry so the user can retry, then track it again (after the
       // restore, so the restore is not read as the request vanishing).
       set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
@@ -860,6 +871,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.answerQuestion(pending.agentId, questionId, values)
     } catch (err) {
+      // Already answered elsewhere: nothing left to retry (see respondPermission).
+      if (isAlreadyResolved(err)) return
       // Restore the entry so the user can retry.
       set((s) => ({ pendingQuestions: { ...s.pendingQuestions, [questionId]: pending } }))
       throw err

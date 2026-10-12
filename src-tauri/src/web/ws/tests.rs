@@ -5644,6 +5644,7 @@ async fn watch_requests_are_routed_by_handle_request() {
             &frame.to_string(),
             &mut authed,
             &mut None,
+            &mut test_access(),
             None,
             &acp,
             &relay,

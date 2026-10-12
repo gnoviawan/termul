@@ -216,6 +216,10 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         "authenticate"
         | "ping"
         | "subscribe"
+        // A per-project fs watch is a subscription like `subscribe`: it only
+        // routes `fs_changed` events to this connection.
+        | "watch_project"
+        | "unwatch_project"
         | "list_persisted_sessions"
         | "open_persisted_session"
         | "get_session_payload"
@@ -258,6 +262,9 @@ pub fn ws_request_permitted(
 /// and revocation, renderer refs, protection, orphan detection — and
 /// `list_preserved`, which re-issues (replaces) the claim of every terminal
 /// without a live attachment, so a view-only peer could lock out its owner.
+/// A view-only connection therefore cannot obtain a claim to `attach` (claims
+/// come only from `spawn`, `list_preserved` and claim rotation): it sees
+/// terminal events and reads for terminals it already holds, nothing more.
 #[must_use]
 pub fn terminal_request_is_view(request_type: &str) -> bool {
     matches!(

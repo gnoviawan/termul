@@ -583,7 +583,7 @@ pub async fn create_branch(
     };
     // Branching from HEAD leaves the work tree alone; branching from another
     // `start_ref` checks that ref out, which rewrites it.
-    if req.start_ref.as_deref().is_some_and(|r| !r.trim().is_empty()) {
+    if crate::acp::destructive_guard::start_ref_rewrites_tree(req.start_ref.as_deref()) {
         if let Some(blocked) = checkout_refusal(&state, &resolved).await {
             return blocked;
         }

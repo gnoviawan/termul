@@ -298,6 +298,35 @@ fn canvas_unauthorized(message: &str) -> Response {
         .into_response()
 }
 
+/// Typed 403 for a bearer/ungated `/canvas/mcp` caller that may not write.
+fn canvas_forbidden(message: String) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "success": false,
+            "error": message,
+            "code": "FORBIDDEN",
+        })),
+    )
+        .into_response()
+}
+
+/// Shared write predicate for the `/canvas/mcp` callers that are NOT holding a
+/// canvas cookie (agent clients on the bearer token, or an ungated server):
+/// MCP tools edit the open document, so they need the same write posture as
+/// `/canvas/open|close|save`. A request without a peer address (only possible
+/// outside the production server) is refused. The canvas-cookie path needs no
+/// check: that credential is only minted by the guarded `/canvas/open`.
+fn mcp_write_refusal(state: &CanvasState, request: &Request) -> Option<Response> {
+    let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() else {
+        return Some(canvas_forbidden(
+            "canvas mcp write access could not be determined (no peer address)".to_string(),
+        ));
+    };
+    check_canvas_write::<()>(state, *peer, "/canvas/mcp")
+        .map(|refused| canvas_forbidden(refused.error.unwrap_or_default()))
+}
+
 /// Typed 502 in the IpcBody failure shape (no live daemon — the "canvas
 /// closed" signal).
 fn daemon_down(message: &str) -> Response {
@@ -549,7 +578,12 @@ async fn mcp(State(state): State<CanvasState>, request: Request) -> Response {
         }
     }
     // (a) the web auth bearer (agent clients) → active daemon; an ungated
-    // server stays open (legacy posture).
+    // server stays open (legacy posture). Both edit the open document, so
+    // they take the write predicate (a cookie holder was already admitted by
+    // the guarded `/canvas/open`).
+    if let Some(refused) = mcp_write_refusal(&state, &request) {
+        return refused;
+    }
     let daemon = state.pool.as_ref().and_then(|pool| pool.active_daemon());
     match state.web_auth.as_ref() {
         Some(auth) => {

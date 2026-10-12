@@ -832,6 +832,7 @@ async fn canvas_routes_require_auth_when_gated() {
             Request::builder()
                 .method("POST")
                 .uri("/canvas/mcp")
+                .extension(axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))
                 .expect("build request"),
@@ -903,6 +904,7 @@ async fn canvas_routes_require_auth_when_gated() {
             Request::builder()
                 .method("POST")
                 .uri("/canvas/mcp")
+                .extension(axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
                 .header("authorization", "Bearer t0ken")
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))

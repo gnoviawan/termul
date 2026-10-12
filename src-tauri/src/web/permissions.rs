@@ -613,6 +613,10 @@ impl PermissionRendezvous {
                 warn!(
                     "[permissions] respond_permission {request_id} — agent has no outstanding request: {e}"
                 );
+                // The agent already resolved it elsewhere: this answer is
+                // `stale`, and remembering the ticket makes any LATER answer
+                // read `already_resolved`.
+                self.resolved.lock().record(request_id);
                 self.tickets.lock().remove(request_id);
                 self.promote_next(&session_id);
                 return Err(RespondError::NotFound);
@@ -1142,6 +1146,7 @@ impl QuestionRendezvous {
                 warn!(
                     "[questions] answer_question {question_id} — agent has no outstanding request: {e}"
                 );
+                self.resolved.lock().record(question_id);
                 self.tickets.lock().remove(question_id);
                 return Err(QuestionRespondError::NotFound);
             }

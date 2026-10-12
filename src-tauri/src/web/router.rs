@@ -641,8 +641,12 @@ async fn health_check(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    let allow =
-        !state.shared_live_writes_denied && (peer.ip().is_loopback() || state.allow_remote_writes);
+    // The same predicate `/ws`, `/terminal/ws` and the write routes use.
+    let allow = crate::web::capabilities::write_decision(
+        peer,
+        crate::web::capabilities::WriteFlags::from_state(&state),
+    )
+    .is_allowed();
     // Durable boundary log (AGENTS.md): record the capability-admission
     // decision. No peer address or credentials logged — only the decision
     // + whether the deployment-mode deny or opt-in governed it.

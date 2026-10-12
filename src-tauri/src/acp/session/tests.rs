@@ -368,3 +368,26 @@ fn replay_window_guard_rejected_while_turn_active() {
     drop(guard);
     assert!(!state.lock().is_replay_window_open("sess-1"));
 }
+
+#[test]
+fn session_roots_snapshot_lists_every_registered_root() {
+    let mut state = DriverState::new();
+    assert!(state.session_roots_snapshot().is_empty());
+    state.set_session_root("a".to_string(), PathBuf::from("/tmp/a"));
+    state.set_session_root("b".to_string(), PathBuf::from("/tmp/b"));
+    let mut roots = state.session_roots_snapshot();
+    roots.sort();
+    assert_eq!(
+        roots,
+        vec![
+            ("a".to_string(), PathBuf::from("/tmp/a")),
+            ("b".to_string(), PathBuf::from("/tmp/b")),
+        ]
+    );
+    let _ = state.dispose_session("a");
+    assert_eq!(
+        state.session_roots_snapshot(),
+        vec![("b".to_string(), PathBuf::from("/tmp/b"))],
+        "a closed session no longer reports a root"
+    );
+}
