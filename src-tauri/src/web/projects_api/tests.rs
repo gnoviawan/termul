@@ -24,7 +24,6 @@ fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
         registry_persistence: None,
         projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -60,7 +59,6 @@ fn state_with_persistence(
         registry_persistence: Some(file_registry),
         projects_file: Some(Arc::new(projects_file)),
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),

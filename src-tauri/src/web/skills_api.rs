@@ -63,22 +63,12 @@ pub async fn list(
     // harmless degrade).
     if let Some(pr) = &q.project_root {
         if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
-            // CAP-1: lock-read the live boundary (may have been rebound).
-            // CAP-2: also check all registered project roots so a web client
-            // that switched to a non-default project can list skills.
-            // Scope in a block so the `!Send` guard drops before the
-            // `spawn_blocking` `.await` (keeps the handler future `Send`).
-            let outside_err = {
-                let project_root = state.project_root.read();
-                crate::web::git_api::ensure_within_project_boundary::<Vec<AgentSkillSummary>>(
-                    &canonical,
-                    &project_root,
-                    &state.registry,
-                )
-            };
-            if let Some(err) = outside_err {
+            if let Some(err) = crate::web::git_api::ensure_within_project_boundary::<
+                Vec<AgentSkillSummary>,
+            >(&canonical, &state.registry)
+            {
                 tracing::warn!(
-                    "[Security] /skills rejected: projectRoot '{}' outside project_root",
+                    "[Security] /skills rejected: projectRoot '{}' outside every registered project",
                     canonical.display()
                 );
                 return (StatusCode::OK, Json(err));
@@ -121,21 +111,12 @@ pub async fn read(
     // mirrors `/skills` (list). A non-existent projectRoot is allowed through.
     if let Some(pr) = &q.project_root {
         if let Ok(canonical) = std::path::Path::new(pr).canonicalize() {
-            // CAP-1: lock-read the live boundary (may have been rebound).
-            // CAP-2: also check all registered project roots.
-            // Scope in a block so the `!Send` guard drops before the
-            // `spawn_blocking` `.await` (keeps the handler future `Send`).
-            let outside_err = {
-                let project_root = state.project_root.read();
-                crate::web::git_api::ensure_within_project_boundary::<AgentSkillContent>(
-                    &canonical,
-                    &project_root,
-                    &state.registry,
-                )
-            };
-            if let Some(err) = outside_err {
+            if let Some(err) = crate::web::git_api::ensure_within_project_boundary::<
+                AgentSkillContent,
+            >(&canonical, &state.registry)
+            {
                 tracing::warn!(
-                    "[Security] /skills/:name rejected: projectRoot '{}' outside project_root",
+                    "[Security] /skills/:name rejected: projectRoot '{}' outside every registered project",
                     canonical.display()
                 );
                 return (StatusCode::OK, Json(err));

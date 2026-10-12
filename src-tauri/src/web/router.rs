@@ -61,16 +61,16 @@ use super::assets;
 /// and replay cursors (Story 1.4). The `/ws` + `/health` routes are registered
 /// BEFORE the static fallback so the static mount cannot shadow them (AC1).
 ///
-/// `project_root` (PR-S4) is the containment boundary for the OPERATION
-/// routes (`/git/*`, `/skills`, `/search/content`) — enforced by
-/// [`git_api::ensure_within_project_boundary`] (accepts the default
-/// `project_root` or any registered, non-archived project root; rejects
-/// with `OUTSIDE_PROJECT_ROOT`). The `/fs/*` browse/read routes (`ls`/`browse`/
-/// `read`) are intentionally broader — no `project_root` check — for desktop
-/// parity, the directory picker, and editor reads; `/fs/*` writes (`mkdir`/
-/// `write`/`delete`/`rename`/`copy`) and `/fs/info` are loopback-guarded
-/// (`check_local_only`, `FORBIDDEN`). See ADR-007 for the recorded policy.
-/// Resolved by the caller from `ServerConfig::project_root` (or its default).
+/// The containment boundary for the OPERATION routes (`/git/*`, `/worktree/*`,
+/// `/skills`, `/search/*`, canvas open) is the project registry — enforced by
+/// [`git_api::ensure_within_project_boundary`] (a path inside ANY registered,
+/// non-archived project; rejects with `OUTSIDE_PROJECT_ROOT`). The `/fs/*`
+/// browse/read routes (`ls`/`browse`/`read`) are intentionally broader — no
+/// boundary check — for desktop parity, the directory picker, and editor
+/// reads; `/fs/*` writes (`mkdir`/`write`/`delete`/`rename`/`copy`) and
+/// `/fs/info` are loopback-guarded (`check_local_only`, `FORBIDDEN`), and a
+/// non-loopback peer admitted by `--allow-remote-writes` is confined to the
+/// registered project roots. See ADR-007 for the recorded policy.
 ///
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see
@@ -101,7 +101,6 @@ pub fn router(
     registry: Arc<ProjectRegistry>,
     registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
-    project_root: std::sync::Arc<parking_lot::RwLock<PathBuf>>,
     history_mode: HistoryMode,
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
@@ -269,14 +268,6 @@ pub fn router(
             "/worktree/rename-branch",
             post(worktree_rename_api::rename_branch),
         );
-    // CAP-1: `project_root` arrives already wrapped in the shared
-    // `Arc<RwLock<PathBuf>>` created by `serve_router` (one per server —
-    // the same live handle the #856 fs watcher re-arms on). Register it
-    // with the registry BEFORE the canvas merge so a project switch rebinds
-    // the *same* `Arc` `AppState.project_root` + the watcher both own.
-    let project_root_handle = project_root;
-    registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
-
     let mut r = r
         // Canvas web routes (OpenPencil canvas mode, CAP-5): open/close/
         // save (IpcBody), the stable /canvas/mcp proxy, the same-origin
@@ -289,14 +280,12 @@ pub fn router(
         // not under a gated prefix) and authenticated by the canvas
         // sub-router's own credentials instead (browser iframes cannot
         // send Authorization headers). The boundary validates web-opened
-        // doc paths against the same live project-root handle + registry
-        // the fs/git routes use.
+        // doc paths against the same project registry the fs/git routes use.
         .merge(crate::web::canvas_api::canvas_router(
             crate::web::canvas_api::CanvasState {
                 pool: canvas_pool,
                 web_auth: web_auth.clone(),
                 boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
-                    project_root: project_root_handle.clone(),
                     registry: registry.clone(),
                 }),
             },
@@ -340,7 +329,6 @@ pub fn router(
         store,
         allow_remote_writes,
         shared_live_writes_denied,
-        project_root: project_root_handle,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -494,7 +482,6 @@ pub fn router_with_static(
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
     static_dir: &Path,
-    project_root: PathBuf,
     allow_remote_writes: bool,
     shared_live_writes_denied: bool,
     web_auth: Option<Arc<WebAuth>>,
@@ -579,10 +566,6 @@ pub fn router_with_static(
             "/acp/factory-key",
             get(acp_api::factory_key_status).post(acp_api::factory_key_save),
         );
-    // CAP-1: same live project-root handle as `router()` — created before
-    // the canvas merge so the (test-only) doc-path boundary shares it.
-    let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
-    registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
     // Canvas routes parity (test/dev variant): the pool is always `None`
     // here — the routes degrade to typed 502 DAEMON_DOWN, which is exactly
     // what the auth tests assert. The boundary is still wired so open's
@@ -593,7 +576,6 @@ pub fn router_with_static(
                 pool: None,
                 web_auth: web_auth.clone(),
                 boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
-                    project_root: project_root_handle.clone(),
                     registry: registry.clone(),
                 }),
             },
@@ -607,7 +589,6 @@ pub fn router_with_static(
     let r = r
         .layer(middleware::from_fn(assets::immutable_asset_cache_headers))
         .layer(assets::static_compression_layer());
-    // CAP-1: same RwLock wrap + handle registration as `router`.
     origin::layer(maybe_gate_api(web_auth.clone(), r), allowed_origins).with_state({
         AppState {
             acp,
@@ -627,7 +608,6 @@ pub fn router_with_static(
             store: None,
             allow_remote_writes,
             shared_live_writes_denied,
-            project_root: project_root_handle,
             pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
                 std::collections::HashMap::new(),
             )),

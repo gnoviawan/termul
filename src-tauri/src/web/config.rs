@@ -124,10 +124,10 @@ fn removed_flag_warning(flag: &str, value: Option<&str>) -> String {
 /// likewise ignored (the XDG base-dir spec requires an absolute path) —
 /// the same guard as [`default_projects_file`] (issue #839).
 ///
-/// Resolve the default project-root boundary for the routes that enforce it
-/// (`/git/*`, `/skills`, `/search/content`). The `/fs/*` routes are
-/// intentionally unconfined (ADR-007); this boundary applies to the
-/// operation routes via `git_api::ensure_within_project_boundary`.
+/// Resolve the default seed root registered as the one project when the
+/// registry is empty. The `/fs/*` routes are intentionally unconfined
+/// (ADR-007); the operation routes are bounded by the registry via
+/// `git_api::ensure_within_project_boundary`.
 ///
 /// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
 /// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
@@ -261,13 +261,11 @@ pub fn default_project_root() -> Option<PathBuf> {
 /// Used at every entry point that constructs a `ServerConfig::project_root`
 /// (the `from_args` `--project-root` flag, the desktop shared-live host's
 /// `default_project_root()` fallback, the standalone `termul-server`
-/// binary) so the boundary check in `git_api::ensure_within_project_boundary`
-/// (the shared operations chokepoint for `/git/*`, `/skills`,
-/// `/search/content` — accepts the default `project_root` or any registered,
-/// non-archived project root) can rely on `project_root` being a real,
-/// accessible directory rather than a path string that only resolves
-/// correctly at the first request. The `/fs/*` browse/read routes are
-/// intentionally broader (no `project_root` containment — ADR-007).
+/// binary) so the seeded project (and the registry-only boundary in
+/// `git_api::ensure_within_project_boundary`) can rely on `project_root`
+/// being a real, accessible directory rather than a path string that only
+/// resolves correctly at the first request. The `/fs/*` browse/read routes
+/// are intentionally broader (no boundary — ADR-007).
 ///
 /// Rejects:
 /// - Paths that do not exist or are not accessible (canonicalize fails).
@@ -370,14 +368,13 @@ pub struct ServerConfig {
     /// `server_main` emits each with `tracing::warn!` right after
     /// `init_tracing`. Empty for programmatic constructions.
     pub deprecation_warnings: Vec<String>,
-    /// Project-root boundary for the routes that explicitly enforce it
-    /// (`/git/*`, `/skills`, `/search/content` via
-    /// `git_api::ensure_within_project_boundary` — refuses paths outside this
-    /// root with `code: "OUTSIDE_ROOT"`, or `PATH_TRAVERSAL` for explicit `..`
-    /// components). The `/fs/*` routes are intentionally NOT confined to this
-    /// root (ADR-007 breadth policy: the directory picker + editor navigate
-    /// outside the project); `/fs/*` writes reject only `..` traversal.
-    /// Defaults to the user's home directory when unset (see
+    /// Seed root: when the project registry is empty at startup, one project
+    /// is registered at this path (see
+    /// `ProjectRegistry::seed_root_if_empty`) so the registry-only boundary
+    /// (`git_api::ensure_within_project_boundary`) does not reject everything.
+    /// It is NOT a boundary by itself — a non-empty registry ignores it. The
+    /// `/fs/*` browse/read routes are intentionally not confined (ADR-007
+    /// breadth policy). Defaults to the user's home directory when unset (see
     /// [`default_project_root`]).
     pub project_root: PathBuf,
     /// Server-owned VFS-roots registry file (VPS mode, Story 4.1). The

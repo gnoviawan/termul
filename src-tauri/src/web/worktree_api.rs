@@ -150,15 +150,9 @@ pub(super) fn resolve_project_path<T>(
             return Err((StatusCode::OK, Json(IpcBody::<T>::err(msg, code))));
         }
     };
-    // 3) project_root containment (web-server security boundary). Lock-read the
-    //    RwLock for the duration of the `starts_with` check (sync — no `.await`
-    //    under the guard). The boundary may have been rebound by a project
-    //    switch since the last request.
-    let outside_err = {
-        let project_root = state.project_root.read();
-        ensure_within_project_boundary::<T>(&resolved, &project_root, &state.registry)
-    };
-    if let Some(err) = outside_err {
+    // 3) Registry boundary (web-server security boundary): inside ANY
+    //    registered, non-archived project.
+    if let Some(err) = ensure_within_project_boundary::<T>(&resolved, &state.registry) {
         return Err((StatusCode::OK, Json(err)));
     }
     Ok(resolved)

@@ -1,7 +1,6 @@
 use super::*;
 use crate::acp::AcpManager;
 use crate::trackers::GitTracker;
-use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::WsRelaySink;
 use crate::web::test_pty_manager;
 use crate::web::ws::HistoryMode;
@@ -33,13 +32,10 @@ fn test_state(root: &std::path::Path) -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(
-            root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-        )),
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),

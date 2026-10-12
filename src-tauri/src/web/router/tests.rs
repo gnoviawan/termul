@@ -35,17 +35,12 @@ impl Drop for TempDir {
 }
 
 fn test_router_with_fixture(dir: &Path) -> Router {
-    // PR-S4: `router_with_static` now requires a project root for the
-    // fs_api boundary. The fixture tests under `assets.rs` only exercise
-    // `/health` and `/ws` (no fs routes), so any existing directory works;
-    // we pass the OS temp dir for symmetry with the legacy default.
     router_with_static(
         Arc::new(AcpManager::new(vec![])),
         crate::web::test_pty_manager(),
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir,
-        std::env::temp_dir(),
         false,
         false,
         None,
@@ -86,7 +81,6 @@ async fn factory_key_http_requires_correct_bearer_when_gated() {
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir.path(),
-        std::env::temp_dir(),
         false,
         false,
         Some(auth),
@@ -133,7 +127,6 @@ fn gated_router(dir: &Path, allow_remote_writes: bool, shared_live_denied: bool)
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir,
-        std::env::temp_dir(),
         allow_remote_writes,
         shared_live_denied,
         Some(auth),
@@ -278,7 +271,6 @@ async fn health_reports_denied_for_non_loopback_without_opt_in() {
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir.path(),
-        std::env::temp_dir(),
         false, // allow_remote_writes (no opt-in)
         false, // shared_live_writes_denied (standalone)
         None,  // web_auth (ungated)
@@ -317,7 +309,6 @@ async fn health_reports_denied_for_all_peers_when_shared_live() {
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir.path(),
-        std::env::temp_dir(),
         true, // allow_remote_writes (would admit non-loopback on standalone)
         true, // shared_live_writes_denied (desktop shared-live overrides)
         None, // web_auth (ungated)
@@ -356,7 +347,6 @@ async fn health_reports_admitted_for_non_loopback_with_opt_in() {
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir.path(),
-        std::env::temp_dir(),
         true,  // allow_remote_writes (opt-in)
         false, // shared_live_writes_denied (standalone, not shared-live)
         None,  // web_auth (ungated)
@@ -525,7 +515,6 @@ fn gated_router_with_fixture(dir: &Path) -> Router {
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir,
-        std::env::temp_dir(),
         false,
         false,
         Some(Arc::new(WebAuth::new(
@@ -992,7 +981,6 @@ fn router_for_origins(dir: &Path, origins: OriginPolicy) -> Router {
         Arc::new(WsRelaySink::new()),
         Arc::new(crate::web::project_registry::ProjectRegistry::new()),
         dir,
-        std::env::temp_dir(),
         false,
         false,
         None,

@@ -327,20 +327,11 @@ pub async fn serve_router(
     } else {
         HistoryMode::LiveOnly
     };
-    // CAP-1 + #856: build the live project-root handle ONCE per server —
-    // the same `Arc` the router registers with the registry (a project
-    // switch rebinds it in place) AND the server-side fs watcher reads to
-    // re-arm at the new root.
-    let project_root_handle =
-        std::sync::Arc::new(parking_lot::RwLock::new(cfg.project_root.clone()));
-    // #856: spawn the FS watcher daemon here — once per SERVE, not per
-    // `router()` call (tests build routers freely and must never spawn an
-    // unkillable watcher). It broadcasts debounced `fs_changed` events to
-    // connected web clients over the control WS.
-    fs_watcher::spawn_fs_watcher(
-        std::sync::Arc::clone(&project_root_handle),
-        Arc::clone(&ws_relay),
-    );
+    // The boundary is "inside any registered project": when nothing is
+    // registered yet (standalone `--project-root` with an empty file
+    // registry, or a freshly started desktop host awaiting its first project
+    // sync), seed one project from the configured root so nothing is rejected.
+    registry.seed_root_if_empty(&cfg.project_root);
     let app = router::router(
         Arc::clone(&acp),
         pty,
@@ -352,7 +343,6 @@ pub async fn serve_router(
         Arc::clone(&registry),
         registry_persistence,
         projects_file,
-        project_root_handle,
         history_mode,
         workspace_manifest,
         acp_catalog,

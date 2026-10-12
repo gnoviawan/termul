@@ -1,6 +1,5 @@
 use super::*;
 use crate::acp::AcpManager;
-use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::WsRelaySink;
 use crate::web::test_pty_manager;
 use crate::web::ws::HistoryMode;
@@ -11,6 +10,9 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 fn test_app(dir: PathBuf) -> axum::Router {
+    // The registered default project's directory must exist (the MCP file
+    // lives under it).
+    std::fs::create_dir_all(&dir).expect("create project dir");
     let pty = test_pty_manager();
     let state = AppState {
         acp: Arc::new(AcpManager::new(vec![])),
@@ -20,11 +22,10 @@ fn test_app(dir: PathBuf) -> axum::Router {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(dir)),
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),
@@ -161,11 +162,10 @@ async fn put_refused_in_shared_live_mode() {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir.clone()),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(dir.clone())),
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),

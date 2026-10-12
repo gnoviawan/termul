@@ -1,6 +1,5 @@
 use super::*;
 use crate::acp::AcpManager;
-use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::WsRelaySink;
 use crate::web::test_pty_manager;
 use axum::body::Body;
@@ -19,15 +18,12 @@ fn test_state() -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&std::env::temp_dir()
+                .canonicalize()
+                .unwrap_or_else(|_| std::env::temp_dir()),),
         registry_persistence: None,
         projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(
-            std::env::temp_dir()
-                .canonicalize()
-                .unwrap_or_else(|_| std::env::temp_dir()),
-        )),
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,

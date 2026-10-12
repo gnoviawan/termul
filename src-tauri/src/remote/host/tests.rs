@@ -654,15 +654,46 @@ fn remote_server_state_default_equals_new() {
     let _ = RemoteServerState::default();
 }
 
+/// A host started with an empty registry seeds exactly one registered project
+/// (the resolved seed root) so the registry-only boundary does not reject
+/// everything before the renderer's first project sync; a non-empty registry
+/// is left alone.
+#[tokio::test]
+async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
+    let (acp, pty, relay, registry) = lifecycle_fixtures();
+    assert!(registry.is_empty());
+    let state = RemoteServerState::new();
+    state
+        .start(
+            acp.clone(),
+            pty.clone(),
+            relay.clone(),
+            registry.clone(),
+            RemoteBindMode::Localhost,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("start with an empty registry");
+    let snap = registry.snapshot();
+    assert_eq!(snap.projects.len(), 1, "one seeded project");
+    assert_eq!(
+        snap.default_project_id.as_deref(),
+        Some(crate::web::project_registry::SEEDED_PROJECT_ID)
+    );
+    let _ = state.stop().await;
+}
+
 /// CAP-1 / CAP-8: the keystone cross-drive integration test.
 ///
 /// Seeds a `ProjectRegistry` with a default project whose path is provably
 /// OUTSIDE the user home tree, starts `RemoteServerState`, and asserts
 /// `GET /skills` + `POST /git/status` pass the containment check (not
 /// `OUTSIDE_PROJECT_ROOT`) over the real shared-live HTTP socket. Then
-/// switches the default to a second project and asserts the new project is
-/// accepted WITHOUT a server restart — proving the live rebind threads
-/// through.
+/// proves the boundary is the registry, not the default: a non-default
+/// project is admitted, moving the default changes nothing, and archiving a
+/// project removes only its root.
 ///
 /// The bug this guards against is the `project_root = %USERPROFILE%` (home)
 /// binding that rejects every project outside the home tree. To reproduce
@@ -677,7 +708,7 @@ fn remote_server_state_default_equals_new() {
 /// test skips rather than false-pass; an explicit override that is unusable
 /// panics so a broken CI setup is loud, not silent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shared_live_binds_project_root_to_active_cross_drive_project() {
+async fn shared_live_boundary_is_any_registered_cross_drive_project() {
     let (acp, pty, relay, registry) = lifecycle_fixtures();
     let (data, _data_dir) = shared_live_fixture();
 
@@ -891,59 +922,62 @@ async fn shared_live_binds_project_root_to_active_cross_drive_project() {
         );
     }
 
-    // ---- Switch the default to project B (dir_b) WITHOUT a restart ----
-    // CAP-1: the registry's set_default_project triggers rebind_project_root,
-    // which recomputes project_root from the new default (dir_b) and writes
-    // the canonical path to the AppState.project_root handle in place.
-    assert!(
-        registry.set_default_project("p-b"),
-        "set_default_project must succeed for a switchable project"
-    );
-
-    // GET /skills?projectRoot=dir_b — must succeed with the new boundary.
+    // ---- Move the host default to project B: the boundary does not move ----
+    // The boundary is "inside any registered, non-archived project", so the
+    // default pointer is irrelevant to it: dir_b is admitted before AND after
+    // the default changes, and dir_a stays admitted while p-a is registered.
     let skills_url_b = format!("{url}/skills?projectRoot={}", percent_encode_path(&dir_b));
+    let outside = |body: &serde_json::Value| {
+        body.get("code").and_then(|v| v.as_str()) == Some("OUTSIDE_PROJECT_ROOT")
+    };
     let resp = client
         .get(&skills_url_b)
         .send()
         .await
-        .expect("GET /skills after switch");
+        .expect("GET /skills non-default project");
     let body: serde_json::Value = resp.json().await.expect("parse /skills body");
-    // Containment claim only (see above) — do not couple to skills-scan success.
     assert!(
-        body.get("code").and_then(|v| v.as_str()) != Some("OUTSIDE_PROJECT_ROOT"),
-        "/skills must not reject the new active project after switch, got: {body}"
+        !outside(&body),
+        "a registered non-default project must be inside the boundary, got: {body}"
     );
+    assert!(
+        registry.set_default_project("p-b"),
+        "set_default_project must succeed for a switchable project"
+    );
+    for (label, url) in [("old default", &skills_url_a), ("new default", &skills_url_b)] {
+        let resp = client.get(url).send().await.expect("GET /skills after default change");
+        let body: serde_json::Value = resp.json().await.expect("parse /skills body");
+        assert!(
+            !outside(&body),
+            "{label} must stay inside the boundary after the default moves, got: {body}"
+        );
+    }
 
-    // CAP-2 (PR #557) widened the operation boundary from "the default
-    // root only" to "the default root OR any registered, non-archived
-    // root" — see `ensure_within_project_boundary` and
-    // `is_within_any_registered_root`. So after the switch, dir_a is STILL
-    // admitted (p-a remains registered + non-archived) even though it is
-    // no longer the default. To prove the rebound boundary actually moved
-    // (and did not just widen to cover both), archive p-a — an archived
-    // root is excluded from `is_within_any_registered_root` — and THEN
-    // assert the rejection. Asserting rejection without archiving would
-    // contradict the CAP-2 contract the production code implements (this
-    // test predated #557; its last assertion was stale, not the code).
+    // Archiving p-a removes its root from the boundary (and nothing else).
     assert!(
         registry.update("p-a", None, None, Some(true)),
         "archiving p-a must succeed"
     );
-    // The old project (dir_a) is now outside BOTH the rebound default
-    // (dir_b) and every non-archived registered root, so
-    // /skills?projectRoot=dir_a must be rejected with
-    // OUTSIDE_PROJECT_ROOT — proving the boundary moved to dir_b.
     let resp = client
         .get(&skills_url_a)
         .send()
         .await
-        .expect("GET /skills old project after archive");
+        .expect("GET /skills archived project");
     let body: serde_json::Value = resp.json().await.expect("parse /skills body");
-    assert_eq!(
-            body.get("code").and_then(|v| v.as_str()),
-            Some("OUTSIDE_PROJECT_ROOT"),
-            "the old project must be rejected after the boundary moved to dir_b (and p-a archived), got: {body}"
-        );
+    assert!(
+        outside(&body),
+        "an archived project must be outside the boundary, got: {body}"
+    );
+    let resp = client
+        .get(&skills_url_b)
+        .send()
+        .await
+        .expect("GET /skills remaining project");
+    let body: serde_json::Value = resp.json().await.expect("parse /skills body");
+    assert!(
+        !outside(&body),
+        "the remaining registered project must stay inside the boundary, got: {body}"
+    );
 
     let _ = state.stop().await;
     // dir_a / dir_b are removed by the TempDirGuard RAII guards on drop,

@@ -212,12 +212,11 @@ fn main() -> ExitCode {
         };
         tracing::warn!(
             "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
-             on {} gain: fs mkdir/write/delete/rename/copy CONFINED to project_root '{}'; \
-             git + worktree operations confined to project_root; AND host-state mutation via \
+             on {} gain: fs mkdir/write/delete/rename/copy CONFINED to the registered project roots; \
+             git + worktree operations confined to the registered project roots; AND host-state mutation via \
              /projects/default, /acp/install, /log/frontend-error, /workspace/*. Loopback callers \
              keep ADR-007 breadth (any path). {auth_tail}",
             host,
-            cfg.project_root.display(),
             auth_tail = auth_tail,
         );
         if cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::Localhost) {

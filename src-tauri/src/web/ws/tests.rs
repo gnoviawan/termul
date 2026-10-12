@@ -2339,7 +2339,7 @@ fn ws_test_app_state() -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&std::env::temp_dir()),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
@@ -2350,7 +2350,6 @@ fn ws_test_app_state() -> AppState {
         web_auth: None,
         allow_remote_writes: false,
         shared_live_writes_denied: false,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
         pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         oauth_base_url: "http://127.0.0.1".to_string(),
     }
@@ -5423,4 +5422,119 @@ async fn handle_list_agents_reports_owned_sessions() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["id"], "agent-1");
     assert_eq!(entries[0]["ownsSession"], json!(["sess-1"]));
+}
+
+// ---- watch_project / unwatch_project ----
+
+fn watch_fixture(
+    id: &str,
+) -> (
+    Arc<WsRelaySink>,
+    Arc<ProjectRegistry>,
+    std::path::PathBuf,
+    mpsc::UnboundedSender<Outbound>,
+    mpsc::UnboundedReceiver<Outbound>,
+) {
+    let dir = std::env::temp_dir()
+        .join(format!("termul-ws-watch-{id}-{}", std::process::id()))
+        .to_path_buf();
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let registry = ProjectRegistry::seeded_for_test(&dir);
+    let (tx, rx) = mpsc::unbounded_channel::<Outbound>();
+    (Arc::new(WsRelaySink::new()), registry, dir, tx, rx)
+}
+
+fn reply_code(reply: &WsReply) -> Option<String> {
+    serde_json::to_value(reply)
+        .unwrap()
+        .get("err")
+        .and_then(|e| e.get("code"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+#[tokio::test]
+async fn watch_and_unwatch_project_manage_the_connections_subscription() {
+    let (relay, registry, dir, tx, _rx) = watch_fixture("ok");
+    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
+
+    let reply = handle_watch_project(
+        "w1".into(),
+        &json!({ "projectId": project }),
+        &relay,
+        &registry,
+        &tx,
+    );
+    assert!(reply.ok, "watch of a registered project succeeds");
+    assert_eq!(relay.fs_watches().subscriber_count(project), 1);
+
+    let reply = handle_unwatch_project(
+        "u1".into(),
+        &json!({ "projectId": project }),
+        &relay,
+        &registry,
+        &tx,
+    );
+    assert!(reply.ok);
+    assert_eq!(relay.fs_watches().watched_project_count(), 0);
+
+    // Idempotent for a registered project.
+    let again = handle_unwatch_project(
+        "u2".into(),
+        &json!({ "projectId": project }),
+        &relay,
+        &registry,
+        &tx,
+    );
+    assert!(again.ok);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn watch_and_unwatch_project_refuse_unknown_archived_and_malformed() {
+    let (relay, registry, dir, tx, _rx) = watch_fixture("refuse");
+    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
+
+    let unknown = json!({ "projectId": "nope" });
+    let w = handle_watch_project("w".into(), &unknown, &relay, &registry, &tx);
+    assert_eq!(reply_code(&w).as_deref(), Some("not_found"));
+    let u = handle_unwatch_project("u".into(), &unknown, &relay, &registry, &tx);
+    assert_eq!(reply_code(&u).as_deref(), Some("not_found"));
+    assert!(registry.update(project, None, None, Some(true)));
+    let w = handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx);
+    assert_eq!(reply_code(&w).as_deref(), Some("not_found"), "archived project");
+
+    for payload in [json!({}), json!({ "projectId": "  " })] {
+        let w = handle_watch_project("w".into(), &payload, &relay, &registry, &tx);
+        assert_eq!(reply_code(&w).as_deref(), Some("unsupported"));
+    }
+    assert_eq!(relay.fs_watches().watched_project_count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Connection close releases the connection's watch through the same cleanup
+/// that reaps its session subscriptions — also when the cleanup is dropped
+/// without `run()`.
+#[tokio::test]
+async fn connection_cleanup_releases_fs_watch_subscriptions() {
+    let (relay, registry, dir, tx, _rx) = watch_fixture("cleanup");
+    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
+    let subscribed = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+    for use_run in [true, false] {
+        let reply = handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx);
+        assert!(reply.ok);
+        assert_eq!(relay.fs_watches().subscriber_count(project), 1);
+        let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed))
+            .with_watch_conn(tx.clone());
+        if use_run {
+            cleanup.run().await;
+        } else {
+            drop(cleanup);
+        }
+        assert_eq!(relay.fs_watches().subscriber_count(project), 0);
+        assert_eq!(relay.fs_watches().watched_project_count(), 0);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

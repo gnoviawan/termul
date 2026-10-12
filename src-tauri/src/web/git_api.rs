@@ -145,44 +145,27 @@ pub struct GitStashInfoDto {
     pub message: String,
 }
 
-/// Reject when the resolved cwd is outside `project_root`. Returns `None` when
-/// the cwd is within bounds; otherwise `Some(IpcBody::err(...,
-/// "OUTSIDE_PROJECT_ROOT"))`. Both `resolved` (from `resolve_request_path`) and
-/// `project_root` (from `AppState`, set via `resolve_and_validate_project_root`
-/// at startup) are canonicalized, so `starts_with` is a reliable containment
-/// check on every platform.
-pub(crate) fn ensure_within_project_root<T>(
+/// Reject when the resolved path is outside EVERY registered, non-archived
+/// project root. Returns `None` when within bounds; otherwise
+/// `Some(IpcBody::err(..., "OUTSIDE_PROJECT_ROOT"))`. `resolved` comes from
+/// `resolve_request_path` (canonical); the registry caches canonical roots, so
+/// `starts_with` is a reliable containment check on every platform and no
+/// request canonicalizes the whole project list.
+pub(crate) fn ensure_within_project_boundary<T>(
     resolved: &Path,
-    project_root: &Path,
+    registry: &crate::web::project_registry::ProjectRegistry,
 ) -> Option<IpcBody<T>> {
-    if resolved.starts_with(project_root) {
+    if registry.is_within_any_registered_root(resolved) {
         None
     } else {
         Some(IpcBody::<T>::err(
             format!(
-                "cwd '{}' is outside project_root '{}'",
-                resolved.display(),
-                project_root.display()
+                "path '{}' is outside every registered project root",
+                resolved.display()
             ),
             "OUTSIDE_PROJECT_ROOT",
         ))
     }
-}
-
-/// Reject when the resolved cwd is outside ALL authorized project roots. First
-/// checks the default `project_root` via `ensure_within_project_root` (fast
-/// path — single `starts_with`), then falls back to ALL registered project
-/// roots (handles a web client that switched to a non-default project via
-/// per-connection `switch_project` — the boundary follows any registered
-/// project, not just the host default). Returns `None` when within bounds;
-/// otherwise `Some(IpcBody::err(..., "OUTSIDE_PROJECT_ROOT"))`.
-pub(crate) fn ensure_within_project_boundary<T>(
-    resolved: &Path,
-    project_root: &Path,
-    registry: &crate::web::project_registry::ProjectRegistry,
-) -> Option<IpcBody<T>> {
-    ensure_within_project_root::<T>(resolved, project_root)
-        .filter(|_| !registry.is_within_any_registered_root(resolved))
 }
 
 /// Resolve + boundary-check the request `cwd`. On failure returns the
@@ -221,19 +204,9 @@ pub(super) fn resolve_cwd<T>(
             return Err((StatusCode::OK, Json(IpcBody::<T>::err(msg, code))));
         }
     };
-    // 3) project_root containment (web-server security boundary). CAP-1:
-    //    lock-read the RwLock for the duration of the `starts_with` check
-    //    (sync — no `.await` under the guard). The boundary may have been
-    //    rebound by a project switch since the last request. CAP-2: also
-    //    check ALL registered project roots so a web client that switched to
-    //    a non-default project (per-connection `switch_project`) can operate
-    //    on it — the boundary follows any registered project, not just the
-    //    host default.
-    let outside_err = {
-        let project_root = state.project_root.read();
-        ensure_within_project_boundary::<T>(&resolved, &project_root, &state.registry)
-    };
-    if let Some(err) = outside_err {
+    // 3) Registry boundary (web-server security boundary): the path must be
+    //    inside ANY registered, non-archived project (cached canonical roots).
+    if let Some(err) = ensure_within_project_boundary::<T>(&resolved, &state.registry) {
         return Err((StatusCode::OK, Json(err)));
     }
     Ok(resolved)

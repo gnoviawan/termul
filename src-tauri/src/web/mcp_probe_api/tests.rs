@@ -1,6 +1,5 @@
 use super::*;
 use crate::acp::AcpManager;
-use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::WsRelaySink;
 use crate::web::test_pty_manager;
 use crate::web::ws::HistoryMode;
@@ -31,11 +30,10 @@ fn test_app_with(allow_remote_writes: bool, shared_live_writes_denied: bool) -> 
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&std::env::temp_dir()),
         registry_persistence: None,
         projects_file: None,
         history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),

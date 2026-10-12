@@ -10,7 +10,7 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 /// Outbound frame on a connection's write loop (event or reply).
-pub(super) enum Outbound {
+pub(crate) enum Outbound {
     /// A sequenced event (server→client push).
     Event(SequencedEvent),
     /// A reply to a client request.
@@ -170,7 +170,8 @@ where
     let web_auth = state.web_auth.clone();
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let subscribed_clients = Arc::new(tokio::sync::Mutex::new(Vec::<(String, ClientId)>::new()));
-    let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed_clients));
+    let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed_clients))
+        .with_watch_conn(out_tx.clone());
     // Per-connection tracking for `switch_project` (Ask-First resolution): the
     // last agent + session this connection used. `switch_project` reuses the
     // agent rather than auto-spawning; a cold tab (no agent yet) → `NO_AGENT`.
@@ -471,6 +472,9 @@ where
 pub(super) struct ConnectionCleanup {
     relay: Arc<WsRelaySink>,
     subscribed_clients: Arc<tokio::sync::Mutex<Vec<(String, ClientId)>>>,
+    /// This connection's outbound channel, the identity its `watch_project`
+    /// subscriptions are keyed by; released with the rest of the cleanup.
+    watch_conn: Option<mpsc::UnboundedSender<Outbound>>,
     state: Arc<std::sync::atomic::AtomicU8>,
 }
 
@@ -482,7 +486,21 @@ impl ConnectionCleanup {
         Self {
             relay,
             subscribed_clients,
+            watch_conn: None,
             state: Arc::new(std::sync::atomic::AtomicU8::new(0)),
+        }
+    }
+
+    pub(super) fn with_watch_conn(mut self, conn: mpsc::UnboundedSender<Outbound>) -> Self {
+        self.watch_conn = Some(conn);
+        self
+    }
+
+    /// Drop this connection's per-project fs watch subscriptions (sync; safe
+    /// from `Drop` outside a runtime).
+    fn release_watches(&self) {
+        if let Some(conn) = &self.watch_conn {
+            self.relay.fs_watches().unsubscribe_all(conn);
         }
     }
 
@@ -494,6 +512,7 @@ impl ConnectionCleanup {
         {
             return;
         }
+        self.release_watches();
         let relay = Arc::clone(&self.relay);
         let subscribed_clients = Arc::clone(&self.subscribed_clients);
         let state = Arc::clone(&self.state);
@@ -514,6 +533,7 @@ impl Drop for ConnectionCleanup {
         {
             return;
         }
+        self.release_watches();
         let relay = Arc::clone(&self.relay);
         let subscribed_clients = Arc::clone(&self.subscribed_clients);
         let state = Arc::clone(&self.state);

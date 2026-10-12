@@ -796,7 +796,7 @@ fn web_canvas_app(pool: Option<Arc<CanvasDaemonPool>>) -> Router {
 }
 
 /// Sub-router app whose doc-path validation boundary is rooted at `root`
-/// (canonicalized like the production `AppState.project_root`).
+/// (registered as the one project, like the registry-backed production boundary).
 fn web_canvas_app_with_boundary(
     pool: Option<Arc<CanvasDaemonPool>>,
     root: &std::path::Path,
@@ -806,8 +806,7 @@ fn web_canvas_app_with_boundary(
         pool,
         web_auth: None,
         boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
-            project_root: Arc::new(parking_lot::RwLock::new(root)),
-            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&root),
         }),
     })
 }

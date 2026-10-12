@@ -67,6 +67,7 @@ mod relay;
 mod sessions;
 mod store;
 mod subscribe;
+mod watch;
 
 // Handler submodules expose their items as `pub(super)`; these private
 // glob re-exports keep bare-name lookups working for sibling submodules and
@@ -80,9 +81,11 @@ use relay::*;
 use sessions::*;
 use store::*;
 use subscribe::*;
+use watch::*;
 
 // The wire-contract `pub` surface stays reachable at `web::ws::*`.
 pub use relay::{ws_upgrade, AUTH_REQUIRED_TYPE, WS_BATCH_TYPE};
+pub(crate) use relay::Outbound;
 
 // ---------------------------------------------------------------------------
 // Sequenced event — the wire envelope (AC2 + AC3)
@@ -555,29 +558,6 @@ pub struct AppState {
     /// sets this `false` (its `--allow-remote-writes` opt-in is the
     /// admission path there). Closes the cloudflared loopback bypass.
     pub shared_live_writes_denied: bool,
-    /// PR-S4 / CAP-1: the project-root boundary for the routes that enforce it
-    /// (`/git/*`, `/skills`, `/search/content` via
-    /// `git_api::ensure_within_project_boundary`). The `/fs/*` routes are
-    /// intentionally NOT confined to this root (ADR-007 breadth); they reject
-    /// only `..` traversal (`PATH_TRAVERSAL`), not paths outside the root.
-    /// On the desktop shared-live path it is
-    /// derived from the `ProjectRegistry`'s default (active) project at start,
-    /// falling back to the user home dir when the registry is empty or its
-    /// default project path is invalid (fails canonicalization); on the
-    /// standalone `termul-server` path it comes from
-    /// `ServerConfig::project_root` (the `--project-root` CLI flag or the
-    /// env/home default).
-    ///
-    /// **CAP-1 (live rebind):** wrapped in `Arc<parking_lot::RwLock<PathBuf>>`
-    /// so switching the active project (via `remote_sync_projects` /
-    /// `set_default_project`) updates the boundary in place without a server
-    /// restart. The same `Arc` handle is registered with the
-    /// `ProjectRegistry` (see `set_project_root_handle`) so the registry's
-    /// `set` / `set_default_project` mutators recompute the canonical path
-    /// from the new default and write it here. Read sites lock-read the guard
-    /// for the duration of the `starts_with` containment check (no `.await`
-    /// under the guard).
-    pub project_root: Arc<parking_lot::RwLock<std::path::PathBuf>>,
     /// Pending MCP OAuth flows keyed by server URL. Used by the web OAuth
     /// callback route to complete the token exchange after the browser
     /// redirect. The desktop path doesn't use this (it runs the full flow

@@ -16,7 +16,7 @@ use crate::web::ws::AppState;
 pub(crate) const MAX_REGISTRY_BYTES: usize = 1024 * 1024;
 pub(crate) const FILE_NAME: &str = "mcp-servers.json";
 
-/// Resolve `{project_root}/.termul/mcp-servers.json`.
+/// Resolve `{default_project_root}/.termul/mcp-servers.json`.
 ///
 /// Shared by the web `PUT /mcp-servers` handler and the desktop
 /// `remote_sync_mcp_registry` Tauri command so the desktop→project-file sync
@@ -26,9 +26,11 @@ pub(crate) fn registry_path(project_root: &Path) -> PathBuf {
 }
 
 pub async fn get(State(state): State<AppState>) -> Json<IpcBody<Value>> {
-    // CAP-1: lock-read the live project_root so the MCP registry file
-    // (.termul/mcp-servers.json) follows the active project on a switch.
-    let project_root = state.project_root.read().clone();
+    // Interim bridge: the MCP registry file lives under the registry's default
+    // project (per-project MCP naming is a later story).
+    let Some(project_root) = state.registry.default_canonical_root() else {
+        return Json(IpcBody::ok(Value::Array(Vec::new())));
+    };
     let path = registry_path(&project_root);
     match fs::read(&path).await {
         Ok(bytes) if bytes.len() > MAX_REGISTRY_BYTES => Json(IpcBody::err(
@@ -68,7 +70,7 @@ pub async fn put(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(value): Json<Value>,
 ) -> Json<IpcBody<()>> {
-    // F-004: this route writes {project_root}/.termul/mcp-servers.json — a
+    // F-004: this route writes {default_project_root}/.termul/mcp-servers.json — a
     // host-state mutation that also defines MCP stdio commands the host later
     // spawns. It must carry the SAME `check_local_only` guard as every other
     // mutation route (fs/git writes, workspace, /acp/install, /projects/*):
@@ -106,8 +108,14 @@ pub async fn put(
         }
     };
 
-    // CAP-1: lock-read the live project_root (follows the active project).
-    let project_root = state.project_root.read().clone();
+    // Interim bridge: write under the registry's default project.
+    let Some(project_root) = state.registry.default_canonical_root() else {
+        tracing::warn!("MCP registry write rejected: no default project");
+        return Json(IpcBody::err(
+            "No default project available for the MCP registry",
+            "NO_ACTIVE_PROJECT_ROOT",
+        ));
+    };
     let path = registry_path(&project_root);
     let write_path = path.clone();
     let write_result =

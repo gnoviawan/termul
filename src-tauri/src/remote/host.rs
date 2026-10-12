@@ -353,16 +353,16 @@ impl RemoteServerState {
                 }
             };
 
-        // CAP-1 / Story 1: resolve the project-root boundary for the
-        // shared-live server from the **active project** (the
-        // `ProjectRegistry`'s default-project path), NOT the user home dir.
-        // On a cross-drive setup (profile on C:, project on E:) the home-dir
-        // fallback rejects every `/skills`, `/git/*`, and `/search/content`
-        // probe for the real project with `OUTSIDE_PROJECT_ROOT`. The registry
-        // carries display paths (not canonical forms), so we run the result
-        // through `resolve_and_validate_project_root` so the value stored in
-        // `ServerConfig::project_root` is a canonical absolute path to an
-        // existing directory — exactly like the standalone `termul-server`.
+        // Resolve the seed root for the shared-live server from the registry's
+        // default-project path, NOT the user home dir. The boundary itself is
+        // the project registry (any registered project); this root only seeds
+        // one registered project when the registry is still empty (the first
+        // renderer project sync replaces it), so a freshly started host does
+        // not reject everything. The registry carries display paths (not
+        // canonical forms), so we run the result through
+        // `resolve_and_validate_project_root` so `ServerConfig::project_root`
+        // is a canonical absolute path to an existing directory — exactly like
+        // the standalone `termul-server`.
         //
         // Fallback chain:
         // 1. Registry default project path → canonicalize.
@@ -372,7 +372,7 @@ impl RemoteServerState {
         // A transient canonicalization failure on the registry default (deleted
         // between sync and start) falls through to the home fallback rather
         // than refusing to start — the operator can still re-sync the registry
-        // and rebind live. A `warn!` is logged so the operator notices.
+        // and sync again. A `warn!` is logged so the operator notices.
         let project_root = {
             // 1. Try the registry's default-project path first.
             let from_registry = registry.default_project_path().and_then(|p| {
@@ -400,8 +400,8 @@ impl RemoteServerState {
                         .to_string()
                 })?;
                 warn!(
-                    "shared-live started with no usable registry default; project_root \
-                     fell back to home ({}). /skills, /git/*, /search/content will \
+                    "shared-live started with no usable registry default; seed root \
+                     fell back to home ({}). /skills, /git/*, /search/* will \
                      reject any project outside this tree until a project is synced.",
                     raw_root.display()
                 );

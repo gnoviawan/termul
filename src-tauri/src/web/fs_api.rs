@@ -277,8 +277,8 @@ pub(super) fn check_local_only<T>(
 
 /// Containment check for remote peers admitted via `--allow-remote-writes`.
 /// Loopback callers keep the ADR-007 breadth (any path); a non-loopback peer
-/// admitted by the opt-in is confined to `state.project_root` (the
-/// registered project boundary). Returns `Some(IpcBody::err(...))` with
+/// admitted by the opt-in is confined to the registered project roots
+/// (inside ANY registered, non-archived project). Returns `Some(IpcBody::err(...))` with
 /// `OUTSIDE_PROJECT_ROOT` when the remote peer targets a path outside the
 /// boundary; `None` otherwise (loopback, or remote-within-boundary).
 /// `resolved` must already be canonicalized by `resolve_request_path`.
@@ -290,8 +290,7 @@ pub(super) fn ensure_remote_within_project_root<T>(
     if peer.ip().is_loopback() {
         return None;
     }
-    let project_root = state.project_root.read();
-    crate::web::git_api::ensure_within_project_root::<T>(resolved, &project_root)
+    crate::web::git_api::ensure_within_project_boundary::<T>(resolved, &state.registry)
 }
 
 /// Return the file extension (including the leading dot) or `None` for files

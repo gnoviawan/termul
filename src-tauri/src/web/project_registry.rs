@@ -14,12 +14,18 @@
 //! start with on their initial `GET /projects`. It is NOT "whoever switched
 //! last": a per-client `switch_project` updates only the requesting
 //! connection's `current_project` (no broadcast, no persistence). The default
-//! changes only via `set_default_project` (explicit) or `remote_sync_projects`
-//! (desktop-hosted push — the desktop user IS the host operator, so their
-//! active selection IS the default for new clients).
+//! changes only via `set_default_project` (an explicit user action). Desktop
+//! navigation never pushes a default: `remote_sync_projects` mirrors the
+//! project list and keeps the host's existing default when it is still valid.
+//!
+//! # Boundary
+//!
+//! The web fs/git/worktree/search/skills/canvas boundary is "inside any
+//! registered, non-archived project". The registry caches each project's
+//! canonical root (rebuilt after every mutation) so a request never
+//! canonicalizes every project.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -27,6 +33,9 @@ use serde::{Deserialize, Serialize};
 use agent_client_protocol::schema::v1::McpServer;
 
 use crate::acp::{FileProjectRegistry, VfsRoot};
+
+/// Id of the project [`ProjectRegistry::seed_root_if_empty`] registers.
+pub const SEEDED_PROJECT_ID: &str = "default";
 
 /// A single project's summary as exposed to the web/remote client.
 ///
@@ -95,6 +104,16 @@ struct RegistryData {
     default_project_id: Option<String>,
 }
 
+/// A project's canonical root as cached for boundary checks. `canonical` is
+/// `None` while the directory cannot be resolved (deleted/moved); such roots
+/// are retried lazily on each check so a directory created later still counts.
+#[derive(Debug, Clone)]
+struct CachedRoot {
+    project_id: String,
+    raw: String,
+    canonical: Option<PathBuf>,
+}
+
 /// In-memory project registry shared by VPS and desktop-hosted web modes.
 ///
 /// `Arc<ProjectRegistry>` is shared between the router (read path + switch
@@ -102,23 +121,16 @@ struct RegistryData {
 /// `remote_server_stop` (clear). All mutation is behind a single
 /// `parking_lot::Mutex` so a renderer sync and a `/projects` read never race.
 ///
-/// **CAP-1 (live project_root rebind):** the registry also holds an optional
-/// `Arc<RwLock<PathBuf>>` handle — the *same* `Arc` `AppState.project_root`
-/// owns. `serve_router` / `router` registers it via `set_project_root_handle`
-/// after constructing `AppState`. The `set` / `set_default_project` mutators
-/// then call `rebind_project_root`, which reads the new default's path,
-/// canonicalizes it via `resolve_and_validate_project_root`, and writes the
-/// canonical form to the handle — so switching the active project updates the
-/// containment boundary without a server restart. When no handle is registered
-/// (tests, pre-`serve_router` seed) the rebind is a no-op.
+/// `roots` caches the canonical root of every non-archived project with a
+/// path. Every mutator (`set`/`upsert`/`update`/`remove`/`clear`) rebuilds it
+/// after its change lands, serialized by `roots_rebuild` so the last rebuild
+/// always reflects the latest registry state. Boundary checks only read it.
 #[derive(Default)]
 pub struct ProjectRegistry {
     inner: Mutex<RegistryData>,
     mcp_servers: Mutex<std::collections::HashMap<String, Vec<McpServer>>>,
-    /// CAP-1: the live `project_root` handle shared with `AppState`. `None`
-    /// until `serve_router` / `router` registers it. The `set` /
-    /// `set_default_project` mutators rebind through this handle.
-    project_root_handle: Mutex<Option<Arc<RwLock<PathBuf>>>>,
+    roots: RwLock<Vec<CachedRoot>>,
+    roots_rebuild: Mutex<()>,
 }
 
 impl ProjectRegistry {
@@ -134,10 +146,6 @@ impl ProjectRegistry {
     /// desktop's current non-archived + archived summaries + default id. The
     /// renderer is the source of truth in desktop-hosted mode — a fresh `set`
     /// fully supersedes the prior snapshot.
-    ///
-    /// **CAP-1:** after the mutation lands, rebinds `AppState.project_root`
-    /// (via the registered handle) to the new default's canonical path so the
-    /// containment boundary follows the active project without a restart.
     pub fn set(&self, mut projects: Vec<ProjectSummary>, default_id: Option<String>) {
         for project in &mut projects {
             project.is_default = default_id.as_deref() == Some(project.id.as_str());
@@ -147,7 +155,7 @@ impl ProjectRegistry {
             g.projects = projects;
             g.default_project_id = default_id;
         }
-        self.rebind_project_root();
+        self.rebuild_roots();
     }
     /// Insert or replace a single project summary by `id` in the in-memory
     /// mirror (Option B: web-client project create/update). A root with an
@@ -160,11 +168,9 @@ impl ProjectRegistry {
     /// current default can never clear its flag while `default_project_id`
     /// still points at it. P4 (no dangling default): when the upsert archives
     /// the current default, `default_project_id` is cleared — same posture as
-    /// `update`/`remove`/`load`. When the upserted project remains the
-    /// default (e.g. its path changed), `project_root` is rebound so the
-    /// containment boundary follows the active project.
+    /// `update`/`remove`/`load`.
     pub fn upsert(&self, project: ProjectSummary) {
-        let rebind = {
+        {
             let mut g = self.inner.lock();
             if let Some(existing) = g.projects.iter_mut().find(|p| p.id == project.id) {
                 *existing = project;
@@ -181,27 +187,27 @@ impl ProjectRegistry {
             for p in &mut g.projects {
                 p.is_default = default_id.as_deref() == Some(p.id.as_str());
             }
-            g.default_project_id = default_id.clone();
-            default_id.is_some()
-        };
-        if rebind {
-            self.rebind_project_root();
+            g.default_project_id = default_id;
         }
+        self.rebuild_roots();
     }
 
     /// Remove a project summary by `id` from the in-memory mirror. Clears the
     /// default when it referenced the removed project (P4: no dangling
     /// default). Returns `true` when a project was removed.
     pub fn remove(&self, project_id: &str) -> bool {
-        let mut g = self.inner.lock();
-        let before = g.projects.len();
-        g.projects.retain(|p| p.id != project_id);
-        if g.projects.len() == before {
-            return false;
+        {
+            let mut g = self.inner.lock();
+            let before = g.projects.len();
+            g.projects.retain(|p| p.id != project_id);
+            if g.projects.len() == before {
+                return false;
+            }
+            if g.default_project_id.as_deref() == Some(project_id) {
+                g.default_project_id = None;
+            }
         }
-        if g.default_project_id.as_deref() == Some(project_id) {
-            g.default_project_id = None;
-        }
+        self.rebuild_roots();
         true
     }
 
@@ -215,22 +221,25 @@ impl ProjectRegistry {
         color: Option<String>,
         is_archived: Option<bool>,
     ) -> bool {
-        let mut g = self.inner.lock();
-        let Some(project) = g.projects.iter_mut().find(|p| p.id == project_id) else {
-            return false;
-        };
-        if let Some(name) = name {
-            project.name = name;
+        {
+            let mut g = self.inner.lock();
+            let Some(project) = g.projects.iter_mut().find(|p| p.id == project_id) else {
+                return false;
+            };
+            if let Some(name) = name {
+                project.name = name;
+            }
+            if let Some(color) = color {
+                project.color = color;
+            }
+            if let Some(is_archived) = is_archived {
+                project.is_archived = is_archived;
+            }
+            if project.is_archived && g.default_project_id.as_deref() == Some(project_id) {
+                g.default_project_id = None;
+            }
         }
-        if let Some(color) = color {
-            project.color = color;
-        }
-        if let Some(is_archived) = is_archived {
-            project.is_archived = is_archived;
-        }
-        if project.is_archived && g.default_project_id.as_deref() == Some(project_id) {
-            g.default_project_id = None;
-        }
+        self.rebuild_roots();
         true
     }
 
@@ -277,34 +286,25 @@ impl ProjectRegistry {
     /// Called by the explicit `set_default_project` operation (Tauri command +
     /// WS request + HTTP route). Returns `false` when the target is unknown,
     /// archived, or pathless (not switchable) — the caller replies `NOT_FOUND`.
-    ///
-    /// **CAP-1:** on success, rebinds `AppState.project_root` (via the
-    /// registered handle) to the new default's canonical path so the
-    /// containment boundary follows the active project without a restart.
+    /// Only the default pointer moves — the boundary is the set of registered
+    /// roots, which this does not change.
     pub fn set_default_project(&self, project_id: &str) -> bool {
-        let ok = {
-            let mut g = self.inner.lock();
-            let valid = g.projects.iter().any(|p| {
-                p.id == project_id
-                    && !p.is_archived
-                    && p.path
-                        .as_deref()
-                        .is_some_and(|path| !path.trim().is_empty())
-            });
-            if !valid {
-                false
-            } else {
-                g.default_project_id = Some(project_id.to_string());
-                for project in &mut g.projects {
-                    project.is_default = project.id == project_id;
-                }
-                true
-            }
-        };
-        if ok {
-            self.rebind_project_root();
+        let mut g = self.inner.lock();
+        let valid = g.projects.iter().any(|p| {
+            p.id == project_id
+                && !p.is_archived
+                && p.path
+                    .as_deref()
+                    .is_some_and(|path| !path.trim().is_empty())
+        });
+        if !valid {
+            return false;
         }
-        ok
+        g.default_project_id = Some(project_id.to_string());
+        for project in &mut g.projects {
+            project.is_default = project.id == project_id;
+        }
+        true
     }
 
     /// Resolve a project id → its cwd (`path`), or `None` when the project is
@@ -358,14 +358,56 @@ impl ProjectRegistry {
         ancestor.map(|(_, id)| id)
     }
 
+    /// Seed one registered project at `root` (also the default) when the
+    /// registry is empty, so the registry-only boundary does not reject every
+    /// request on a standalone `--project-root` server or a freshly started
+    /// desktop host that has not received its project list yet. Returns
+    /// `true` when a project was seeded; a non-empty registry is left alone.
+    pub fn seed_root_if_empty(&self, root: &Path) -> bool {
+        if !self.is_empty() {
+            return false;
+        }
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Project".to_string());
+        let id = SEEDED_PROJECT_ID.to_string();
+        self.set(
+            vec![ProjectSummary {
+                id: id.clone(),
+                name,
+                color: "blue".to_string(),
+                path: Some(root.to_string_lossy().into_owned()),
+                is_archived: false,
+                is_default: true,
+            }],
+            Some(id),
+        );
+        tracing::info!(root = %root.display(), "seeded one registered project from the configured project root");
+        true
+    }
+
+    /// Test fixture: a shared registry with `root` registered as the one
+    /// (default) project, i.e. the boundary an `AppState` rooted at `root`
+    /// used to have.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn seeded_for_test(root: &Path) -> std::sync::Arc<Self> {
+        let registry = std::sync::Arc::new(Self::new());
+        registry.seed_root_if_empty(root);
+        registry
+    }
+
     /// Clear the mirror (called on `remote_server_stop` so a stale list does
-    /// not linger after the server is off). Idempotent. Does NOT trigger a
-    /// `project_root` rebind — the server is stopping; the boundary is
-    /// re-established on the next `serve_router` start.
+    /// not linger after the server is off). Idempotent.
     pub fn clear(&self) {
-        let mut g = self.inner.lock();
-        *g = RegistryData::default();
-        self.mcp_servers.lock().clear();
+        {
+            let mut g = self.inner.lock();
+            *g = RegistryData::default();
+            self.mcp_servers.lock().clear();
+        }
+        self.rebuild_roots();
     }
 
     /// Number of projects currently mirrored (test helper / diagnostics).
@@ -380,60 +422,51 @@ impl ProjectRegistry {
         self.len() == 0
     }
 
-    /// Check whether a canonical `path` is within ANY registered (non-archived)
-    /// project root. Used by the operation containment check
-    /// (`ensure_within_project_boundary`) so that a web client that switched to
-    /// a non-default project (per-connection `switch_project`) can still run
-    /// git/skills/search operations — the boundary follows any registered
-    /// project, not just the host default.
+    /// Check whether a canonical `path` is within ANY registered
+    /// (non-archived) project root. This is the single containment boundary
+    /// for the web fs/git/worktree/search/skills/canvas routes.
     ///
-    /// Collects display paths under a short lock, then canonicalizes each
-    /// outside the lock (sync fs call). Paths that fail to canonicalize
-    /// (deleted/moved) are silently skipped — they cannot match a live request.
+    /// Reads the cached canonical roots (no per-call canonicalize of every
+    /// project). Only roots that could not be resolved at the last rebuild
+    /// (deleted/moved directories) are retried here, so a directory that
+    /// appears later is accepted without a registry mutation.
     #[must_use]
-    pub fn is_within_any_registered_root(&self, path: &std::path::Path) -> bool {
-        let paths: Vec<String> = {
-            let g = self.inner.lock();
-            g.projects
-                .iter()
-                .filter(|p| !p.is_archived)
-                .filter_map(|p| p.path.as_deref().map(|s| s.trim().to_string()))
-                .filter(|s| !s.is_empty())
-                .collect()
-        };
-        for raw in paths {
-            if let Ok(canonical) = std::fs::canonicalize(&raw) {
-                if path.starts_with(&canonical) {
-                    return true;
-                }
-            }
-        }
-        false
+    pub fn is_within_any_registered_root(&self, path: &Path) -> bool {
+        self.roots.read().iter().any(|root| match &root.canonical {
+            Some(canonical) => path.starts_with(canonical),
+            None => std::fs::canonicalize(&root.raw).is_ok_and(|c| path.starts_with(c)),
+        })
     }
 
-    // ---- CAP-1: live project_root rebind ----
+    /// Canonical root of a registered, non-archived project, or `None` when
+    /// the id is unknown/archived/pathless or its directory cannot be
+    /// resolved. Used by the per-project fs watch.
+    #[must_use]
+    pub fn canonical_root(&self, project_id: &str) -> Option<PathBuf> {
+        let root = self
+            .roots
+            .read()
+            .iter()
+            .find(|r| r.project_id == project_id)
+            .cloned()?;
+        root.canonical
+            .or_else(|| std::fs::canonicalize(&root.raw).ok())
+    }
 
-    /// Register the `Arc<RwLock<PathBuf>>` handle that `AppState.project_root`
-    /// owns. Called once by `serve_router` / `router` after `AppState` is
-    /// built (the initial canonical `project_root` is already correct — the
-    /// host computed it from this registry's default, or the standalone from
-    /// its CLI arg). Subsequent `set` / `set_default_project` mutations
-    /// recompute the canonical path from the new default and write it here via
-    /// `rebind_project_root`. Safe to call multiple times (a restart builds a
-    /// new `AppState` + re-registers) — last handle wins.
-    pub fn set_project_root_handle(&self, handle: Arc<RwLock<PathBuf>>) {
-        *self.project_root_handle.lock() = Some(handle);
+    /// Canonical root of the host default project, or `None` when there is no
+    /// default (or its directory cannot be resolved). Interim bridge for the
+    /// MCP server/OAuth files, which are still host-wide until per-project
+    /// naming lands.
+    #[must_use]
+    pub fn default_canonical_root(&self) -> Option<PathBuf> {
+        let default_id = self.inner.lock().default_project_id.clone()?;
+        self.canonical_root(&default_id)
     }
 
     /// The default project's cwd `path` (display form, not canonicalized), or
     /// `None` when the registry has no default or the default has no path.
-    /// Single-lock read of `default_project_id` + the matching summary's
-    /// `path`. `rebind_project_root` canonicalizes this via
-    /// `resolve_and_validate_project_root`. Also used by
-    /// `RemoteServerState::start` to derive the initial `project_root` from
-    /// the active project (CAP-1). `pub(crate)` — the returned path is a
-    /// display form (not canonicalized); callers MUST run it through
-    /// `resolve_and_validate_project_root` before using it as a boundary.
+    /// Callers that need a boundary-grade path MUST canonicalize it through
+    /// `resolve_and_validate_project_root`.
     #[must_use]
     pub(crate) fn default_project_path(&self) -> Option<String> {
         let g = self.inner.lock();
@@ -445,56 +478,41 @@ impl ProjectRegistry {
             .filter(|p| !p.trim().is_empty())
     }
 
-    /// CAP-1: recompute `AppState.project_root` from the current default
-    /// project's path and write the canonical form to the registered handle.
-    /// Called by `set` / `set_default_project` after the mutation lands.
-    ///
-    /// - No handle registered (tests, pre-`serve_router` seed) → no-op.
-    /// - No default / empty path → `warn!` + keep the prior boundary (do NOT
-    ///   widen to home mid-run; only the START path falls back to home).
-    /// - Canonicalization fails (deleted/moved path) → `warn!` + keep the
-    ///   prior boundary (transient failure does not widen the jail).
-    /// - Success → write lock the handle + replace with the canonical path.
-    ///
-    /// The lock is held only across the `starts_with`-style replacement (no
-    /// `.await` under the guard). `resolve_and_validate_project_root` is a
-    /// sync fs canonicalize — called outside any registry lock.
-    fn rebind_project_root(&self) {
-        // Clone the Arc out of the handle lock, then drop the handle lock so
-        // the fs canonicalize below never runs under a registry mutex.
-        let handle = self.project_root_handle.lock().clone();
-        let Some(handle) = handle else {
-            // No handle registered yet (test / pre-serve seed) — nothing to
-            // rebind. This is the normal path for `seed_from_file` + unit
-            // tests that construct AppState directly without calling
-            // `set_project_root_handle`.
-            return;
+    /// Rebuild the cached canonical roots from the current registry state.
+    /// Snapshots the paths under the registry lock, canonicalizes outside it,
+    /// and serializes concurrent rebuilds so the last one reflects the latest
+    /// state.
+    fn rebuild_roots(&self) {
+        let _serial = self.roots_rebuild.lock();
+        let entries: Vec<(String, String)> = {
+            let g = self.inner.lock();
+            g.projects
+                .iter()
+                .filter(|p| !p.is_archived)
+                .filter_map(|p| {
+                    let raw = p.path.as_deref()?.trim();
+                    (!raw.is_empty()).then(|| (p.id.clone(), raw.to_string()))
+                })
+                .collect()
         };
-        let Some(path) = self.default_project_path() else {
-            tracing::warn!(
-                "project_root rebind skipped: registry has no default project path; \
-                 keeping the prior boundary"
-            );
-            return;
-        };
-        match crate::web::config::resolve_and_validate_project_root(PathBuf::from(&path).as_path())
-        {
-            Ok(canonical) => {
-                let mut g = handle.write();
-                *g = canonical.clone();
-                tracing::info!(
-                    project_root = %canonical.display(),
-                    "project_root rebound to default project path"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "project_root rebind failed for '{}': {}; keeping the prior boundary",
-                    path,
-                    e
-                );
-            }
-        }
+        let roots = entries
+            .into_iter()
+            .map(|(project_id, raw)| {
+                let canonical = std::fs::canonicalize(&raw).ok();
+                if canonical.is_none() {
+                    tracing::warn!(
+                        project_id = %project_id,
+                        "project root cannot be canonicalized; it is rechecked lazily"
+                    );
+                }
+                CachedRoot {
+                    project_id,
+                    raw,
+                    canonical,
+                }
+            })
+            .collect();
+        *self.roots.write() = roots;
     }
 }
 

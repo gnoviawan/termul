@@ -142,17 +142,12 @@ pub async fn content(
     // an `.await` would make the handler future `!Send`, failing axum's
     // `Handler` trait). CAP-2: also check all registered project roots so a
     // web client that switched to a non-default project can search.
-    let outside_err = {
-        let project_root = state.project_root.read();
-        crate::web::git_api::ensure_within_project_boundary::<FileSearchResponse>(
-            &canonical_root,
-            &project_root,
-            &state.registry,
-        )
-    };
-    if let Some(err) = outside_err {
+    if let Some(err) = crate::web::git_api::ensure_within_project_boundary::<FileSearchResponse>(
+        &canonical_root,
+        &state.registry,
+    ) {
         tracing::warn!(
-            "[Security] Content search rejected: root '{}' outside project_root",
+            "[Security] Content search rejected: root '{}' outside every registered project",
             canonical_root.display()
         );
         return (StatusCode::OK, Json(err));
@@ -369,19 +364,13 @@ pub async fn file_names(
         }
     };
     // Same live-boundary check as `/search/content` (see the comment there):
-    // accepts the default `project_root` or any registered, non-archived
-    // project root; rejects `OUTSIDE_PROJECT_ROOT` otherwise.
-    let outside_err = {
-        let project_root = state.project_root.read();
-        ensure_within_project_boundary::<FileNameSearchResponse>(
-            &canonical_root,
-            &project_root,
-            &state.registry,
-        )
-    };
-    if let Some(err) = outside_err {
+    // accepts any registered, non-archived project root; rejects
+    // `OUTSIDE_PROJECT_ROOT` otherwise.
+    if let Some(err) =
+        ensure_within_project_boundary::<FileNameSearchResponse>(&canonical_root, &state.registry)
+    {
         tracing::warn!(
-            "[Security] File name search rejected: root outside project_root (len {})",
+            "[Security] File name search rejected: root outside every registered project (len {})",
             canonical_root.display().to_string().len()
         );
         return (StatusCode::OK, Json(err));

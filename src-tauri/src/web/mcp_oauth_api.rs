@@ -90,8 +90,11 @@ pub async fn oauth_start(
     // service. Resolve the URL against the persisted MCP server registry
     // (`.termul/mcp-servers.json`) — reject if no enabled HTTP/SSE entry
     // matches.
-    let project_root = state.project_root.read().clone();
-    if !is_authorized_mcp_server_url(&project_root, &request.server_url).await {
+    let authorized = match state.registry.default_canonical_root() {
+        Some(project_root) => is_authorized_mcp_server_url(&project_root, &request.server_url).await,
+        None => false,
+    };
+    if !authorized {
         log::warn!(
             "[mcp-oauth] web flow start rejected: server URL not in authorized registry (url redacted)"
         );
@@ -270,7 +273,7 @@ pub async fn oauth_disconnect(
 }
 
 /// Check whether the given `server_url` matches an enabled HTTP/SSE entry in
-/// the persisted MCP server registry (`{project_root}/.termul/mcp-servers.json`).
+/// the persisted MCP server registry (`{default_project_root}/.termul/mcp-servers.json`).
 /// This prevents a web client from using the OAuth start endpoint to make the
 /// host discover OAuth metadata for an attacker-selected URL.
 async fn is_authorized_mcp_server_url(project_root: &std::path::Path, server_url: &str) -> bool {

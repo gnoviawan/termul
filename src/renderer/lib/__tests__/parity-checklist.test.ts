@@ -2003,21 +2003,24 @@ describe('Web FS watcher parity (#856)', () => {
   const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
   const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
 
-  it('web/fs_watcher watches the project root with notify and re-arms on switch', () => {
+  it('web/fs_watcher is a refcounted per-projectId notify watch hub', () => {
     const watcher = join(root, 'web', 'fs_watcher')
     expect(existsSync(watcher), 'web/fs_watcher module should exist').toBe(true)
     const content = readRustModule(watcher)
     expect(content).toMatch(/recommended_watcher/)
     expect(content).toMatch(/RecursiveMode::Recursive/)
+    expect(content).toMatch(/pub struct FsWatchHub/)
+    expect(content).toMatch(/FsChangedPayload/)
+    expect(content).toMatch(/"fs_changed"/)
   })
 
-  it('web/sink broadcasts the fs_changed agent-level event with a typed payload', () => {
-    const sink = join(root, 'web', 'sink.rs')
-    expect(existsSync(sink), 'web/sink.rs should exist').toBe(true)
-    const content = readFileSync(sink, 'utf-8')
-    expect(content).toMatch(/broadcast_fs_changed/)
-    expect(content).toMatch(/FsChangedPayload/)
-    expect(content).toMatch(/"acp:fs_changed"/)
+  it('ws/watch.rs handles watch_project / unwatch_project and dispatch routes them', () => {
+    const handlers = readFileSync(join(root, 'web', 'ws', 'watch.rs'), 'utf-8')
+    expect(handlers).toMatch(/fn handle_watch_project/)
+    expect(handlers).toMatch(/fn handle_unwatch_project/)
+    const dispatch = readFileSync(join(root, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(/"watch_project"/)
+    expect(dispatch).toMatch(/"unwatch_project"/)
   })
 
   it('web-protocol.types.ts registers fs_changed (event type + reliable tier)', () => {

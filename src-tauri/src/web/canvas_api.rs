@@ -54,7 +54,6 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{any, get, post};
 use axum::Router;
-use parking_lot::RwLock;
 use serde::Deserialize;
 
 use crate::canvas::mcp_proxy;
@@ -77,20 +76,16 @@ pub struct CanvasState {
 /// Project-root boundary for the web doc-path validation on open — the SAME
 /// containment semantics the fs/git routes enforce (`git_api::
 /// ensure_within_project_boundary`): the path is accepted when it is within
-/// the live (rebindable) project root OR any registered project root.
+/// any registered, non-archived project root.
 #[derive(Clone)]
 pub struct CanvasProjectBoundary {
-    /// The same `Arc<RwLock<PathBuf>>` handle `AppState.project_root` owns —
-    /// the boundary follows active-project switches.
-    pub project_root: Arc<RwLock<PathBuf>>,
     pub registry: Arc<ProjectRegistry>,
 }
 
 /// Validate a canvas doc path against the project boundary — mirrors the
 /// fs/git route validation (`fs_api::resolve_request_path` canonicalization +
 /// `git_api::ensure_within_project_boundary` containment): the doc a web
-/// client opens must live inside the live project root or a registered
-/// project root, exactly like every other web fs operation. Returns the
+/// client opens must live inside the registered project root, exactly like every other web fs operation. Returns the
 /// canonicalized, verbatim-stripped doc path on success; a typed
 /// `PATH_VALIDATION_FAILED` pair on rejection. `None` boundary (test
 /// compositions) skips validation and returns the verbatim-stripped path.
@@ -111,16 +106,10 @@ fn validate_doc_path(
     // ancestor-walks for not-yet-existing tails, which then fail at spawn).
     let resolved: PathBuf = crate::web::fs_api::resolve_request_path(Path::new(doc_path))
         .map_err(|(message, code)| failed(format!("{message} (code {code})")))?;
-    // Containment vs the live project root OR any registered root.
-    let outside = {
-        let project_root = boundary.project_root.read();
-        crate::web::git_api::ensure_within_project_boundary::<()>(
-            &resolved,
-            &project_root,
-            &boundary.registry,
-        )
-        .is_some()
-    };
+    // Containment vs any registered, non-archived project root.
+    let outside =
+        crate::web::git_api::ensure_within_project_boundary::<()>(&resolved, &boundary.registry)
+            .is_some();
     if outside {
         return Err(failed(format!(
             "doc path '{}' is outside the project boundary",
