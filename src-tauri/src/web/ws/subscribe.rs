@@ -14,13 +14,29 @@ pub(super) struct SubscribePayload {
     last_seq: Option<u64>,
 }
 
+/// Forward a subscription's events into the connection's outbound queue until
+/// the subscription or the connection ends. Reliable: an event waits for room
+/// (the connection closes if the peer stays full), it is never dropped.
+pub(super) fn spawn_event_forwarder(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<SequencedEvent>,
+    out_tx: OutboundSender,
+) {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if out_tx.enqueue(Outbound::Event(event)).await != EnqueueOutcome::Enqueued {
+                break;
+            }
+        }
+    });
+}
+
 /// Wire `subscribe` → [`WsRelaySink::subscribe`] + forward replay/live to this connection.
 pub(super) async fn handle_subscribe(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    out_tx: &mpsc::UnboundedSender<Outbound>,
-    subscribed_clients: &mut Vec<(String, ClientId)>,
+    out_tx: &OutboundSender,
+    subscribed_clients: &Subscriptions,
 ) -> WsReply {
     let parsed: SubscribePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -55,13 +71,9 @@ pub(super) async fn handle_subscribe(
     // Do not drop the currently-live subscription until the replacement is
     // successfully registered. This preserves pending-permission ownership on
     // stale/failure and lets grace cancellation happen only after resubscribe.
-    let prior_clients: Vec<ClientId> = subscribed_clients
-        .iter()
-        .filter(|(sid, _)| sid == &parsed.session_id)
-        .map(|(_, client_id)| *client_id)
-        .collect();
+    let prior_clients = subscribed_clients.clients_for(&parsed.session_id);
 
-    let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
+    let (client_id, rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
     match replay {
         ReplayResult::NotFound => {
             // Durable failure record for the desktop log sink (ws.rs runs on
@@ -83,29 +95,16 @@ pub(super) async fn handle_subscribe(
             )
         }
         ReplayResult::Ok(replayed) => {
-            subscribed_clients.retain(|(sid, cid)| {
-                if sid == &parsed.session_id && prior_clients.contains(cid) {
-                    relay.unsubscribe(sid, *cid);
-                    false
-                } else {
-                    true
-                }
-            });
-            subscribed_clients.push((parsed.session_id.clone(), client_id));
+            for prior in subscribed_clients.replace(&parsed.session_id, &prior_clients, client_id) {
+                relay.unsubscribe(&parsed.session_id, prior);
+            }
             if let Some(rendezvous) = relay.rendezvous() {
                 rendezvous.cancel_disconnect_grace(&parsed.session_id);
             }
             if let Some(question_rendezvous) = relay.question_rendezvous() {
                 question_rendezvous.cancel_disconnect_grace(&parsed.session_id);
             }
-            let forward_tx = out_tx.clone();
-            tokio::spawn(async move {
-                while let Some(evt) = rx.recv().await {
-                    if forward_tx.send(Outbound::Event(evt)).is_err() {
-                        break;
-                    }
-                }
-            });
+            spawn_event_forwarder(rx, out_tx.clone());
             WsReply::ok(
                 id,
                 Some(json!({

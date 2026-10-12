@@ -30,6 +30,7 @@ use crate::canvas::pool::CanvasDaemonPool;
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::catalog_api;
+use crate::web::connection_runtime::ConnectionRuntime;
 use crate::web::fs_api;
 use crate::web::git_api;
 use crate::web::git_diff_stat_api;
@@ -90,6 +91,10 @@ use super::assets;
 /// sub-router (see `web::canvas_api`). `None` (the desktop shared-live
 /// host) degrades the routes to typed 502 `DAEMON_DOWN` — the desktop
 /// mounts its MCP proxy on the agentation server instead (AD-8).
+///
+/// `connections` is the host's [`ConnectionRuntime`]: the shutdown handle every
+/// upgraded `/ws` + `/terminal/ws` socket joins, and the outbound overflow
+/// tolerance (AD-19).
 #[allow(clippy::too_many_arguments)]
 pub fn router(
     acp: Arc<AcpManager>,
@@ -113,6 +118,7 @@ pub fn router(
     web_auth: Option<Arc<WebAuth>>,
     canvas_pool: Option<Arc<CanvasDaemonPool>>,
     allowed_origins: OriginPolicy,
+    connections: ConnectionRuntime,
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
@@ -339,6 +345,7 @@ pub fn router(
         )),
         oauth_base_url,
         web_auth,
+        connections,
     };
     // Origin check is the outer layer so `/ws` and `/terminal/ws` (public to
     // the token gate; they authenticate after the upgrade) are covered, and
@@ -622,6 +629,7 @@ pub fn router_with_static(
             )),
             oauth_base_url: "http://127.0.0.1".to_string(),
             web_auth,
+            connections: ConnectionRuntime::default(),
         }
     })
 }

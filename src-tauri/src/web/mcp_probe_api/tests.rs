@@ -47,6 +47,7 @@ fn test_app_with(allow_remote_writes: bool, shared_live_writes_denied: bool) -> 
         web_auth: None,
         allow_remote_writes,
         shared_live_writes_denied,
+        connections: Default::default(),
     };
     axum::Router::new()
         .route("/mcp-servers/probe", post(super::probe))

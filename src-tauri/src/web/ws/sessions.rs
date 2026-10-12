@@ -372,8 +372,8 @@ pub(super) async fn handle_recover_session_snapshot(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    out_tx: &mpsc::UnboundedSender<Outbound>,
-    subscribed_clients: &mut Vec<(String, ClientId)>,
+    out_tx: &OutboundSender,
+    subscribed_clients: &Subscriptions,
     history_mode: HistoryMode,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {
@@ -401,12 +401,8 @@ pub(super) async fn handle_recover_session_snapshot(
     if parsed.session_id.is_empty() {
         return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
     }
-    let prior_clients: Vec<ClientId> = subscribed_clients
-        .iter()
-        .filter(|(sid, _)| sid == &parsed.session_id)
-        .map(|(_, client_id)| *client_id)
-        .collect();
-    let (client_id, mut rx, events, watermark) =
+    let prior_clients = subscribed_clients.clients_for(&parsed.session_id);
+    let (client_id, rx, events, watermark) =
         match relay.subscribe_snapshot(&parsed.session_id).await {
             Ok(result) => result,
             Err(error) => {
@@ -431,29 +427,16 @@ pub(super) async fn handle_recover_session_snapshot(
                 );
             }
         };
-    subscribed_clients.retain(|(sid, client_id)| {
-        if sid == &parsed.session_id && prior_clients.contains(client_id) {
-            relay.unsubscribe(sid, *client_id);
-            false
-        } else {
-            true
-        }
-    });
-    subscribed_clients.push((parsed.session_id.clone(), client_id));
+    for prior in subscribed_clients.replace(&parsed.session_id, &prior_clients, client_id) {
+        relay.unsubscribe(&parsed.session_id, prior);
+    }
     if let Some(rendezvous) = relay.rendezvous() {
         rendezvous.cancel_disconnect_grace(&parsed.session_id);
     }
     if let Some(question_rendezvous) = relay.question_rendezvous() {
         question_rendezvous.cancel_disconnect_grace(&parsed.session_id);
     }
-    let forward_tx = out_tx.clone();
-    tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            if forward_tx.send(Outbound::Event(event)).is_err() {
-                break;
-            }
-        }
-    });
+    spawn_event_forwarder(rx, out_tx.clone());
     WsReply::ok(
         id,
         Some(json!({
@@ -541,8 +524,8 @@ pub(super) async fn handle_open_persisted_session(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    out_tx: &mpsc::UnboundedSender<Outbound>,
-    subscribed_clients: &mut Vec<(String, ClientId)>,
+    out_tx: &OutboundSender,
+    subscribed_clients: &Subscriptions,
     history_mode: HistoryMode,
 ) -> WsReply {
     if history_mode != HistoryMode::Server {

@@ -28,12 +28,12 @@ use std::time::Duration;
 
 use notify::{recommended_watcher, RecursiveMode, Result as NotifyResult, Watcher};
 use parking_lot::Mutex;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
 
 use crate::web::project_registry::ProjectRegistry;
-use crate::web::ws::{Outbound, SequencedEvent};
+use crate::web::ws::{EnqueueOutcome, Outbound, OutboundSender, SequencedEvent};
 
 /// How long to batch raw notify events before broadcasting one
 /// `fs_changed` frame. A save, a build, and a git checkout each fan dozens
@@ -131,7 +131,7 @@ pub enum WatchError {
 /// watcher task. `generation` lets a finishing task remove only its own entry.
 struct ProjectWatch {
     generation: u64,
-    subscribers: Vec<UnboundedSender<Outbound>>,
+    subscribers: Vec<OutboundSender>,
     cancel: CancellationToken,
     /// `true` while the notify watcher is armed on the project's root (read by
     /// `FsWatchHub::wait_armed`, which tests use to act only once it is live).
@@ -147,6 +147,8 @@ type WatchMap = Arc<Mutex<HashMap<String, ProjectWatch>>>;
 pub struct FsWatchHub {
     watches: WatchMap,
     next_generation: AtomicU64,
+    /// Every project watcher task, so a host stop can await them.
+    tasks: TaskTracker,
 }
 
 impl FsWatchHub {
@@ -158,7 +160,7 @@ impl FsWatchHub {
         &self,
         registry: &Arc<ProjectRegistry>,
         project_id: &str,
-        conn: &UnboundedSender<Outbound>,
+        conn: &OutboundSender,
     ) -> Result<(), WatchError> {
         if registry.canonical_root(project_id).is_none() {
             warn!(
@@ -196,7 +198,7 @@ impl FsWatchHub {
             project_id,
             "[fs-watch] first subscriber; arming project watcher"
         );
-        tokio::spawn(run_project_watch(
+        self.tasks.spawn(run_project_watch(
             project_id.to_string(),
             generation,
             Arc::clone(registry),
@@ -209,7 +211,7 @@ impl FsWatchHub {
 
     /// Remove one connection's subscription. Drops the watcher on the last
     /// unsubscribe. Returns `true` when the connection was subscribed.
-    pub(crate) fn unsubscribe(&self, project_id: &str, conn: &UnboundedSender<Outbound>) -> bool {
+    pub(crate) fn unsubscribe(&self, project_id: &str, conn: &OutboundSender) -> bool {
         let mut watches = self.watches.lock();
         let Some(watch) = watches.get_mut(project_id) else {
             return false;
@@ -232,7 +234,7 @@ impl FsWatchHub {
     /// Remove a closed connection from every project it watches (the
     /// per-connection cleanup hook). Projects left without subscribers drop
     /// their watcher.
-    pub(crate) fn unsubscribe_all(&self, conn: &UnboundedSender<Outbound>) {
+    pub(crate) fn unsubscribe_all(&self, conn: &OutboundSender) {
         let mut watches = self.watches.lock();
         let mut emptied = Vec::new();
         for (project_id, watch) in watches.iter_mut() {
@@ -247,6 +249,24 @@ impl FsWatchHub {
                 info!(project_id = %project_id, "[fs-watch] connection closed; watcher dropped");
             }
         }
+    }
+
+    /// Host stop: cancel every watch still registered and wait up to `bound`
+    /// for the watcher tasks to end (connections that closed already released
+    /// theirs). The hub is shared across host restarts, so it accepts watches
+    /// again afterwards.
+    pub async fn shutdown(&self, bound: Duration) {
+        for (_, watch) in self.watches.lock().drain() {
+            watch.cancel.cancel();
+        }
+        self.tasks.close();
+        if tokio::time::timeout(bound, self.tasks.wait()).await.is_err() {
+            warn!(
+                tasks = self.tasks.len(),
+                "[fs-watch] watcher tasks still running after the drain bound"
+            );
+        }
+        self.tasks.reopen();
     }
 
     /// Wait until `project_id`'s notify watcher is armed (events under the
@@ -306,15 +326,20 @@ fn deliver(
     else {
         return false;
     };
+    // Bounded delivery: a subscriber whose queue is full misses this batch
+    // (the explorer refreshes on the next change) and counts toward its
+    // overflow tolerance; one that is closing is pruned.
     watch.subscribers.retain(|subscriber| {
-        subscriber
-            .send(Outbound::Event(SequencedEvent::new(
-                None,
-                0,
-                "fs_changed",
-                payload.clone(),
-            )))
-            .is_ok()
+        let outcome = subscriber.try_enqueue(Outbound::Event(SequencedEvent::new(
+            None,
+            0,
+            "fs_changed",
+            payload.clone(),
+        )));
+        if outcome == EnqueueOutcome::Full {
+            warn!(project_id, "[fs-watch] subscriber queue full; fs_changed batch dropped");
+        }
+        outcome != EnqueueOutcome::Closed
     });
     if watch.subscribers.is_empty() {
         if let Some(watch) = guard.remove(project_id) {
@@ -405,13 +430,13 @@ async fn run_project_watch(
 /// Tell every subscriber that its watch of `project_id` ended because the
 /// project is no longer watchable (archived, removed, root gone), so the client
 /// can re-request the watch instead of waiting for events that never come.
-fn notify_watch_ended(project_id: &str, subscribers: &[UnboundedSender<Outbound>]) {
+fn notify_watch_ended(project_id: &str, subscribers: &[OutboundSender]) {
     let payload = serde_json::json!({
         "projectId": project_id,
         "reason": "project_unavailable",
     });
     for subscriber in subscribers {
-        let _ = subscriber.send(Outbound::Event(SequencedEvent::new(
+        subscriber.try_enqueue(Outbound::Event(SequencedEvent::new(
             None,
             0,
             "fs_watch_ended",

@@ -1,18 +1,16 @@
 //! Per-connection access state for `/ws`: the capabilities resolved at
-//! `authenticate`, the connection's own `ClientId` (first-wins identity for
-//! ticket answers) and its presence registration.
+//! `authenticate` and the connection's own `ClientId` (first-wins identity for
+//! ticket answers). Plain `Copy` data: request tasks take a copy; the presence
+//! registration lives in `ConnState`.
 
 use super::*;
 use crate::web::capabilities::{ws_request_permitted, Capabilities, CapabilityPolicy};
-use crate::web::presence::PresenceGuard;
 
+#[derive(Debug, Clone, Copy)]
 pub(super) struct ConnectionAccess {
     policy: CapabilityPolicy,
     capabilities: Capabilities,
     connection_id: ClientId,
-    /// Held for the connection's lifetime; dropping it (connection cleanup,
-    /// including an aborted read task) unregisters the device connection.
-    presence: Option<PresenceGuard>,
 }
 
 impl ConnectionAccess {
@@ -22,15 +20,16 @@ impl ConnectionAccess {
             capabilities: Capabilities::none(policy.carrier),
             policy,
             connection_id: ClientId::new(),
-            presence: None,
         }
     }
 
-    /// `authenticate` succeeded: resolve capabilities once and register the
-    /// device connection in presence.
-    pub(super) fn grant(&mut self, identity: &ClientIdentity, relay: &WsRelaySink) {
+    /// `authenticate` succeeded: resolve capabilities once.
+    pub(super) fn grant(&mut self) {
         self.capabilities = self.policy.resolve();
-        self.presence = Some(relay.presence().register(identity, self.policy.carrier));
+    }
+
+    pub(super) fn carrier(&self) -> Carrier {
+        self.policy.carrier
     }
 
     pub(super) fn capabilities(&self) -> Capabilities {

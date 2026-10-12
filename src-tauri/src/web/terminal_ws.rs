@@ -19,19 +19,21 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
 use axum::response::IntoResponse;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::pty::manager::{PtyManager, SpawnOptions};
 use crate::web::capabilities::{
     terminal_request_is_view, Capabilities, CapabilityPolicy, Carrier,
 };
+use crate::web::connection_runtime::{send_going_away, SocketLease};
 use crate::web::presence::PresenceGuard;
 use crate::web::ws::{validate_authenticate_handshake, AppState, ClientIdentity};
 
@@ -57,20 +59,58 @@ pub async fn terminal_ws_upgrade(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| run(socket, state, peer))
+    // Joins the host shutdown before the handler returns, so the host's drain
+    // cannot miss a socket whose upgrade is still completing.
+    let lease = state.connections.shutdown.admit();
+    ws.on_upgrade(move |socket| serve_socket(lease, socket, state, peer))
 }
 
-async fn run(socket: WebSocket, state: AppState, peer: SocketAddr) {
-    let (mut sink, mut stream) = socket.split();
-    let (tx, mut rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
+/// Serve an upgraded socket under its shutdown `lease`: [`run`] until it ends,
+/// or until the host's drain bound forces an abort.
+async fn serve_socket<S>(lease: SocketLease, socket: S, state: AppState, peer: SocketAddr)
+where
+    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message, Error = axum::Error> + Send + 'static,
+{
+    let stop = lease.stop_token();
+    lease.run(run(socket, state, peer, stop)).await;
+}
 
-    let write_task = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            if sink.send(message).await.is_err() {
-                break;
-            }
+/// The write half: forwards queued frames to the socket. A host stop jumps the
+/// queue (`Close(1001)`, bounded by the close drain timeout) and ends the
+/// loop, even while a send to a peer that stopped reading is pending.
+async fn write_loop<K>(mut sink: K, mut rx: mpsc::Receiver<Message>, stop: CancellationToken)
+where
+    K: Sink<Message, Error = axum::Error> + Unpin,
+{
+    loop {
+        let message = tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            message = rx.recv() => match message {
+                Some(message) => message,
+                None => return,
+            },
+        };
+        let sent = tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            sent = sink.send(message) => sent,
+        };
+        if sent.is_err() {
+            return;
         }
-    });
+    }
+    send_going_away(&mut sink).await;
+}
+
+async fn run<S>(socket: S, state: AppState, peer: SocketAddr, stop: CancellationToken)
+where
+    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message, Error = axum::Error> + Send + 'static,
+{
+    let (sink, mut stream) = socket.split();
+    let (tx, rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
+
+    let write_task = tokio::spawn(write_loop(sink, rx, stop.clone()));
 
     // Per-connection authorization: terminal IDs this socket may operate on.
     // Shared with the event-forwarding task so it can see updates.
@@ -133,7 +173,17 @@ async fn run(socket: WebSocket, state: AppState, peer: SocketAddr) {
         client_id,
     };
 
-    while let Some(frame) = stream.next().await {
+    loop {
+        // A host stop ends the loop even while a request is being served; the
+        // write half sends the `Close(1001)`.
+        let frame = tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            frame = stream.next() => match frame {
+                Some(frame) => frame,
+                None => break,
+            },
+        };
         let Ok(message) = frame else { break };
         let Message::Text(text) = message else {
             continue;
@@ -148,7 +198,12 @@ async fn run(socket: WebSocket, state: AppState, peer: SocketAddr) {
         let id = request.id.clone();
         let op_type = request.type_.clone();
         info!("[terminal-ws] request start type={op_type} id={id}");
-        match handle(request, &state, &tx, &mut ctx).await {
+        let handled = tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
+            handled = handle(request, &state, &tx, &mut ctx) => handled,
+        };
+        match handled {
             Ok(data) => {
                 info!("[terminal-ws] request success type={op_type} id={id}");
                 let _ = send_json(&tx, json!({ "id": id, "success": true, "data": data })).await;

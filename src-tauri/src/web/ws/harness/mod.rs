@@ -76,6 +76,7 @@ impl Host {
                 std::collections::HashMap::new(),
             )),
             oauth_base_url: "http://127.0.0.1".to_string(),
+            connections: Default::default(),
         };
         Self { relay, state }
     }

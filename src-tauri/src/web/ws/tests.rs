@@ -2243,6 +2243,7 @@ pub(super) fn ws_test_app_state() -> AppState {
         shared_live_writes_denied: false,
         pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         oauth_base_url: "http://127.0.0.1".to_string(),
+        connections: Default::default(),
     }
 }
 

@@ -142,7 +142,7 @@ pub(super) async fn handle_dispose_ephemeral_session(
     payload: &Value,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
-    subscribed_clients: &mut Vec<(String, ClientId)>,
+    subscribed_clients: &Subscriptions,
 ) -> WsReply {
     let parsed: CloseSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -162,14 +162,9 @@ pub(super) async fn handle_dispose_ephemeral_session(
         .await;
     match result {
         Ok(()) => {
-            subscribed_clients.retain(|(session_id, client_id)| {
-                if session_id == &disposed_session_id.0 {
-                    relay.unsubscribe(session_id, *client_id);
-                    false
-                } else {
-                    true
-                }
-            });
+            for client_id in subscribed_clients.remove_session(&disposed_session_id.0) {
+                relay.unsubscribe(&disposed_session_id.0, client_id);
+            }
             relay.forget_session(&disposed_session_id.0).await;
             WsReply::ok(id, Some(json!({})))
         }

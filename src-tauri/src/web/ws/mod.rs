@@ -34,17 +34,16 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
 use axum::response::IntoResponse;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::acp::config::AgentConfig;
@@ -56,6 +55,7 @@ use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::auth::WebAuth;
 use crate::web::capabilities::{Carrier, CapabilityPolicy};
+use crate::web::connection_runtime::ConnectionRuntime;
 use crate::web::permissions::DEFAULT_PERMISSION_RECONNECT_GRACE;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::{
@@ -92,7 +92,7 @@ use watch::*;
 
 // The wire-contract `pub` surface stays reachable at `web::ws::*`.
 pub use relay::{ws_upgrade, AUTH_REQUIRED_TYPE, WS_BATCH_TYPE};
-pub(crate) use relay::Outbound;
+pub(crate) use relay::{EnqueueOutcome, Outbound, OutboundSender};
 
 // ---------------------------------------------------------------------------
 // Sequenced event — the wire envelope (AC2 + AC3)
@@ -593,6 +593,9 @@ pub struct AppState {
     /// `None` keeps the legacy ungated behavior (accept-any-token
     /// `authenticate`, no `/terminal/ws` connection gate).
     pub web_auth: Option<Arc<WebAuth>>,
+    /// Host shutdown coordination + per-connection overflow tolerance, shared
+    /// by every upgraded `/ws` and `/terminal/ws` socket (AD-19).
+    pub connections: ConnectionRuntime,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]

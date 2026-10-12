@@ -29,7 +29,7 @@ pub(super) fn handle_watch_project(
     payload: &Value,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
-    out_tx: &mpsc::UnboundedSender<Outbound>,
+    out_tx: &OutboundSender,
 ) -> WsReply {
     let parsed = match parse_payload(payload, "watch_project") {
         Ok(parsed) => parsed,
@@ -66,7 +66,7 @@ pub(super) fn handle_unwatch_project(
     id: String,
     payload: &Value,
     relay: &Arc<WsRelaySink>,
-    out_tx: &mpsc::UnboundedSender<Outbound>,
+    out_tx: &OutboundSender,
 ) -> WsReply {
     let parsed = match parse_payload(payload, "unwatch_project") {
         Ok(parsed) => parsed,

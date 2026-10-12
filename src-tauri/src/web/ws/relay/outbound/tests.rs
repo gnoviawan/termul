@@ -1,0 +1,115 @@
+use super::*;
+
+fn event_frame() -> Outbound {
+    Outbound::Event(crate::web::ws::SequencedEvent::new(
+        None,
+        0,
+        "probe",
+        serde_json::json!({}),
+    ))
+}
+
+#[test]
+fn try_enqueue_distinguishes_full_from_closed() {
+    let (tx, rx) = outbound_channel(2, 100);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    assert_eq!(
+        tx.try_enqueue(event_frame()),
+        EnqueueOutcome::Full,
+        "a full queue refuses the frame without closing the connection"
+    );
+    assert!(!tx.closing().is_cancelled());
+    drop(rx);
+    assert_eq!(
+        tx.try_enqueue(event_frame()),
+        EnqueueOutcome::Closed,
+        "a dropped receiver means the connection is gone"
+    );
+}
+
+#[test]
+fn consecutive_full_enqueues_close_the_peer_at_the_tolerance() {
+    let (tx, _rx) = outbound_channel(1, 3);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+    assert!(!tx.closing().is_cancelled(), "two failures are within the tolerance of 3");
+    assert_eq!(
+        tx.try_enqueue(event_frame()),
+        EnqueueOutcome::Closed,
+        "the third consecutive failure closes the peer"
+    );
+    assert!(tx.closing().is_cancelled());
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Closed);
+}
+
+#[test]
+fn a_successful_enqueue_resets_the_failure_count() {
+    let (tx, mut rx) = outbound_channel(1, 3);
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    for _ in 0..2 {
+        assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+    }
+    // The peer drains, then fills again: the earlier failures no longer count.
+    rx.try_recv().expect("queued frame");
+    assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Enqueued);
+    for _ in 0..2 {
+        assert_eq!(tx.try_enqueue(event_frame()), EnqueueOutcome::Full);
+    }
+    assert!(
+        !tx.closing().is_cancelled(),
+        "failures are consecutive: a success in between resets the count"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reliable_enqueue_waits_for_room_instead_of_dropping() {
+    let (tx, mut rx) = outbound_channel(1, 15);
+    assert_eq!(tx.enqueue(event_frame()).await, EnqueueOutcome::Enqueued);
+
+    let sender = tx.clone();
+    let waiting = tokio::spawn(async move {
+        sender
+            .enqueue(Outbound::Reply(crate::web::ws::WsReply::ok("late", None)))
+            .await
+    });
+    tokio::time::sleep(FULL_QUEUE_ATTEMPT / 2).await;
+    assert!(!waiting.is_finished(), "the reply waits while the queue is full");
+
+    rx.recv().await.expect("first frame");
+    assert_eq!(waiting.await.unwrap(), EnqueueOutcome::Enqueued);
+    assert!(
+        matches!(rx.recv().await, Some(Outbound::Reply(reply)) if reply.id == "late"),
+        "the waiting reply is delivered, not dropped"
+    );
+    assert!(!tx.closing().is_cancelled());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reliable_enqueue_closes_a_peer_that_stays_full() {
+    let tolerance = 4;
+    let (tx, _rx) = outbound_channel(1, tolerance);
+    assert_eq!(tx.enqueue(event_frame()).await, EnqueueOutcome::Enqueued);
+
+    let started = tokio::time::Instant::now();
+    let outcome = tx
+        .enqueue(Outbound::Reply(crate::web::ws::WsReply::ok("lost", None)))
+        .await;
+    assert_eq!(
+        outcome,
+        EnqueueOutcome::Closed,
+        "a reply that cannot be queued closes the connection instead of vanishing"
+    );
+    assert!(tx.closing().is_cancelled());
+    // One failed attempt per wait window after the first immediate failure.
+    assert_eq!(started.elapsed(), FULL_QUEUE_ATTEMPT * (tolerance as u32 - 1));
+}
+
+#[test]
+fn senders_are_the_same_channel_only_when_cloned() {
+    let (a, _rx_a) = outbound_channel(1, 1);
+    let (b, _rx_b) = outbound_channel(1, 1);
+    assert!(a.same_channel(&a.clone()));
+    assert!(!a.same_channel(&b));
+}

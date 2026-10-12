@@ -65,6 +65,7 @@ fn test_state(root: &std::path::Path) -> AppState {
         web_auth: None,
         allow_remote_writes: false,
         shared_live_writes_denied: false,
+        connections: Default::default(),
     }
 }
 

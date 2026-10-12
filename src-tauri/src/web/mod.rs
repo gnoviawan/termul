@@ -25,6 +25,7 @@ pub mod canvas_api;
 pub mod capabilities;
 pub mod catalog_api;
 pub mod config;
+pub mod connection_runtime;
 pub mod fs_api;
 pub mod fs_watcher;
 pub mod git_api;
@@ -79,6 +80,7 @@ use tracing::{error, info, warn};
 use crate::acp::AcpManager;
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
+use crate::web::connection_runtime::{ConnectionRuntime, SOCKET_DRAIN_BOUND};
 use crate::web::store::WebStore;
 
 #[cfg(test)]
@@ -345,6 +347,11 @@ pub async fn serve_router(
             cfg.project_root.display()
         );
     }
+    // AD-19: one shutdown handle + overflow tolerance for every socket this
+    // host upgrades.
+    let connections = ConnectionRuntime::new(cfg.overflow_tolerance);
+    let socket_shutdown = connections.shutdown.clone();
+    let watch_relay = Arc::clone(&ws_relay);
     let app = router::router(
         Arc::clone(&acp),
         pty,
@@ -377,19 +384,38 @@ pub async fn serve_router(
         // server instead (AD-8).
         canvas_pool,
         cfg.allowed_origins.clone(),
+        connections,
     );
 
     let handle = tokio::spawn(async move {
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so
         // the fs WRITE routes can extract `ConnectInfo<SocketAddr>` for the
         // localhost-only guard. Read routes and `/ws` are unaffected.
+        //
+        // Axum's graceful shutdown only drains plain HTTP requests: an
+        // upgraded socket is handed to a detached task. So the stop signal
+        // also tells every admitted `/ws` + `/terminal/ws` socket to close
+        // (`Close(1001)`), and the task below awaits them before it reports
+        // the server stopped.
+        let begin_socket_shutdown = socket_shutdown.clone();
         let serve_result = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(shutdown)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            begin_socket_shutdown.begin();
+        })
         .await
         .inspect_err(|e| error!("ACP web server error: {}", e));
+
+        // Also reached when the server errored rather than being stopped.
+        socket_shutdown.begin();
+        let stragglers = socket_shutdown.drain(SOCKET_DRAIN_BOUND).await;
+        watch_relay.fs_watches().shutdown(SOCKET_DRAIN_BOUND).await;
+        if stragglers > 0 {
+            error!("ACP web server stopped with {stragglers} socket task(s) still running");
+        }
 
         match serve_result {
             Ok(()) => info!("ACP web server stopped"),

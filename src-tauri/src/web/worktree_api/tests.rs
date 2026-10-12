@@ -63,6 +63,7 @@ fn test_state(root: &std::path::Path) -> AppState {
             std::collections::HashMap::new(),
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
+        connections: Default::default(),
     }
 }
 
@@ -556,6 +557,7 @@ fn production_router(root: &std::path::Path) -> axum::Router {
         // No canvas pool on this fixture — the /canvas/* routes degrade.
         None,
         crate::web::origin::OriginPolicy::default(),
+        crate::web::connection_runtime::ConnectionRuntime::default(),
     )
 }
 

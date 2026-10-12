@@ -35,6 +35,7 @@ fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
         web_auth: None,
         allow_remote_writes: false,
         shared_live_writes_denied: false,
+        connections: Default::default(),
     }
 }
 
@@ -70,6 +71,7 @@ fn state_with_persistence(
         web_auth: None,
         allow_remote_writes: false,
         shared_live_writes_denied: false,
+        connections: Default::default(),
     }
 }
 
