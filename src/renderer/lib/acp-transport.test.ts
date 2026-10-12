@@ -2232,6 +2232,34 @@ describe('WsAcpTransport project watches across reconnects', () => {
     transport.dispose()
   })
 
+  it('keeps tracking a watch whose reply timed out, and untracks one the host refuses', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const tracked = () => (transport as unknown as { watchedProjects: Set<string> }).watchedProjects
+
+    // No reply ever arrives: the request times out, but the host may have
+    // registered the watch, so it stays tracked for the next reconnect.
+    FakeWebSocket.holdWatchProjectReplies = true
+    const timedOut = transport.watchProject?.('p-slow')?.then(
+      () => 'ok',
+      (error: unknown) => (error as { code?: string }).code
+    )
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(await timedOut).toBe('timeout')
+    expect(tracked().has('p-slow')).toBe(true)
+
+    // An explicit host refusal on a live socket untracks it.
+    FakeWebSocket.holdWatchProjectReplies = false
+    FakeWebSocket.watchProjectRefusals['p-gone'] = 'not_found'
+    await expect(transport.watchProject?.('p-gone')).rejects.toMatchObject({ code: 'not_found' })
+    expect(tracked().has('p-gone')).toBe(false)
+    transport.dispose()
+  })
+
   it('a re-watch whose reply never arrives does not hold the reconnect', async () => {
     vi.useFakeTimers()
     const transport = await connectedWithWatch('p-1')
