@@ -192,7 +192,8 @@ pub async fn acp_history_save(
                 crate::acp::import_chat_history(persistence, store.inner()).await;
             }
             crate::web::broadcast_chat_history_changed(ws_relay.inner());
-            crate::web::watch::publish_chat_history(ws_relay.inner(), &[session_id.as_str()]);
+            // `import_chat_history` can add several unknown legacy sessions: bulk.
+            crate::web::watch::publish_chat_history(ws_relay.inner(), &[]);
             log::info!("[acp-history] save success session_id={}", log_session_id);
             Ok(IpcResult::success(()))
         }

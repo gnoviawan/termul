@@ -1500,6 +1500,13 @@ impl AcpManager {
             return Ok(());
         };
         log::info!("[acp] killing agent {agent_id}");
+        // A kill we initiated emits no `agent_disconnected` (below), so a
+        // watcher of the roster is told directly that the agent is gone.
+        for sink in &self.sinks {
+            if let Some(relay) = sink.as_ws_relay() {
+                crate::web::watch::publish_agent_removed(relay, &agent_id.0);
+            }
+        }
 
         // Mark this as an intentional kill so the driver teardown stays silent
         // (no `acp:agent_disconnected` for a kill we initiated — L4).

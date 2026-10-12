@@ -125,8 +125,8 @@ export class WatchClient {
     }
     if (frame.reset) {
       entry.revision = { hostEpoch: revision.hostEpoch, n: revision.n }
-      entry.attempt = 0
-      this.dispatch(entry, (handlers) => handlers.onState(frame.state))
+      const state = frame.state
+      if (this.dispatch(entry, (handlers) => handlers.onState(state))) entry.attempt = 0
       return
     }
     const last = entry.revision
@@ -147,7 +147,8 @@ export class WatchClient {
       return
     }
     entry.revision = { hostEpoch: revision.hostEpoch, n: revision.n }
-    this.dispatch(entry, (handlers) => handlers.onDelta?.(frame.delta))
+    const applied = frame.delta
+    this.dispatch(entry, (handlers) => handlers.onDelta?.(applied))
   }
 
   /** The socket is authenticated again: every watch rebuilds from fresh state. */
@@ -191,11 +192,19 @@ export class WatchClient {
       })
   }
 
-  private dispatch(entry: Entry, call: (handlers: WatchHandlers) => void): void {
+  /**
+   * Call every handler. A handler that throws leaves its state behind the
+   * revision the client now holds, so the watch is asked for fresh state again
+   * (with backoff, so a handler that always throws cannot loop quickly).
+   * Returns `false` when one threw.
+   */
+  private dispatch(entry: Entry, call: (handlers: WatchHandlers) => void): boolean {
+    let failure: unknown = null
     for (const handlers of [...entry.handlers]) {
       try {
         call(handlers)
       } catch (error) {
+        failure = error
         void logFrontendError({
           level: 'warn',
           source: 'WatchClient.handler',
@@ -203,6 +212,10 @@ export class WatchClient {
         })
       }
     }
+    if (failure === null) return true
+    entry.revision = null
+    this.scheduleRetry(entry, failure)
+    return false
   }
 
   private clearRetry(entry: Entry): void {

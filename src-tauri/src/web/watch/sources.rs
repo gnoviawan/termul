@@ -9,7 +9,9 @@
 //!   refetches.
 //! - `agents`: state = the live agent summaries; a delta is
 //!   `{"event": "<agent event type>", "payload": <event payload>}` for an
-//!   agent that spawned, crashed, failed or disconnected. Applying a delta is
+//!   agent that spawned, crashed, failed or disconnected, or
+//!   `{"event": "agent_removed", "payload": {"agentId"}}` for one removed by an
+//!   intentional kill (which emits no lifecycle event). Applying a delta is
 //!   idempotent, so one that overlaps a freshly read state does no harm.
 
 use serde_json::{json, Value};
@@ -65,6 +67,15 @@ pub fn publish_projects(relay: &WsRelaySink, registry: &ProjectRegistry) {
 pub fn publish_chat_history(relay: &WsRelaySink, changed: &[&str]) {
     relay.watches().publish(WatchKind::ChatHistory, "", || {
         json!({ "changed": changed })
+    });
+}
+
+/// An agent was removed from the roster by an intentional kill, which emits no
+/// lifecycle event: the delta is `{"event": "agent_removed", "payload":
+/// {"agentId": ...}}`.
+pub fn publish_agent_removed(relay: &WsRelaySink, agent_id: &str) {
+    relay.watches().publish(WatchKind::Agents, "", || {
+        json!({ "event": "agent_removed", "payload": { "agentId": agent_id } })
     });
 }
 

@@ -854,16 +854,30 @@ export interface WsWatchRevision {
   n: number
 }
 
-/** Top-level `watch` frame: the full state of a watch (`reset: true`) or one delta. */
-export interface WsWatchFrame {
+/** Fields every `watch` frame carries. */
+interface WsWatchFrameBase {
   type: typeof WS_WATCH_FRAME_TYPE
   watch: WsWatchName
   scope: string
   revision: WsWatchRevision
-  reset?: true
-  state?: unknown
-  delta?: unknown
 }
+
+/** Top-level `watch` frame with the full state of a watch (revision `n = 1`). */
+export interface WsWatchStateFrame extends WsWatchFrameBase {
+  reset: true
+  state: unknown
+  delta?: undefined
+}
+
+/** Top-level `watch` frame with one delta after the state. */
+export interface WsWatchDeltaFrame extends WsWatchFrameBase {
+  reset?: undefined
+  state?: undefined
+  delta: unknown
+}
+
+/** Top-level `watch` frame: exactly one of the state and delta forms. */
+export type WsWatchFrame = WsWatchStateFrame | WsWatchDeltaFrame
 
 /** `watch` reply payload. */
 export interface WsWatchReply {
@@ -885,7 +899,13 @@ export interface ChatHistoryWatchDelta {
  * as an event.
  */
 export interface AgentsWatchDelta {
-  event: 'agent_spawned' | 'agent_crashed' | 'agent_error' | 'agent_disconnected'
+  event:
+    | 'agent_spawned'
+    | 'agent_crashed'
+    | 'agent_error'
+    | 'agent_disconnected'
+    // An intentional kill emits no lifecycle event; the payload is `{ agentId }`.
+    | 'agent_removed'
   payload: unknown
 }
 

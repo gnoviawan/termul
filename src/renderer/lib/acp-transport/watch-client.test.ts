@@ -236,8 +236,8 @@ describe('WatchClient', () => {
     expect(sent.at(-1)).toEqual({ type: 'unwatch', watch: 'projects', scope: '' })
   })
 
-  it('keeps delivering to the other handlers when one throws', () => {
-    const { transport } = makeTransport()
+  it('keeps delivering to the other handlers when one throws, and asks for fresh state again', async () => {
+    const { transport, sent } = makeTransport()
     const client = new WatchClient(transport)
     const survivor = vi.fn()
     client.subscribe('projects', {
@@ -246,9 +246,36 @@ describe('WatchClient', () => {
       }
     })
     client.subscribe('projects', { onState: survivor })
+    await flush()
+    const requests = sent.filter((s) => s.type === 'watch').length
 
     client.handleFrame(stateFrame(1, 'x'))
-
     expect(survivor).toHaveBeenCalledWith('x')
+
+    // The failing handler holds no state for this revision: resubscribe after a backoff.
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sent.filter((s) => s.type === 'watch').length).toBe(requests + 1)
+  })
+
+  it('does not apply deltas to a watch whose handler failed until fresh state arrives', async () => {
+    const { transport } = makeTransport()
+    const client = new WatchClient(transport)
+    const onDelta = vi.fn()
+    let failState = true
+    client.subscribe('projects', {
+      onState: () => {
+        if (failState) throw new Error('boom')
+      },
+      onDelta
+    })
+    await flush()
+    client.handleFrame(stateFrame(1, 'x'))
+    client.handleFrame(deltaFrame(2, 'a'))
+    expect(onDelta).not.toHaveBeenCalled()
+
+    failState = false
+    client.handleFrame(stateFrame(1, 'fresh'))
+    client.handleFrame(deltaFrame(2, 'b'))
+    expect(onDelta).toHaveBeenCalledWith('b')
   })
 })
