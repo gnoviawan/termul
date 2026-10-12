@@ -58,7 +58,6 @@ import {
   isHistoryCoveredEvent,
   nextSeq,
   PROMOTE_SLOW_WARNING_MS,
-  pendingPromptCommands,
   persistComposerOptions,
   persistSession,
   rejectCommitMessageCollector,
@@ -66,7 +65,11 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpSession, AcpState, ChatMessage, TurnEndSetter } from '../types'
-import { beginPromptReconcile, clearPromptReconcile } from './prompt-reconcile'
+import {
+  abandonPendingPrompt,
+  beginPromptReconcile,
+  clearPromptReconcile
+} from './prompt-reconcile'
 import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
 
 /** Send the next queued prompt after the current turn closes. */
@@ -378,6 +381,10 @@ export async function runPromptTurn(
   // `userMessage` is absent ONLY in the deliberate empty-display dispatch —
   // the turn still runs (the optimistic-bubble step was skipped, not failed).
   if (!openTurnId) throw new Error(`unknown session ${sessionId}`)
+  // Track the wire turn from the moment the optimistic turn opens (not at
+  // dispatch): a replayed `prompt_complete` for the PREVIOUS turn arriving
+  // while a warm-pool promotion is awaited must not close this new turn.
+  activeWirePromptTurns.set(sessionId, turnId)
 
   /**
    * A stop reason ends the turn (it ran on this call). A receipt resolves the
@@ -466,7 +473,6 @@ export async function runPromptTurn(
       await pendingPromotion
       if (promoteSlowTimer) clearTimeout(promoteSlowTimer)
     }
-    activeWirePromptTurns.set(sessionId, turnId)
     settleDispatch(await dispatch(liveSession, turnId))
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
@@ -612,8 +618,17 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     // Stop abandons the command (no more same-id resends — a late resend must
     // not start a turn the user cancelled) and ends the local turn view itself,
     // because a host that never saw the turn will never send its terminator.
-    const abandonedPending = pendingPromptCommands.has(sessionId)
-    if (abandonedPending) clearPromptReconcile(sessionId)
+    // A resend already in flight may still start the turn on the host after
+    // this cancel: cancel again once it settles.
+    const abandonedPending = abandonPendingPrompt(sessionId, () => {
+      void acpApi.cancelPrompt(session.agentId, sessionId).catch((err: unknown) => {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.promptReconcile',
+          message: `Follow-up cancel after an in-flight resend on session ${sessionId} failed: ${String(err)}`
+        })
+      })
+    })
     try {
       await acpApi.cancelPrompt(session.agentId, sessionId)
     } catch (err) {

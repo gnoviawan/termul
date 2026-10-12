@@ -185,6 +185,13 @@ export class WsAcpTransport implements AcpTransport {
   /** Bound DOM-listener refs so `dispose()` can detach them. */
   private visibilityHandler: (() => void) | null = null
   private focusHandler: (() => void) | null = null
+  private blurHandler: (() => void) | null = null
+  /**
+   * True once the page was hidden or the window blurred since the last return
+   * probe. A plain `focus` of a socket that was never away has nothing to
+   * revalidate, so it must not ping.
+   */
+  private awaySinceProbe = false
   private pageShowHandler: (() => void) | null = null
   private resumeHandler: (() => void) | null = null
   private onlineHandler: (() => void) | null = null
@@ -1098,6 +1105,7 @@ export class WsAcpTransport implements AcpTransport {
     if (this.visibilityHandler || typeof document === 'undefined') return
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') {
+        this.awaySinceProbe = true
         // CAP-3: signal the server to extend its keepalive watchdog to the
         // 5-min background ceiling before the tab suspends (the OS will
         // throttle/pause this transport's timers).
@@ -1114,12 +1122,22 @@ export class WsAcpTransport implements AcpTransport {
     }
     // Every return signal probes the held socket (or cuts a pending backoff
     // short); a reconnect happens only if the probe fails.
-    const onFocus = (): void => this.validateOnResume('window focus')
+    const onFocus = (): void => {
+      // Probe on focus only after the page was hidden/blurred since the last
+      // probe; a live socket that never left needs no round-trip. A dead or
+      // backing-off channel still goes through the full check.
+      if (!this.awaySinceProbe && this.isSocketLive() && !this.reconnecting) return
+      this.validateOnResume('window focus')
+    }
+    const onBlur = (): void => {
+      this.awaySinceProbe = true
+    }
     const onPageShow = (): void => this.validateOnResume('pageshow')
     const onResume = (): void => this.validateOnResume('browser resume')
     const onOnline = (): void => this.validateOnResume('network online')
     this.visibilityHandler = onVisibility
     this.focusHandler = onFocus
+    this.blurHandler = onBlur
     this.pageShowHandler = onPageShow
     this.resumeHandler = onResume
     this.onlineHandler = onOnline
@@ -1128,6 +1146,7 @@ export class WsAcpTransport implements AcpTransport {
     // NOT bubble — attach to `window`, not `document` (a document-level listener
     // would never fire for window focus changes, making the fallback dead code).
     window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
     window.addEventListener('pageshow', onPageShow)
     document.addEventListener('resume', onResume)
     window.addEventListener('online', onOnline)
@@ -1142,6 +1161,10 @@ export class WsAcpTransport implements AcpTransport {
     if (this.focusHandler && typeof window !== 'undefined') {
       window.removeEventListener('focus', this.focusHandler)
       this.focusHandler = null
+    }
+    if (this.blurHandler && typeof window !== 'undefined') {
+      window.removeEventListener('blur', this.blurHandler)
+      this.blurHandler = null
     }
     if (this.pageShowHandler && typeof window !== 'undefined') {
       window.removeEventListener('pageshow', this.pageShowHandler)
@@ -1165,6 +1188,7 @@ export class WsAcpTransport implements AcpTransport {
    */
   private validateOnResume(reason: string): void {
     if (this.disposed || this.tokenHalted) return
+    this.awaySinceProbe = false
     // A pending backoff is cut short by any wake signal (attempt counter kept).
     if (this.expediteReconnect()) return
     // Handshake in flight: bounded by HANDSHAKE_TIMEOUT_MS, nothing to probe.

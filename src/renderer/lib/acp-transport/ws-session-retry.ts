@@ -80,7 +80,12 @@ export class SessionResubscribeRetry {
   private async fire(sessionId: string, entry: RetryEntry): Promise<void> {
     if (this.entries.get(sessionId) !== entry) return
     if (!this.deps.canRun()) {
-      this.entries.delete(sessionId)
+      // The socket is not live right now (a reconnect pass is running or
+      // about to run). Keep the entry and re-arm — bounded by the same
+      // attempt budget — instead of silently dropping the session: if the
+      // reconnect pass takes it over, its `cancelAll`/`cancel` removes this
+      // entry first; if it never does, the budget ends in `onGiveUp`.
+      this.schedule(sessionId, new Error('socket not live when the retry fired'))
       return
     }
     const mode: SessionRetryMode =

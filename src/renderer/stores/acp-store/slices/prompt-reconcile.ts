@@ -22,6 +22,7 @@ import { dropRecordKey } from '../helpers'
 import { useAcpStore } from '../index'
 import {
   activeWirePromptTurns,
+  claimPromptTurnEnd,
   type PendingPromptCommand,
   pendingPromptCommands
 } from '../shared-state'
@@ -76,8 +77,17 @@ function armRetryTimer(sessionId: SessionId, cmd: PendingPromptCommand): void {
   }, delay)
 }
 
+/** A resend that outlived Stop has settled: let the caller cancel again. */
+function settleCancelled(cmd: PendingPromptCommand): boolean {
+  if (!cmd.cancelled) return false
+  const after = cmd.afterCancelSettled
+  cmd.afterCancelSettled = undefined
+  after?.()
+  return true
+}
+
 function runResend(sessionId: SessionId, cmd: PendingPromptCommand): void {
-  if (cmd.inFlight) return
+  if (cmd.inFlight || cmd.cancelled) return
   const session = useAcpStore.getState().sessions[sessionId]
   if (
     !session ||
@@ -98,12 +108,14 @@ function runResend(sessionId: SessionId, cmd: PendingPromptCommand): void {
   void resending.then(
     (result) => {
       cmd.inFlight = false
+      if (settleCancelled(cmd)) return
       if (pendingPromptCommands.get(sessionId) !== cmd) return
       clearPromptReconcile(sessionId)
       cmd.onResult(result)
     },
     (err: unknown) => {
       cmd.inFlight = false
+      if (settleCancelled(cmd)) return
       if (pendingPromptCommands.get(sessionId) !== cmd) return
       // Dropped socket / timeout / local token halt: the host never answered,
       // so the outcome is still unknown — keep waiting, never fail the turn.
@@ -156,6 +168,29 @@ export function clearPromptReconcile(sessionId: SessionId): void {
     pendingPromptCommands.delete(sessionId)
   }
   setReconcileFlag(sessionId, false)
+}
+
+/**
+ * Stop on a prompt that is still waiting to confirm: the user abandoned it.
+ * The command is marked cancelled (no resend may dispatch it again) and the
+ * turn id is claimed as ended, so a late host `prompt_complete` for it is
+ * recognised as stale and cannot end a newer open turn. A resend already in
+ * flight may still start the turn on the host: `afterInFlightSettles` runs
+ * once it settles so the caller can send `cancel_prompt` again.
+ * Returns whether a pending command existed.
+ */
+export function abandonPendingPrompt(
+  sessionId: SessionId,
+  afterInFlightSettles: () => void
+): boolean {
+  const cmd = pendingPromptCommands.get(sessionId)
+  if (!cmd) return false
+  cmd.cancelled = true
+  if (cmd.inFlight) cmd.afterCancelSettled = afterInFlightSettles
+  clearPromptReconcile(sessionId)
+  claimPromptTurnEnd(cmd.turnId)
+  if (activeWirePromptTurns.get(sessionId) === cmd.turnId) activeWirePromptTurns.delete(sessionId)
+  return true
 }
 
 /** Resolve the pending command only when it belongs to `turnId`. */

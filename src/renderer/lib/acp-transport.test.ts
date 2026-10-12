@@ -2615,6 +2615,59 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     transport.dispose()
   })
 
+  it('a plain focus of a socket that never left the page does not ping; focus after blur does, once', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as TransportInternals
+    const socket = internals.socket
+    const pings = () => socket.sent.filter((raw) => JSON.parse(raw).type === 'ping').length
+
+    window.dispatchEvent(new Event('focus'))
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+    expect(pings()).toBe(0)
+
+    window.dispatchEvent(new Event('blur'))
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+    expect(pings()).toBe(1)
+    await vi.advanceTimersByTimeAsync(10)
+    // The probe cleared the away flag: the next plain focus is free again.
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+    expect(pings()).toBe(1)
+
+    // A hide → show cycle re-arms the probe on its own return signal.
+    dispatchVisibility('hidden')
+    dispatchVisibility('visible')
+    await vi.advanceTimersByTimeAsync(10)
+    expect(pings()).toBe(2)
+    transport.dispose()
+  })
+
+  it('pageshow, online and resume still probe a never-blurred socket', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const socket = (transport as unknown as TransportInternals).socket
+    const pings = () => socket.sent.filter((raw) => JSON.parse(raw).type === 'ping').length
+    window.dispatchEvent(new Event('pageshow'))
+    await vi.advanceTimersByTimeAsync(10)
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(10)
+    document.dispatchEvent(new Event('resume'))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(pings()).toBe(3)
+    transport.dispose()
+  })
+
   it('dispose() detaches the visibility/focus listeners', async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
@@ -3815,6 +3868,49 @@ describe('WsAcpTransport unauthorized authenticate halts reconnect churn (#907)'
     await vi.advanceTimersByTimeAsync(20_000)
     expect(internals.reconnectTimer).toBeNull()
     expect(internals.socket).toBeNull()
+    transport.dispose()
+  })
+
+  it('reports (false, recovered=false) when a reconnect cycle ends on the token halt, and (false, true) only after a real recovery', async () => {
+    vi.useFakeTimers()
+    let reject = false
+    class RefuseOnReconnectWebSocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.authFail = reject
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: RefuseOnReconnectWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const calls: Array<[boolean, boolean | undefined]> = []
+    transport.setReconnectListener((reconnecting, recovered) =>
+      calls.push([reconnecting, recovered])
+    )
+    const internals = transport as unknown as TransportInternals
+
+    // Drop → the reconnect handshake is refused (token halt): no recovery.
+    reject = true
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls).toEqual([
+      [true, undefined],
+      [false, false]
+    ])
+
+    // Token fixed → a later reconnect that really recovers reports `true`.
+    calls.length = 0
+    gateStatusRef.current = 'ok'
+    reject = false
+    await transport.connect()
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls).toEqual([
+      [true, undefined],
+      [false, true]
+    ])
     transport.dispose()
   })
 

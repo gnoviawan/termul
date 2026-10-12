@@ -3,6 +3,7 @@ import { act, render, waitFor } from '@testing-library/react'
 import { Streamdown } from 'streamdown'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { AgentProse } from './chat-agent-prose'
 import { chatCodePlugin } from './chat-code-plugin'
 import { ChatMarkdownCode, OPEN_FENCE_HIGHLIGHT_MAX_CHARS } from './chat-markdown-code'
 
@@ -71,6 +72,39 @@ describe('streaming code fences', () => {
 
     // The fence closes and the message settles: exactly the full body, once.
     view.update(`\`\`\`ts\n${body}\n\`\`\``, false)
+    await waitFor(() => expect(highlight).toHaveBeenCalled(), { timeout: 15_000 })
+    await settle()
+    expect(highlight).toHaveBeenCalledTimes(1)
+    const [options] = highlight.mock.calls[0]
+    expect(options.language).toBe('ts')
+    expect(options.code).toBe(body)
+  }, 30_000)
+
+  it('AgentProse (the real chat renderer) never highlights a partial oversized open fence, then highlights the full body once at close', async () => {
+    const highlight = vi.spyOn(shikiCodePlugin, 'highlight')
+    const body = fenceBody(Math.ceil(OPEN_FENCE_HIGHLIGHT_MAX_CHARS / 40) + 40)
+    const first = Math.floor(OPEN_FENCE_HIGHLIGHT_MAX_CHARS * 1.1)
+    // The streaming text is throttled (10 Hz trailing edge): settle past it.
+    const settle = () => act(async () => new Promise<void>((resolve) => setTimeout(resolve, 250)))
+    const ui = (value: string, streaming: boolean) => (
+      <TooltipProvider>
+        <AgentProse text={value} streaming={streaming} reduced />
+      </TooltipProvider>
+    )
+
+    const view = render(ui(`\`\`\`ts\n${body.slice(0, first)}`, true))
+    await settle()
+    for (const f of [0.5, 0.7, 0.85, 1]) {
+      const end = Math.floor(first + (body.length - first) * f)
+      view.rerender(ui(`\`\`\`ts\n${body.slice(0, end)}`, true))
+      await settle()
+    }
+    expect(highlight.mock.calls.map(([options]) => options.code.length)).toEqual([])
+    expect(
+      view.container.querySelector('[data-streamdown="code-block-body"]')?.textContent
+    ).toContain('line 0')
+
+    view.rerender(ui(`\`\`\`ts\n${body}\n\`\`\``, false))
     await waitFor(() => expect(highlight).toHaveBeenCalled(), { timeout: 15_000 })
     await settle()
     expect(highlight).toHaveBeenCalledTimes(1)

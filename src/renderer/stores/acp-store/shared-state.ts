@@ -385,10 +385,18 @@ export interface PendingPromptCommand {
   resend: () => Promise<PromptDispatchResult>
   onResult: (result: PromptDispatchResult) => void
   onDefiniteFailure: (err: unknown) => void
-  /** Timer-driven resends already spent (bounded; reconnect resends are free). */
+  /**
+   * Timer-driven resends already spent. Picks the backoff delay (the ladder,
+   * then the last delay repeats as a slow cap) — NOT a limit: the timer keeps
+   * retrying until the command resolves. Recovery-driven resends do not count.
+   */
   attempts: number
   timer: ReturnType<typeof setTimeout> | undefined
   inFlight: boolean
+  /** Stop abandoned the command: it must never be (re)dispatched again. */
+  cancelled?: boolean
+  /** Runs once a resend that was already in flight at Stop has settled. */
+  afterCancelSettled?: () => void
 }
 
 export const pendingPromptCommands = new Map<SessionId, PendingPromptCommand>()

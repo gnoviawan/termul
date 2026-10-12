@@ -103,7 +103,7 @@ import {
   initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
-import { activeWirePromptTurns } from './shared-state'
+import { activeWirePromptTurns, inFlightPromotions } from './shared-state'
 import { PROMPT_RECONCILE_RETRY_DELAYS_MS, resendPendingPrompts } from './slices/prompt-reconcile'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
 
@@ -496,6 +496,95 @@ describe('prompt pending-reconcile (AD-6)', () => {
     resendPendingPrompts()
     expect(send).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
+  })
+
+  it('Stop while a resend is in flight cancels again once that resend settles; the cancelled command never re-dispatches', async () => {
+    seedSession('s1', 'agent-1', false)
+    let resolveResend!: (v: unknown) => void
+    let calls = 0
+    const cancel = vi.fn(async () => {})
+    const send = vi.fn(() => {
+      calls += 1
+      if (calls === 1) return Promise.reject(drop())
+      return new Promise((resolve) => {
+        resolveResend = resolve
+      })
+    })
+    _setAcpTransportForTests({
+      sendPrompt: send,
+      sendPromptBlocks: send,
+      cancelPrompt: cancel,
+      dispose: () => {}
+    } as unknown as AcpTransport)
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    resendPendingPrompts() // resend now in flight
+    expect(send).toHaveBeenCalledTimes(2)
+    await useAcpStore.getState().cancelPrompt('s1')
+    expect(cancel).toHaveBeenCalledTimes(1)
+    // The host may still start the turn from the in-flight resend: cancel again.
+    resolveResend('end_turn')
+    await flushTurnEnd()
+    expect(cancel).toHaveBeenCalledTimes(2)
+    // Cancelled: no recovery event can dispatch it again.
+    resendPendingPrompts()
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+  })
+
+  it('a late prompt_complete for the turn Stop abandoned is stale: it cannot end a newer open turn', async () => {
+    seedSession('s1', 'agent-1', false)
+    const send = installTransport(async () => {
+      throw drop()
+    })
+    await useAcpStore.getState().sendPrompt('s1', 'deploy')
+    const abandoned = sentTurnIds(send)[0]
+    await useAcpStore.getState().cancelPrompt('s1')
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
+    // A newer turn is open (its wire id is not tracked yet) …
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: { ...s.sessions.s1, activeTurn: true, openTurnId: 'newer', lastError: null }
+      }
+    }))
+    // … when the host's terminator for the abandoned turn arrives late.
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn',
+      turnId: abandoned
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    expect(useAcpStore.getState().sessions.s1.openTurnId).toBe('newer')
+  })
+
+  it('a replayed prompt_complete for the previous turn cannot close a new turn awaiting its warm-pool promotion', async () => {
+    seedSession('s1', 'agent-1', false)
+    let release!: () => void
+    inFlightPromotions.set(
+      's1',
+      new Promise<void>((resolve) => {
+        release = resolve
+      })
+    )
+    const send = installTransport(async () => ({ receipt: 'in_progress' }))
+    const running = useAcpStore.getState().sendPrompt('s1', 'first prompt')
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    expect(send).not.toHaveBeenCalled() // still holding for the promotion
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn',
+      turnId: 'previous-turn'
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(true)
+    release()
+    await running
+    expect(send).toHaveBeenCalledTimes(1)
   })
 
   it('snapshot recovery resolves it: the recovered terminator ends the turn', async () => {

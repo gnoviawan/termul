@@ -88,12 +88,26 @@ describe('SessionResubscribeRetry', () => {
     expect(runs.filter(([sid]) => sid === 'a')).toHaveLength(2)
   })
 
-  it('drops a retry instead of running it while the socket is not usable', async () => {
-    const { retry, runs, setCanRun } = build()
+  it('keeps a retry that fires while the socket is not usable and runs it once the socket is live again', async () => {
+    const { retry, runs, giveUps, setCanRun } = build()
     retry.schedule('s1')
     setCanRun(false)
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(1_000) // first timer fires: socket not live
     expect(runs).toHaveLength(0)
+    expect(retry.has('s1')).toBe(true) // not silently dropped
+    expect(giveUps).toEqual([])
+    setCanRun(true)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(runs.map(([sid]) => sid)).toEqual(['s1'])
+  })
+
+  it('a session that never sees a usable socket is handed back through onGiveUp after the bounded attempts', async () => {
+    const { retry, runs, giveUps, setCanRun } = build()
+    retry.schedule('s1')
+    setCanRun(false)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(runs).toHaveLength(0)
+    expect(giveUps).toEqual(['s1'])
     expect(retry.has('s1')).toBe(false)
   })
 
