@@ -29,14 +29,6 @@ export function needsYouAnnouncement(chat: string): string {
   return `${chat} needs you`
 }
 
-export function switchingAnnouncement(project: string): string {
-  return `Switching to ${project}…`
-}
-
-export function switchFailedAnnouncement(project: string): string {
-  return `Couldn't switch to ${project}`
-}
-
 /** `1 chat matches` follows the spine's singular precedent; every other count is plural. */
 export function chatsMatchAnnouncement(count: number): string {
   return count === 1 ? '1 chat matches' : `${count} chats match`
@@ -55,7 +47,7 @@ export function resolveChatLabel(
 }
 
 // ---------------------------------------------------------------------------
-// ACP: approvals, other-chat needs-you, turn finished, project switch
+// ACP: approvals, other-chat needs-you, turn finished
 // ---------------------------------------------------------------------------
 
 /** The slice of an ACP session the derivation reads. */
@@ -75,8 +67,6 @@ export interface AcpAnnouncementState {
   pendingElicitations: Readonly<Record<string, { sessionId: string }>>
   /** Per-session denied-by-disconnect notice (L-09), keyed by session id. */
   permissionDenialNotices: Readonly<Record<string, { requestId: string; tool: string }>>
-  switchingProjectId: string | null
-  failedProjectSwitchId: string | null
 }
 
 /** Facts from outside the ACP store that decide who an announcement is for. */
@@ -88,8 +78,6 @@ export interface AnnouncementContext {
   candidateChatIds: ReadonlySet<string>
   /** `{chat}`: the `agentChatLabel` chain. */
   chatLabel: (sessionId: string) => string
-  /** `{project}`: the project-store name, or the id when no name is found. */
-  projectName: (projectId: string) => string
 }
 
 /** What the previous evaluation saw. Compared against the next state. */
@@ -108,8 +96,6 @@ export interface AcpAnnouncementMemory {
   approvalKeys: ReadonlySet<string>
   /** `{sessionId}:{requestId}` of every denial notice, for any chat. */
   denialKeys: ReadonlySet<string>
-  switchingProjectId: string | null
-  failedProjectSwitchId: string | null
 }
 
 export interface AnnouncementResult<M> {
@@ -173,7 +159,7 @@ function observeNeedsYou(state: AcpAnnouncementState): Record<string, boolean> {
 /**
  * Diff the previous memory against the next ACP state.
  *
- * Emission order is switch, turn finished, needs-you, denial, approval, so that
+ * Emission order is turn finished, needs-you, denial, approval, so that
  * when several land together `Approval needed` is the one the announcer keeps.
  * A null `prev` returns the baseline memory and no announcements.
  */
@@ -197,27 +183,13 @@ export function deriveAcpAnnouncements(
     activeTurn,
     needsYou,
     approvalKeys: new Set(approvals.keys()),
-    denialKeys,
-    switchingProjectId: state.switchingProjectId,
-    failedProjectSwitchId: state.failedProjectSwitchId
+    denialKeys
   }
   if (prev === null) return { memory, announcements: [] }
 
   const announcements: string[] = []
 
-  // 1. Project switch: starts, or fails (even if the failure is cleared again
-  // in the same tick, because each store write is evaluated on its own).
-  if (state.switchingProjectId !== null && state.switchingProjectId !== prev.switchingProjectId) {
-    announcements.push(switchingAnnouncement(ctx.projectName(state.switchingProjectId)))
-  }
-  if (
-    state.failedProjectSwitchId !== null &&
-    state.failedProjectSwitchId !== prev.failedProjectSwitchId
-  ) {
-    announcements.push(switchFailedAnnouncement(ctx.projectName(state.failedProjectSwitchId)))
-  }
-
-  // 2. Turn finished: the active chat's own turn going true → false. Switching
+  // 1. Turn finished: the active chat's own turn going true → false. Switching
   // between chats changes nothing here, because the diff is per session. A
   // `closed` session is excluded: reopening a chat installs it as `closed` with
   // an optimistic live turn and clears that flag again when no agent owns the
@@ -238,7 +210,7 @@ export function deriveAcpAnnouncements(
     announcements.push(TURN_FINISHED)
   }
 
-  // 3. Needs-you: another chat in the active project goes false → true. An
+  // 2. Needs-you: another chat in the active project goes false → true. An
   // unknown previous value is a baseline, and a chat that already needed you
   // (a second permission, or it just stopped being active) stays silent.
   for (const sessionId of ctx.candidateChatIds) {
@@ -250,7 +222,7 @@ export function deriveAcpAnnouncements(
     }
   }
 
-  // 4. Denied by disconnect: a new notice for the active chat. A notice for
+  // 3. Denied by disconnect: a new notice for the active chat. A notice for
   // another chat is stored silently and shows when that chat is opened, and a
   // key the previous memory already held (switching chats) never repeats. A
   // session first seen in this same evaluation is a baseline.
@@ -261,7 +233,7 @@ export function deriveAcpAnnouncements(
     }
   }
 
-  // 5. Approval: a new pending key for the active chat. A session first seen in
+  // 4. Approval: a new pending key for the active chat. A session first seen in
   // this same evaluation is a baseline, not a new request.
   if (activeChatId !== null && prev.sessionIds.has(activeChatId)) {
     for (const [key, sessionId] of approvals) {

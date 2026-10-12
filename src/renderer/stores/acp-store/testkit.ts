@@ -47,8 +47,6 @@ export const FRESH = {
   suppressQueueFlush: {},
   pendingPromptReconcile: {},
   transportReconnecting: false,
-  queuedProjectSwitchId: null,
-  switchingProjectId: null,
   pendingBrowserOpen: {}
 }
 

@@ -159,7 +159,7 @@ where
     // 10 ACP command handlers (`send_prompt`, `create_session`, …) forward to it.
     let acp = Arc::clone(&state.acp);
     // Epic-4 bridge: the in-memory project registry — source for `GET /projects`
-    // (router) + `switch_project` cwd resolution (this handler).
+    // (router) + `create_session` project binding (this handler).
     let registry = Arc::clone(&state.registry);
     let registry_persistence = state.registry_persistence.clone();
     let projects_file = state.projects_file.clone();
@@ -180,20 +180,6 @@ where
     let subscribed_clients = Arc::new(tokio::sync::Mutex::new(Vec::<(String, ClientId)>::new()));
     let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed_clients))
         .with_watch_conn(out_tx.clone());
-    // Per-connection tracking for `switch_project` (Ask-First resolution): the
-    // last agent + session this connection used. `switch_project` reuses the
-    // agent rather than auto-spawning; a cold tab (no agent yet) → `NO_AGENT`.
-    // The old web-focused session is closed server-side after the new one is
-    // ready. Set by `spawn_agent` / `create_session` / `load_session` /
-    // `resume_session` (the handlers that carry an agentId / create a session).
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    // Project identity is connection-local. The registry's active id may have
-    // been changed by another browser/desktop and cannot prove this socket's
-    // tracked session is already rooted at that project.
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-
     // AC9: emit auth_required on the connection before anything else.
     if out_tx.send(Outbound::Event(auth_required_event())).is_err() {
         return; // receiver dropped before we started — peer already gone.
@@ -412,10 +398,6 @@ where
                         projects_file.as_deref(),
                         &write_tx,
                         &read_subscribed_clients,
-                        &mut current_agent,
-                        &current_session,
-                        &current_project,
-                        &switch_queue,
                         history_mode,
                         acp_catalog.as_ref(),
                         acp_install.as_ref(),
@@ -582,10 +564,6 @@ pub(super) async fn dispatch_connection_text(
     projects_file: Option<&PathBuf>,
     write_tx: &mpsc::UnboundedSender<Outbound>,
     subscribed_clients: &Arc<tokio::sync::Mutex<Vec<(String, ClientId)>>>,
-    current_agent: &mut Option<AgentId>,
-    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
-    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
-    switch_queue: &Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
     history_mode: HistoryMode,
     acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<&Arc<crate::acp::install::AcpInstallService>>,
@@ -627,10 +605,6 @@ pub(super) async fn dispatch_connection_text(
         projects_file,
         write_tx,
         &mut subscriptions,
-        current_agent,
-        current_session,
-        current_project,
-        switch_queue,
         history_mode,
         acp_catalog,
         acp_install,

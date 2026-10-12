@@ -31,12 +31,11 @@ import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
  * the drawer are modal (the header goes aria-hidden while one is open), so
  * controls read while a sheet is open use `includeHidden`.
  *
- * Two host-side behaviours cannot be produced on cue by the seeded server, so
- * the suite plays them at the wire, the way the web client receives them: a
- * `switch_project` that stays in flight and is then refused (the busy and
- * Failed rows), and the terminal socket's `exit_code_changed` event (the
- * "Last exit code N" row; the host derives the code from the shell's own
- * output, which this harness's Windows ConPTY shell does not emit reliably).
+ * One host-side behaviour cannot be produced on cue by the seeded server, so
+ * the suite plays it at the wire, the way the web client receives it: the
+ * terminal socket's `exit_code_changed` event (the "Last exit code N" row; the
+ * host derives the code from the shell's own output, which this harness's
+ * Windows ConPTY shell does not emit reliably).
  *
  * Left to the unit tests: the 9+ overflow (it needs ten chats asking at once),
  * the zero-project and no-project states (the seeded server always has
@@ -283,62 +282,28 @@ async function startChatFromLauncher(
 interface ProjectSwitchWire {
   /** How many `switch_project` requests the page has sent so far. */
   requestCount: () => number
-  /** Answer the oldest held request with the protocol's own failure frame. */
-  refuse: (message: string) => void
-  /** Let the oldest held request through to the server. */
-  release: () => void
 }
 
 /**
- * Hold every `switch_project` request at the relay wire, so a switch stays in
- * flight until the test refuses or releases it. The seeded server offers no way
- * to make a switch slow or fail on cue, and the refusal is the protocol's own
- * failure frame, so the app handles it as it would a host-side one. Every other
- * frame passes through. Must run before the page loads: the relay socket opens
- * at boot.
+ * Count every `switch_project` frame the page sends at the relay wire. Project
+ * switching is client-only, so the count must stay 0; every frame passes
+ * through. Must run before the page loads: the relay socket opens at boot.
  */
-async function holdProjectSwitches(page: Page): Promise<ProjectSwitchWire> {
+async function watchProjectSwitches(page: Page): Promise<ProjectSwitchWire> {
   let requests = 0
-  // Each held request remembers the socket pair it arrived on: the page may
-  // open more than one `/ws` connection, and the reply must go back on the same one.
-  const held: Array<{
-    id: string
-    message: string | Buffer
-    client: WebSocketRoute
-    server: WebSocketRoute
-  }> = []
   await page.routeWebSocket(
     (url) => url.pathname === '/ws',
     (client) => {
       const server = client.connectToServer()
       client.onMessage((message) => {
-        const frame = JSON.parse(String(message)) as { id?: string; type?: string }
-        if (frame.type === 'switch_project' && frame.id) {
-          requests += 1
-          held.push({ id: frame.id, message, client, server })
-          return
-        }
+        const frame = JSON.parse(String(message)) as { type?: string }
+        if (frame.type === 'switch_project') requests += 1
         server.send(message)
       })
       server.onMessage((message) => client.send(message))
     }
   )
-  const next = (): (typeof held)[number] => {
-    const request = held.shift()
-    if (!request) throw new Error('no switch_project request is being held')
-    return request
-  }
-  return {
-    requestCount: () => requests,
-    refuse: (message) => {
-      const { id, client } = next()
-      client.send(JSON.stringify({ id, ok: false, err: { code: 'no_agent', message } }))
-    },
-    release: () => {
-      const { message, server } = next()
-      server.send(message)
-    }
-  }
+  return { requestCount: () => requests }
 }
 
 interface TerminalWire {
@@ -644,81 +609,27 @@ test('project sheet returns focus on Escape and hardware back, and Add project o
   await expect(page.getByText('Create New Project')).toBeVisible()
 })
 
-test('a refused project switch keeps the sheet open on the row, and a switch in flight ignores other rows', async ({
+test('a project pick switches client-side, closes the sheet onto the subtitle and sends no host request', async ({
   page,
   request
 }) => {
   await createProject(request, 'shdr-busy-a')
   await createProject(request, 'shdr-busy-b')
-  await createProject(request, 'shdr-busy-c')
-  const wire = await holdProjectSwitches(page)
+  const wire = await watchProjectSwitches(page)
   await openMobileWorkspace(page, 'shdr-busy-a')
   const sheet = page.getByRole('dialog', { name: 'Projects' })
   const row = (name: string): Locator => sheet.getByRole('button', { name: new RegExp(`^${name}`) })
-  const [current, target, other] = ['shdr-busy-a', 'shdr-busy-b', 'shdr-busy-c']
 
-  // Attempt 1: in flight the other rows stay focusable but are aria-disabled (a
-  // native `disabled` would drop the focused row's focus); the current project
-  // keeps its native `disabled`.
   await subtitle(page).tap()
   await expect(sheet).toBeVisible()
-  await row(target).tap()
-  await expect.poll(() => wire.requestCount()).toBe(1)
-  await expect(row(target)).toBeFocused()
-  for (const name of [target, other]) {
-    await expect(row(name)).toHaveAttribute('aria-disabled', 'true')
-    await expect(row(name)).toHaveJSProperty('disabled', false)
-  }
-  await expect(row(current)).toHaveJSProperty('disabled', true)
-  await expect(row(current)).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(row('shdr-busy-a')).toHaveJSProperty('disabled', true)
+  await row('shdr-busy-b').tap()
 
-  // The refusal keeps the sheet open, marks the row Failed, raises the existing
-  // toast, leaves the focus on the row, and is logged with the project id and
-  // the error message.
-  const refusal = 'switch_project requires a live agent (e2e)'
-  const logged = page.waitForRequest(
-    (req) =>
-      req.url().endsWith('/log/frontend-error') &&
-      (req.postData() ?? '').includes('ProjectSwitcherDrawer')
-  )
-  wire.refuse(refusal)
-  await expect(row(target)).toContainText('Failed')
-  await expect(page.getByText(refusal)).toBeVisible()
-  await expect(sheet).toBeVisible()
-  await expect(row(target)).toBeFocused()
-  expect(JSON.parse((await logged).postData() ?? '{}')).toMatchObject({
-    level: 'warn',
-    source: 'ProjectSwitcherDrawer',
-    message: `Project switch failed for e2e-${target}: ${refusal}`
-  })
-  // The busy state ended: rows are tappable again.
-  await expect(row(other)).not.toHaveAttribute('aria-disabled', 'true')
-
-  // Dismissing the sheet clears the Failed badge and returns focus to the subtitle.
-  await page.keyboard.press('Escape')
   await expect(sheet).toBeHidden()
+  await expect(subtitle(page)).toHaveText('shdr-busy-b')
   await expect(subtitle(page)).toBeFocused()
-  await expect(subtitle(page)).toHaveText(current)
-  await subtitle(page).tap()
-  await expect(sheet).toBeVisible()
-  await expect(row(target)).not.toContainText('Failed')
-
-  // Attempt 2: a tap on another row while busy is ignored (no second request,
-  // the sheet stays, and focus follows the tap onto that row and stays there).
-  // `force`: Playwright treats an aria-disabled row as not actionable.
-  await row(target).tap()
-  await expect.poll(() => wire.requestCount()).toBe(2)
-  await row(other).tap({ force: true })
-  await expect(row(other)).toBeFocused()
-  await expect(sheet).toBeVisible()
-  expect(wire.requestCount()).toBe(2)
-
-  // Letting it through completes the switch: the sheet closes onto the subtitle.
-  wire.release()
-  await expect(sheet).toBeHidden()
-  await expect(subtitle(page)).toHaveText(target)
-  await expect(subtitle(page)).toBeFocused()
-  expect(wire.requestCount()).toBe(2)
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
+  expect(wire.requestCount()).toBe(0)
 })
 
 test('a worktree chat shows its chat/ branch and Worktree; another chat shows Local', async ({

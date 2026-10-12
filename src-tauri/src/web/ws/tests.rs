@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
-use crate::acp::SpawnOutcome;
+use crate::acp::{AgentId, SpawnOutcome};
 use crate::web::permissions::{PermissionRendezvous, QuestionRendezvous, TurnClaim};
 use std::collections::HashSet;
 
@@ -299,10 +299,6 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     let registry = Arc::new(ProjectRegistry::new());
     let (tx, mut rx) = mpsc::unbounded_channel();
     let subscriptions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let mut current_agent = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None));
-    let current_project = Arc::new(parking_lot::Mutex::new(None));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     assert!(
             dispatch_connection_text(
@@ -318,10 +314,6 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
                 None,
                 &tx,
                 &subscriptions,
-                &mut current_agent,
-                &current_session,
-                &current_project,
-                &switch_queue,
                 HistoryMode::LiveOnly,
                 None,
                 None,
@@ -349,10 +341,6 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
             None,
             &tx,
             &subscriptions,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -454,10 +442,6 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
     let registry = Arc::new(ProjectRegistry::new());
     let (tx, mut rx) = mpsc::unbounded_channel();
     let subscriptions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let mut current_agent = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None));
-    let current_project = Arc::new(parking_lot::Mutex::new(None));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
 
     assert!(
@@ -474,10 +458,6 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
                 None,
                 &tx,
                 &subscriptions,
-                &mut current_agent,
-                &current_session,
-                &current_project,
-                &switch_queue,
                 HistoryMode::LiveOnly,
                 None,
                 None,
@@ -499,10 +479,6 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
                 None,
                 &tx,
                 &subscriptions,
-                &mut current_agent,
-                &current_session,
-                &current_project,
-                &switch_queue,
                 HistoryMode::LiveOnly,
                 None,
                 None,
@@ -607,10 +583,6 @@ async fn accepted_prompt_survives_disconnect_and_persists_completion_for_reconne
     let (tx, rx) = mpsc::unbounded_channel();
     let subscriptions = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None));
-    let current_project = Arc::new(parking_lot::Mutex::new(None));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
 
     assert!(
@@ -627,10 +599,6 @@ async fn accepted_prompt_survives_disconnect_and_persists_completion_for_reconne
                 None,
                 &tx,
                 &subscriptions,
-                &mut current_agent,
-                &current_session,
-                &current_project,
-                &switch_queue,
                 HistoryMode::Server,
                 None,
                 None,
@@ -693,10 +661,6 @@ async fn handle_request_with_catalog(
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     handle_request(
         text,
@@ -711,10 +675,6 @@ async fn handle_request_with_catalog(
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         Some(catalog),
         None,
@@ -798,10 +758,6 @@ async fn handle_request_without_catalog(text: &str) -> WsReply {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     handle_request(
         text,
@@ -816,10 +772,6 @@ async fn handle_request_without_catalog(text: &str) -> WsReply {
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -905,10 +857,6 @@ async fn handle_request_with_store(text: &str, store: &Arc<WebStore>) -> WsReply
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     handle_request(
         text,
@@ -923,10 +871,6 @@ async fn handle_request_with_store(text: &str, store: &Arc<WebStore>) -> WsReply
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -1356,77 +1300,6 @@ fn auth_required_event_shape() {
 }
 
 #[test]
-fn project_switch_outcomes_and_failure_event_serialize_camel_case() {
-    let completed = SwitchProjectOutcome::Completed {
-        project_id: "p-2".to_string(),
-        session_id: SessionId("s-new".to_string()),
-        cwd: "/work/p2".to_string(),
-        mcp_server_count: 2,
-        agent_id: AgentId("a-1".to_string()),
-        previous_session_id: SessionId("s-old".to_string()),
-    };
-    let completed = serde_json::to_value(completed).expect("completed serde");
-    assert_eq!(completed["status"], "completed");
-    assert_eq!(completed["projectId"], "p-2");
-    assert_eq!(completed["sessionId"], "s-new");
-    assert_eq!(completed["mcpServerCount"], 2);
-    assert_eq!(completed["agentId"], "a-1");
-    assert_eq!(completed["previousSessionId"], "s-old");
-
-    let queued = SwitchProjectOutcome::Queued {
-        project_id: "p-3".to_string(),
-        current_session_id: SessionId("s-old".to_string()),
-    };
-    let queued = serde_json::to_value(queued).expect("queued serde");
-    assert_eq!(queued["status"], "queued");
-    assert_eq!(queued["projectId"], "p-3");
-    assert_eq!(queued["currentSessionId"], "s-old");
-
-    let failed = project_switch_failed_event(
-        "r-1".to_string(),
-        "p-3".to_string(),
-        SessionId("s-old".to_string()),
-        "persist failed".to_string(),
-    );
-    assert_eq!(failed.type_, "project_switch_failed");
-    assert_eq!(failed.sid.as_deref(), Some("s-old"));
-    assert_eq!(failed.seq, 0);
-    assert_eq!(failed.payload["requestId"], "r-1");
-    assert_eq!(failed.payload["projectId"], "p-3");
-    assert_eq!(failed.payload["previousSessionId"], "s-old");
-    assert_eq!(failed.payload["message"], "persist failed");
-}
-
-#[test]
-fn connection_specific_no_op_requires_known_matching_project() {
-    assert!(!connection_already_on_project(None, "p-1"));
-    assert!(!connection_already_on_project(Some("p-2"), "p-1"));
-    assert!(connection_already_on_project(Some("p-1"), "p-1"));
-}
-
-#[test]
-fn project_switch_queue_replacement_is_latest_wins() {
-    let pending = |request_id: &str, project_id: &str| PendingProjectSwitch {
-        request_id: request_id.to_string(),
-        target: ProjectSwitchContext {
-            project_id: project_id.to_string(),
-            cwd: format!("/work/{project_id}"),
-            mcp_servers: Vec::new(),
-        },
-        previous_session_id: SessionId("s-old".to_string()),
-    };
-    let mut queue = ProjectSwitchQueue::default();
-    assert!(queue.replace_pending(pending("r-1", "p-1")).is_none());
-    let replaced = queue
-        .replace_pending(pending("r-2", "p-2"))
-        .expect("first request replaced");
-    assert_eq!(replaced.request_id, "r-1");
-    assert_eq!(replaced.target.project_id, "p-1");
-    assert_eq!(queue.pending.as_ref().unwrap().request_id, "r-2");
-    assert_eq!(queue.pending.as_ref().unwrap().target.project_id, "p-2");
-}
-
-#[test]
 fn ws_reply_ok_and_err_shape() {
     let ok = WsReply::ok("r1", Some(json!({"ok": true})));
     let v = serde_json::to_value(&ok).expect("serialize ok");
@@ -1468,8 +1341,7 @@ pub(super) fn test_access() -> ConnectionAccess {
 /// The no-op `AcpManager` (`vec![]` sinks) returns fast `Err`s for the ACP
 /// command methods (no agent spawned) which the handlers map to
 /// `WsErrorCode`; the generic tests use an empty registry + no
-/// agent/session (the `switch_project`-specific tests call
-/// `handle_request` directly with a populated registry).
+/// agent/session.
 fn handle_sync(text: &str, authed: &mut bool) -> WsReply {
     handle_sync_with_auth(text, authed, None)
 }
@@ -1528,10 +1400,6 @@ pub(super) fn handle_sync_with_access(
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1549,10 +1417,6 @@ pub(super) fn handle_sync_with_access(
             None,
             &tx,
             &mut subs,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -2020,9 +1884,7 @@ fn handle_request_post_auth_other_types_not_implemented() {
     // Story 1.7 wired `respond_permission`; Story 1.8 wired `send_prompt`,
     // `create_session`, `load_session`, `resume_session`, `close_session`,
     // `list_sessions`, `cancel_prompt`, `set_mode`, `set_model`,
-    // `set_config_option`. The Epic-4 bridge now wires `switch_project` too
-    // (a malformed `{}` payload → `unsupported`, covered separately). Only
-    // truly unknown types stay `not_implemented`.
+    // `set_config_option`. Only truly unknown types stay `not_implemented`.
     let ty = "totally_unknown_type";
     let reply = handle_sync(
         &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
@@ -2052,7 +1914,6 @@ fn handle_request_post_auth_acp_commands_reject_malformed_payload() {
         "set_config_option",
         "spawn_agent",
         "kill_agent",
-        "switch_project",
         "promote_session",
         // CAP-11: gated on history mode before payload parse — still
         // `unsupported` (NOT the not_implemented stub) in live-only mode.
@@ -2102,10 +1963,6 @@ async fn handle_list_agents_returns_identity_summaries() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     let reply = handle_request(
         r#"{"id":"r1","type":"list_agents","payload":{}}"#,
@@ -2120,10 +1977,6 @@ async fn handle_list_agents_returns_identity_summaries() {
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -2334,10 +2187,6 @@ async fn handle_resume_session_ok_reply_carries_null_replay_snapshot() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     let reply = handle_request(
             r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-1","sessionId":"sess-1","cwd":"/tmp"}}"#,
@@ -2352,10 +2201,6 @@ async fn handle_resume_session_ok_reply_carries_null_replay_snapshot() {
             None,
             &tx,
             &mut subs,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -2612,10 +2457,6 @@ async fn install_acp_agent_unknown_agent_returns_catalog_agent_not_found() {
     let registry = Arc::new(ProjectRegistry::new());
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs: Vec<(String, ClientId)> = Vec::new();
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     let reply = handle_request(
         r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"does-not-exist"}}"#,
@@ -2630,10 +2471,6 @@ async fn install_acp_agent_unknown_agent_returns_catalog_agent_not_found() {
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         Some(&store),
@@ -2891,10 +2728,6 @@ fn handle_respond_permission_malformed_payload_is_unsupported() {
     let mut subs = Vec::new();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2912,10 +2745,6 @@ fn handle_respond_permission_malformed_payload_is_unsupported() {
             None,
             &tx,
             &mut subs,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -2985,10 +2814,6 @@ fn handle_respond_permission_wrong_agent_is_permission_denied() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
         &mut authed,
@@ -3002,10 +2827,6 @@ fn handle_respond_permission_wrong_agent_is_permission_denied() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3041,10 +2862,6 @@ fn handle_respond_permission_needs_no_subscription() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
         &mut authed,
@@ -3058,10 +2875,6 @@ fn handle_respond_permission_needs_no_subscription() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3082,10 +2895,6 @@ fn handle_respond_permission_resolves_then_second_is_already_resolved() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let ok_reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
         &mut authed,
@@ -3099,10 +2908,6 @@ fn handle_respond_permission_resolves_then_second_is_already_resolved() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3123,10 +2928,6 @@ fn handle_respond_permission_resolves_then_second_is_already_resolved() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3146,10 +2947,6 @@ fn handle_respond_permission_invalid_option_is_permission_denied() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
         &mut authed,
@@ -3163,10 +2960,6 @@ fn handle_respond_permission_invalid_option_is_permission_denied() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3239,10 +3032,6 @@ fn handle_answer_question_malformed_payload_is_unsupported() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut subs = Vec::new();
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1"}}"#,
@@ -3257,10 +3046,6 @@ fn handle_answer_question_malformed_payload_is_unsupported() {
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3279,10 +3064,6 @@ fn handle_answer_question_wrong_agent_is_permission_denied() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a2","questionId":"q-1","values":["plan-a"]}}"#,
         &mut authed,
@@ -3296,10 +3077,6 @@ fn handle_answer_question_wrong_agent_is_permission_denied() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3333,10 +3110,6 @@ fn handle_answer_question_needs_no_subscription() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-A","values":["plan-a"]}}"#,
         &mut authed,
@@ -3350,10 +3123,6 @@ fn handle_answer_question_needs_no_subscription() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3372,10 +3141,6 @@ fn handle_answer_question_resolves_then_second_is_already_resolved() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let ok_reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
         &mut authed,
@@ -3389,10 +3154,6 @@ fn handle_answer_question_resolves_then_second_is_already_resolved() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3412,10 +3173,6 @@ fn handle_answer_question_resolves_then_second_is_already_resolved() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3434,10 +3191,6 @@ fn handle_answer_question_invalid_option_is_permission_denied() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["escalate"]}}"#,
         &mut authed,
@@ -3451,10 +3204,6 @@ fn handle_answer_question_invalid_option_is_permission_denied() {
         None,
         &tx,
         &mut subs.clone(),
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -3499,10 +3248,6 @@ fn handle_subscribe_ok_and_stale() {
     let mut subs = Vec::new();
     let mut authed = true;
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let reply = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -3520,10 +3265,6 @@ fn handle_subscribe_ok_and_stale() {
             None,
             &tx,
             &mut subs,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -3551,10 +3292,6 @@ fn handle_subscribe_ok_and_stale() {
             None,
             &tx,
             &mut subs2,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -3581,10 +3318,6 @@ fn handle_subscribe_ok_and_stale() {
             None,
             &tx,
             &mut subs2,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -3612,10 +3345,6 @@ fn handle_subscribe_ok_and_stale() {
             None,
             &tx,
             &mut subs3,
-            &mut current_agent,
-            &current_session,
-            &current_project,
-            &switch_queue,
             HistoryMode::LiveOnly,
             None,
             None,
@@ -3825,453 +3554,6 @@ async fn open_persisted_session_catalog_branch_admits_finalized_session() {
 
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
-}
-
-/// Epic-4 bridge: a cold web tab (no agent spawned / session created yet)
-/// sends `switch_project` → deferred `Selected` (Ask-First resolution:
-/// do NOT auto-spawn). Per-connection `current_project` is updated; the
-/// host default is NOT touched (no `registry.set_default_project`, no
-/// `broadcast_projects_changed`, no persistence — a per-client switch is
-/// ephemeral). No agent/session is created — the web client spawns the
-/// agent lazily when a chat starts.
-#[test]
-fn handle_switch_project_cold_tab_is_deferred_select() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
-    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-    let mut subs = Vec::new();
-    let mut authed = true;
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-    let reply = block_on(handle_request(
-        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    ));
-    assert!(reply.ok, "{:?}", reply.err);
-    let payload = reply.payload.expect("selected payload");
-    assert_eq!(payload["status"], "selected");
-    assert_eq!(payload["projectId"], "p-1");
-    assert_eq!(payload["cwd"], "/a");
-    // Cold tab: no session was created.
-    assert!(current_session.lock().is_none());
-    // Per-connection tracking reflects the switch.
-    let cp = current_project.lock().clone();
-    assert_eq!(cp.as_deref(), Some("p-1"));
-    // The host default is UNCHANGED (per-connection switch — Epic 7).
-    let snap = registry.snapshot();
-    assert_eq!(snap.default_project_id, None);
-}
-
-/// Cold-tab `switch_project` with an unknown/archived/pathless `projectId`
-/// → `NOT_FOUND` (the registry lookup is hoisted above the agent check, so
-/// a cold tab gets the same `not_found` as the live-agent path).
-#[test]
-fn handle_switch_project_cold_tab_unknown_id_is_not_found() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: true,
-        }],
-        Some("p-1".to_string()),
-    );
-    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-    let mut subs = Vec::new();
-    let mut authed = true;
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-    let reply = block_on(handle_request(
-        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    ));
-    assert!(!reply.ok);
-    assert_eq!(reply.err.unwrap().code, "not_found");
-}
-
-/// Cold-tab `switch_project` is per-connection (Epic 7): it updates only
-/// the requester's `current_project`. It does NOT persist to the
-/// `--projects-file` (only `set_default_project` writes the durable
-/// default) and does NOT broadcast `projects_changed`.
-#[test]
-fn execute_cold_tab_select_is_per_connection_no_persistence_no_broadcast() {
-    // A relay is wired (VPS-mode fixture) but the cold-tab switch must NOT
-    // touch it (no broadcast). Prefix `_` so the unused binding documents
-    // the intent without failing the build.
-    let _relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
-    // A file registry + path are wired (VPS-mode fixtures), but the
-    // cold-tab switch must NOT touch them.
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![crate::acp::VfsRoot {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            path: PathBuf::from("/a"),
-            color: "blue".to_string(),
-            is_archived: false,
-            mcp_servers: vec![],
-        }],
-        None,
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let path = std::env::temp_dir().join(format!(
-        "termul-ws-cold-tab-noperist-{}.json",
-        std::process::id()
-    ));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let target = ProjectSwitchContext {
-        project_id: "p-1".to_string(),
-        cwd: "/a".to_string(),
-        mcp_servers: vec![],
-    };
-    let result = execute_cold_tab_select(target, &current_project);
-    // Capture whether a file was written (it must NOT be).
-    let leaked = std::fs::read_to_string(&path).ok();
-    let _ = std::fs::remove_file(&path);
-    let outcome = result.expect("cold-tab select succeeds");
-    let SwitchProjectOutcome::Selected { project_id, cwd } = outcome else {
-        panic!("expected Selected, got {:?}", outcome);
-    };
-    assert_eq!(project_id, "p-1");
-    assert_eq!(cwd, "/a");
-    // Per-connection tracking reflects the switch.
-    let cp = current_project.lock().clone();
-    assert_eq!(cp.as_deref(), Some("p-1"));
-    // The host default is UNCHANGED (per-connection switch).
-    assert_eq!(registry.snapshot().default_project_id, None);
-    // The file registry is UNCHANGED (no persistence on switch).
-    assert_eq!(file_registry.lock().default_project_id(), None);
-    // No file was written to disk.
-    assert!(leaked.is_none(), "switch must not write the projects file");
-}
-
-/// `switch_project` with a live agent but an unknown `projectId` →
-/// `NOT_FOUND` (registry lookup happens BEFORE `new_session`, so the no-op
-/// AcpManager never creates a session).
-#[test]
-fn handle_switch_project_unknown_id_is_not_found() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let registry = Arc::new(ProjectRegistry::new());
-    // A known project so the registry is non-empty; "missing" is absent.
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: true,
-        }],
-        Some("p-1".to_string()),
-    );
-    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-    let mut subs = Vec::new();
-    let mut authed = true;
-    let mut current_agent: Option<crate::acp::AgentId> = Some(crate::acp::AgentId::new());
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-    let reply = block_on(handle_request(
-        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    ));
-    assert!(!reply.ok);
-    assert_eq!(reply.err.unwrap().code, "not_found");
-}
-
-/// Issue #849: an agent IS tracked (a chat existed) but no session is
-/// (tracked session closed/never created). `switch_project` must NOT fail
-/// with "requires a tracked current session" — it degrades to the cold-tab
-/// deferred select: per-connection `current_project` updates, no session is
-/// created, no broadcast, no persistence.
-#[test]
-fn handle_switch_project_agent_without_session_degrades_to_select() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
-    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-    let mut subs = Vec::new();
-    let mut authed = true;
-    // An agent is tracked, but NO session is.
-    let mut current_agent: Option<crate::acp::AgentId> = Some(crate::acp::AgentId::new());
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-    let reply = block_on(handle_request(
-        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    ));
-    assert!(reply.ok, "issue #849: switch must succeed: {:?}", reply.err);
-    let payload = reply.payload.expect("selected payload");
-    assert_eq!(payload["status"], "selected");
-    assert_eq!(payload["projectId"], "p-1");
-    assert_eq!(payload["cwd"], "/a");
-    // No session was created; per-connection tracking reflects the switch.
-    assert!(current_session.lock().is_none());
-    assert_eq!(current_project.lock().as_deref(), Some("p-1"));
-    // The host default is UNCHANGED (per-connection switch — Epic 7).
-    assert_eq!(registry.snapshot().default_project_id, None);
-}
-
-/// Regression: `close_session` failing must still clear the connection's
-/// `current_session`/`current_project` trackers. The capability gate fails
-/// BEFORE contacting the agent on `close=false` agents (e.g. devin — the
-/// observed "agent does not support session/close"), and the renderer drops
-/// the session locally on every close. A stale tracker made the next
-/// `switch_project` take the Completed path, minting a session the client
-/// could not attribute ("Completed project switch has no tracked agent").
-#[tokio::test]
-async fn close_session_failure_clears_tracker_so_switch_selects() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    // Default capabilities advertise no `sessionCapabilities.close`, so the
-    // gate errors with "agent does not support session/close".
-    acp.install_test_agent_with_sessions(crate::acp::AgentId("a-1".to_string()), HashSet::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
-    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-    let mut subs = Vec::new();
-    let mut authed = true;
-    let mut current_agent: Option<crate::acp::AgentId> =
-        Some(crate::acp::AgentId("a-1".to_string()));
-    let current_session = Arc::new(parking_lot::Mutex::new(Some(crate::acp::SessionId(
-        "s-1".to_string(),
-    ))));
-    let current_project = Arc::new(parking_lot::Mutex::new(Some("p-old".to_string())));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-
-    let reply = handle_request(
-        r#"{"id":"c1","type":"close_session","payload":{"agentId":"a-1","sessionId":"s-1"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    )
-    .await;
-    // The capability miss still surfaces as an error reply — the fix is in the
-    // tracker bookkeeping, not the client-visible outcome.
-    assert!(!reply.ok);
-    assert!(current_session.lock().is_none());
-    assert!(current_project.lock().is_none());
-
-    // The follow-up switch must now take the cold-tab `selected` path instead
-    // of minting a session the client cannot attribute.
-    let reply = handle_request(
-        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    )
-    .await;
-    assert!(reply.ok, "switch must succeed: {:?}", reply.err);
-    let payload = reply.payload.expect("selected payload");
-    assert_eq!(payload["status"], "selected");
-    assert_eq!(payload["projectId"], "p-1");
-}
-
-/// A failed `close_session` for a session this connection is NOT tracking
-/// leaves the tracker alone — the `== closing` guard keeps a genuinely
-/// current session pointed at.
-#[tokio::test]
-async fn close_session_failure_on_untracked_session_keeps_tracker() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    acp.install_test_agent_with_sessions(crate::acp::AgentId("a-1".to_string()), HashSet::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-    let mut subs = Vec::new();
-    let mut authed = true;
-    let mut current_agent: Option<crate::acp::AgentId> =
-        Some(crate::acp::AgentId("a-1".to_string()));
-    let current_session = Arc::new(parking_lot::Mutex::new(Some(crate::acp::SessionId(
-        "s-live".to_string(),
-    ))));
-    let current_project = Arc::new(parking_lot::Mutex::new(Some("p-here".to_string())));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-
-    let reply = handle_request(
-        r#"{"id":"c1","type":"close_session","payload":{"agentId":"a-1","sessionId":"s-other"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    )
-    .await;
-    assert!(!reply.ok);
-    assert_eq!(current_session.lock().as_ref().unwrap().0, "s-live");
-    assert_eq!(current_project.lock().as_deref(), Some("p-here"));
 }
 
 /// Host-owned history (CAP-2): `list_persisted_sessions` serves the
@@ -4820,70 +4102,6 @@ async fn get_session_payload_standalone_corrupt_log_is_unsupported() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[tokio::test]
-async fn try_reopen_returns_none_when_no_stored_session() {
-    let root = std::env::temp_dir().join(format!("termul-ws-reopen-none-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&root).unwrap();
-    let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
-        .await
-        .unwrap();
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let target = ProjectSwitchContext {
-        project_id: "p-1".to_string(),
-        cwd: "/a".to_string(),
-        mcp_servers: vec![],
-    };
-    let result =
-        try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
-            .await
-            .unwrap();
-    assert!(result.is_none());
-    let _ = std::fs::remove_dir_all(root);
-}
-
-/// Switch-back reopen returns `Err` (fallback) when a durable session exists
-/// but the agent cannot load or resume it. `execute_project_switch` catches
-/// this and falls back to a new session.
-#[tokio::test]
-async fn try_reopen_falls_back_when_agent_cannot_load() {
-    let root = std::env::temp_dir().join(format!(
-        "termul-ws-reopen-fallback-{}",
-        uuid::Uuid::new_v4()
-    ));
-    let cwd = root.join("cwd");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
-        .await
-        .unwrap();
-    persistence
-        .register_session(crate::acp::SessionRegistration {
-            session_id: "s-1".to_string(),
-            stable_agent_namespace: Some("config:claude".to_string()),
-            runtime_agent_id: Some("agent-1".to_string()),
-            project_id: Some("p-1".to_string()),
-            cwd: cwd.clone(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let target = ProjectSwitchContext {
-        project_id: "p-1".to_string(),
-        // `register_session` canonicalizes cwd; match exactly so the
-        // `(project_id, cwd)` lookup finds the stored session.
-        cwd: persistence.metadata("s-1").unwrap().cwd,
-        mcp_servers: vec![],
-    };
-    let result =
-        try_reopen_session_for_switch(&acp, &AgentId("a-1".to_string()), &persistence, &target)
-            .await;
-    assert!(
-        result.is_err(),
-        "no registered agent → reopen fails → Err → new session"
-    );
-    let _ = std::fs::remove_dir_all(root);
-}
-
 /// `set_default_project` WS request (Epic 7): updates the host default,
 /// persists to the `FileProjectRegistry` (VPS, rollback-safe), and
 /// broadcasts `projects_changed`. Mirrors the `set_host_default_project`
@@ -5031,12 +4249,10 @@ async fn handle_set_default_project_unknown_id_is_not_found() {
     );
 }
 
-/// `set_default_project` WS request is a distinct operation from
-/// `switch_project`: the host default changes + broadcasts to ALL clients,
-/// while a per-connection switch touches only the requester's
-/// `current_project`. This test documents the parity boundary.
+/// `set_default_project` changes the host default and broadcasts
+/// `projects_changed` (carrying the new default) to ALL clients.
 #[tokio::test]
-async fn handle_set_default_project_broadcasts_unlike_switch() {
+async fn handle_set_default_project_broadcasts_to_all_clients() {
     let relay = Arc::new(WsRelaySink::new());
     let registry = Arc::new(ProjectRegistry::new());
     registry.set(
@@ -5080,303 +4296,6 @@ async fn handle_set_default_project_broadcasts_unlike_switch() {
     );
 }
 
-/// P7 — live-agent `switch_project` success path: no `projects_changed`
-/// broadcast, no `FileProjectRegistry` persistence. The cold-tab path has
-/// this assertion; this test covers the live-agent `execute_project_switch`
-/// path. A `block_on` AcpManager can't spawn a real agent, so we call
-/// `execute_project_switch` directly with a no-op AcpManager — the key
-/// assertion is that NO broadcast fires (the relay's event log stays empty)
-/// and the file registry default is UNCHANGED even though the connection's
-/// `current_project` was updated.
-///
-/// Note: `AcpManager::new(vec![])` has no registered agents, so
-/// `new_session_with_context` will fail. We assert the error path does NOT
-/// broadcast (the success path can't be exercised without a real agent).
-/// This is a structural gap — a regression that adds a broadcast BEFORE
-/// the session-creation step would be caught here.
-#[tokio::test]
-async fn execute_project_switch_live_agent_path_does_not_broadcast() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: true,
-        }],
-        Some("p-1".to_string()),
-    );
-    // A file registry + path are wired (VPS fixtures), but the switch must
-    // NOT touch them.
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![crate::acp::VfsRoot {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            path: PathBuf::from("/a"),
-            color: "blue".to_string(),
-            is_archived: false,
-            mcp_servers: vec![],
-        }],
-        Some("p-1".to_string()),
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let path = std::env::temp_dir().join(format!(
-        "termul-ws-live-switch-nobroadcast-{}-{}.json",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    // Subscribe a client to prove NO broadcast reaches it.
-    relay.seed_session_for_test("sess-1");
-    let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
-
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let target = ProjectSwitchContext {
-        project_id: "p-1".to_string(),
-        cwd: "/a".to_string(),
-        mcp_servers: vec![],
-    };
-    // The live-agent path will fail (no registered agent →
-    // new_session_with_context errors), but the key assertion is that NO
-    // broadcast fires even on this path. A regression that calls
-    // broadcast_projects_changed BEFORE the session-creation error would
-    // be caught.
-    let _result = execute_project_switch(
-        &AgentId("a-1".to_string()),
-        target,
-        SessionId("s-old".to_string()),
-        &acp,
-        &relay,
-        &current_session,
-        &current_project,
-    )
-    .await;
-    // No broadcast reached the subscribed client.
-    assert!(
-        rx.try_recv().is_err(),
-        "switch_project must NOT broadcast projects_changed (per-connection)"
-    );
-    // The file registry default is UNCHANGED (no persistence on switch).
-    assert_eq!(
-        file_registry.lock().default_project_id(),
-        Some("p-1"),
-        "switch must not persist to the file registry"
-    );
-    // No file was written to disk.
-    assert!(!path.exists(), "switch must not write the projects file");
-}
-
-/// P8 — multi-client: a `switch_project` by one client does NOT fan out
-/// a `projects_changed` event to other subscribed clients. This is the
-/// symmetric negative of `handle_set_default_project_broadcasts_unlike_switch`
-/// (which proves `set_default_project` DOES broadcast). The cold-tab path
-/// is used (no live agent) — the assertion is that the relay's event log
-/// stays empty for the non-switching client.
-#[tokio::test]
-async fn switch_project_cold_tab_does_not_fan_out_to_other_clients() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
-    // Client A subscribes to sess-a; client B subscribes to sess-b.
-    relay.seed_session_for_test("sess-a");
-    relay.seed_session_for_test("sess-b");
-    let (_client_a, mut rx_a, _replay_a) = relay.subscribe("sess-a", None).await;
-    let (_client_b, mut rx_b, _replay_b) = relay.subscribe("sess-b", None).await;
-
-    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-    let mut subs = Vec::new();
-    let mut authed = true;
-    let mut current_agent: Option<crate::acp::AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
-    let current_project_a = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-
-    // Client A sends switch_project (cold-tab path).
-    let reply_a = handle_request(
-        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
-        &mut authed,
-        &mut None,
-        &mut test_access(),
-        None,
-        &acp,
-        &relay,
-        &registry,
-        None,
-        None,
-        &tx,
-        &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project_a,
-        &switch_queue,
-        HistoryMode::LiveOnly,
-        None,
-        None,
-        None,
-    )
-    .await;
-    assert!(reply_a.ok, "client A switch succeeds: {:?}", reply_a.err);
-
-    // Client A's current_project reflects the switch.
-    assert_eq!(current_project_a.lock().as_deref(), Some("p-1"));
-
-    // P8: client B receives ZERO projects_changed events (no fan-out).
-    let mut b_drained = 0;
-    while rx_b.try_recv().is_ok() {
-        b_drained += 1;
-    }
-    assert_eq!(
-        b_drained, 0,
-        "switch_project must not fan out to other clients"
-    );
-    // Client A also receives nothing (switch_project responds to the
-    // requester ONLY — no broadcast).
-    let mut a_drained = 0;
-    while rx_a.try_recv().is_ok() {
-        a_drained += 1;
-    }
-    assert_eq!(a_drained, 0, "switch_project must not broadcast at all");
-}
-
-/// P10 — cold-tab `switch_project` with `registry_persistence: Some(...)`
-/// still does NOT write the file (the persistence block was removed from
-/// the switch path entirely — only `set_default_project` persists).
-#[test]
-fn execute_cold_tab_select_with_persistence_does_not_write_file() {
-    let _relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
-    // Wire a REAL file registry + path (VPS-mode fixtures) — the switch
-    // must NOT touch them.
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![crate::acp::VfsRoot {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            path: PathBuf::from("/a"),
-            color: "blue".to_string(),
-            is_archived: false,
-            mcp_servers: vec![],
-        }],
-        None,
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let path = std::env::temp_dir().join(format!(
-        "termul-ws-cold-tab-vps-noperist-{}-{}.json",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let target = ProjectSwitchContext {
-        project_id: "p-1".to_string(),
-        cwd: "/a".to_string(),
-        mcp_servers: vec![],
-    };
-    // The cold-tab switch only takes (target, current_project) now — it
-    // no longer accepts registry_persistence/projects_file. Calling it
-    // directly proves the file is untouched even when VPS fixtures exist
-    // in the caller's scope.
-    let result = execute_cold_tab_select(target, &current_project);
-    let leaked = std::fs::read_to_string(&path).ok();
-    let _ = std::fs::remove_file(&path);
-    let outcome = result.expect("cold-tab select succeeds");
-    let SwitchProjectOutcome::Selected { project_id, cwd } = outcome else {
-        panic!("expected Selected, got {:?}", outcome);
-    };
-    assert_eq!(project_id, "p-1");
-    assert_eq!(cwd, "/a");
-    assert_eq!(current_project.lock().as_deref(), Some("p-1"));
-    // The host default is UNCHANGED (per-connection switch).
-    assert_eq!(registry.snapshot().default_project_id, None);
-    // The file registry is UNCHANGED.
-    assert_eq!(file_registry.lock().default_project_id(), None);
-    // No file was written.
-    assert!(leaked.is_none(), "switch must not write the projects file");
-}
-
-/// P17 — `connection_already_on_project` gate: when the connection's
-/// `current_project` already matches the target, the switch returns early
-/// (a no-op `Completed` with the previous session). The cold-tab test
-/// (`execute_cold_tab_select_is_per_connection_no_persistence_no_broadcast`)
-/// covers the non-matching path; this test pins the matching path.
-#[tokio::test]
-async fn execute_project_switch_returns_early_when_already_on_project() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: true,
-        }],
-        Some("p-1".to_string()),
-    );
-    let current_session = Arc::new(parking_lot::Mutex::new(Some(SessionId(
-        "s-prev".to_string(),
-    ))));
-    // The connection is ALREADY on p-1.
-    let current_project = Arc::new(parking_lot::Mutex::new(Some("p-1".to_string())));
-    let target = ProjectSwitchContext {
-        project_id: "p-1".to_string(),
-        cwd: "/a".to_string(),
-        mcp_servers: vec![],
-    };
-    let outcome = execute_project_switch(
-        &AgentId("a-1".to_string()),
-        target,
-        SessionId("s-prev".to_string()),
-        &acp,
-        &relay,
-        &current_session,
-        &current_project,
-    )
-    .await
-    .expect("early return succeeds");
-    // The switch is a no-op: same session, no new session created.
-    let SwitchProjectOutcome::Completed {
-        project_id,
-        session_id,
-        cwd,
-        ..
-    } = outcome
-    else {
-        panic!("expected Completed (early return), got {:?}", outcome);
-    };
-    assert_eq!(project_id, "p-1");
-    assert_eq!(session_id.0, "s-prev");
-    assert_eq!(cwd, "/a");
-    // current_session unchanged (no new session).
-    assert_eq!(current_session.lock().as_ref().unwrap().0, "s-prev");
-}
-
 // ---- Issue #837: resume_session split-brain guard at the WS boundary ----
 
 /// A `resume_session` dispatched at a duplicate agent while the ORIGINAL
@@ -5401,10 +4320,6 @@ async fn handle_resume_session_rejected_mid_turn_maps_to_session_owned_by_other(
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     let reply = handle_request(
         r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-duplicate","sessionId":"sess-mid","cwd":"/tmp"}}"#,
@@ -5419,10 +4334,6 @@ async fn handle_resume_session_rejected_mid_turn_maps_to_session_owned_by_other(
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,
@@ -5458,10 +4369,6 @@ async fn handle_list_agents_reports_owned_sessions() {
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
     let mut subs = Vec::new();
     let registry = Arc::new(ProjectRegistry::new());
-    let mut current_agent: Option<AgentId> = None;
-    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
     let mut authed = true;
     let reply = handle_request(
         r#"{"id":"r1","type":"list_agents","payload":{}}"#,
@@ -5476,10 +4383,6 @@ async fn handle_list_agents_reports_owned_sessions() {
         None,
         &tx,
         &mut subs,
-        &mut current_agent,
-        &current_session,
-        &current_project,
-        &switch_queue,
         HistoryMode::LiveOnly,
         None,
         None,

@@ -22,6 +22,11 @@ use crate::acp::atomic_file;
 use crate::path_validation::strip_verbatim_prefix;
 pub const SESSION_SCHEMA_VERSION: u32 = 1;
 const INDEX_FILE: &str = "sessions.json";
+/// Written once the one-shot migration that stamped every project-less
+/// persisted session with [`UNASSIGNED_PROJECT_ID`] has completed, so later
+/// opens never re-run it (and never re-stamp a session whose project was
+/// deliberately cleared by a future feature).
+const UNASSIGNED_MIGRATION_MARKER: &str = "unassigned-project-migrated";
 const METADATA_FILE: &str = "metadata.json";
 const MESSAGES_FILE: &str = "messages.jsonl";
 const TOOL_CALLS_FILE: &str = "tool-calls.jsonl";
@@ -342,7 +347,7 @@ impl SessionPersistence {
             session_id: registration.session_id.clone(),
             stable_agent_namespace: registration.stable_agent_namespace,
             runtime_agent_id: registration.runtime_agent_id,
-            project_id: registration.project_id,
+            project_id: stamped_project_id(registration.project_id),
             cwd: cwd.clone(),
             title: None,
             title_source: None,
@@ -422,7 +427,6 @@ impl SessionPersistence {
                     )));
                 }
                 metadata.runtime_agent_id = registration.runtime_agent_id;
-                metadata.project_id = registration.project_id;
                 metadata.status = PersistedSessionStatus::Active;
                 metadata.last_activity_at = metadata.last_activity_at.max(now);
                 metadata.discovered = true;
@@ -447,7 +451,7 @@ impl SessionPersistence {
             storage_key,
             session_id: session_id.to_string(),
             stable_agent_namespace: registration.stable_agent_namespace,
-            project_id: registration.project_id,
+            project_id: stamped_project_id(registration.project_id),
             runtime_agent_id: registration.runtime_agent_id,
             cwd: cwd.clone(),
             title: normalized_title,
@@ -517,7 +521,7 @@ impl SessionPersistence {
             session_id: registration.session_id.clone(),
             stable_agent_namespace: registration.stable_agent_namespace,
             runtime_agent_id: registration.runtime_agent_id,
-            project_id: registration.project_id,
+            project_id: stamped_project_id(registration.project_id),
             cwd: strip_verbatim_prefix(&registration.cwd.to_string_lossy()).into_owned(),
             title,
             title_source: None,
@@ -1595,6 +1599,9 @@ impl SessionPersistence {
             Err(error) => return Err(error.into()),
         };
 
+        let migration_marker = self.inner.root.join(UNASSIGNED_MIGRATION_MARKER);
+        let migrate_unassigned = !migration_marker.exists();
+        let mut unassigned_stamped = 0usize;
         let mut recovered = HashMap::new();
         let mut logical_ids = HashSet::new();
         for entry in fs::read_dir(&self.inner.root)? {
@@ -1769,6 +1776,16 @@ impl SessionPersistence {
                 metadata.status = PersistedSessionStatus::Closed;
                 dirty = true;
             }
+            if migrate_unassigned
+                && metadata
+                    .project_id
+                    .as_deref()
+                    .is_none_or(|id| id.trim().is_empty())
+            {
+                metadata.project_id = Some(UNASSIGNED_PROJECT_ID.to_string());
+                unassigned_stamped += 1;
+                dirty = true;
+            }
             if dirty {
                 if let Err(e) = self.persist_metadata(&metadata) {
                     log::error!(
@@ -1789,6 +1806,14 @@ impl SessionPersistence {
         // metadata + logs so stale titles/status/counts/namespaces cannot survive.
         let _ = existing_index;
         self.persist_index().await?;
+        if migrate_unassigned {
+            // Marker last: a crash before this point re-runs the (idempotent)
+            // stamping on the next open.
+            atomic_file::replace(&migration_marker, b"1\n")?;
+            log::info!(
+                "[acp-history] unassigned-project migration complete stamped={unassigned_stamped}"
+            );
+        }
         Ok(())
     }
 
@@ -2004,5 +2029,7 @@ mod diff_stat_tests;
 mod model_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod unassigned_tests;
 #[cfg(test)]
 mod worktree_branch_tests;

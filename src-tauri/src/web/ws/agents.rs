@@ -27,7 +27,6 @@ pub(super) async fn handle_spawn_agent(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
-    current_agent: &mut Option<crate::acp::AgentId>,
 ) -> WsReply {
     let mut parsed: SpawnAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -63,12 +62,7 @@ pub(super) async fn handle_spawn_agent(
         return WsReply::err(id, WsErrorCode::Unsupported, msg);
     }
     match acp.spawn(parsed.config).await {
-        Ok(outcome) => {
-            // Track the spawned agent so a later `switch_project` can reuse it
-            // (Ask-First resolution: do NOT auto-spawn on switch).
-            *current_agent = Some(outcome.agent_id.clone());
-            ok_with_payload(id, &outcome)
-        }
+        Ok(outcome) => ok_with_payload(id, &outcome),
         Err(e) => acp_err_to_reply(id, e),
     }
 }
@@ -84,9 +78,6 @@ pub(super) async fn handle_kill_agent(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
-    current_agent: &mut Option<AgentId>,
-    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
-    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: KillAgentPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -99,21 +90,7 @@ pub(super) async fn handle_kill_agent(
         }
     };
     match acp.kill(&parsed.agent_id).await {
-        Ok(()) => {
-            // If the killed agent is this connection's tracked agent, drop the
-            // tracking so a later `switch_project` does not reuse the dead id
-            // (which would map `new_session`'s "unknown agent" to `not_found").
-            // The web client must spawn/create a session again first.
-            if current_agent
-                .as_ref()
-                .is_some_and(|a| *a == parsed.agent_id)
-            {
-                *current_agent = None;
-                *current_session.lock() = None;
-                *current_project.lock() = None;
-            }
-            WsReply::ok(id, Some(json!({})))
-        }
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(e) => acp_err_to_reply(id, e),
     }
 }

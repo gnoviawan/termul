@@ -42,8 +42,7 @@
  * The `acp:*` event names from `src-tauri/src/acp/events.rs` with the `acp:`
  * prefix dropped (18, including `browser_open_request`), plus relay-level and
  * Epic-4 bridge events (`auth_required`, `projects_changed`,
- * `project_switch_completed`, `project_switch_failed`, `chat_history_changed`).
- * 23 total.
+ * `chat_history_changed`).
  */
 export const WS_EVENT_TYPES = [
   // Session/agent lifecycle (reliable)
@@ -71,9 +70,6 @@ export const WS_EVENT_TYPES = [
   'auth_required',
   // Desktop project-list live push (Epic-4 bridge — agent-level, seq 0)
   'projects_changed',
-  // Queued project switch outcome (connection-local, seq 0)
-  'project_switch_completed',
-  'project_switch_failed',
   // Server-authored authoritative user input (durable/replayable).
   'user_prompt',
   // Desktop chat-history live push (Epic-4 bridge — agent-level, seq 0).
@@ -146,7 +142,6 @@ export const WS_REQUEST_TYPES = [
   'spawn_agent',
   'kill_agent',
   'list_agents',
-  'switch_project',
   // WS connection token-gate handshake (pre-auth). Distinct from
   // `authenticate_agent` (the ACP agent method).
   'authenticate',
@@ -361,8 +356,7 @@ export interface RemoveProjectPayload {
  * The stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
  * enum (snake_case `code`). Extended from the architecture's 7 by
  * `unsupported` (OS-cap rejection, AC8), `not_implemented` (stub request
- * handlers, AC10), `no_agent` (switch_project with no live agent, Epic-4
- * bridge), and `agent_auth_required` (agent rejected session entry with ACP
+ * handlers, AC10), and `agent_auth_required` (agent rejected session entry with ACP
  * AuthRequired -32000, Story 7).
  */
 export const WS_ERROR_CODES = {
@@ -375,8 +369,6 @@ export const WS_ERROR_CODES = {
   DUPLICATE: 'duplicate',
   UNSUPPORTED: 'unsupported',
   NOT_IMPLEMENTED: 'not_implemented',
-  // switch_project with no live agent on the connection (Epic-4 bridge).
-  NO_AGENT: 'no_agent',
   // Agent rejected session entry with ACP AuthRequired (-32000) — the user
   // must authenticate first (Story 7; additive — old clients ignore unknown
   // codes).
@@ -466,8 +458,6 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   permission_request: WS_RELAY_TIERS.RELIABLE,
   auth_required: WS_RELAY_TIERS.RELIABLE,
   projects_changed: WS_RELAY_TIERS.RELIABLE,
-  project_switch_completed: WS_RELAY_TIERS.RELIABLE,
-  project_switch_failed: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
   chat_history_changed: WS_RELAY_TIERS.RELIABLE,
   browser_open_request: WS_RELAY_TIERS.RELIABLE,

@@ -1,6 +1,12 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
+import {
+  groupSessionsByRecency,
+  type HistoryGroup,
+  scopeSessionIndex,
+  UNASSIGNED_GROUP,
+  unassignedSessions
+} from '@/lib/acp-history-persistence'
 import { activeWorktreeOf } from '@/lib/active-worktree'
 import { logFrontendError } from '@/lib/log-api'
 import { chatsMatchAnnouncement } from '@/lib/shell-announcements'
@@ -44,8 +50,8 @@ export interface ChatHistoryEntries {
   filtered: ChatHistorySidebarEntry[]
   /** The rendered window of `filtered`. */
   visible: ChatHistorySidebarEntry[]
-  /** `visible` grouped Today / Yesterday / Earlier. */
-  groups: ReturnType<typeof groupSessionsByRecency<ChatHistorySidebarEntry>>
+  /** `visible` grouped Today / Yesterday / Earlier, then the Unassigned bucket. */
+  groups: { group: HistoryGroup; entries: ChatHistorySidebarEntry[] }[]
   hasMore: boolean
   /** Attach to the lazy-load sentinel below the list. */
   sentinelRef: RefObject<HTMLDivElement>
@@ -100,9 +106,19 @@ export function useChatHistoryEntries({
   // created is still reachable instead of silently hidden). Worktree-inclusive
   // reachability (above) keeps the project's worktree chats listed from the
   // root view. See `scopeSessionIndex` for the contract.
+  // Sessions the host stamped with the unassigned sentinel (no owning
+  // project) belong to no project's scope; they are listed in their own
+  // "Unassigned" bucket so they stay reachable.
+  const unassignedIds = useMemo(
+    () => new Set(unassignedSessions(sessionIndex).map((entry) => entry.id)),
+    [sessionIndex]
+  )
   const scopedIndex = useMemo(
-    () => scopeSessionIndex(sessionIndex, activeProjectId, activeCwd, worktreePaths),
-    [sessionIndex, activeProjectId, activeCwd, worktreePaths]
+    () => [
+      ...scopeSessionIndex(sessionIndex, activeProjectId, activeCwd, worktreePaths),
+      ...sessionIndex.filter((entry) => unassignedIds.has(entry.id))
+    ],
+    [sessionIndex, activeProjectId, activeCwd, worktreePaths, unassignedIds]
   )
 
   // Termul-created sessions only. The host-owned `discovered` flag is `false`
@@ -180,7 +196,14 @@ export function useChatHistoryEntries({
   const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
   const hasMore = filtered.length > visible.length
 
-  const groups = useMemo(() => groupSessionsByRecency(visible, Date.now()), [visible])
+  const groups = useMemo(() => {
+    const assigned = visible.filter((entry) => !unassignedIds.has(entry.id))
+    const unassigned = visible.filter((entry) => unassignedIds.has(entry.id))
+    const recency: { group: HistoryGroup; entries: ChatHistorySidebarEntry[] }[] =
+      groupSessionsByRecency(assigned, Date.now())
+    if (unassigned.length > 0) recency.push({ group: UNASSIGNED_GROUP, entries: unassigned })
+    return recency
+  }, [visible, unassignedIds])
 
   // Grow the window when the bottom sentinel scrolls into view (lazy load).
   // `visibleCount` is intentionally in the deps so the observer re-arms after

@@ -197,6 +197,23 @@ pub struct SessionIndexFile {
     pub sessions: Vec<SessionIndexEntry>,
 }
 
+/// Project id stamped on a session that no registered project owns (no
+/// explicit id, no registry match on its cwd, or a legacy record that predates
+/// project attribution). Renderers show these under an "Unassigned" bucket.
+pub const UNASSIGNED_PROJECT_ID: &str = "__unassigned__";
+
+/// The project id a new session record carries: the supplied non-empty id, else
+/// [`UNASSIGNED_PROJECT_ID`]. A session's project is stamped once at creation
+/// and never rewritten afterwards.
+#[must_use]
+pub(super) fn stamped_project_id(project_id: Option<String>) -> Option<String> {
+    Some(
+        project_id
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| UNASSIGNED_PROJECT_ID.to_string()),
+    )
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SessionRegistration {
     pub session_id: String,

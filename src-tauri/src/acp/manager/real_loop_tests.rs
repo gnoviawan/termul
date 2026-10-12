@@ -458,3 +458,26 @@ async fn process_shutdown_mid_turn_leaves_the_turn_to_the_interrupted_marker() {
     );
     let _ = std::fs::remove_dir_all(&h.dir);
 }
+
+/// A session created without a project is stamped with the unassigned
+/// sentinel in the durable record, through the real `session/new` path that
+/// `create_session` and `acp_new_session` share. (The explicit-project case is
+/// covered at the store; the mock agent hands out one fixed session id, so a
+/// second create here would hit the store's idempotent path.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_created_without_a_project_is_stamped_unassigned() {
+    let Some(h) = Harness::start_with_persistence().await else {
+        return;
+    };
+    let persistence = h.persistence.clone().expect("durable harness");
+
+    assert_eq!(
+        persistence
+            .metadata(&h.session_id.0)
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some(crate::acp::UNASSIGNED_PROJECT_ID)
+    );
+    h.finish().await;
+}

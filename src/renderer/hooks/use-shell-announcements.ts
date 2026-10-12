@@ -68,8 +68,7 @@ function readContext(state: AcpState): AnnouncementContext {
       resolveChatLabel(
         state.sessions[sessionId]?.title,
         state.sessionIndex.find((entry) => entry.id === sessionId)?.title
-      ),
-    projectName: (projectId) => projects.projects.find((p) => p.id === projectId)?.name || projectId
+      )
   }
 }
 
@@ -81,9 +80,7 @@ function acpSlicesUnchanged(next: AcpState, prev: AcpState): boolean {
     next.pendingPermissions === prev.pendingPermissions &&
     next.pendingQuestions === prev.pendingQuestions &&
     next.pendingElicitations === prev.pendingElicitations &&
-    next.permissionDenialNotices === prev.permissionDenialNotices &&
-    next.switchingProjectId === prev.switchingProjectId &&
-    next.failedProjectSwitchId === prev.failedProjectSwitchId
+    next.permissionDenialNotices === prev.permissionDenialNotices
   )
 }
 

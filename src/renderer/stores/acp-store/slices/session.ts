@@ -29,14 +29,12 @@ import {
 } from '@/lib/acp-history-persistence'
 import { selectMcpServersForAgent } from '@/lib/acp-mcp-persistence'
 import { decideResume, resumeMissesSession } from '@/lib/acp-resume-policy'
-import { chatForeignToProject } from '@/lib/acp-session-ownership'
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
 import { classifySetupError } from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -1310,12 +1308,7 @@ type SessionSliceState = Pick<
   | 'discoveredSessions'
   | 'discoveringKeys'
   | 'discoveredReopenContexts'
-  | 'queuedProjectSwitchId'
-  | 'failedProjectSwitchId'
-  | 'switchingProjectId'
   | 'createSession'
-  | 'switchProject'
-  | 'setFailedProjectSwitch'
   | 'closeSession'
   | 'setActiveSession'
   | 'loadSessionIndex'
@@ -1345,9 +1338,6 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
   sessions: {},
   activeSessionId: null,
   sessionUsage: {},
-  queuedProjectSwitchId: null,
-  failedProjectSwitchId: null,
-  switchingProjectId: null,
 
   createSession: async (agentId, cwd, mcpServers, projectId, opts) => {
     try {
@@ -1469,137 +1459,6 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       throw err
     }
   },
-
-  switchProject: async (projectId) => {
-    const transport = getAcpTransport()
-    if (!transport.switchProject) {
-      throw new Error('Project switching is only available in web/remote mode')
-    }
-    // Published before the first await so the shell announcer sees the switch
-    // begin; cleared on every exit (completed, selected, queued, rejected).
-    set({ switchingProjectId: projectId })
-    try {
-      // Starting a new switch clears any prior transient failure indicator so a
-      // retry doesn't keep a stale "Failed" badge while the new attempt runs.
-      set({ failedProjectSwitchId: null })
-      const focusedSessionId = getTabFocusedSessionId() ?? get().activeSessionId
-      const focusedSession = focusedSessionId ? get().sessions[focusedSessionId] : null
-      const outcome = await transport.switchProject(projectId)
-      if (outcome.status === 'queued') {
-        set({ queuedProjectSwitchId: outcome.projectId })
-        return outcome
-      }
-      if (outcome.status === 'selected') {
-        // Cold tab: the server updated the shared active project but created no
-        // session (no agent spawned). Mirror desktop's local select + clear the
-        // transient switch badges; the agent spawns lazily when a chat starts.
-        set({ queuedProjectSwitchId: null, failedProjectSwitchId: null })
-        // No session was minted, so the focus pointers still name the
-        // PREVIOUS project's chat — clear them so a later switch/manifest
-        // write cannot inherit that session on the target project.
-        const st = get()
-        if (st.activeSessionId && chatForeignToProject(st.activeSessionId, outcome.projectId, st)) {
-          set({ activeSessionId: null })
-        }
-        const tabFocused = getTabFocusedSessionId()
-        if (tabFocused && chatForeignToProject(tabFocused, outcome.projectId, st)) {
-          setTabFocusedSessionId(null)
-        }
-        useProjectStore.getState().selectProject(outcome.projectId)
-        return outcome
-      }
-
-      // Switch-back restore (Epic-4 bridge): if the server reopened an existing
-      // session (detected via the server history index), fetch its transcript via
-      // `openHistorySession` + focus the workspace tab (`addAgentChatTab`) —
-      // mirrors desktop's "restore the last tab." Else the server minted a new
-      // session → current blank-chat path below.
-      if (get().sessionIndex.some((e) => e.id === outcome.sessionId)) {
-        // Parity with the new-session branch: set activeSessionId + clear the
-        // queued id so the reopened session is the active chat (not just tab
-        // focus).
-        set({ queuedProjectSwitchId: null, activeSessionId: outcome.sessionId })
-        const opening = get().openHistorySession(outcome.sessionId)
-        useWorkspaceStore.getState().addAgentChatTab(outcome.sessionId)
-        setTabFocusedSessionId(outcome.sessionId)
-        useProjectStore.getState().selectProject(outcome.projectId)
-        await opening
-        return outcome
-      }
-
-      // `outcome.previousSessionId` is server-authoritative for "which session
-      // this connection was on" — the UI pointer (sessionStorage focus +
-      // activeSessionId) can be stale or empty when every chat tab was closed
-      // or when the pointer survived a reload. Inherit from the focused record
-      // only when the server sent no id (old server) or it matches the
-      // pointer — a mismatched pointer would inherit an unrelated session's
-      // title/modes/models.
-      const previous =
-        (outcome.previousSessionId ? get().sessions[outcome.previousSessionId] : undefined) ??
-        (!outcome.previousSessionId || focusedSessionId === outcome.previousSessionId
-          ? focusedSession
-          : undefined)
-      // `outcome.agentId` is the owning agent — server-authoritative. Local
-      // records are the fallback for older replies carrying no agentId. A
-      // `session_created` event stub for the minted session may already be
-      // installed (the manager fans the event out before the reply lands).
-      const agentId =
-        outcome.agentId ?? previous?.agentId ?? get().sessions[outcome.sessionId]?.agentId
-      if (!agentId) {
-        // Older servers send no `agentId` and no local record exists to borrow
-        // one from — the minted session cannot be attributed here. The switch
-        // DID commit server-side, so mirror the `selected` path rather than
-        // failing; the orphaned session stays reachable via the history index.
-        set({ queuedProjectSwitchId: null, failedProjectSwitchId: null })
-        useProjectStore.getState().selectProject(outcome.projectId)
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp.switchProject',
-          message: `switch_project completed for ${outcome.projectId} but session ${outcome.sessionId} has no attributable agent; deferred to lazy spawn`
-        })
-        return outcome
-      }
-
-      set((s) => {
-        const existing = s.sessions[outcome.sessionId]
-        return {
-          queuedProjectSwitchId: null,
-          failedProjectSwitchId: null,
-          activeSessionId: outcome.sessionId,
-          sessions: {
-            ...s.sessions,
-            [outcome.sessionId]: {
-              id: outcome.sessionId,
-              agentId,
-              cwd: outcome.cwd,
-              projectId: outcome.projectId,
-              status: 'active',
-              title: existing?.title ?? previous?.title ?? null,
-              activeTurn: false,
-              mcpServerCount: outcome.mcpServerCount,
-              openTurnId: null,
-              modes: existing?.modes ?? previous?.modes ?? null,
-              models: existing?.models ?? previous?.models ?? null,
-              configOptions: existing?.configOptions ?? previous?.configOptions ?? [],
-              lastError: existing?.lastError ?? null,
-              createdAt: existing?.createdAt ?? Date.now(),
-              replaying: null
-            }
-          },
-          messages: { ...s.messages, [outcome.sessionId]: s.messages[outcome.sessionId] ?? [] }
-        }
-      })
-      setTabFocusedSessionId(outcome.sessionId)
-      useProjectStore.getState().selectProject(outcome.projectId)
-      return outcome
-    } finally {
-      // Only clear our own marker: an overlapping call for another project
-      // owns the field until it settles.
-      if (get().switchingProjectId === projectId) set({ switchingProjectId: null })
-    }
-  },
-
-  setFailedProjectSwitch: (projectId) => set({ failedProjectSwitchId: projectId }),
 
   closeSession: async (sessionId) => {
     invalidateSessionReopen(sessionId)

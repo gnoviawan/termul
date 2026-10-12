@@ -3,6 +3,8 @@
  * slices it needs) so both the acp-store and renderer hooks/components can
  * share one ownership rule without import cycles.
  */
+import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
+
 interface OwnershipState {
   sessions: Readonly<Record<string, { projectId: string } | undefined>>
   sessionIndex: ReadonlyArray<{ id: string; projectId: string }>
@@ -21,9 +23,12 @@ export function sessionOwnerProjectId(
   // Live (hydrated/open) sessions carry projectId; CLOSED history tabs are
   // evicted from `sessions` but stay in `sessionIndex` — the index is the
   // ownership source of truth for them.
-  const live = state.sessions[sessionId]?.projectId
-  if (live) return live
-  return state.sessionIndex.find((entry) => entry.id === sessionId)?.projectId || undefined
+  const owner =
+    state.sessions[sessionId]?.projectId ||
+    state.sessionIndex.find((entry) => entry.id === sessionId)?.projectId
+  // The host's unassigned sentinel names no project: such a chat has no owner
+  // to switch to, so it counts as unknown (fail-open, shown wherever opened).
+  return owner && owner !== UNASSIGNED_PROJECT_ID ? owner : undefined
 }
 
 /**

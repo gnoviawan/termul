@@ -127,7 +127,6 @@ class FakeWebSocket {
   /** CAP-11 compat: when true, `list_agents` replies with bare id strings
    * (the pre-CAP-11 server shape) instead of summary objects. */
   listAgentsAsStrings = false
-  switchProjectReply: unknown = null
   /** CAP-6 / Story 8: when set, `list_acp_catalog` replies with this catalog
    * payload; unset → falls through to the `not_implemented` fallback (so
    * `probeRuntime`/`fetchRegistrySnapshot` degrade gracefully). */
@@ -246,10 +245,6 @@ class FakeWebSocket {
         ok: true,
         payload: { sessionId: payload.sessionId, watermark: 42, events: this.snapshotEvents }
       })
-      return
-    }
-    if (req.type === 'switch_project' && this.switchProjectReply) {
-      this.emitReply({ id: req.id, ok: true, payload: this.switchProjectReply })
       return
     }
     // CAP-6 / Story 8: the WS transport resolves the ACP catalog through
@@ -990,7 +985,7 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
-  it('switchProject maps completed replies and subscribes the new session', async () => {
+  it('sends the owning projectId on create_session and subscribes the new session', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
@@ -998,118 +993,18 @@ describe('WsAcpTransport', () => {
     await transport.connect()
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
 
-    sock.switchProjectReply = {
-      status: 'completed',
-      projectId: 'p-2',
-      sessionId: 's-new',
-      cwd: '/work/p2',
-      mcpServerCount: 2
-    }
-    await expect(transport.switchProject('p-2')).resolves.toEqual(sock.switchProjectReply)
+    const outcome = await transport.newSession('a1', '/work/p2', undefined, { projectId: 'p-2' })
 
-    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
-    const switchReq = sent.find((r) => r.type === 'switch_project')
-    expect(switchReq).toBeTruthy()
-    expect(switchReq?.payload).toEqual({ projectId: 'p-2' })
-    expect(sent).toContainEqual(
-      expect.objectContaining({ type: 'subscribe', payload: { sessionId: 's-new' } })
+    const frames = sock.sent.map((raw) => JSON.parse(raw) as { type: string; payload: unknown })
+    expect(frames).toContainEqual({
+      id: expect.any(String),
+      type: 'create_session',
+      payload: { agentId: 'a1', cwd: '/work/p2', ephemeral: false, projectId: 'p-2' }
+    })
+    expect(frames).toContainEqual(
+      expect.objectContaining({ type: 'subscribe', payload: { sessionId: outcome.sessionId } })
     )
-
-    transport.dispose()
-  })
-
-  it('switchProject passes through selected (cold-tab) replies without subscribing', async () => {
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-
-    sock.switchProjectReply = {
-      status: 'selected',
-      projectId: 'p-2',
-      cwd: '/work/p2'
-    }
-    await expect(transport.switchProject('p-2')).resolves.toEqual(sock.switchProjectReply)
-
-    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
-    const switchReq = sent.find((r) => r.type === 'switch_project')
-    expect(switchReq).toBeTruthy()
-    expect(switchReq?.payload).toEqual({ projectId: 'p-2' })
-    // Cold tab: no session, so the client must NOT subscribe early.
-    expect(sent).not.toContainEqual(expect.objectContaining({ type: 'subscribe' }))
-
-    transport.dispose()
-  })
-
-  it('switchProject maps queued replies without subscribing early', async () => {
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    sock.switchProjectReply = {
-      status: 'queued',
-      projectId: 'p-2',
-      currentSessionId: 's-old'
-    }
-
-    await expect(transport.switchProject('p-2')).resolves.toEqual(sock.switchProjectReply)
-    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
-    expect(sent.filter((frame) => frame.type === 'subscribe')).toHaveLength(0)
-    transport.dispose()
-  })
-
-  it('subscribes before emitting queued project switch completion', async () => {
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    const completed: unknown[] = []
-    transport.onEvent('project_switch_completed', (payload) => completed.push(payload))
-    const payload = {
-      status: 'completed',
-      requestId: 'r-switch',
-      projectId: 'p-2',
-      previousSessionId: 's-old',
-      sessionId: 's-new',
-      cwd: '/work/p2',
-      mcpServerCount: 1
-    }
-
-    sock.emit({ sid: 's-old', seq: 0, type: 'project_switch_completed', payload })
-    await vi.waitFor(() => expect(completed).toEqual([payload]))
-    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
-    expect(sent).toContainEqual(
-      expect.objectContaining({ type: 'subscribe', payload: { sessionId: 's-new' } })
-    )
-    transport.dispose()
-  })
-
-  it('delivers correlated queued project switch failure without subscribing', async () => {
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    const failed: unknown[] = []
-    transport.onEvent('project_switch_failed', (payload) => failed.push(payload))
-    const payload = {
-      requestId: 'r-switch',
-      projectId: 'p-2',
-      previousSessionId: 's-old',
-      message: 'target project became unavailable before commit'
-    }
-
-    sock.emit({ sid: 's-old', seq: 0, type: 'project_switch_failed', payload })
-    await vi.waitFor(() => expect(failed).toEqual([payload]))
-    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string })
-    expect(sent.filter((frame) => frame.type === 'subscribe')).toHaveLength(0)
+    expect(frames.some((frame) => frame.type === 'switch_project')).toBe(false)
     transport.dispose()
   })
 

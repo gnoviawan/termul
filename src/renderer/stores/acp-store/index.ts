@@ -30,10 +30,6 @@
  * `./types` the `AcpState` contract; `./helpers` the pure helpers.
  */
 
-import type {
-  ProjectSwitchCompletedEvent,
-  ProjectSwitchFailedEvent
-} from '@shared/types/web-projects.types'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
@@ -77,9 +73,6 @@ import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
-import { setTabFocusedSessionId } from '@/lib/web-tab-session'
-import { useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
 import {
   collectProjectsWithActiveAgentChat,
@@ -498,116 +491,8 @@ export function initAcpEventListeners(): () => void {
     }
   })
   connection.attach()
-  const applyCompletedProjectSwitch = (event: ProjectSwitchCompletedEvent): void => {
-    const state = useAcpStore.getState()
-    const previous = state.sessions[event.previousSessionId]
-    // Stale queued-switch guard: a queued (turn-active) switch completes
-    // AFTER the user already moved on to a DIFFERENT project. Applying the
-    // late outcome would re-run selectProject + reattach against the
-    // current tree — inserting the late project's chat tab into whatever
-    // the user is looking at and re-entering the restore flow (observed as
-    // cross-project tab accumulation during rapid multi-project rotation).
-    // The completion is legitimate when the user is ALREADY on the target
-    // project (immediate switch path; selectProject ran before the event)
-    // or when the queued switch itself asked for exactly this project (the
-    // queued flow does not change activeProjectId until the completion
-    // arrives, so the queue id is the user's pending intent). Drop
-    // everything else: the server already committed its per-connection
-    // state, and the late project's sessions stay reachable through its
-    // history index.
-    const activeProjectId = useProjectStore.getState().activeProjectId
-    const queuedForThisProject = state.queuedProjectSwitchId === event.projectId
-    if (activeProjectId !== event.projectId && !queuedForThisProject) {
-      if (state.queuedProjectSwitchId != null) {
-        useAcpStore.setState({ queuedProjectSwitchId: null })
-      }
-      return
-    }
-    // `event.agentId` is the owning agent — server-authoritative. Local
-    // records are the fallback for older events carrying no agentId.
-    const agentId = event.agentId ?? previous?.agentId ?? state.sessions[event.sessionId]?.agentId
-    if (!agentId) {
-      // No attributable agent: old server event and no local record. The
-      // switch committed server-side — clear the queued marker (never leave
-      // the badge spinning) and mirror a deferred select; the session stays
-      // reachable via the history index.
-      if (state.queuedProjectSwitchId != null) {
-        useAcpStore.setState({ queuedProjectSwitchId: null })
-        useProjectStore.getState().selectProject(event.projectId)
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp-store.projectSwitchCompleted',
-          message: `Queued switch to ${event.projectId} completed but session ${event.sessionId} has no attributable agent`
-        })
-      }
-      return
-    }
-    // Queued switch-back restore (parity with switchProject's immediate-reopen
-    // branch): if the server reopened an existing session (detected via the
-    // server history index), fetch its transcript via `openHistorySession` +
-    // focus the workspace tab (`addAgentChatTab`) instead of minting a blank
-    // session. The transcript load is fire-and-forget (the event handler is
-    // void) — the restore preload shows immediately. Else the blank path below.
-    if (state.sessionIndex.some((e) => e.id === event.sessionId)) {
-      const opening = state.openHistorySession(event.sessionId)
-      useWorkspaceStore.getState().addAgentChatTab(event.sessionId)
-      useAcpStore.setState({
-        queuedProjectSwitchId: null,
-        activeSessionId: event.sessionId
-      })
-      setTabFocusedSessionId(event.sessionId)
-      useProjectStore.getState().selectProject(event.projectId)
-      void opening
-      return
-    }
-    useAcpStore.setState((s) => {
-      const existing = s.sessions[event.sessionId]
-      return {
-        queuedProjectSwitchId: null,
-        failedProjectSwitchId: null,
-        activeSessionId: event.sessionId,
-        sessions: {
-          ...s.sessions,
-          [event.sessionId]: {
-            id: event.sessionId,
-            agentId,
-            cwd: event.cwd,
-            projectId: event.projectId,
-            status: 'active',
-            title: existing?.title ?? previous?.title ?? null,
-            activeTurn: false,
-            mcpServerCount: event.mcpServerCount,
-            openTurnId: null,
-            modes: existing?.modes ?? previous?.modes ?? null,
-            models: existing?.models ?? previous?.models ?? null,
-            configOptions: existing?.configOptions ?? previous?.configOptions ?? [],
-            lastError: existing?.lastError ?? null,
-            createdAt: existing?.createdAt ?? Date.now(),
-            replaying: null
-          }
-        },
-        messages: { ...s.messages, [event.sessionId]: s.messages[event.sessionId] ?? [] }
-      }
-    })
-    setTabFocusedSessionId(event.sessionId)
-    useProjectStore.getState().selectProject(event.projectId)
-  }
-  const applyFailedProjectSwitch = (event: ProjectSwitchFailedEvent): void => {
-    const state = useAcpStore.getState()
-    if (state.queuedProjectSwitchId !== event.projectId) return
-    useAcpStore.setState({
-      queuedProjectSwitchId: null,
-      failedProjectSwitchId: event.projectId
-    })
-    toast.error(event.message || 'Project switch failed')
-  }
   teardown = [
     attachPermissionDenialTracking(useAcpStore),
-    transport.onEvent<ProjectSwitchCompletedEvent>(
-      'project_switch_completed',
-      applyCompletedProjectSwitch
-    ),
-    transport.onEvent<ProjectSwitchFailedEvent>('project_switch_failed', applyFailedProjectSwitch),
     acpApi.onEvent<AgentSpawnedEvent>(ACP_EVENTS.agentSpawned, (e) =>
       useAcpStore.getState()._onAgentSpawned(e)
     ),

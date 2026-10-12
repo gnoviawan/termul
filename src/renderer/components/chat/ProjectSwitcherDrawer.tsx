@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
-import { AlertCircle, Check, Clock3, FolderGit2, Home, Plus, Settings } from '@/components/icons'
+import { Check, FolderGit2, Home, Plus, Settings } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,7 +11,7 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
-import { useProjectSwitch, useProjectSwitchState } from '@/hooks/use-project-switch'
+import { useProjectSwitch } from '@/hooks/use-project-switch'
 import { setHostDefaultProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerProjects } from '@/lib/web-server-api'
@@ -42,18 +42,16 @@ const SIDE_CLASS_NAME = {
 /**
  * Web/remote project switcher (Epic-4 bridge). Mirrors the desktop's available
  * project list (read-only, fetched into the project store by `useProjectsLoader`
- * via `GET /projects`) and switches the shared-live session to a project's cwd
- * via the `switch_project` WS request. Archived projects render greyed + are
- * not clickable. The currently active project is marked. The Tauri desktop
- * transport has no `switchProject` — this drawer is mounted only in web/remote
- * mode, so a missing method is a no-op (defensive).
+ * via `GET /projects`) and makes the picked project this client's active one.
+ * Switching is client-only: no host request, no effect on other devices.
+ * Archived projects render greyed + are not clickable. The currently active
+ * project is marked.
  *
  * Epic 7 (cross-client continuity): a project `isDefault` (the host default,
  * set by the host's `default_project_id`) shows a "host default" badge. A
  * "Set as host default" action calls `set_host_default_project` (Tauri) or
  * `POST /projects/default` (web) depending on transport — distinct from the
- * per-connection `switch_project` (which only updates this client's
- * `activeProjectId` and never broadcasts).
+ * client-only switch (which only updates this client's `activeProjectId`).
  */
 export function ProjectSwitcherDrawer({
   open,
@@ -66,36 +64,15 @@ export function ProjectSwitcherDrawer({
 }: ProjectSwitcherDrawerProps): React.JSX.Element {
   const projects = useProjectStore((s) => s.projects)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
-  const { switchTo, clearFailed } = useProjectSwitch('ProjectSwitcherDrawer')
-  const {
-    switchingId,
-    queuedId: queuedProjectSwitchId,
-    failedId: failedProjectSwitchId,
-    busy: switchBusy
-  } = useProjectSwitchState()
+  const { switchTo } = useProjectSwitch('ProjectSwitcherDrawer')
   const [defaultingId, setDefaultingId] = useState<string | null>(null)
 
-  // The inline "Failed" badge is transient: dismiss it when the drawer closes
-  // so a stale red indicator doesn't reappear on the next open. A fresh switch
-  // attempt also clears it (see `switchProject`), so retrying self-heals. The
-  // `failedProjectSwitchId` dep covers a failure that arrives AFTER the drawer
-  // closes (e.g. a queued switch rejected while closed) — the effect re-runs
-  // and clears it immediately so no stale badge resurfaces on reopen.
-  useEffect(() => {
-    if (!open && failedProjectSwitchId !== null) clearFailed()
-  }, [open, failedProjectSwitchId, clearFailed])
-
-  // While a switch is in flight or queued (`switchBusy`) rows stay focusable
-  // (`aria-disabled`, not `disabled`, so the focused row keeps focus) and the
-  // hook ignores taps. The palette shares the routine, so the spinner and the
-  // Queued badge also show for a switch it started.
-  async function handleSwitch(project: Project): Promise<void> {
-    const status = await switchTo(project.id)
-    if (status === 'completed' || status === 'selected') onOpenChange(false)
+  function handleSwitch(project: Project): void {
+    if (switchTo(project.id) === 'selected') onOpenChange(false)
   }
 
-  // Explicit host-default change (Epic 7). Distinct from `switchProject`
-  // (per-connection): updates the host default that new web clients start
+  // Explicit host-default change (Epic 7). Distinct from the client-only
+  // switch: updates the host default that new web clients start
   // with + broadcasts `projects_changed` to ALL clients. Transport parity:
   // Tauri → `set_host_default_project`; web → `POST /projects/default`.
   async function handleSetDefault(project: Project): Promise<void> {
@@ -107,7 +84,7 @@ export function ProjectSwitcherDrawer({
         : await webServerProjects.setDefaultProject(project.id)
       if (!result.success) {
         // P15: guard against undefined error string (avoid "undefined" toast).
-        toast.error('Failed to set host default: ' + (result.error ?? 'unknown error'))
+        toast.error(`Failed to set host default: ${result.error ?? 'unknown error'}`)
       } else {
         // P6: update isDefault flags locally so the badge refreshes
         // immediately (desktop-hosted mode doesn't refetch on set_default;
@@ -153,25 +130,20 @@ export function ProjectSwitcherDrawer({
                 const isArchived = project.isArchived ?? false
                 const isActive = project.id === activeProjectId
                 const isHostDefault = project.isDefault === true
-                const isSwitching = switchingId === project.id
                 const isSettingDefault = defaultingId === project.id
-                const isQueued = queuedProjectSwitchId === project.id
-                const isFailed = failedProjectSwitchId === project.id
                 const switchDisabled = isArchived || isActive
-                const switchBlocked = switchDisabled || switchBusy
                 return (
                   <li key={project.id} className="flex items-center gap-1">
                     <button
                       type="button"
                       disabled={switchDisabled}
-                      aria-disabled={switchBusy && !switchDisabled ? 'true' : undefined}
                       aria-current={isActive ? 'true' : undefined}
-                      onClick={() => void handleSwitch(project)}
+                      onClick={() => handleSwitch(project)}
                       className={[
                         'flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors duration-150 ease-out',
                         isActive ? 'keycap text-foreground' : 'hover:bg-foreground/[0.03]',
                         isArchived ? 'text-disabled-foreground' : '',
-                        switchBlocked ? 'cursor-not-allowed' : 'cursor-pointer'
+                        switchDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
                       ].join(' ')}
                     >
                       <ProjectIcon project={project} size={18} />
@@ -184,13 +156,13 @@ export function ProjectSwitcherDrawer({
                       >
                         {project.name}
                       </span>
-                      {isActive && !isSwitching && !isQueued && !isFailed && (
+                      {isActive && (
                         <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
                           <Check size={12} aria-hidden="true" />
                           Current
                         </span>
                       )}
-                      {isHostDefault && !isSwitching && !isQueued && !isFailed && (
+                      {isHostDefault && (
                         <span
                           title="Host default (new clients start here)"
                           className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
@@ -199,49 +171,27 @@ export function ProjectSwitcherDrawer({
                           Default
                         </span>
                       )}
-                      {isSwitching ? (
-                        <Spinner size={14} decorative className="text-muted-foreground" />
-                      ) : isQueued ? (
-                        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                          <Clock3 size={13} />
-                          Queued
-                        </span>
-                      ) : isFailed ? (
-                        <span className="flex shrink-0 items-center gap-1 text-xs text-destructive">
-                          <AlertCircle size={13} />
-                          Failed
-                        </span>
-                      ) : isActive ? (
-                        <Check size={14} className="shrink-0 text-primary" />
-                      ) : null}
+                      {isActive ? <Check size={14} className="shrink-0 text-primary" /> : null}
                     </button>
                     {/* Project settings act on the active project only, so the
                      * gear sits on the Current row: on another row it would
-                     * first have to switch the session. Disabled while a switch
-                     * is in flight or queued: the modal follows the active
-                     * project and would change under the user when it lands. */}
+                     * first have to switch the active project. */}
                     {isActive && onOpenProjectSettings && (
                       <button
                         type="button"
-                        disabled={switchBusy}
                         aria-label={`"${project.name}" project settings`}
                         title="Project settings"
                         onClick={() => {
                           onOpenChange(false)
                           onOpenProjectSettings()
                         }}
-                        className={[
-                          'inline-flex size-11 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors',
-                          switchBusy
-                            ? 'cursor-not-allowed text-disabled-foreground'
-                            : 'hover:bg-foreground/[0.03] hover:text-foreground'
-                        ].join(' ')}
+                        className="inline-flex size-11 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-foreground/[0.03] hover:text-foreground"
                       >
                         <Settings size={14} />
                       </button>
                     )}
                     {/* Set as host default (Epic 7) — distinct from the
-                     * per-connection switch. Hidden when already the host
+                     * client-only switch. Hidden when already the host
                      * default (no-op), archived, or pathless (P5: a
                      * pathless project can't be a default — the host would
                      * reject it with NOT_FOUND). A truthy `project.path`

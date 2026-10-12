@@ -82,10 +82,6 @@ pub(super) async fn handle_request(
     projects_file: Option<&PathBuf>,
     out_tx: &mpsc::UnboundedSender<Outbound>,
     subscribed_clients: &mut Vec<(String, ClientId)>,
-    current_agent: &mut Option<AgentId>,
-    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
-    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
-    switch_queue: &Arc<tokio::sync::Mutex<ProjectSwitchQueue>>,
     history_mode: HistoryMode,
     acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<&Arc<crate::acp::install::AcpInstallService>>,
@@ -257,54 +253,12 @@ pub(super) async fn handle_request(
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the
         // existing `fan_out` → `WsRelaySink::emit` → WS frame → store pipeline.
-        "create_session" => {
-            handle_create_session(
-                id,
-                &req.payload,
-                acp,
-                registry,
-                current_agent,
-                current_session,
-                current_project,
-            )
-            .await
-        }
-        "load_session" => {
-            handle_load_session(
-                id,
-                &req.payload,
-                acp,
-                current_agent,
-                current_session,
-                current_project,
-            )
-            .await
-        }
-        "resume_session" => {
-            handle_resume_session(
-                id,
-                &req.payload,
-                acp,
-                current_agent,
-                current_session,
-                current_project,
-            )
-            .await
-        }
-        "close_session" => {
-            handle_close_session(id, &req.payload, acp, current_session, current_project).await
-        }
+        "create_session" => handle_create_session(id, &req.payload, acp, registry).await,
+        "load_session" => handle_load_session(id, &req.payload, acp).await,
+        "resume_session" => handle_resume_session(id, &req.payload, acp).await,
+        "close_session" => handle_close_session(id, &req.payload, acp).await,
         "dispose_ephemeral_session" => {
-            handle_dispose_ephemeral_session(
-                id,
-                &req.payload,
-                acp,
-                relay,
-                subscribed_clients,
-                current_session,
-                current_project,
-            )
-            .await
+            handle_dispose_ephemeral_session(id, &req.payload, acp, relay, subscribed_clients).await
         }
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
         // Story 8: promote a backend-ephemeral warm-pool session to durable
@@ -313,28 +267,13 @@ pub(super) async fn handle_request(
         "register_discovered_session" => {
             handle_register_discovered_session(id, &req.payload, acp, relay).await
         }
-        "switch_project" => {
-            handle_switch_project(
-                id,
-                &req.payload,
-                acp,
-                relay,
-                registry,
-                out_tx,
-                current_agent,
-                current_session,
-                current_project,
-                switch_queue,
-            )
-            .await
-        }
         // Per-project fs watch (`fs_changed` goes only to subscribed
         // connections): refcounted in `relay.fs_watches()`, released on
         // `unwatch_project`, connection close, or project archive/remove.
         "watch_project" => handle_watch_project(id, &req.payload, relay, registry, out_tx),
         "unwatch_project" => handle_unwatch_project(id, &req.payload, relay, out_tx),
         // Explicit host-default change (Epic 7 — cross-client continuity).
-        // Distinct from `switch_project` (per-connection): updates the host's
+        // Updates the host's
         // `default_project_id`, persists to `FileProjectRegistry` (VPS, with
         // rollback), and broadcasts `projects_changed` to ALL clients. Any
         // authenticated client can set the default for now (Epic 2 wires auth).
@@ -388,7 +327,7 @@ pub(super) async fn handle_request(
             )
             .await
         }
-        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, current_agent).await,
+        "spawn_agent" => handle_spawn_agent(id, &req.payload, acp).await,
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
         // resolved `SupportedAcpAgentStatus`. The web client never probes
@@ -419,17 +358,7 @@ pub(super) async fn handle_request(
         "store_read" => handle_store_read(id, &req.payload, store).await,
         "store_write" => handle_store_write(id, &req.payload, store).await,
         "store_delete" => handle_store_delete(id, &req.payload, store).await,
-        "kill_agent" => {
-            handle_kill_agent(
-                id,
-                &req.payload,
-                acp,
-                current_agent,
-                current_session,
-                current_project,
-            )
-            .await
-        }
+        "kill_agent" => handle_kill_agent(id, &req.payload, acp).await,
         "list_agents" => handle_list_agents(id, acp).await,
         // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.
         // `pi_terminal_login`). Distinct from the WS connection `authenticate`

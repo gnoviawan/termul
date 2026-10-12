@@ -44,8 +44,8 @@ const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
 // shared `useProjectSwitch` routine (its own tests live in
 // use-project-switch.test.tsx) is the phone shell's.
 const { selectProjectSpy, switchToSpy, useProjectSwitchSpy } = vi.hoisted(() => {
-  const switchTo = vi.fn(async () => 'completed' as const)
-  const projectSwitch = { switchTo, clearFailed: vi.fn() }
+  const switchTo = vi.fn(() => 'selected' as const)
+  const projectSwitch = { switchTo }
   return {
     selectProjectSpy: vi.fn(),
     switchToSpy: switchTo,
@@ -54,8 +54,7 @@ const { selectProjectSpy, switchToSpy, useProjectSwitchSpy } = vi.hoisted(() => 
 })
 
 vi.mock('@/hooks/use-project-switch', () => ({
-  useProjectSwitch: useProjectSwitchSpy,
-  useProjectSwitchState: () => ({ switchingId: null, queuedId: null, failedId: null, busy: false })
+  useProjectSwitch: useProjectSwitchSpy
 }))
 
 vi.mock('@/lib/tauri-runtime', async () => {

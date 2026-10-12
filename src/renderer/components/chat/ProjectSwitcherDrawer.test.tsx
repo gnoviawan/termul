@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect, useRef, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -6,61 +6,20 @@ import {
   recordSheetOpener,
   sheetCloseAutoFocus
 } from '@/lib/sheet-focus-return'
-import { useAcpStore } from '@/stores/acp-store'
 import { ProjectSwitcherDrawer } from './ProjectSwitcherDrawer'
 
-const {
-  mockSwitchProject,
-  setFailedProjectSwitch,
-  toastError,
-  toastSuccess,
-  mockSetDefaultProject,
-  mockLogFrontendError
-} = vi.hoisted(() => ({
-  mockSwitchProject: vi.fn(),
-  setFailedProjectSwitch: vi.fn(),
+const { mockSwitchTo, toastError, toastSuccess, mockSetDefaultProject } = vi.hoisted(() => ({
+  mockSwitchTo: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
-  mockSetDefaultProject: vi.fn(),
-  mockLogFrontendError: vi.fn()
+  mockSetDefaultProject: vi.fn()
 }))
 
-vi.mock('@/lib/log-api', () => ({
-  logFrontendError: mockLogFrontendError
+// Switching is client-only; the hook's own behavior is covered by
+// `use-project-switch.test.tsx`. The sheet only reacts to its status.
+vi.mock('@/hooks/use-project-switch', () => ({
+  useProjectSwitch: () => ({ switchTo: mockSwitchTo })
 }))
-
-// A real zustand store, so the sheet re-renders when a marker changes and the
-// shared switch hook can read it through `getState()`. `switchProject` mirrors
-// the real action's contract: it publishes `switchingProjectId` before it
-// yields and clears it on every exit.
-vi.mock('@/stores/acp-store', async () => {
-  const { create } = await import('zustand')
-  interface SwitchState {
-    queuedProjectSwitchId: string | null
-    failedProjectSwitchId: string | null
-    switchingProjectId: string | null
-    switchProject: (projectId: string) => Promise<unknown>
-    setFailedProjectSwitch: (projectId: string | null) => void
-  }
-  const useAcpStore = create<SwitchState>()((set) => ({
-    queuedProjectSwitchId: null,
-    failedProjectSwitchId: null,
-    switchingProjectId: null,
-    switchProject: async (projectId) => {
-      set({ switchingProjectId: projectId })
-      try {
-        return await mockSwitchProject(projectId)
-      } finally {
-        set({ switchingProjectId: null })
-      }
-    },
-    setFailedProjectSwitch: (projectId) => {
-      setFailedProjectSwitch(projectId)
-      set({ failedProjectSwitchId: projectId })
-    }
-  }))
-  return { useAcpStore }
-})
 
 vi.mock('sonner', () => ({
   toast: { error: toastError, success: toastSuccess }
@@ -131,22 +90,8 @@ const state = {
 describe('ProjectSwitcherDrawer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useAcpStore.setState({
-      queuedProjectSwitchId: null,
-      failedProjectSwitchId: null,
-      switchingProjectId: null
-    })
+    mockSwitchTo.mockReturnValue('selected')
   })
-
-  function setSwitchMarkers(markers: {
-    queuedProjectSwitchId?: string | null
-    failedProjectSwitchId?: string | null
-    switchingProjectId?: string | null
-  }): void {
-    act(() => {
-      useAcpStore.setState(markers)
-    })
-  }
 
   it('renders the mirrored list, marks the active project, disables archived + active entries', async () => {
     render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
@@ -174,194 +119,25 @@ describe('ProjectSwitcherDrawer', () => {
     expect(gammaBtn).not.toHaveAttribute('aria-current', 'true')
   })
 
-  it('switches the shared session on clicking a non-active project', async () => {
-    mockSwitchProject.mockResolvedValue({
-      status: 'completed',
-      projectId: 'p3',
-      sessionId: 's-new',
-      cwd: '/g',
-      mcpServerCount: 2
-    })
+  it('switches the active project client-side and closes the sheet', async () => {
     const onOpenChange = vi.fn()
     render(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
 
     fireEvent.click(await screen.findByText('Gamma'))
 
-    await waitFor(() => expect(mockSwitchProject).toHaveBeenCalledWith('p3'))
+    expect(mockSwitchTo).toHaveBeenCalledWith('p3')
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
-  it('keeps the drawer open and shows queued state until completion', async () => {
-    mockSwitchProject.mockResolvedValue({
-      status: 'queued',
-      projectId: 'p3',
-      currentSessionId: 's-old'
-    })
-    const onOpenChange = vi.fn()
-    render(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
-
-    fireEvent.click(await screen.findByText('Gamma'))
-    await waitFor(() => expect(mockSwitchProject).toHaveBeenCalledWith('p3'))
-    expect(onOpenChange).not.toHaveBeenCalledWith(false)
-
-    // The store records the queued target once the server accepts the switch.
-    setSwitchMarkers({ queuedProjectSwitchId: 'p3' })
-    expect(await screen.findByText('Queued')).toBeInTheDocument()
-    // Busy rows stay in the tab order (aria-disabled, not disabled).
-    const gammaBtn = screen.getByText('Gamma').closest('button')
-    expect(gammaBtn).toHaveAttribute('aria-disabled', 'true')
-    expect(gammaBtn).not.toBeDisabled()
-  })
-
-  it('surfaces a rejected switch as an inline "Failed" badge + toast and stays open', async () => {
-    mockSwitchProject.mockRejectedValue(
-      new Error('switch_project requires a live agent; open a chat first')
-    )
+  it('keeps the sheet open when the switch is ignored', async () => {
+    mockSwitchTo.mockReturnValue('ignored')
     const onOpenChange = vi.fn()
     render(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
 
     fireEvent.click(await screen.findByText('Gamma'))
 
-    await waitFor(() => expect(mockSwitchProject).toHaveBeenCalledWith('p3'))
-    // The shared switch hook marks the failed project on the store so the inline
-    // badge can render (mirrors how `applyFailedProjectSwitch` sets it for the
-    // event path).
-    await waitFor(() => expect(setFailedProjectSwitch).toHaveBeenCalledWith('p3'))
-    expect(toastError).toHaveBeenCalledWith(
-      'switch_project requires a live agent; open a chat first'
-    )
-    expect(mockLogFrontendError).toHaveBeenCalledWith({
-      level: 'warn',
-      source: 'ProjectSwitcherDrawer',
-      message:
-        'Project switch failed for p3: switch_project requires a live agent; open a chat first'
-    })
-    // A failed switch does not close the drawer.
+    expect(mockSwitchTo).toHaveBeenCalledWith('p3')
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
-
-    expect(await screen.findByText('Failed')).toBeInTheDocument()
-    // The failed row stays retryable (not disabled) so the user can retry.
-    expect(screen.getByText('Gamma').closest('button')).not.toBeDisabled()
-  })
-
-  it('replaces the Queued badge with a Failed badge when a queued switch fails', async () => {
-    render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
-
-    // Queued switch in flight: badge shows + row disabled.
-    setSwitchMarkers({ queuedProjectSwitchId: 'p3' })
-    expect(await screen.findByText('Queued')).toBeInTheDocument()
-    expect(screen.getByText('Gamma').closest('button')).toHaveAttribute('aria-disabled', 'true')
-
-    // Server emits `project_switch_failed`: store clears queued + sets failed.
-    setSwitchMarkers({ queuedProjectSwitchId: null, failedProjectSwitchId: 'p3' })
-    expect(screen.queryByText('Queued')).not.toBeInTheDocument()
-    expect(await screen.findByText('Failed')).toBeInTheDocument()
-    // Retryable again now that the turn is idle.
-    expect(screen.getByText('Gamma').closest('button')).not.toBeDisabled()
-  })
-
-  it('clears a failure that arrives while the drawer is closed (no stale badge on reopen)', async () => {
-    const onOpenChange = vi.fn()
-    const { rerender } = render(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
-
-    // Queued switch in flight while the drawer is open.
-    setSwitchMarkers({ queuedProjectSwitchId: 'p3' })
-    expect(await screen.findByText('Queued')).toBeInTheDocument()
-
-    // User closes the drawer while the queued switch is still pending server-side.
-    rerender(<ProjectSwitcherDrawer open={false} onOpenChange={onOpenChange} />)
-
-    // The queued switch fails AFTER closure: store clears queued + sets failed.
-    setFailedProjectSwitch.mockClear()
-    setSwitchMarkers({ queuedProjectSwitchId: null, failedProjectSwitchId: 'p3' })
-
-    // The cleanup effect must react to the late failure (its deps include
-    // `failedProjectSwitchId`) and clear it so it can't resurface on reopen.
-    await waitFor(() => expect(setFailedProjectSwitch).toHaveBeenCalledWith(null))
-
-    // Store honored the clear → reopening shows no stale "Failed"/"Queued" badge.
-    await waitFor(() => expect(useAcpStore.getState().failedProjectSwitchId).toBeNull())
-    rerender(<ProjectSwitcherDrawer open onOpenChange={onOpenChange} />)
-    expect(await screen.findByText('Gamma')).toBeInTheDocument()
-    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
-    expect(screen.queryByText('Queued')).not.toBeInTheDocument()
-  })
-
-  describe('busy rows keep focus (aria-disabled guard)', () => {
-    it('marks non-active, non-archived rows aria-disabled while a switch is in flight and ignores taps', async () => {
-      let resolveSwitch: (value: unknown) => void = () => {}
-      mockSwitchProject.mockReturnValue(
-        new Promise((resolve) => {
-          resolveSwitch = resolve
-        })
-      )
-      render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
-
-      const gammaBtn = (await screen.findByText('Gamma')).closest('button') as HTMLButtonElement
-      gammaBtn.focus()
-      fireEvent.click(gammaBtn)
-      await waitFor(() => expect(mockSwitchProject).toHaveBeenCalledTimes(1))
-
-      // The tapped row stays enabled and focused; only aria-disabled flips.
-      expect(gammaBtn).toHaveAttribute('aria-disabled', 'true')
-      expect(gammaBtn).not.toBeDisabled()
-      expect(document.activeElement).toBe(gammaBtn)
-
-      // A second tap while busy is ignored.
-      fireEvent.click(gammaBtn)
-      expect(mockSwitchProject).toHaveBeenCalledTimes(1)
-
-      // Active and archived rows keep the hard `disabled`, never aria-disabled.
-      const alphaBtn = screen.getByText('Alpha').closest('button')
-      const betaBtn = screen.getByText('Beta').closest('button')
-      expect(alphaBtn).toBeDisabled()
-      expect(alphaBtn).not.toHaveAttribute('aria-disabled')
-      expect(betaBtn).toBeDisabled()
-      expect(betaBtn).not.toHaveAttribute('aria-disabled')
-
-      resolveSwitch({ status: 'selected', projectId: 'p3' })
-      await waitFor(() => expect(gammaBtn).not.toHaveAttribute('aria-disabled'))
-    })
-
-    it('ignores taps on a non-active row while another switch is queued', async () => {
-      setSwitchMarkers({ queuedProjectSwitchId: 'p2' })
-      render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
-
-      const gammaBtn = (await screen.findByText('Gamma')).closest('button') as HTMLButtonElement
-      expect(gammaBtn).toHaveAttribute('aria-disabled', 'true')
-      fireEvent.click(gammaBtn)
-
-      expect(mockSwitchProject).not.toHaveBeenCalled()
-    })
-
-    it('shows a switch another caller started (the palette) and ignores taps meanwhile', async () => {
-      setSwitchMarkers({ switchingProjectId: 'p3' })
-      render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
-
-      const gammaBtn = (await screen.findByText('Gamma')).closest('button') as HTMLButtonElement
-      expect(gammaBtn).toHaveAttribute('aria-disabled', 'true')
-      expect(gammaBtn).not.toBeDisabled()
-      // The in-progress spinner follows the store marker, not the drawer's own tap.
-      expect(gammaBtn.querySelector('.tm-comet')).not.toBeNull()
-      const alphaBtn = screen.getByText('Alpha').closest('button') as HTMLButtonElement
-      expect(alphaBtn.querySelector('.tm-comet')).toBeNull()
-      fireEvent.click(gammaBtn)
-
-      expect(mockSwitchProject).not.toHaveBeenCalled()
-    })
-
-    it('keeps focus on the failed row so the user can retry', async () => {
-      mockSwitchProject.mockRejectedValue(new Error('boom'))
-      render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
-
-      const gammaBtn = (await screen.findByText('Gamma')).closest('button') as HTMLButtonElement
-      gammaBtn.focus()
-      fireEvent.click(gammaBtn)
-
-      await waitFor(() => expect(setFailedProjectSwitch).toHaveBeenCalledWith('p3'))
-      await waitFor(() => expect(gammaBtn).not.toHaveAttribute('aria-disabled'))
-      expect(document.activeElement).toBe(gammaBtn)
-    })
   })
 
   describe('Add project row', () => {
@@ -435,28 +211,6 @@ describe('ProjectSwitcherDrawer', () => {
       expect(calls).toEqual(['open:false', 'settings'])
     })
 
-    it('is disabled while a switch is in flight or queued', async () => {
-      const onOpenProjectSettings = vi.fn()
-      render(
-        <ProjectSwitcherDrawer
-          open
-          onOpenChange={vi.fn()}
-          onOpenProjectSettings={onOpenProjectSettings}
-        />
-      )
-      const gear = await screen.findByRole('button', { name: '"Alpha" project settings' })
-
-      setSwitchMarkers({ switchingProjectId: 'p3' })
-      expect(gear).toBeDisabled()
-      setSwitchMarkers({ switchingProjectId: null, queuedProjectSwitchId: 'p3' })
-      expect(gear).toBeDisabled()
-      fireEvent.click(gear)
-      expect(onOpenProjectSettings).not.toHaveBeenCalled()
-
-      setSwitchMarkers({ queuedProjectSwitchId: null })
-      expect(gear).toBeEnabled()
-    })
-
     it('is omitted when no settings handler is available', async () => {
       render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
 
@@ -508,8 +262,6 @@ describe('ProjectSwitcherDrawer', () => {
     })
 
     it('returns focus to the opener after a successful switch closes the sheet', async () => {
-      mockSwitchProject.mockResolvedValue({ status: 'completed', projectId: 'p3' })
-
       // Mirrors MobileChatShell: the subtitle is recorded as the sheet's opener.
       _resetSheetFocusReturnForTests()
       function Harness(): React.JSX.Element {
@@ -626,7 +378,7 @@ describe('ProjectSwitcherDrawer', () => {
         fireEvent.click(control('Gamma') as HTMLElement)
 
         await waitFor(() => expect(mockSetDefaultProject).toHaveBeenCalledTimes(1))
-        expect(mockSwitchProject).not.toHaveBeenCalled()
+        expect(mockSwitchTo).not.toHaveBeenCalled()
       } finally {
         state.projects = original
       }

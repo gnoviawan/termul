@@ -94,8 +94,7 @@ describe('useShellAnnouncements', () => {
     useAcpStore.setState(FRESH)
     useAcpStore.setState({
       agentStatus: { 'agent-1': 'connected' },
-      sessionIndex: [],
-      failedProjectSwitchId: null
+      sessionIndex: []
     })
     seedSessions()
     seedProjectStore(
@@ -746,53 +745,12 @@ describe('useShellAnnouncements', () => {
     })
   })
 
-  describe('project switch', () => {
-    it('announces a switch in flight with the project-store name', () => {
-      renderHook(() => useShellAnnouncements())
-      act(() => {
-        useAcpStore.setState({ switchingProjectId: 'p2' })
-      })
-      settle()
-      expect(region()).toBe('Switching to Beta…')
-
-      act(() => {
-        useAcpStore.setState({ switchingProjectId: null })
-      })
-      settle()
-      expect(region()).toBe('Switching to Beta…')
-    })
-
-    it('falls back to the project id when the store has no name', () => {
-      renderHook(() => useShellAnnouncements())
-      act(() => {
-        useAcpStore.setState({ switchingProjectId: 'p3' })
-      })
-      settle()
-      expect(region()).toBe('Switching to p3…')
-
-      act(() => {
-        useAcpStore.setState({ switchingProjectId: 'unknown-project' })
-      })
-      settle()
-      expect(region()).toBe('Switching to unknown-project…')
-    })
-
-    it('announces a failure even when it is cleared again in the same tick', () => {
-      renderHook(() => useShellAnnouncements())
-      act(() => {
-        useAcpStore.setState({ failedProjectSwitchId: 'p2' })
-        useAcpStore.setState({ failedProjectSwitchId: null })
-      })
-      settle()
-      expect(region()).toBe("Couldn't switch to Beta")
-    })
-  })
-
   describe('queue behaviour', () => {
     it('shows only the newest of two back-to-back announcements', () => {
+      seedSessions({ active: { activeTurn: true, openTurnId: 't1' } })
       renderHook(() => useShellAnnouncements())
       act(() => {
-        useAcpStore.setState({ switchingProjectId: 'p2' })
+        seedSessions({ active: { activeTurn: false, openTurnId: null } })
       })
       act(() => {
         useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
@@ -801,7 +759,7 @@ describe('useShellAnnouncements', () => {
       expect(region()).toBe('Approval needed')
     })
 
-    it('lets Approval needed win when it lands with a switch, a turn end and a needs-you', () => {
+    it('lets Approval needed win when it lands with a turn end and a needs-you', () => {
       seedSessions({ active: { activeTurn: true, openTurnId: 't1' } })
       renderHook(() => useShellAnnouncements())
       act(() => {
@@ -810,7 +768,6 @@ describe('useShellAnnouncements', () => {
       // Land everything in one write.
       act(() => {
         useAcpStore.setState({
-          switchingProjectId: 'p2',
           pendingPermissions: { ...permission('r1', 'active'), ...permission('r2', 'other') }
         })
       })
@@ -946,7 +903,7 @@ describe('useShellAnnouncements', () => {
       const workspaceRead = vi.spyOn(useWorkspaceStore, 'getState')
 
       act(() => {
-        useAcpStore.setState({ switchingProjectId: 'p2' })
+        useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
       })
 
       expect(workspaceRead).toHaveBeenCalled()

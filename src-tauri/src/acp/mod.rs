@@ -68,7 +68,7 @@ pub use project_registry::{FileProjectRegistry, VfsRoot};
 #[allow(unused_imports)]
 pub use session_persistence::{
     PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionPersistence,
-    SessionPersistenceError, SessionRegistration,
+    SessionPersistenceError, SessionRegistration, UNASSIGNED_PROJECT_ID,
 };
 #[allow(unused_imports)]
 pub use workspace_manifest::{

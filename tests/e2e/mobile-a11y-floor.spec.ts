@@ -223,11 +223,6 @@ async function chooseFromMore(page: Page, row: string): Promise<void> {
     .tap()
 }
 
-/** The subtitle button (project · branch · Local/Worktree) that opens the project sheet. */
-function projectSwitcher(page: Page): Locator {
-  return page.getByRole('button', { name: /, switch project$/ })
-}
-
 interface Box {
   x: number
   y: number
@@ -385,59 +380,6 @@ test.describe('shell live region', () => {
     await expect(region).toHaveText('1 chat matches')
     await search.fill('zzz-no-such-chat')
     await expect(region).toHaveText('0 chats match')
-  })
-
-  test('announces a project switch as it starts', async ({ page }) => {
-    const current = await registerProject()
-    const target = await registerProject()
-    await bootShell(page, current)
-
-    await projectSwitcher(page).tap()
-    await page
-      .getByRole('dialog', { name: 'Projects' })
-      .getByRole('button', { name: target.name, exact: true })
-      .tap()
-
-    await expect(liveRegion(page)).toHaveText(`Switching to ${target.name}…`)
-  })
-
-  test('announces a refused project switch', async ({ page }) => {
-    const current = await registerProject()
-    const target = await registerProject()
-    // The server refuses switch_project for the target, with the protocol's
-    // own failure frame (a real refusal needs a dead agent, which no agent
-    // dies on cue across platforms). Every other frame passes through.
-    await page.routeWebSocket(/:\d+\/ws$/, (client) => {
-      const server = client.connectToServer()
-      client.onMessage((message) => {
-        const frame = JSON.parse(String(message)) as {
-          id?: string
-          type?: string
-          payload?: { projectId?: string }
-        }
-        if (frame.type === 'switch_project' && frame.payload?.projectId === target.id) {
-          client.send(
-            JSON.stringify({
-              id: frame.id,
-              ok: false,
-              err: { code: 'e2e_refused', message: 'switch refused (e2e)' }
-            })
-          )
-          return
-        }
-        server.send(message)
-      })
-      server.onMessage((message) => client.send(message))
-    })
-    await bootShell(page, current)
-
-    await projectSwitcher(page).tap()
-    await page
-      .getByRole('dialog', { name: 'Projects' })
-      .getByRole('button', { name: target.name, exact: true })
-      .tap()
-
-    await expect(liveRegion(page)).toHaveText(`Couldn't switch to ${target.name}`)
   })
 
   test('announces the control channel dropping and recovering, in that order', async ({ page }) => {

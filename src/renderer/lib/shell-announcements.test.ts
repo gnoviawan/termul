@@ -16,8 +16,6 @@ import {
   deriveConnectionAnnouncements,
   needsYouAnnouncement,
   resolveChatLabel,
-  switchFailedAnnouncement,
-  switchingAnnouncement,
   TURN_FINISHED
 } from './shell-announcements'
 
@@ -39,8 +37,6 @@ function acpState(overrides: Partial<AcpAnnouncementState> = {}): AcpAnnouncemen
     pendingQuestions: {},
     pendingElicitations: {},
     permissionDenialNotices: {},
-    switchingProjectId: null,
-    failedProjectSwitchId: null,
     ...overrides
   }
 }
@@ -51,7 +47,6 @@ function context(overrides: Partial<AnnouncementContext> = {}): AnnouncementCont
     activeProjectId: 'p1',
     candidateChatIds: new Set(['active', 'other']),
     chatLabel: (id) => `Chat ${id}`,
-    projectName: (id) => `Project ${id}`,
     ...overrides
   }
 }
@@ -81,8 +76,6 @@ describe('announcement strings', () => {
     expect(APPROVAL_NEEDED).toBe('Approval needed')
     expect(TURN_FINISHED).toBe('Turn finished')
     expect(needsYouAnnouncement('Fix auth')).toBe('Fix auth needs you')
-    expect(switchingAnnouncement('pecut-web')).toBe('Switching to pecut-web…')
-    expect(switchFailedAnnouncement('docs-site')).toBe("Couldn't switch to docs-site")
     expect(CONNECTION_RECONNECTING).toBe('Reconnecting…')
     expect(CONNECTION_DISCONNECTED).toBe('Disconnected')
     expect(CONNECTION_CONNECTED).toBe('Connected')
@@ -109,15 +102,12 @@ describe('deriveAcpAnnouncements: baseline', () => {
     const state = acpState({
       sessions: twoChats(),
       pendingPermissions: { r1: { sessionId: 'active' } },
-      pendingQuestions: { q1: { sessionId: 'other' } },
-      switchingProjectId: 'p2',
-      failedProjectSwitchId: 'p3'
+      pendingQuestions: { q1: { sessionId: 'other' } }
     })
     const result = deriveAcpAnnouncements(null, state, context())
     expect(result.announcements).toEqual([])
     expect(result.memory.approvalKeys).toEqual(new Set(['permission:r1', 'question:q1']))
     expect(result.memory.needsYou).toEqual({ active: true, other: true })
-    expect(result.memory.switchingProjectId).toBe('p2')
   })
 
   it('stays silent on an unchanged re-evaluation', () => {
@@ -525,77 +515,17 @@ describe('deriveAcpAnnouncements: turn finished', () => {
   })
 })
 
-describe('deriveAcpAnnouncements: project switch', () => {
-  const idle = acpState({ sessions: twoChats() })
-
-  it('announces when a switch starts, with the project name', () => {
-    expect(transition(idle, { ...idle, switchingProjectId: 'p2' })).toEqual([
-      'Switching to Project p2…'
-    ])
-  })
-
-  it('falls back to whatever the name lookup returns (the id when no name is found)', () => {
-    const ctx = context({ projectName: (id) => id })
-    expect(transition(idle, { ...idle, switchingProjectId: 'p2' }, ctx)).toEqual([
-      'Switching to p2…'
-    ])
-  })
-
-  it('is silent when the switch ends', () => {
-    expect(transition({ ...idle, switchingProjectId: 'p2' }, idle)).toEqual([])
-  })
-
-  it('announces a failure', () => {
-    expect(transition(idle, { ...idle, failedProjectSwitchId: 'p2' })).toEqual([
-      "Couldn't switch to Project p2"
-    ])
-  })
-
-  it('catches a failure that is cleared again in the same tick (each write is evaluated)', () => {
-    const baseline = deriveAcpAnnouncements(null, idle, context())
-    const failed = deriveAcpAnnouncements(
-      baseline.memory,
-      { ...idle, failedProjectSwitchId: 'p2' },
-      context()
-    )
-    expect(failed.announcements).toEqual(["Couldn't switch to Project p2"])
-    const cleared = deriveAcpAnnouncements(failed.memory, idle, context())
-    expect(cleared.announcements).toEqual([])
-  })
-
-  it('announces a repeated failure for the same project after it was cleared', () => {
-    const failed = { ...idle, failedProjectSwitchId: 'p2' }
-    const a = deriveAcpAnnouncements(null, failed, context())
-    const cleared = deriveAcpAnnouncements(a.memory, idle, context())
-    const again = deriveAcpAnnouncements(cleared.memory, failed, context())
-    expect(again.announcements).toEqual(["Couldn't switch to Project p2"])
-  })
-
-  it('does not repeat while the same switch stays in flight', () => {
-    const switching = { ...idle, switchingProjectId: 'p2' }
-    expect(transition(switching, { ...switching })).toEqual([])
-  })
-
-  it('announces a different target while another switch is in flight', () => {
-    expect(
-      transition({ ...idle, switchingProjectId: 'p2' }, { ...idle, switchingProjectId: 'p3' })
-    ).toEqual(['Switching to Project p3…'])
-  })
-})
-
 describe('deriveAcpAnnouncements: emission order', () => {
-  it('emits switch, turn finished, needs-you, approval so that Approval needed wins', () => {
+  it('emits turn finished, needs-you, approval so that Approval needed wins', () => {
     const before = acpState({
       sessions: twoChats({ active: { activeTurn: true } })
     })
     const after = acpState({
       sessions: twoChats({ active: { activeTurn: false } }),
-      switchingProjectId: 'p2',
       pendingQuestions: { q1: { sessionId: 'other' } },
       pendingPermissions: { r1: { sessionId: 'active' } }
     })
     expect(transition(before, after)).toEqual([
-      'Switching to Project p2…',
       TURN_FINISHED,
       'Chat other needs you',
       APPROVAL_NEEDED

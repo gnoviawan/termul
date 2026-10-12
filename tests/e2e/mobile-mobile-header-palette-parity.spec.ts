@@ -7,8 +7,7 @@ import {
   expect,
   type Locator,
   type Page,
-  test,
-  type WebSocketRoute
+  test
 } from 'playwright/test'
 import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
 
@@ -18,32 +17,20 @@ import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
  *
  * Two promises are checked against a real layout and a real relay:
  *
- * 1. One project switch. The command palette's project entries run the same
- *    switch as the project sheet on the phone shell: the palette closes, the
- *    shell live region says "Switching to {project}…", a refusal toasts, is
- *    logged with source `CommandPalette` and is announced, a switch in flight
- *    or queued ignores every other pick (no second `switch_project` frame),
- *    and the sheet is where "Queued" shows. A desktop-width shell keeps the
- *    plain client-side select (no `switch_project` frame at all).
+ * 1. One client-only project switch. The command palette's project entries run
+ *    the same switch as the project sheet on the phone shell: the palette
+ *    closes and the header lands on the picked project, with no `switch_project`
+ *    frame on the wire (switching never reaches the host). A desktop-width
+ *    shell keeps the plain client-side select.
  * 2. A terminal keeps its navigation. The terminal ⋯ sheet lists Git changes,
  *    Files, Command palette and Project settings after Command history and
  *    before a set-apart Close terminal, each row 44px tall, and each one opens
  *    its destination once and closes the sheet.
  *
- * Wire-level plays, because the seeded server cannot produce them on cue: a
- * `switch_project` that stays in flight and is then refused, released or
- * answered `queued` (the replies the real server gives a dead agent, a running
- * turn and a live one, the way the web client receives them). `queued` is
- * played because the seeded server never answers it: its connection tracks the
- * launcher's idle warm-pool session, not the chat that is streaming, so a
- * switch during a running turn completes at once instead.
- *
  * Not observable here, by design (left to the unit tests): a project without a
  * path and the Tauri gates (the server refuses to register a pathless project,
  * and the browser is never Tauri), an archived target (the seeded server has no
- * archive operation), the Cmd/Ctrl+1-9 shortcut, and the store throwing after
- * the server accepted a switch (a deferred item of the spec). What a screen
- * reader speaks needs a device; the live region text is what the page offers it.
+ * archive operation), and the Cmd/Ctrl+1-9 shortcut.
  *
  * Every test builds its own project(s) under the workspace root, so it owns its
  * chats and terminals and never depends on another suite's state. Project names
@@ -240,110 +227,31 @@ async function startChat(page: Page, prompt: string): Promise<void> {
 interface ProjectSwitchWire {
   /** The project ids of every `switch_project` request the page has sent, in order. */
   requested: () => string[]
-  /** Answer the oldest held request with the protocol's own failure frame. */
-  refuse: (message: string) => void
-  /** Answer the oldest held request with the server's own `queued` reply. */
-  queue: () => void
-  /** Let the oldest held request through to the server. */
-  release: () => void
 }
 
 /**
- * Watch every `switch_project` request at the relay wire. With `hold`, each one
- * stays in flight until the test refuses or releases it: the seeded server
- * offers no way to make a switch slow or fail on cue, and the refusal is the
- * protocol's own failure frame, so the app handles it as it would a host-side
- * one. Without `hold` every frame passes through and the wire only records.
+ * Record every `switch_project` frame the page sends at the relay wire. Switching
+ * is client-only, so the list must stay empty; frames always pass through.
  * Must run before the page loads: the relay socket opens at boot.
  */
-async function watchProjectSwitches(
-  page: Page,
-  { hold }: { hold: boolean }
-): Promise<ProjectSwitchWire> {
+async function watchProjectSwitches(page: Page): Promise<ProjectSwitchWire> {
   const requested: string[] = []
-  // Each held request remembers the socket pair it arrived on: the page may
-  // open more than one `/ws` connection, and the reply must go back on the same one.
-  const held: Array<{
-    id: string
-    projectId: string
-    message: string | Buffer
-    client: WebSocketRoute
-    server: WebSocketRoute
-  }> = []
   await page.routeWebSocket(
     (url) => url.pathname === '/ws',
     (client) => {
       const server = client.connectToServer()
       client.onMessage((message) => {
         const frame = JSON.parse(String(message)) as {
-          id?: string
           type?: string
           payload?: { projectId?: string }
         }
-        if (frame.type === 'switch_project' && frame.id) {
-          requested.push(frame.payload?.projectId ?? '')
-          if (hold) {
-            held.push({
-              id: frame.id,
-              projectId: frame.payload?.projectId ?? '',
-              message,
-              client,
-              server
-            })
-            return
-          }
-        }
+        if (frame.type === 'switch_project') requested.push(frame.payload?.projectId ?? '')
         server.send(message)
       })
       server.onMessage((message) => client.send(message))
     }
   )
-  const next = (): (typeof held)[number] => {
-    const request = held.shift()
-    if (!request) throw new Error('no switch_project request is being held')
-    return request
-  }
-  return {
-    requested: () => [...requested],
-    refuse: (message) => {
-      const { id, client } = next()
-      client.send(JSON.stringify({ id, ok: false, err: { code: 'no_agent', message } }))
-    },
-    queue: () => {
-      const { id, projectId, client } = next()
-      client.send(
-        JSON.stringify({
-          id,
-          ok: true,
-          payload: { status: 'queued', projectId, currentSessionId: 'e2e-running-session' }
-        })
-      )
-    },
-    release: () => {
-      const { message, server } = next()
-      server.send(message)
-    }
-  }
-}
-
-/**
- * Record every non-empty text the live region ever shows (a repeat is recorded
- * again: the region is cleared between messages). `toHaveText` only sees the
- * current message, and a newer one replaces the older.
- */
-async function trackAnnouncements(page: Page): Promise<() => Promise<string[]>> {
-  await page.evaluate(() => {
-    const region = document.querySelector('[data-shell-live-region]')
-    if (!region) throw new Error('no live region to track')
-    const store = window as unknown as { __hppAnnounced: string[] }
-    store.__hppAnnounced = []
-    new MutationObserver(() => {
-      const text = region.textContent ?? ''
-      if (text) store.__hppAnnounced.push(text)
-    }).observe(region, { childList: true, characterData: true, subtree: true })
-  })
-  return () =>
-    page.evaluate(() => (window as unknown as { __hppAnnounced: string[] }).__hppAnnounced)
+  return { requested: () => [...requested] }
 }
 
 const PALETTE_SEARCH_PLACEHOLDER = 'Search commands, projects, settings...'
@@ -434,186 +342,48 @@ async function openNewTerminal(page: Page): Promise<string> {
 // The palette runs the project sheet's switch
 // ---------------------------------------------------------------------------
 
-test('a palette pick closes the palette, announces Switching to the project, and lands on it', async ({
+test('a palette pick closes the palette and lands on the project without a host request', async ({
   page,
   request
 }) => {
   await createProject(request, 'hpp-pick-from')
   await createProject(request, 'hpp-pick-to')
-  const wire = await watchProjectSwitches(page, { hold: true })
+  const wire = await watchProjectSwitches(page)
   await openMobileWorkspace(page, 'hpp-pick-from')
-  const announced = await trackAnnouncements(page)
 
   await openPalette(page)
   await pickProject(page, 'hpp-pick-to')
 
-  // The switch is in flight (the relay holds it): the palette is gone, the
-  // shell has spoken, and the active project has not changed yet.
-  await expect.poll(() => wire.requested()).toEqual(['e2e-hpp-pick-to'])
-  await expect(liveRegion(page)).toHaveText('Switching to hpp-pick-to…')
-  await expect(subtitle(page)).toHaveText('hpp-pick-from')
-
-  // The in-flight state is the sheet's: every row is aria-disabled but stays
-  // focusable, and the current project keeps its native `disabled`.
-  await subtitle(page).tap()
-  await expect(projectSheet(page)).toBeVisible()
-  await expect(projectRow(page, 'hpp-pick-to')).toHaveAttribute('aria-disabled', 'true')
-  await expect(projectRow(page, 'hpp-pick-from')).toBeDisabled()
-  await page.keyboard.press('Escape')
-  await expect(projectSheet(page)).toBeHidden()
-
-  // Letting it through completes the switch: the header names the new project.
-  wire.release()
   await expect(subtitle(page)).toHaveText('hpp-pick-to')
   await expect(subtitle(page)).toHaveAccessibleName('hpp-pick-to, switch project')
-  expect(await announced()).toEqual(['Switching to hpp-pick-to…'])
-  expect(wire.requested()).toEqual(['e2e-hpp-pick-to'])
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
+  expect(wire.requested()).toEqual([])
 })
 
-test('a refused palette pick toasts the message, is announced and logged as CommandPalette, and leaves nothing behind', async ({
-  page,
-  request
-}) => {
-  await createProject(request, 'hpp-refuse-from')
-  await createProject(request, 'hpp-refuse-to')
-  const wire = await watchProjectSwitches(page, { hold: true })
-  await openMobileWorkspace(page, 'hpp-refuse-from')
-  const announced = await trackAnnouncements(page)
-
-  await openPalette(page)
-  await pickProject(page, 'hpp-refuse-to')
-  await expect.poll(() => wire.requested()).toEqual(['e2e-hpp-refuse-to'])
-  // Refuse only once the start was spoken: a refusal that lands in the same
-  // render would replace it before the region ever shows it.
-  await expect(liveRegion(page)).toHaveText('Switching to hpp-refuse-to…')
-
-  const refusal = 'switch_project requires a live agent (e2e)'
-  const logged = page.waitForRequest(
-    (req) =>
-      req.url().endsWith('/log/frontend-error') && (req.postData() ?? '').includes('CommandPalette')
-  )
-  wire.refuse(refusal)
-
-  // The error toast carries the transport's message, the shell announces the
-  // failure after the start, and the log names the palette as the source.
-  await expect(page.getByText(refusal)).toBeVisible()
-  await expect(liveRegion(page)).toHaveText("Couldn't switch to hpp-refuse-to")
-  expect(await announced()).toEqual([
-    'Switching to hpp-refuse-to…',
-    "Couldn't switch to hpp-refuse-to"
-  ])
-  expect(JSON.parse((await logged).postData() ?? '{}')).toMatchObject({
-    level: 'warn',
-    source: 'CommandPalette',
-    message: `Project switch failed for e2e-hpp-refuse-to: ${refusal}`
-  })
-  // Still on the first project.
-  await expect(subtitle(page)).toHaveText('hpp-refuse-from')
-
-  // Nothing lingers: the busy state ended, and the closed sheet has already
-  // dropped the Failed badge, so opening it shows a plain, tappable list.
-  await subtitle(page).tap()
-  await expect(projectSheet(page)).toBeVisible()
-  await expect(projectRow(page, 'hpp-refuse-to')).not.toContainText('Failed')
-  await expect(projectRow(page, 'hpp-refuse-to')).not.toHaveAttribute('aria-disabled', 'true')
-  await expect(projectRow(page, 'hpp-refuse-to')).toBeEnabled()
-})
-
-test('the active project and a switch in flight ignore palette and sheet picks: no second request', async ({
+test('the active project is not a palette target and the sheet follows the pick', async ({
   page,
   request
 }) => {
   await createProject(request, 'hpp-busy-a')
   await createProject(request, 'hpp-busy-b')
-  await createProject(request, 'hpp-busy-c')
-  const wire = await watchProjectSwitches(page, { hold: true })
+  const wire = await watchProjectSwitches(page)
   await openMobileWorkspace(page, 'hpp-busy-a')
 
-  // The active project is not a target: the palette closes, nothing is sent.
+  // The active project is not a target: the palette closes, nothing changes.
   await openPalette(page)
   await pickProject(page, 'hpp-busy-a')
+  await expect(subtitle(page)).toHaveText('hpp-busy-a')
 
-  // A real pick goes out and stays in flight.
   await openPalette(page)
   await pickProject(page, 'hpp-busy-b')
-  await expect.poll(() => wire.requested()).toEqual(['e2e-hpp-busy-b'])
-
-  // In flight, another palette pick closes the palette and is dropped.
-  await openPalette(page)
-  await pickProject(page, 'hpp-busy-c')
-
-  // The sheet shows the busy list, and a tap on another row is dropped too
-  // (`force`: Playwright treats an aria-disabled row as not actionable).
-  await subtitle(page).tap()
-  await expect(projectSheet(page)).toBeVisible()
-  await sheetSettled(page, projectSheet(page))
-  for (const name of ['hpp-busy-b', 'hpp-busy-c']) {
-    await expect(projectRow(page, name)).toHaveAttribute('aria-disabled', 'true')
-  }
-  await projectRow(page, 'hpp-busy-c').tap({ force: true })
-  await expect(projectRow(page, 'hpp-busy-c')).toBeFocused()
-  await expect(projectSheet(page)).toBeVisible()
-
-  // The earlier pick of the active project and both dropped picks sent nothing.
-  expect(wire.requested()).toEqual(['e2e-hpp-busy-b'])
-
-  // Letting the one request through completes it.
-  wire.release()
-  await expect(projectRow(page, 'hpp-busy-b')).toContainText('Current')
-  await page.keyboard.press('Escape')
-  await expect(projectSheet(page)).toBeHidden()
   await expect(subtitle(page)).toHaveText('hpp-busy-b')
-  expect(wire.requested()).toEqual(['e2e-hpp-busy-b'])
-})
 
-test('a queued palette pick shows Queued in the sheet, disables the other rows and gives no extra feedback', async ({
-  page,
-  request
-}) => {
-  await createProject(request, 'hpp-queue-from')
-  await createProject(request, 'hpp-queue-to')
-  await createProject(request, 'hpp-queue-other')
-  const wire = await watchProjectSwitches(page, { hold: true })
-  await openMobileWorkspace(page, 'hpp-queue-from')
-  const announced = await trackAnnouncements(page)
-
-  await openPalette(page)
-  await pickProject(page, 'hpp-queue-to')
-  await expect.poll(() => wire.requested()).toEqual(['e2e-hpp-queue-to'])
-  await expect(liveRegion(page)).toHaveText('Switching to hpp-queue-to…')
-
-  // The server answers a switch requested while a turn runs with `queued`. The
-  // seeded server cannot be made to: its connection tracks the launcher's idle
-  // warm session, not the chat that is streaming, so the relay plays the reply.
-  wire.queue()
-
-  // The sheet is where it shows: the target reads Queued, the other rows are
-  // aria-disabled (still focusable), the current project keeps `disabled`.
   await subtitle(page).tap()
   await expect(projectSheet(page)).toBeVisible()
   await sheetSettled(page, projectSheet(page))
-  await expect(projectRow(page, 'hpp-queue-to')).toContainText('Queued')
-  await expect(projectRow(page, 'hpp-queue-to')).toHaveAttribute('aria-disabled', 'true')
-  await expect(projectRow(page, 'hpp-queue-other')).toHaveAttribute('aria-disabled', 'true')
-  await expect(projectRow(page, 'hpp-queue-from')).toBeDisabled()
-
-  // A tap on another row, and another palette pick, send nothing.
-  await projectRow(page, 'hpp-queue-other').tap({ force: true })
-  await expect(projectRow(page, 'hpp-queue-other')).toBeFocused()
-  await page.keyboard.press('Escape')
-  await expect(projectSheet(page)).toBeHidden()
-  await openPalette(page)
-  await pickProject(page, 'hpp-queue-other')
-  await subtitle(page).tap()
-  await expect(projectSheet(page)).toBeVisible()
-  await expect(projectRow(page, 'hpp-queue-to')).toContainText('Queued')
-  expect(wire.requested()).toEqual(['e2e-hpp-queue-to'])
-
-  // No extra feedback for a palette-queued switch: no toast, no announcement
-  // beyond the start, and the active project has not changed.
-  await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
-  expect(await announced()).toEqual(['Switching to hpp-queue-to…'])
-  await expect(projectRow(page, 'hpp-queue-from')).toContainText('Current')
+  await expect(projectRow(page, 'hpp-busy-b')).toContainText('Current')
+  await expect(projectRow(page, 'hpp-busy-a')).toBeEnabled()
+  expect(wire.requested()).toEqual([])
 })
 
 // ---------------------------------------------------------------------------
@@ -729,18 +499,17 @@ test('from a terminal, ⋯ then Command palette switches the project like the sh
 }) => {
   await createProject(request, 'hpp-term-from')
   await createProject(request, 'hpp-term-to')
-  const wire = await watchProjectSwitches(page, { hold: false })
+  const wire = await watchProjectSwitches(page)
   await openMobileWorkspace(page, 'hpp-term-from')
   await openNewTerminal(page)
 
   await openPalette(page, 'terminal')
   await pickProject(page, 'hpp-term-to')
 
-  // One request went out for the picked project, and the header lands on it
-  // without a failure toast: a tab with no chat is not a refusal.
-  await expect.poll(() => wire.requested()).toEqual(['e2e-hpp-term-to'])
+  // The header lands on the picked project with no host request and no toast.
   await expect(subtitle(page)).toHaveText('hpp-term-to')
   await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
+  expect(wire.requested()).toEqual([])
 })
 
 // ---------------------------------------------------------------------------
@@ -821,7 +590,7 @@ test.describe('desktop-width shell', () => {
   }) => {
     await createProject(request, 'hpp-desk-from')
     await createProject(request, 'hpp-desk-to')
-    const wire = await watchProjectSwitches(page, { hold: false })
+    const wire = await watchProjectSwitches(page)
     await wsRequest(E2E_BASE_URL, 'store_write', {
       key: ACTIVE_PROJECT_KEY,
       value: { _version: 1, data: 'e2e-hpp-desk-from' }

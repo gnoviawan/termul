@@ -8,10 +8,6 @@
  * (`.message` is the human string callers already toast).
  */
 
-import type {
-  ProjectSwitchCompletedEvent,
-  SwitchProjectReply
-} from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
   type AcpRuntimePolicy,
@@ -721,9 +717,9 @@ export class WsAcpTransport implements AcpTransport {
       additionalDirectories?: string[]
     }
   ): Promise<NewSessionOutcome> {
-    // Web/remote: the host attributes the session to a project by resolving
-    // `cwd` against its registry (CAP-2), so no explicit projectId is sent.
-    // Worktree fields are desktop-only (CAP-3) and ignored on the WS path —
+    // Web/remote: the host stamps `session.projectId` once — the explicit
+    // `projectId` when registered (unknown → `not_found`), else the registry
+    // project owning `cwd`, else the unassigned sentinel. Worktree fields are desktop-only (CAP-3) and ignored on the WS path —
     // the host-owned durable record keys state isolation on `cwd` regardless.
     const outcome = await this.request<NewSessionOutcome>('create_session', {
       agentId,
@@ -733,6 +729,7 @@ export class WsAcpTransport implements AcpTransport {
       // Additive (story 8): sent only when set, so the wire shape is unchanged
       // for every non-promotable create.
       ...(options?.promotable ? { promotable: true } : {}),
+      ...(options?.projectId ? { projectId: options.projectId } : {}),
       ...(options?.additionalDirectories?.length
         ? { additionalDirectories: options.additionalDirectories }
         : {})
@@ -743,7 +740,6 @@ export class WsAcpTransport implements AcpTransport {
     return outcome
   }
 
-  /** Web/remote: subscribe immediately only when the server completed the switch. */
   async disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
     await this.request('dispose_ephemeral_session', { agentId, sessionId })
     this.subscribed.delete(sessionId)
@@ -778,14 +774,6 @@ export class WsAcpTransport implements AcpTransport {
         message: `promote_session succeeded for session ${sessionId} but the live subscribe failed; the next prompt will retry the subscribe: ${String(error)}`
       })
     }
-  }
-
-  async switchProject(projectId: string): Promise<SwitchProjectReply> {
-    const outcome = await this.request<SwitchProjectReply>('switch_project', { projectId })
-    if (outcome.status === 'completed') {
-      await this.subscribeSession(outcome.sessionId, null)
-    }
-    return outcome
   }
 
   async loadSession(
@@ -1759,10 +1747,6 @@ export class WsAcpTransport implements AcpTransport {
 
     // Agent-level / relay events (seq 0, or sid null): deliver immediately.
     if (evt.sid == null || evt.seq === 0) {
-      if (evt.type === 'project_switch_completed') {
-        const payload = evt.payload as ProjectSwitchCompletedEvent
-        await this.subscribeSession(payload.sessionId, null)
-      }
       this.emitLocal(evt.type, evt.payload)
       return
     }

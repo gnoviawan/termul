@@ -3,7 +3,6 @@
  * (spec-04 PR A). Pure declarations only: no store logic lives here.
  */
 
-import type { SwitchProjectReply } from '@shared/types/web-projects.types'
 import type { PendingLauncherOptions } from '@/components/agents/pending-launcher-options'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type {
@@ -492,16 +491,6 @@ export interface AcpState {
   transportReconnecting: boolean
   /** Sessions recovered live-only after stale because no server snapshot exists. */
   degradedRecoverySessions: Record<SessionId, true>
-  /** Target project waiting for the current turn to finish, if any. */
-  queuedProjectSwitchId: string | null
-  /** Target project whose switch just failed (transient inline indicator). */
-  failedProjectSwitchId: string | null
-  /**
-   * Target project of a `switchProject` call that is awaiting the transport.
-   * Null otherwise. The only store-visible signal for an in-flight switch;
-   * the mobile shell announcer derives "Switching to {project}…" from it.
-   */
-  switchingProjectId: string | null
 
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
@@ -555,8 +544,6 @@ export interface AcpState {
   ) => Promise<SessionId>
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
-  switchProject: (projectId: string) => Promise<SwitchProjectReply>
-  setFailedProjectSwitch: (projectId: string | null) => void
 
   // Actions — configured agents (P4)
   loadAgentConfigs: () => Promise<void>

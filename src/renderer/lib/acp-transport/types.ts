@@ -5,7 +5,6 @@
  * multiplexed `/ws` client on web/server (`./ws-transport`).
  */
 
-import type { SwitchProjectReply } from '@shared/types/web-projects.types'
 import {
   type HistoryMode,
   type PersistedSessionSummary,
@@ -249,8 +248,6 @@ export interface AcpTransport {
    * `acp_auth_deliver_redirect`; WS: `acp_deliver_auth_redirect`.
    */
   deliverAuthRedirect(agentId: AgentId, url: string): Promise<number>
-  /** Web/remote only: switch now or report that the switch was queued. */
-  switchProject?(projectId: string): Promise<SwitchProjectReply>
   historyMode?(): HistoryMode | 'tauri_store'
   listPersistedSessions?(): Promise<PersistedSessionSummary[]>
   openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>

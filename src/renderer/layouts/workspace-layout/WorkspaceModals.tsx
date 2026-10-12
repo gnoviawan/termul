@@ -40,7 +40,7 @@ interface WorkspaceModalsProps extends WorkspaceCloseDialogsProps {
   activeProjectId: string
   addProject: Parameters<typeof NewProjectModal>[0]['onCreateProject']
   selectProject: (id: string) => void
-  switchProjectFromPalette: (id: string) => Promise<unknown>
+  switchProjectFromPalette: (id: string) => unknown
   isNewProjectModalOpen: boolean
   setIsNewProjectModalOpen: (open: boolean) => void
   isCommandPaletteOpen: boolean
@@ -138,7 +138,7 @@ export function WorkspaceModals({
             onClose={() => setIsCommandPaletteOpen(false)}
             projects={projects}
             onSwitchProject={
-              isMobileWebShell ? (id) => void switchProjectFromPalette(id) : selectProject
+              isMobileWebShell ? (id) => switchProjectFromPalette(id) : selectProject
             }
             onAddTerminal={() => handleAddTerminal(undefined)}
             onShowAgentLauncher={() => {

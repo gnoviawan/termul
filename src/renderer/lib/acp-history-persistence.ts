@@ -1,5 +1,6 @@
 /** Desktop ACP history persistence boundary. */
 
+import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
 import type { ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
@@ -348,6 +349,15 @@ export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): str
 }
 
 export type RecencyGroup = 'Today' | 'Yesterday' | 'Earlier'
+
+/** The history bucket for sessions the host could not attribute to any project. */
+export const UNASSIGNED_GROUP = 'Unassigned'
+export type HistoryGroup = RecencyGroup | typeof UNASSIGNED_GROUP
+
+/** Index entries stamped with the host's unassigned-project sentinel. */
+export function unassignedSessions(entries: SessionIndexEntry[]): SessionIndexEntry[] {
+  return entries.filter((entry) => entry.projectId === UNASSIGNED_PROJECT_ID)
+}
 
 export function groupSessionsByRecency<T extends { lastActivityAt: number }>(
   entries: T[],

@@ -30,9 +30,6 @@ pub(super) async fn handle_resume_session(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
-    current_agent: &mut Option<crate::acp::AgentId>,
-    current_session: &Arc<parking_lot::Mutex<Option<crate::acp::SessionId>>>,
-    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: LoadResumeSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -44,25 +41,16 @@ pub(super) async fn handle_resume_session(
             )
         }
     };
-    // Clone the ids before the call moves `parsed.session_id` + `parsed.cwd`;
-    // we still need the session id to track it for `switch_project`.
-    let agent_id = parsed.agent_id.clone();
-    let session_id = parsed.session_id.clone();
     match acp
         .resume_session(
-            &agent_id,
+            &parsed.agent_id,
             parsed.session_id,
             parsed.cwd,
             parsed.additional_directories,
         )
         .await
     {
-        Ok(outcome) => {
-            *current_agent = Some(agent_id);
-            *current_session.lock() = Some(session_id);
-            *current_project.lock() = None;
-            resume_ok_payload(id, &outcome)
-        }
+        Ok(outcome) => resume_ok_payload(id, &outcome),
         Err(e) => acp_err_to_reply(id, e),
     }
 }
@@ -155,8 +143,6 @@ pub(super) async fn handle_dispose_ephemeral_session(
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     subscribed_clients: &mut Vec<(String, ClientId)>,
-    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
-    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: CloseSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -174,17 +160,6 @@ pub(super) async fn handle_dispose_ephemeral_session(
     let result = acp
         .dispose_ephemeral_session(&parsed.agent_id, parsed.session_id)
         .await;
-    // The client drops the session on every dispose — the connection tracker
-    // must follow regardless of the agent call's result. A stale tracker makes
-    // the next `switch_project` take the Completed path (minting an orphaned
-    // session the client cannot attribute) instead of the cold-tab `Selected`.
-    {
-        let mut tracked = current_session.lock();
-        if tracked.as_ref() == Some(&disposed_session_id) {
-            *tracked = None;
-            *current_project.lock() = None;
-        }
-    }
     match result {
         Ok(()) => {
             subscribed_clients.retain(|(session_id, client_id)| {
@@ -206,8 +181,6 @@ pub(super) async fn handle_close_session(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
-    current_session: &Arc<parking_lot::Mutex<Option<SessionId>>>,
-    current_project: &Arc<parking_lot::Mutex<Option<String>>>,
 ) -> WsReply {
     let parsed: CloseSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -219,22 +192,7 @@ pub(super) async fn handle_close_session(
             )
         }
     };
-    let closing_session_id = parsed.session_id.clone();
     let result = acp.close_session(&parsed.agent_id, parsed.session_id).await;
-    // The client drops the session on every close — the connection tracker
-    // must follow regardless of the agent call's result (capability-gated
-    // `session/close` fails permanently on agents without `close`, transient
-    // failures leave a session the client has already discarded). A stale
-    // tracker makes the next `switch_project` take the Completed path
-    // (minting an orphaned session the client cannot attribute) instead of
-    // the cold-tab `Selected`.
-    {
-        let mut tracked = current_session.lock();
-        if tracked.as_ref() == Some(&closing_session_id) {
-            *tracked = None;
-            *current_project.lock() = None;
-        }
-    }
     match result {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(e) => acp_err_to_reply(id, e),

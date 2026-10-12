@@ -1,19 +1,12 @@
 import { render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 // Story 12 (QA F12): ProjectSwitcherDrawer copy/width contract —
 //   - drawer width ~70-75% viewport (w-[72vw] capped at 20rem)
 //   - header p-2 family (no px-4 py-3 drift)
 //   - no "desktop" wording in the accessible description
 
-const { acpState, projectState } = vi.hoisted(() => ({
-  acpState: {
-    switchProject: vi.fn(),
-    queuedProjectSwitchId: null as string | null,
-    failedProjectSwitchId: null as string | null,
-    switchingProjectId: null as string | null,
-    setFailedProjectSwitch: vi.fn()
-  },
+const { projectState } = vi.hoisted(() => ({
   projectState: {
     projects: [
       { id: 'p1', name: 'Alpha', path: '/a', color: 'blue' },
@@ -24,12 +17,8 @@ const { acpState, projectState } = vi.hoisted(() => ({
   }
 }))
 
-// The sheet reads the switch markers through selectors and the shared switch
-// hook reads them through `getState()`, so each mock serves both.
-vi.mock('@/stores/acp-store', () => ({
-  useAcpStore: Object.assign((selector: (state: unknown) => unknown) => selector(acpState), {
-    getState: () => acpState
-  })
+vi.mock('@/hooks/use-project-switch', () => ({
+  useProjectSwitch: () => ({ switchTo: vi.fn() })
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -53,13 +42,6 @@ vi.mock('@/lib/tauri-runtime', () => ({
 import { ProjectSwitcherDrawer } from './ProjectSwitcherDrawer'
 
 describe('ProjectSwitcherDrawer token sweep (story 12)', () => {
-  beforeEach(() => {
-    acpState.switchProject.mockReset()
-    acpState.queuedProjectSwitchId = null
-    acpState.failedProjectSwitchId = null
-    acpState.switchingProjectId = null
-  })
-
   it('drawer width is ~70-75% of the viewport and the header uses the p-2 family', async () => {
     render(<ProjectSwitcherDrawer open onOpenChange={vi.fn()} />)
 

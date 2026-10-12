@@ -34,12 +34,7 @@ describe('requestTimeoutMs', () => {
   it('never undercuts the host bound of the long operations', () => {
     expect(requestTimeoutMs('install_acp_agent')).toBeGreaterThanOrEqual(320_000)
     expect(requestTimeoutMs('list_acp_catalog')).toBeGreaterThan(60_000)
-    for (const type of [
-      'create_session',
-      'load_session',
-      'resume_session',
-      'switch_project'
-    ] as const) {
+    for (const type of ['create_session', 'load_session', 'resume_session'] as const) {
       expect(requestTimeoutMs(type)).toBeGreaterThan(60_000) // server session cap + grace
     }
   })

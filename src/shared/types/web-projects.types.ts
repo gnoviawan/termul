@@ -64,16 +64,9 @@ export interface ProjectsChangedEvent {
   defaultProjectId: string | null
 }
 
-/** `switch_project` WS request payload (client→server). */
-export interface SwitchProjectRequest {
-  /** Target project id (resolved to a cwd via the registry server-side). */
-  projectId: string
-}
-
 /**
  * `set_default_project` WS request payload (client→server) — the explicit
- * host-default change. Distinct from `switch_project` (per-connection): this
- * updates the host default that new web clients start with, persists to the
+ * host-default change: this updates the host default that new web clients start with, persists to the
  * `FileProjectRegistry` (VPS), and broadcasts `projects_changed` to ALL
  * clients. Mirrors the `set_host_default_project` Tauri command + the
  * `POST /projects/default` HTTP route (transport parity).
@@ -83,64 +76,10 @@ export interface SetDefaultProjectRequest {
   projectId: string
 }
 
-/** Completed `switch_project` outcome (server→client). */
-export interface SwitchProjectCompleted {
-  status: 'completed'
-  projectId: string
-  sessionId: string
-  cwd: string
-  mcpServerCount: number
-  /**
-   * The session the connection was tracking before the switch
-   * (server-authoritative — the client's focused/active pointer can be stale
-   * or absent, e.g. all chats closed or a sessionStorage id from before a
-   * reload).
-   */
-  previousSessionId: string
-  /**
-   * Agent owning the new session — lets the client attribute the session
-   * record even when the previous session's local record is gone.
-   */
-  agentId: string
-}
-
-/** Deferred `switch_project` outcome while the current turn finishes. */
-export interface SwitchProjectQueued {
-  status: 'queued'
-  projectId: string
-  currentSessionId: string
-}
-
 /**
- * Cold-tab `switch_project` outcome (server→client). The requesting
- * connection's `current_project` changed but no session was created and no
- * agent was spawned — the web client spawns the agent lazily when a chat
- * starts (Ask-First resolution stands). The host default is NOT touched
- * (per-connection switch). `cwd` lets the client resolve the project root
- * without a second registry round-trip. Mirrors the Rust
- * `SwitchProjectOutcome::Selected`.
+ * Project id the host stamps on a session no registered project owns (and on
+ * persisted sessions that predate project attribution). Mirrors
+ * `UNASSIGNED_PROJECT_ID` in `src-tauri/src/acp/session_persistence/types.rs`.
+ * Chat history shows these under an "Unassigned" bucket.
  */
-export interface SwitchProjectSelected {
-  status: 'selected'
-  projectId: string
-  cwd: string
-}
-
-/** Discriminated `switch_project` reply payload. */
-export type SwitchProjectReply =
-  | SwitchProjectCompleted
-  | SwitchProjectQueued
-  | SwitchProjectSelected
-
-/** Reliable completion event for a previously queued switch. */
-export interface ProjectSwitchCompletedEvent extends SwitchProjectCompleted {
-  requestId: string
-}
-
-/** Reliable, correlated failure event for a previously queued switch. */
-export interface ProjectSwitchFailedEvent {
-  requestId: string
-  projectId: string
-  previousSessionId: string
-  message: string
-}
+export const UNASSIGNED_PROJECT_ID = '__unassigned__'

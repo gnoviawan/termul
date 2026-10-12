@@ -2,8 +2,8 @@
 //!
 //! The standalone server seeds it from the file-backed VFS-root registry; the
 //! desktop shared-live server receives renderer snapshots. The browser reads it
-//! through `GET /projects` and resolves `switch_project` ids to private cwd/MCP
-//! context here. Public summaries remain redact-by-omission.
+//! through `GET /projects`; `create_session` resolves project ids and cwds to
+//! registered projects here, and private cwd/MCP context lives alongside. Public summaries remain redact-by-omission.
 //!
 //! The registry itself is not durable. VPS mode persists the default id through
 //! the separately retained `FileProjectRegistry`; desktop mode remains file-free.
@@ -12,9 +12,8 @@
 //!
 //! The host owns a single `default_project_id` — the project NEW web clients
 //! start with on their initial `GET /projects`. It is NOT "whoever switched
-//! last": a per-client `switch_project` updates only the requesting
-//! connection's `current_project` (no broadcast, no persistence). The default
-//! changes only via `set_default_project` (an explicit user action); `set`
+//! last": switching projects is client-only and never reaches the host. The
+//! default changes only via `set_default_project` (an explicit user action); `set`
 //! stores whatever default its caller passes (the desktop project-list sync
 //! passes the existing default, so navigation never moves it).
 //!
@@ -295,8 +294,7 @@ impl ProjectRegistry {
 
     /// Resolve a complete switchable project context. Archived, unknown, and
     /// pathless projects are rejected. MCP configuration is kept private and
-    /// never enters `ProjectSummary`/`GET /projects`. Per-connection activity
-    /// is NOT computed here — the caller checks `current_project` itself.
+    /// never enters `ProjectSummary`/`GET /projects`.
     #[must_use]
     pub fn switch_context(&self, project_id: &str) -> Option<ProjectSwitchContext> {
         let g = self.inner.lock();
@@ -346,9 +344,15 @@ impl ProjectRegistry {
         true
     }
 
+    /// Whether `project_id` is a registered project (archived or not). Used by
+    /// `create_session` to validate an explicit `projectId` before stamping it.
+    #[must_use]
+    pub fn contains(&self, project_id: &str) -> bool {
+        self.inner.lock().projects.iter().any(|p| p.id == project_id)
+    }
+
     /// Resolve a project id → its cwd (`path`), or `None` when the project is
-    /// not in the registry or has no cwd. Used by the `switch_project` WS
-    /// handler to start a new session at the project's path.
+    /// not in the registry or has no cwd.
     #[must_use]
     pub fn find_path(&self, project_id: &str) -> Option<String> {
         let g = self.inner.lock();
