@@ -16,6 +16,7 @@ import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-
 import { useWindowState } from '@/hooks/use-window-state'
 import { primeServerCapability } from '@/lib/tauri-runtime'
 import { getCurrentWindow } from '@/lib/tauri-window'
+import { ensureClientIdentity } from '@/lib/web-client-identity'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAcpAgents } from './hooks/use-acp-agents'
@@ -64,6 +65,13 @@ const queryClient = new QueryClient()
 
 // Component to handle app-level effects like auto-save
 function AppEffects(): null {
+  // Versioned handshake identity (AD-4, AD-15): mint `deviceId` (localStorage)
+  // and `clientInstanceId` (sessionStorage) at boot, before the first WS
+  // handshake. Both roots call this — keep them in parity.
+  useEffect(() => {
+    ensureClientIdentity()
+  }, [])
+
   useTerminalAutoSave()
   useTerminalRestore()
   useCrashRecovery()

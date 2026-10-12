@@ -52,6 +52,11 @@ import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import { flagWebAuthUnauthorized, getWebAuthGateState } from '@/lib/web-auth-gate'
 import { getWebAuthToken } from '@/lib/web-auth-token'
+import { buildAuthenticatePayload } from '@/lib/web-client-identity'
+import {
+  clearProtocolMismatchLatch,
+  handleProtocolVersionMismatch
+} from '@/lib/web-protocol-reload'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 import { toWsEventType } from './event-names'
 import { type AcpConnectionState, type AcpTransport, AcpTransportError } from './types'
@@ -78,6 +83,19 @@ export function resolveWsUrl(
   return `${proto}//${locationLike.host}/ws`
 }
 
+/**
+ * `authenticate` refusals that halt the channel (token, protocol version,
+ * client identity). The handshake path already logs/handles each, so the
+ * event-tail isolation must not double-log the rethrow.
+ */
+function isHandshakeRefusal(err: unknown): boolean {
+  return (
+    err instanceof AcpTransportError &&
+    (err.code === WS_ERROR_CODES.UNAUTHORIZED ||
+      err.code === WS_ERROR_CODES.PROTOCOL_VERSION_MISMATCH ||
+      err.code === WS_ERROR_CODES.INVALID_CLIENT_IDENTITY)
+  )
+}
 /**
  * Grace margin added on top of the server turn budget so the server's typed
  * `turn timeout` reply wins the race instead of the client's generic timeout.
@@ -268,6 +286,13 @@ export class WsAcpTransport implements AcpTransport {
     onGiveUp: (sid, err) => this.giveUpSessionSubscription(sid, err),
     canRun: () => this.isSocketLive()
   })
+  /**
+   * AD-15: the host refused `authenticate` with `protocol_version_mismatch`
+   * or `invalid_client_identity`. Neither can succeed on retry, so the
+   * reconnect loop and `connect()` stay dormant for the rest of the page
+   * (a version mismatch reloads the page once via the shared helper).
+   */
+  private protocolHalted: AcpTransportError | null = null
 
   constructor(opts?: { url?: string; WebSocketImpl?: typeof WebSocket }) {
     this.wsUrl =
@@ -370,6 +395,9 @@ export class WsAcpTransport implements AcpTransport {
         throw new AcpTransportError(WS_ERROR_CODES.UNAUTHORIZED, 'web auth token rejected')
       }
     }
+    // AD-15: protocol mismatch / bad identity never recovers in this page
+    // (a reload replaces the transport); keep refusing instead of churning.
+    if (this.protocolHalted) throw this.protocolHalted
     this.attachVisibilityListeners()
     if (this.socket?.readyState === WebSocket.OPEN && this.authed) return
     if (this.connecting) return this.connecting
@@ -1346,7 +1374,7 @@ export class WsAcpTransport implements AcpTransport {
     // loop — every retry would re-send the same refused token forever (the
     // original 8s churn). The flag is cleared by the next successful
     // authenticate, after which normal reconnect behavior resumes.
-    if (this.tokenHalted) return
+    if (this.tokenHalted || this.protocolHalted) return
     if (this.disposed || this.reconnectTimer) return
     // Exponential backoff with ±25 % jitter. The attempt counter is reset only
     // by `stableTimer` (60 s of stable connection), never merely on connect.
@@ -1564,7 +1592,7 @@ export class WsAcpTransport implements AcpTransport {
         // durable log — EXCEPT the #907 token-halt rethrow, which
         // openSocket's onmessage catch observes identically and the
         // reconnect path already logs (avoiding a doubled warn per refusal).
-        if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.UNAUTHORIZED) return
+        if (isHandshakeRefusal(err)) return
         void logFrontendError({
           level: 'warn',
           source: 'WsAcpTransport.eventTail',
@@ -1581,7 +1609,7 @@ export class WsAcpTransport implements AcpTransport {
       const chained = this.eventTail.then(() => this.handleEvent(obj as unknown as WsEvent))
       this.eventTail = chained.catch((err) => {
         // Same observability + same token-halt dedup as the batch branch.
-        if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.UNAUTHORIZED) return
+        if (isHandshakeRefusal(err)) return
         void logFrontendError({
           level: 'warn',
           source: 'WsAcpTransport.eventTail',
@@ -1623,15 +1651,18 @@ export class WsAcpTransport implements AcpTransport {
       // directly (socket is already open); do NOT call request()→connect() or
       // we deadlock on the in-flight connect promise.
       try {
-        const auth = await this.sendWhenOpen<AcpAuthenticateReply>('authenticate', {
-          token: getWebAuthToken() ?? 'dev'
-        })
+        const auth = await this.sendWhenOpen<AcpAuthenticateReply>(
+          'authenticate',
+          buildAuthenticatePayload(getWebAuthToken() ?? 'dev')
+        )
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
         this.authed = true
         // Issue #907 (F3): the handshake succeeded — any prior token-class
         // halt is over; normal reconnect semantics resume from here.
         this.tokenHalted = false
+        this.protocolHalted = null
+        clearProtocolMismatchLatch()
         // Story 10: the socket is OPEN + the token-gate handshake completed.
         // 'connected' fires here ONLY for a fresh (initial or manual)
         // connect — during a reconnect cycle the state stays 'reconnecting'
@@ -1652,6 +1683,35 @@ export class WsAcpTransport implements AcpTransport {
           this.sendLifecycleSignal('background')
         }
       } catch (err) {
+        if (
+          err instanceof AcpTransportError &&
+          (err.code === WS_ERROR_CODES.PROTOCOL_VERSION_MISMATCH ||
+            err.code === WS_ERROR_CODES.INVALID_CLIENT_IDENTITY)
+        ) {
+          // AD-15: a stale protocol / bad identity is permanent for this
+          // page — never retried. Version mismatch reloads once (loop
+          // latch inside the helper); a bad identity is a plain halt.
+          this.protocolHalted = err
+          this.reconnecting = false
+          this.reconnectAttempt = 0
+          this.onReconnectStateChange?.(false)
+          this.emitConnectionState('disconnected')
+          try {
+            this.socket?.close()
+          } catch {
+            /* ignore — already closing */
+          }
+          if (err.code === WS_ERROR_CODES.PROTOCOL_VERSION_MISMATCH) {
+            handleProtocolVersionMismatch('WsAcpTransport')
+          } else {
+            void logFrontendError({
+              level: 'error',
+              source: 'WsAcpTransport.handshake',
+              message: `authenticate refused (${err.code}); reconnecting is stopped`
+            })
+          }
+          throw err
+        }
         // Issue #907 (F3): an `unauthorized` authenticate refusal is a TOKEN
         // problem, not a network one — retrying with the same token can never
         // succeed. Halt the reconnect backoff loop (socket stays closed) and

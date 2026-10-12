@@ -1,13 +1,15 @@
 //! Dedicated interactive terminal websocket.
 //!
-//! This endpoint intentionally stays separate from the ACP relay. When the
+//! This endpoint intentionally stays separate from the ACP relay. A fresh
+//! connection is never implicitly authed: it must send
+//! `authenticate{protocolVersion, deviceId, clientInstanceId, token?}` before
+//! any other request, gated or not. The version/identity checks run first
+//! (`PROTOCOL_VERSION_MISMATCH` / `INVALID_CLIENT_IDENTITY`); then, when the
 //! server runs with the web auth gate (`AppState.web_auth = Some` — public
-//! bind or explicit token, see `web::auth::resolve`), a fresh connection must
-//! send `authenticate{token}` before any other request; every pre-auth op is
-//! refused with the single generic `UNAUTHORIZED` and spawns no PTY. An
-//! ungated server treats `authenticate` as a no-op success (new-client /
-//! old-server tolerance) and admits all operations, exactly as before the
-//! gate existed. Beyond the connection gate, all operations are
+//! bind or explicit token, see `web::auth::resolve`), the token must match.
+//! Every pre-auth op is refused with the single generic `UNAUTHORIZED` and
+//! spawns no PTY; an ungated server accepts any token once the handshake
+//! checks pass. Beyond the connection gate, all operations are
 //! project-scoped: a connection may only interact with terminals whose
 //! `project_id` it has been authorized for via spawn or explicit attach.
 
@@ -26,7 +28,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::pty::manager::{PtyManager, SpawnOptions};
-use crate::web::ws::AppState;
+use crate::web::ws::{validate_authenticate_handshake, AppState, ClientIdentity};
 
 const MAX_RECONNECT_FRAMES: usize = 64;
 /// #851: sequential per-connection id source for the size-owner marker.
@@ -72,9 +74,9 @@ async fn run(socket: WebSocket, state: AppState) {
     let attachments: HashMap<String, Attachment> = HashMap::new();
 
     if state.web_auth.is_some() {
-        info!("[terminal-ws] client connected (web auth gate ON — authenticate required)");
+        info!("[terminal-ws] client connected (web auth gate ON — token + handshake required)");
     } else {
-        info!("[terminal-ws] client connected (ungated)");
+        info!("[terminal-ws] client connected (ungated — handshake required)");
     }
 
     let event_tx = tx.clone();
@@ -110,8 +112,10 @@ async fn run(socket: WebSocket, state: AppState) {
     let mut ctx = ConnectionContext {
         authorized: authorized.clone(),
         attachments,
-        // The connection starts authed exactly when the server is ungated.
-        authed: state.web_auth.is_none(),
+        // Every connection starts un-authed, gated or not; only a valid
+        // `authenticate` handshake flips it.
+        authed: false,
+        identity: None,
         // #851: opaque per-connection id for the size-owner marker.
         client_id,
     };
@@ -213,10 +217,13 @@ struct ConnectionContext {
     authorized: Arc<RwLock<HashSet<String>>>,
     /// Per-terminal output forwarding attachments (terminal_id -> attachment).
     attachments: HashMap<String, Attachment>,
-    /// Whether this connection has passed the web auth gate (`authenticate`
-    /// request). Initialized to `true` on ungated servers so legacy behavior
-    /// is byte-identical; a gated server starts every connection un-authed.
+    /// Whether this connection has completed a valid `authenticate`
+    /// handshake. Every connection starts un-authed, gated or not; only a
+    /// valid `authenticate` flips it.
     authed: bool,
+    /// Identity validated by the `authenticate` handshake (AD-4), kept
+    /// exactly as received.
+    identity: Option<ClientIdentity>,
     /// #851: opaque per-connection id (see `NEXT_CONNECTION_ID`) used for
     /// the single-size-owner marker on write/resize.
     client_id: String,
@@ -286,28 +293,44 @@ async fn handle(
     match connection_gate(ctx.authed, request.type_.as_str()) {
         ConnectionGate::Refuse => Err(("UNAUTHORIZED", "Unauthorized".to_string())),
         ConnectionGate::Authenticate => {
-            match state.web_auth.as_ref() {
-                // Gated + not yet authed: validate the presented token
-                // (constant-time). A wrong or absent token refuses with the
-                // single generic UNAUTHORIZED and leaves the connection
-                // un-authed (retry allowed) — the same collapse the terminal
-                // claim/attach paths use.
-                Some(gate) if !ctx.authed => {
-                    let presented = request.payload["token"].as_str().unwrap_or("");
-                    if gate.accepts(presented) {
-                        ctx.authed = true;
-                        info!("[terminal-ws] connection authenticated");
-                        Ok(json!({}))
-                    } else {
-                        warn!("[terminal-ws] authenticate rejected (bad token)");
-                        Err(("UNAUTHORIZED", "Unauthorized".to_string()))
-                    }
-                }
-                // Ungated server or already-authed connection: no-op success
-                // so new clients stay compatible with pre-gate servers
-                // (and re-auth is idempotent).
-                _ => Ok(json!({})),
+            // Already authed: idempotent success, no re-validation.
+            if ctx.authed {
+                return Ok(json!({}));
             }
+            // Handshake checks run FIRST (gated and ungated alike) so a stale
+            // tab learns it must reload even when its token is also wrong.
+            let identity = validate_authenticate_handshake(&request.payload).map_err(|refusal| {
+                warn!(
+                    "[terminal-ws] authenticate rejected id={} check={} code={}",
+                    request.id,
+                    refusal.check,
+                    refusal.terminal_code()
+                );
+                (refusal.terminal_code(), refusal.message)
+            })?;
+            // Gated: validate the presented token (constant-time). A wrong
+            // or absent token refuses with the single generic UNAUTHORIZED
+            // and leaves the connection un-authed (retry allowed) — the same
+            // collapse the terminal claim/attach paths use. Ungated servers
+            // admit any token once the handshake checks pass.
+            if let Some(gate) = state.web_auth.as_ref() {
+                let presented = request.payload["token"].as_str().unwrap_or("");
+                if !gate.accepts(presented) {
+                    warn!(
+                        "[terminal-ws] authenticate rejected id={} (bad token)",
+                        request.id
+                    );
+                    return Err(("UNAUTHORIZED", "Unauthorized".to_string()));
+                }
+            }
+            ctx.authed = true;
+            let identity = ctx.identity.insert(identity);
+            info!(
+                "[terminal-ws] connection authenticated device_id={} client_instance_id={}",
+                ClientIdentity::log_label(&identity.device_id),
+                ClientIdentity::log_label(&identity.client_instance_id)
+            );
+            Ok(json!({}))
         }
         ConnectionGate::Allow => match request.type_.as_str() {
             "spawn" => {

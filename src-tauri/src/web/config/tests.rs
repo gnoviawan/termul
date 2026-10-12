@@ -93,8 +93,12 @@ fn server_config_bind_addr() {
         host: "127.0.0.1".to_string(),
         port: 8080,
         event_log_capacity: 4096,
-        permission_timeout_secs: 60,
-        permission_reconnect_grace_secs: 15,
+        agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
+        overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
+        receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
+        partition_gc_age_secs: None,
+        partition_byte_budget: None,
+        deprecation_warnings: Vec::new(),
         project_root: PathBuf::from("/tmp"),
         projects_file: None,
         sessions_dir: None,
@@ -115,8 +119,12 @@ fn server_config_bind_addr() {
         host: "example.com".to_string(),
         port: 8080,
         event_log_capacity: 4096,
-        permission_timeout_secs: 60,
-        permission_reconnect_grace_secs: 15,
+        agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
+        overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
+        receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
+        partition_gc_age_secs: None,
+        partition_byte_budget: None,
+        deprecation_warnings: Vec::new(),
         project_root: PathBuf::from("/tmp"),
         projects_file: None,
         sessions_dir: None,
@@ -131,6 +139,17 @@ fn server_config_bind_addr() {
     assert_eq!(bad.bind_addr(), None);
 }
 
+/// Startup warnings that come from the removed permission flags only.
+/// `from_args` also queues warnings for invalid tunable env values, and
+/// those depend on the process environment, so tests that look at the
+/// removed flags must not count them.
+fn removed_flag_warnings(cfg: &ServerConfig) -> Vec<&String> {
+    cfg.deprecation_warnings
+        .iter()
+        .filter(|warning| warning.contains("--permission-"))
+        .collect()
+}
+
 #[test]
 fn from_args_defaults() {
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
@@ -140,13 +159,9 @@ fn from_args_defaults() {
         cfg.event_log_capacity, 4096,
         "default event-log-capacity is 4096 (AC4)"
     );
-    assert_eq!(
-        cfg.permission_timeout_secs, 60,
-        "default permission-timeout is 60s (Story 1.7 / FR14)"
-    );
-    assert_eq!(
-        cfg.permission_reconnect_grace_secs, 60,
-        "default reconnect grace is 60s (CAP-4: mobile wake + reconnect chain)"
+    assert!(
+        removed_flag_warnings(&cfg).is_empty(),
+        "no removed flags passed => no removed-flag warnings"
     );
     // PR-S4: project_root defaults to $HOME / $USERPROFILE when the env var
     // is unset. The CI hosts in this repo all set $HOME, so the resolved
@@ -223,51 +238,167 @@ fn from_args_missing_event_log_capacity_value() {
 }
 
 #[test]
-fn from_args_accepts_permission_timeout() {
-    let cfg = ServerConfig::from_args(["--permission-timeout", "30"]).expect("parse");
-    assert_eq!(cfg.permission_timeout_secs, 30);
-    // Other defaults stay intact.
+fn from_args_removed_permission_flags_parse_and_warn_once_each() {
+    let cfg = ServerConfig::from_args([
+        "--permission-timeout",
+        "30",
+        "--permission-reconnect-grace",
+        "5",
+    ])
+    .expect("removed flags still parse");
+    let warnings = removed_flag_warnings(&cfg);
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings[0].contains("--permission-timeout"));
+    assert!(warnings[0].contains("'30'"));
+    assert!(warnings[1].contains("--permission-reconnect-grace"));
+    assert!(warnings[1].contains("'5'"));
+    // Everything else is unaffected.
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
-    assert_eq!(cfg.event_log_capacity, 4096);
 }
 
 #[test]
-fn from_args_accepts_permission_reconnect_grace() {
-    let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "20"]).expect("parse");
-    assert_eq!(cfg.permission_reconnect_grace_secs, 20);
+fn from_args_removed_permission_flags_tolerate_invalid_values() {
+    for (flag, value) in [
+        ("--permission-timeout", "0"),
+        ("--permission-timeout", "soon"),
+        ("--permission-reconnect-grace", "0"),
+        ("--permission-reconnect-grace", "-3"),
+    ] {
+        let cfg = ServerConfig::from_args([flag, value])
+            .unwrap_or_else(|e| panic!("{flag} {value} must not abort: {e}"));
+        let warnings = removed_flag_warnings(&cfg);
+        assert_eq!(warnings.len(), 1, "{flag} {value}");
+        assert!(warnings[0].contains(flag));
+    }
 }
 
 #[test]
-fn from_args_rejects_permission_reconnect_grace_zero() {
+fn from_args_removed_permission_flags_tolerate_missing_value() {
+    // Trailing: no value at all.
+    let cfg = ServerConfig::from_args(["--permission-timeout"]).expect("must not abort");
+    let warnings = removed_flag_warnings(&cfg);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("no value"));
+    // Followed by another flag: that flag is NOT swallowed as the value.
+    let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "--port", "9091"])
+        .expect("must not abort");
+    assert_eq!(cfg.port, 9091, "the next flag keeps its own value");
+    let warnings = removed_flag_warnings(&cfg);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("no value"));
+    // `-h` is help, never the removed flag's value.
     assert!(matches!(
-        ServerConfig::from_args(["--permission-reconnect-grace", "0"]),
-        Err(ParseCliError::Message(_))
+        ServerConfig::from_args(["--permission-timeout", "-h"]),
+        Err(ParseCliError::Help)
     ));
 }
 
 #[test]
-fn from_args_rejects_permission_timeout_zero() {
-    assert!(matches!(
-        ServerConfig::from_args(["--permission-timeout", "0"]),
-        Err(ParseCliError::Message(_))
-    ));
+fn from_args_tunable_defaults() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(&[
+        AGENT_IDLE_WINDOW_ENV,
+        PARTITION_GC_AGE_ENV,
+        PARTITION_BYTE_BUDGET_ENV,
+    ]);
+    for key in [
+        AGENT_IDLE_WINDOW_ENV,
+        PARTITION_GC_AGE_ENV,
+        PARTITION_BYTE_BUDGET_ENV,
+    ] {
+        std::env::remove_var(key);
+    }
+    let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
+    restore_env(saved);
+    assert_eq!(cfg.agent_idle_window_secs, 900);
+    assert_eq!(cfg.overflow_tolerance, 15);
+    assert_eq!(cfg.receipt_retention_secs, 600);
+    assert_eq!(cfg.partition_gc_age_secs, None);
+    assert_eq!(cfg.partition_byte_budget, None);
 }
 
 #[test]
-fn from_args_rejects_non_numeric_permission_timeout() {
-    assert!(matches!(
-        ServerConfig::from_args(["--permission-timeout", "soon"]),
-        Err(ParseCliError::Message(_))
-    ));
+fn from_args_accepts_tunable_flags() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let cfg = ServerConfig::from_args([
+        "--agent-idle-window-secs",
+        "120",
+        "--overflow-tolerance",
+        "7",
+        "--receipt-retention-secs",
+        "30",
+        "--partition-gc-age-secs",
+        "86400",
+        "--partition-byte-budget",
+        "1048576",
+    ])
+    .expect("parse");
+    assert_eq!(cfg.agent_idle_window_secs, 120);
+    assert_eq!(cfg.overflow_tolerance, 7);
+    assert_eq!(cfg.receipt_retention_secs, 30);
+    assert_eq!(cfg.partition_gc_age_secs, Some(86400));
+    assert_eq!(cfg.partition_byte_budget, Some(1_048_576));
 }
 
 #[test]
-fn from_args_missing_permission_timeout_value() {
-    assert!(matches!(
-        ServerConfig::from_args(["--permission-timeout"]),
-        Err(ParseCliError::Message(_))
-    ));
+fn from_args_rejects_zero_non_numeric_and_missing_tunable_values() {
+    for flag in [
+        "--agent-idle-window-secs",
+        "--overflow-tolerance",
+        "--receipt-retention-secs",
+        "--partition-gc-age-secs",
+        "--partition-byte-budget",
+    ] {
+        for bad in ["0", "soon", "-1", ""] {
+            assert!(
+                matches!(
+                    ServerConfig::from_args([flag, bad]),
+                    Err(ParseCliError::Message(_))
+                ),
+                "{flag} {bad:?} must be rejected"
+            );
+        }
+        assert_eq!(
+            ServerConfig::from_args([flag]),
+            Err(ParseCliError::Message(format!("missing value for {flag}")))
+        );
+    }
+}
+
+#[test]
+fn from_args_tunable_env_fallback_flag_wins_and_invalid_env_warns() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(&[
+        AGENT_IDLE_WINDOW_ENV,
+        PARTITION_GC_AGE_ENV,
+        PARTITION_BYTE_BUDGET_ENV,
+    ]);
+    std::env::set_var(AGENT_IDLE_WINDOW_ENV, "45");
+    std::env::set_var(PARTITION_GC_AGE_ENV, "3600");
+    std::env::set_var(PARTITION_BYTE_BUDGET_ENV, "2048");
+    let from_env = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+    let flag_wins = ServerConfig::from_args(["--agent-idle-window-secs", "60"]).expect("parse");
+
+    // Invalid env never aborts: it is ignored with one warning each.
+    std::env::set_var(AGENT_IDLE_WINDOW_ENV, "0");
+    std::env::set_var(PARTITION_GC_AGE_ENV, "nope");
+    std::env::set_var(PARTITION_BYTE_BUDGET_ENV, "  ");
+    let invalid = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+    restore_env(saved);
+
+    assert_eq!(from_env.agent_idle_window_secs, 45);
+    assert_eq!(from_env.partition_gc_age_secs, Some(3600));
+    assert_eq!(from_env.partition_byte_budget, Some(2048));
+    assert!(from_env.deprecation_warnings.is_empty());
+    assert_eq!(flag_wins.agent_idle_window_secs, 60);
+
+    assert_eq!(invalid.agent_idle_window_secs, DEFAULT_AGENT_IDLE_WINDOW_SECS);
+    assert_eq!(invalid.partition_gc_age_secs, None);
+    assert_eq!(invalid.partition_byte_budget, None);
+    assert_eq!(invalid.deprecation_warnings.len(), 2, "blank env is silent");
+    assert!(invalid.deprecation_warnings[0].contains(AGENT_IDLE_WINDOW_ENV));
+    assert!(invalid.deprecation_warnings[1].contains(PARTITION_GC_AGE_ENV));
 }
 
 #[test]
@@ -287,7 +418,7 @@ fn from_args_unknown_option() {
 }
 
 // Patch 17: `--workspace-manifests-dir` CLI flag accept / missing /
-// empty-value tests (mirrors the `--permission-timeout` test pattern).
+// empty-value tests (mirrors the `--event-log-capacity` test pattern).
 
 #[test]
 fn from_args_accepts_workspace_manifests_dir() {
@@ -419,8 +550,12 @@ fn service_account_state_dir_falls_through_empty_env_var() {
         host: "127.0.0.1".to_string(),
         port: 8080,
         event_log_capacity: 4096,
-        permission_timeout_secs: 60,
-        permission_reconnect_grace_secs: 15,
+        agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
+        overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
+        receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
+        partition_gc_age_secs: None,
+        partition_byte_budget: None,
+        deprecation_warnings: Vec::new(),
         project_root: PathBuf::from("/tmp"),
         projects_file: None,
         sessions_dir: None,

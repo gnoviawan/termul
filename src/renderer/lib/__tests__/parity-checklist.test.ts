@@ -2170,3 +2170,27 @@ describe('Worktree branch rename parity (shell revamp story 16)', () => {
     }
   })
 })
+
+// Story 2 / AD-4, AD-15: the versioned `authenticate` handshake identity is
+// minted at boot on BOTH renderer roots, and every WS client builds its
+// handshake through the one shared payload builder.
+describe('Client identity boot parity (AD-4)', () => {
+  it('both renderer roots call ensureClientIdentity() at boot', () => {
+    for (const root of ['TauriApp.tsx', 'App.tsx']) {
+      const content = readFileSync(join(LIB_DIR, '..', root), 'utf-8')
+      expect(content, root).toMatch(/from '@\/lib\/web-client-identity'/)
+      expect(content, root).toMatch(/ensureClientIdentity\(\)/)
+    }
+  })
+
+  it('all three WS clients build the handshake via buildAuthenticatePayload()', () => {
+    for (const client of [
+      join('acp-transport', 'ws-transport.ts'),
+      'web-terminal-api.ts',
+      'web-persistence-api.ts'
+    ]) {
+      const content = readFileSync(join(LIB_DIR, client), 'utf-8')
+      expect(content, client).toMatch(/buildAuthenticatePayload\(/)
+    }
+  })
+})

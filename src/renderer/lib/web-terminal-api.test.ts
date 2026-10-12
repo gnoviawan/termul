@@ -1,3 +1,4 @@
+import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   mockAttachResult,
@@ -19,6 +20,32 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(Math.random).mockRestore()
 })
+
+const mockHandleProtocolVersionMismatch = vi.hoisted(() => vi.fn())
+vi.mock('./web-protocol-reload', () => ({
+  handleProtocolVersionMismatch: mockHandleProtocolVersionMismatch,
+  clearProtocolMismatchLatch: vi.fn()
+}))
+
+/**
+ * Host-side handshake validation, mirroring the Rust `/terminal/ws`
+ * `authenticate` arm: version first, then identity. Returns the refusal code,
+ * or null when the payload is a valid handshake.
+ */
+function validateHandshake(payload: Record<string, unknown>): string | null {
+  if (payload.protocolVersion !== WS_PROTOCOL_VERSION) return 'PROTOCOL_VERSION_MISMATCH'
+  for (const key of ['deviceId', 'clientInstanceId']) {
+    const value = payload[key]
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      new TextEncoder().encode(value).length > MAX_CLIENT_ID_LEN
+    ) {
+      return 'INVALID_CLIENT_IDENTITY'
+    }
+  }
+  return null
+}
 
 /**
  * Minimal FakeWebSocket for the terminal protocol (`{id,type,payload}` requests
@@ -63,21 +90,23 @@ class FakeWebSocket {
         heldAuthenticateId = req.id
         return
       }
-      // CAP-1 interim gate (Story 1): the connection-level handshake. 'ok' —
-      // gate accepts (or ungated no-op); 'refuse' — the generic UNAUTHORIZED
-      // refusal; 'legacy' — a pre-gate server without the arm answers
-      // NOT_IMPLEMENTED and the client must proceed.
-      if (authenticateMode === 'refuse') {
-        this.emitReply({ id: req.id, success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
+      // Versioned handshake (AD-15): the host validates version + identity
+      // BEFORE the token on every connection (gated or not). 'ok' — a valid
+      // handshake is accepted; 'refuse' — the generic UNAUTHORIZED refusal
+      // (bad token); 'mismatch' / 'identity' — force that refusal regardless
+      // of the payload.
+      const refusal =
+        authenticateMode === 'mismatch'
+          ? 'PROTOCOL_VERSION_MISMATCH'
+          : authenticateMode === 'identity'
+            ? 'INVALID_CLIENT_IDENTITY'
+            : validateHandshake(req.payload)
+      if (refusal) {
+        this.emitReply({ id: req.id, success: false, error: refusal, code: refusal })
         return
       }
-      if (authenticateMode === 'legacy') {
-        this.emitReply({
-          id: req.id,
-          success: false,
-          error: 'unknown terminal request',
-          code: 'NOT_IMPLEMENTED'
-        })
+      if (authenticateMode === 'refuse') {
+        this.emitReply({ id: req.id, success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
         return
       }
       this.emitReply({ id: req.id, success: true, data: {} })
@@ -173,10 +202,10 @@ let spawnReplyData: Record<string, unknown> = mockSpawnedTerminal({
 
 /** Test knob: credential returned by rotate_claim replies. */
 let rotateReplyClaim = 'rotated-claim-64-hex'
-/** Test knob (CAP-1): how the fake answers the connection `authenticate`
- * handshake — 'ok' accepts, 'refuse' answers UNAUTHORIZED, 'legacy' answers
- * NOT_IMPLEMENTED (pre-gate server without the arm). */
-let authenticateMode: 'ok' | 'refuse' | 'legacy' = 'ok'
+/** Test knob: how the fake answers the connection `authenticate` handshake —
+ * 'ok' validates the payload and accepts, 'refuse' answers UNAUTHORIZED (bad
+ * token), 'mismatch' / 'identity' force the AD-15 handshake refusals. */
+let authenticateMode: 'ok' | 'refuse' | 'mismatch' | 'identity' = 'ok'
 /** Test knob: hold the `authenticate` reply (OPEN socket, pending handshake). */
 let holdAuthenticateReply = false
 /** The request id of the held `authenticate` frame (reply target). */
@@ -218,6 +247,11 @@ function restoreVisibility(): void {
     configurable: true,
     value: 'visible'
   })
+}
+
+/** Request `type`s sent on a FakeWebSocket, in wire order. */
+function frameTypes(sock: FakeWebSocket): string[] {
+  return sock.sent.map((raw) => (JSON.parse(raw) as { type: string }).type)
 }
 
 /** Find the LAST sent request frame of a given type on a FakeWebSocket. */
@@ -1022,7 +1056,12 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     expect(types[0]).toBe('authenticate')
     expect(types).toContain('spawn')
     const authReq = findSentRequest(internals.socket, 'authenticate')
-    expect(authReq?.payload).toEqual({ token: 's3cret-token' })
+    expect(authReq?.payload).toEqual({
+      token: 's3cret-token',
+      protocolVersion: WS_PROTOCOL_VERSION,
+      deviceId: window.localStorage.getItem('termul.deviceId'),
+      clientInstanceId: window.sessionStorage.getItem('termul.clientInstanceId')
+    })
     client.dispose()
   })
 
@@ -1107,28 +1146,39 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     client.dispose()
   })
 
-  it('proceeds without auth when a pre-gate server answers NOT_IMPLEMENTED', async () => {
-    window.localStorage.setItem('termul.webAuthToken', 'any')
-    authenticateMode = 'legacy'
+  it('ALWAYS authenticates, omitting the token when none is known (ungated host)', async () => {
     const { client, internals } = newClient()
     const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
     expect(spawn.success).toBe(true)
-    const types = internals.socket.sent.map((s) => {
-      // Test-local read of the recorded frame; the fake only writes request JSON.
-      const frame = JSON.parse(s) as { type: string }
-      return frame.type
-    })
-    expect(types[0]).toBe('authenticate')
-    expect(types).toContain('spawn')
+    const authReq = findSentRequest(internals.socket, 'authenticate')
+    expect(authReq).toBeDefined()
+    expect(authReq?.payload).not.toHaveProperty('token')
+    expect(authReq?.payload).toMatchObject({ protocolVersion: WS_PROTOCOL_VERSION })
+    expect(frameTypes(internals.socket)[0]).toBe('authenticate')
     client.dispose()
   })
 
-  it('never sends authenticate when no token is known (legacy ungated path)', async () => {
+  it('a pre-gate server answering NOT_IMPLEMENTED is refused, not tolerated (no compat shim)', async () => {
     const { client, internals } = newClient()
-    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
-    expect(spawn.success).toBe(true)
-    expect(findSentRequest(internals.socket, 'authenticate')).toBeUndefined()
-    client.dispose()
+    const origSend = FakeWebSocket.prototype.send
+    FakeWebSocket.prototype.send = function (this: FakeWebSocket, data: string) {
+      const req = JSON.parse(data) as { id: string; type: string }
+      if (req.type === 'authenticate') {
+        this.sent.push(data)
+        this.emitReply({ id: req.id, success: false, error: 'x', code: 'NOT_IMPLEMENTED' })
+        return
+      }
+      origSend.call(this, data)
+    }
+    try {
+      const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+      expect(spawn.success).toBe(false)
+      expect(mockHandleProtocolVersionMismatch).not.toHaveBeenCalled()
+    } finally {
+      FakeWebSocket.prototype.send = origSend
+      client.dispose()
+    }
+    expect(internals.socket ?? null).toBeNull()
   })
 
   it('a concurrent connect() joins the in-flight authenticate handshake instead of the OPEN fast path', async () => {
@@ -1184,6 +1234,94 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     await client.connect()
     expect(internals.socket).toBe(sock)
 
+    client.dispose()
+  })
+})
+
+describe('WebTerminalClient protocol handshake refusals (AD-15)', () => {
+  beforeEach(() => {
+    mockHandleProtocolVersionMismatch.mockClear()
+    mockLogFrontendError.mockClear()
+  })
+
+  afterEach(() => {
+    authenticateMode = 'ok'
+    window.localStorage.clear()
+    vi.useRealTimers()
+  })
+
+  function newClient(): { client: WebTerminalClient; internals: ClientInternals } {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    return { client, internals: client as unknown as ClientInternals }
+  }
+
+  it('PROTOCOL_VERSION_MISMATCH halts reconnecting, reports once, and surfaces disconnected', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = newClient()
+    // A live claimed terminal would normally drive an endless reconnect loop.
+    await client.attach('t1', 'lease-abc')
+    const states: string[] = []
+    client.setConnectionStateListener((state) => states.push(state))
+
+    authenticateMode = 'mismatch'
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(70_000)
+
+    expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledTimes(1)
+    expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledWith('WebTerminalClient')
+    expect(internals.reconnectTimer).toBeNull()
+    expect(client.getConnectionState()).toBe('disconnected')
+    expect(states.at(-1)).toBe('disconnected')
+
+    // Dormant: a later request fails fast without opening another socket.
+    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(spawn.success).toBe(false)
+    expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledTimes(1)
+    client.dispose()
+  })
+
+  it('INVALID_CLIENT_IDENTITY is non-retryable and never reloads', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = newClient()
+    await client.attach('t1', 'lease-abc')
+    authenticateMode = 'identity'
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(70_000)
+
+    expect(mockHandleProtocolVersionMismatch).not.toHaveBeenCalled()
+    expect(internals.reconnectTimer).toBeNull()
+    expect(client.getConnectionState()).toBe('disconnected')
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'WebTerminalClient.handshake',
+        message: expect.stringContaining('INVALID_CLIENT_IDENTITY')
+      })
+    )
+    client.dispose()
+  })
+
+  it('a first-connect version mismatch fails the request with NETWORK_ERROR and no terminal op', async () => {
+    authenticateMode = 'mismatch'
+    const { client, internals } = newClient()
+    const pending = client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    const sock = internals.socket
+    const spawn = await pending
+    expect(spawn).toMatchObject({ success: false, code: 'NETWORK_ERROR' })
+    expect(frameTypes(sock)).toEqual(['authenticate'])
+    expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledTimes(1)
+    client.dispose()
+  })
+
+  it('never logs the web auth token on a refusal', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 'super-secret-token')
+    authenticateMode = 'mismatch'
+    const { client } = newClient()
+    await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(JSON.stringify(mockLogFrontendError.mock.calls)).not.toContain('super-secret-token')
     client.dispose()
   })
 })

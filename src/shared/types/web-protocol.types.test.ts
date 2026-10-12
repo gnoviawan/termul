@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   isHumanRelayedCap,
   isOsFulfilledCap,
+  MAX_CLIENT_ID_LEN,
   type ReliabilityTier,
   WS_ERROR_CODES,
   WS_EVENT_TIERS,
   WS_EVENT_TYPES,
   WS_HUMAN_RELAYED_CAPS,
   WS_OS_FULFILLED_CAPS,
+  WS_PROTOCOL_VERSION,
   WS_RELAY_TIERS,
   WS_REQUEST_TYPES,
   type WsError,
@@ -139,9 +141,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 12 stable error codes', () => {
+  it('exports exactly 21 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(12)
+    expect(codes.size).toBe(21)
     const expected = [
       'not_found',
       'unauthorized',
@@ -154,7 +156,18 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'not_implemented',
       'no_agent',
       'agent_auth_required',
-      'session_owned_by_other'
+      'session_owned_by_other',
+      // Versioned handshake refusals.
+      'protocol_version_mismatch',
+      'invalid_client_identity',
+      // Reserved wire names (handlers land in later slices).
+      'terminal_limit',
+      'project_busy',
+      'outcome_unknown',
+      'destructive_op_blocked',
+      'provider_quota_exceeded',
+      'provider_session_limit',
+      'provider_request_rejected'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)
@@ -165,6 +178,31 @@ describe('web-protocol.types — error codes (AC2)', () => {
     for (const code of Object.values(WS_ERROR_CODES)) {
       expect(code).toMatch(/^[a-z][a-z_]*$/)
     }
+  })
+})
+
+describe('web-protocol.types — versioned handshake contract (AD-15)', () => {
+  it('pins the protocol version and client id length cap shared with the Rust host', () => {
+    expect(WS_PROTOCOL_VERSION).toBe(1)
+    expect(MAX_CLIENT_ID_LEN).toBe(128)
+  })
+
+  it('WsRequest/WsReply carry the optional command_id / visible_at envelope fields', () => {
+    // Compile-time + runtime: the snake_case envelope fields are optional,
+    // so every legacy frame shape stays valid.
+    const legacy: WsRequest = { id: '1', type: 'ping', payload: {} }
+    const withCommand: WsRequest = { id: '2', type: 'ping', payload: {}, command_id: 'c-1' }
+    const okReply: WsReply = { id: '2', ok: true, visible_at: 42 }
+    const errReply: WsReply = {
+      id: '3',
+      ok: false,
+      err: { code: WS_ERROR_CODES.OUTCOME_UNKNOWN, message: 'x' },
+      visible_at: 43
+    }
+    expect(legacy.command_id).toBeUndefined()
+    expect(withCommand.command_id).toBe('c-1')
+    expect(okReply.visible_at).toBe(42)
+    expect(errReply.visible_at).toBe(43)
   })
 })
 

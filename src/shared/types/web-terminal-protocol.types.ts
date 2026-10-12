@@ -27,6 +27,21 @@ export type WebTerminalRequestType =
   | 'update_orphan_detection'
   | 'list_preserved'
 
+/**
+ * Machine codes the `/terminal/ws` handshake adds to the reply `code` string
+ * (SCREAMING_SNAKE, unlike `/ws`'s snake_case `WS_ERROR_CODES`). Mirror the
+ * Rust `terminal_ws` handshake refusals (AD-15, AD-4).
+ */
+export const WEB_TERMINAL_ERROR_CODES = {
+  // Bad token on a gated host (unchanged generic refusal).
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  // `authenticate` carried a missing or different `protocolVersion`.
+  PROTOCOL_VERSION_MISMATCH: 'PROTOCOL_VERSION_MISMATCH',
+  // `authenticate` carried a missing, empty or oversized `deviceId` /
+  // `clientInstanceId`.
+  INVALID_CLIENT_IDENTITY: 'INVALID_CLIENT_IDENTITY'
+} as const
+
 export interface WebTerminalRequest {
   id: string
   type: WebTerminalRequestType

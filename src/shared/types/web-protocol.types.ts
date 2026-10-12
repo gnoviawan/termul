@@ -354,11 +354,11 @@ export interface RemoveProjectPayload {
 }
 
 // ============================================================================
-// Error codes (11) — stable machine strings (AC2)
+// Error codes — stable machine strings (AC2)
 // ============================================================================
 
 /**
- * The 12 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
+ * The stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
  * enum (snake_case `code`). Extended from the architecture's 7 by
  * `unsupported` (OS-cap rejection, AC8), `not_implemented` (stub request
  * handlers, AC10), `no_agent` (switch_project with no live agent, Epic-4
@@ -384,7 +384,29 @@ export const WS_ERROR_CODES = {
   // resume_session/load_session rejected because a DIFFERENT live agent owns
   // the session and is mid-turn (issue #837). Retryable: re-ask the host for
   // the owner (`list_agents.ownsSession`) and resume on that agent.
-  SESSION_OWNED_BY_OTHER: 'session_owned_by_other'
+  SESSION_OWNED_BY_OTHER: 'session_owned_by_other',
+  // `authenticate` carried a missing or different `protocolVersion`
+  // (`WS_PROTOCOL_VERSION`). The client must reload; no compat shim (AD-15).
+  PROTOCOL_VERSION_MISMATCH: 'protocol_version_mismatch',
+  // `authenticate` carried a missing, empty or oversized `deviceId` /
+  // `clientInstanceId` (AD-4). The host never mints either id.
+  INVALID_CLIENT_IDENTITY: 'invalid_client_identity',
+  // Reserved names — handler behavior lands in later slices.
+  // A host terminal cap (per project or global) refused a spawn.
+  TERMINAL_LIMIT: 'terminal_limit',
+  // Project remove/archive refused while bound sessions/PTYs are live.
+  PROJECT_BUSY: 'project_busy',
+  // A command resend found no stored outcome; never re-executed.
+  OUTCOME_UNKNOWN: 'outcome_unknown',
+  // Branch switch / worktree removal refused while a session in the target
+  // path has an active turn.
+  DESTRUCTIVE_OP_BLOCKED: 'destructive_op_blocked',
+  // Upstream provider refused the call: quota / usage limit.
+  PROVIDER_QUOTA_EXCEEDED: 'provider_quota_exceeded',
+  // Upstream provider refused the call: session limit.
+  PROVIDER_SESSION_LIMIT: 'provider_session_limit',
+  // Upstream provider rejected the request with a 4xx class error.
+  PROVIDER_REQUEST_REJECTED: 'provider_request_rejected'
 } as const
 
 /** Union of all WS error code strings. */
@@ -471,9 +493,34 @@ export interface AcpRuntimePolicy {
   pongTimeoutMs: number
 }
 
+/**
+ * The `authenticate` protocol version this client speaks. Mirrors the Rust
+ * `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
+ */
+export const WS_PROTOCOL_VERSION = 1
+
+/** Longest accepted `deviceId` / `clientInstanceId`, in bytes. */
+export const MAX_CLIENT_ID_LEN = 128
+
+/**
+ * `authenticate` payload (AD-4, AD-15). `token` is omitted only when no web
+ * auth token is configured. Neither id is a credential, and the host never
+ * mints or rewrites either.
+ */
+export interface AcpAuthenticatePayload {
+  token?: string
+  protocolVersion: number
+  /** Per install / browser profile; persisted locally. */
+  deviceId: string
+  /** Per tab or window; kept in `sessionStorage`. */
+  clientInstanceId: string
+}
+
 export interface AcpAuthenticateReply {
   historyMode?: HistoryMode
   runtimePolicy?: AcpRuntimePolicy
+  /** The protocol version the host speaks. */
+  protocolVersion?: number
 }
 
 /** Atomic stale-recovery payload emitted before post-watermark live events. */
@@ -615,6 +662,11 @@ export interface WsRequest {
   type: WsRequestType
   /** Request payload (shape depends on `type`). */
   payload: unknown
+  /**
+   * Client-minted command id for a mutating request. The field name is fixed
+   * here; the host ignores it until the command/receipt work lands.
+   */
+  command_id?: string
 }
 
 /**
@@ -625,8 +677,14 @@ export interface WsRequest {
  * Mirrors the `IpcResult<T>` philosophy from `ipc.types.ts`.
  */
 export type WsReply<T = unknown> =
-  | { id: string; ok: true; payload?: T; err?: never }
-  | { id: string; ok: false; payload?: never; err: { code: WsErrorCode; message: string } }
+  | { id: string; ok: true; payload?: T; err?: never; visible_at?: unknown }
+  | {
+      id: string
+      ok: false
+      payload?: never
+      err: { code: WsErrorCode; message: string }
+      visible_at?: unknown
+    }
 
 /**
  * The `err` object shape inside a failing `WsReply`.

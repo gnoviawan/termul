@@ -51,6 +51,7 @@ function RouteFallback(): React.JSX.Element {
 
 import { isWindows } from '@/lib/platform'
 import { isTauriContext, primeServerCapability } from '@/lib/tauri-runtime'
+import { ensureClientIdentity } from '@/lib/web-client-identity'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
@@ -119,6 +120,13 @@ const queryClient = new QueryClient()
 // usePreventNativeContextMenu is ported for parity (portal regression defense).
 // usePreventAltMenu stays (web-only).
 function AppEffects(): null {
+  // Versioned handshake identity (AD-4, AD-15): mint `deviceId` (localStorage)
+  // and `clientInstanceId` (sessionStorage) at boot, before the first WS
+  // handshake. Both roots call this — keep them in parity.
+  useEffect(() => {
+    ensureClientIdentity()
+  }, [])
+
   usePreventAltMenu()
   // Background Update Check: advisory only, never auto-applies (Q8/Q10).
   // Same cadence as the desktop root; failures are silent on both surfaces.

@@ -14,12 +14,18 @@
  */
 
 import type { IpcResult, PersistenceApi } from '@shared/types/ipc.types'
-import type { WsRequest, WsRequestType } from '@shared/types/web-protocol.types'
+import {
+  WS_ERROR_CODES,
+  type WsRequest,
+  type WsRequestType
+} from '@shared/types/web-protocol.types'
 import { randomUUID } from '@/lib/uuid'
 import { resolveWsUrl } from './acp-transport'
 import { HANDSHAKE_TIMEOUT_MS } from './acp-transport/ws-transport-timing'
 import { logFrontendError } from './log-api'
 import { getWebAuthToken } from './web-auth-token'
+import { buildAuthenticatePayload } from './web-client-identity'
+import { clearProtocolMismatchLatch, handleProtocolVersionMismatch } from './web-protocol-reload'
 
 const DEBOUNCE_MS = 500
 const CURRENT_VERSION = 1
@@ -51,6 +57,13 @@ export class WebStoreSocket {
   private socket: WebSocket | null = null
   private authed = false
   private connecting: Promise<void> | null = null
+  /**
+   * AD-15: the host refused `authenticate` with `protocol_version_mismatch` /
+   * `invalid_client_identity`. Neither succeeds on retry, so every later
+   * request fails fast with the same error instead of re-handshaking (a
+   * version mismatch reloads the page once via the shared helper).
+   */
+  private halted: StoreError | null = null
   private readonly pending = new Map<string, PendingRequest>()
   private readonly wsUrl: string
   private readonly wsCtor: typeof WebSocket
@@ -62,6 +75,7 @@ export class WebStoreSocket {
   }
 
   async connect(): Promise<void> {
+    if (this.halted) throw this.halted
     if (this.socket?.readyState === WebSocket.OPEN && this.authed) return
     if (this.connecting) return this.connecting
     this.connecting = this.open()
@@ -119,6 +133,7 @@ export class WebStoreSocket {
       ws.onopen = () => {
         void this.authenticate().then(() => {
           this.authed = true
+          clearProtocolMismatchLatch()
           settleOk()
         }, settleErr)
       }
@@ -207,11 +222,40 @@ export class WebStoreSocket {
       const frame: WsRequest = {
         id,
         type: 'authenticate',
-        payload: { token: getWebAuthToken() ?? 'dev' }
+        payload: buildAuthenticatePayload(getWebAuthToken() ?? 'dev')
       }
-      this.pending.set(id, { resolve: () => resolve(), reject })
+      this.pending.set(id, {
+        resolve: () => resolve(),
+        reject: (err) => {
+          if (
+            err.code === WS_ERROR_CODES.PROTOCOL_VERSION_MISMATCH ||
+            err.code === WS_ERROR_CODES.INVALID_CLIENT_IDENTITY
+          ) {
+            this.haltHandshake(err)
+          }
+          reject(err)
+        }
+      })
       this.socket?.send(JSON.stringify(frame))
     })
+  }
+
+  private haltHandshake(err: StoreError): void {
+    this.halted = err
+    try {
+      this.socket?.close()
+    } catch {
+      /* already closing */
+    }
+    if (err.code === WS_ERROR_CODES.PROTOCOL_VERSION_MISMATCH) {
+      handleProtocolVersionMismatch('WebStoreSocket')
+    } else {
+      void logFrontendError({
+        level: 'error',
+        source: 'WebStoreSocket.handshake',
+        message: `authenticate refused (${err.code}); persistence requests are stopped`
+      })
+    }
   }
 
   private rejectAll(err: StoreError): void {

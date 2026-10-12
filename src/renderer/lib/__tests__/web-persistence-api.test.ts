@@ -6,8 +6,38 @@
  * / `store_delete` from an in-memory map, mirroring the Rust `WebStore`.
  */
 
+import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createWebPersistenceApi } from '../web-persistence-api'
+
+const mockHandleProtocolVersionMismatch = vi.hoisted(() => vi.fn())
+vi.mock('../web-protocol-reload', () => ({
+  handleProtocolVersionMismatch: mockHandleProtocolVersionMismatch,
+  clearProtocolMismatchLatch: vi.fn()
+}))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+
+/**
+ * Host-side handshake validation mirroring the Rust `/ws` `authenticate` arm:
+ * version first, then identity. Returns the `err.code` or null when valid.
+ */
+function validateHandshake(payload: Record<string, unknown>): string | null {
+  if (payload.protocolVersion !== WS_PROTOCOL_VERSION) return 'protocol_version_mismatch'
+  for (const key of ['deviceId', 'clientInstanceId']) {
+    const value = payload[key]
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      new TextEncoder().encode(value).length > MAX_CLIENT_ID_LEN
+    ) {
+      return 'invalid_client_identity'
+    }
+  }
+  return null
+}
+
+/** Test knob: force this refusal on every `authenticate` (null = validate). */
+let forcedAuthRefusal: string | null = null
 
 class FakeStoreSocket {
   static OPEN = 1
@@ -50,6 +80,11 @@ class FakeStoreSocket {
     }
     if (req.type === 'authenticate') {
       if (FakeStoreSocket.stall === 'authenticate') return
+      const refusal = forcedAuthRefusal ?? validateHandshake(req.payload as Record<string, unknown>)
+      if (refusal) {
+        this.emit({ id: req.id, ok: false, err: { code: refusal, message: refusal } })
+        return
+      }
       this.emit({ id: req.id, ok: true, payload: {} })
       return
     }
@@ -99,6 +134,8 @@ describe('createWebPersistenceApi', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    forcedAuthRefusal = null
+    mockHandleProtocolVersionMismatch.mockClear()
   })
 
   it('read returns KEY_NOT_FOUND for a missing key', async () => {
@@ -188,6 +225,52 @@ describe('createWebPersistenceApi', () => {
     it('falls back to the legacy dev placeholder when no token is known', async () => {
       await api.read('warmup')
       expect(sentAuthenticate().payload.token).toBe('dev')
+    })
+
+    it('sends the full versioned handshake payload (version + device + instance ids)', async () => {
+      const result = await api.read('warmup')
+      // The fake host validates the payload; a stale shape would be refused
+      // with protocol_version_mismatch / invalid_client_identity.
+      expect(result).toMatchObject({ success: false, code: 'KEY_NOT_FOUND' })
+      expect(sentAuthenticate().payload).toEqual({
+        token: 'dev',
+        protocolVersion: WS_PROTOCOL_VERSION,
+        deviceId: window.localStorage.getItem('termul.deviceId'),
+        clientInstanceId: window.sessionStorage.getItem('termul.clientInstanceId')
+      })
+    })
+  })
+
+  describe('handshake refusals (AD-15)', () => {
+    it('protocol_version_mismatch reports once, then every request fails fast without re-handshaking', async () => {
+      forcedAuthRefusal = 'protocol_version_mismatch'
+      const first = await api.read('k')
+      expect(first).toMatchObject({ success: false, code: 'protocol_version_mismatch' })
+      expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledTimes(1)
+      expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledWith('WebStoreSocket')
+
+      const second = await api.write('k', 1)
+      expect(second).toMatchObject({ success: false, code: 'protocol_version_mismatch' })
+      expect(sockets).toHaveLength(1)
+      expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledTimes(1)
+    })
+
+    it('invalid_client_identity is non-retryable and never reloads', async () => {
+      forcedAuthRefusal = 'invalid_client_identity'
+      const first = await api.read('k')
+      expect(first).toMatchObject({ success: false, code: 'invalid_client_identity' })
+      const second = await api.read('k')
+      expect(second).toMatchObject({ success: false, code: 'invalid_client_identity' })
+      expect(sockets).toHaveLength(1)
+      expect(mockHandleProtocolVersionMismatch).not.toHaveBeenCalled()
+    })
+
+    it('an unauthorized refusal stays retryable (a later request re-handshakes)', async () => {
+      forcedAuthRefusal = 'unauthorized'
+      expect(await api.read('k')).toMatchObject({ success: false, code: 'unauthorized' })
+      forcedAuthRefusal = null
+      expect(await api.read('k')).toMatchObject({ success: false, code: 'KEY_NOT_FOUND' })
+      expect(sockets.length).toBeGreaterThanOrEqual(2)
     })
   })
 

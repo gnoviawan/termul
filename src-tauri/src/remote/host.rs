@@ -332,14 +332,13 @@ impl RemoteServerState {
             // OS-assigned ephemeral port (avoids fixed-port conflicts).
             port: 0,
             event_log_capacity: ws_relay.event_log_capacity(),
-            permission_timeout_secs: ws_relay
-                .rendezvous()
-                .map(|r| r.timeout().as_secs())
-                .unwrap_or(60),
-            permission_reconnect_grace_secs: ws_relay
-                .rendezvous()
-                .map(|r| r.disconnect_grace().as_secs())
-                .unwrap_or(15),
+            agent_idle_window_secs: crate::web::config::DEFAULT_AGENT_IDLE_WINDOW_SECS,
+            overflow_tolerance: crate::web::config::DEFAULT_OVERFLOW_TOLERANCE,
+            receipt_retention_secs: crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
+            // Unset until the device-state work picks values.
+            partition_gc_age_secs: None,
+            partition_byte_budget: None,
+            deprecation_warnings: Vec::new(),
             project_root,
             // Desktop-hosted shared-live mode queries the live desktop
             // `AcpManager` via the in-memory renderer-fed registry, NOT a

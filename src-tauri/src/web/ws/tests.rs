@@ -308,6 +308,7 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
             dispatch_connection_text(
                 r#"{"id":"prompt-long","type":"send_prompt","payload":{"agentId":"agent-long","sessionId":"session-long","text":"long","turnId":"turn-long"}}"#,
                 &mut authed,
+                &mut None,
                 None,
                 &acp,
                 &relay,
@@ -337,6 +338,7 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
         dispatch_connection_text(
             r#"{"id":"ping-1","type":"ping","payload":{}}"#,
             &mut authed,
+            &mut None,
             None,
             &acp,
             &relay,
@@ -460,6 +462,7 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
             dispatch_connection_text(
                 r#"{"id":"prompt-ordered","type":"send_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel","text":"start then cancel","turnId":"turn-ordered"}}"#,
                 &mut authed,
+                &mut None,
                 None,
                 &acp,
                 &relay,
@@ -483,6 +486,7 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
             dispatch_connection_text(
                 r#"{"id":"cancel-ordered","type":"cancel_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel"}}"#,
                 &mut authed,
+                &mut None,
                 None,
                 &acp,
                 &relay,
@@ -609,6 +613,7 @@ async fn accepted_prompt_survives_disconnect_and_persists_completion_for_reconne
             dispatch_connection_text(
                 r#"{"id":"prompt-resume","type":"send_prompt","payload":{"agentId":"agent-resume","sessionId":"session-resume","text":"continue after disconnect","turnId":"turn-resume"}}"#,
                 &mut authed,
+                &mut None,
                 None,
                 &acp,
                 &relay,
@@ -691,6 +696,7 @@ async fn handle_request_with_catalog(
     handle_request(
         text,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -794,6 +800,7 @@ async fn handle_request_without_catalog(text: &str) -> WsReply {
     handle_request(
         text,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -899,6 +906,7 @@ async fn handle_request_with_store(text: &str, store: &Arc<WebStore>) -> WsReply
     handle_request(
         text,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -1457,7 +1465,7 @@ fn handle_request_pre_auth_rejects_non_authenticate() {
 fn handle_request_authenticate_marks_authed() {
     let mut authed = false;
     let reply = handle_sync(
-        r#"{"id":"r1","type":"authenticate","payload":{"token":"any"}}"#,
+        &auth_frame("r1", Some("any")),
         &mut authed,
     );
     assert!(reply.ok);
@@ -1466,6 +1474,18 @@ fn handle_request_authenticate_marks_authed() {
 /// Like `handle_sync` but with the web auth gate threaded through
 /// (`Some(&gate)` = gated server; `None` = legacy ungated behavior).
 fn handle_sync_with_auth(text: &str, authed: &mut bool, web_auth: Option<&WebAuth>) -> WsReply {
+    let mut identity = None;
+    handle_sync_with_identity(text, authed, &mut identity, web_auth)
+}
+
+/// Like `handle_sync_with_auth` but exposes the per-connection identity
+/// out-param so tests can assert what the handshake recorded.
+fn handle_sync_with_identity(
+    text: &str,
+    authed: &mut bool,
+    identity: &mut Option<ClientIdentity>,
+    web_auth: Option<&WebAuth>,
+) -> WsReply {
     let relay = Arc::new(WsRelaySink::new());
     let acp = Arc::new(AcpManager::new(vec![]));
     let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
@@ -1482,6 +1502,7 @@ fn handle_sync_with_auth(text: &str, authed: &mut bool, web_auth: Option<&WebAut
         .block_on(handle_request(
             text,
             authed,
+            identity,
             web_auth,
             &acp,
             &relay,
@@ -1501,6 +1522,25 @@ fn handle_sync_with_auth(text: &str, authed: &mut bool, web_auth: Option<&WebAut
         ))
 }
 
+/// A `/ws` `authenticate` frame carrying a valid handshake (current
+/// protocol version + fixed identity) and an optional token.
+fn auth_frame(id: &str, token: Option<&str>) -> String {
+    let mut payload = json!({
+        "protocolVersion": WS_PROTOCOL_VERSION,
+        "deviceId": "device-a",
+        "clientInstanceId": "tab-1",
+    });
+    if let Some(token) = token {
+        payload["token"] = json!(token);
+    }
+    json!({"id": id, "type": "authenticate", "payload": payload}).to_string()
+}
+
+/// An `authenticate` frame with a caller-built payload.
+fn auth_frame_with(id: &str, payload: Value) -> String {
+    json!({"id": id, "type": "authenticate", "payload": payload}).to_string()
+}
+
 fn test_gate() -> WebAuth {
     WebAuth::new(crate::web::auth::WebAuthToken::new("s3cret-token").expect("non-empty"))
 }
@@ -1511,7 +1551,7 @@ fn gated_authenticate_rejects_wrong_token() {
     let gate = test_gate();
     let mut authed = false;
     let reply = handle_sync_with_auth(
-        r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+        &auth_frame("r1", Some("WRONG")),
         &mut authed,
         Some(&gate),
     );
@@ -1525,7 +1565,7 @@ fn gated_authenticate_rejects_missing_token() {
     let gate = test_gate();
     let mut authed = false;
     let reply = handle_sync_with_auth(
-        r#"{"id":"r1","type":"authenticate","payload":{}}"#,
+        &auth_frame("r1", None),
         &mut authed,
         Some(&gate),
     );
@@ -1539,7 +1579,7 @@ fn gated_authenticate_accepts_correct_token() {
     let gate = test_gate();
     let mut authed = false;
     let reply = handle_sync_with_auth(
-        r#"{"id":"r1","type":"authenticate","payload":{"token":"s3cret-token"}}"#,
+        &auth_frame("r1", Some("s3cret-token")),
         &mut authed,
         Some(&gate),
     );
@@ -1561,13 +1601,13 @@ fn gated_retry_after_wrong_token_succeeds_on_same_connection() {
     let gate = test_gate();
     let mut authed = false;
     let wrong = handle_sync_with_auth(
-        r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+        &auth_frame("r1", Some("WRONG")),
         &mut authed,
         Some(&gate),
     );
     assert!(!wrong.ok);
     let right = handle_sync_with_auth(
-        r#"{"id":"r2","type":"authenticate","payload":{"token":"s3cret-token"}}"#,
+        &auth_frame("r2", Some("s3cret-token")),
         &mut authed,
         Some(&gate),
     );
@@ -1588,12 +1628,203 @@ fn ungated_authenticate_accepts_any_token() {
     // to the pre-gate behavior.
     let mut authed = false;
     let reply = handle_sync_with_auth(
-        r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+        &auth_frame("r1", Some("WRONG")),
         &mut authed,
         None,
     );
     assert!(reply.ok, "ungated server accepts any token");
     assert!(authed);
+}
+
+fn err_code(reply: &WsReply) -> &str {
+    &reply.err.as_ref().expect("err present").code
+}
+
+#[test]
+fn authenticate_success_records_identity_and_reports_protocol_version() {
+    let mut authed = false;
+    let mut identity = None;
+    let reply = handle_sync_with_identity(
+        &auth_frame("r1", Some("any")),
+        &mut authed,
+        &mut identity,
+        None,
+    );
+    assert!(reply.ok);
+    assert!(authed);
+    assert_eq!(
+        identity,
+        Some(ClientIdentity {
+            device_id: "device-a".to_string(),
+            client_instance_id: "tab-1".to_string(),
+        })
+    );
+    let payload = reply.payload.expect("auth reply payload");
+    assert_eq!(payload["protocolVersion"], json!(WS_PROTOCOL_VERSION));
+    assert!(payload.get("historyMode").is_some());
+    assert!(payload.get("runtimePolicy").is_some());
+}
+
+#[test]
+fn authenticate_version_missing_or_wrong_is_refused_pre_auth() {
+    for gate in [None, Some(test_gate())] {
+        for payload in [
+            json!({"deviceId": "d", "clientInstanceId": "c", "token": "s3cret-token"}),
+            json!({"protocolVersion": 0, "deviceId": "d", "clientInstanceId": "c", "token": "s3cret-token"}),
+            json!({"protocolVersion": WS_PROTOCOL_VERSION + 1, "deviceId": "d", "clientInstanceId": "c", "token": "s3cret-token"}),
+            json!({"protocolVersion": "1", "deviceId": "d", "clientInstanceId": "c", "token": "s3cret-token"}),
+            json!({"protocolVersion": null, "deviceId": "d", "clientInstanceId": "c", "token": "s3cret-token"}),
+        ] {
+            let mut authed = false;
+            let mut identity = None;
+            let reply = handle_sync_with_identity(
+                &auth_frame_with("r1", payload.clone()),
+                &mut authed,
+                &mut identity,
+                gate.as_ref(),
+            );
+            assert!(!reply.ok, "{payload}");
+            assert_eq!(err_code(&reply), "protocol_version_mismatch", "{payload}");
+            assert!(!authed, "mismatch must stay pre-auth: {payload}");
+            assert!(identity.is_none(), "mismatch must not record identity");
+        }
+    }
+}
+
+#[test]
+fn authenticate_bad_identity_is_refused_pre_auth() {
+    let oversized = "x".repeat(MAX_CLIENT_ID_LEN + 1);
+    // 65 two-byte characters: 65 chars but 130 bytes — the limit is in bytes.
+    let oversized_bytes = "\u{e9}".repeat(MAX_CLIENT_ID_LEN / 2 + 1);
+    let cases = [
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": oversized_bytes, "clientInstanceId": "c"}),
+        // Control characters could forge log lines.
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "d\nforged log line", "clientInstanceId": "c"}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "d", "clientInstanceId": "c\u{7}"}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "clientInstanceId": "c"}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "", "clientInstanceId": "c"}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": 7, "clientInstanceId": "c"}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": oversized, "clientInstanceId": "c"}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "d"}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "d", "clientInstanceId": ""}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "d", "clientInstanceId": ["c"]}),
+        json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "d", "clientInstanceId": oversized}),
+    ];
+    for payload in cases {
+        let mut authed = false;
+        let mut identity = None;
+        let reply = handle_sync_with_identity(
+            &auth_frame_with("r1", payload.clone()),
+            &mut authed,
+            &mut identity,
+            None,
+        );
+        assert!(!reply.ok, "{payload}");
+        assert_eq!(err_code(&reply), "invalid_client_identity", "{payload}");
+        assert!(!authed);
+        assert!(identity.is_none());
+    }
+}
+
+#[test]
+fn authenticate_accepts_identity_at_the_length_limit_verbatim() {
+    let max = "é".repeat(MAX_CLIENT_ID_LEN / 2);
+    assert_eq!(max.len(), MAX_CLIENT_ID_LEN);
+    let mut authed = false;
+    let mut identity = None;
+    let reply = handle_sync_with_identity(
+        &auth_frame_with(
+            "r1",
+            json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": max, "clientInstanceId": " tab "}),
+        ),
+        &mut authed,
+        &mut identity,
+        None,
+    );
+    assert!(reply.ok);
+    let identity = identity.expect("identity recorded");
+    assert_eq!(identity.device_id, max);
+    assert_eq!(identity.client_instance_id, " tab ", "ids stored as received");
+}
+
+#[test]
+fn authenticate_checks_version_then_identity_then_token() {
+    let gate = test_gate();
+    // Wrong token AND bad version: the stale tab hears about the version.
+    let mut authed = false;
+    let reply = handle_sync_with_auth(
+        &auth_frame_with(
+            "r1",
+            json!({"deviceId": "", "clientInstanceId": "", "token": "WRONG"}),
+        ),
+        &mut authed,
+        Some(&gate),
+    );
+    assert_eq!(err_code(&reply), "protocol_version_mismatch");
+    // The version-mismatch refusal never echoes the presented token.
+    let mismatch_serialized = serde_json::to_string(&reply).expect("serialize");
+    assert!(!mismatch_serialized.contains("WRONG"));
+    // Valid version, bad identity, wrong token: identity beats token.
+    let reply = handle_sync_with_auth(
+        &auth_frame_with(
+            "r2",
+            json!({"protocolVersion": WS_PROTOCOL_VERSION, "deviceId": "", "clientInstanceId": "c", "token": "WRONG"}),
+        ),
+        &mut authed,
+        Some(&gate),
+    );
+    assert_eq!(err_code(&reply), "invalid_client_identity");
+    // Valid handshake, wrong token: unchanged unauthorized.
+    let reply = handle_sync_with_auth(&auth_frame("r3", Some("WRONG")), &mut authed, Some(&gate));
+    assert_eq!(err_code(&reply), "unauthorized");
+    assert!(!authed);
+    // The unauthorized refusal never echoes the presented token either.
+    let serialized = serde_json::to_string(&reply).expect("serialize");
+    assert!(!serialized.contains("WRONG"));
+}
+
+#[test]
+fn post_auth_authenticate_is_idempotent_ok_without_revalidation() {
+    let mut authed = true;
+    let reply = handle_sync(r#"{"id":"r1","type":"authenticate","payload":{}}"#, &mut authed);
+    assert!(reply.ok);
+    assert!(authed);
+}
+
+#[test]
+fn ws_error_code_wire_strings_for_handshake_and_reserved_codes() {
+    for (code, wire) in [
+        (WsErrorCode::ProtocolVersionMismatch, "protocol_version_mismatch"),
+        (WsErrorCode::InvalidClientIdentity, "invalid_client_identity"),
+        (WsErrorCode::TerminalLimit, "terminal_limit"),
+        (WsErrorCode::ProjectBusy, "project_busy"),
+        (WsErrorCode::OutcomeUnknown, "outcome_unknown"),
+        (WsErrorCode::DestructiveOpBlocked, "destructive_op_blocked"),
+        (WsErrorCode::ProviderQuotaExceeded, "provider_quota_exceeded"),
+        (WsErrorCode::ProviderSessionLimit, "provider_session_limit"),
+        (WsErrorCode::ProviderRequestRejected, "provider_request_rejected"),
+    ] {
+        assert_eq!(code.as_str(), wire);
+    }
+}
+
+#[test]
+fn ws_request_parses_command_id_and_reply_skips_unset_visible_at() {
+    let with: WsRequest = serde_json::from_str(
+        r#"{"id":"r1","type":"write","payload":{},"command_id":"cmd-1"}"#,
+    )
+    .expect("parse");
+    assert_eq!(with.command_id.as_deref(), Some("cmd-1"));
+    let without: WsRequest =
+        serde_json::from_str(r#"{"id":"r1","type":"ping","payload":{}}"#).expect("parse");
+    assert_eq!(without.command_id, None);
+
+    let plain = serde_json::to_value(WsReply::ok("r1", None)).expect("serialize");
+    assert!(plain.get("visible_at").is_none());
+    let mut stamped = WsReply::ok("r1", None);
+    stamped.visible_at = Some(json!(42));
+    let stamped = serde_json::to_value(&stamped).expect("serialize");
+    assert_eq!(stamped["visible_at"], json!(42));
 }
 
 #[test]
@@ -1839,6 +2070,7 @@ async fn handle_list_agents_returns_identity_summaries() {
     let reply = handle_request(
         r#"{"id":"r1","type":"list_agents","payload":{}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2069,6 +2301,7 @@ async fn handle_resume_session_ok_reply_carries_null_replay_snapshot() {
     let reply = handle_request(
             r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-1","sessionId":"sess-1","cwd":"/tmp"}}"#,
             &mut authed,
+            &mut None,
             None,
             &acp,
             &relay,
@@ -2341,6 +2574,7 @@ async fn install_acp_agent_unknown_agent_returns_catalog_agent_not_found() {
     let reply = handle_request(
         r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"does-not-exist"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2621,6 +2855,7 @@ fn handle_respond_permission_malformed_payload_is_unsupported() {
         .block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1"}}"#,
             &mut authed,
+            &mut None,
             None,
             &acp,
             &relay,
@@ -2709,6 +2944,7 @@ fn handle_respond_permission_wrong_agent_is_permission_denied() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2763,6 +2999,7 @@ fn handle_respond_permission_not_subscribed_is_not_found() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2802,6 +3039,7 @@ fn handle_respond_permission_resolves_then_second_is_stale() {
     let ok_reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2824,6 +3062,7 @@ fn handle_respond_permission_resolves_then_second_is_stale() {
     let stale_reply = block_on(handle_request(
         r#"{"id":"r2","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2862,6 +3101,7 @@ fn handle_respond_permission_invalid_option_is_permission_denied() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2954,6 +3194,7 @@ fn handle_answer_question_malformed_payload_is_unsupported() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -2991,6 +3232,7 @@ fn handle_answer_question_wrong_agent_is_permission_denied() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a2","questionId":"q-1","values":["plan-a"]}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3043,6 +3285,7 @@ fn handle_answer_question_not_subscribed_is_not_found() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-A","values":["plan-a"]}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3081,6 +3324,7 @@ fn handle_answer_question_resolves_then_second_is_stale() {
     let ok_reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3102,6 +3346,7 @@ fn handle_answer_question_resolves_then_second_is_stale() {
     let stale_reply = block_on(handle_request(
         r#"{"id":"r2","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3139,6 +3384,7 @@ fn handle_answer_question_invalid_option_is_permission_denied() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["escalate"]}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3206,6 +3452,7 @@ fn handle_subscribe_ok_and_stale() {
         .block_on(handle_request(
             r#"{"id":"sub1","type":"subscribe","payload":{"sessionId":"s1","lastSeq":0}}"#,
             &mut authed,
+            &mut None,
             None,
             &acp,
             &relay,
@@ -3235,6 +3482,7 @@ fn handle_subscribe_ok_and_stale() {
         .block_on(handle_request(
             r#"{"id":"sub2","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
             &mut authed,
+            &mut None,
             None,
             &acp,
             &relay,
@@ -3263,6 +3511,7 @@ fn handle_subscribe_ok_and_stale() {
         .block_on(handle_request(
             r#"{"id":"sub3","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
             &mut authed,
+            &mut None,
             None,
             &acp,
             &relay,
@@ -3292,6 +3541,7 @@ fn handle_subscribe_ok_and_stale() {
         .block_on(handle_request(
             r#"{"id":"sub4","type":"subscribe","payload":{"sessionId":"s1"}}"#,
             &mut authed,
+            &mut None,
             None,
             &acp,
             &relay,
@@ -3548,6 +3798,7 @@ fn handle_switch_project_cold_tab_is_deferred_select() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3609,6 +3860,7 @@ fn handle_switch_project_cold_tab_unknown_id_is_not_found() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3727,6 +3979,7 @@ fn handle_switch_project_unknown_id_is_not_found() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3780,6 +4033,7 @@ fn handle_switch_project_agent_without_session_degrades_to_select() {
     let reply = block_on(handle_request(
         r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3849,6 +4103,7 @@ async fn close_session_failure_clears_tracker_so_switch_selects() {
     let reply = handle_request(
         r#"{"id":"c1","type":"close_session","payload":{"agentId":"a-1","sessionId":"s-1"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3878,6 +4133,7 @@ async fn close_session_failure_clears_tracker_so_switch_selects() {
     let reply = handle_request(
         r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -3925,6 +4181,7 @@ async fn close_session_failure_on_untracked_session_keeps_tracker() {
     let reply = handle_request(
         r#"{"id":"c1","type":"close_session","payload":{"agentId":"a-1","sessionId":"s-other"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -4884,6 +5141,7 @@ async fn switch_project_cold_tab_does_not_fan_out_to_other_clients() {
     let reply_a = handle_request(
         r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -5081,6 +5339,7 @@ async fn handle_resume_session_rejected_mid_turn_maps_to_session_owned_by_other(
     let reply = handle_request(
         r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-duplicate","sessionId":"sess-mid","cwd":"/tmp"}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,
@@ -5136,6 +5395,7 @@ async fn handle_list_agents_reports_owned_sessions() {
     let reply = handle_request(
         r#"{"id":"r1","type":"list_agents","payload":{}}"#,
         &mut authed,
+        &mut None,
         None,
         &acp,
         &relay,

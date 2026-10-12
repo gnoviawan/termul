@@ -23,6 +23,9 @@ use termul_manager_lib::server_update::{
 };
 use termul_manager_lib::web::auth::{resolve as resolve_web_auth, WebAuthResolution};
 use termul_manager_lib::web::config::ParseCliError;
+use termul_manager_lib::web::permissions::{
+    DEFAULT_PERMISSION_RECONNECT_GRACE, DEFAULT_PERMISSION_TIMEOUT,
+};
 use termul_manager_lib::web::{
     seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
     WsRelaySink,
@@ -98,6 +101,11 @@ fn main() -> ExitCode {
     };
 
     init_tracing();
+    // Tracing is only live now, so removed-flag warnings queued during
+    // `ServerConfig::from_args` are emitted here, one per flag.
+    for warning in &cfg.deprecation_warnings {
+        warn!("{warning}");
+    }
 
     // QA remediation Story 1 (CAP-1 interim): resolve the web auth gate
     // BEFORE any binding/serving setup. Fail-closed: a public bind whose
@@ -321,8 +329,8 @@ fn main() -> ExitCode {
         // `acp_respond_permission` Tauri command directly).
         let rendezvous = Arc::new(PermissionRendezvous::with_policy(
             Arc::clone(&acp),
-            Duration::from_secs(cfg.permission_timeout_secs),
-            Duration::from_secs(cfg.permission_reconnect_grace_secs),
+            DEFAULT_PERMISSION_TIMEOUT,
+            DEFAULT_PERMISSION_RECONNECT_GRACE,
         ));
         ws_relay.set_rendezvous(rendezvous);
         // Issue #411: attach the server-side question rendezvous (bounded
@@ -336,8 +344,8 @@ fn main() -> ExitCode {
         // still pending instead of instantly cancelled.
         let question_rendezvous = Arc::new(QuestionRendezvous::with_policy(
             Arc::clone(&acp),
-            Duration::from_secs(cfg.permission_timeout_secs),
-            Duration::from_secs(cfg.permission_reconnect_grace_secs),
+            DEFAULT_PERMISSION_TIMEOUT,
+            DEFAULT_PERMISSION_RECONNECT_GRACE,
         ));
         ws_relay.set_question_rendezvous(question_rendezvous);
         // Story 4.1: the in-memory project registry. In VPS mode the
@@ -729,13 +737,37 @@ OPTIONS:
   Tuning:
     --event-log-capacity <N>      Per-session event-log ring capacity.
                                   [default: 4096]
-    --permission-timeout <SECS>   Permission rendezvous timeout. On expiry the
-                                  pending permission resolves as deny.
-                                  [default: 60]
-    --permission-reconnect-grace <SECS>
-                                  Grace after last subscriber disconnect before
-                                  pending permissions are denied.
-                                  [default: 60]
+    --agent-idle-window-secs <SECS>
+                                  Idle window after which an idle agent is
+                                  reaped. Positive integer.
+                                  [env: TERMUL_AGENT_IDLE_REAP_SECS]
+                                  [default: 900]
+    --overflow-tolerance <N>      Reliable-queue overflow tolerance per client.
+                                  Positive integer. Reserved: the host
+                                  validates it but does not read it yet.
+                                  [default: 15]
+    --receipt-retention-secs <SECS>
+                                  How long a command receipt is retained.
+                                  Positive integer. Reserved: the host
+                                  validates it but does not read it yet.
+                                  [default: 600]
+    --partition-gc-age-secs <SECS>
+                                  Age after which an unused device partition
+                                  is garbage collected. Positive integer.
+                                  Reserved: the host validates it but does
+                                  not read it yet.
+                                  [env: TERMUL_PARTITION_GC_AGE_SECS]
+                                  [default: unset]
+    --partition-byte-budget <BYTES>
+                                  Per-device partition byte budget. Positive
+                                  integer. Reserved: the host validates it
+                                  but does not read it yet.
+                                  [env: TERMUL_PARTITION_BYTE_BUDGET]
+                                  [default: unset]
+    --permission-timeout <SECS>, --permission-reconnect-grace <SECS>
+                                  Removed. Still accepted so existing launch
+                                  commands keep starting, but ignored (a
+                                  warning is logged at startup).
 
   Security & updates:
     --allow-remote-writes         Admit non-loopback peers on all guarded write

@@ -72,6 +72,7 @@ pub(super) async fn cleanup_connection_subscriptions(
 pub(super) async fn handle_request(
     text: &str,
     authed: &mut bool,
+    identity: &mut Option<ClientIdentity>,
     web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
@@ -104,13 +105,28 @@ pub(super) async fn handle_request(
     // Pre-auth gate (AC9): only authenticate is allowed.
     if !*authed {
         if req.type_ == "authenticate" {
+            // Handshake checks run FIRST — on gated and ungated hosts alike —
+            // so a stale tab learns it must reload even when its token is
+            // also wrong. A refusal leaves the connection pre-auth.
+            let validated = match validate_authenticate_handshake(&req.payload) {
+                Ok(validated) => validated,
+                Err(refusal) => {
+                    warn!(
+                        target: "termul::web::ws",
+                        request_id = %req.id,
+                        check = refusal.check,
+                        code = refusal.code.as_str(),
+                        "/ws authenticate refused (handshake check failed)"
+                    );
+                    return WsReply::err(id, refusal.code, refusal.message);
+                }
+            };
             // CAP-1 interim (Story 1): when the server runs gated, validate
             // the presented token in constant time BEFORE marking authed. A
             // wrong/absent token is refused `unauthorized`; `authed` stays
             // false and the connection stays open so the client may retry.
-            // Ungated servers (`web_auth: None`) keep the legacy
-            // accept-any-token behavior (frozen contract: ungated loopback is
-            // byte-identical to the pre-gate server).
+            // Ungated servers (`web_auth: None`) accept any token once the
+            // handshake checks above pass.
             if let Some(gate) = web_auth {
                 let presented = req.payload["token"].as_str().unwrap_or("");
                 if !gate.accepts(presented) {
@@ -131,6 +147,14 @@ pub(super) async fn handle_request(
                     );
                 }
             }
+            info!(
+                target: "termul::web::ws",
+                request_id = %req.id,
+                device_id = %ClientIdentity::log_label(&validated.device_id),
+                client_instance_id = %ClientIdentity::log_label(&validated.client_instance_id),
+                "/ws connection authenticated"
+            );
+            *identity = Some(validated);
             *authed = true;
             let reconnect_grace = relay
                 .rendezvous()
@@ -142,6 +166,7 @@ pub(super) async fn handle_request(
                 Some(json!({
                     "historyMode": history_mode,
                     "runtimePolicy": RuntimePolicy::resolved(reconnect_grace),
+                    "protocolVersion": WS_PROTOCOL_VERSION,
                 })),
             );
         }

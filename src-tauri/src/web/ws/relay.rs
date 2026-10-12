@@ -333,6 +333,9 @@ pub(super) async fn run_relay(socket: WebSocket, state: AppState) {
     let read_relay = Arc::clone(&relay);
     let mut read_task = tokio::spawn(async move {
         let mut authed = false;
+        // Validated `authenticate` identity (AD-4), recorded once per
+        // connection; later slices key presence and write stamps off it.
+        let mut identity: Option<ClientIdentity> = None;
         // CAP-11: set once a binary frame poisons the connection. The error
         // reply + Close(1003) are already queued; further text requests must
         // NOT dispatch (they would execute before the close lands) — the read
@@ -372,6 +375,7 @@ pub(super) async fn run_relay(socket: WebSocket, state: AppState) {
                     if !dispatch_connection_text(
                         &t,
                         &mut authed,
+                        &mut identity,
                         web_auth.as_deref(),
                         &acp,
                         &read_relay,
@@ -518,6 +522,7 @@ impl Drop for ConnectionCleanup {
 pub(super) async fn dispatch_connection_text(
     text: &str,
     authed: &mut bool,
+    identity: &mut Option<ClientIdentity>,
     web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
@@ -554,6 +559,7 @@ pub(super) async fn dispatch_connection_text(
     let reply = handle_request(
         text,
         authed,
+        identity,
         web_auth,
         acp,
         relay,

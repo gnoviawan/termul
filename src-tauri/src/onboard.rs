@@ -240,7 +240,7 @@ impl OnboardAnswers {
     }
 
     /// Synthesize a [`ServerConfig`] from the answers. Non-onboarded fields use
-    /// the parser's defaults (event-log capacity, permission timeouts). Remote
+    /// the parser's defaults (event-log capacity, tunables). Remote
     /// writes is only enabled in the config when the bind is non-loopback — on
     /// loopback it stays `false` (documented no-op).
     pub fn to_server_config(&self) -> ServerConfig {
@@ -249,8 +249,12 @@ impl OnboardAnswers {
             host: self.host.clone(),
             port: self.port,
             event_log_capacity: 4096,
-            permission_timeout_secs: 60,
-            permission_reconnect_grace_secs: 60,
+            agent_idle_window_secs: crate::web::config::DEFAULT_AGENT_IDLE_WINDOW_SECS,
+            overflow_tolerance: crate::web::config::DEFAULT_OVERFLOW_TOLERANCE,
+            receipt_retention_secs: crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
+            partition_gc_age_secs: None,
+            partition_byte_budget: None,
+            deprecation_warnings: Vec::new(),
             project_root: self.project_root.clone(),
             projects_file: Some(self.projects_file.clone()),
             sessions_dir: Some(self.sessions_dir.clone()),

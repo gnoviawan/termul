@@ -22,6 +22,96 @@ fn trimmed_env_path(key: &str) -> Option<PathBuf> {
     })
 }
 
+/// Default idle-agent reap window in seconds (15 min) — the value the
+/// standalone server used before the window became a [`ServerConfig`] field.
+pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 900;
+/// Default reliable-queue overflow tolerance per client.
+pub const DEFAULT_OVERFLOW_TOLERANCE: usize = 15;
+/// Default command-receipt retention in seconds (10 min).
+pub const DEFAULT_RECEIPT_RETENTION_SECS: u64 = 600;
+
+const AGENT_IDLE_WINDOW_ENV: &str = "TERMUL_AGENT_IDLE_REAP_SECS";
+const PARTITION_GC_AGE_ENV: &str = "TERMUL_PARTITION_GC_AGE_SECS";
+const PARTITION_BYTE_BUDGET_ENV: &str = "TERMUL_PARTITION_BYTE_BUDGET";
+
+/// Parse a strictly positive integer from a flag or env value.
+fn parse_positive<T>(source: &str, value: &str) -> Result<T, ParseCliError>
+where
+    T: std::str::FromStr + PartialEq + From<u8>,
+{
+    let parsed = value.trim().parse::<T>().map_err(|_| {
+        ParseCliError::Message(format!(
+            "invalid {source} '{value}': expected a positive integer"
+        ))
+    })?;
+    if parsed == T::from(0) {
+        return Err(ParseCliError::Message(format!(
+            "invalid {source} '{value}': use a positive integer"
+        )));
+    }
+    Ok(parsed)
+}
+
+/// Positive integer from an env var. Unset and blank values mean "not
+/// configured". An invalid value is ignored with a queued startup warning
+/// (the pre-existing `TERMUL_AGENT_IDLE_REAP_SECS` behavior) — unlike the
+/// flags, which fail startup.
+fn positive_env<T>(key: &str, warnings: &mut Vec<String>) -> Option<T>
+where
+    T: std::str::FromStr + PartialEq + From<u8>,
+{
+    let raw = std::env::var(key).ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    match parse_positive(&format!("${key}"), &raw) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            warnings.push(format!("{error}; ignoring it"));
+            None
+        }
+    }
+}
+
+/// Next CLI token as a flag's value, or the shared `missing value` error.
+fn require_value<S, I>(iter: &mut I, flag: &str) -> Result<S, ParseCliError>
+where
+    I: Iterator<Item = S>,
+{
+    iter.next()
+        .ok_or_else(|| ParseCliError::Message(format!("missing value for {flag}")))
+}
+
+/// Consume the value of a removed flag when the next token is not another
+/// `--flag`; `None` when the value is absent.
+fn take_removed_flag_value<S, I>(iter: &mut std::iter::Peekable<I>) -> Option<String>
+where
+    S: AsRef<str>,
+    I: Iterator<Item = S>,
+{
+    // `-h` stays the help flag, never the removed flag's value.
+    if iter
+        .peek()
+        .is_some_and(|next| !next.as_ref().starts_with("--") && next.as_ref() != "-h")
+    {
+        iter.next().map(|value| value.as_ref().to_string())
+    } else {
+        None
+    }
+}
+
+/// The single startup warning for one removed flag.
+fn removed_flag_warning(flag: &str, value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!(
+            "{flag} (value '{value}') is a removed option: it is parsed and ignored; remove it from the launch command"
+        ),
+        None => format!(
+            "{flag} (no value) is a removed option: it is parsed and ignored; remove it from the launch command"
+        ),
+    }
+}
+
 /// Resolve the default ACP session-history root for the standalone
 /// `termul-server`: `$TERMUL_SESSIONS_DIR` (trimmed, non-empty) →
 /// `$XDG_STATE_HOME/termul/sessions` →
@@ -250,12 +340,36 @@ pub struct ServerConfig {
     pub port: u16,
     /// Per-session event-log capacity (bounded ring; AC4). Default 4096.
     pub event_log_capacity: usize,
-    /// Permission-rendezvous timeout in seconds (Story 1.7 / FR14). On expiry
-    /// the pending permission resolves as deny (`Cancelled`). Default 60.
-    pub permission_timeout_secs: u64,
-    /// Last-subscriber disconnect grace before pending permissions are denied.
-    /// The original per-ticket timeout continues running during this grace.
-    pub permission_reconnect_grace_secs: u64,
+    /// Idle window (seconds) after which the host reaps an idle agent.
+    /// `--agent-idle-window-secs` → `$TERMUL_AGENT_IDLE_REAP_SECS` →
+    /// [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (900, the pre-existing server
+    /// value). The desktop host reads the same default const.
+    pub agent_idle_window_secs: u64,
+    /// Reliable-queue overflow tolerance per client. `--overflow-tolerance`
+    /// → [`DEFAULT_OVERFLOW_TOLERANCE`] (15). Reserved: this is the single
+    /// definition; the read-model work that bounds the queue reads it. No
+    /// runtime code reads it yet.
+    pub overflow_tolerance: usize,
+    /// How long a command receipt is retained, in seconds.
+    /// `--receipt-retention-secs` → [`DEFAULT_RECEIPT_RETENTION_SECS`] (600).
+    /// Reserved: the command-receipt work reads it. No runtime code reads it
+    /// yet.
+    pub receipt_retention_secs: u64,
+    /// Age (seconds) after which an unused per-device partition is garbage
+    /// collected. `None` (unset) until the device-state work picks a value;
+    /// `--partition-gc-age-secs` → `$TERMUL_PARTITION_GC_AGE_SECS`.
+    pub partition_gc_age_secs: Option<u64>,
+    /// Per-device partition byte budget. `None` (unset) until the
+    /// device-state work picks a value; `--partition-byte-budget` →
+    /// `$TERMUL_PARTITION_BYTE_BUDGET`. Reserved: no runtime code reads it
+    /// yet.
+    pub partition_byte_budget: Option<u64>,
+    /// Startup warnings gathered while parsing: removed flags that are still
+    /// accepted and ignored, and invalid tunable env values that were
+    /// ignored. Tracing is initialised after parsing, so
+    /// `server_main` emits each with `tracing::warn!` right after
+    /// `init_tracing`. Empty for programmatic constructions.
+    pub deprecation_warnings: Vec<String>,
     /// Project-root boundary for the routes that explicitly enforce it
     /// (`/git/*`, `/skills`, `/search/content` via
     /// `git_api::ensure_within_project_boundary` — refuses paths outside this
@@ -431,8 +545,12 @@ impl ServerConfig {
         let mut host = "127.0.0.1".to_string();
         let mut port: u16 = 8080;
         let mut event_log_capacity: usize = 4096;
-        let mut permission_timeout_secs: u64 = 60;
-        let mut permission_reconnect_grace_secs: u64 = 60;
+        let mut agent_idle_window_secs: Option<u64> = None;
+        let mut overflow_tolerance: usize = DEFAULT_OVERFLOW_TOLERANCE;
+        let mut receipt_retention_secs: u64 = DEFAULT_RECEIPT_RETENTION_SECS;
+        let mut partition_gc_age_secs: Option<u64> = None;
+        let mut partition_byte_budget: Option<u64> = None;
+        let mut deprecation_warnings: Vec<String> = Vec::new();
         // PR-S4: when `--project-root` is absent, fall back to the env var or
         // the user's home directory via `default_project_root()`. The
         // resolved value is run through `resolve_and_validate_project_root`
@@ -524,43 +642,40 @@ impl ServerConfig {
                     }
                     event_log_capacity = parsed;
                 }
-                "--permission-timeout" => {
-                    let value = iter.next().ok_or_else(|| {
-                        ParseCliError::Message("missing value for --permission-timeout".into())
-                    })?;
-                    let parsed = value.as_ref().parse::<u64>().map_err(|_| {
-                        ParseCliError::Message(format!(
-                            "invalid --permission-timeout '{}': expected a positive integer (seconds)",
-                            value.as_ref()
-                        ))
-                    })?;
-                    if parsed == 0 {
-                        return Err(ParseCliError::Message(
-                            "invalid --permission-timeout '0': use a positive integer (seconds)"
-                                .into(),
-                        ));
-                    }
-                    permission_timeout_secs = parsed;
+                "--agent-idle-window-secs" => {
+                    let value = require_value(&mut iter, "--agent-idle-window-secs")?;
+                    agent_idle_window_secs =
+                        Some(parse_positive::<u64>("--agent-idle-window-secs", value.as_ref())?);
                 }
-                "--permission-reconnect-grace" => {
-                    let value = iter.next().ok_or_else(|| {
-                        ParseCliError::Message(
-                            "missing value for --permission-reconnect-grace".into(),
-                        )
-                    })?;
-                    let parsed = value.as_ref().parse::<u64>().map_err(|_| {
-                        ParseCliError::Message(format!(
-                            "invalid --permission-reconnect-grace '{}': expected a positive integer (seconds)",
-                            value.as_ref()
-                        ))
-                    })?;
-                    if parsed == 0 {
-                        return Err(ParseCliError::Message(
-                            "invalid --permission-reconnect-grace '0': use a positive integer (seconds)"
-                                .into(),
-                        ));
-                    }
-                    permission_reconnect_grace_secs = parsed;
+                "--overflow-tolerance" => {
+                    let value = require_value(&mut iter, "--overflow-tolerance")?;
+                    overflow_tolerance =
+                        parse_positive::<usize>("--overflow-tolerance", value.as_ref())?;
+                }
+                "--receipt-retention-secs" => {
+                    let value = require_value(&mut iter, "--receipt-retention-secs")?;
+                    receipt_retention_secs =
+                        parse_positive::<u64>("--receipt-retention-secs", value.as_ref())?;
+                }
+                "--partition-gc-age-secs" => {
+                    let value = require_value(&mut iter, "--partition-gc-age-secs")?;
+                    partition_gc_age_secs =
+                        Some(parse_positive::<u64>("--partition-gc-age-secs", value.as_ref())?);
+                }
+                "--partition-byte-budget" => {
+                    let value = require_value(&mut iter, "--partition-byte-budget")?;
+                    partition_byte_budget =
+                        Some(parse_positive::<u64>("--partition-byte-budget", value.as_ref())?);
+                }
+                // Removed flags: still parsed (so existing launch scripts and
+                // unit files keep starting) but ignored. Their value is
+                // consumed when present and never validated — a zero,
+                // non-numeric or missing value must not abort startup. One
+                // warning each is queued for `server_main` to emit once
+                // tracing is initialised.
+                "--permission-timeout" | "--permission-reconnect-grace" => {
+                    let value = take_removed_flag_value(&mut iter);
+                    deprecation_warnings.push(removed_flag_warning(arg, value.as_deref()));
                 }
                 "--project-root" => {
                     let value = iter.next().ok_or_else(|| {
@@ -801,12 +916,27 @@ impl ServerConfig {
             )));
         }
 
+        // Tunables: `--flag` wins, then the env var (where one exists), then
+        // the shared `DEFAULT_*` const. An invalid env value is ignored with
+        // a startup warning; an invalid flag value already failed above.
+        let agent_idle_window_secs = agent_idle_window_secs
+            .or_else(|| positive_env::<u64>(AGENT_IDLE_WINDOW_ENV, &mut deprecation_warnings))
+            .unwrap_or(DEFAULT_AGENT_IDLE_WINDOW_SECS);
+        let partition_gc_age_secs = partition_gc_age_secs
+            .or_else(|| positive_env::<u64>(PARTITION_GC_AGE_ENV, &mut deprecation_warnings));
+        let partition_byte_budget = partition_byte_budget
+            .or_else(|| positive_env::<u64>(PARTITION_BYTE_BUDGET_ENV, &mut deprecation_warnings));
+
         Ok(Self {
             host,
             port,
             event_log_capacity,
-            permission_timeout_secs,
-            permission_reconnect_grace_secs,
+            agent_idle_window_secs,
+            overflow_tolerance,
+            receipt_retention_secs,
+            partition_gc_age_secs,
+            partition_byte_budget,
+            deprecation_warnings,
             project_root,
             projects_file,
             sessions_dir: Some(sessions_dir),

@@ -27,9 +27,9 @@ fn context_authorize_and_detach_roundtrip() {
     let mut ctx = ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
         attachments: HashMap::new(),
-        // Tests exercise post-gate behavior; the ungated posture starts
-        // every connection authed.
+        // Tests exercise post-gate behavior on an already-authed connection.
         authed: true,
+        identity: None,
         client_id: "test-conn-1".to_string(),
     };
     ctx.authorize("t1");
@@ -150,6 +150,7 @@ fn gate_test_ctx(authed: bool) -> ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
         attachments: HashMap::new(),
         authed,
+        identity: None,
         client_id: format!("test-conn-{authed}"),
     }
 }
@@ -187,7 +188,7 @@ async fn gated_handle_refuses_pre_auth_spawn_and_validates_token() {
     assert!(!ctx.authed, "refused spawn must not authenticate");
 
     let wrong = handle(
-        gate_request("r2", "authenticate", json!({"token": "WRONG"})),
+        gate_request("r2", "authenticate", auth_payload(Some("WRONG"))),
         &state,
         &tx,
         &mut ctx,
@@ -197,7 +198,7 @@ async fn gated_handle_refuses_pre_auth_spawn_and_validates_token() {
     assert!(!ctx.authed, "wrong token must not authenticate");
 
     let missing = handle(
-        gate_request("r3", "authenticate", json!({})),
+        gate_request("r3", "authenticate", auth_payload(None)),
         &state,
         &tx,
         &mut ctx,
@@ -207,7 +208,7 @@ async fn gated_handle_refuses_pre_auth_spawn_and_validates_token() {
     assert!(!ctx.authed);
 
     let ok = handle(
-        gate_request("r4", "authenticate", json!({"token": "s3cret"})),
+        gate_request("r4", "authenticate", auth_payload(Some("s3cret"))),
         &state,
         &tx,
         &mut ctx,
@@ -231,17 +232,39 @@ async fn gated_handle_refuses_pre_auth_spawn_and_validates_token() {
     );
 }
 
+fn auth_payload(token: Option<&str>) -> Value {
+    let mut payload = json!({
+        "protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION,
+        "deviceId": "device-a",
+        "clientInstanceId": "tab-1",
+    });
+    if let Some(token) = token {
+        payload["token"] = json!(token);
+    }
+    payload
+}
+
 #[tokio::test]
-async fn ungated_handle_treats_authenticate_as_noop_success() {
-    // New-client/old-server tolerance: an ungated server accepts
-    // `authenticate` as a no-op success, so clients that always send it
-    // keep working on pre-gate deployments.
+async fn ungated_connection_is_authed_only_after_valid_handshake() {
+    // Ungated hosts no longer admit connections implicitly: requests before
+    // a valid `authenticate` are refused UNAUTHORIZED, and any token passes
+    // once the handshake checks succeed.
     let state = gate_test_state(None);
     let (tx, _rx) = mpsc::channel(8);
-    // run() initializes ungated connections authed: true.
-    let mut ctx = gate_test_ctx(true);
+    let mut ctx = gate_test_ctx(false);
+
+    let refused = handle(
+        gate_request("r0", "spawn", json!({"projectId": "p"})),
+        &state,
+        &tx,
+        &mut ctx,
+    )
+    .await;
+    assert_eq!(refused, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+    assert!(!ctx.authed);
+
     let reply = handle(
-        gate_request("r1", "authenticate", json!({"token": "anything"})),
+        gate_request("r1", "authenticate", auth_payload(Some("anything"))),
         &state,
         &tx,
         &mut ctx,
@@ -249,6 +272,55 @@ async fn ungated_handle_treats_authenticate_as_noop_success() {
     .await;
     assert_eq!(reply, Ok(json!({})));
     assert!(ctx.authed);
+    let identity = ctx.identity.as_ref().expect("identity recorded");
+    assert_eq!(identity.device_id, "device-a");
+    assert_eq!(identity.client_instance_id, "tab-1");
+
+    // Re-auth on an authed connection is an idempotent no-op success.
+    let again = handle(
+        gate_request("r2", "authenticate", json!({})),
+        &state,
+        &tx,
+        &mut ctx,
+    )
+    .await;
+    assert_eq!(again, Ok(json!({})));
+}
+
+#[tokio::test]
+async fn authenticate_refuses_bad_version_and_identity_with_screaming_codes() {
+    let oversized = "x".repeat(crate::web::ws::MAX_CLIENT_ID_LEN + 1);
+    for token in [None, Some("s3cret")] {
+        let state = gate_test_state(token);
+        let (tx, _rx) = mpsc::channel(8);
+        for (payload, code) in [
+            // Missing version, wrong version, non-numeric version.
+            (json!({"deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}), "PROTOCOL_VERSION_MISMATCH"),
+            (json!({"protocolVersion": 99, "deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}), "PROTOCOL_VERSION_MISMATCH"),
+            (json!({"protocolVersion": "1", "deviceId": "d", "clientInstanceId": "c", "token": "s3cret"}), "PROTOCOL_VERSION_MISMATCH"),
+            // Version wins over a bad identity AND a wrong token.
+            (json!({"deviceId": "", "clientInstanceId": "", "token": "WRONG"}), "PROTOCOL_VERSION_MISMATCH"),
+            // Identity beats a wrong token.
+            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "", "clientInstanceId": "c", "token": "WRONG"}), "INVALID_CLIENT_IDENTITY"),
+            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": 5, "clientInstanceId": "c", "token": "s3cret"}), "INVALID_CLIENT_IDENTITY"),
+            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "d", "token": "s3cret"}), "INVALID_CLIENT_IDENTITY"),
+            (json!({"protocolVersion": crate::web::ws::WS_PROTOCOL_VERSION, "deviceId": "d", "clientInstanceId": oversized, "token": "s3cret"}), "INVALID_CLIENT_IDENTITY"),
+        ] {
+            let mut ctx = gate_test_ctx(false);
+            let reply = handle(
+                gate_request("r1", "authenticate", payload.clone()),
+                &state,
+                &tx,
+                &mut ctx,
+            )
+            .await;
+            let (got, message) = reply.expect_err("handshake must be refused");
+            assert_eq!(got, code, "{payload}");
+            assert!(!message.contains("WRONG") && !message.contains("s3cret"));
+            assert!(!ctx.authed, "refusal stays pre-auth: {payload}");
+            assert!(ctx.identity.is_none());
+        }
+    }
 }
 
 #[test]
@@ -279,9 +351,9 @@ async fn connection_detach_aborts_attachment_and_clears_authorization() {
     let mut ctx = ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
         attachments: HashMap::new(),
-        // Tests exercise post-gate behavior; the ungated posture starts
-        // every connection authed.
+        // Tests exercise post-gate behavior on an already-authed connection.
         authed: true,
+        identity: None,
         client_id: "test-conn-2".to_string(),
     };
     ctx.authorize("t1");
@@ -667,7 +739,7 @@ async fn list_preserved_refuses_unauthed_and_leaks_no_existence() {
     // projectId: now VALIDATION_ERROR (structural) — the gate is the
     // only existence boundary.
     let auth = handle(
-        gate_request("auth", "authenticate", json!({"token": "s3cret"})),
+        gate_request("auth", "authenticate", auth_payload(Some("s3cret"))),
         &state,
         &tx,
         &mut unauthed,

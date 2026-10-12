@@ -20,11 +20,15 @@
 //!
 //! # Scope fence
 //!
-//! `authenticate` validates the single-token web auth gate (CAP-1 interim,
+//! `authenticate` first validates `protocolVersion` ([`WS_PROTOCOL_VERSION`])
+//! and the `deviceId` / `clientInstanceId` identity (see
+//! [`validate_authenticate_handshake`]) — on gated AND ungated hosts — and
+//! refuses `protocol_version_mismatch` / `invalid_client_identity`, staying
+//! pre-auth. It then validates the single-token web auth gate (CAP-1 interim,
 //! QA remediation Story 1) when `AppState.web_auth` is `Some` — a wrong/absent
 //! token is refused `unauthorized` and the connection stays pre-auth (retry
-//! allowed). Ungated servers (`web_auth: None`) keep the legacy
-//! accept-any-token behavior byte-for-byte. `subscribe` is wired (Story 1.6):
+//! allowed). Ungated servers (`web_auth: None`) accept any token after the
+//! handshake checks pass. `subscribe` is wired (Story 1.6):
 //! binds the connection to a session log with optional `lastSeq` cursor
 //! replay. Unknown request types return `err.code: "not_implemented"`.
 
@@ -154,7 +158,100 @@ pub fn tier_of(type_: &str) -> ReliabilityTier {
 // Request / reply / error envelope structs (AC2 + AC10)
 // ---------------------------------------------------------------------------
 
-/// A WS request frame `{id, type, payload}` sent client→server.
+/// The `authenticate` protocol version this host speaks. Mirrors the TS
+/// `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
+pub const WS_PROTOCOL_VERSION: u32 = 1;
+
+/// Longest accepted `deviceId` / `clientInstanceId`, in bytes.
+pub const MAX_CLIENT_ID_LEN: usize = 128;
+
+/// Client identity presented on `authenticate` (AD-4). Neither id is a
+/// credential, and the host stores both exactly as received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIdentity {
+    /// Per install / browser profile; partitions view state and presence.
+    pub device_id: String,
+    /// Per tab or window; stamps writes.
+    pub client_instance_id: String,
+}
+
+impl ClientIdentity {
+    /// Log-safe label for one id: the first 8 characters. The ids are stable
+    /// per profile, so the full values stay out of service logs.
+    #[must_use]
+    pub fn log_label(id: &str) -> String {
+        id.chars().take(8).collect()
+    }
+}
+
+/// Why an `authenticate` handshake was refused before the token gate ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandshakeRefusal {
+    /// Stable `/ws` error code ([`WsErrorCode::ProtocolVersionMismatch`] or
+    /// [`WsErrorCode::InvalidClientIdentity`]); `/terminal/ws` maps it to its
+    /// SCREAMING wire string via [`HandshakeRefusal::terminal_code`].
+    pub code: WsErrorCode,
+    /// The payload field that failed (`protocolVersion`, `deviceId`,
+    /// `clientInstanceId`) — safe to log.
+    pub check: &'static str,
+    /// Human-readable message for the refusal reply.
+    pub message: String,
+}
+
+impl HandshakeRefusal {
+    /// The `/terminal/ws` SCREAMING_SNAKE_CASE wire code for this refusal.
+    #[must_use]
+    pub const fn terminal_code(&self) -> &'static str {
+        match self.code {
+            WsErrorCode::ProtocolVersionMismatch => "PROTOCOL_VERSION_MISMATCH",
+            _ => "INVALID_CLIENT_IDENTITY",
+        }
+    }
+}
+
+/// Validate the `authenticate` payload's `protocolVersion`, `deviceId` and
+/// `clientInstanceId` (shared by `/ws` and `/terminal/ws`). Runs BEFORE any
+/// token check so a stale tab learns it must reload even on a token mismatch.
+/// A missing, non-numeric or different `protocolVersion` is a mismatch; each
+/// id must be a non-empty string of at most [`MAX_CLIENT_ID_LEN`] bytes with
+/// no control characters (the host logs ids, so a newline must not forge a
+/// log line). The ids are returned exactly as received (the host never mints
+/// or rewrites).
+pub fn validate_authenticate_handshake(payload: &Value) -> Result<ClientIdentity, HandshakeRefusal> {
+    if payload["protocolVersion"].as_u64() != Some(u64::from(WS_PROTOCOL_VERSION)) {
+        return Err(HandshakeRefusal {
+            code: WsErrorCode::ProtocolVersionMismatch,
+            check: "protocolVersion",
+            message: format!(
+                "protocol version mismatch: this host speaks version {WS_PROTOCOL_VERSION}; reload the client"
+            ),
+        });
+    }
+    let client_id = |field: &'static str| -> Result<String, HandshakeRefusal> {
+        match payload[field].as_str() {
+            Some(value)
+                if !value.is_empty()
+                    && value.len() <= MAX_CLIENT_ID_LEN
+                    && !value.chars().any(char::is_control) =>
+            {
+                Ok(value.to_string())
+            }
+            _ => Err(HandshakeRefusal {
+                code: WsErrorCode::InvalidClientIdentity,
+                check: field,
+                message: format!(
+                    "{field} must be a non-empty string of at most {MAX_CLIENT_ID_LEN} bytes without control characters"
+                ),
+            }),
+        }
+    };
+    Ok(ClientIdentity {
+        device_id: client_id("deviceId")?,
+        client_instance_id: client_id("clientInstanceId")?,
+    })
+}
+
+/// A WS request frame `{id, type, payload, command_id?}` sent client→server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WsRequest {
     /// Client-chosen correlation id (echoed in the reply).
@@ -165,6 +262,10 @@ pub struct WsRequest {
     /// Request payload (shape depends on `type`).
     #[serde(default = "Value::default")]
     pub payload: Value,
+    /// Client-minted command id for a mutating request. The field name is
+    /// fixed here; dispatch ignores it until the command/receipt work lands.
+    #[serde(default)]
+    pub command_id: Option<String>,
 }
 
 /// A WS reply frame `{id, ok, payload?, err?}` sent server→client.
@@ -180,6 +281,10 @@ pub struct WsReply {
     /// Failure detail (omitted on success).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub err: Option<WsError>,
+    /// Receipt visibility marker (watch revision or log seq). The field name
+    /// is fixed here; its semantics belong to the command/receipt work.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_at: Option<Value>,
 }
 
 impl WsReply {
@@ -191,6 +296,7 @@ impl WsReply {
             ok: true,
             payload,
             err: None,
+            visible_at: None,
         }
     }
 
@@ -201,6 +307,7 @@ impl WsReply {
             id: id.into(),
             ok: false,
             payload: None,
+            visible_at: None,
             err: Some(WsError {
                 code: code.as_str().to_string(),
                 message: message.into(),
@@ -227,6 +334,7 @@ impl WsReply {
             id: id.into(),
             ok: false,
             payload: None,
+            visible_at: None,
             err: Some(WsError {
                 code: code.into(),
                 message: message.into(),
@@ -244,7 +352,7 @@ pub struct WsError {
     pub message: String,
 }
 
-/// The 11 stable `err.code` machine strings (AC2). Mirrors the TS
+/// The stable `err.code` machine strings (AC2). Mirrors the TS
 /// `WS_ERROR_CODES` const. Serialized as snake_case via [`WsErrorCode::as_str`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsErrorCode {
@@ -269,6 +377,35 @@ pub enum WsErrorCode {
     /// DIFFERENT live agent with a turn in flight (issue #837 split-brain
     /// guard). Additive: receivers that ignore unknown codes stay compatible.
     SessionOwnedByOther,
+    /// `authenticate` carried a missing or different `protocolVersion`
+    /// ([`WS_PROTOCOL_VERSION`]). The client must reload; no compatibility
+    /// shim exists (AD-15).
+    ProtocolVersionMismatch,
+    /// `authenticate` carried a missing, empty or oversized `deviceId` /
+    /// `clientInstanceId` (AD-4). The host never mints either id.
+    InvalidClientIdentity,
+    /// Reserved: a host terminal cap (per project or global) refused a spawn.
+    /// Handler behavior lands with the host-owned lifecycle work.
+    TerminalLimit,
+    /// Reserved: project remove/archive refused while sessions or PTYs bound
+    /// to the project are live. Handler behavior lands with the project
+    /// registry work.
+    ProjectBusy,
+    /// Reserved: a command resend found no stored outcome (evicted ledger
+    /// entry); the command is never re-executed. Handler behavior lands with
+    /// the command ledger work.
+    OutcomeUnknown,
+    /// Reserved: branch switch / worktree removal refused while a session
+    /// with its cwd inside the target path has an active turn.
+    DestructiveOpBlocked,
+    /// Reserved: the upstream provider refused the call for quota / usage
+    /// limits.
+    ProviderQuotaExceeded,
+    /// Reserved: the upstream provider refused the call for a session limit.
+    ProviderSessionLimit,
+    /// Reserved: the upstream provider rejected the request with a 4xx class
+    /// error.
+    ProviderRequestRejected,
 }
 
 impl WsErrorCode {
@@ -288,6 +425,15 @@ impl WsErrorCode {
             Self::NoAgent => "no_agent",
             Self::AgentAuthRequired => "agent_auth_required",
             Self::SessionOwnedByOther => "session_owned_by_other",
+            Self::ProtocolVersionMismatch => "protocol_version_mismatch",
+            Self::InvalidClientIdentity => "invalid_client_identity",
+            Self::TerminalLimit => "terminal_limit",
+            Self::ProjectBusy => "project_busy",
+            Self::OutcomeUnknown => "outcome_unknown",
+            Self::DestructiveOpBlocked => "destructive_op_blocked",
+            Self::ProviderQuotaExceeded => "provider_quota_exceeded",
+            Self::ProviderSessionLimit => "provider_session_limit",
+            Self::ProviderRequestRejected => "provider_request_rejected",
         }
     }
 }

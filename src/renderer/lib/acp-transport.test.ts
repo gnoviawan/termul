@@ -10,9 +10,18 @@ vi.mock('@/lib/web-auth-gate', () => ({
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
+const protocolReloadRef = vi.hoisted(() => ({
+  handle: vi.fn(),
+  clear: vi.fn()
+}))
+vi.mock('@/lib/web-protocol-reload', () => ({
+  handleProtocolVersionMismatch: protocolReloadRef.handle,
+  clearProtocolMismatchLatch: protocolReloadRef.clear
+}))
 
 // Static import of the globally mocked (vitest.setup.ts) Tauri IPC surface —
 // the desktop-path tests assert the exact command names + payloads.
+import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
 import { logFrontendError } from '@/lib/log-api'
 import { flagWebAuthUnauthorized } from '@/lib/web-auth-gate'
@@ -38,6 +47,26 @@ afterEach(() => {
   vi.mocked(Math.random).mockRestore()
 })
 
+/**
+ * Host-side handshake validation mirroring the Rust `/ws` `authenticate` arm:
+ * version first, then identity. Returns the `err.code` or null when valid.
+ */
+function validateHandshake(payload: unknown): string | null {
+  const p = (payload ?? {}) as Record<string, unknown>
+  if (p.protocolVersion !== WS_PROTOCOL_VERSION) return 'protocol_version_mismatch'
+  for (const key of ['deviceId', 'clientInstanceId']) {
+    const value = p[key]
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      new TextEncoder().encode(value).length > MAX_CLIENT_ID_LEN
+    ) {
+      return 'invalid_client_identity'
+    }
+  }
+  return null
+}
+
 class FakeWebSocket {
   static OPEN = 1
   static CONNECTING = 0
@@ -52,6 +81,8 @@ class FakeWebSocket {
   onclose: ((ev: CloseEvent) => void) | null = null
   sent: string[] = []
   authFail = false
+  /** When set, `authenticate` is refused with this `err.code` (AD-15). */
+  authRefusalCode: string | null = null
   /** When set, `respond_permission` replies with this err (default: not_implemented). */
   respondPermissionErr: { code: string; message: string } | null = null
   /** When set, `authenticate_agent` replies with this err (default: ok). */
@@ -146,6 +177,11 @@ class FakeWebSocket {
     this.sent.push(data)
     const req = JSON.parse(data) as { id: string; type: string; payload: unknown }
     if (req.type === 'authenticate') {
+      const refusal = this.authRefusalCode ?? validateHandshake(req.payload)
+      if (refusal) {
+        this.emitReply({ id: req.id, ok: false, err: { code: refusal, message: refusal } })
+        return
+      }
       if (this.authFail) {
         this.emitReply({
           id: req.id,
@@ -3703,6 +3739,104 @@ describe('WsAcpTransport web auth token presentation (CAP-1)', () => {
     })
     const authReq = sent.find((r) => r.type === 'authenticate')
     expect(authReq?.payload.token).toBe('dev')
+    transport.dispose()
+  })
+
+  it('sends the full versioned handshake payload on every (re)handshake', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    // The fake host validates version + identity; connect() only resolves for
+    // a valid payload.
+    await transport.connect()
+    const internals = transport as unknown as { socket: FakeWebSocket }
+    const authReq = internals.socket.sent
+      .map((s) => JSON.parse(s) as { type: string; payload: Record<string, unknown> })
+      .find((r) => r.type === 'authenticate')
+    expect(authReq?.payload).toEqual({
+      token: 'dev',
+      protocolVersion: WS_PROTOCOL_VERSION,
+      deviceId: window.localStorage.getItem('termul.deviceId'),
+      clientInstanceId: window.sessionStorage.getItem('termul.clientInstanceId')
+    })
+    transport.dispose()
+  })
+})
+
+// AD-15: a stale protocol / bad identity can never be fixed by retrying.
+describe('WsAcpTransport versioned handshake refusals (AD-15)', () => {
+  function refusedBy(code: string): typeof WebSocket {
+    return class extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.authRefusalCode = code
+      }
+    } as unknown as typeof WebSocket
+  }
+
+  beforeEach(() => {
+    protocolReloadRef.handle.mockClear()
+    vi.mocked(flagWebAuthUnauthorized).mockClear()
+    vi.mocked(logFrontendError).mockClear()
+  })
+
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+  })
+
+  it('protocol_version_mismatch halts reconnect, reloads once via the helper, and never flags the token gate', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: refusedBy('protocol_version_mismatch')
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+    const internals = transport as unknown as TransportInternals
+
+    // The first rejection may carry the transport-level 'closed' (the fake's
+    // synchronous close races the refusal, same as the #907 token halt); the
+    // halt itself is the contract, and later connect() calls name the cause.
+    await expect(transport.connect()).rejects.toBeInstanceOf(AcpTransportError)
+    expect(protocolReloadRef.handle).toHaveBeenCalledTimes(1)
+    expect(protocolReloadRef.handle).toHaveBeenCalledWith('WsAcpTransport')
+    expect(vi.mocked(flagWebAuthUnauthorized)).not.toHaveBeenCalled()
+    expect(states[states.length - 1]).toBe('disconnected')
+    expect(states).not.toContain('reconnecting')
+    expect(internals.reconnectTimer).toBeNull()
+
+    // Nothing re-arms and later connect() calls refuse without a new socket
+    // or a second reload request.
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(internals.reconnectTimer).toBeNull()
+    await expect(transport.connect()).rejects.toMatchObject({
+      code: 'protocol_version_mismatch'
+    })
+    expect(internals.socket).toBeNull()
+    expect(protocolReloadRef.handle).toHaveBeenCalledTimes(1)
+    transport.dispose()
+  })
+
+  it('invalid_client_identity is non-retryable and never reloads', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: refusedBy('invalid_client_identity')
+    })
+    const internals = transport as unknown as TransportInternals
+
+    await expect(transport.connect()).rejects.toBeInstanceOf(AcpTransportError)
+    await expect(transport.connect()).rejects.toMatchObject({
+      code: 'invalid_client_identity'
+    })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(protocolReloadRef.handle).not.toHaveBeenCalled()
+    expect(internals.reconnectTimer).toBeNull()
+    expect(vi.mocked(logFrontendError)).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'WsAcpTransport.handshake', level: 'error' })
+    )
     transport.dispose()
   })
 })
