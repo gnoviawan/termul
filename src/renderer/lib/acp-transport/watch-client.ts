@@ -271,6 +271,7 @@ export class WatchClient {
     if (!this.transport.isLive()) return // onConnected retries
     const delay = Math.min(RETRY_BASE_MS * 2 ** entry.attempt, RETRY_MAX_MS)
     entry.attempt += 1
+    this.clearRetry(entry)
     void logFrontendError({
       level: 'info',
       source: 'WatchClient.subscribe',
