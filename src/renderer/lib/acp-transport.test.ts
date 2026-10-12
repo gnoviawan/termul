@@ -1340,6 +1340,34 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('still repairs a gap frame that arrived while a subscribe was in flight and then failed', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    transport.setRecoveryHandler(async () => {})
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.holdSubscribe = true
+    const subscribing = transport.subscribeSession('s1', 0).catch((error) => error)
+    await Promise.resolve()
+    sock.emit({ type: 'gap', sid: 's1' })
+    await flushEvents(transport)
+    const subscribeFrame = findSentRequest(sock, 'subscribe') as unknown as { id: string }
+    sock.emitReply({
+      id: subscribeFrame.id,
+      ok: false,
+      err: { code: 'unavailable', message: 'try later' }
+    })
+    expect(await subscribing).toBeInstanceOf(AcpTransportError)
+    await vi.waitFor(() =>
+      expect(
+        sock.sent.filter((frame) => JSON.parse(frame).type === 'recover_session_snapshot')
+      ).toHaveLength(1)
+    )
+    transport.dispose()
+  })
+
   it('holds events that overtake the subscribe reply and judges them against its head', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',

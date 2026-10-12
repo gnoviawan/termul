@@ -606,13 +606,24 @@ export class WsAcpTransport implements AcpTransport {
 
   /**
    * End one sync level. When the outermost one ends successfully, the held
-   * events are judged against the cursor the reply installed; a failed sync
-   * drops them (its reply never named a replay boundary, and a hole they leave
-   * is caught by the next live event).
+   * events are judged against the cursor the reply installed. A failed sync
+   * drops them (its reply never named a replay boundary; a hole they leave is
+   * caught by the next live event or the resubscribe replay) but still acts on
+   * a held `gap`.
    */
   private endSync(sessionId: string, completed: boolean): void {
     const result = this.syncGate.end(sessionId)
-    if (!result || !completed) return
+    if (!result) return
+    if (!completed) {
+      // A failed sync drops what it held, but a held `gap` is the host's only
+      // word that LOSSY events went missing (nothing may follow to expose it):
+      // repair it while the socket is up. A dead socket's reconnect pass
+      // resubscribes from the cursor, which replays the hole.
+      if (this.isSocketLive() && result.held.some((item) => item.kind === 'gap')) {
+        this.recoverInBackground(sessionId, 'gap frame during a failed sync')
+      }
+      return
+    }
     if (result.lost) {
       this.recoverInBackground(sessionId, 'the held-event buffer overflowed during a sync')
     }
