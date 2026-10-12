@@ -1,5 +1,5 @@
 use super::{validate_project_path, IpcResult};
-use crate::acp::destructive_guard::ensure_no_active_turn_under;
+use crate::acp::destructive_guard::ensure_no_active_turn_in_checkout;
 use crate::acp::AcpManager;
 use crate::trackers::git_tracker::{DiffStatError, GitDiffStat};
 use crate::trackers::{GitCommit, GitStatusDetail};
@@ -158,7 +158,7 @@ pub async fn git_checkout_branch(
     branch: String,
     is_remote: Option<bool>,
 ) -> Result<(), String> {
-    ensure_no_active_turn_under(&manager, std::path::Path::new(&cwd))
+    ensure_no_active_turn_in_checkout(&manager, std::path::Path::new(&cwd))
         .await
         .map_err(|blocked| blocked.to_string())?;
     let is_remote = is_remote.unwrap_or(false);
@@ -170,12 +170,22 @@ pub async fn git_checkout_branch(
 }
 
 /// Create a new branch from `start_ref` (defaults to HEAD) and check it out.
+/// A non-HEAD `start_ref` is refused with `destructive_op_blocked: …` while a
+/// session working inside the work tree is mid-turn.
 #[tauri::command]
 pub async fn git_create_branch(
+    manager: State<'_, Arc<AcpManager>>,
     cwd: String,
     branch: String,
     start_ref: Option<String>,
 ) -> Result<(), String> {
+    // Branching from HEAD leaves the work tree alone; branching from another
+    // `start_ref` checks that ref out, which rewrites it.
+    if start_ref.as_deref().is_some_and(|r| !r.trim().is_empty()) {
+        ensure_no_active_turn_in_checkout(&manager, std::path::Path::new(&cwd))
+            .await
+            .map_err(|blocked| blocked.to_string())?;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         crate::trackers::git_tracker::git_create_branch(&cwd, &branch, start_ref.as_deref())
     })
@@ -384,7 +394,7 @@ pub async fn git_branch_switch(
     name: String,
 ) -> Result<(), String> {
     let validated = validate_project_path(&cwd)?;
-    ensure_no_active_turn_under(&manager, &validated)
+    ensure_no_active_turn_in_checkout(&manager, &validated)
         .await
         .map_err(|blocked| blocked.to_string())?;
     let validated_str = validated

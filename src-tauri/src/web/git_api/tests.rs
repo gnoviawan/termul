@@ -747,3 +747,51 @@ async fn branch_create_is_not_a_destructive_op() {
     let body: IpcBody<()> = body_as(resp.into_body()).await;
     assert!(body.success, "{:?}", body.error);
 }
+
+#[tokio::test]
+async fn checkout_from_a_subdirectory_guards_the_whole_work_tree() {
+    if git_missing() {
+        return;
+    }
+    let repo = repo_with_feature_branch("guard-subdir");
+    let sub = repo.join("packages/app");
+    std::fs::create_dir_all(&sub).expect("subdir");
+    // The session works at the repo root; the caller names a subdirectory.
+    let before = head_branch(&repo);
+    let state = state_with_session(&repo, repo.clone(), true);
+    let resp = post_json(
+        state,
+        "/git/branch-switch",
+        &serde_json::json!({ "cwd": sub.to_string_lossy(), "name": "feature" }),
+    )
+    .await;
+    let body: IpcBody<()> = body_as(resp.into_body()).await;
+    assert_eq!(body.code.as_deref(), Some("destructive_op_blocked"));
+    assert_eq!(head_branch(&repo), before);
+}
+
+#[tokio::test]
+async fn create_branch_from_another_start_ref_is_guarded_but_from_head_is_not() {
+    if git_missing() {
+        return;
+    }
+    let repo = repo_with_feature_branch("guard-create-start");
+    let state = state_with_session(&repo, repo.clone(), true);
+    let resp = post_json(
+        state.clone(),
+        "/git/create-branch",
+        &serde_json::json!({ "cwd": repo.to_string_lossy(), "branch": "topic", "startRef": "feature" }),
+    )
+    .await;
+    let body: IpcBody<()> = body_as(resp.into_body()).await;
+    assert_eq!(body.code.as_deref(), Some("destructive_op_blocked"));
+
+    let resp = post_json(
+        state,
+        "/git/create-branch",
+        &serde_json::json!({ "cwd": repo.to_string_lossy(), "branch": "topic" }),
+    )
+    .await;
+    let body: IpcBody<()> = body_as(resp.into_body()).await;
+    assert!(body.success, "{:?}", body.error);
+}

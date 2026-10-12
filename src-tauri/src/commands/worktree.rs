@@ -225,10 +225,15 @@ pub async fn worktree_remove_all_managed(
     worktrees_json: String,
 ) -> Result<IpcResult<Vec<RemoveResult>>, String> {
     let validated_path = validate_and_stringify!(&project_path);
-    // Removes every listed worktree: refuse the whole batch when any of them
-    // has a session mid-turn inside it.
+    // Refuse the whole batch when a session is mid-turn inside any worktree
+    // that would be removed.
     if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&worktrees_json) {
-        for path in entries.iter().filter_map(|entry| entry["path"].as_str()) {
+        // Only managed worktrees are removed, so only those can block.
+        for path in entries
+            .iter()
+            .filter_map(|entry| entry["path"].as_str())
+            .filter(|path| WorktreeManager::is_managed_path(path))
+        {
             if let Err(blocked) =
                 ensure_no_active_turn_under(&manager, std::path::Path::new(path)).await
             {

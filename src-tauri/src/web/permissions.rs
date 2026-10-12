@@ -665,6 +665,7 @@ impl PermissionRendezvous {
                 .await;
         }
         for (request_id, agent_id) in queued_to_deny {
+            self.resolved.lock().record(&request_id);
             if let Err(error) = self
                 .acp
                 .respond_permission(&agent_id, request_id.clone(), None)

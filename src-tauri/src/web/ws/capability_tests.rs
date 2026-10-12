@@ -31,6 +31,7 @@ const MUTATIONS: &[&str] = &[
     "update_project",
     "remove_project",
     "set_default_project",
+    "switch_project",
     "set_catalog_opt_in",
     "install_acp_agent",
     "authenticate_agent",

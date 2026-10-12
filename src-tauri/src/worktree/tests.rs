@@ -757,3 +757,12 @@ fn test_resolve_default_base_branch_detached_head_flag() {
     // main exists locally -> default_base should be main (fallback chain).
     assert_eq!(info.default_base, "main");
 }
+
+#[test]
+fn managed_path_requires_a_termul_worktrees_component_pair() {
+    assert!(WorktreeManager::is_managed_path("/p/.termul/worktrees/wt-1"));
+    assert!(WorktreeManager::is_managed_path("/p/.termul/worktrees"));
+    assert!(!WorktreeManager::is_managed_path("/p/worktrees/wt-1"));
+    assert!(!WorktreeManager::is_managed_path("/p/.termul/other/worktrees/wt-1"));
+    assert!(!WorktreeManager::is_managed_path("/p/not.termul/worktrees/wt-1"));
+}

@@ -1339,6 +1339,8 @@ async fn view_only_terminal_connection_is_refused_every_mutation() {
         "update_orphan_detection",
         "add_renderer_ref",
         "remove_renderer_ref",
+        // Re-issues (replaces) the claim of every unattached terminal.
+        "list_preserved",
     ] {
         let refused = handle(
             gate_request("m", mutation, json!({ "terminalId": "t1", "projectId": "p" })),
@@ -1354,8 +1356,25 @@ async fn view_only_terminal_connection_is_refused_every_mutation() {
             crate::web::ws::WsErrorCode::Forbidden.as_str()
         );
     }
-    // Reads, attach bookkeeping and listing stay available.
-    for view in ["get_cwd", "get_git_branch", "get_git_status", "get_exit_code", "list_preserved", "detach"] {
+    // `attach` passes the capability gate: a bad claim is the generic
+    // UNAUTHORIZED, never FORBIDDEN.
+    let attach = handle(
+        gate_request(
+            "att",
+            "attach",
+            json!({ "terminalId": "t1", "claim": "not-a-valid-claim" }),
+        ),
+        &state,
+        &tx,
+        &mut ctx,
+    )
+    .await;
+    assert!(
+        matches!(&attach, Err((code, _)) if *code == "UNAUTHORIZED"),
+        "attach must reach claim verification: {attach:?}"
+    );
+    // Reads and detach bookkeeping stay available.
+    for view in ["get_cwd", "get_git_branch", "get_git_status", "get_exit_code", "detach"] {
         let outcome = handle(
             gate_request("v", view, json!({ "terminalId": "t1", "projectId": "p" })),
             &state,

@@ -110,6 +110,7 @@ fn view_only_may_read_but_not_mutate() {
         "update_project",
         "remove_project",
         "set_default_project",
+        "switch_project",
         "set_catalog_opt_in",
         "install_acp_agent",
         "authenticate_agent",
@@ -189,7 +190,6 @@ fn terminal_view_allow_list_excludes_every_mutation() {
         "get_git_branch",
         "get_git_status",
         "get_exit_code",
-        "list_preserved",
     ] {
         assert!(terminal_request_is_view(view), "{view}");
     }
@@ -204,6 +204,8 @@ fn terminal_view_allow_list_excludes_every_mutation() {
         "update_orphan_detection",
         "add_renderer_ref",
         "remove_renderer_ref",
+        // Re-issues the claim of every unattached terminal.
+        "list_preserved",
     ] {
         assert!(!terminal_request_is_view(mutation), "{mutation}");
     }

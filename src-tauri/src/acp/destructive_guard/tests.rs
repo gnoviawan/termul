@@ -160,3 +160,34 @@ async fn persisted_session_cwd_counts_when_the_driver_reports_no_root() {
         .expect("idle");
     store.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn git_toplevel_resolves_the_work_tree_root_and_falls_back_outside_a_repo() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let sub = repo.join("a/b");
+    std::fs::create_dir_all(&sub).unwrap();
+    let init = crate::trackers::git_tracker::GitTracker::run_git_command(
+        repo.to_str().unwrap(),
+        &["init", "-q"],
+    );
+    if init.is_none_or(|out| !out.status.success()) {
+        return; // git unavailable
+    }
+    assert_eq!(
+        std::fs::canonicalize(git_toplevel(&sub).await).unwrap(),
+        std::fs::canonicalize(&repo).unwrap()
+    );
+    let plain = root.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    assert_eq!(git_toplevel(&plain).await, plain);
+
+    // A session at the repo root blocks a checkout named from a subdirectory.
+    let acp = manager();
+    acp.install_test_agent_with_session_roots(
+        agent("a1"),
+        vec![("s1".to_string(), repo.clone(), true)],
+    );
+    assert!(ensure_no_active_turn_in_checkout(&acp, &sub).await.is_err());
+    assert!(ensure_no_active_turn_under(&acp, &sub).await.is_ok());
+}

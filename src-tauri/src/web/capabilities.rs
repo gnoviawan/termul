@@ -253,9 +253,11 @@ pub fn ws_request_permitted(
     }
 }
 
-/// `/terminal/ws` request types a view-only connection may still send
-/// (everything else — spawn/write/resize/kill/claims/renderer refs/protection
-/// /orphan detection — mutates the host).
+/// `/terminal/ws` request types a view-only connection may still send.
+/// Everything else mutates the host: spawn/write/resize/kill, claim rotation
+/// and revocation, renderer refs, protection, orphan detection — and
+/// `list_preserved`, which re-issues (replaces) the claim of every terminal
+/// without a live attachment, so a view-only peer could lock out its owner.
 #[must_use]
 pub fn terminal_request_is_view(request_type: &str) -> bool {
     matches!(
@@ -267,7 +269,6 @@ pub fn terminal_request_is_view(request_type: &str) -> bool {
             | "get_git_branch"
             | "get_git_status"
             | "get_exit_code"
-            | "list_preserved"
     )
 }
 

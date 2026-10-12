@@ -804,3 +804,29 @@ fn same_client_double_respond_is_rejected() {
         );
     });
 }
+
+/// A queued (never promoted) permission cancelled by the disconnect deny is
+/// remembered too: a late answer reads `already_resolved`, not `stale`.
+#[test]
+fn queued_permission_denied_on_disconnect_reads_already_resolved() {
+    let rdz = test_rendezvous();
+    block_on(async {
+        for id in ["perm-out", "perm-queued"] {
+            rdz.register(
+                id.to_string(),
+                AgentId("a1".to_string()),
+                "sess-1".to_string(),
+                options_value(&["allow"]),
+            );
+        }
+        assert_eq!(rdz.queued_count_for_session("sess-1"), 1);
+        rdz.deny_all_for_client(|_| 0).await;
+        for id in ["perm-out", "perm-queued"] {
+            assert_eq!(
+                rdz.try_respond(ClientId::new(), id, Some("allow")).await,
+                Err(RespondError::AlreadyResolved),
+                "{id}"
+            );
+        }
+    });
+}

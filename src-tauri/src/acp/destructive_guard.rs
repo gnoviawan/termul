@@ -48,10 +48,51 @@ fn is_inside(candidate: &Path, target: &Path) -> bool {
     canonical_or_self(candidate).starts_with(target)
 }
 
+/// The git work-tree root containing `dir` (`dir` itself when it is not in a
+/// repository or git is unavailable). A checkout rewrites the whole work tree
+/// no matter which subdirectory the caller names, so the guard must test the
+/// root, not the supplied `cwd`.
+pub async fn git_toplevel(dir: &Path) -> PathBuf {
+    let dir = dir.to_path_buf();
+    let fallback = dir.clone();
+    tokio::task::spawn_blocking(move || {
+        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
+            dir.to_str()?,
+            &["rev-parse", "--show-toplevel"],
+        )?;
+        if !output.status.success() {
+            return None;
+        }
+        let top = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!top.is_empty()).then(|| PathBuf::from(top))
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(fallback)
+}
+
+/// [`ensure_no_active_turn_under`] for a checkout run from `cwd`: the target
+/// is the enclosing git work-tree root.
+///
+/// # Errors
+/// [`DestructiveOpBlocked`] naming the work-tree root.
+pub async fn ensure_no_active_turn_in_checkout(
+    acp: &AcpManager,
+    cwd: &Path,
+) -> Result<(), DestructiveOpBlocked> {
+    ensure_no_active_turn_under(acp, &git_toplevel(cwd).await).await
+}
+
 /// Refuse when any session whose working directory lies inside `target` has
 /// an active turn. A session's directory is read from its driver-held
 /// workspace root and from its persisted metadata. Idle sessions never block;
 /// an agent whose driver cannot answer is skipped (a dead driver has no turn).
+///
+/// This is a point-in-time check: it refuses an operation requested while a
+/// turn is already running. It does not reserve the target against a prompt
+/// the user starts afterwards (that needs prompt admission to share a lock
+/// with the mutation).
 ///
 /// # Errors
 /// [`DestructiveOpBlocked`] naming the canonical `target`.

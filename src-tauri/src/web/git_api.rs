@@ -534,7 +534,7 @@ pub async fn checkout_branch(
     };
     // A checkout rewrites the whole working tree: refuse while a session
     // working inside it is mid-turn.
-    if let Some(blocked) = destructive_op_refusal(&state, &resolved).await {
+    if let Some(blocked) = checkout_refusal(&state, &resolved).await {
         return blocked;
     }
     let cwd_for_log = cwd.clone();
@@ -581,6 +581,13 @@ pub async fn create_branch(
         Ok(s) => s,
         Err(resp) => return resp,
     };
+    // Branching from HEAD leaves the work tree alone; branching from another
+    // `start_ref` checks that ref out, which rewrites it.
+    if req.start_ref.as_deref().is_some_and(|r| !r.trim().is_empty()) {
+        if let Some(blocked) = checkout_refusal(&state, &resolved).await {
+            return blocked;
+        }
+    }
     let cwd_for_log = cwd.clone();
     let branch = req.branch;
     let branch_for_log = branch.clone();
@@ -845,6 +852,17 @@ pub async fn branch_create(
     .await
 }
 
+/// [`destructive_op_refusal`] for a checkout run from `cwd`: the target is the
+/// enclosing git work-tree root (a checkout rewrites all of it, whichever
+/// subdirectory the caller named).
+async fn checkout_refusal(
+    state: &AppState,
+    cwd: &std::path::Path,
+) -> Option<(StatusCode, Json<IpcBody<()>>)> {
+    let top = crate::acp::destructive_guard::git_toplevel(cwd).await;
+    destructive_op_refusal(state, &top).await
+}
+
 /// The shared destructive-operation guard as an HTTP refusal: `Some` when a
 /// session working inside `target` has an active turn (same code + message as
 /// the Tauri commands).
@@ -974,7 +992,7 @@ async fn run_branch_name_write(
         Err((st, body)) => return (st, body),
     };
     if guard_active_turns {
-        if let Some(blocked) = destructive_op_refusal(state, &resolved).await {
+        if let Some(blocked) = checkout_refusal(state, &resolved).await {
             return blocked;
         }
     }
