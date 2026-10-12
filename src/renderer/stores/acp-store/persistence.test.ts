@@ -1534,6 +1534,25 @@ describe('acp-store', () => {
     )
   })
 
+  it('syncMcpRegistryToProjectFile requested before the registry loaded mirrors once it loads', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.syncMcpRegistryToProjectBestEffort).mockClear()
+    vi.mocked(persistence.loadMcpServers).mockResolvedValueOnce([
+      { id: 'm9', type: 'stdio', name: 'late', command: 'node', enabled: true }
+    ])
+    useAcpStore.setState({ mcpServers: [], mcpServersLoaded: false })
+
+    await useAcpStore.getState().syncMcpRegistryToProjectFile()
+    // Not loaded yet: nothing is mirrored (an empty list would clobber the file).
+    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).not.toHaveBeenCalled()
+
+    await useAcpStore.getState().loadMcpServers()
+    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(persistence.syncMcpRegistryToProjectBestEffort)).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'm9' })
+    ])
+  })
+
   it('rolls back an import batch when registry persistence fails', async () => {
     const persistence = await import('@/lib/acp-mcp-persistence')
     vi.mocked(persistence.saveMcpServers).mockRejectedValueOnce(new Error('disk full'))

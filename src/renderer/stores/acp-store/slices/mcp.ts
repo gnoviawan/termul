@@ -65,6 +65,11 @@ type McpSliceState = Pick<
   | 'disconnectMcpOAuth'
 >
 
+// A project-file mirror requested before the MCP registry finished loading is
+// kept and performed as soon as the registry loads (mirroring the empty
+// pre-load state would clobber the project's file).
+let projectFileMirrorPending = false
+
 export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (set, get) => ({
   mcpServers: [],
   mcpServersLoaded: false,
@@ -80,6 +85,10 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
     try {
       const list = await loadMcpServersFromDisk()
       set({ mcpServers: list, mcpServersLoaded: true })
+      if (projectFileMirrorPending) {
+        projectFileMirrorPending = false
+        await syncMcpRegistryToProjectBestEffort(list)
+      }
     } catch (err) {
       void logFrontendError({
         source: 'acp-store.loadMcpServers',
@@ -253,7 +262,10 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
   // throws, so a switch still completes even if the sync write fails.
   syncMcpRegistryToProjectFile: async () => {
     if (!isTauriContext()) return
-    if (!get().mcpServersLoaded) return
+    if (!get().mcpServersLoaded) {
+      projectFileMirrorPending = true
+      return
+    }
     await syncMcpRegistryToProjectBestEffort(get().mcpServers)
   },
 

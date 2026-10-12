@@ -695,6 +695,39 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
     }
   })
 
+  it('watching another directory before the re-arm keeps the lost directories claimed', async () => {
+    vi.useFakeTimers()
+    try {
+      const unsubscribe = tauriFilesystemApi.onFileChanged(() => {})
+      await tauriFilesystemApi.watchDirectory('/web/proj')
+      await tauriFilesystemApi.watchDirectory('/web/proj/src')
+      mockAcpTransport.emit('acp:fs_watch_ended', {
+        projectId: 'proj-1',
+        reason: 'project_unavailable'
+      })
+      mockAcpTransport.watchProject.mockClear()
+
+      // A new directory of the same project is watched before the retry fires.
+      await tauriFilesystemApi.watchDirectory('/web/proj/lib')
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
+
+      // Unwatching it must NOT release the project: the two lost directories
+      // are still mounted and were adopted into the active bookkeeping.
+      await tauriFilesystemApi.unwatchDirectory('/web/proj/lib')
+      expect(mockAcpTransport.unwatchProject).not.toHaveBeenCalled()
+
+      // No retry is left to fire, and releasing the rest sends one unwatch.
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
+      await tauriFilesystemApi.unwatchDirectory('/web/proj')
+      await tauriFilesystemApi.unwatchDirectory('/web/proj/src')
+      expect(mockAcpTransport.unwatchProject).toHaveBeenCalledTimes(1)
+      unsubscribe()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('drops fs_changed for a project this client is not watching', async () => {
     await tauriFilesystemApi.watchDirectory('/web/proj')
     const received: string[] = []

@@ -1100,18 +1100,33 @@ async function watchWebDirectory(dirPath: string): Promise<IpcResult<void>> {
   if (webWatchedDirs.has(normalized)) return { success: true, data: undefined }
   const projectId = resolveWatchProjectId(dirPath)
   if (!projectId) return { success: true, data: undefined }
-  webWatchedDirs.set(normalized, projectId)
-  const refs = (webProjectWatchRefs.get(projectId) ?? 0) + 1
-  webProjectWatchRefs.set(projectId, refs)
-  if (refs === 1) {
+  const watchedBefore = webProjectWatchRefs.has(projectId)
+  claimWebWatch(normalized, projectId)
+  // Directories of this project whose host watch ended and are still wanted
+  // rejoin the active bookkeeping NOW, so unwatching this directory cannot
+  // release the project while they remain mounted.
+  const adopted = [...(webLostWatchDirs.get(projectId) ?? [])].filter(
+    (dir) => !webWatchedDirs.has(dir)
+  )
+  webLostWatchDirs.delete(projectId)
+  for (const dir of adopted) claimWebWatch(dir, projectId)
+  if (!watchedBefore) {
     try {
       await enqueueProjectHostOp(projectId, () => getAcpTransport().watchProject?.(projectId))
     } catch (err) {
       forgetWebProjectWatch(projectId)
+      // This directory and the adopted ones are still wanted: keep them for the
+      // next retry (an unwatch of any of them removes it from the set).
+      webLostWatchDirs.set(projectId, new Set([normalized, ...adopted]))
       logWebWatchFailure('watchWebDirectory', projectId, err)
     }
   }
   return { success: true, data: undefined }
+}
+
+function claimWebWatch(normalizedDir: string, projectId: string): void {
+  webWatchedDirs.set(normalizedDir, projectId)
+  webProjectWatchRefs.set(projectId, (webProjectWatchRefs.get(projectId) ?? 0) + 1)
 }
 
 async function unwatchWebDirectory(dirPath: string): Promise<IpcResult<void>> {
@@ -1166,15 +1181,16 @@ function scheduleRewatch(projectId: string, attempt: number): void {
   const timer = setTimeout(() => {
     webRewatchTimers.delete(timer)
     void (async () => {
-      const dirs = webLostWatchDirs.get(projectId)
-      // Re-watched by a caller meanwhile, or nothing is wanted any more.
-      if (!dirs || dirs.size === 0 || webProjectWatchRefs.has(projectId)) {
+      const first = webLostWatchDirs.get(projectId)?.values().next().value
+      // Re-watched by a caller meanwhile (which adopted the lost directories),
+      // or nothing is wanted any more.
+      if (first === undefined) {
         webLostWatchDirs.delete(projectId)
         return
       }
-      for (const dir of [...dirs]) await watchWebDirectory(dir)
-      if (webProjectWatchRefs.has(projectId)) webLostWatchDirs.delete(projectId)
-      else scheduleRewatch(projectId, attempt + 1)
+      // Claims every lost directory of the project together.
+      await watchWebDirectory(first)
+      if (!webProjectWatchRefs.has(projectId)) scheduleRewatch(projectId, attempt + 1)
     })()
   }, delay)
   webRewatchTimers.add(timer)
