@@ -779,8 +779,16 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   async watchProject(projectId: string): Promise<void> {
-    await this.request('watch_project', { projectId })
+    // Tracked BEFORE the reply: if the socket drops while the request is in
+    // flight (the host may have registered the watch), the reconnect re-sends
+    // it. A refusal on a live socket is not tracked.
     this.watchedProjects.add(projectId)
+    try {
+      await this.request('watch_project', { projectId })
+    } catch (error) {
+      if (this.isSocketLive()) this.watchedProjects.delete(projectId)
+      throw error
+    }
   }
 
   async unwatchProject(projectId: string): Promise<void> {

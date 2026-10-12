@@ -539,6 +539,27 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
     expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(2)
   })
 
+  it('retries an initially failed host watch with backoff, without a second loop', async () => {
+    vi.useFakeTimers()
+    try {
+      mockAcpTransport.watchProject.mockRejectedValueOnce(new Error('socket blip'))
+      mockAcpTransport.watchProject.mockRejectedValueOnce(new Error('still down'))
+
+      await tauriFilesystemApi.watchDirectory('/web/proj')
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
+
+      // First retry (2 s) fails too; the second (10 s) succeeds; then it stops.
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('overlapping watches of one directory send a single host watch and one unwatch', async () => {
     let release: () => void = () => {}
     mockAcpTransport.watchProject.mockImplementationOnce(

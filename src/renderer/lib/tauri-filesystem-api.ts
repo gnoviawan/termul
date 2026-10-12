@@ -1119,6 +1119,9 @@ async function watchWebDirectory(dirPath: string): Promise<IpcResult<void>> {
       // next retry (an unwatch of any of them removes it from the set).
       webLostWatchDirs.set(projectId, new Set([normalized, ...adopted]))
       logWebWatchFailure('watchWebDirectory', projectId, err)
+      // A failed request emits no `fs_watch_ended`: schedule the retries here
+      // (unless the retry loop that made this call is already running).
+      if (!webRewatchActive.has(projectId)) scheduleRewatch(projectId, 0)
     }
   }
   return { success: true, data: undefined }
@@ -1154,6 +1157,8 @@ const REWATCH_DELAYS_MS = [2_000, 10_000, 30_000]
 /** Directories whose host watch ended and are still wanted by the explorer, per project. */
 const webLostWatchDirs = new Map<string, Set<string>>()
 const webRewatchTimers = new Set<ReturnType<typeof setTimeout>>()
+/** Projects with a re-arm retry loop in flight (so a failure inside it does not start a second loop). */
+const webRewatchActive = new Set<string>()
 
 /**
  * The host ended a project's watch (or the transport could not restore it
@@ -1176,8 +1181,10 @@ function scheduleRewatch(projectId: string, attempt: number): void {
   const delay = REWATCH_DELAYS_MS[attempt]
   if (delay === undefined) {
     webLostWatchDirs.delete(projectId)
+    webRewatchActive.delete(projectId)
     return
   }
+  webRewatchActive.add(projectId)
   const timer = setTimeout(() => {
     webRewatchTimers.delete(timer)
     void (async () => {
@@ -1186,11 +1193,13 @@ function scheduleRewatch(projectId: string, attempt: number): void {
       // or nothing is wanted any more.
       if (first === undefined) {
         webLostWatchDirs.delete(projectId)
+        webRewatchActive.delete(projectId)
         return
       }
       // Claims every lost directory of the project together.
       await watchWebDirectory(first)
-      if (!webProjectWatchRefs.has(projectId)) scheduleRewatch(projectId, attempt + 1)
+      if (webProjectWatchRefs.has(projectId)) webRewatchActive.delete(projectId)
+      else scheduleRewatch(projectId, attempt + 1)
     })()
   }, delay)
   webRewatchTimers.add(timer)
@@ -1288,6 +1297,7 @@ export function _resetFilesystemStateForTesting() {
   webProjectHostOps.clear()
   for (const timer of webRewatchTimers) clearTimeout(timer)
   webRewatchTimers.clear()
+  webRewatchActive.clear()
   webLostWatchDirs.clear()
   activeCallbacks.clear()
   globalCallbacks.clear()

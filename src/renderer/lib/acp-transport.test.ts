@@ -2207,6 +2207,31 @@ describe('WsAcpTransport project watches across reconnects', () => {
     transport.dispose()
   })
 
+  it('a watch in flight when the socket drops is tracked and re-sent after reconnect', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    FakeWebSocket.holdWatchProjectReplies = true
+    const pending = transport.watchProject?.('p-1')
+    const settled = pending?.then(
+      () => 'ok',
+      () => 'rejected'
+    )
+
+    // The socket drops while the reply is outstanding: the request rejects.
+    FakeWebSocket.holdWatchProjectReplies = false
+    ;(transport as unknown as { socket: FakeWebSocket }).socket.close()
+    await vi.advanceTimersByTimeAsync(2500)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(await settled).toBe('rejected')
+    expect(watchFrames(transport)).toEqual(['p-1'])
+    transport.dispose()
+  })
+
   it('a re-watch whose reply never arrives does not hold the reconnect', async () => {
     vi.useFakeTimers()
     const transport = await connectedWithWatch('p-1')
