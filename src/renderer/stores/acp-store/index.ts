@@ -70,7 +70,7 @@ import {
   type UserPromptEvent
 } from '@/lib/acp-api'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
-import { getAcpTransport } from '@/lib/acp-transport'
+import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
@@ -431,6 +431,37 @@ export function initAcpEventListeners(): () => void {
   // `false`. The listener is idempotent: re-registration overwrites the
   // previous callback.
   const transport = getAcpTransport()
+  let historyRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let historyRetryAttempt = 0
+  let historyTornDown = false
+  const refetchHistoryAfterReconnect = (): void => {
+    const run = (): void => {
+      if (historyTornDown) return
+      void useAcpStore
+        .getState()
+        .loadSessionIndex()
+        .then(() => undefined)
+        .catch((error) => {
+          if (historyTornDown) return
+          if (!isTransientAcpTransportError(error) || historyRetryAttempt >= 3) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'acp-store.reconnectHistoryRefresh',
+              message: `ACP history refresh after reconnect failed: ${String(error)}`
+            })
+            return
+          }
+          const delay = Math.min(500 * 2 ** historyRetryAttempt, 2_000)
+          historyRetryAttempt += 1
+          historyRetryTimer = setTimeout(() => {
+            historyRetryTimer = null
+            run()
+          }, delay)
+        })
+    }
+    if (historyRetryTimer) return
+    run()
+  }
   const connection = new AcpConnectionCoordinator(transport, {
     installRecovery: installTransportRecovery,
     // The transport captures this before the snapshot round-trip so a late
@@ -446,8 +477,12 @@ export function initAcpEventListeners(): () => void {
     setReconnecting: (reconnecting, recovered) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
       if (!reconnecting) {
-        // The chat-history index needs no refetch here: every reconnect
-        // resubscribes the `chat_history` watch, whose state rebuilds it.
+        if (historyRetryTimer) {
+          clearTimeout(historyRetryTimer)
+          historyRetryTimer = null
+        }
+        historyRetryAttempt = 0
+        refetchHistoryAfterReconnect()
         // AD-6: the socket is back — resend every prompt command that lost its
         // reply, with the same turn id (the host answers with a receipt). Only
         // on a REAL recovery: the token-halt path also ends the reconnect
@@ -540,6 +575,11 @@ export function initAcpEventListeners(): () => void {
     )
   ]
   return () => {
+    historyTornDown = true
+    if (historyRetryTimer) {
+      clearTimeout(historyRetryTimer)
+      historyRetryTimer = null
+    }
     teardown.forEach((fn) => {
       fn()
     })
