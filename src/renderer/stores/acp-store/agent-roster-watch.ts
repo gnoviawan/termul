@@ -5,8 +5,8 @@
  *
  * A delta carries one of those events with its original payload and goes to
  * the same store reducers a desktop event does. An `agent_removed` delta (an
- * intentional kill, which has no event) disconnects an agent still shown as
- * connected. The full state (on every
+ * intentional kill, which has no event) disconnects an agent the store still
+ * tracks. The full state (on every
  * subscribe, so after a reconnect or a lost delta) is reconciled against what
  * the store holds: an agent the host lists that the store lacks counts as
  * spawned, a connected agent the host no longer lists counts as disconnected.
@@ -80,9 +80,10 @@ function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
       return
     case 'agent_removed':
       // The host killed the agent on purpose and sent no lifecycle event. The
-      // client that asked for the kill already cleaned up (its agent is no
-      // longer `connected`), so only another client's agent is disconnected.
-      if (state.agentStatus[agentId] === 'connected') state._onAgentDisconnected({ agentId })
+      // client that asked for the kill drops the agent from the store itself,
+      // so only an agent still tracked here (whatever its status, e.g. one
+      // left in `error` by a failed turn) is disconnected.
+      if (state.agents[agentId]) state._onAgentDisconnected({ agentId })
       return
     default:
       void logFrontendError({

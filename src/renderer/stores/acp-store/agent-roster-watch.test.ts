@@ -56,12 +56,14 @@ describe('attachAgentRosterWatch', () => {
     expect(toastError).toHaveBeenCalledWith('oops')
   })
 
-  it('disconnects a connected agent the host removed, and leaves one already cleaned up alone', () => {
-    const { state, handlers } = setup({ agents: ['other', 'mine'], connected: ['other'] })
+  it('disconnects a tracked agent the host removed, whatever its status, and skips one the store dropped', () => {
+    const { state, handlers } = setup({ agents: ['other', 'errored'], connected: ['other'] })
     handlers().onDelta?.({ event: 'agent_removed', payload: { agentId: 'other' } })
+    handlers().onDelta?.({ event: 'agent_removed', payload: { agentId: 'errored' } })
     handlers().onDelta?.({ event: 'agent_removed', payload: { agentId: 'mine' } })
-    expect(state._onAgentDisconnected).toHaveBeenCalledTimes(1)
+    expect(state._onAgentDisconnected).toHaveBeenCalledTimes(2)
     expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'other' })
+    expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'errored' })
   })
 
   it('reconciles the full state: spawns the unknown, disconnects the connected agent the host dropped', () => {
