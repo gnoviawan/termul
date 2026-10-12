@@ -497,26 +497,3 @@ async fn watch_ended_is_delivered_once_a_full_queue_has_room() {
         "the watch-ended notice follows once there is room"
     );
 }
-
-/// Host stop: `shutdown` cancels every remaining watch and awaits the watcher
-/// tasks; the hub is shared across host restarts, so it arms watches again
-/// afterwards.
-#[tokio::test]
-async fn shutdown_drops_every_watch_and_the_hub_arms_again_afterwards() {
-    let dir = temp_project_dir("shutdown");
-    let registry = registry_with(&[("p-1", &dir)]);
-    let hub = FsWatchHub::default();
-    let (a, _ra) = conn();
-    hub.subscribe(&registry, "p-1", &a).expect("a subscribes");
-    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "watcher armed");
-
-    tokio::time::timeout(Duration::from_secs(10), hub.shutdown(Duration::from_secs(5)))
-        .await
-        .expect("shutdown returns once the watcher tasks ended");
-    assert_eq!(hub.watched_project_count(), 0);
-    assert_eq!(hub.tasks.len(), 0, "no watcher task outlived the shutdown");
-
-    hub.subscribe(&registry, "p-1", &a).expect("subscribes after a restart");
-    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "re-armed after shutdown");
-    let _ = std::fs::remove_dir_all(&dir);
-}

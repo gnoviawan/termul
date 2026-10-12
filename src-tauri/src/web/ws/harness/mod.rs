@@ -86,6 +86,9 @@ impl Host {
         let (carrier, peer) = pair();
         let (done_tx, done) = watch::channel(false);
         let state = self.state.clone();
+        // Admitted before the task is spawned, like the upgrade handler does,
+        // so a stop cannot drain past a connection that has not started yet.
+        let lease = state.connections.shutdown.admit();
         let task = tokio::spawn(async move {
             // Signals completion on a normal exit or a cancel, never on a panic.
             struct Finished(watch::Sender<bool>);
@@ -101,7 +104,6 @@ impl Host {
             let _finished = Finished(done_tx);
             // The harness peer is a local, write-capable connection.
             let local_peer = SocketAddr::from(([127, 0, 0, 1], 0));
-            let lease = state.connections.shutdown.admit();
             serve_socket(lease, carrier, state, local_peer).await;
         });
         Conn { peer, task, done }

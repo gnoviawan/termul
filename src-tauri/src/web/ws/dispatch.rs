@@ -56,10 +56,12 @@ pub(super) async fn cleanup_connection_subscriptions(
 /// The caller has already passed the pre-auth gate and the required-capability
 /// check; `authenticate` is idempotent here.
 ///
-/// The 10 ACP command types (`send_prompt`, `create_session`, …) forward to
+/// The ACP command types (`create_session`, `cancel_prompt`, …) forward to
 /// `AcpManager` (Story 1.8); `respond_permission` routes through the Story 1.7
 /// rendezvous; OS-cap requests → `unsupported`; unknown types →
-/// `not_implemented`.
+/// `not_implemented`. `send_prompt` is NOT routed here: its reply is deferred
+/// (accept now, complete on its own task), so `relay::conn::run_request`
+/// handles it.
 pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
     let id = req.id.clone();
     let acp = &env.acp;
@@ -262,7 +264,6 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "acp_deliver_auth_redirect" => {
             handle_deliver_auth_redirect(id, &req.payload, acp).await
         }
-        "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
         // CAP-2: host-authored durable agent-switch marker (desktop parity
         // with the `acp_record_agent_switch` Tauri command). Persists the
         // `agent_switch` record through `SessionPersistence`, then fans the

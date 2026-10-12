@@ -129,6 +129,8 @@ pub(super) async fn complete_send_prompt(
     }
 }
 
+/// Accept and complete in one call (tests; production defers the completion).
+#[cfg(test)]
 pub(super) async fn handle_send_prompt(
     id: String,
     payload: &Value,

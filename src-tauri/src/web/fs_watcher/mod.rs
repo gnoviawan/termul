@@ -29,7 +29,6 @@ use std::time::Duration;
 use notify::{recommended_watcher, RecursiveMode, Result as NotifyResult, Watcher};
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 use tracing::{info, warn};
 
 use crate::web::project_registry::ProjectRegistry;
@@ -147,8 +146,6 @@ type WatchMap = Arc<Mutex<HashMap<String, ProjectWatch>>>;
 pub struct FsWatchHub {
     watches: WatchMap,
     next_generation: AtomicU64,
-    /// Every project watcher task, so a host stop can await them.
-    tasks: TaskTracker,
 }
 
 impl FsWatchHub {
@@ -198,7 +195,7 @@ impl FsWatchHub {
             project_id,
             "[fs-watch] first subscriber; arming project watcher"
         );
-        self.tasks.spawn(run_project_watch(
+        tokio::spawn(run_project_watch(
             project_id.to_string(),
             generation,
             Arc::clone(registry),
@@ -249,24 +246,6 @@ impl FsWatchHub {
                 info!(project_id = %project_id, "[fs-watch] connection closed; watcher dropped");
             }
         }
-    }
-
-    /// Host stop: cancel every watch still registered and wait up to `bound`
-    /// for the watcher tasks to end (connections that closed already released
-    /// theirs). The hub is shared across host restarts, so it accepts watches
-    /// again afterwards.
-    pub async fn shutdown(&self, bound: Duration) {
-        for (_, watch) in self.watches.lock().drain() {
-            watch.cancel.cancel();
-        }
-        self.tasks.close();
-        if tokio::time::timeout(bound, self.tasks.wait()).await.is_err() {
-            warn!(
-                tasks = self.tasks.len(),
-                "[fs-watch] watcher tasks still running after the drain bound"
-            );
-        }
-        self.tasks.reopen();
     }
 
     /// Wait until `project_id`'s notify watcher is armed (events under the

@@ -158,7 +158,7 @@ where
         }
     });
 
-    let mut ctx = ConnectionContext {
+    let ctx = ConnectionContext {
         authorized: authorized.clone(),
         attachments,
         // Every connection starts un-authed, gated or not; only a valid
@@ -171,6 +171,15 @@ where
         presence: None,
         // #851: opaque per-connection id for the size-owner marker.
         client_id,
+    };
+    // Owns the connection's context and event task so every way out of this
+    // function (the loop ending, or the future being dropped when the host's
+    // drain aborts a straggler) aborts the forwarders and releases each
+    // attachment exactly once.
+    let mut session = SessionTeardown {
+        ctx,
+        state: state.clone(),
+        event_task,
     };
 
     loop {
@@ -201,7 +210,7 @@ where
         let handled = tokio::select! {
             biased;
             () = stop.cancelled() => break,
-            handled = handle(request, &state, &tx, &mut ctx) => handled,
+            handled = handle(request, &state, &tx, &mut session.ctx) => handled,
         };
         match handled {
             Ok(data) => {
@@ -216,14 +225,29 @@ where
     }
 
     // Cleanup: abort all output forwarding tasks. PTYs are preserved.
-    event_task.abort();
-    ctx.release_all(&state);
+    drop(session);
     info!(
         "[terminal-ws] client disconnected; {} PTY(s) preserved",
-        ctx.authorized.read().len()
+        authorized.read().len()
     );
     drop(tx);
     let _ = write_task.await;
+}
+
+/// Teardown of one `/terminal/ws` connection, run on drop: aborts the lifecycle
+/// event task and ends every attachment (each releases its `web_attachments`
+/// count exactly once). PTYs themselves are preserved.
+struct SessionTeardown {
+    ctx: ConnectionContext,
+    state: AppState,
+    event_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for SessionTeardown {
+    fn drop(&mut self) {
+        self.event_task.abort();
+        self.ctx.release_all(&self.state);
+    }
 }
 
 /// A live output-forwarding attachment: the forwarder task plus the one-shot

@@ -351,7 +351,6 @@ pub async fn serve_router(
     // host upgrades.
     let connections = ConnectionRuntime::from_config(&cfg);
     let socket_shutdown = connections.shutdown.clone();
-    let watch_relay = Arc::clone(&ws_relay);
     let app = router::router(
         Arc::clone(&acp),
         pty,
@@ -412,7 +411,6 @@ pub async fn serve_router(
         // Also reached when the server errored rather than being stopped.
         socket_shutdown.begin();
         let stragglers = socket_shutdown.drain(SOCKET_DRAIN_BOUND).await;
-        watch_relay.fs_watches().shutdown(SOCKET_DRAIN_BOUND).await;
         if stragglers > 0 {
             error!("ACP web server stopped with {stragglers} socket task(s) still running");
         }

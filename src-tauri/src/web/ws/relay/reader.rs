@@ -4,7 +4,6 @@
 //! pongs and requests keep flowing while a handler runs.
 
 use futures_util::Stream;
-use tokio_util::sync::CancellationToken;
 
 use super::super::*;
 use super::conn::{dispatch_connection_text, ConnState, HandlerEnv};
@@ -20,13 +19,10 @@ pub(super) async fn run_reader<St>(
     env: HandlerEnv,
     out_tx: OutboundSender,
     liveness: Arc<Liveness>,
-    fault: CancellationToken,
+    executor: Arc<KeyedExecutor>,
 ) where
     St: Stream<Item = Result<Message, axum::Error>> + Unpin,
 {
-    // Owned here so ending the loop (or aborting it) aborts every handler the
-    // connection still has in flight.
-    let executor = KeyedExecutor::new(fault);
     // CAP-11: set once a binary frame poisons the connection. The error reply +
     // Close(1003) are already queued; further text requests must NOT dispatch
     // (they would execute before the close lands) — the loop just waits for

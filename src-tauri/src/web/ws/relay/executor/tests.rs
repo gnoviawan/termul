@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
@@ -166,4 +167,31 @@ async fn dropping_the_executor_aborts_running_jobs() {
     })
     .await
     .expect("the job's future was dropped with its connection");
+}
+
+#[tokio::test]
+async fn shutdown_returns_only_after_aborted_jobs_have_unwound() {
+    let exec = KeyedExecutor::new(CancellationToken::new());
+    let unwound = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    struct Guard(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let guard = Guard(Arc::clone(&unwound));
+    exec.submit(Some("session:s".to_string()), async move {
+        let _guard = guard;
+        let _ = entered_tx.send(());
+        std::future::pending::<()>().await;
+    })
+    .expect("accepted");
+    entered_rx.await.expect("job started");
+
+    exec.shutdown().await;
+    assert!(
+        unwound.load(Ordering::SeqCst),
+        "shutdown returned while a job could still touch connection state"
+    );
 }

@@ -31,8 +31,9 @@ mod writer;
 pub(super) use conn::{ConnState, HandlerEnv, Subscriptions};
 #[cfg(test)]
 pub(super) use conn::dispatch_connection_text;
+pub(super) use executor::KeyedExecutor;
 #[cfg(test)]
-pub(super) use executor::{KeyedExecutor, MAX_INFLIGHT_REQUESTS};
+pub(super) use executor::MAX_INFLIGHT_REQUESTS;
 pub(crate) use outbound::{
     outbound_channel, EnqueueOutcome, OutboundSender, OUTBOUND_QUEUE_CAPACITY,
 };
@@ -178,8 +179,11 @@ where
     );
     let env = HandlerEnv::new(&state, out_tx.clone(), &conn);
 
-    // Dropping the set aborts every task, so even a cancelled `run_relay`
-    // (the host aborting a straggler) leaves nothing running.
+    // The executor lives here, not in the read loop: after the tasks are
+    // aborted its in-flight handlers are aborted AND awaited, so none can
+    // register a subscription after the cleanup below has released them.
+    // Dropping this frame (the host aborting a straggler) aborts everything.
+    let executor = Arc::new(KeyedExecutor::new(closing.clone()));
     let mut tasks = JoinSet::new();
     tasks.spawn(writer::run_writer(sink, out_rx, stop));
     tasks.spawn(watchdog::run_watchdog(Arc::clone(&liveness)));
@@ -189,13 +193,14 @@ where
         env,
         out_tx,
         liveness,
-        closing.clone(),
+        Arc::clone(&executor),
     ));
     tokio::select! {
         _ = tasks.join_next() => {}
         () = closing.cancelled() => {}
     }
     tasks.shutdown().await;
+    executor.shutdown().await;
     cleanup.run().await;
 }
 

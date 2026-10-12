@@ -8,8 +8,9 @@
 //! one session cannot reorder, while a slow install on another entity cannot
 //! block a prompt.
 //!
-//! The executor owns its tasks: dropping it (the connection ended) aborts
-//! every running handler.
+//! The executor owns its tasks: dropping it aborts every running handler, and
+//! [`KeyedExecutor::shutdown`] additionally waits for them to unwind (the
+//! connection's cleanup runs only after that).
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -168,6 +169,13 @@ impl KeyedExecutor {
             }
         });
         Ok(())
+    }
+
+    /// Abort every running job and wait until each has unwound, so none can
+    /// touch connection state (the subscriptions) once this returns.
+    pub(in crate::web::ws) async fn shutdown(&self) {
+        let mut tasks = std::mem::take(&mut *self.tasks.lock());
+        tasks.shutdown().await;
     }
 
     /// Jobs queued or running.
