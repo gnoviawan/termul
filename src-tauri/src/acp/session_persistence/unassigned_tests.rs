@@ -150,8 +150,13 @@ async fn legacy_sessions_without_a_project_are_stamped_unassigned_exactly_once()
 
 #[test]
 fn the_sentinel_literal_matches_the_renderer_constant() {
-    // `UNASSIGNED_PROJECT_ID` in `src/shared/types/web-projects.types.ts`.
-    assert_eq!(UNASSIGNED_PROJECT_ID, "__unassigned__");
+    let renderer = include_str!("../../../../src/shared/types/web-projects.types.ts");
+    assert!(
+        renderer.contains(&format!(
+            "export const UNASSIGNED_PROJECT_ID = '{UNASSIGNED_PROJECT_ID}'"
+        )),
+        "src/shared/types/web-projects.types.ts must declare the same sentinel"
+    );
 }
 
 #[tokio::test]

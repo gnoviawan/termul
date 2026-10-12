@@ -164,12 +164,25 @@ describe('ChatHistoryTab scoping', () => {
 
   it('lists host-unassigned chats in their own Unassigned group after the recency groups', () => {
     const now = Date.now()
+    const DAY = 24 * 60 * 60 * 1000
     sessionIndexRef.current = [
       entry('mine-main', {
         projectId: 'p1',
         cwd: '/work',
         title: 'mine-main',
         lastActivityAt: now
+      }),
+      entry('yesterday-chat', {
+        projectId: 'p1',
+        cwd: '/work',
+        title: 'yesterday-chat',
+        lastActivityAt: now - DAY
+      }),
+      entry('earlier-chat', {
+        projectId: 'p1',
+        cwd: '/work',
+        title: 'earlier-chat',
+        lastActivityAt: now - 7 * DAY
       }),
       entry('stray', {
         projectId: '__unassigned__',
@@ -182,7 +195,7 @@ describe('ChatHistoryTab scoping', () => {
     render(<ChatHistoryTab />)
 
     const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)
-    expect(headings).toEqual(['Today', 'Unassigned'])
+    expect(headings).toEqual(['Today', 'Yesterday', 'Earlier', 'Unassigned'])
     const unassigned = screen.getByRole('group', { name: 'Unassigned' })
     expect(within(unassigned).getByText('stray')).toBeInTheDocument()
     // The assigned chat stays in its recency group, not the bucket.
