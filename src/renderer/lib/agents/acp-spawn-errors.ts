@@ -1,3 +1,4 @@
+import { isProviderErrorCode, type ProviderErrorCode } from '@shared/types/web-protocol.types'
 import type { AgentConfig, AuthMethod } from '@/lib/acp-api'
 import { DEFINITE_SPAWN_REJECTIONS } from '@/lib/acp-transport/tauri-verdicts'
 
@@ -43,6 +44,9 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
  * - `transport`   the connection/stream was destroyed or refused; the process
  *                 must be evicted before any retry (it cannot be reused).
  * - `auth`        the provider requires the user to complete authentication.
+ * - `provider`    the upstream provider refused the call (quota / usage limit,
+ *                 session limit, rejected request); the host names which one
+ *                 with a stable code, so no message wording is parsed.
  * - `timeout`     initialize / `session/new` timed out (agent is alive but slow
  *                 or wedged).
  * - `unknown`     anything else; the diagnostic is surfaced verbatim.
@@ -52,6 +56,7 @@ export type SetupErrorCategory =
   | 'spawn'
   | 'transport'
   | 'auth'
+  | 'provider'
   | 'timeout'
   | 'unknown'
 
@@ -71,6 +76,8 @@ export interface PrepareChatError {
    * a user-initiated Retry may.
    */
   definite?: boolean
+  /** The host's stable provider failure code (`category: 'provider'` only). */
+  providerCode?: ProviderErrorCode
 }
 
 /** Short, actionable label for each setup-failure category. */
@@ -79,8 +86,48 @@ export const SETUP_ERROR_LABELS: Record<SetupErrorCategory, string> = {
   spawn: 'Agent unavailable',
   transport: 'Agent connection lost',
   auth: 'Authentication required',
+  provider: 'Provider refused the request',
   timeout: 'Session setup timed out',
   unknown: 'Setup failed'
+}
+
+/** Short label per provider failure code. */
+export const PROVIDER_ERROR_LABELS: Record<ProviderErrorCode, string> = {
+  provider_quota_exceeded: 'Usage limit reached',
+  provider_session_limit: 'Session limit reached',
+  provider_request_rejected: 'Provider rejected the request'
+}
+
+/** Plain-language explanation per provider failure code. */
+export const PROVIDER_ERROR_MESSAGES: Record<ProviderErrorCode, string> = {
+  provider_quota_exceeded:
+    "The provider's usage limit was reached. Wait for it to reset or check your plan, then try again.",
+  provider_session_limit:
+    "The provider's session limit was reached. Wait for it to reset, then try again.",
+  provider_request_rejected:
+    'The provider rejected the request. Check the model and account settings, then try again.'
+}
+
+/**
+ * The text a person reads for a provider failure: the plain-language message
+ * for its code, followed by the provider's own wording (it may name when the
+ * limit resets) when that adds anything.
+ */
+export function describeProviderFailure(code: ProviderErrorCode, own: string): string {
+  const plain = PROVIDER_ERROR_MESSAGES[code]
+  const trimmed = own.trim()
+  return trimmed && trimmed !== code ? `${plain} (${trimmed})` : plain
+}
+
+/**
+ * The host's stable provider failure code on a failure, however it arrived: the
+ * `/ws` `err.code` / `AcpTransportError.code`, or a serialized `{ code }`
+ * object. `undefined` for every other value.
+ */
+export function providerCodeOf(raw: unknown): ProviderErrorCode | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const code = (raw as { code?: unknown }).code
+  return isProviderErrorCode(code) ? code : undefined
 }
 
 /** Marker code carried by {@link AmbiguousAuthError} so it survives serialization. */
@@ -204,8 +251,8 @@ const TIMEOUT_PATTERN = /timed out|timeout/i
  * Classify a provider-setup failure into a stable {@link PrepareChatError}.
  *
  * Classification is deterministic and order-sensitive (P4):
- *   multi-auth → agent-auth-required → spawn (ENOENT) → transport → auth →
- *   timeout → unknown.
+ *   multi-auth → agent-auth-required → definite spawn rejection → provider
+ *   code → spawn (ENOENT) → transport → auth → timeout → unknown.
  *
  * The explicit `agent_auth_required` wire code / `ACP_AUTH_REQUIRED` message
  * prefix is checked BEFORE the wording heuristics: an auth-required reply may
@@ -256,6 +303,18 @@ export function classifySetupError(
       label: SETUP_ERROR_LABELS.spawn,
       detail: formatAcpSpawnError(definiteSpawnRejectionMessage(raw), config),
       definite: true
+    }
+  }
+  // The host's provider code is authoritative too: a quota or session limit
+  // may carry any wording (including words the heuristics below read as auth
+  // or transport), and it must never evict the process or ask to sign in.
+  const providerCode = providerCodeOf(raw)
+  if (providerCode) {
+    return {
+      category: 'provider',
+      label: PROVIDER_ERROR_LABELS[providerCode],
+      detail: describeProviderFailure(providerCode, rawErrorMessage(raw)),
+      providerCode
     }
   }
   if (ENOENT_PATTERN.test(message)) {

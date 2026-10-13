@@ -390,6 +390,7 @@ async fn fan_out_agent_error_and_crashed_carry_code_and_data() {
         message: "auth".to_string(),
         code: Some(-32000),
         data: Some(data.clone()),
+        provider_code: None,
     };
     fan_out(&sinks, Some("sess-err"), "acp:agent_error", &with_detail);
     let without_detail = AgentErrorEvent {
@@ -398,6 +399,7 @@ async fn fan_out_agent_error_and_crashed_carry_code_and_data() {
         message: "turn idle timeout".to_string(),
         code: None,
         data: None,
+        provider_code: None,
     };
     fan_out(&sinks, Some("sess-err"), "acp:agent_error", &without_detail);
     let crashed = AgentCrashedEvent {

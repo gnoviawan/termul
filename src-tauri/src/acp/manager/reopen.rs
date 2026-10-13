@@ -78,12 +78,14 @@ pub const ACP_AUTH_REQUIRED_PREFIX: &str = "ACP_AUTH_REQUIRED";
 
 /// Wire-string for an agent error crossing the manager's `Err(String)`
 /// boundary: `ErrorCode::AuthRequired` gets the [`ACP_AUTH_REQUIRED_PREFIX`]
-/// tag; every other error stringifies verbatim.
+/// tag, a recognized provider failure gets its `ACP_PROVIDER_*` tag
+/// ([`tag_provider_error`](crate::acp::provider_errors::tag_provider_error));
+/// every other error stringifies verbatim.
 pub(super) fn acp_err_wire_string(error: agent_client_protocol::Error) -> String {
     if error.code == agent_client_protocol::ErrorCode::AuthRequired {
         format!("{ACP_AUTH_REQUIRED_PREFIX}: {error}")
     } else {
-        error.to_string()
+        crate::acp::provider_errors::tag_provider_error(&events::AcpErrorDetail::from(&error))
     }
 }
 

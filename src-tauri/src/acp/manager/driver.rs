@@ -22,6 +22,7 @@ pub(super) fn run_agent(
     reaped: Arc<AtomicBool>,
     exit: Arc<ExitSignal>,
     start_error: Arc<Mutex<Option<String>>>,
+    stderr_ring: Arc<StderrRing>,
     persistence: Option<Arc<SessionPersistence>>,
 ) {
     warn_if_pidfd_reaper();
@@ -48,6 +49,8 @@ pub(super) fn run_agent(
     };
 
     let profile = AgentRuntimeProfile::resolve(&config);
+    let agent_kind = agent_kind(&config).to_string();
+    let agent_command = config.command.clone();
     let result = runtime.block_on(drive_connection(
         config,
         sinks.clone(),
@@ -59,6 +62,7 @@ pub(super) fn run_agent(
         driver_state.clone(),
         persistence.clone(),
         profile,
+        stderr_ring.clone(),
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -205,6 +209,20 @@ pub(super) fn run_agent(
     if let (true, Some(reason)) = (was_spawned, exit_reason) {
         if reason == AgentExitReason::Crashed {
             if let Err(detail) = result {
+                // The crash log names the agent kind, the command basename and
+                // the stderr tail; arguments and environment never reach it.
+                let logged = if profile.mask_failure_details {
+                    "connection failed (details withheld)"
+                } else {
+                    detail.message.as_str()
+                };
+                log_agent_failure(
+                    "agent crashed",
+                    &agent_kind,
+                    &agent_command,
+                    logged,
+                    &stderr_ring,
+                );
                 // Story 1.9 FR26: emit the typed `AgentCrashed` event BEFORE
                 // `agent_error` (back-compat) + the session/agent close events.
                 // The renderer distinguishes "crash" (→ `status: 'error'` +
@@ -380,6 +398,7 @@ pub(super) async fn drive_connection(
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
     profile: AgentRuntimeProfile,
+    stderr_ring: Arc<StderrRing>,
 ) -> Result<(), events::AcpErrorDetail> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -427,6 +446,7 @@ pub(super) async fn drive_connection(
     let agent = TreeKillAgent::new(config.to_mcp_server(shim_dir.as_deref())).with_debug(
         move |line: &str, direction: LineDirection| match direction {
             LineDirection::Stderr => {
+                stderr_ring.push(line);
                 if redact_output {
                     log::debug!("[acp] {debug_agent_id} stderr ({} bytes)", line.len());
                 } else {

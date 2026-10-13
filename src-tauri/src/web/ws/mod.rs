@@ -46,6 +46,7 @@ use serde_json::{json, Value};
 use tracing::{debug, error, info, warn};
 
 use crate::acp::config::AgentConfig;
+use crate::acp::provider_errors::ProviderErrorKind;
 use crate::acp::{AcpManager, FileProjectRegistry, SessionCreationContext};
 // Only the harness and the ws tests name these (through `super::*`).
 #[cfg(test)]
@@ -410,13 +411,11 @@ pub enum WsErrorCode {
     /// Reserved: branch switch / worktree removal refused while a session
     /// with its cwd inside the target path has an active turn.
     DestructiveOpBlocked,
-    /// Reserved: the upstream provider refused the call for quota / usage
-    /// limits.
+    /// The upstream provider refused the call for quota / usage limits.
     ProviderQuotaExceeded,
-    /// Reserved: the upstream provider refused the call for a session limit.
+    /// The upstream provider refused the call for a session limit.
     ProviderSessionLimit,
-    /// Reserved: the upstream provider rejected the request with a 4xx class
-    /// error.
+    /// The upstream provider rejected the request with a 4xx class error.
     ProviderRequestRejected,
     /// The connection lacks the capability the request needs (view-only
     /// connection attempting a mutation outside `device/<deviceId>/`).
@@ -700,7 +699,9 @@ pub(super) fn elapsed_ms(epoch: tokio::time::Instant) -> u64 {
 /// manager boundary, or the bare default `"Authentication required"` message
 /// (exact match) for pre-collapsed paths — → `AgentAuthRequired` (Story 7);
 /// `"unknown agent: …"` / `"unknown permission request: …"` → `NotFound`;
-/// capability-gate failures (`"agent does not support …"`) → `Unsupported`.
+/// capability-gate failures (`"agent does not support …"`) → `Unsupported`;
+/// `"ACP_PROVIDER_*: …"` provider failures → `provider_quota_exceeded` /
+/// `provider_session_limit` / `provider_request_rejected`.
 /// Unrecognized errors fall back to `NotImplemented` (preserves the human
 /// message verbatim).
 pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
@@ -715,6 +716,16 @@ pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
             crate::acp::manager::SpawnFailure::InvalidAgentConfig => {
                 WsErrorCode::InvalidAgentConfig
             }
+        };
+        return WsReply::err(id, code, message.to_string());
+    }
+    // Upstream provider refusals: the stable code carries the verdict, so the
+    // message drops the manager's transport prefix.
+    if let Some((kind, message)) = crate::acp::provider_errors::split_provider_tag(&err) {
+        let code = match kind {
+            ProviderErrorKind::QuotaExceeded => WsErrorCode::ProviderQuotaExceeded,
+            ProviderErrorKind::SessionLimit => WsErrorCode::ProviderSessionLimit,
+            ProviderErrorKind::RequestRejected => WsErrorCode::ProviderRequestRejected,
         };
         return WsReply::err(id, code, message.to_string());
     }
@@ -757,6 +768,8 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
 mod capability_tests;
 #[cfg(test)]
 mod project_binding_tests;
+#[cfg(test)]
+mod provider_error_tests;
 #[cfg(test)]
 mod spawn_rejection_tests;
 #[cfg(test)]

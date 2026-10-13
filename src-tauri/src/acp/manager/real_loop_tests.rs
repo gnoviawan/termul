@@ -5,14 +5,15 @@
 //! goes through the shared prompt-turn service exactly as on `/ws` and desktop.
 //! A missing interpreter fails loudly; `TERMUL_SKIP_REAL_LOOP_TESTS=1` skips.
 
-use tokio_util::sync::CancellationToken;
 use super::*;
+use crate::acp::provider_errors::{ACP_PROVIDER_REQUEST_REJECTED, ACP_PROVIDER_SESSION_LIMIT};
 use crate::web::prompt_turn::{
     accept_prompt_turn, complete_prompt_turn, PromptAdmission, PromptTurnRequest,
 };
 use crate::web::sink::ReplayResult;
 use crate::web::{EventStream, StreamItem, WsRelaySink};
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 const MOCK_AGENT: &str = r#"
 import json, sys
@@ -49,6 +50,15 @@ for line in sys.stdin:
         elif text == "rpcfail":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "mock failure"}})
+        elif text == "providerlimit":
+            send({"jsonrpc": "2.0", "id": rid,
+                  "error": {"code": -32603,
+                            "message": "You've hit your session limit",
+                            "data": {"errorKind": "rate_limit"}}})
+        elif text == "rejected":
+            send({"jsonrpc": "2.0", "id": rid,
+                  "error": {"code": -32603, "message": "Internal error",
+                            "data": {"status": 400}}})
         elif text == "crash":
             chunk("partial")
             sys.exit(3)
@@ -308,7 +318,9 @@ impl Harness {
             .expect("mock session");
         let session_id = session.session_id;
         relay.seed_session_for_test(&session_id.0);
-        let (_client, rx, replay, _) = relay.subscribe(&session_id.0, None, None, &CancellationToken::new()).await;
+        let (_client, rx, replay, _) = relay
+            .subscribe(&session_id.0, None, None, &CancellationToken::new())
+            .await;
         assert!(matches!(replay, ReplayResult::Ok(_)));
         Some(Self {
             logs,
@@ -456,6 +468,78 @@ async fn rpc_error_turn_emits_one_error_terminator_and_releases_the_claim() {
 
     assert_eq!(h.run("ok", "t2").await.unwrap(), StopReason::EndTurn);
     h.finish().await;
+}
+
+/// A provider refusal keeps its stable code on both the `agent_error` event
+/// and the turn reply; an unrecognized RPC failure carries neither.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_failure_carries_a_stable_code_on_the_event_and_the_reply() {
+    let Some(mut h) = Harness::start().await else {
+        return;
+    };
+    let error = h.run("providerlimit", "t1").await.unwrap_err();
+    assert!(
+        error.starts_with(&format!(
+            "{ACP_PROVIDER_SESSION_LIMIT}: You've hit your session limit"
+        )),
+        "{error}"
+    );
+    let events = h.events_through_terminator().await;
+    let (_, payload) = events
+        .iter()
+        .find(|(kind, _)| kind == "agent_error")
+        .expect("agent_error event");
+    assert_eq!(payload["providerCode"], "provider_session_limit");
+
+    let error = h.run("rejected", "t2").await.unwrap_err();
+    assert!(error.starts_with(ACP_PROVIDER_REQUEST_REJECTED), "{error}");
+    let events = h.events_through_terminator().await;
+    let (_, payload) = events
+        .iter()
+        .find(|(kind, _)| kind == "agent_error")
+        .expect("agent_error event");
+    assert_eq!(payload["providerCode"], "provider_request_rejected");
+
+    let error = h.run("rpcfail", "t3").await.unwrap_err();
+    assert_eq!(error, "mock failure");
+    let events = h.events_through_terminator().await;
+    let (_, payload) = events
+        .iter()
+        .find(|(kind, _)| kind == "agent_error")
+        .expect("agent_error event");
+    assert!(payload.get("providerCode").is_none());
+    h.finish().await;
+}
+
+/// A start failure reports the agent's last stderr lines, masked, in the
+/// rejection detail; the failure stays untagged (not a launch refusal).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_failure_detail_embeds_the_masked_stderr_tail() {
+    let Some(python) = find_python() else {
+        return;
+    };
+    let _serial = TIMEOUT_TEST_LOCK.lock().await;
+    let script = "import sys\n\
+        sys.stderr.write('fatal: runtime is missing\\n')\n\
+        sys.stderr.write('ANTHROPIC_API_KEY=sk-ant-0123456789abcdef0123\\n')\n\
+        sys.stderr.flush()\n\
+        sys.exit(1)\n";
+    let acp = AcpManager::new(vec![]);
+    let error = acp
+        .spawn(AgentConfig {
+            config_id: Some("custom-diag".to_string()),
+            name: "diag".to_string(),
+            command: python.to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            env: std::collections::HashMap::new(),
+            allow_terminal: false,
+        })
+        .await
+        .expect_err("agent exits before initialize");
+    assert!(error.contains("agent stderr:"), "{error}");
+    assert!(error.contains("fatal: runtime is missing"), "{error}");
+    assert!(!error.contains("sk-ant-0123456789"), "{error}");
+    assert!(classify_spawn_error(&error).is_none(), "{error}");
 }
 
 /// A wedged agent hits the idle deadline: typed timeout → `timeout`

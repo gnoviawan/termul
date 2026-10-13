@@ -74,6 +74,7 @@ pub(crate) use gates::{ConfigOptionValue, GatewayAuthInput};
 mod history;
 mod reopen;
 mod spawn_error;
+mod stderr_ring;
 mod timeouts;
 mod turn;
 mod wire;
@@ -84,6 +85,7 @@ use command_loop::*;
 use driver::*;
 use exit::{ExitIntent, ExitSignal};
 use gates::*;
+use stderr_ring::*;
 use turn::*;
 use wire::*;
 
@@ -689,6 +691,11 @@ impl AcpManager {
         // `Err(_)` with no detail; the driver records the real error here so we
         // can surface it instead of a generic "did not initialize" message.
         let start_error = Arc::new(Mutex::new(None::<String>));
+        // The last lines the agent wrote to stderr. A profile that redacts
+        // agent output (Factory Droid) captures nothing.
+        let stderr_ring = Arc::new(StderrRing::new(
+            !AgentRuntimeProfile::resolve(&config).redact_output,
+        ));
 
         let thread_agent_id = agent_id.clone();
         let thread_config = config.clone();
@@ -696,6 +703,7 @@ impl AcpManager {
         let thread_reaped = reaped.clone();
         let thread_exit = exit.clone();
         let thread_start_error = start_error.clone();
+        let thread_stderr_ring = stderr_ring.clone();
         let thread_persistence = self.persistence.clone();
         let thread_host_plan_server = self.host_plan_server.clone();
         let stable_namespace = stable_agent_namespace(&config);
@@ -713,6 +721,7 @@ impl AcpManager {
                     thread_reaped,
                     thread_exit,
                     thread_start_error,
+                    thread_stderr_ring,
                     thread_persistence,
                 );
             })
@@ -731,8 +740,17 @@ impl AcpManager {
                     log::warn!("[acp] Factory Droid initialize failed: {e}");
                     return Err("Factory Droid initialize failed".to_string());
                 }
-                log::warn!("[acp] spawn failed: agent initialize failed: {e}");
-                return Err(format!("agent initialize failed: {e}"));
+                log_agent_failure(
+                    "spawn failed",
+                    agent_kind(&config),
+                    &config.command,
+                    &format!("agent initialize failed: {e}"),
+                    &stderr_ring,
+                );
+                return Err(with_stderr_tail(
+                    format!("agent initialize failed: {e}"),
+                    &stderr_ring,
+                ));
             }
             Err(_) => {
                 // Driver thread dropped the sender without initializing (e.g.
@@ -760,7 +778,14 @@ impl AcpManager {
                         generic.to_string()
                     });
                 }
-                log::warn!("[acp] spawn failed: {message}");
+                log_agent_failure(
+                    "spawn failed",
+                    agent_kind(&config),
+                    &config.command,
+                    &message,
+                    &stderr_ring,
+                );
+                let message = with_stderr_tail(message, &stderr_ring);
                 return Err(if definite {
                     agent_unavailable(message)
                 } else {
@@ -796,8 +821,14 @@ impl AcpManager {
                 drop(agents);
                 join_thread_bounded(join_handle).await;
                 let reason = "agent exited before it could be registered";
-                log::warn!("[acp] spawn failed: {reason}");
-                return Err(reason.to_string());
+                log_agent_failure(
+                    "spawn failed",
+                    agent_kind(&config),
+                    &config.command,
+                    reason,
+                    &stderr_ring,
+                );
+                return Err(with_stderr_tail(reason.to_string(), &stderr_ring));
             }
             agents.insert(
                 agent_id.clone(),

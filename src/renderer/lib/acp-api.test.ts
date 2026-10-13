@@ -225,6 +225,21 @@ describe('parseAcpErrorDetail (gh-821)', () => {
     ).toEqual({ code: -32000, data: { reason: 'login' } })
   })
 
+  it('extracts a known provider code and drops an unknown one', () => {
+    expect(
+      parseAcpErrorDetail({
+        message: 'limit',
+        code: -32603,
+        providerCode: 'provider_session_limit'
+      })
+    ).toEqual({ code: -32603, providerCode: 'provider_session_limit' })
+    expect(parseAcpErrorDetail({ providerCode: 'provider_quota_exceeded' })).toEqual({
+      providerCode: 'provider_quota_exceeded'
+    })
+    expect(parseAcpErrorDetail({ providerCode: 'something_else' })).toEqual({})
+    expect(parseAcpErrorDetail({ providerCode: 429 })).toEqual({})
+  })
+
   it('ignores a non-integer code and tolerates non-object payloads', () => {
     expect(parseAcpErrorDetail({ code: 1.5 })).toEqual({})
     expect(parseAcpErrorDetail({ code: '-32000' })).toEqual({})

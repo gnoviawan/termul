@@ -127,13 +127,14 @@ export function LauncherStatusBanners({
         <FactoryApiKeyForm auth={factoryKeyAuth} />
       ) : null}
       {/* Story 11 (QA F12/F9): non-auth prepare failures (spawn /
-        transport / timeout) previously surfaced only as a "Setup
+        transport / provider / timeout) previously surfaced only as a "Setup
         failed" pill with Retry buried inside the model-picker modal.
         Render them in-flow above the composer — same pattern as
         AuthRequiredBanner — with a Retry that re-runs prepare. */}
       {prepareError &&
         (prepareError.category === 'spawn' ||
           prepareError.category === 'transport' ||
+          prepareError.category === 'provider' ||
           prepareError.category === 'timeout') && (
           <NonAuthFailureBanner
             agentName={selectedEntry?.agent.name ?? 'Agent'}

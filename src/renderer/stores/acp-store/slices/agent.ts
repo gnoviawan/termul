@@ -2,6 +2,7 @@
  * Agent slice — extracted from ../acp-store.ts (spec-04 PR B). Pure move, no logic changes.
  */
 
+import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import {
@@ -13,7 +14,11 @@ import {
   type SessionId
 } from '@/lib/acp-api'
 import { saveAuthMethodMemory as saveAuthMethodMemoryToDisk } from '@/lib/acp-auth-method-memory'
-import { AmbiguousAuthError, isAmbiguousAuthError } from '@/lib/agents/acp-spawn-errors'
+import {
+  AmbiguousAuthError,
+  describeProviderFailure,
+  isAmbiguousAuthError
+} from '@/lib/agents/acp-spawn-errors'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -80,7 +85,18 @@ const inFlightAuth = new Map<string, Promise<boolean>>()
  */
 const PROVIDER_LIMIT_ERROR_KINDS = new Set(['rate_limit', 'billing_error'])
 
-function isProviderLimitError(data: unknown): boolean {
+/** Provider codes that end only the turn (the host classified the refusal). */
+const PROVIDER_LIMIT_CODES: ReadonlySet<string> = new Set([
+  WS_ERROR_CODES.PROVIDER_QUOTA_EXCEEDED,
+  WS_ERROR_CODES.PROVIDER_SESSION_LIMIT
+])
+
+/**
+ * The host's stable `providerCode` decides. The `data.errorKind` check stays
+ * for hosts that predate the code and cannot supply it.
+ */
+function isProviderLimitError(providerCode: string | undefined, data: unknown): boolean {
+  if (providerCode !== undefined) return PROVIDER_LIMIT_CODES.has(providerCode)
   if (typeof data !== 'object' || data === null) return false
   const kind = (data as { errorKind?: unknown }).errorKind
   return typeof kind === 'string' && PROVIDER_LIMIT_ERROR_KINDS.has(kind)
@@ -861,7 +877,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // Flush coalesced updates so the error reflects the final transcript state.
     flushCoalescedSync()
     const detail = parseAcpErrorDetail(e)
-    const providerLimit = Boolean(e.sessionId) && isProviderLimitError(detail.data)
+    const providerLimit =
+      Boolean(e.sessionId) && isProviderLimitError(detail.providerCode, detail.data)
     if (providerLimit) {
       void logFrontendError({
         level: 'warn',
@@ -889,7 +906,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
               // a perpetually-active turn). The `_onAgentDisconnected` reducer
               // now preserves the 'error' status (it skips 'error' sessions).
               status: providerLimit ? s.sessions[e.sessionId].status : ('error' as SessionStatus),
-              lastError: e.message,
+              lastError: detail.providerCode
+                ? describeProviderFailure(detail.providerCode, e.message)
+                : e.message,
               lastErrorCode: detail.code ?? null,
               lastErrorData: detail.data,
               activeTurn: false,
@@ -968,7 +987,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
             [e.sessionId]: {
               ...s.sessions[e.sessionId],
               status: 'error' as SessionStatus,
-              lastError: e.message,
+              lastError: detail.providerCode
+                ? describeProviderFailure(detail.providerCode, e.message)
+                : e.message,
               lastErrorCode: detail.code ?? null,
               lastErrorData: detail.data,
               activeTurn: false,

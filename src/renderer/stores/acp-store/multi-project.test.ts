@@ -142,6 +142,7 @@ vi.mock('@/lib/api', async (importActual) => {
 
 import { invoke } from '@tauri-apps/api/core'
 import { _resetAcpTransportForTests } from '@/lib/acp-transport'
+import { PROVIDER_ERROR_MESSAGES } from '@/lib/agents/acp-spawn-errors'
 import {
   _resetAcpAuthForTesting,
   agentReuseKey,
@@ -468,6 +469,28 @@ describe('acp-store multi-project isolation', () => {
     expect(state.sessions['s1'].lastError).toContain('session limit')
     expect(state.sessions['s1'].lastErrorData).toEqual({ errorKind })
     expect(state.messages['s1'].map((m) => m.id)).toEqual(['m1', 'm2', 'm3'])
+  })
+
+  // The host's stable providerCode decides without `data.errorKind`.
+  it.each([
+    ['provider_quota_exceeded', true],
+    ['provider_session_limit', true],
+    ['provider_request_rejected', false]
+  ] as const)('agent_error with providerCode %s keeps the agent live=%s', (providerCode, live) => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({ agentStatus: { ...s.agentStatus, 'agent-1': 'connected' } }))
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'Internal error',
+      code: -32603,
+      providerCode
+    })
+    const state = useAcpStore.getState()
+    expect(state.agentStatus['agent-1']).toBe(live ? 'connected' : 'error')
+    expect(state.sessions['s1'].status).toBe(live ? 'active' : 'error')
+    expect(state.sessions['s1'].lastError).toContain(PROVIDER_ERROR_MESSAGES[providerCode])
+    expect(state.sessions['s1'].lastError).toContain('Internal error')
   })
 
   // Story 1.9 review (EC #8): a crash event for an already-closed session

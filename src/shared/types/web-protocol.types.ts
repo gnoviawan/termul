@@ -587,6 +587,24 @@ export const WS_ERROR_CODES = {
 /** Union of all WS error code strings. */
 export type WsErrorCode = (typeof WS_ERROR_CODES)[keyof typeof WS_ERROR_CODES]
 
+/**
+ * The stable upstream-provider failure codes. They travel as the `err.code` of
+ * a failed session/prompt reply and as `providerCode` on `agent_error`.
+ */
+export const PROVIDER_ERROR_CODES = [
+  WS_ERROR_CODES.PROVIDER_QUOTA_EXCEEDED,
+  WS_ERROR_CODES.PROVIDER_SESSION_LIMIT,
+  WS_ERROR_CODES.PROVIDER_REQUEST_REJECTED
+] as const
+
+/** One of {@link PROVIDER_ERROR_CODES}. */
+export type ProviderErrorCode = (typeof PROVIDER_ERROR_CODES)[number]
+
+/** True when `value` is a known provider failure code. */
+export function isProviderErrorCode(value: unknown): value is ProviderErrorCode {
+  return PROVIDER_ERROR_CODES.some((code) => code === value)
+}
+
 // ============================================================================
 // Reliability tiers (AC5) — single registry mirroring the Rust enum
 // ============================================================================

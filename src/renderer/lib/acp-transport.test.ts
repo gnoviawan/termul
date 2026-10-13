@@ -5020,7 +5020,10 @@ describe('TauriAcpTransport commands (AD-5)', () => {
     ['command_conflict: reused for another request', 'command_conflict', false],
     ['invalid_command_id: bad id', 'invalid_command_id', false],
     ['ACP_AGENT_UNAVAILABLE: program not found', 'agent_unavailable', false],
-    ['ACP_INVALID_AGENT_CONFIG: empty name', 'invalid_agent_config', false]
+    ['ACP_INVALID_AGENT_CONFIG: empty name', 'invalid_agent_config', false],
+    ['ACP_PROVIDER_QUOTA_EXCEEDED: usage limit reached', 'provider_quota_exceeded', false],
+    ['ACP_PROVIDER_SESSION_LIMIT: session limit reached', 'provider_session_limit', false],
+    ['ACP_PROVIDER_REQUEST_REJECTED: status 400', 'provider_request_rejected', false]
   ])('maps the verdict "%s" to a typed %s error (uncertain=%s)', async (text, code, uncertain) => {
     vi.mocked(invoke).mockRejectedValue(text)
     const error = await tauri()

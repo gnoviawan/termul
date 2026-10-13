@@ -990,6 +990,7 @@ fn agent_error_and_crashed_serialize_code_and_data() {
         message: "boom".to_string(),
         code: Some(-32000),
         data: Some(data.clone()),
+        provider_code: None,
     };
     let value = serde_json::to_value(&error).unwrap();
     assert_eq!(value["code"], -32000);
@@ -1013,6 +1014,7 @@ fn agent_error_and_crashed_serialize_code_and_data() {
         message: "timeout".to_string(),
         code: None,
         data: None,
+        provider_code: None,
     };
     let value = serde_json::to_value(&bare).unwrap();
     assert!(value.get("code").is_none());
@@ -1066,4 +1068,42 @@ fn masked_error_detail_drops_code_and_data() {
         serde_json::to_value(masked.into_agent_error(AgentId("a1".to_string()), None)).unwrap();
     assert!(value.get("code").is_none());
     assert!(value.get("data").is_none());
+}
+
+/// A provider failure carries a stable `providerCode` on `agent_error`; an
+/// unrecognized shape and an auth error omit the key.
+#[test]
+fn agent_error_carries_provider_code_only_for_provider_failures() {
+    let build = |rpc: agent_client_protocol::Error| {
+        serde_json::to_value(
+            AcpErrorDetail::from(&rpc)
+                .into_agent_error(AgentId("a1".to_string()), Some(SessionId::new("s1"))),
+        )
+        .unwrap()
+    };
+    let limit = build(
+        agent_client_protocol::Error::new(
+            -32603,
+            "Internal error: You've hit your session limit",
+        )
+        .data(serde_json::json!({ "errorKind": "rate_limit" })),
+    );
+    assert_eq!(limit["providerCode"], "provider_session_limit");
+    let quota = build(
+        agent_client_protocol::Error::new(-32603, "Internal error")
+            .data(serde_json::json!({ "errorKind": "billing_error" })),
+    );
+    assert_eq!(quota["providerCode"], "provider_quota_exceeded");
+    let rejected = build(
+        agent_client_protocol::Error::new(-32603, "Internal error")
+            .data(serde_json::json!({ "status": 400 })),
+    );
+    assert_eq!(rejected["providerCode"], "provider_request_rejected");
+
+    assert!(build(agent_client_protocol::Error::internal_error())
+        .get("providerCode")
+        .is_none());
+    assert!(build(agent_client_protocol::Error::new(-32000, "Authentication required"))
+        .get("providerCode")
+        .is_none());
 }

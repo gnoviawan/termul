@@ -781,7 +781,9 @@ pub(super) async fn run_command_loop(
                             send_reply(&task_slot, Ok(stop_reason));
                         }
                         Err(detail) => {
-                            let message = detail.message;
+                            // A provider failure keeps its stable tag so the
+                            // reply carries the code the error event already has.
+                            let message = crate::acp::provider_errors::tag_provider_error(&detail);
                             if !is_ephemeral {
                                 if let Some(persistence) = &turn_persistence {
                                     if let Err(error) =

@@ -14,7 +14,11 @@
  * normalize it (toast, etc.).
  */
 
-import type { AgentCapabilities } from '@shared/types/web-protocol.types'
+import {
+  type AgentCapabilities,
+  isProviderErrorCode,
+  type ProviderErrorCode
+} from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
 import { type CommandCallOptions, getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
@@ -568,6 +572,9 @@ export interface AgentErrorEvent {
   code?: number
   /** gh-821: JSON-RPC error `data` (structured; also folded into `message`). */
   data?: unknown
+  /** Stable provider failure code (quota / session limit / rejected request).
+   * Absent for any other error and for older hosts. */
+  providerCode?: ProviderErrorCode
 }
 /** Story 1.9 FR26: the agent subprocess crashed mid-turn (a typed event
  * distinct from `agent_error` (non-fatal) + `agent_disconnected` (always)).
@@ -586,6 +593,7 @@ export interface AgentCrashedEvent {
 export interface AcpErrorDetail {
   code?: number
   data?: unknown
+  providerCode?: ProviderErrorCode
 }
 
 /**
@@ -595,10 +603,15 @@ export interface AcpErrorDetail {
  */
 export function parseAcpErrorDetail(payload: unknown): AcpErrorDetail {
   if (typeof payload !== 'object' || payload === null) return {}
-  const { code, data } = payload as { code?: unknown; data?: unknown }
+  const { code, data, providerCode } = payload as {
+    code?: unknown
+    data?: unknown
+    providerCode?: unknown
+  }
   const detail: AcpErrorDetail = {}
   if (typeof code === 'number' && Number.isInteger(code)) detail.code = code
   if (data !== undefined && data !== null) detail.data = data
+  if (isProviderErrorCode(providerCode)) detail.providerCode = providerCode
   return detail
 }
 /**

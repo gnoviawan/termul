@@ -767,12 +767,15 @@ impl AcpErrorDetail {
         agent_id: AgentId,
         session_id: Option<SessionId>,
     ) -> AgentErrorEvent {
+        let provider_code = crate::acp::provider_errors::classify_provider_error(&self)
+            .map(crate::acp::provider_errors::ProviderErrorKind::code);
         AgentErrorEvent {
             agent_id,
             session_id,
             message: self.message,
             code: self.code,
             data: self.data,
+            provider_code,
         }
     }
 
@@ -815,6 +818,12 @@ pub struct AgentErrorEvent {
     /// structured here); absent on the wire when the error carried none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+    /// Stable provider failure code (`provider_quota_exceeded`,
+    /// `provider_session_limit` or `provider_request_rejected`) when the error
+    /// classifies as an upstream provider failure; absent otherwise. Consumers
+    /// key on this instead of parsing `message`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_code: Option<&'static str>,
 }
 
 /// `acp:agent_crashed` (Story 1.9 FR26)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AuthMethod } from '@/lib/acp-api'
+import { AcpTransportError } from '@/lib/acp-transport/types'
 import {
   AGENT_AUTH_REQUIRED_CODE,
   AmbiguousAuthError,
@@ -8,6 +9,9 @@ import {
   isAgentAuthRequiredError,
   isAmbiguousAuthError,
   isDefiniteSpawnRejection,
+  PROVIDER_ERROR_LABELS,
+  PROVIDER_ERROR_MESSAGES,
+  providerCodeOf,
   SETUP_ERROR_LABELS
 } from './acp-spawn-errors'
 
@@ -69,6 +73,52 @@ describe('classifySetupError order and categories (P4)', () => {
     const raw = 'Error: spawn npx ENOENT'
     const result = classifySetupError(raw)
     expect(result.category).toBe('spawn')
+  })
+
+  it.each([
+    'provider_quota_exceeded',
+    'provider_session_limit',
+    'provider_request_rejected'
+  ] as const)('classifies the host code %s as provider whatever the wording', (code) => {
+    // Wording that the heuristics would read as transport / auth / timeout.
+    for (const wording of [
+      'connection limit: authentication token quota timed out',
+      'You have hit your limit',
+      ''
+    ]) {
+      const result = classifySetupError(new AcpTransportError(code, wording))
+      expect(result.category).toBe('provider')
+      expect(result.providerCode).toBe(code)
+      expect(result.label).toBe(PROVIDER_ERROR_LABELS[code])
+      expect(result.detail).toContain(PROVIDER_ERROR_MESSAGES[code])
+      if (wording) expect(result.detail).toContain(wording)
+    }
+  })
+
+  it('classifies a serialized { code, message } provider failure', () => {
+    const result = classifySetupError({
+      code: 'provider_session_limit',
+      message: 'resets 8:20pm'
+    })
+    expect(result.category).toBe('provider')
+    expect(result.detail).toBe(`${PROVIDER_ERROR_MESSAGES.provider_session_limit} (resets 8:20pm)`)
+  })
+
+  it('keeps auth and definite spawn rejections ahead of a provider code', () => {
+    expect(
+      classifySetupError(new AcpTransportError('agent_auth_required', 'sign in')).category
+    ).toBe('auth')
+    expect(classifySetupError(new AcpTransportError('agent_unavailable', 'quota')).category).toBe(
+      'spawn'
+    )
+  })
+
+  it('reads provider wording without a host code through the old heuristics only', () => {
+    // No code: nothing new is guessed from wording; it falls to the old paths.
+    expect(classifySetupError('You have reached your usage limit').category).toBe('unknown')
+    expect(providerCodeOf('provider_quota_exceeded')).toBeUndefined()
+    expect(providerCodeOf({ code: 'rate_limited' })).toBeUndefined()
+    expect(providerCodeOf({ code: 'provider_quota_exceeded' })).toBe('provider_quota_exceeded')
   })
 
   it('classifies transport failures (destroyed stream, refused, reset)', () => {
