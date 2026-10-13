@@ -161,6 +161,7 @@ impl PtyManager {
                 web_attachments: Arc::new(AtomicUsize::new(0)),
                 last_web_listed: Arc::new(RwLock::new(None)),
                 web_size_owner: Arc::new(RwLock::new(None)),
+                resizer: None,
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -320,6 +321,7 @@ impl PtyManager {
                 web_attachments: Arc::new(AtomicUsize::new(0)),
                 last_web_listed: Arc::new(RwLock::new(None)),
                 web_size_owner: Arc::new(RwLock::new(None)),
+                resizer: None,
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -398,7 +400,7 @@ impl PtyManager {
     /// Pushes raw bytes to pending_buf, handles overflow protection.
     /// Sets done_flag to true on EOF or error so flusher can finalize.
     /// ADR-002.5: Intercepts DA queries via DaFilter and responds directly to PTY writer.
-    fn reader_loop(
+    pub(super) fn reader_loop(
         instance: Arc<TerminalInstance>,
         mut reader: Box<dyn Read + Send>,
         terminal_events: TerminalEventHub,
@@ -511,7 +513,7 @@ impl PtyManager {
     /// output_log: sequence-aware bounded history. Each batch is appended before
     /// broadcasting, so attach can snapshot and subscribe under the same lock.
     #[allow(clippy::too_many_arguments)]
-    fn flusher_loop(
+    pub(super) fn flusher_loop(
         pending_buf: Arc<Mutex<Vec<u8>>>,
         done_flag: Arc<AtomicBool>,
         broadcast_tx: Arc<tokio::sync::broadcast::Sender<TerminalOutputChunk>>,

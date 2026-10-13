@@ -40,6 +40,12 @@ struct StoredSSHProfile {
     pub jump_host_id: Option<String>,
     pub port_forwards: Vec<PortForwardConfig>,
     pub tags: Option<Vec<String>>,
+    /// Group the host is listed under. Absent in files written before
+    /// groups existed.
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub favorite: bool,
     pub last_connected: Option<String>,
     pub imported_from: Option<String>,
     /// Whether a password is stored in the OS keychain
@@ -74,6 +80,10 @@ pub struct SSHProfile {
     pub jump_host_id: Option<String>,
     pub port_forwards: Vec<PortForwardConfig>,
     pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub favorite: bool,
     pub last_connected: Option<String>,
     pub imported_from: Option<String>,
     /// Indicates whether a password exists in the OS keychain
@@ -102,6 +112,8 @@ impl std::fmt::Debug for SSHProfile {
             .field("jump_host_id", &self.jump_host_id)
             .field("port_forwards", &self.port_forwards)
             .field("tags", &self.tags)
+            .field("group", &self.group)
+            .field("favorite", &self.favorite)
             .field("last_connected", &self.last_connected)
             .field("imported_from", &self.imported_from)
             .field("has_stored_password", &self.has_stored_password)
@@ -125,6 +137,8 @@ impl From<StoredSSHProfile> for SSHProfile {
             jump_host_id: stored.jump_host_id,
             port_forwards: stored.port_forwards,
             tags: stored.tags,
+            group: stored.group,
+            favorite: stored.favorite,
             last_connected: stored.last_connected,
             imported_from: stored.imported_from,
             has_stored_password: stored.has_stored_password,
@@ -146,6 +160,8 @@ impl From<&SSHProfile> for StoredSSHProfile {
             jump_host_id: profile.jump_host_id.clone(),
             port_forwards: profile.port_forwards.clone(),
             tags: profile.tags.clone(),
+            group: profile.group.clone(),
+            favorite: profile.favorite,
             last_connected: profile.last_connected.clone(),
             imported_from: profile.imported_from.clone(),
             has_stored_password: profile.has_stored_password,
@@ -368,6 +384,38 @@ impl ProfileManager {
         Ok(())
     }
 
+    /// Copy a profile under a new id, including its keychain secrets.
+    pub fn duplicate(&self, id: &str) -> Result<SSHProfile, String> {
+        let mut copy = self
+            .get_with_credentials(id)?
+            .ok_or_else(|| format!("Profile not found: {}", id))?;
+        copy.id = uuid::Uuid::new_v4().to_string();
+        copy.name = format!("{} (copy)", copy.name);
+        copy.last_connected = None;
+        copy.favorite = false;
+        copy.has_stored_password = false;
+        copy.has_stored_passphrase = false;
+        self.save(copy.clone())?;
+        // Return the stored form (flags set, secrets cleared).
+        self.get(&copy.id)?
+            .ok_or_else(|| "Duplicated profile was not saved".to_string())
+    }
+
+    /// Save the secret that matches the profile's auth method (password or
+    /// key passphrase) to the OS keychain, e.g. after the user ticked
+    /// "Save to keychain" at a connect prompt.
+    pub fn store_secret(&self, id: &str, secret: &str) -> Result<(), String> {
+        let mut profile = self
+            .get(id)?
+            .ok_or_else(|| format!("Profile not found: {}", id))?;
+        match profile.auth_method.as_str() {
+            "password" => profile.password = Some(secret.to_string()),
+            "key" => profile.passphrase = Some(secret.to_string()),
+            other => return Err(format!("Auth method {} has no secret to store", other)),
+        }
+        self.save(profile)
+    }
+
     /// Import profiles from SSH config, skipping duplicates by host+username+port
     pub fn import_from_config(
         &self,
@@ -407,6 +455,8 @@ impl ProfileManager {
                 jump_host_id: None,
                 port_forwards: Vec::new(),
                 tags: None,
+                group: None,
+                favorite: false,
                 last_connected: None,
                 imported_from: parsed_profile.imported_from,
                 has_stored_password: false,
@@ -425,3 +475,6 @@ impl ProfileManager {
         Ok(imported)
     }
 }
+
+#[cfg(test)]
+mod tests;

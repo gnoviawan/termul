@@ -37,6 +37,14 @@ impl PtyManager {
             .ok_or_else(|| format!("Terminal not found: {}", id))?
             .clone();
 
+        if let Some(resizer) = &instance.resizer {
+            resizer(cols, rows)?;
+            *instance.cols.write() = cols;
+            *instance.rows.write() = rows;
+            instance.update_activity();
+            return Ok(());
+        }
+
         #[cfg(target_os = "windows")]
         {
             if let Some(conpty_handles) = &instance.conpty_handles {

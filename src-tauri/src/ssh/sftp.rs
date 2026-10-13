@@ -1,13 +1,16 @@
-//! SFTP Operations
-//!
-//! Provides file system operations over SSH using the SFTP subsystem.
+//! SFTP operations on a session's connection (russh-sftp).
 
+use russh_sftp::client::fs::Metadata;
+use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
-use ssh2::{FileStat, Session, Sftp};
-use std::fs;
-use std::io::{Read, Write};
-use std::path::Path;
 use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Largest file the editor opens (it holds the whole file in memory).
+const MAX_EDIT_BYTES: u64 = 5 * 1024 * 1024;
+const TRANSFER_CHUNK: usize = 32 * 1024;
+/// Emit transfer progress every this many bytes.
+const PROGRESS_STEP: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,320 +37,311 @@ pub struct SFTPTransferProgress {
     pub error: Option<String>,
 }
 
-/// Create an SFTP subsystem from an SSH session
-pub fn create_sftp(session: &Session) -> Result<Sftp, String> {
-    session
-        .sftp()
-        .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))
-}
-
-/// Convert FileStat to entry type string
-fn stat_to_entry_type(stat: &FileStat) -> &str {
-    if stat.is_dir() {
-        "directory"
-    } else if stat.perm.is_some_and(|p| p & 0o120000 == 0o120000) {
+pub(crate) fn entry_type(meta: &Metadata) -> &'static str {
+    if meta.is_symlink() {
         "symlink"
+    } else if meta.is_dir() {
+        "directory"
     } else {
         "file"
     }
 }
 
-/// Convert FileStat mtime to ISO string
-fn mtime_to_iso(stat: &FileStat) -> String {
-    stat.mtime
-        .map(|t| {
-            chrono::DateTime::from_timestamp(t as i64, 0)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
-        })
+pub(crate) fn mtime_to_iso(mtime: Option<u32>) -> String {
+    mtime
+        .and_then(|t| chrono::DateTime::from_timestamp(i64::from(t), 0))
+        .map(|dt| dt.to_rfc3339())
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
-/// List directory contents over SFTP
-pub fn list_dir(sftp: &Sftp, remote_path: &str) -> Result<Vec<SFTPEntry>, String> {
-    let path = Path::new(remote_path);
-
-    let entries = sftp
-        .readdir(path)
-        .map_err(|e| format!("Failed to read directory '{}': {}", remote_path, e))?;
-
-    let mut result = Vec::with_capacity(entries.len());
-
-    for (entry_path, stat) in entries {
-        let name = entry_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        // Skip . and ..
-        if name == "." || name == ".." {
-            continue;
-        }
-
-        let full_path = if remote_path.ends_with('/') {
-            format!("{}{}", remote_path, name)
-        } else {
-            format!("{}/{}", remote_path, name)
-        };
-
-        result.push(SFTPEntry {
-            name,
-            path: full_path,
-            entry_type: stat_to_entry_type(&stat).to_string(),
-            size: stat.size.unwrap_or(0),
-            permissions: stat.perm.unwrap_or(0),
-            modified_at: mtime_to_iso(&stat),
-            owner: stat.uid.map(|u| u.to_string()),
-        });
+pub(crate) fn join(parent: &str, name: &str) -> String {
+    if parent.ends_with('/') {
+        format!("{}{}", parent, name)
+    } else {
+        format!("{}/{}", parent, name)
     }
+}
 
-    // Sort: directories first, then alphabetically
-    result.sort_by(|a, b| {
-        let a_is_dir = a.entry_type == "directory";
-        let b_is_dir = b.entry_type == "directory";
-        b_is_dir
-            .cmp(&a_is_dir)
+/// Directories first, then by name (case-insensitive).
+pub(crate) fn sort_entries(entries: &mut [SFTPEntry]) {
+    entries.sort_by(|a, b| {
+        let a_dir = a.entry_type == "directory";
+        let b_dir = b.entry_type == "directory";
+        b_dir
+            .cmp(&a_dir)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
+}
 
+pub async fn list_dir(sftp: &SftpSession, remote_path: &str) -> Result<Vec<SFTPEntry>, String> {
+    let entries = sftp
+        .read_dir(remote_path)
+        .await
+        .map_err(|e| format!("Failed to read directory '{}': {}", remote_path, e))?;
+    let mut result: Vec<SFTPEntry> = entries
+        .filter(|entry| {
+            let name = entry.file_name();
+            name != "." && name != ".."
+        })
+        .map(|entry| {
+            let name = entry.file_name();
+            let meta = entry.metadata();
+            SFTPEntry {
+                path: join(remote_path, &name),
+                entry_type: entry_type(&meta).to_string(),
+                size: meta.size.unwrap_or(0),
+                permissions: meta.permissions.unwrap_or(0),
+                modified_at: mtime_to_iso(meta.mtime),
+                owner: meta
+                    .user
+                    .clone()
+                    .or_else(|| meta.uid.map(|u| u.to_string())),
+                name,
+            }
+        })
+        .collect();
+    sort_entries(&mut result);
     Ok(result)
 }
 
-/// Download a file from remote to local
-pub fn download_file(
-    sftp: &Sftp,
+/// Absolute form of a remote path (`.` is the login directory).
+pub async fn realpath(sftp: &SftpSession, remote_path: &str) -> Result<String, String> {
+    sftp.canonicalize(remote_path)
+        .await
+        .map_err(|e| format!("Failed to resolve '{}': {}", remote_path, e))
+}
+
+/// Read a remote file for the editor (bounded, UTF-8).
+pub async fn read_file_to_string(sftp: &SftpSession, remote_path: &str) -> Result<String, String> {
+    let meta = sftp
+        .metadata(remote_path)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", remote_path, e))?;
+    if meta.size.unwrap_or(0) > MAX_EDIT_BYTES {
+        return Err(format!(
+            "'{}' is larger than {} MB; download it instead",
+            remote_path,
+            MAX_EDIT_BYTES / 1024 / 1024
+        ));
+    }
+    let bytes = sftp
+        .read(remote_path)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", remote_path, e))?;
+    String::from_utf8(bytes).map_err(|_| format!("'{}' is not a text file", remote_path))
+}
+
+/// Write content to a remote file (creates or overwrites).
+pub async fn write_file_from_string(
+    sftp: &SftpSession,
     remote_path: &str,
-    local_path: &str,
-    app_handle: &AppHandle,
-    connection_id: &str,
+    content: &str,
 ) -> Result<(), String> {
-    let remote = Path::new(remote_path);
-
-    // Get file size for progress
-    let stat = sftp
-        .stat(remote)
-        .map_err(|e| format!("Failed to stat remote file '{}': {}", remote_path, e))?;
-
-    let total_bytes = stat.size.unwrap_or(0);
-
-    // Open remote file
-    let mut remote_file = sftp
-        .open(remote)
-        .map_err(|e| format!("Failed to open remote file '{}': {}", remote_path, e))?;
-
-    // Create local file
-    let mut local_file = fs::File::create(local_path)
-        .map_err(|e| format!("Failed to create local file '{}': {}", local_path, e))?;
-
-    // Transfer with progress
-    let mut buffer = [0u8; 32768]; // 32KB chunks
-    let mut bytes_transferred: u64 = 0;
-    let mut last_progress_emit: u64 = 0;
-
-    loop {
-        let bytes_read = remote_file
-            .read(&mut buffer)
-            .map_err(|e| format!("Read error: {}", e))?;
-
-        if bytes_read == 0 {
-            break;
-        }
-
-        local_file
-            .write_all(&buffer[..bytes_read])
-            .map_err(|e| format!("Write error: {}", e))?;
-
-        bytes_transferred += bytes_read as u64;
-
-        // Emit progress every 256KB
-        if bytes_transferred - last_progress_emit >= 262144 || bytes_transferred == total_bytes {
-            let progress = SFTPTransferProgress {
-                connection_id: connection_id.to_string(),
-                remote_path: remote_path.to_string(),
-                local_path: local_path.to_string(),
-                bytes_transferred,
-                total_bytes,
-                direction: "download".to_string(),
-                status: "in-progress".to_string(),
-                error: None,
-            };
-
-            let _ = app_handle.emit("ssh-transfer-progress", &progress);
-            last_progress_emit = bytes_transferred;
-        }
-    }
-
-    // Emit completion
-    let progress = SFTPTransferProgress {
-        connection_id: connection_id.to_string(),
-        remote_path: remote_path.to_string(),
-        local_path: local_path.to_string(),
-        bytes_transferred,
-        total_bytes,
-        direction: "download".to_string(),
-        status: "completed".to_string(),
-        error: None,
-    };
-    let _ = app_handle.emit("ssh-transfer-progress", &progress);
-
-    Ok(())
-}
-
-/// Upload a file from local to remote
-pub fn upload_file(
-    sftp: &Sftp,
-    local_path: &str,
-    remote_path: &str,
-    app_handle: &AppHandle,
-    connection_id: &str,
-) -> Result<(), String> {
-    let local = Path::new(local_path);
-
-    if !local.exists() {
-        return Err(format!("Local file not found: {}", local_path));
-    }
-
-    let metadata =
-        fs::metadata(local).map_err(|e| format!("Failed to read local file metadata: {}", e))?;
-
-    let total_bytes = metadata.len();
-
-    // Open local file
-    let mut local_file = fs::File::open(local)
-        .map_err(|e| format!("Failed to open local file '{}': {}", local_path, e))?;
-
-    // Create remote file
-    let remote = Path::new(remote_path);
-    let mut remote_file = sftp
-        .create(remote)
-        .map_err(|e| format!("Failed to create remote file '{}': {}", remote_path, e))?;
-
-    // Transfer with progress
-    let mut buffer = [0u8; 32768];
-    let mut bytes_transferred: u64 = 0;
-    let mut last_progress_emit: u64 = 0;
-
-    loop {
-        let bytes_read = local_file
-            .read(&mut buffer)
-            .map_err(|e| format!("Read error: {}", e))?;
-
-        if bytes_read == 0 {
-            break;
-        }
-
-        remote_file
-            .write_all(&buffer[..bytes_read])
-            .map_err(|e| format!("Write error: {}", e))?;
-
-        bytes_transferred += bytes_read as u64;
-
-        // Emit progress every 256KB
-        if bytes_transferred - last_progress_emit >= 262144 || bytes_transferred == total_bytes {
-            let progress = SFTPTransferProgress {
-                connection_id: connection_id.to_string(),
-                remote_path: remote_path.to_string(),
-                local_path: local_path.to_string(),
-                bytes_transferred,
-                total_bytes,
-                direction: "upload".to_string(),
-                status: "in-progress".to_string(),
-                error: None,
-            };
-
-            let _ = app_handle.emit("ssh-transfer-progress", &progress);
-            last_progress_emit = bytes_transferred;
-        }
-    }
-
-    // Emit completion
-    let progress = SFTPTransferProgress {
-        connection_id: connection_id.to_string(),
-        remote_path: remote_path.to_string(),
-        local_path: local_path.to_string(),
-        bytes_transferred,
-        total_bytes,
-        direction: "upload".to_string(),
-        status: "completed".to_string(),
-        error: None,
-    };
-    let _ = app_handle.emit("ssh-transfer-progress", &progress);
-
-    Ok(())
-}
-
-/// Read a remote file's content into a string (for editing)
-pub fn read_file_to_string(sftp: &Sftp, remote_path: &str) -> Result<String, String> {
-    let path = Path::new(remote_path);
     let mut file = sftp
-        .open(path)
-        .map_err(|e| format!("Failed to open remote file '{}': {}", remote_path, e))?;
-
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)
-        .map_err(|e| format!("Failed to read remote file '{}': {}", remote_path, e))?;
-
-    Ok(contents)
-}
-
-/// Write content to a remote file (creates or overwrites)
-pub fn write_file_from_string(sftp: &Sftp, remote_path: &str, content: &str) -> Result<(), String> {
-    let path = Path::new(remote_path);
-    let mut file = sftp
-        .create(path)
-        .map_err(|e| format!("Failed to create remote file '{}': {}", remote_path, e))?;
-
+        .create(remote_path)
+        .await
+        .map_err(|e| format!("Failed to open '{}' for writing: {}", remote_path, e))?;
     file.write_all(content.as_bytes())
-        .map_err(|e| format!("Failed to write to remote file '{}': {}", remote_path, e))?;
-    file.flush()
-        .map_err(|e| format!("Failed to flush remote file '{}': {}", remote_path, e))?;
-
-    Ok(())
+        .await
+        .map_err(|e| format!("Failed to write '{}': {}", remote_path, e))?;
+    file.shutdown()
+        .await
+        .map_err(|e| format!("Failed to save '{}': {}", remote_path, e))
 }
 
-/// Create an empty file on the remote
-pub fn create_file(sftp: &Sftp, remote_path: &str) -> Result<(), String> {
-    let path = Path::new(remote_path);
-    // Check the remote filesystem, not the local filesystem.
-    if sftp.stat(path).is_ok() {
-        return Err(format!("File already exists: {}", remote_path));
+/// Create an empty file; fails when something already exists at the path.
+pub async fn create_file(sftp: &SftpSession, remote_path: &str) -> Result<(), String> {
+    if sftp.try_exists(remote_path).await.unwrap_or(false) {
+        return Err(format!("'{}' already exists", remote_path));
     }
-
     let mut file = sftp
-        .create(path)
-        .map_err(|e| format!("Failed to create file '{}': {}", remote_path, e))?;
-    file.flush().ok();
+        .create(remote_path)
+        .await
+        .map_err(|e| format!("Failed to create '{}': {}", remote_path, e))?;
+    let _ = file.shutdown().await;
     Ok(())
 }
 
-/// Delete a remote file or empty directory
-pub fn delete_path(sftp: &Sftp, remote_path: &str) -> Result<(), String> {
-    let path = Path::new(remote_path);
-
-    let stat = sftp
-        .stat(path)
-        .map_err(|e| format!("Failed to stat '{}': {}", remote_path, e))?;
-
-    if stat.is_dir() {
-        sftp.rmdir(path)
-            .map_err(|e| format!("Failed to remove directory '{}': {}", remote_path, e))
+/// Delete a file, a symlink (not its target) or an empty directory.
+pub async fn delete_path(sftp: &SftpSession, remote_path: &str) -> Result<(), String> {
+    let meta = sftp
+        .symlink_metadata(remote_path)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", remote_path, e))?;
+    if meta.is_dir() && !meta.is_symlink() {
+        sftp.remove_dir(remote_path).await.map_err(|e| {
+            format!(
+                "Failed to remove folder '{}' (it must be empty): {}",
+                remote_path, e
+            )
+        })
     } else {
-        sftp.unlink(path)
-            .map_err(|e| format!("Failed to delete file '{}': {}", remote_path, e))
+        sftp.remove_file(remote_path)
+            .await
+            .map_err(|e| format!("Failed to delete '{}': {}", remote_path, e))
     }
 }
 
-/// Create a remote directory
-pub fn mkdir(sftp: &Sftp, remote_path: &str) -> Result<(), String> {
-    let path = Path::new(remote_path);
-    sftp.mkdir(path, 0o755)
-        .map_err(|e| format!("Failed to create directory '{}': {}", remote_path, e))
+pub async fn mkdir(sftp: &SftpSession, remote_path: &str) -> Result<(), String> {
+    sftp.create_dir(remote_path)
+        .await
+        .map_err(|e| format!("Failed to create folder '{}': {}", remote_path, e))
 }
 
-/// Rename a remote file or directory
-pub fn rename(sftp: &Sftp, old_path: &str, new_path: &str) -> Result<(), String> {
-    let old = Path::new(old_path);
-    let new = Path::new(new_path);
-    sftp.rename(old, new, None)
+pub async fn rename(sftp: &SftpSession, old_path: &str, new_path: &str) -> Result<(), String> {
+    sftp.rename(old_path, new_path)
+        .await
         .map_err(|e| format!("Failed to rename '{}' to '{}': {}", old_path, new_path, e))
 }
+
+struct Progress<'a> {
+    app: &'a AppHandle,
+    connection_id: &'a str,
+    remote_path: &'a str,
+    local_path: &'a str,
+    direction: &'static str,
+    total: u64,
+}
+
+impl Progress<'_> {
+    fn emit(&self, transferred: u64, status: &str, error: Option<String>) {
+        let progress = SFTPTransferProgress {
+            connection_id: self.connection_id.to_string(),
+            remote_path: self.remote_path.to_string(),
+            local_path: self.local_path.to_string(),
+            bytes_transferred: transferred,
+            total_bytes: self.total,
+            direction: self.direction.to_string(),
+            status: status.to_string(),
+            error,
+        };
+        let _ = self.app.emit("ssh-transfer-progress", &progress);
+    }
+}
+
+/// Copy `reader` to `writer`, reporting progress; returns bytes copied.
+async fn copy_with_progress<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    progress: &Progress<'_>,
+) -> Result<u64, String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut buffer = vec![0u8; TRANSFER_CHUNK];
+    let mut transferred = 0u64;
+    let mut last_emit = 0u64;
+    loop {
+        let n = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|e| format!("Read error: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        writer
+            .write_all(&buffer[..n])
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
+        transferred += n as u64;
+        if transferred - last_emit >= PROGRESS_STEP {
+            progress.emit(transferred, "in-progress", None);
+            last_emit = transferred;
+        }
+    }
+    writer
+        .shutdown()
+        .await
+        .map_err(|e| format!("Write error: {}", e))?;
+    Ok(transferred)
+}
+
+pub async fn download_file(
+    sftp: &SftpSession,
+    remote_path: &str,
+    local_path: &str,
+    app: &AppHandle,
+    connection_id: &str,
+) -> Result<(), String> {
+    let total = sftp
+        .metadata(remote_path)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", remote_path, e))?
+        .size
+        .unwrap_or(0);
+    let progress = Progress {
+        app,
+        connection_id,
+        remote_path,
+        local_path,
+        direction: "download",
+        total,
+    };
+    let result = async {
+        let mut remote = sftp
+            .open(remote_path)
+            .await
+            .map_err(|e| format!("Failed to open '{}': {}", remote_path, e))?;
+        let mut local = tokio::fs::File::create(local_path)
+            .await
+            .map_err(|e| format!("Failed to create '{}': {}", local_path, e))?;
+        copy_with_progress(&mut remote, &mut local, &progress).await
+    }
+    .await;
+    match result {
+        Ok(transferred) => {
+            progress.emit(transferred, "completed", None);
+            Ok(())
+        }
+        Err(e) => {
+            progress.emit(0, "failed", Some(e.clone()));
+            Err(e)
+        }
+    }
+}
+
+pub async fn upload_file(
+    sftp: &SftpSession,
+    local_path: &str,
+    remote_path: &str,
+    app: &AppHandle,
+    connection_id: &str,
+) -> Result<(), String> {
+    let total = tokio::fs::metadata(local_path)
+        .await
+        .map_err(|e| format!("Local file not found: {} ({})", local_path, e))?
+        .len();
+    let progress = Progress {
+        app,
+        connection_id,
+        remote_path,
+        local_path,
+        direction: "upload",
+        total,
+    };
+    let result = async {
+        let mut local = tokio::fs::File::open(local_path)
+            .await
+            .map_err(|e| format!("Failed to open '{}': {}", local_path, e))?;
+        let mut remote = sftp
+            .create(remote_path)
+            .await
+            .map_err(|e| format!("Failed to create '{}': {}", remote_path, e))?;
+        copy_with_progress(&mut local, &mut remote, &progress).await
+    }
+    .await;
+    match result {
+        Ok(transferred) => {
+            progress.emit(transferred, "completed", None);
+            Ok(())
+        }
+        Err(e) => {
+            progress.emit(0, "failed", Some(e.clone()));
+            Err(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

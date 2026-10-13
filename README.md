@@ -345,12 +345,14 @@ bun run tauri <command>  # Direct Tauri CLI access
 
 ## SSH Development Notes
 
-- SSH passwords and key passphrases are stored through the OS keychain, not in `ssh-profiles.json`.
-- Active SSH sessions may retain the relevant secret in process memory only to support automatic reconnect; use SSH agent authentication to avoid runtime secret retention.
-- Interactive SSH terminals use OpenSSH's default known-hosts file with `StrictHostKeyChecking=accept-new`; do not override `UserKnownHostsFile` to `/dev/null`/`NUL` because that disables persistent host-key verification.
-- Local port forwarding uses `ssh2` `channel_direct_tcpip` over the active SSH session; remote/reverse forwarding is not supported by the MVP command path yet.
-- `ssh2` vendors OpenSSL only for macOS targets so packaged `.app` bundles do not depend on Homebrew or build-runner library paths.
-- Windows and Linux retain `ssh2`'s system/default OpenSSL behavior. Do not enable `vendored-openssl` globally: its local source build can fail in common Windows/MSYS environments without a complete Perl module setup.
+Design and decisions: [`docs/ssh-native.md`](docs/ssh-native.md).
+
+- SSH runs natively on [`russh`](https://crates.io/crates/russh) (pure Rust, `aws-lc-rs` backend): no system `ssh`, OpenSSL or Perl is needed on any platform. Each session tab owns one connection; the shell, the SFTP browser and port forwards are channels on it.
+- The remote shell is adopted by `PtyManager` as a regular terminal (`pty/manager/external.rs`), so xterm, scrollback replay, claims, resize and kill work as for local terminals.
+- SSH passwords and key passphrases are stored through the OS keychain, never in `ssh-profiles.json`. A secret that worked stays in process memory only while a session to that host is open (so a second tab does not ask again); SSH agent authentication avoids it entirely.
+- Host keys are never accepted silently: a first-seen or changed key is shown with its SHA256 fingerprint and must be confirmed. Trust is written to `~/.ssh/known_hosts_termul`; `~/.ssh/known_hosts` is read but never modified.
+- Local port forwarding uses `direct-tcpip` channels on the session's connection; remote/reverse forwarding is not supported yet.
+- Real-server tests are opt-in: see `ssh::connect::tests::real_server_auth_matrix` and `ssh::session::tests::real_server_shell_round_trip` (`cargo test --lib -- --ignored real_server` with the `TERMUL_SSH_TEST_*` variables).
 
 ## ⭐ Star History
 

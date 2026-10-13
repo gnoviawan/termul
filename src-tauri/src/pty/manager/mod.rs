@@ -30,6 +30,7 @@ use tauri::ipc::{Channel, Response};
 
 use tokio::sync::Mutex as AsyncMutex;
 
+mod external;
 mod instance;
 mod lifecycle;
 mod resolve;
@@ -59,12 +60,13 @@ use types::{
 };
 
 // `crate::pty::manager` public/`pub(crate)` surface preserved via re-export.
+pub use external::ExternalTerminal;
 pub use instance::TerminalInstance;
 pub(crate) use resolve::{resolve_spawn_program, ResolvedProgram};
 pub use types::{
-    PreservedTerminal, SpawnOptions, SpawnedTerminal, TerminalAttachResult, TerminalInfo,
-    TerminalOutputChunk, TerminalReplay, FLUSH_INTERVAL, MAX_PENDING, OVERFLOW_NOTICE, READ_BUF,
-    SCROLLBACK_CAP,
+    ExternalResizer, PreservedTerminal, SpawnOptions, SpawnedTerminal, TerminalAttachResult,
+    TerminalInfo, TerminalOutputChunk, TerminalReplay, FLUSH_INTERVAL, MAX_PENDING,
+    OVERFLOW_NOTICE, READ_BUF, SCROLLBACK_CAP,
 };
 
 /// Manages all PTY instances

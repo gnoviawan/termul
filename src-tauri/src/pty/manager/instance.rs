@@ -59,6 +59,9 @@ pub struct TerminalInstance {
     /// resize conflicts between devices are observable). `None` until a
     /// web client acts on the terminal.
     pub web_size_owner: Arc<RwLock<Option<String>>>,
+    /// Resize hook for terminals whose I/O is not a local PTY (an SSH shell
+    /// channel). `None` for every locally spawned terminal.
+    pub resizer: Option<ExternalResizer>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }

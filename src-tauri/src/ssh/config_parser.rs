@@ -39,7 +39,7 @@ fn get_ssh_config_path() -> Option<PathBuf> {
 }
 
 /// Expand ~ in paths to the user's home directory
-fn expand_tilde(path: &str) -> String {
+pub(crate) fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path.starts_with("~\\") {
         let home = {
             #[cfg(target_os = "windows")]

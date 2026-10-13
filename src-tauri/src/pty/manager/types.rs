@@ -127,6 +127,9 @@ pub(super) const TERM_BROADCAST_CAPACITY: usize = 1024;
 /// even for very chatty terminals. Oldest bytes are evicted first.
 pub const SCROLLBACK_CAP: usize = 256 * 1024;
 
+/// Resize hook for an adopted (non-PTY) terminal: `(cols, rows)`.
+pub type ExternalResizer = Arc<dyn Fn(u16, u16) -> Result<(), String> + Send + Sync>;
+
 /// Options for spawning a new terminal
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,73 +1,40 @@
 use super::*;
 
-#[test]
-fn write_all_nonblocking_retries_after_would_block() {
-    struct FlakyWriter {
-        attempts: usize,
-        output: Vec<u8>,
+fn request(
+    forward_type: &str,
+    local_port: u16,
+    remote_host: &str,
+    remote_port: u16,
+) -> PortForwardRequest {
+    PortForwardRequest {
+        id: "f1".into(),
+        forward_type: forward_type.into(),
+        local_port,
+        remote_host: remote_host.into(),
+        remote_port,
+        label: None,
     }
-
-    impl Write for FlakyWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.attempts += 1;
-            if self.attempts == 1 {
-                return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock));
-            }
-            self.output.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let mut writer = FlakyWriter {
-        attempts: 0,
-        output: Vec::new(),
-    };
-
-    write_all_nonblocking(&mut writer, b"hello").expect("write should retry and succeed");
-
-    assert_eq!(writer.output, b"hello");
 }
 
-#[tokio::test]
-async fn stop_all_in_map_signals_and_clears() {
-    let should_stop = Arc::new(AtomicBool::new(false));
-    let should_stop_assertion = should_stop.clone();
-    let task = tokio::spawn(async {});
-    let forward = ActivePortForward {
-        id: "forward-1".to_string(),
-        config_id: "forward-1".to_string(),
-        local_port: 8080,
-        remote_host: "127.0.0.1".to_string(),
-        remote_port: 80,
-        forward_type: "local".to_string(),
-        status: "active".to_string(),
-        error: None,
-    };
+#[test]
+fn validate_accepts_local_forwards_only() {
+    assert!(validate(&request("local", 8080, "localhost", 80)).is_ok());
+    assert!(validate(&request("remote", 8080, "localhost", 80)).is_err());
+    assert!(validate(&request("dynamic", 8080, "localhost", 80)).is_err());
+}
 
-    let mut forwards = HashMap::from([(
-        "conn-1".to_string(),
-        HashMap::from([(
-            "forward-1".to_string(),
-            ForwardHandle {
-                should_stop,
-                task,
-                info: forward,
-            },
-        )]),
-    )]);
+#[test]
+fn validate_rejects_zero_ports_and_empty_hosts() {
+    assert!(validate(&request("local", 0, "localhost", 80)).is_err());
+    assert!(validate(&request("local", 8080, "localhost", 0)).is_err());
+    assert!(validate(&request("local", 8080, "  ", 80)).is_err());
+}
 
-    // Drain and signal stop (same logic as stop_all without emit)
-    for (_, conn_forwards) in forwards.drain() {
-        for (_, handle) in conn_forwards {
-            handle.should_stop.store(true, Ordering::Relaxed);
-            handle.task.abort();
-        }
-    }
-
-    assert!(forwards.is_empty());
-    assert!(should_stop_assertion.load(Ordering::Relaxed));
+#[test]
+fn stopping_unknown_forwards_reports_an_error() {
+    let manager = PortForwardManager::new(Arc::new(|_, _| {}));
+    assert!(manager.stop_forward("s1", "missing").is_err());
+    // Bulk stops are no-ops without forwards.
+    manager.stop_all_for_session("s1");
+    manager.stop_all();
 }
