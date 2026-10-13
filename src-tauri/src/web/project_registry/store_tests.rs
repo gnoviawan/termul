@@ -62,7 +62,7 @@ fn projects_default_and_mcp_survive_a_reopen() {
         registry.commit_add(summary("p-2", &dir_b)).unwrap();
         registry.commit_set_default("p-2").unwrap();
         registry
-            .commit_update("my-api", Some("Renamed".to_string()), None, None)
+            .commit_update("my-api", Some("Renamed".to_string()), None, None, None)
             .unwrap();
     }
     let reopened = open(&file);
@@ -106,7 +106,7 @@ fn a_v3_file_loads_and_the_first_write_backs_it_up_as_v4() {
     );
 
     registry
-        .commit_update("p-1", Some("Two".to_string()), None, None)
+        .commit_update("p-1", Some("Two".to_string()), None, None, None)
         .unwrap();
 
     let saved: serde_json::Value =
@@ -199,7 +199,7 @@ fn a_failed_write_changes_nothing_in_memory() {
 
     let add = registry.commit_add(summary("p-2", &dir));
     assert!(matches!(add, Err(ProjectCommandError::Persist(_))));
-    let update = registry.commit_update("p-1", None, None, Some(true));
+    let update = registry.commit_update("p-1", None, None, Some(true), None);
     assert!(matches!(update, Err(ProjectCommandError::Persist(_))));
     let remove = registry.commit_remove("p-1");
     assert!(matches!(remove, Err(ProjectCommandError::Persist(_))));
@@ -226,7 +226,7 @@ fn archiving_or_removing_the_default_clears_it_durably() {
 
     registry.commit_set_default("p-1").unwrap();
     registry
-        .commit_update("p-1", None, None, Some(true))
+        .commit_update("p-1", None, None, Some(true), None)
         .unwrap();
     assert_eq!(registry.snapshot().default_project_id, None);
     assert_eq!(open(&file).snapshot().default_project_id, None);

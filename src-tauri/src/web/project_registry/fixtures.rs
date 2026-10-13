@@ -47,7 +47,7 @@ impl ProjectRegistry {
         color: Option<String>,
         is_archived: Option<bool>,
     ) -> bool {
-        self.commit_update(project_id, name, color, is_archived)
+        self.commit_update(project_id, name, color, is_archived, None)
             .is_ok()
     }
 

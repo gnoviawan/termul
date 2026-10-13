@@ -421,6 +421,14 @@ describe('web-protocol.types — envelope shapes (AC2 + AC3)', () => {
     expect(({ projectId: 'p-1' } satisfies RemoveProjectPayload).projectId).toBe('p-1')
   })
 
+  it('update_project takes an optional path that moves the root, guarded by the same cascade', () => {
+    const move: UpdateProjectPayload = { projectId: 'p-1', path: '/work/new-root', cascade: true }
+    expect(move.path).toBe('/work/new-root')
+    expect(move.cascade).toBe(true)
+    const rename: UpdateProjectPayload = { projectId: 'p-1', name: 'x' }
+    expect(rename.path).toBeUndefined()
+  })
+
   it('compile-time: WsEventType / WsRequestType / ReliabilityTier are string unions', () => {
     const e: WsEventType = 'message_chunk'
     const r: WsRequestType = 'send_prompt'

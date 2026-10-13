@@ -321,3 +321,52 @@ async fn busy_archive_over_http_honors_cascade_in_the_body() {
     assert!(host.registry.get("p-1").unwrap().is_archived);
     assert!(host.live_sessions("a1").is_empty());
 }
+
+#[tokio::test]
+async fn moving_the_root_over_http_is_refused_busy_and_honors_cascade_in_the_body() {
+    let host = TestHost::new(&[("a1", "s-1", "p-1")], true).await;
+    host.add_project("p-1").await;
+    let moved = host.project_dir.parent().unwrap().join("moved");
+    std::fs::create_dir_all(&moved).unwrap();
+    let canonical = std::fs::canonicalize(&moved).unwrap().to_string_lossy().into_owned();
+    let original = host.registry.get("p-1").unwrap().path;
+    let app = app(state_for(&host));
+
+    let refused: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/p-1",
+        Some(serde_json::json!({ "path": moved })),
+        LOOPBACK,
+    )
+    .await;
+    assert_eq!(refused.code.as_deref(), Some("PROJECT_BUSY"));
+    assert_eq!(
+        refused.details,
+        Some(serde_json::json!({ "sessions": ["s-1"], "terminals": [] }))
+    );
+    assert_eq!(host.registry.get("p-1").unwrap().path, original);
+
+    let bad: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/p-1",
+        Some(serde_json::json!({ "path": "/definitely/not/a/dir", "cascade": true })),
+        LOOPBACK,
+    )
+    .await;
+    assert_eq!(bad.code.as_deref(), Some("VALIDATION_ERROR"));
+    assert_eq!(host.live_sessions("a1"), ["s-1"], "a refused path stops nothing");
+
+    let moved_ok: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/p-1",
+        Some(serde_json::json!({ "path": moved, "cascade": true })),
+        LOOPBACK,
+    )
+    .await;
+    assert!(moved_ok.success, "{moved_ok:?}");
+    assert_eq!(host.registry.get("p-1").unwrap().path.as_deref(), Some(canonical.as_str()));
+    assert!(host.live_sessions("a1").is_empty());
+}

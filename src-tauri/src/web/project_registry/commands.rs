@@ -126,13 +126,16 @@ pub struct AddProject {
 }
 
 /// The `update_project` request. `cascade` only matters when it archives a
-/// project with live sessions or terminals.
+/// project with live sessions or terminals, or moves its root while some are
+/// bound to it.
 #[derive(Debug, Clone)]
 pub struct UpdateProject {
     pub project_id: String,
     pub name: Option<String>,
     pub color: Option<String>,
     pub is_archived: Option<bool>,
+    /// A new working directory; validated and canonicalized like `add`.
+    pub path: Option<String>,
     pub cascade: bool,
 }
 
@@ -185,25 +188,51 @@ impl ProjectHost<'_> {
         Ok(committed.value)
     }
 
-    /// Patch a project's display fields; `isArchived` archives or restores it.
-    /// Archiving a project with live sessions or terminals is refused
-    /// `project_busy` unless `cascade` stops them first.
+    /// Patch a project's display fields; `isArchived` archives or restores it
+    /// and `path` moves its root. Archiving a project with live sessions or
+    /// terminals, or moving the root of one (their working directories would
+    /// leave it), is refused `project_busy` unless `cascade` stops them first.
+    /// A `path` that is already the root is not a move.
     ///
     /// # Errors
+    /// Reserved id or unusable path (a `path` is checked like `add`'s),
     /// `NotFound`, `Busy`, or a failed registry write.
     pub async fn update(&self, req: UpdateProject) -> Result<(), ProjectCommandError> {
+        let canonical = match req.path.as_deref() {
+            Some(path) => {
+                if req.project_id == UNASSIGNED_PROJECT_ID {
+                    tracing::warn!(target: "termul::web::project_registry", "update_project: reserved project id refused");
+                    return Err(ProjectCommandError::Reserved);
+                }
+                Some(validate_root_path(Path::new(path)).map_err(|reason| {
+                    tracing::warn!(
+                        target: "termul::web::project_registry",
+                        project_id = %req.project_id,
+                        "update_project: invalid root path"
+                    );
+                    ProjectCommandError::InvalidPath(reason)
+                })?)
+            }
+            None => None,
+        };
         let archiving = req.is_archived == Some(true)
             && self
                 .registry
                 .get(&req.project_id)
                 .is_some_and(|project| !project.is_archived);
-        let committed = if archiving {
+        let moving = canonical
+            .as_deref()
+            .is_some_and(|root| self.registry.moves_root(&req.project_id, root));
+        let path = canonical.map(|root| root.to_string_lossy().into_owned());
+        let guarded = archiving || moving;
+        let committed = if guarded {
             self.release(&req.project_id, req.cascade, || {
                 self.registry.commit_update(
                     &req.project_id,
                     req.name.clone(),
                     req.color.clone(),
                     req.is_archived,
+                    path.clone(),
                 )
             })
             .await?
@@ -213,10 +242,13 @@ impl ProjectHost<'_> {
                 req.name,
                 req.color,
                 req.is_archived,
+                path,
             )?
         };
         if committed.changed {
-            if archiving {
+            if guarded {
+                // An archived project stops being watched, and a moved one's
+                // watcher still observes the old root.
                 self.relay.fs_watches().unwatch_project(&req.project_id);
             }
             notify_changed(self.relay, self.registry);
@@ -225,6 +257,7 @@ impl ProjectHost<'_> {
             target: "termul::web::project_registry",
             project_id = %req.project_id,
             archived = archiving,
+            moved = moving,
             "update_project: project updated"
         );
         Ok(())

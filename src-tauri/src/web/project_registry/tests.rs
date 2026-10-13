@@ -275,7 +275,7 @@ fn switch_context_rejects_archived_and_carries_private_mcp() {
     assert!(public["projects"][0].get("mcpServers").is_none());
 
     // A commit rewrites the file without losing the project's MCP config.
-    reg.commit_update("live", Some("Renamed".to_string()), None, None).unwrap();
+    reg.commit_update("live", Some("Renamed".to_string()), None, None, None).unwrap();
     let reopened = ProjectRegistry::open_durable(&file, RootCheck::Strict).expect("reopen");
     assert_eq!(reopened.switch_context("live").unwrap().mcp_servers.len(), 1);
     let _ = std::fs::remove_dir_all(dir);

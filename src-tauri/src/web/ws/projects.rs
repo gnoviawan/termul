@@ -173,9 +173,9 @@ pub(super) struct AddProjectPayload {
 }
 
 /// `update_project` WS request payload (Option B). All fields optional (partial
-/// update). Mirrors `PUT /projects/{id}`. `cascade` lets an archive stop the
-/// project's live sessions and terminals instead of being refused
-/// `project_busy`.
+/// update). Mirrors `PUT /projects/{id}`. `path` moves the project's root.
+/// `cascade` lets an archive or a root move stop the project's live sessions
+/// and terminals instead of being refused `project_busy`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct UpdateProjectPayload {
@@ -183,6 +183,7 @@ pub(super) struct UpdateProjectPayload {
     name: Option<String>,
     color: Option<String>,
     is_archived: Option<bool>,
+    path: Option<String>,
     #[serde(default)]
     cascade: bool,
 }
@@ -280,7 +281,8 @@ pub(super) async fn handle_add_project(id: String, payload: &Value, env: &Handle
 }
 
 /// `update_project` WS handler — patch a project's display fields; archive and
-/// restore go through `isArchived` (archiving a busy project honors `cascade`).
+/// restore go through `isArchived` and a root move through `path` (archiving or
+/// moving a busy project honors `cascade`).
 pub(super) async fn handle_update_project(
     id: String,
     payload: &Value,
@@ -307,6 +309,7 @@ pub(super) async fn handle_update_project(
             name: parsed.name,
             color: parsed.color,
             is_archived: parsed.is_archived,
+            path: parsed.path,
             cascade: parsed.cascade,
         })
         .await;

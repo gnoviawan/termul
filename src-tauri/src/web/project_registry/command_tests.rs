@@ -95,6 +95,7 @@ async fn updating_an_unknown_project_is_not_found() {
             name: Some("x".to_string()),
             color: None,
             is_archived: None,
+            path: None,
             cascade: false,
         })
         .await
@@ -189,6 +190,7 @@ async fn archive_is_guarded_like_remove_and_cascade_archives_in_place() {
         name: None,
         color: None,
         is_archived: Some(true),
+        path: None,
         cascade,
     };
 
@@ -210,11 +212,127 @@ async fn archive_is_guarded_like_remove_and_cascade_archives_in_place() {
             name: None,
             color: None,
             is_archived: Some(false),
+            path: None,
             cascade: false,
         })
         .await
         .unwrap();
     assert!(!host.registry.get("p-1").unwrap().is_archived);
+}
+
+/// A second directory next to the fixture's project, canonicalized as the
+/// registry stores roots.
+fn another_root(host: &TestHost) -> (String, String) {
+    let dir = host.project_dir.parent().unwrap().join("moved");
+    std::fs::create_dir_all(&dir).unwrap();
+    let canonical = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+    (dir.to_string_lossy().into_owned(), canonical)
+}
+
+fn move_request(path: &str, cascade: bool) -> UpdateProject {
+    UpdateProject {
+        project_id: "p-1".to_string(),
+        name: None,
+        color: None,
+        is_archived: None,
+        path: Some(path.to_string()),
+        cascade,
+    }
+}
+
+#[tokio::test]
+async fn update_moves_the_root_of_a_project_nothing_is_bound_to() {
+    let host = TestHost::new(&[], true).await;
+    host.add_project("p-1").await;
+    let (requested, canonical) = another_root(&host);
+
+    host.host().update(move_request(&requested, false)).await.unwrap();
+
+    assert_eq!(host.registry.get("p-1").unwrap().path.as_deref(), Some(canonical.as_str()));
+    let reloaded =
+        ProjectRegistry::open_durable(&host.registry_file, RootCheck::Strict).unwrap();
+    assert_eq!(
+        reloaded.get("p-1").unwrap().path.as_deref(),
+        Some(canonical.as_str()),
+        "the move is persisted"
+    );
+}
+
+#[tokio::test]
+async fn update_refuses_a_bad_root_like_add_and_changes_nothing() {
+    let host = TestHost::new(&[], true).await;
+    host.add_project("p-1").await;
+    let before = host.registry.snapshot();
+
+    let missing = host
+        .host()
+        .update(move_request("/definitely/not/a/dir", false))
+        .await
+        .unwrap_err();
+    assert!(matches!(missing, ProjectCommandError::InvalidPath(_)));
+    assert_eq!(missing.http_code(), "VALIDATION_ERROR");
+
+    let (requested, _) = another_root(&host);
+    let reserved = host
+        .host()
+        .update(UpdateProject {
+            project_id: crate::acp::session_persistence::UNASSIGNED_PROJECT_ID.to_string(),
+            ..move_request(&requested, false)
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(reserved, ProjectCommandError::Reserved);
+
+    let ghost = host
+        .host()
+        .update(UpdateProject {
+            project_id: "ghost".to_string(),
+            ..move_request(&requested, false)
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(ghost, ProjectCommandError::NotFound(_)));
+    assert_eq!(host.registry.snapshot(), before);
+}
+
+#[tokio::test]
+async fn moving_a_busy_root_is_guarded_like_archive_and_cascade_moves_in_place() {
+    let host = TestHost::new(&[("a1", "s-1", "p-1")], true).await;
+    host.add_project("p-1").await;
+    let terminal = host.spawn_terminal("p-1").await;
+    let original = host.registry.get("p-1").unwrap().path;
+    let (requested, canonical) = another_root(&host);
+
+    let error = host.host().update(move_request(&requested, false)).await.unwrap_err();
+    let details = busy_details(&error);
+    assert_eq!(details["sessions"], serde_json::json!(["s-1"]));
+    assert_eq!(details["terminals"], serde_json::json!([terminal]));
+    assert_eq!(host.registry.get("p-1").unwrap().path, original, "the root stays");
+    assert_eq!(host.live_sessions("a1"), ["s-1"], "nothing was stopped");
+    assert!(host.pty.get(&terminal).is_some());
+
+    host.host().update(move_request(&requested, true)).await.unwrap();
+    assert_eq!(host.registry.get("p-1").unwrap().path.as_deref(), Some(canonical.as_str()));
+    assert!(host.live_sessions("a1").is_empty(), "the bound session was stopped");
+    assert!(host.pty.get(&terminal).is_none(), "the bound terminal was stopped");
+    assert!(!host.registry.is_removing("p-1"));
+    host.pty.kill_all().await;
+}
+
+#[tokio::test]
+async fn repeating_the_current_root_is_not_a_move_even_when_the_project_is_busy() {
+    let host = TestHost::new(&[("a1", "s-1", "p-1")], true).await;
+    host.add_project("p-1").await;
+    let current = host.registry.get("p-1").unwrap().path.unwrap();
+    let before = host.registry.snapshot();
+
+    host.host().update(move_request(&current, false)).await.unwrap();
+    // The same directory spelled as the operator typed it.
+    let typed = host.project_dir.to_string_lossy().into_owned();
+    host.host().update(move_request(&typed, false)).await.unwrap();
+
+    assert_eq!(host.registry.snapshot(), before);
+    assert_eq!(host.live_sessions("a1"), ["s-1"]);
 }
 
 #[tokio::test]

@@ -476,15 +476,18 @@ export interface AddProjectPayload {
 
 /**
  * `update_project` request payload. All fields optional. Reply: `{}`.
- * `isArchived` archives/restores; archiving a project with live sessions or
- * PTYs is refused `project_busy` unless `cascade` is `true`, which makes the
- * host stop them first.
+ * `isArchived` archives/restores; `path` moves the project's root (validated
+ * and canonicalized like `add_project`'s; the current root is not a move).
+ * Archiving a project with live sessions or PTYs, or moving the root of one,
+ * is refused `project_busy` unless `cascade` is `true`, which makes the host
+ * stop them first.
  */
 export interface UpdateProjectPayload {
   projectId: string
   name?: string
   color?: string
   isArchived?: boolean
+  path?: string
   cascade?: boolean
 }
 

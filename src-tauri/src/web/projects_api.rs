@@ -99,17 +99,18 @@ pub struct UpsertProjectRequest {
     pub is_archived: bool,
 }
 
-/// `PUT /projects/{id}` request body — patch a project's display fields and
-/// archive/restore it (`isArchived`). All fields optional (partial update).
-/// `cascade: true` lets an archive stop the project's live sessions and
-/// terminals instead of being refused `PROJECT_BUSY`. Mirrors the
-/// `update_project` WS request.
+/// `PUT /projects/{id}` request body — patch a project's display fields,
+/// archive/restore it (`isArchived`) and move its root (`path`). All fields
+/// optional (partial update). `cascade: true` lets an archive or a root move
+/// stop the project's live sessions and terminals instead of being refused
+/// `PROJECT_BUSY`. Mirrors the `update_project` WS request.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub color: Option<String>,
     pub is_archived: Option<bool>,
+    pub path: Option<String>,
     #[serde(default)]
     pub cascade: bool,
 }
@@ -222,7 +223,7 @@ pub async fn create_project(
     }
 }
 
-/// `PUT /projects/{id}` → patch a project's display fields / archive state.
+/// `PUT /projects/{id}` → patch a project's display fields / archive state / root.
 pub async fn update_project(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -238,6 +239,7 @@ pub async fn update_project(
             name: req.name,
             color: req.color,
             is_archived: req.is_archived,
+            path: req.path,
             cascade: req.cascade,
         })
         .await;
