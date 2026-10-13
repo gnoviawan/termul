@@ -9,7 +9,14 @@ import type {
   SSHConnection,
   SSHConnectionStatus,
   SSHConnectionStatusCallback,
+  SSHHostKeyPrompt,
+  SSHKeyFileInfo,
+  SSHLiveSession,
   SSHProfile,
+  SSHSessionEndedEvent,
+  SSHSessionOpened,
+  SSHSessionOpenRequest,
+  SSHSessionProgressEvent,
   TransferProgressCallback
 } from '@shared/types/ssh.types'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -41,7 +48,10 @@ async function readProfilesFromStore(): Promise<IpcResult<SSHProfile[]>> {
 const SSH_EVENTS = {
   CONNECTION_STATUS_CHANGED: 'ssh-connection-status-changed',
   PORT_FORWARD_STATUS_CHANGED: 'ssh-port-forward-status-changed',
-  TRANSFER_PROGRESS: 'ssh-transfer-progress'
+  TRANSFER_PROGRESS: 'ssh-transfer-progress',
+  SESSION_PROGRESS: 'ssh-session-progress',
+  SESSION_HOST_KEY: 'ssh-session-host-key',
+  SESSION_ENDED: 'ssh-session-ended'
 } as const
 
 const SSH_COMMANDS = {
@@ -49,12 +59,10 @@ const SSH_COMMANDS = {
   SAVE_PROFILE: 'ssh_save_profile',
   DELETE_PROFILE: 'ssh_delete_profile',
   IMPORT_CONFIG: 'ssh_import_config',
-  CONNECT: 'ssh_connect',
-  DISCONNECT: 'ssh_disconnect',
-  GET_CONNECTIONS: 'ssh_get_connections',
   PORT_FORWARD_START: 'ssh_port_forward_start',
   PORT_FORWARD_STOP: 'ssh_port_forward_stop',
   SFTP_LIST_DIR: 'sftp_list_dir',
+  SFTP_REALPATH: 'sftp_realpath',
   SFTP_DOWNLOAD: 'sftp_download',
   SFTP_UPLOAD: 'sftp_upload',
   SFTP_DELETE: 'sftp_delete',
@@ -63,6 +71,18 @@ const SSH_COMMANDS = {
   SFTP_READ_FILE: 'sftp_read_file',
   SFTP_WRITE_FILE: 'sftp_write_file',
   SFTP_CREATE_FILE: 'sftp_create_file',
+  SESSION_OPEN: 'ssh_session_open',
+  SESSION_RESPOND_HOST_KEY: 'ssh_session_respond_host_key',
+  SESSION_CANCEL: 'ssh_session_cancel',
+  SESSION_CLOSE: 'ssh_session_close',
+  SESSION_LIST: 'ssh_session_list',
+  DUPLICATE_PROFILE: 'ssh_duplicate_profile',
+  INSPECT_KEY: 'ssh_inspect_key',
+  LIST_KEYS: 'ssh_list_keys',
+  // Legacy connection commands (see SSHConnection)
+  CONNECT: 'ssh_connect',
+  DISCONNECT: 'ssh_disconnect',
+  GET_CONNECTIONS: 'ssh_get_connections',
   CREATE_ASKPASS: 'ssh_create_askpass'
 } as const
 
@@ -73,9 +93,8 @@ async function invokeIpc<T>(
   // Web/remote mode: SSH/SFTP/port-forwarding are desktop-only. Return an
   // explicit `WEB_UNSUPPORTED` result instead of invoking a Tauri-only
   // command whose stub throws `tauriUnavailable`. All SSH command methods
-  // (profile CRUD, connect/disconnect, port forwarding, SFTP) and
-  // `createAskpassScript` delegate through this function, so the guard is
-  // applied once for the whole API.
+  // (profile CRUD, sessions, port forwarding, SFTP) delegate through this
+  // function, so the guard is applied once for the whole API.
   if (!isTauriContext()) {
     return {
       success: false,
@@ -86,10 +105,24 @@ async function invokeIpc<T>(
   return invokeTauriIpc<T>(command, args)
 }
 
+/** Subscribe to a Tauri event; a no-op outside the desktop runtime. */
+function listenDesktop<T>(event: string, callback: (payload: T) => void): () => void {
+  if (!isTauriContext()) return () => {}
+  let unlisten: Promise<UnlistenFn> | undefined
+  try {
+    unlisten = listen<T>(event, ({ payload }) => callback(payload))
+  } catch {
+    return () => {}
+  }
+  return () => {
+    cleanupTauriListener(unlisten)
+  }
+}
+
 export function createSSHApi(): SSHApi {
   return {
     // Profile management — CRUD works in web mode via the server-side store;
-    // connect/SFTP/port-forwarding remain desktop-only (`WEB_UNSUPPORTED`).
+    // sessions/SFTP/port-forwarding remain desktop-only (`WEB_UNSUPPORTED`).
     async listProfiles(): Promise<IpcResult<SSHProfile[]>> {
       if (!isTauriContext()) return readProfilesFromStore()
       return invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
@@ -133,7 +166,7 @@ export function createSSHApi(): SSHApi {
       return invokeIpc<SSHProfile[]>(SSH_COMMANDS.IMPORT_CONFIG)
     },
 
-    // Connection management
+    // Legacy connection management (see SSHConnection)
     async connect(profileId: string, password?: string): Promise<IpcResult<SSHConnection>> {
       return invokeIpc<SSHConnection>(SSH_COMMANDS.CONNECT, {
         request: { profileId, password }
@@ -148,14 +181,21 @@ export function createSSHApi(): SSHApi {
       return invokeIpc<SSHConnection[]>(SSH_COMMANDS.GET_CONNECTIONS)
     },
 
+    onConnectionStatusChanged(callback: SSHConnectionStatusCallback): () => void {
+      return listenDesktop<{ id: string; status: SSHConnectionStatus; error?: string }>(
+        SSH_EVENTS.CONNECTION_STATUS_CHANGED,
+        (payload) => callback(payload.id, payload.status, payload.error)
+      )
+    },
+
     // Port forwarding
     async startPortForward(
-      connectionId: string,
+      sessionId: string,
       config: PortForwardConfig
     ): Promise<IpcResult<ActivePortForward>> {
       return invokeIpc<ActivePortForward>(SSH_COMMANDS.PORT_FORWARD_START, {
         request: {
-          connectionId,
+          connectionId: sessionId,
           id: config.id,
           forwardType: config.type,
           localPort: config.localPort,
@@ -166,13 +206,22 @@ export function createSSHApi(): SSHApi {
       })
     },
 
-    async stopPortForward(connectionId: string, forwardId: string): Promise<IpcResult<void>> {
-      return invokeIpc<void>(SSH_COMMANDS.PORT_FORWARD_STOP, { connectionId, forwardId })
+    async stopPortForward(sessionId: string, forwardId: string): Promise<IpcResult<void>> {
+      return invokeIpc<void>(SSH_COMMANDS.PORT_FORWARD_STOP, {
+        connectionId: sessionId,
+        forwardId
+      })
     },
 
     // SFTP operations
     async sftpListDir(connectionId: string, remotePath: string): Promise<IpcResult<SFTPEntry[]>> {
       return invokeIpc<SFTPEntry[]>(SSH_COMMANDS.SFTP_LIST_DIR, {
+        request: { connectionId, remotePath }
+      })
+    },
+
+    async sftpRealpath(connectionId: string, remotePath: string): Promise<IpcResult<string>> {
+      return invokeIpc<string>(SSH_COMMANDS.SFTP_REALPATH, {
         request: { connectionId, remotePath }
       })
     },
@@ -241,62 +290,61 @@ export function createSSHApi(): SSHApi {
       })
     },
 
-    // Event listeners
-    onConnectionStatusChanged(callback: SSHConnectionStatusCallback): () => void {
-      if (!isTauriContext()) return () => {}
-
-      let unlisten: Promise<UnlistenFn> | undefined
-      try {
-        unlisten = listen<{ id: string; status: SSHConnectionStatus; error?: string }>(
-          SSH_EVENTS.CONNECTION_STATUS_CHANGED,
-          ({ payload }) => {
-            callback(payload.id, payload.status, payload.error)
-          }
-        )
-      } catch {
-        return () => {}
-      }
-
-      return () => {
-        cleanupTauriListener(unlisten)
-      }
+    // Interactive sessions
+    async openSession(request: SSHSessionOpenRequest): Promise<IpcResult<SSHSessionOpened>> {
+      return invokeIpc<SSHSessionOpened>(SSH_COMMANDS.SESSION_OPEN, { request })
     },
 
+    async respondHostKey(sessionId: string, trust: boolean): Promise<IpcResult<boolean>> {
+      return invokeIpc<boolean>(SSH_COMMANDS.SESSION_RESPOND_HOST_KEY, { sessionId, trust })
+    },
+
+    async cancelSession(sessionId: string): Promise<IpcResult<boolean>> {
+      return invokeIpc<boolean>(SSH_COMMANDS.SESSION_CANCEL, { sessionId })
+    },
+
+    async closeSession(sessionId: string): Promise<IpcResult<void>> {
+      return invokeIpc<void>(SSH_COMMANDS.SESSION_CLOSE, { sessionId })
+    },
+
+    async listSessions(): Promise<IpcResult<SSHLiveSession[]>> {
+      return invokeIpc<SSHLiveSession[]>(SSH_COMMANDS.SESSION_LIST)
+    },
+
+    async duplicateProfile(profileId: string): Promise<IpcResult<SSHProfile>> {
+      return invokeIpc<SSHProfile>(SSH_COMMANDS.DUPLICATE_PROFILE, { profileId })
+    },
+
+    async inspectKey(path: string): Promise<IpcResult<SSHKeyFileInfo>> {
+      return invokeIpc<SSHKeyFileInfo>(SSH_COMMANDS.INSPECT_KEY, { path })
+    },
+
+    async listKeys(): Promise<IpcResult<SSHKeyFileInfo[]>> {
+      return invokeIpc<SSHKeyFileInfo[]>(SSH_COMMANDS.LIST_KEYS)
+    },
+
+    // Event listeners
     onPortForwardStatusChanged(callback: PortForwardStatusCallback): () => void {
-      if (!isTauriContext()) return () => {}
-
-      let unlisten: Promise<UnlistenFn> | undefined
-      try {
-        unlisten = listen<[string, ActivePortForward]>(
-          SSH_EVENTS.PORT_FORWARD_STATUS_CHANGED,
-          ({ payload }) => {
-            callback(payload[0], payload[1])
-          }
-        )
-      } catch {
-        return () => {}
-      }
-
-      return () => {
-        cleanupTauriListener(unlisten)
-      }
+      return listenDesktop<[string, ActivePortForward]>(
+        SSH_EVENTS.PORT_FORWARD_STATUS_CHANGED,
+        (payload) => callback(payload[0], payload[1])
+      )
     },
 
     onTransferProgress(callback: TransferProgressCallback): () => void {
-      if (!isTauriContext()) return () => {}
+      return listenDesktop<SFTPTransferProgress>(SSH_EVENTS.TRANSFER_PROGRESS, callback)
+    },
 
-      let unlisten: Promise<UnlistenFn> | undefined
-      try {
-        unlisten = listen<SFTPTransferProgress>(SSH_EVENTS.TRANSFER_PROGRESS, ({ payload }) => {
-          callback(payload)
-        })
-      } catch {
-        return () => {}
-      }
+    onSessionProgress(callback: (event: SSHSessionProgressEvent) => void): () => void {
+      return listenDesktop<SSHSessionProgressEvent>(SSH_EVENTS.SESSION_PROGRESS, callback)
+    },
 
-      return () => {
-        cleanupTauriListener(unlisten)
-      }
+    onSessionHostKey(callback: (prompt: SSHHostKeyPrompt) => void): () => void {
+      return listenDesktop<SSHHostKeyPrompt>(SSH_EVENTS.SESSION_HOST_KEY, callback)
+    },
+
+    onSessionEnded(callback: (event: SSHSessionEndedEvent) => void): () => void {
+      return listenDesktop<SSHSessionEndedEvent>(SSH_EVENTS.SESSION_ENDED, callback)
     }
   }
 }
@@ -304,8 +352,8 @@ export function createSSHApi(): SSHApi {
 export const sshApi = createSSHApi()
 
 /**
- * Create an SSH_ASKPASS helper script in the temp directory.
- * Returns the path to the script.
+ * Legacy: create an SSH_ASKPASS helper script in the temp directory and
+ * return its path. Removed with the legacy connection API.
  */
 export async function createAskpassScript(password: string): Promise<IpcResult<string>> {
   return invokeIpc<string>(SSH_COMMANDS.CREATE_ASKPASS, { password })

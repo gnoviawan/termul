@@ -39,7 +39,7 @@ vi.mock('../persistence-api', () => ({
 }))
 
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { createAskpassScript, createSSHApi } from '../ssh-api'
+import { createSSHApi } from '../ssh-api'
 
 const profile = (overrides: Partial<SSHProfile> = {}): SSHProfile => ({
   id: 'p-1',
@@ -118,30 +118,42 @@ describe('sshApi (web branch)', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
-  it('connect returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
+  it('session commands return WEB_UNSUPPORTED when !isTauriContext()', async () => {
     const api = createSSHApi()
-    const result = await api.connect('profile-1')
+    const results = await Promise.all([
+      api.openSession({ sessionId: 's', profileId: 'profile-1', cols: 80, rows: 24 }),
+      api.respondHostKey('s', true),
+      api.cancelSession('s'),
+      api.closeSession('s'),
+      api.listSessions(),
+      api.inspectKey('/k'),
+      api.listKeys(),
+      api.duplicateProfile('profile-1'),
+      api.sftpRealpath('s', '.')
+    ])
 
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
+    for (const result of results) {
+      expect(result.success).toBe(false)
+      if (!result.success) expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('session event listeners are no-ops outside the desktop', () => {
+    const api = createSSHApi()
+    for (const unlisten of [
+      api.onSessionProgress(vi.fn()),
+      api.onSessionHostKey(vi.fn()),
+      api.onSessionEnded(vi.fn())
+    ]) {
+      expect(unlisten).toBeTypeOf('function')
+      unlisten()
+    }
   })
 
   it('sftpListDir returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
     const api = createSSHApi()
     const result = await api.sftpListDir('conn-1', '/remote')
-
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockInvoke).not.toHaveBeenCalled()
-  })
-
-  it('createAskpassScript returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
-    const result = await createAskpassScript('secret')
 
     expect(result.success).toBe(false)
     if (!result.success) {

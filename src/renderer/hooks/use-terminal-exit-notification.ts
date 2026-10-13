@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { terminalApi } from '@/lib/api'
+import { isSSHTerminalProjectId } from '@/lib/ssh-terminal-id'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -39,7 +40,9 @@ export function useTerminalExitNotification(): void {
     const cleanup = terminalApi.onExit((ptyId: string, exitCode: number) => {
       const terminalState = useTerminalStore.getState()
       const terminal = terminalState.findTerminalByPtyId(ptyId)
-      if (!terminal) return
+      // SSH session terminals end on close, disconnect and network loss; the SSH
+      // workspace shows that state itself, so a desktop notification is just noise.
+      if (!terminal || isSSHTerminalProjectId(terminal.projectId)) return
 
       // Flag the terminal for the in-app highlight border when its process finishes
       // while the user is not already looking at it. "Viewing" requires BOTH that this

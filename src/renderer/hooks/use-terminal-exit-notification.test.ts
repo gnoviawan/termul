@@ -15,6 +15,7 @@ vi.mock('@/lib/tauri-notification-api', () => ({
   sendDesktopNotification: vi.fn()
 }))
 
+import { sshTerminalProjectId } from '@/lib/ssh-terminal-id'
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
 import {
   mockProject,
@@ -118,6 +119,27 @@ describe('terminal exit notification logic', () => {
     emitExit('pty-1', 0)
 
     expect(sendDesktopNotification).toHaveBeenCalledWith('Termul', 'Build Server — DONE')
+  })
+
+  it('stays silent for an SSH session terminal (the SSH workspace shows its own end state)', () => {
+    seedTerminalStore(
+      [
+        mockTerminal({
+          id: 'term-ssh',
+          ptyId: 'pty-ssh',
+          name: 'SSH: Mashermes',
+          projectId: sshTerminalProjectId('87970f2c')
+        })
+      ],
+      { activeTerminalId: 'term-ssh' }
+    )
+
+    const { emitExit } = renderExitHook()
+    emitExit('pty-ssh', -1)
+
+    expect(sendDesktopNotification).not.toHaveBeenCalled()
+    const term = useTerminalStore.getState().terminals.find((t) => t.id === 'term-ssh')
+    expect(term?.needsAttention).toBeFalsy()
   })
 
   it('does not send notification for unknown ptyId', () => {
