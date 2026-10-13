@@ -75,9 +75,12 @@ function startSharedConfigSync(set: AcpSet, get: AcpGet): void {
     }
   })
   // Merge only (like the load): an entry this page just remembered or forgot
-  // may not have reached the host yet.
+  // may not have reached the host yet. A deleted key forgets every method.
   syncSharedKey<unknown>(PersistenceKeys.acpAuthMethods, (change) => {
-    if (!change.exists) return
+    if (!change.exists) {
+      rememberedAuthMethods.clear()
+      return
+    }
     for (const [configId, methodId] of Object.entries(normalizeAuthMethodMemory(change.data))) {
       if (!forgottenAuthMethodConfigs.has(configId)) rememberedAuthMethods.set(configId, methodId)
     }

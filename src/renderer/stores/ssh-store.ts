@@ -66,6 +66,11 @@ export interface SSHState {
   clearCompletedTransfers: () => void
 }
 
+/** Security: strip sensitive fields before storing in renderer state. */
+function sanitizeProfile(profile: SSHProfile): SSHProfile {
+  return { ...profile, password: undefined, passphrase: undefined }
+}
+
 let profileSyncStarted = false
 
 /** Show profiles another device or tab saved (web client); started once, after the first load. */
@@ -74,7 +79,7 @@ function startProfileSync(setProfiles: (profiles: SSHProfile[]) => void): void {
   profileSyncStarted = true
   syncSharedKey<SSHProfile[]>(PersistenceKeys.sshProfiles, (change) => {
     if (!change.exists) setProfiles([])
-    else if (Array.isArray(change.data)) setProfiles(change.data)
+    else if (Array.isArray(change.data)) setProfiles(change.data.map(sanitizeProfile))
   })
 }
 
@@ -91,7 +96,7 @@ export const useSSHStore = create<SSHState>((set, _get) => ({
     try {
       const result = await sshApi.listProfiles()
       if (result?.success) {
-        set({ profiles: result.data, isLoaded: true })
+        set({ profiles: result.data.map(sanitizeProfile), isLoaded: true })
       } else {
         set({ isLoaded: true })
       }
@@ -104,12 +109,7 @@ export const useSSHStore = create<SSHState>((set, _get) => ({
   saveProfile: async (profile: SSHProfile) => {
     const result = await sshApi.saveProfile(profile)
     if (result.success) {
-      // Security: strip sensitive fields before storing in renderer state
-      const sanitized: SSHProfile = {
-        ...profile,
-        password: undefined,
-        passphrase: undefined
-      }
+      const sanitized = sanitizeProfile(profile)
       set((state) => {
         const existing = state.profiles.findIndex((p) => p.id === profile.id)
         const profiles =

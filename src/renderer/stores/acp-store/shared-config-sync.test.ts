@@ -60,6 +60,9 @@ describe('shared agent configuration from another device', () => {
     sharedFake.remote(PersistenceKeys.acpAuthMethods, { a: 'oauth', '': 'x', b: 7 })
 
     expect(Object.fromEntries(rememberedAuthMethods)).toEqual({ a: 'oauth' })
+
+    sharedFake.remoteDelete(PersistenceKeys.acpAuthMethods)
+    expect(rememberedAuthMethods.size).toBe(0)
     expect(sharedFake.api.write).not.toHaveBeenCalled()
   })
 })

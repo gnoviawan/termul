@@ -35,6 +35,12 @@ describe('ssh profiles another device saved', () => {
     sharedFake.remote(PersistenceKeys.sshProfiles, [profile('a'), profile('b')])
     expect(useSSHStore.getState().profiles.map((p) => p.id)).toEqual(['a', 'b'])
 
+    sharedFake.remote(PersistenceKeys.sshProfiles, [
+      { ...profile('a'), password: 'secret', passphrase: 'p' }
+    ])
+    expect(useSSHStore.getState().profiles[0].password).toBeUndefined()
+    expect(useSSHStore.getState().profiles[0].passphrase).toBeUndefined()
+
     sharedFake.remoteDelete(PersistenceKeys.sshProfiles)
     expect(useSSHStore.getState().profiles).toEqual([])
     expect(sharedFake.api.write).not.toHaveBeenCalled()

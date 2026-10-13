@@ -42,6 +42,8 @@ export function useSharedKeySync<T>(
   apply: (change: SharedKeyChange<T>) => void
 ): void {
   const applyRef = useRef(apply)
-  applyRef.current = apply
+  useEffect(() => {
+    applyRef.current = apply
+  })
   useEffect(() => syncSharedKey<T>(key, (change) => applyRef.current(change)), [key])
 }

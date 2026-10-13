@@ -15,7 +15,7 @@
  * Applying never writes: the caller's listener only updates in-memory state.
  */
 
-import { type PersistenceKeyChange } from '@shared/types/ipc.types'
+import type { PersistenceKeyChange } from '@shared/types/ipc.types'
 
 type KeyChange = PersistenceKeyChange
 
