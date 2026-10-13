@@ -19,8 +19,10 @@ import { isDefiniteSpawnRejection } from '@/lib/agents/acp-spawn-errors'
 import { persistenceApi } from '@/lib/api'
 import { __resetCommandEngineForTesting } from '@/lib/command-engine'
 import { __clearCommandJournalForTesting } from '@/lib/command-journal'
+import { projectForCwd, resolveAgentSpawnEnv } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { useProjectStore } from '@/stores/project-store'
 import { agentReuseKey, configIdFromReuseKey, detachedReuseKey } from '../acp-reuse-keys'
 import { ephemeralSessionIds } from './ephemeral-ids'
 import { isReusableStatus } from './helpers'
@@ -223,19 +225,26 @@ const inFlightWarmOutcomes = new Map<string, Promise<AgentId | null>>()
  */
 const definiteSpawnRejections = new Map<string, string>()
 
-function spawnSignature(config: AgentConfigLaunchFields): string {
-  return JSON.stringify([
-    config.name,
-    config.command,
-    config.args,
-    config.env,
-    config.allowTerminal
-  ])
+/**
+ * The launch signature each live agent in `configToLiveAgent` was spawned
+ * with, by reuse key. A warm agent whose signature no longer matches the
+ * current launch (an edited project env, for example) is replaced instead of
+ * reused, so the chat runs with the env the project has now. In-memory only.
+ */
+const liveAgentSignatures = new Map<string, string>()
+
+/**
+ * The effective launch of a config in a working directory: the agent config
+ * plus the env the project owning `cwd` adds underneath it.
+ */
+function spawnSignature(config: AgentConfigLaunchFields, env: Record<string, string>): string {
+  return JSON.stringify([config.name, config.command, config.args, env, config.allowTerminal])
 }
 
 /** Test-only: forget recorded definite spawn rejections between tests. */
 export function _resetDefiniteSpawnRejectionsForTesting(): void {
   definiteSpawnRejections.clear()
+  liveAgentSignatures.clear()
 }
 
 /** In-flight `session/new` for a prepare key. */
@@ -636,9 +645,24 @@ export function ensureLiveAgent(
       message: `Detached agent ${currentAgentId} so the next Agent chat gets its own process`
     })
   }
+  // The project owning `cwd` contributes its env underneath the agent config,
+  // exactly as a terminal tab in that project gets it (`spawnTerminalInPane`)
+  // and as a terminal-native agent does (`launchAgentInPane`).
+  const project = projectForCwd(useProjectStore.getState().projects, trimmedCwd)
+  const env = resolveAgentSpawnEnv(project?.envVars, config.env)
+  const signature = spawnSignature(config, env)
+
   const existing = get().configToLiveAgent[reuseKey]
   if (existing && isReusableStatus(get().agentStatus[existing])) {
-    return Promise.resolve(existing)
+    const liveSignature = liveAgentSignatures.get(reuseKey)
+    if (liveSignature === undefined || liveSignature === signature) {
+      return Promise.resolve(existing)
+    }
+    // Spawned under an older launch (the project env changed since): replace
+    // it so the chat does not run with a stale environment.
+    return replaceStaleAgent(get, set, reuseKey, existing).then(() =>
+      ensureLiveAgent(get, set, configId, cwd, options)
+    )
   }
 
   const inFlight = inFlightWarms.get(reuseKey)
@@ -650,7 +674,6 @@ export function ensureLiveAgent(
     return strict ? asCallerView(strict, reuseKey, configId, options) : inFlight
   }
 
-  const signature = spawnSignature(config)
   if (
     options.silentSpawnFailure &&
     !options.surfaceDefiniteRejection &&
@@ -665,16 +688,24 @@ export function ensureLiveAgent(
 
   const strictSpawn = (async (): Promise<AgentId | null> => {
     try {
+      if (project?.envVars?.length) {
+        void logFrontendError({
+          level: 'info',
+          source: 'acp-store.ensureLiveAgent',
+          message: `Spawning ${config.name} with the env of project ${project.id} (${project.envVars.length} var(s))`
+        })
+      }
       const agentId = await get().spawnAgent({
         configId,
         name: config.name,
         command: config.command,
         args: config.args,
-        env: config.env,
+        env,
         allowTerminal: config.allowTerminal
       })
       definiteSpawnRejections.delete(reuseKey)
       if (get().agentConfigs.some((c) => c.id === configId)) {
+        liveAgentSignatures.set(reuseKey, signature)
         set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
         return agentId
       }
@@ -706,6 +737,36 @@ export function ensureLiveAgent(
   // Joiners derive their own view; this handle must never be an unhandled rejection.
   strictSpawn.catch(() => undefined)
   return spawnPromise
+}
+
+/**
+ * Drop a warm, session-less agent whose launch no longer matches the current
+ * one (stale project env) so the next `ensureLiveAgent` spawns a fresh process.
+ * Best effort: a failed kill still clears the reuse slot.
+ */
+async function replaceStaleAgent(
+  get: () => AcpState,
+  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void,
+  reuseKey: string,
+  agentId: AgentId
+): Promise<void> {
+  liveAgentSignatures.delete(reuseKey)
+  set((s) => {
+    if (s.configToLiveAgent[reuseKey] !== agentId) return {}
+    const configToLiveAgent = { ...s.configToLiveAgent }
+    delete configToLiveAgent[reuseKey]
+    return { configToLiveAgent }
+  })
+  void logFrontendError({
+    level: 'info',
+    source: 'acp-store.ensureLiveAgent',
+    message: `Replacing agent ${agentId}: its launch env no longer matches the project`
+  })
+  try {
+    await get().killAgent(agentId)
+  } catch {
+    /* best-effort cleanup */
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 //! Host-managed lifecycle for the Claude ACP adapter.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -249,7 +250,15 @@ trait ClaudeCredentialStore: Send + Sync {
 #[async_trait::async_trait]
 trait ClaudeRuntimeProbe: Send + Sync {
     async fn ensure_supported(&self) -> Result<(), String>;
-    async fn cli_authentication_status(&self) -> Result<Option<bool>, String>;
+    /// Whether the Claude CLI is signed in under `env`: the env the agent
+    /// process will be spawned with (project env such as `CLAUDE_CONFIG_DIR`
+    /// plus the agent config's own), so the preflight checks the same
+    /// profile the agent will use. `None` when the CLI is missing or the
+    /// probe is inconclusive.
+    async fn cli_authentication_status(
+        &self,
+        env: &HashMap<String, String>,
+    ) -> Result<Option<bool>, String>;
 }
 
 struct SystemClaudeRuntimeProbe;
@@ -279,11 +288,23 @@ impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
         Ok(())
     }
 
-    async fn cli_authentication_status(&self) -> Result<Option<bool>, String> {
+    async fn cli_authentication_status(
+        &self,
+        env: &HashMap<String, String>,
+    ) -> Result<Option<bool>, String> {
         let path = super::config::runtime_resolution_path();
         let Some(cli_path) = resolve_runtime_executable("claude", &path) else {
             return Ok(None);
         };
+        log::info!(
+            "[acp-claude] checking Claude CLI auth status with {} agent env var(s){}",
+            env.len(),
+            if env.contains_key("CLAUDE_CONFIG_DIR") {
+                " (CLAUDE_CONFIG_DIR set)"
+            } else {
+                ""
+            }
+        );
         let cli = crate::pty::manager::resolve_spawn_program(
             cli_path
                 .to_str()
@@ -291,10 +312,18 @@ impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
         )?;
         let mut command = tokio::process::Command::new(cli.program);
         crate::process_util::hide_console(&mut command);
+        // The agent's env first, then the same PATH the agent resolves with
+        // (unless the env overrides it, as `to_mcp_server` honours too), and
+        // never the API key: `claude-code` mode strips it from the agent env
+        // as well.
         command
             .args(cli.prepend_args)
             .args(["auth", "status"])
-            .env("PATH", path)
+            .envs(env);
+        if !env.contains_key("PATH") {
+            command.env("PATH", path);
+        }
+        command
             .env_remove(ANTHROPIC_API_KEY_ENV)
             .kill_on_drop(true)
             .stdout(std::process::Stdio::null())
@@ -430,7 +459,12 @@ impl ClaudeAgentService {
         let path = super::config::runtime_resolution_path();
         status.cli_installed = resolve_runtime_executable("claude", &path).is_some();
         if status.cli_installed {
-            status.cli_authenticated = self.runtime_probe.cli_authentication_status().await?;
+            // Host-level status: no project is in scope, so the probe sees
+            // Termul's own environment.
+            status.cli_authenticated = self
+                .runtime_probe
+                .cli_authentication_status(&HashMap::new())
+                .await?;
         }
         Ok(status)
     }
@@ -653,7 +687,11 @@ impl ClaudeAgentService {
         }
         match self.auth_mode() {
             Ok(ClaudeAuthMode::ClaudeCode) => {
-                match self.runtime_probe.cli_authentication_status().await {
+                match self
+                    .runtime_probe
+                    .cli_authentication_status(&config.env)
+                    .await
+                {
                     Ok(Some(true)) => {}
                     Ok(status) => {
                         log::warn!(

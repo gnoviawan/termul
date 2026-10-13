@@ -203,3 +203,80 @@ function expandEnvReferences(value: string, env: Record<string, string>): string
 
   return result
 }
+
+/**
+ * Resolve an agent definition's env against the surrounding (project) env.
+ * A value starting with `$` names a surrounding variable; an unresolved
+ * reference or an empty value is dropped.
+ *
+ * Shared by terminal-native agent launches and ACP agent spawns, so a project
+ * env var such as `CLAUDE_CONFIG_DIR` reaches both the same way.
+ */
+export function resolveAgentEnv(
+  defEnv: Record<string, string> | undefined,
+  surroundingEnv: Record<string, string>
+): Record<string, string> {
+  if (!defEnv) return {}
+  const out: Record<string, string> = {}
+  for (const [key, raw] of Object.entries(defEnv)) {
+    if (!key.trim()) continue
+    let value = raw
+    if (raw.startsWith('$')) {
+      value = surroundingEnv[raw.slice(1)] ?? ''
+    }
+    if (value !== '') {
+      out[key] = value
+    }
+  }
+  return out
+}
+
+/** Project fields needed to map a working directory back to its project. */
+export interface ProjectPathFields {
+  path?: string
+  worktrees?: Array<{ path: string }>
+}
+
+function normalizeDirPath(path: string): string {
+  const normalized = path.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalized === '' ? '/' : normalized
+}
+
+/**
+ * The registered project a working directory belongs to: the project whose
+ * root or worktree is exactly `cwd`, else the project with the deepest root
+ * that contains `cwd`. `undefined` when no project claims it.
+ */
+export function projectForCwd<P extends ProjectPathFields>(
+  projects: readonly P[],
+  cwd: string
+): P | undefined {
+  const target = normalizeDirPath(cwd)
+  let containing: P | undefined
+  let containingDepth = -1
+  for (const project of projects) {
+    if (project.worktrees?.some((w) => normalizeDirPath(w.path) === target)) return project
+    if (!project.path) continue
+    const root = normalizeDirPath(project.path)
+    if (root === target) return project
+    const prefix = root === '/' ? '/' : `${root}/`
+    if (target.startsWith(prefix) && root.length > containingDepth) {
+      containing = project
+      containingDepth = root.length
+    }
+  }
+  return containing
+}
+
+/**
+ * The env an agent process spawned for a project receives: the project's
+ * env vars with the agent's own env layered on top (`$VAR` values resolved
+ * against the project env). Empty when neither contributes anything.
+ */
+export function resolveAgentSpawnEnv(
+  projectEnvVars: EnvVariable[] | undefined,
+  agentEnv: Record<string, string> | undefined
+): Record<string, string> {
+  const { env: projectEnv } = resolveEnvForSpawn(projectEnvVars, {})
+  return { ...projectEnv, ...resolveAgentEnv(agentEnv, projectEnv) }
+}

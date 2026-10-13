@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { EnvVariable } from '@/types/project'
-import { mergeEnvVars, parseEnvFile, resolveEnvForSpawn, resolveProjectEnvPath } from './env-parser'
+import {
+  mergeEnvVars,
+  parseEnvFile,
+  projectForCwd,
+  resolveAgentSpawnEnv,
+  resolveEnvForSpawn,
+  resolveProjectEnvPath
+} from './env-parser'
 
 describe('env-parser', () => {
   describe('resolveProjectEnvPath', () => {
@@ -247,6 +254,53 @@ describe('env-parser', () => {
       // $BASE should not be expanded because BASE is a project var, not inherited
       expect(result.env.BASE).toBe('/app')
       expect(result.env.FULL).toBe('/data') // $BASE resolves to empty
+    })
+  })
+})
+
+describe('project env for agent spawns', () => {
+  const projects = [
+    { id: 'a', path: '/work/app', worktrees: [{ path: '/tmp/app-wt' }] },
+    { id: 'b', path: '/work/app/nested' },
+    { id: 'c', path: 'C:\\work\\win\\' }
+  ]
+
+  describe('projectForCwd', () => {
+    it.each([
+      ['/work/app', 'a'],
+      ['/work/app/', 'a'],
+      ['/tmp/app-wt', 'a'],
+      ['/work/app/src', 'a'],
+      ['/work/app/nested', 'b'],
+      ['/work/app/nested/deep', 'b'],
+      ['C:/work/win/src', 'c'],
+      ['C:\\work\\win', 'c']
+    ])('maps %s to project %s', (cwd, id) => {
+      expect(projectForCwd(projects, cwd)?.id).toBe(id)
+    })
+
+    it('returns undefined for a cwd outside every project (no prefix-string matches)', () => {
+      expect(projectForCwd(projects, '/work/application')).toBeUndefined()
+      expect(projectForCwd(projects, '/elsewhere')).toBeUndefined()
+      expect(projectForCwd([], '/work/app')).toBeUndefined()
+    })
+  })
+
+  describe('resolveAgentSpawnEnv', () => {
+    it('puts the project env under the agent env and resolves $ references', () => {
+      const env = resolveAgentSpawnEnv(
+        [
+          { key: 'CLAUDE_CONFIG_DIR', value: '/home/me/.claude-work' },
+          { key: 'TOKEN', value: 't' }
+        ],
+        { CLAUDE_CONFIG_DIR: '/agent', REF: '$TOKEN', GONE: '$NOPE', EMPTY: '' }
+      )
+      expect(env).toEqual({ CLAUDE_CONFIG_DIR: '/agent', TOKEN: 't', REF: 't' })
+    })
+
+    it('is empty when neither side contributes', () => {
+      expect(resolveAgentSpawnEnv(undefined, undefined)).toEqual({})
+      expect(resolveAgentSpawnEnv([], {})).toEqual({})
     })
   })
 })

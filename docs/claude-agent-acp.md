@@ -86,6 +86,14 @@ host's configured credential. Credential status and management remain local to
 the server host's CLI. There are no HTTP or WS routes for reading or changing
 Claude credentials.
 
+## Per-project Claude profiles
+
+The agent process and the `claude auth status` preflight both run with the
+project's environment variables (Project Settings → Environment Variables)
+underneath the agent config's own env. Set `CLAUDE_CONFIG_DIR` on a project to
+pin its agent chats, like its terminal tabs, to one Claude Code login.
+Changing a project's env replaces its warm agent on the next chat.
+
 ## Startup failures
 
 - **Node.js 22 or newer required:** upgrade Node and restart Termul.

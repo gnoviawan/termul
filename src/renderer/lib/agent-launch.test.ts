@@ -63,9 +63,13 @@ vi.mock('@/lib/api', () => ({
   terminalApi: { spawn: mockTerminalApiSpawn }
 }))
 
-vi.mock('@/lib/env-parser', () => ({
-  resolveEnvForSpawn: () => ({ env: {}, hasProjectEnv: false })
-}))
+vi.mock('@/lib/env-parser', async (orig) => {
+  const actual = await orig<typeof import('@/lib/env-parser')>()
+  return {
+    ...actual,
+    resolveEnvForSpawn: () => ({ env: {}, hasProjectEnv: false })
+  }
+})
 
 vi.mock('@/lib/worktree-context', () => ({
   ensureWorktreeSymlinks: mockEnsureWorktreeSymlinks
