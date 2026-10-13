@@ -2,6 +2,98 @@
 @import "shadcn/tailwind.css";
 @config "../../tailwind.config.ts";
 
+/* App animations. Kept in CSS rather than tailwind.config.ts: JS-config
+   keyframes carry no source file, so Vite warns about a missing `from`.
+   `inline` writes each value into its utility, as the JS config did. After
+   the shadcn import so these accordion keyframes still win over its own. */
+@theme inline {
+  /* Custom ease-out (cubic-bezier(0.23, 1, 0.32, 1)) so these match the
+     tailwindcss-animate Radix overrides further down. */
+  --animate-accordion-down: accordion-down 250ms cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-accordion-up: accordion-up 250ms cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-fade-in: fade-in 200ms cubic-bezier(0.23, 1, 0.32, 1);
+  --animate-slide-in: slide-in 180ms cubic-bezier(0.23, 1, 0.32, 1);
+  /* Tab bar live-turn edge: opacity-only fade-in so the 2px gradient edge
+     appears without a transform. Reduced motion renders it instantly via
+     motion-reduce:animate-none. */
+  --animate-alive-in: alive-in 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  /* Chat "agent is typing" dots: a gentle hop + scale, staggered per dot via
+     animation-delay at the call site. */
+  --animate-typing-bounce: typing-bounce 1s cubic-bezier(0.77, 0, 0.175, 1) infinite;
+  /* Streaming caret: a steady blink while the agent is writing. */
+  --animate-caret-blink: caret-blink 1s step-end infinite;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+  @keyframes alive-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes typing-bounce {
+    0%,
+    80%,
+    100% {
+      transform: translateY(0) scale(0.8);
+      opacity: 0.5;
+    }
+    40% {
+      transform: translateY(-3px) scale(1);
+      opacity: 1;
+    }
+  }
+  @keyframes caret-blink {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    50%,
+    95% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+}
+
 /* Streamdown ships Tailwind utility classes in its dist bundles; Tailwind v4
    must scan them to generate the matching CSS (chat markdown renderer). */
 @source "../../node_modules/streamdown/dist/*.js";
