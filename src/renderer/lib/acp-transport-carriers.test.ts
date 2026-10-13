@@ -99,7 +99,7 @@ class FakeHost {
     const ok = (payload: unknown = {}) => conn.emit({ id: frame.id, ok: true, payload })
 
     if (frame.command_id && this.dropReplyOnce.delete(frame.command_id)) {
-      conn.endByHost(1001, 'host stop')
+      conn.endByHost(1012, 'host restart')
       return
     }
     if (this.hold.has(frame.type)) {
@@ -372,7 +372,7 @@ describe.each([webCarrier(), channelCarrier()])('/ws contract over $name', (carr
     const states: boolean[] = []
     transport.setReconnectListener?.((reconnecting) => states.push(reconnecting))
 
-    host.conns[0].endByHost(1001, 'host stop')
+    host.conns[0].endByHost(1012, 'host restart')
     expect(states).toEqual([true])
 
     await vi.advanceTimersByTimeAsync(2_000)
