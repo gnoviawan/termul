@@ -1,10 +1,11 @@
 /**
  * Web/remote project list wire contract (runtime-neutral).
  *
- * The desktop-hosted shared-live web server (`remote_server_start`) mirrors the
- * desktop's non-archived project list into an in-memory `ProjectRegistry` (a
- * deliberate bridge to Epic 4). The browser reads it via `GET /projects` and
- * receives the same list through the `projects` watch (full state, then deltas) when the desktop mutates its store.
+ * Every host (the desktop included) owns one durable project registry. Clients
+ * read it through the `projects` watch (full state, then the replacement list on
+ * each change) and change it with the `add_project` / `update_project` /
+ * `remove_project` / `set_default_project` commands. `GET /projects` returns the
+ * same list over HTTP.
  *
  * # Secret boundary (frozen constraint)
  *
@@ -53,9 +54,8 @@ export interface ProjectListPayload {
 /**
  * `set_default_project` WS request payload (client→server) — the explicit
  * host-default change: this updates the host default that new web clients start with, persists to the
- * `FileProjectRegistry` (VPS), and publishes the project state to every
- * `projects` watcher. Mirrors the `set_host_default_project` Tauri command + the
- * `POST /projects/default` HTTP route (transport parity).
+ * durable registry file, and publishes the project state to every `projects`
+ * watcher. Mirrors the `POST /projects/default` HTTP route (transport parity).
  */
 export interface SetDefaultProjectRequest {
   /** Target project id (validated switchable: known, not archived, has cwd). */

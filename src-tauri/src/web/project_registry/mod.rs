@@ -74,7 +74,7 @@ pub(crate) mod test_host;
 
 pub use busy::{BoundEntities, BoundSession};
 pub use commands::{
-    import_projects, notify_changed, replace_projects, set_default_project, AddProject,
+    import_projects, notify_changed, set_default_project, AddProject,
     ProjectCommandError, ProjectHost, UpdateProject,
 };
 pub use crate::acp::RootCheck;

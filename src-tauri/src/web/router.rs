@@ -182,8 +182,7 @@ pub fn router(
             get(projects_api::list).post(projects_api::create_project),
         )
         // Explicit host-default change (Epic 7 — cross-client workspace
-        // continuity). Mirrors the `set_default_project` WS request + the
-        // `set_host_default_project` Tauri command (transport parity).
+        // continuity). Mirrors the `set_default_project` WS request.
         .route("/projects/default", post(projects_api::set_default_project))
         // Project mutations through the shared command service.
         // `PUT /projects/{id}` patches display fields and archives/restores

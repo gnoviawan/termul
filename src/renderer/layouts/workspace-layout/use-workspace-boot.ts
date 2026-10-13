@@ -32,7 +32,7 @@ export function useWorkspaceBoot({ navigate, activeProjectId }: UseWorkspaceBoot
   // persisted token) leaves this layout untouched; `unauthorized` swaps the
   // loading state for the token-entry screen. A successful submission flips
   // the gate to ok and the projects loader (gated on
-  // useWebAuthGateOk in use-projects-persistence.ts) re-fetches with the
+  // useWebAuthGateOk in use-project-registry.ts) subscribes with the
   // fresh Authorization header.
   useEffect(() => {
     checkWebAuthGate()

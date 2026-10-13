@@ -37,7 +37,6 @@ import {
   type FsWriteExpected,
   type HashedFileContent
 } from '@shared/types/ipc.types'
-import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
 import {
   bodyToResult,
   getJson,
@@ -399,71 +398,6 @@ export const webServerGit = {
 export const webServerShell = {
   async getAvailableShells(): Promise<IpcResult<DetectedShells>> {
     return getJson<DetectedShells>('/shells')
-  }
-}
-
-/**
- * Project-list mirror routed to `termul-server` (`GET /projects`). Returns the
- * desktop's non-archived + archived project summaries the renderer synced into
- * the in-memory `ProjectRegistry` (Epic-4 bridge). Web/remote mode only.
- *
- * Also exposes the explicit host-default change (`POST /projects/default`,
- * Epic 7) — mirrors the `set_host_default_project` Tauri command + the
- * `set_default_project` WS request (transport parity).
- */
-export const webServerProjects = {
-  async list(): Promise<IpcResult<ProjectListPayload>> {
-    return getJson<ProjectListPayload>('/projects')
-  },
-
-  /**
-   * Set the host's default project (Epic 7 — cross-client workspace
-   * continuity). Validates the project is switchable, updates
-   * `registry.set_default_project`, persists to the `FileProjectRegistry`
-   * (VPS), and publishes the project state to every `projects` watcher.
-   */
-  async setDefaultProject(projectId: string): Promise<IpcResult<void>> {
-    return postJson<void>('/projects/default', { projectId })
-  },
-
-  /**
-   * Create / upsert a project (Option B: the standalone server is a first-class
-   * project-list authority). Canonicalizes + validates the path on the server,
-   * persists to `FileProjectRegistry` (VPS), and publishes the project state.
-   * Mirrors the `add_project` WS request.
-   */
-  async addProject(params: {
-    id: string
-    name: string
-    path: string
-    color: string
-    isArchived?: boolean
-  }): Promise<IpcResult<ProjectSummary>> {
-    return postJson<ProjectSummary>('/projects', params)
-  },
-
-  /**
-   * Patch a project's display fields (name, color, archived). All fields
-   * optional (partial update). Mirrors the `update_project` WS request +
-   * `PUT /projects/{id}`.
-   */
-  async updateProject(
-    projectId: string,
-    patch: { name?: string; color?: string; isArchived?: boolean }
-  ): Promise<IpcResult<void>> {
-    return putJson<void>(`/projects/${encodeURIComponent(projectId)}`, patch)
-  },
-
-  /**
-   * Remove a project. Mirrors the `remove_project` WS request +
-   * `DELETE /projects/{id}`.
-   */
-  async removeProject(projectId: string): Promise<IpcResult<void>> {
-    const res = await fetch(`${serverBase()}/projects/${encodeURIComponent(projectId)}`, {
-      method: 'DELETE',
-      headers: authHeader()
-    })
-    return parseBody<void>(res)
   }
 }
 

@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/context-menu'
 import { WriteGate, WriteGateReason } from '@/components/ui/write-gate'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
+import type { ProjectUpdates } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { Project, ProjectGroup } from '@/types/project'
 
@@ -34,7 +35,7 @@ export interface ProjectContextMenuContentProps {
   onStartRename: (project: Project) => void
   onOpenSettings: (projectId: string) => void
   onOpenColorPicker: (targetId: string, targetType: 'project' | 'group') => void
-  onUpdateProject: (id: string, updates: Partial<Project>) => void
+  onUpdateProject: (id: string, updates: ProjectUpdates) => void
   moveProjectToGroup: (projectId: string, targetGroupId: string | null) => void
   onCreateGroupForProject: (projectId: string) => void
   onNewWorktree: (projectId: string) => void

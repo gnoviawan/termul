@@ -9,7 +9,7 @@ import { useShellLayoutStore } from '@/stores/shell-layout-store'
  * - Hydrates the store once (single-flight inside the store): reads the saved
  *   record, or migrates the legacy values when none exists.
  * - Notices a Project disappearing from `useProjectStore` between two LOADED
- *   states (desktop cascade, sidebar delete, web refetch all end up here) and
+ *   states (a remove from any device and a host cascade both arrive as a `projects` watch state) and
  *   asks the store to drop everything remembered for it. The initial load
  *   (`isLoaded` false -> true) is never treated as a removal.
  */

@@ -47,8 +47,7 @@ export interface Project {
    * `true` when this is the host's default project (set by the host's
    * `default_project_id`). Mirrors `ProjectSummary.isDefault` on the wire.
    * Distinct from `isActive` (per-client, set locally by `selectProject`).
-   * Surfaced in the desktop-hosted shared-live bridge (`useProjectsAutoSave`
-   * maps `summary.isDefault` → `Project.isDefault`).
+   * Set by the `projects` watch feed (`summary.isDefault` → `Project.isDefault`).
    */
   isDefault?: boolean
   isArchived?: boolean

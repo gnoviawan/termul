@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::acp::session_persistence::UNASSIGNED_PROJECT_ID;
 
-use super::store::insert_project;
-use super::{ProjectRegistry, ProjectSummary};
+use super::store::{insert_project, Committed};
+use super::{ProjectCommandError, ProjectRegistry, ProjectSummary};
 
 impl ProjectRegistry {
     /// A shared registry with `root` registered as the one (default) project,
@@ -17,6 +17,37 @@ impl ProjectRegistry {
         let registry = Arc::new(Self::new());
         registry.seed_root_if_no_usable_project(root);
         registry
+    }
+
+    /// Replace the whole list.
+    /// The new default is chosen by `derive(projects, current default)` under
+    /// the commit lock, so a concurrent explicit default change is never
+    /// overwritten by a stale read. The reserved unassigned id never
+    /// registers. Returns the stored default.
+    pub(super) fn commit_replace_all(
+        &self,
+        mut projects: Vec<ProjectSummary>,
+        derive: impl FnOnce(&[ProjectSummary], Option<&str>) -> Option<String>,
+    ) -> Result<Committed<Option<String>>, ProjectCommandError> {
+        let before = projects.len();
+        projects.retain(|p| p.id != UNASSIGNED_PROJECT_ID);
+        if projects.len() != before {
+            tracing::warn!(
+                target: "termul::web::project_registry",
+                "replace: dropped a project carrying the reserved unassigned id"
+            );
+        }
+        let committed = self.commit(|data| {
+            data.default_project_id = derive(&projects, data.default_project_id.as_deref());
+            data.projects = projects;
+            data.seeded = false;
+            Ok(())
+        })?;
+        let stored = self.inner.lock().default_project_id.clone();
+        Ok(Committed {
+            value: stored,
+            changed: committed.changed,
+        })
     }
 
     /// Replace the whole list and default (panics when the commit fails).
@@ -61,16 +92,5 @@ impl ProjectRegistry {
     /// Make `project_id` the default; `false` when it is not switchable.
     pub(crate) fn set_default_project(&self, project_id: &str) -> bool {
         self.commit_set_default(project_id).is_ok()
-    }
-
-    /// Replace the list, deriving the default under the commit lock.
-    pub(crate) fn set_with_default_from(
-        &self,
-        projects: Vec<ProjectSummary>,
-        derive: impl FnOnce(&[ProjectSummary], Option<&str>) -> Option<String>,
-    ) -> Option<String> {
-        self.commit_replace_all(projects, derive)
-            .expect("fixture replace commits")
-            .value
     }
 }

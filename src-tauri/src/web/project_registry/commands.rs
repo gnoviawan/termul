@@ -369,25 +369,6 @@ pub fn set_default_project(
     Ok(())
 }
 
-/// Replace the whole list with the desktop renderer's push (transitional until
-/// the renderer reads the registry through the projects watch). The default is
-/// `derive(projects, current default)`; returns the stored default.
-///
-/// # Errors
-/// A failed registry write (the registry is unchanged).
-pub fn replace_projects(
-    registry: &Arc<ProjectRegistry>,
-    relay: &Arc<WsRelaySink>,
-    projects: Vec<ProjectSummary>,
-    derive: impl FnOnce(&[ProjectSummary], Option<&str>) -> Option<String>,
-) -> Result<Option<String>, ProjectCommandError> {
-    let committed = registry.commit_replace_all(projects, derive)?;
-    // The renderer's push is announced even when nothing changed: it is the
-    // signal that a freshly started host's clients should refetch.
-    notify_changed(relay, registry);
-    Ok(committed.value)
-}
-
 /// The desktop's one-shot import of the renderer's old project list: allowed
 /// once, merges without overwriting, durable even for an empty list.
 ///

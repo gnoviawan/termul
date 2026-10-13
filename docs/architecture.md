@@ -130,7 +130,7 @@ This is a strongly store-driven architecture with hooks providing side-effect or
 
 Hooks such as:
 
-- `use-projects-persistence`
+- `use-project-registry`
 - `use-terminal-restore`
 - `useTerminalAutoSave`
 - `use-file-watcher`
@@ -245,7 +245,7 @@ Primary persisted domains include:
 
 `src/shared/types/persistence.types.ts` defines structures like:
 
-- `PersistedProjectData`
+- `ProjectPrefsRecord` (per-device project settings and sidebar layout; the project list itself lives in the host registry)
 - `PersistedTerminalLayout`
 - `PersistedSnapshotList`
 - `WindowState`

@@ -64,41 +64,6 @@ export async function projectRegistryImport(
 }
 
 /**
- * Push the desktop renderer's current project list into the in-memory
- * `ProjectRegistry` (Epic-4 bridge) so the web/remote client can read it via
- * `GET /projects`. No env-var values cross the wire — `ProjectSummary` redacts
- * by omission. Call on server-start success + on every project-list mutation
- * while the server runs (a no-op when the server is stopped just returns ok).
- *
- * Desktop navigation never moves the host default: the push carries no
- * `defaultProjectId`. The host keeps its current default while that project is
- * still valid (so a default set from the web or via `setHostDefaultProject` is
- * not reverted by a later list mutation), else the project the summaries flag
- * as stored default (`isDefault`), else the first switchable one. The reply
- * carries the resulting host default id (`null` when there is none).
- */
-export async function syncProjects(projects: ProjectSummary[]): Promise<IpcResult<string | null>> {
-  return invokeIpc<string | null>('remote_sync_projects', {
-    payload: { projects }
-  })
-}
-
-/**
- * Explicitly set the host's default project (Epic 7 — cross-client workspace
- * continuity). Distinct from a per-connection `switch_project`: this changes
- * the host default that new web clients start with. Validates the project is
- * switchable, updates `registry.set_default_project`, and publishes
- * the project state to every `projects` watcher. Mirrors the
- * `set_default_project` WS request + the `POST /projects/default` HTTP route
- * (transport parity). The explicit way to select the host default (a project-list
- * sync only changes it when the current default is no longer valid); it stores
- * the default and rebinds nothing.
- */
-export async function setHostDefaultProject(projectId: string): Promise<IpcResult<void>> {
-  return invokeIpc<void>('set_host_default_project', { projectId })
-}
-
-/**
  * Mirror the desktop app-store MCP registry to the named project's
  * `.termul/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
  * `remote_sync_mcp_registry` command resolves `projectId` through the shared

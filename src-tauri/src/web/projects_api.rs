@@ -77,8 +77,7 @@ impl<T> IpcBody<T> {
 }
 
 /// `POST /projects/default` request body — the explicit host-default change
-/// (Epic 7). Mirrors the `set_default_project` WS request payload + the
-/// `set_host_default_project` Tauri command argument.
+/// (Epic 7). Mirrors the `set_default_project` WS request payload.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetDefaultProjectRequest {
@@ -169,8 +168,7 @@ fn check_project_write_guard<T>(
 ///
 /// Validates the target is switchable (unknown/archived/pathless → `NOT_FOUND`),
 /// persists, and notifies every connected client. Mirrors the
-/// `set_default_project` WS request + the `set_host_default_project` Tauri
-/// command (transport parity).
+/// `set_default_project` WS request (transport parity).
 ///
 /// # Malformed body (P14)
 ///

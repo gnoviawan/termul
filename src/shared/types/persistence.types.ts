@@ -70,7 +70,6 @@ export interface PersistedSnapshotList {
 export const PersistenceKeys = {
   terminals: (projectId: string): string => `terminals/${projectId}`,
   snapshots: (projectId: string): string => `snapshots/${projectId}`,
-  projects: 'projects',
   windowState: 'window-state',
   // App-wide settings records (shared between devices, merged per field).
   appSettings: 'settings/app',
@@ -122,8 +121,8 @@ export const PersistenceKeys = {
   // Restored on drawer reopen across close/reopen and page reloads (web only).
   mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`,
   // The device's own active project (device scope: each device keeps its own
-  // selection). Web/remote only: the desktop already persists
-  // `activeProjectId` inside the `projects` snapshot.
+  // selection). Written only by an explicit project switch; a device without
+  // one lands on the host default project.
   activeProject: 'active-project',
   // Renderer-owned per-project settings and list layout (device scope): the
   // `ProjectPrefsRecord` keyed by project id. The project list itself lives in
@@ -253,14 +252,6 @@ export interface PersistedProjectPrefs {
   icon?: ProjectIcon
 }
 
-// Persisted project data (stored at projects.json)
-export interface PersistedProjectData {
-  projects: PersistedProject[]
-  groups?: PersistedProjectGroup[]
-  activeProjectId: string
-  updatedAt: string // ISO timestamp
-}
-
 export interface PersistedProjectGroup {
   id: string
   name: string
@@ -275,43 +266,13 @@ export interface PersistedEnvVariable {
   isSecret?: boolean
 }
 
-// Minimal project data for persistence (matches Project from renderer)
-export interface PersistedProject {
-  id: string
-  name: string
-  color: string
-  path?: string
-  isArchived?: boolean
-  gitBranch?: string
-  defaultShell?: string
-  envVars?: PersistedEnvVariable[]
-  // Worktree fields (added by worktree feature)
-  worktrees?: PersistedWorktree[]
-  /** The explicit host-default selection (the stored default flag); additive, absent on older records. */
-  isDefault?: boolean
-  /**
-   * Legacy: no longer written. Records saved before the switcher pick moved to
-   * the shell-layout store (`worktreePickByProject`, keyed by path) may still
-   * carry it; only the shell-layout migration reads it.
-   */
-  activeWorktreeId?: string | null
-  // Git detection (cached)
-  isGitRepo?: boolean
-  /**
-   * Resolved project icon (spec-project-icon) incl. the renderer-stamped
-   * `fetchedAt`. Persisted so a previously resolved icon renders on app start
-   * before `use-project-icon` re-resolution completes.
-   */
-  icon?: ProjectIcon
-}
-
 // ============================================================================
 // Worktree Persistence Types
 // ============================================================================
 
 /**
  * Persisted worktree data (subset of Worktree for storage)
- * Stored as part of the project record — no separate persistence hook.
+ * Stored inside the project's {@link PersistedProjectPrefs}.
  */
 export interface PersistedWorktree {
   id: string

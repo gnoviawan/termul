@@ -1894,8 +1894,6 @@ pub fn run() {
             commands::remote_server_start,
             commands::remote_server_stop,
             commands::remote_server_status,
-            commands::remote_sync_projects,
-            commands::set_host_default_project,
             commands::project_registry_import,
             commands::remote_sync_chat_history,
             commands::remote_sync_mcp_registry,

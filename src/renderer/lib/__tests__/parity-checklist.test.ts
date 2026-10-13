@@ -515,14 +515,17 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
-  // Epic 7 — cross-client workspace continuity: the explicit host-default
-  // change ships on THREE transports (Tauri command `set_host_default_project`,
-  // HTTP `POST /projects/default`, WS `set_default_project` request). This
-  // block pins the TS-side parity (the Rust-side parity — router route + ws
-  // handler + Tauri command registration — is covered by the Rust test suite).
-  // Also pins the wire rename `activeProjectId` → `defaultProjectId` +
-  // `ProjectSummary.isActive` → `isDefault`.
-  describe('Project default parity (Epic 7)', () => {
+  // Project registry parity (story 8): the host owns the project list and
+  // every surface changes it through ONE renderer facade over the `/ws`
+  // transport (the browser over its WebSocket, the desktop over its Channel
+  // carrier) — no per-surface Tauri command, no per-surface HTTP client. The
+  // Rust side (ws handlers, HTTP routes, durable registry) is covered by the
+  // Rust test suite. Also pins the wire rename `activeProjectId` →
+  // `defaultProjectId` + `ProjectSummary.isActive` → `isDefault`.
+  describe('Project registry parity (story 8)', () => {
+    const Facade = join(LIB_DIR, 'project-registry-api.ts')
+    const TransportTypes = join(LIB_DIR, 'acp-transport', 'types.ts')
+    const WsTransport = join(LIB_DIR, 'acp-transport', 'ws-transport.ts')
     const TauriRemoteApi = join(LIB_DIR, 'tauri-remote-api.ts')
     const WebServerApi = join(LIB_DIR, 'web-server-api.ts')
     const SharedTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-projects.types.ts')
@@ -543,38 +546,45 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/projectId:\s*string/)
     })
 
-    it('tauri-remote-api.ts exports setHostDefaultProject + invokes set_host_default_project', () => {
-      expect(existsSync(TauriRemoteApi), 'tauri-remote-api.ts should exist').toBe(true)
-      const content = readFileSync(TauriRemoteApi, 'utf-8')
-      expect(content).toMatch(/export\s+async\s+function\s+setHostDefaultProject\b/)
-      expect(content).toMatch(/set_host_default_project/)
+    it('project-registry-api.ts exposes the commands over the shared transport only', () => {
+      expect(existsSync(Facade), 'project-registry-api.ts should exist').toBe(true)
+      const content = readFileSync(Facade, 'utf-8')
+      for (const operation of ['add', 'update', 'archive', 'restore', 'remove', 'setDefault']) {
+        expect(content, operation).toMatch(new RegExp(`\\b${operation}\\(`))
+      }
+      expect(content).toMatch(/getAcpTransport\(\)/)
+      // One implementation for both surfaces: no surface branch, no raw invoke,
+      // no HTTP client, no browser storage.
+      expect(content).not.toMatch(/isTauriContext/)
+      expect(content).not.toMatch(/\binvoke(Ipc)?\b/)
+      expect(content).not.toMatch(/fetch\(/)
+      expect(content).not.toMatch(/localStorage(?:\.|\[)/)
     })
 
-    it('web-server-api.ts exposes setDefaultProject hitting POST /projects/default', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/setDefaultProject\b/)
-      expect(content).toMatch(/\/projects\/default/)
-    })
-    it('web-server-api.ts exposes addProject hitting POST /projects', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/addProject\b/)
-      expect(content).toMatch(/postJson.*\/projects'/)
-    })
-
-    it('web-server-api.ts exposes updateProject hitting PUT /projects/{id}', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/updateProject\b/)
-      expect(content).toMatch(/\/projects\/\$\{encodeURIComponent\(projectId\)\}/)
+    it('the transport declares and sends the four project requests', () => {
+      const types = readFileSync(TransportTypes, 'utf-8')
+      const ws = readFileSync(WsTransport, 'utf-8')
+      for (const method of ['addProject', 'updateProject', 'removeProject', 'setDefaultProject']) {
+        expect(types, method).toMatch(new RegExp(`\\b${method}\\(`))
+      }
+      for (const request of [
+        'add_project',
+        'update_project',
+        'remove_project',
+        'set_default_project'
+      ]) {
+        expect(ws, request).toMatch(new RegExp(`'${request}'`))
+      }
     })
 
-    it('web-server-api.ts exposes removeProject hitting DELETE /projects/{id}', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/removeProject\b/)
-      expect(content).toMatch(/method:\s*'DELETE'/)
+    it('the old per-surface project calls are retired', () => {
+      const tauri = readFileSync(TauriRemoteApi, 'utf-8')
+      expect(tauri).not.toMatch(/syncProjects|remote_sync_projects/)
+      expect(tauri).not.toMatch(/setHostDefaultProject|set_host_default_project/)
+      expect(tauri).toMatch(/export\s+async\s+function\s+projectRegistryImport\b/)
+      expect(tauri).toMatch(/project_registry_import/)
+      const web = readFileSync(WebServerApi, 'utf-8')
+      expect(web).not.toMatch(/webServerProjects/)
     })
   })
 

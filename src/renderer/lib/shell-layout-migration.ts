@@ -10,6 +10,7 @@
 
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { persistenceApi } from '@/lib/api'
+import { LEGACY_PROJECTS_KEY } from '@/lib/legacy-project-import'
 import {
   clampToBounds,
   defaultShellLayoutRecord,
@@ -132,7 +133,7 @@ async function readRaw(key: string): Promise<unknown> {
 export async function readLegacyShellLayoutSources(): Promise<LegacyShellLayoutSources> {
   const [appSettings, projects] = await Promise.all([
     readRaw(PersistenceKeys.appSettings),
-    isTauriContext() ? readRaw(PersistenceKeys.projects) : Promise.resolve(null)
+    isTauriContext() ? readRaw(LEGACY_PROJECTS_KEY) : Promise.resolve(null)
   ])
   return {
     appSettings,

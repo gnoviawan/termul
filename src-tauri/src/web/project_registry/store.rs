@@ -231,37 +231,6 @@ impl ProjectRegistry {
         })
     }
 
-    /// Replace the whole list (the desktop renderer's transitional push).
-    /// The new default is chosen by `derive(projects, current default)` under
-    /// the commit lock, so a concurrent explicit default change is never
-    /// overwritten by a stale read. The reserved unassigned id never
-    /// registers. Returns the stored default.
-    pub(super) fn commit_replace_all(
-        &self,
-        mut projects: Vec<ProjectSummary>,
-        derive: impl FnOnce(&[ProjectSummary], Option<&str>) -> Option<String>,
-    ) -> Result<Committed<Option<String>>, ProjectCommandError> {
-        let before = projects.len();
-        projects.retain(|p| p.id != UNASSIGNED_PROJECT_ID);
-        if projects.len() != before {
-            tracing::warn!(
-                target: "termul::web::project_registry",
-                "replace: dropped a project carrying the reserved unassigned id"
-            );
-        }
-        let committed = self.commit(|data| {
-            data.default_project_id = derive(&projects, data.default_project_id.as_deref());
-            data.projects = projects;
-            data.seeded = false;
-            Ok(())
-        })?;
-        let stored = self.inner.lock().default_project_id.clone();
-        Ok(Committed {
-            value: stored,
-            changed: committed.changed,
-        })
-    }
-
     /// The desktop's one-shot import: only while `imported` is false. Merges
     /// (ids not present are added, existing ids are kept, never overwritten),
     /// applies `default_project_id` only when no default is set (the synthetic

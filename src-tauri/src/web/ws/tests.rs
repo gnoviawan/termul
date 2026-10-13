@@ -3692,8 +3692,7 @@ fn project_summary_for_test(
 
 /// `set_default_project` WS request (Epic 7): updates the host default and
 /// writes it through to the durable registry file. Mirrors the
-/// `set_host_default_project` Tauri command + `POST /projects/default` HTTP
-/// route (transport parity).
+/// `POST /projects/default` HTTP route (transport parity).
 #[tokio::test]
 async fn handle_set_default_project_updates_host_default_and_persists() {
     let dir = tempfile::tempdir().unwrap();

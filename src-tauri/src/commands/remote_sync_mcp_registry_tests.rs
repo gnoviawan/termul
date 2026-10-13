@@ -1,4 +1,4 @@
-use super::{default_after_sync, sync_mcp_registry_to_project_file};
+use super::sync_mcp_registry_to_project_file;
 use crate::web::mcp_servers_api::registry_path;
 use crate::web::{ProjectRegistry, ProjectSummary};
 use serde_json::json;
@@ -151,76 +151,4 @@ fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> Proje
         is_archived: archived,
         is_default: default,
     }
-}
-
-/// A project-list sync never moves the host default while it is still
-/// switchable: the registry's current default wins (so a web-set default is
-/// not reverted by the desktop's stale stored flag), then the stored
-/// `is_default` flag, then the first switchable project.
-#[test]
-fn sync_default_keeps_current_then_stored_flag_then_first_switchable() {
-    let list = vec![
-        summary("a", Some("/a"), false, false),
-        summary("b", Some("/b"), false, true),
-        summary("c", Some("/c"), false, false),
-    ];
-    // The registry default (set elsewhere) beats the stored flag.
-    assert_eq!(default_after_sync(&list, Some("a")).as_deref(), Some("a"));
-    // No current default: the stored flag decides.
-    assert_eq!(default_after_sync(&list, None).as_deref(), Some("b"));
-    // A current default that vanished falls back to the flag.
-    assert_eq!(default_after_sync(&list, Some("gone")).as_deref(), Some("b"));
-
-    let unflagged = vec![
-        summary("a", Some("/a"), false, false),
-        summary("c", Some("/c"), false, false),
-    ];
-    assert_eq!(default_after_sync(&unflagged, Some("c")).as_deref(), Some("c"));
-    assert_eq!(default_after_sync(&unflagged, Some("gone")).as_deref(), Some("a"));
-
-    let unswitchable = vec![
-        summary("arch", Some("/x"), true, true),
-        summary("nopath", None, false, false),
-        summary("blank", Some("  "), false, false),
-    ];
-    assert_eq!(default_after_sync(&unswitchable, Some("arch")), None);
-    assert_eq!(default_after_sync(&[], None), None);
-}
-
-/// The sync derives the default under the registry lock: a `set_default_project`
-/// that starts while the derivation is running waits for it, so it lands AFTER
-/// the sync and is never overwritten by a default derived from a stale read.
-#[test]
-fn sync_derives_the_default_under_the_registry_lock() {
-    use std::sync::{mpsc, Arc};
-    let reg = Arc::new(ProjectRegistry::new());
-    let list = || {
-        vec![
-            summary("a", Some("/a"), false, true),
-            summary("b", Some("/b"), false, false),
-        ]
-    };
-    assert_eq!(reg.set_with_default_from(list(), default_after_sync).as_deref(), Some("a"));
-
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let setter = {
-        let reg = Arc::clone(&reg);
-        std::thread::spawn(move || {
-            entered_rx.recv().expect("derivation started");
-            // Starts while the sync still holds the registry lock.
-            reg.set_default_project("b")
-        })
-    };
-    let derived = reg.set_with_default_from(list(), |projects, current| {
-        entered_tx.send(()).expect("signal the setter");
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        default_after_sync(projects, current)
-    });
-    assert_eq!(derived.as_deref(), Some("a"), "the sync derived from the default it saw");
-    assert!(setter.join().expect("setter thread"), "the explicit default was accepted");
-
-    // The explicit default landed after the sync and survives.
-    let snap = reg.snapshot();
-    assert_eq!(snap.default_project_id.as_deref(), Some("b"));
-    assert!(snap.projects.iter().find(|p| p.id == "b").is_some_and(|p| p.is_default));
 }
