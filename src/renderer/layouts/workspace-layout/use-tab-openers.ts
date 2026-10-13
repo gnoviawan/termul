@@ -10,7 +10,7 @@ import { openProjectCanvas } from '@/lib/open-project-canvas'
 import { openTerminalAtCwd, spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { randomUUID } from '@/lib/uuid'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
-import { useDefaultShell, useMaxTerminalsPerProject } from '@/stores/app-settings-store'
+import { useDefaultShell } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
@@ -56,7 +56,6 @@ export function useTabOpeners({
   closeGitSheet
 }: UseTabOpenersOptions) {
   const appDefaultShell = useDefaultShell()
-  const maxTerminals = useMaxTerminalsPerProject()
 
   // OpenPencil canvas mode (CAP-1): the palette command resolves the
   // project's `.op` document (first one in the project root, via the pure
@@ -82,20 +81,13 @@ export function useTabOpeners({
 
       const result = await spawnTerminalInPane(paneId, activeProjectId, cwd, {
         shell: shellName || activeProject?.defaultShell || appDefaultShell || undefined,
-        envVars: activeProject?.envVars,
-        maxTerminalsPerProject: maxTerminals
+        envVars: activeProject?.envVars
       })
       if (!result.success) {
         toast.error(result.error || 'Failed to create terminal')
       }
     },
-    [
-      activeProject?.defaultShell,
-      activeProject?.envVars,
-      activeProjectId,
-      appDefaultShell,
-      maxTerminals
-    ]
+    [activeProject?.defaultShell, activeProject?.envVars, activeProjectId, appDefaultShell]
   )
 
   // ADR-004.5: command-bar "Launch Agent" entry. Launches the default agent's
@@ -112,14 +104,13 @@ export function useTabOpeners({
       BUILT_IN_AGENTS[0],
       undefined,
       {
-        envVars: activeProject?.envVars,
-        maxTerminalsPerProject: maxTerminals
+        envVars: activeProject?.envVars
       }
     )
     if (!result.success) {
       toast.error(result.error || 'Failed to launch agent')
     }
-  }, [activeProjectId, activeProject?.envVars, maxTerminals])
+  }, [activeProjectId, activeProject?.envVars])
 
   const handleAddTerminal = useCallback(
     (paneId: string | undefined, shell?: ShellInfo) => {

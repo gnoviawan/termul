@@ -258,7 +258,6 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: () => 14,
   useUiZoomLevel: () => 1,
   useDefaultShell: () => 'bash',
-  useMaxTerminalsPerProject: () => 10,
   useConfirmTerminalClose: () => confirmTerminalCloseRef.current,
   useColorTheme: () => 'termul',
   useAppearanceMode: () => 'dark'

@@ -369,13 +369,12 @@ vi.mock('@/lib/terminal-api', () => ({
 vi.mock('@/stores/terminal-store', () => {
   const state = {
     terminals: [] as unknown[],
-    isTerminalLimitReached: () => false,
     setTerminals: vi.fn(),
     selectTerminal: vi.fn()
   }
   const useTerminalStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
   useTerminalStore.getState = () => state
-  return { useTerminalStore, GLOBAL_TERMINAL_LIMIT: 30 }
+  return { useTerminalStore }
 })
 
 vi.mock('@/lib/worktree-context', () => ({

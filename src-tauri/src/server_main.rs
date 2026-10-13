@@ -412,6 +412,7 @@ fn main() -> ExitCode {
             Arc::clone(&git_tracker),
             Arc::clone(&exit_code_tracker),
         ));
+        pty.set_max_terminals_per_project(cfg.max_terminals_per_project);
 
         let projects_file = cfg.projects_file.clone();
         // OpenPencil canvas mode (spec-openpencil-canvas-mode): the
@@ -746,6 +747,13 @@ OPTIONS:
                                   reaped. Positive integer.
                                   [env: TERMUL_AGENT_IDLE_REAP_SECS]
                                   [default: 1800]
+    --max-terminals-per-project <N>
+                                  Most live terminals one project may have.
+                                  The host refuses a spawn past it with
+                                  TERMINAL_LIMIT; the host-wide cap is 30.
+                                  Positive integer.
+                                  [env: TERMUL_MAX_TERMINALS_PER_PROJECT]
+                                  [default: 10]
     --overflow-tolerance <N>      Reliable-queue overflow tolerance per client.
                                   Positive integer. Reserved: the host
                                   validates it but does not read it yet.

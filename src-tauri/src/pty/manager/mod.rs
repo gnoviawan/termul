@@ -33,6 +33,7 @@ use tokio::sync::Mutex as AsyncMutex;
 mod external;
 mod instance;
 mod lifecycle;
+mod limits;
 mod resolve;
 mod spawn;
 mod types;
@@ -48,7 +49,8 @@ use self::windows::*;
 use instance::should_reap_orphan;
 #[cfg(test)]
 use instance::should_reap_web_listed;
-use instance::{ClaimRollbackGuard, TerminalSlotReservation};
+use instance::ClaimRollbackGuard;
+use limits::PendingSpawns;
 #[cfg(all(test, target_os = "windows"))]
 use resolve::{
     is_directly_executable_windows, merge_windows_environment_map, parse_npm_cmd_shim,
@@ -62,6 +64,7 @@ use types::{
 // `crate::pty::manager` public/`pub(crate)` surface preserved via re-export.
 pub use external::ExternalTerminal;
 pub use instance::TerminalInstance;
+pub use limits::{SpawnError, TERMINAL_LIMIT_CODE};
 pub(crate) use resolve::{resolve_spawn_program, ResolvedProgram};
 pub use types::{
     ExternalResizer, PreservedTerminal, SpawnOptions, SpawnedTerminal, TerminalAttachResult,
@@ -72,7 +75,10 @@ pub use types::{
 /// Manages all PTY instances
 pub struct PtyManager {
     terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
-    active_terminal_slots: Arc<AtomicUsize>,
+    /// Spawns that hold a cap slot but have not registered their PTY yet.
+    pending_spawns: PendingSpawns,
+    /// Per-project terminal cap; the global cap is `GLOBAL_TERMINAL_LIMIT`.
+    max_terminals_per_project: Arc<AtomicUsize>,
     id_counter: Arc<AtomicU64>,
     terminal_events: TerminalEventHub,
     orphan_detection_enabled: Arc<AtomicBool>,
@@ -106,7 +112,10 @@ impl PtyManager {
     ) -> Self {
         Self {
             terminals: Arc::new(RwLock::new(HashMap::new())),
-            active_terminal_slots: Arc::new(AtomicUsize::new(0)),
+            pending_spawns: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            max_terminals_per_project: Arc::new(AtomicUsize::new(
+                crate::web::config::DEFAULT_MAX_TERMINALS_PER_PROJECT,
+            )),
             id_counter: Arc::new(AtomicU64::new(0)),
             terminal_events,
             orphan_detection_enabled: Arc::new(AtomicBool::new(true)),
@@ -187,14 +196,6 @@ impl PtyManager {
         }
     }
 
-    fn try_reserve_terminal_slot(&self) -> Option<TerminalSlotReservation> {
-        TerminalSlotReservation::try_acquire(self.active_terminal_slots.clone())
-    }
-
-    fn release_terminal_slot(&self) {
-        self.active_terminal_slots.fetch_sub(1, Ordering::SeqCst);
-    }
-
     /// Start the orphan detection background task
     /// This is called lazily when the first terminal is spawned
     fn start_orphan_detection(&self) {
@@ -213,7 +214,6 @@ impl PtyManager {
         let git_tracker = self.git_tracker.clone();
         let exit_code_tracker = self.exit_code_tracker.clone();
         let claims = self.claims.clone();
-        let active_slots = self.active_terminal_slots.clone();
         let enabled = self.orphan_detection_enabled.clone();
         let timeout_ms = self.orphan_timeout_ms.clone();
         let is_hidden = self.is_hidden.clone();
@@ -287,7 +287,6 @@ impl PtyManager {
                     }
 
                     if let Some(instance) = terminals.write().remove(&id) {
-                        active_slots.fetch_sub(1, Ordering::SeqCst);
                         tokio::task::spawn_blocking(move || {
                             Self::cleanup_terminal_resources_sync(instance, true);
                         });
@@ -314,5 +313,7 @@ impl PtyManager {
     }
 }
 
+#[cfg(test)]
+mod limit_tests;
 #[cfg(test)]
 mod tests;

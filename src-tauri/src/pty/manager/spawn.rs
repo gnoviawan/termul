@@ -13,15 +13,24 @@ impl PtyManager {
         &self,
         options: SpawnOptions,
         on_data: Option<Channel<Response>>,
-    ) -> Result<SpawnedTerminal, String> {
+    ) -> Result<SpawnedTerminal, SpawnError> {
         // Start orphan detection on first spawn (lazy initialization)
         self.start_orphan_detection();
 
-        let mut slot_reservation = self
-            .try_reserve_terminal_slot()
-            .ok_or_else(|| "Global terminal limit reached".to_string())?;
-
         let id = self.generate_id();
+
+        // The host is the only cap enforcer: a refused spawn creates nothing
+        // (no claim, no PTY, no event) and holds no slot.
+        let _slot_reservation = self
+            .try_reserve_terminal_slot(&id, options.project_id.as_deref())
+            .map_err(|limit| {
+                log::warn!(
+                    "[PtyManager] spawn refused: {:?} terminal cap reached (project_id={})",
+                    limit.scope,
+                    options.project_id.as_deref().unwrap_or("-")
+                );
+                SpawnError::Limit(limit)
+            })?;
 
         let claim = self.claims.issue(&id, options.project_id.as_deref());
         let mut claim_guard = ClaimRollbackGuard {
@@ -33,19 +42,19 @@ impl PtyManager {
         let info = match self.spawn_pty(id.clone(), options, on_data).await {
             Ok(info) => info,
             Err(e) => {
-                // claim_guard drops here and removes the dangling record.
-                return Err(e);
+                // claim_guard drops here and removes the dangling record; the
+                // reservation drops with it, so the slot is free again.
+                return Err(SpawnError::Failed(e));
             }
         };
 
         claim_guard.commit();
-        slot_reservation.commit();
         Ok(SpawnedTerminal { info, claim })
     }
 
     /// Platform-specific PTY creation (the former `spawn` body). `id` and the
     /// claim lifecycle are owned by [`spawn`](Self::spawn); slot reservation
-    /// commits there too, so a failure on any branch rolls everything back.
+    /// is held there too, so a failure on any branch rolls everything back.
     async fn spawn_pty(
         &self,
         id: String,
@@ -162,6 +171,7 @@ impl PtyManager {
                 last_web_listed: Arc::new(RwLock::new(None)),
                 web_size_owner: Arc::new(RwLock::new(None)),
                 resizer: None,
+                exited: AtomicBool::new(false),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -322,6 +332,7 @@ impl PtyManager {
                 last_web_listed: Arc::new(RwLock::new(None)),
                 web_size_owner: Arc::new(RwLock::new(None)),
                 resizer: None,
+                exited: AtomicBool::new(false),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -473,6 +484,7 @@ impl PtyManager {
 
         // Signal flusher that reader is done
         done_flag.store(true, Ordering::Release);
+        instance.exited.store(true, Ordering::Release);
 
         // Get real child exit status where possible.
         let exit_code = match instance.child.try_lock() {

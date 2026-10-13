@@ -251,6 +251,7 @@ impl OnboardAnswers {
             event_log_capacity: 4096,
             agent_idle_window_secs: crate::web::config::DEFAULT_AGENT_IDLE_WINDOW_SECS,
             overflow_tolerance: crate::web::config::DEFAULT_OVERFLOW_TOLERANCE,
+            max_terminals_per_project: crate::web::config::DEFAULT_MAX_TERMINALS_PER_PROJECT,
             receipt_retention_secs: crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
             partition_gc_age_secs: None,
             partition_byte_budget: None,

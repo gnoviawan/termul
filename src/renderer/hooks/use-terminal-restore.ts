@@ -1,5 +1,7 @@
 import type { PreservedTerminalEntry } from '@shared/types/ipc.types'
+import { WEB_TERMINAL_ERROR_CODES } from '@shared/types/web-terminal-protocol.types'
 import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
 import { loadCustomAgents } from '@/lib/agents/custom-agents'
@@ -953,6 +955,7 @@ async function restoreFromLayout(
     // ALL preserved restore as tabs, not just the active one).
     const preservedById = new Map(preserved.map((entry) => [entry.id, entry]))
 
+    const limitRefusals = { count: 0, message: '' }
     for (const persistedTerminal of layout.terminals) {
       if (isCancelled()) {
         await cleanupSpawnedPtys(newTerminals, restoreId, 'during restore loop')
@@ -1141,6 +1144,14 @@ async function restoreFromLayout(
 
         if (!spawnResult.success || !spawnData) {
           debugLog('restoreFromLayout', `Spawn FAILED, skipping [${terminalCallId}]`)
+          if (
+            !spawnResult.success &&
+            'code' in spawnResult &&
+            spawnResult.code === WEB_TERMINAL_ERROR_CODES.TERMINAL_LIMIT
+          ) {
+            limitRefusals.count += 1
+            limitRefusals.message = spawnResult.error
+          }
           continue
         }
 
@@ -1191,6 +1202,14 @@ async function restoreFromLayout(
         if (spawnTimeout) clearTimeout(spawnTimeout)
         TERMINALS_PENDING_PTY_ASSIGNMENT.delete(newId)
       }
+    }
+
+    // The host refuses a spawn past a terminal cap. Say so once: a skipped
+    // tab would otherwise vanish without a trace.
+    if (limitRefusals.count > 0) {
+      toast.error(
+        `${limitRefusals.count} terminal${limitRefusals.count === 1 ? '' : 's'} not restored. ${limitRefusals.message}`
+      )
     }
 
     // Story 5 (resolved Q3): every preserved PTY of the project restores as

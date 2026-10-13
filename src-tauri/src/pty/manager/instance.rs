@@ -62,11 +62,19 @@ pub struct TerminalInstance {
     /// Resize hook for terminals whose I/O is not a local PTY (an SSH shell
     /// channel). `None` for every locally spawned terminal.
     pub resizer: Option<ExternalResizer>,
+    /// Set once the PTY's process has exited. An exited PTY that is still
+    /// tracked holds no process, so it counts toward no terminal cap.
+    pub exited: AtomicBool,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
 
 impl TerminalInstance {
+    /// Whether the PTY's process has exited.
+    pub fn has_exited(&self) -> bool {
+        self.exited.load(Ordering::Acquire)
+    }
+
     /// Whether any web WS connection currently holds a live attachment for
     /// this terminal (forwarder task active).
     pub fn has_web_attachment(&self) -> bool {
@@ -327,44 +335,6 @@ pub(super) fn should_reap_web_listed(
         // Never seen by the web surface: a desktop-only terminal — the
         // web-listed window never applies.
         None => false,
-    }
-}
-
-pub(super) struct TerminalSlotReservation {
-    active_slots: Arc<AtomicUsize>,
-    committed: bool,
-}
-
-impl TerminalSlotReservation {
-    pub(super) fn try_acquire(active_slots: Arc<AtomicUsize>) -> Option<Self> {
-        loop {
-            let current = active_slots.load(Ordering::SeqCst);
-            if current >= GLOBAL_TERMINAL_LIMIT {
-                return None;
-            }
-
-            if active_slots
-                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                return Some(Self {
-                    active_slots,
-                    committed: false,
-                });
-            }
-        }
-    }
-
-    pub(super) fn commit(&mut self) {
-        self.committed = true;
-    }
-}
-
-impl Drop for TerminalSlotReservation {
-    fn drop(&mut self) {
-        if !self.committed {
-            self.active_slots.fetch_sub(1, Ordering::SeqCst);
-        }
     }
 }
 

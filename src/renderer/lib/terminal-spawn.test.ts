@@ -8,7 +8,6 @@ const {
   mockAddTerminal,
   mockSetTerminalPtyId,
   mockSetTerminalClaim,
-  mockIsTerminalLimitReached,
   mockAddTabToPane,
   mockTerminalApiSpawn,
   mockTerminals,
@@ -19,7 +18,6 @@ const {
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
   mockSetTerminalClaim: vi.fn(),
-  mockIsTerminalLimitReached: vi.fn(),
   mockAddTabToPane: vi.fn(),
   mockTerminalApiSpawn: vi.fn(),
   mockTerminals: [] as Array<{ projectId: string }>,
@@ -36,8 +34,7 @@ vi.mock('@/stores/terminal-store', () => ({
       terminals: mockTerminals,
       addTerminal: mockAddTerminal,
       setTerminalPtyId: mockSetTerminalPtyId,
-      setTerminalClaim: mockSetTerminalClaim,
-      isTerminalLimitReached: mockIsTerminalLimitReached
+      setTerminalClaim: mockSetTerminalClaim
     })
   }
 }))
@@ -66,12 +63,6 @@ vi.mock('@/stores/shell-layout-store', () => ({
   }
 }))
 
-vi.mock('@/stores/app-settings-store', () => ({
-  useAppSettingsStore: {
-    getState: () => ({ settings: { maxTerminalsPerProject: 10 } })
-  }
-}))
-
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: mockLogFrontendError
 }))
@@ -94,7 +85,6 @@ describe('spawnTerminalInPane', () => {
     vi.clearAllMocks()
     mockTerminals.length = 0
     mockActivePaneId.current = 'pane-1'
-    mockIsTerminalLimitReached.mockReturnValue(false)
     mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
     // CAP-3: spawn is the only claim issuance path — the fixture carries the
     // issued lease credential alongside the terminal info.
@@ -137,56 +127,31 @@ describe('spawnTerminalInPane', () => {
     expect(mockSetTerminalClaim).not.toHaveBeenCalled()
   })
 
-  it('returns error when global terminal limit is reached', async () => {
-    mockIsTerminalLimitReached.mockReturnValue(true)
+  it('leaves the terminal cap to the host: a crowded store never blocks the spawn call', async () => {
+    for (let i = 0; i < 40; i++) {
+      mockTerminals.push({ projectId: 'proj-1' })
+    }
 
     const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree')
 
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('Maximum')
-    expect(mockTerminalApiSpawn).not.toHaveBeenCalled()
+    expect(result.success).toBe(true)
+    expect(mockTerminalApiSpawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the host terminal_limit refusal and records nothing', async () => {
+    const hostMessage =
+      'Terminal limit reached (10 per project, 30 total): this project is at its limit'
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: false,
+      error: hostMessage,
+      code: 'TERMINAL_LIMIT'
+    })
+
+    const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree')
+
+    expect(result).toEqual({ success: false, error: hostMessage })
     expect(mockAddTerminal).not.toHaveBeenCalled()
-  })
-
-  it('returns error when per-project terminal limit is reached', async () => {
-    // 10 terminals already in this project
-    for (let i = 0; i < 10; i++) {
-      mockTerminals.push({ projectId: 'proj-1' })
-    }
-
-    const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree', {
-      maxTerminalsPerProject: 10
-    })
-
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('Maximum 10 terminals per project')
-    expect(mockTerminalApiSpawn).not.toHaveBeenCalled()
-  })
-
-  it('allows spawn when under per-project limit', async () => {
-    // 9 terminals in this project (limit is 10)
-    for (let i = 0; i < 9; i++) {
-      mockTerminals.push({ projectId: 'proj-1' })
-    }
-
-    const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree', {
-      maxTerminalsPerProject: 10
-    })
-
-    expect(result.success).toBe(true)
-  })
-
-  it('per-project limit only counts terminals for same project', async () => {
-    // 10 terminals in a different project
-    for (let i = 0; i < 10; i++) {
-      mockTerminals.push({ projectId: 'proj-other' })
-    }
-
-    const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree', {
-      maxTerminalsPerProject: 10
-    })
-
-    expect(result.success).toBe(true)
+    expect(mockAddTabToPane).not.toHaveBeenCalled()
   })
 
   it('returns error when PTY spawn fails', async () => {
@@ -243,7 +208,6 @@ describe('openTerminalAtCwd', () => {
     vi.clearAllMocks()
     mockTerminals.length = 0
     mockActivePaneId.current = 'pane-1'
-    mockIsTerminalLimitReached.mockReturnValue(false)
     mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
     mockTerminalApiSpawn.mockResolvedValue({
       success: true,

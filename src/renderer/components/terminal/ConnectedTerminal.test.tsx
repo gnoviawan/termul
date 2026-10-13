@@ -346,7 +346,6 @@ const mockTerminalStoreState = {
   clearTerminalPtyId: vi.fn(),
   truncateHiddenTerminalBuffers: vi.fn(),
   getTerminalCount: vi.fn(() => 0),
-  isTerminalLimitReached: vi.fn(() => false),
   cleanupProjectTerminals: vi.fn()
 }
 

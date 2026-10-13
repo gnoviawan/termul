@@ -62,12 +62,6 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'appearance',
-    label: 'Max Terminals Per Project',
-    description: 'Maximum number of terminal tabs allowed per project.',
-    keywords: ['tabs', 'limit']
-  },
-  {
-    categoryId: 'appearance',
     label: 'Terminal Renderer',
     description: 'GPU-accelerated rendering for terminal output.',
     keywords: ['webgl', 'dom', 'gpu']

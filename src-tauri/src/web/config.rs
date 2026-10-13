@@ -25,6 +25,9 @@ fn trimmed_env_path(key: &str) -> Option<PathBuf> {
 /// Default idle-agent reap window in seconds (30 min). The one definition the
 /// standalone server and the desktop host both read; no client holds a copy.
 pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 1800;
+/// Default per-project terminal cap. The host enforces it on every spawn
+/// carrier; the global cap of 30 is fixed in the PTY manager.
+pub const DEFAULT_MAX_TERMINALS_PER_PROJECT: usize = 10;
 /// Default reliable-queue overflow tolerance per client.
 pub const DEFAULT_OVERFLOW_TOLERANCE: usize = 15;
 /// Default command-receipt retention in seconds (10 min).
@@ -34,6 +37,7 @@ pub const DEFAULT_RECEIPT_RETENTION_SECS: u64 = 600;
 pub const MAX_RECEIPT_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 const AGENT_IDLE_WINDOW_ENV: &str = "TERMUL_AGENT_IDLE_REAP_SECS";
+const MAX_TERMINALS_PER_PROJECT_ENV: &str = "TERMUL_MAX_TERMINALS_PER_PROJECT";
 const PARTITION_GC_AGE_ENV: &str = "TERMUL_PARTITION_GC_AGE_SECS";
 const PARTITION_BYTE_BUDGET_ENV: &str = "TERMUL_PARTITION_BYTE_BUDGET";
 
@@ -74,6 +78,20 @@ where
             None
         }
     }
+}
+
+/// The per-project terminal cap for the desktop host, which has no CLI:
+/// `$TERMUL_MAX_TERMINALS_PER_PROJECT` → [`DEFAULT_MAX_TERMINALS_PER_PROJECT`].
+/// An invalid env value is ignored with a logged warning.
+#[must_use]
+pub fn desktop_max_terminals_per_project() -> usize {
+    let mut warnings = Vec::new();
+    let value = positive_env::<usize>(MAX_TERMINALS_PER_PROJECT_ENV, &mut warnings)
+        .unwrap_or(DEFAULT_MAX_TERMINALS_PER_PROJECT);
+    for warning in warnings {
+        log::warn!("{warning}");
+    }
+    value
 }
 
 /// Next CLI token as a flag's value, or the shared `missing value` error.
@@ -350,6 +368,11 @@ pub struct ServerConfig {
     /// `--overflow-tolerance` → [`DEFAULT_OVERFLOW_TOLERANCE`] (15). Read by
     /// `serve_router` into the connection runtime every `/ws` socket uses.
     pub overflow_tolerance: usize,
+    /// Per-project terminal cap enforced by the PTY manager on every spawn.
+    /// `--max-terminals-per-project` → `$TERMUL_MAX_TERMINALS_PER_PROJECT` →
+    /// [`DEFAULT_MAX_TERMINALS_PER_PROJECT`] (10). The desktop host reads the
+    /// same env var and default through [`desktop_max_terminals_per_project`].
+    pub max_terminals_per_project: usize,
     /// How long the command ledger keeps a command's outcome, in seconds
     /// (bare command ids are kept six times as long).
     /// `--receipt-retention-secs` → [`DEFAULT_RECEIPT_RETENTION_SECS`] (600).
@@ -547,6 +570,7 @@ impl ServerConfig {
         let mut event_log_capacity: usize = 4096;
         let mut agent_idle_window_secs: Option<u64> = None;
         let mut overflow_tolerance: usize = DEFAULT_OVERFLOW_TOLERANCE;
+        let mut max_terminals_per_project: Option<usize> = None;
         let mut receipt_retention_secs: u64 = DEFAULT_RECEIPT_RETENTION_SECS;
         // The last requested value above the cap; the clamp warning is queued
         // after parsing so a repeated flag cannot leave a stale warning.
@@ -649,6 +673,13 @@ impl ServerConfig {
                     let value = require_value(&mut iter, "--agent-idle-window-secs")?;
                     agent_idle_window_secs =
                         Some(parse_positive::<u64>("--agent-idle-window-secs", value.as_ref())?);
+                }
+                "--max-terminals-per-project" => {
+                    let value = require_value(&mut iter, "--max-terminals-per-project")?;
+                    max_terminals_per_project = Some(parse_positive::<usize>(
+                        "--max-terminals-per-project",
+                        value.as_ref(),
+                    )?);
                 }
                 "--overflow-tolerance" => {
                     let value = require_value(&mut iter, "--overflow-tolerance")?;
@@ -936,6 +967,11 @@ impl ServerConfig {
         let agent_idle_window_secs = agent_idle_window_secs
             .or_else(|| positive_env::<u64>(AGENT_IDLE_WINDOW_ENV, &mut deprecation_warnings))
             .unwrap_or(DEFAULT_AGENT_IDLE_WINDOW_SECS);
+        let max_terminals_per_project = max_terminals_per_project
+            .or_else(|| {
+                positive_env::<usize>(MAX_TERMINALS_PER_PROJECT_ENV, &mut deprecation_warnings)
+            })
+            .unwrap_or(DEFAULT_MAX_TERMINALS_PER_PROJECT);
         let partition_gc_age_secs = partition_gc_age_secs
             .or_else(|| positive_env::<u64>(PARTITION_GC_AGE_ENV, &mut deprecation_warnings));
         let partition_byte_budget = partition_byte_budget
@@ -947,6 +983,7 @@ impl ServerConfig {
             event_log_capacity,
             agent_idle_window_secs,
             overflow_tolerance,
+            max_terminals_per_project,
             receipt_retention_secs,
             partition_gc_age_secs,
             partition_byte_budget,

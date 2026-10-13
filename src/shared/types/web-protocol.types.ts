@@ -494,9 +494,10 @@ export const WS_ERROR_CODES = {
   // `authenticate` carried a missing, empty or oversized `deviceId` /
   // `clientInstanceId` (AD-4). The host never mints either id.
   INVALID_CLIENT_IDENTITY: 'invalid_client_identity',
-  // Reserved names — handler behavior lands in later slices.
-  // A host terminal cap (per project or global) refused a spawn.
+  // A host terminal cap (per project or global) refused a spawn. The terminal
+  // carriers answer it as `TERMINAL_LIMIT` (`WEB_TERMINAL_ERROR_CODES`).
   TERMINAL_LIMIT: 'terminal_limit',
+  // Reserved names — handler behavior lands in later slices.
   // Project remove/archive refused while bound sessions/PTYs are live.
   PROJECT_BUSY: 'project_busy',
   // A command resend found no stored outcome (evicted ledger entry or an

@@ -26,11 +26,11 @@ impl PtyManager {
         terminal: ExternalTerminal,
     ) -> Result<SpawnedTerminal, String> {
         self.start_orphan_detection();
-        let mut slot_reservation = self
-            .try_reserve_terminal_slot()
-            .ok_or_else(|| "Global terminal limit reached".to_string())?;
-
         let id = self.generate_id();
+        // Adopted terminals have no project, so only the global cap applies.
+        let _slot_reservation = self
+            .try_reserve_terminal_slot(&id, None)
+            .map_err(|limit| limit.to_string())?;
         let claim = self.claims.issue(&id, None);
         let ExternalTerminal {
             reader,
@@ -70,6 +70,7 @@ impl PtyManager {
             last_web_listed: Arc::new(RwLock::new(None)),
             web_size_owner: Arc::new(RwLock::new(None)),
             resizer: Some(resizer),
+            exited: AtomicBool::new(false),
             #[cfg(target_os = "windows")]
             conpty_handles: None,
         });
@@ -118,7 +119,6 @@ impl PtyManager {
 
         self.terminals.write().insert(id.clone(), instance);
         self.exit_code_tracker.initialize_terminal(&id);
-        slot_reservation.commit();
         log::info!("[PtyManager] Adopted external terminal {}", id);
 
         Ok(SpawnedTerminal {

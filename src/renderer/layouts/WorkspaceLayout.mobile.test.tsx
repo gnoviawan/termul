@@ -159,7 +159,6 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontFamily: vi.fn(() => 'monospace'),
   useTerminalBufferSize: vi.fn(() => 10000),
   useDefaultShell: vi.fn(() => 'bash'),
-  useMaxTerminalsPerProject: vi.fn(() => 10),
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue'),

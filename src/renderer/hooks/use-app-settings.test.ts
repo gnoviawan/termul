@@ -195,6 +195,24 @@ describe('use-app-settings', () => {
     })
   })
 
+  it('loads an old persisted per-project terminal limit and drops the retired key', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: { ...DEFAULT_APP_SETTINGS, maxTerminalsPerProject: 5 }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+    })
+    expect(useAppSettingsStore.getState().settings).toEqual(DEFAULT_APP_SETTINGS)
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+      APP_SETTINGS_KEY,
+      DEFAULT_APP_SETTINGS
+    )
+  })
+
   it('persists normalized legacy light color theme settings', async () => {
     mockPersistenceRead.mockResolvedValueOnce({
       success: true,

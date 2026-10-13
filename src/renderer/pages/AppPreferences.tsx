@@ -23,7 +23,6 @@ import {
   useDefaultShell,
   useEditorAutoSave,
   useEditorAutoSaveDelayMs,
-  useMaxTerminalsPerProject,
   useNotifyOnAgentChatNeedsYou,
   useNotifyOnAgentChatTurnFinished,
   useNotifyOnTerminalIdle,
@@ -70,7 +69,6 @@ export function AppPreferencesModal(): React.JSX.Element {
   const terminalScreenReaderMode = useTerminalScreenReaderMode()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
-  const maxTerminals = useMaxTerminalsPerProject()
   const orphanDetectionEnabled = useOrphanDetectionEnabled()
   const orphanDetectionTimeout = useOrphanDetectionTimeout()
   const _confirmTerminalClose = useConfirmTerminalClose()
@@ -170,10 +168,6 @@ export function AppPreferencesModal(): React.JSX.Element {
 
   const handleDefaultProjectColorChange = (value: ProjectColor) => {
     updateSetting('defaultProjectColor', value)
-  }
-
-  const handleMaxTerminalsChange = (value: number) => {
-    updateSetting('maxTerminalsPerProject', value)
   }
 
   const isTerminalUrlOpenMode = (value: string): value is TerminalUrlOpenMode =>
@@ -308,7 +302,6 @@ export function AppPreferencesModal(): React.JSX.Element {
             bufferSize={bufferSize}
             terminalRenderer={terminalRenderer}
             screenReaderMode={terminalScreenReaderMode}
-            maxTerminals={maxTerminals}
             handleFontFamilyChange={handleFontFamilyChange}
             handleFontSizeChange={handleFontSizeChange}
             handleUiZoomChange={handleUiZoomChange}
@@ -316,7 +309,6 @@ export function AppPreferencesModal(): React.JSX.Element {
             handleBufferSizeChange={handleBufferSizeChange}
             handleRendererChange={handleRendererChange}
             handleScreenReaderModeChange={handleScreenReaderModeChange}
-            handleMaxTerminalsChange={handleMaxTerminalsChange}
           />
           {/* Default Shell Section */}
           <ShellSection

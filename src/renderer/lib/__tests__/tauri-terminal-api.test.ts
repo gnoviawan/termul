@@ -158,6 +158,31 @@ describe('tauri-terminal-api', () => {
       }
     })
 
+    it('spawn refused by a host terminal cap surfaces TERMINAL_LIMIT with the numbers and releases the channel', async () => {
+      const { api } = await loadApi()
+      const refusal = {
+        success: false,
+        error: 'Terminal limit reached (10 per project, 30 total): this project is at its limit',
+        code: 'TERMINAL_LIMIT'
+      }
+      mockInvoke.mockResolvedValue(refusal)
+
+      const received: Uint8Array[] = []
+      const off = api.onData((_terminalId, bytes) => received.push(bytes))
+      const result = await api.spawn({ projectId: 'p1' })
+
+      // The host's typed refusal reaches the caller verbatim: stable code,
+      // message naming both limits.
+      expect(result).toEqual(refusal)
+
+      // No terminal exists, so the stream channel is released.
+      const channel = mockInvoke.mock.calls[0][1].onData as unknown as ChannelLike
+      channel.onmessage?.(new Uint8Array([1]).buffer)
+      expect(received).toHaveLength(0)
+
+      off()
+    })
+
     it('attach passes terminalId + claim + lastSeq + Channel to terminal_attach and streams bytes by terminal id', async () => {
       const { api, Channel } = await loadApi()
       mockInvoke.mockResolvedValue({ success: true, data: ATTACHED })

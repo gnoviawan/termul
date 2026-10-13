@@ -34,7 +34,7 @@ use tauri::ipc::{Channel, Response};
 use parking_lot::Mutex;
 use tracing::warn;
 
-use crate::pty::manager::SpawnedTerminal;
+use crate::pty::manager::{SpawnedTerminal, TERMINAL_LIMIT_CODE};
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::web::command_ledger::{
     is_valid_command_id, run_command_released, ClassKind, Command, CommandClass, CommandLedger,
@@ -62,6 +62,7 @@ pub const REVOKE_CLAIM: &str = "terminal_revoke_claim";
 /// back to one of these.
 const REJECTION_CODES: &[&str] = &[
     "SPAWN_FAILED",
+    TERMINAL_LIMIT_CODE,
     "WRITE_FAILED",
     "KILL_FAILED",
     "UNAUTHORIZED",
@@ -425,9 +426,9 @@ pub async fn spawn(
             }
             match run_pty.spawn(options, on_data).await {
                 Ok(spawned) => Effect::Done(spawned),
-                Err(message) => Effect::Released {
-                    code: "SPAWN_FAILED",
-                    message,
+                Err(error) => Effect::Released {
+                    code: error.code(),
+                    message: error.to_string(),
                 },
             }
         },

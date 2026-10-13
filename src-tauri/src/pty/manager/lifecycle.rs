@@ -112,8 +112,6 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        self.release_terminal_slot();
-
         // Wrap blocking cleanup in spawn_blocking to avoid panic
         let instance_clone = instance.clone();
         tokio::task::spawn_blocking(move || {
@@ -142,8 +140,6 @@ impl PtyManager {
             .write()
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
-
-        self.release_terminal_slot();
 
         let instance_clone = instance.clone();
         tokio::task::spawn_blocking(move || {
@@ -294,7 +290,7 @@ impl PtyManager {
 
     /// Check if terminal limit is reached
     pub fn is_limit_reached(&self) -> bool {
-        self.active_terminal_slots.load(Ordering::SeqCst) >= GLOBAL_TERMINAL_LIMIT
+        self.live_terminal_count() >= GLOBAL_TERMINAL_LIMIT
     }
 
     /// Kill all terminals (best-effort), used as app-exit safety net.
@@ -312,8 +308,6 @@ impl PtyManager {
                 Some(i) => i,
                 None => continue,
             };
-
-            self.release_terminal_slot();
 
             // Wrap blocking cleanup in spawn_blocking to avoid panic
             let instance_clone = instance.clone();

@@ -396,8 +396,9 @@ pub enum WsErrorCode {
     /// `authenticate` carried a missing, empty or oversized `deviceId` /
     /// `clientInstanceId` (AD-4). The host never mints either id.
     InvalidClientIdentity,
-    /// Reserved: a host terminal cap (per project or global) refused a spawn.
-    /// Handler behavior lands with the host-owned lifecycle work.
+    /// A host terminal cap (per project or global) refused a spawn. The
+    /// terminal carriers (`/terminal/ws`, desktop `terminal_spawn`) answer it
+    /// as the SCREAMING form `TERMINAL_LIMIT`; this is the `/ws` spelling.
     TerminalLimit,
     /// Reserved: project remove/archive refused while sessions or PTYs bound
     /// to the project are live. Handler behavior lands with the project

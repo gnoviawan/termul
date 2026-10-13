@@ -1197,6 +1197,9 @@ pub fn run() {
                 git_tracker,
                 exit_code_tracker,
             ));
+            pty_manager.set_max_terminals_per_project(
+                web::config::desktop_max_terminals_per_project(),
+            );
             app.manage(pty_manager.clone());
 
             // Create Browser Tab Manager

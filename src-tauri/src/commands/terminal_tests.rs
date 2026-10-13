@@ -40,6 +40,29 @@ async fn a_spawn_resend_replies_with_the_existing_terminal_and_a_fresh_claim() {
 }
 
 #[tokio::test]
+async fn a_spawn_over_the_terminal_cap_replies_terminal_limit_with_the_numbers() {
+    let pty = crate::web::test_pty_manager();
+    pty.set_max_terminals_per_project(1);
+    let ledger = std::sync::Arc::new(CommandLedger::new(Duration::from_secs(600)));
+    let held = terminal_value_reply(
+        ledgered::spawn(&ledger, &pty, spawn_options("spawn-1"), None).await,
+        ledgered::SPAWN,
+    );
+
+    let refused = terminal_value_reply(
+        ledgered::spawn(&ledger, &pty, spawn_options("spawn-2"), None).await,
+        ledgered::SPAWN,
+    );
+    assert!(!refused.success);
+    assert_eq!(refused.code.as_deref(), Some("TERMINAL_LIMIT"));
+    let message = refused.error.expect("message");
+    assert!(message.contains("1 per project") && message.contains("30 total"), "{message}");
+    assert_eq!(pty.get_all().len(), 1, "a refused spawn creates nothing");
+
+    pty.force_kill(&held.data.expect("held").info.id).await.unwrap();
+}
+
+#[tokio::test]
 async fn a_rotate_resend_replies_outcome_unknown_and_a_revoke_resend_replies_ok() {
     let ledger = std::sync::Arc::new(CommandLedger::new(Duration::from_secs(600)));
     let fields = [("terminalId", Some("t1"))];

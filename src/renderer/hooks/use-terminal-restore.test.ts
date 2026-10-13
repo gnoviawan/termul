@@ -15,6 +15,10 @@ import {
   useTerminalRestore
 } from './use-terminal-restore'
 
+const { mockToastError } = vi.hoisted(() => ({ mockToastError: vi.fn() }))
+
+vi.mock('sonner', () => ({ toast: { error: mockToastError } }))
+
 const { mockRecordTerminalContinuityEvent, mockBeginProjectContinuityCorrelation } = vi.hoisted(
   () => ({
     mockRecordTerminalContinuityEvent: vi.fn(),
@@ -949,6 +953,34 @@ describe('useTerminalRestore', () => {
         expect.objectContaining({ projectId: 'project-a' })
       )
     })
+  })
+
+  it('tells the user once when the host refuses restored terminals at its limit', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-a',
+      terminals: [
+        mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a', scrollback: [] }),
+        mockPersistedTerminal({ id: 'persisted-b', name: 'B', cwd: '/projects/a', scrollback: [] }),
+        mockPersistedTerminal({ id: 'persisted-c', name: 'C', cwd: '/projects/a', scrollback: [] })
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    const hostMessage =
+      'Terminal limit reached (10 per project, 30 total): this project is at its limit'
+    mockTerminalSpawn
+      .mockResolvedValueOnce({ success: true, data: mockSpawnedTerminal({ id: 'pty-a' }) })
+      .mockResolvedValue({ success: false, error: hostMessage, code: 'TERMINAL_LIMIT' })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledTimes(1)
+    })
+    expect(mockToastError).toHaveBeenCalledWith(`2 terminals not restored. ${hostMessage}`)
   })
 
   it('skips the tab remap and terminal selection when the switch settles without committing the project', async () => {

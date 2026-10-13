@@ -142,6 +142,29 @@ async fn concurrent_same_id_spawns_create_one_pty() {
 }
 
 #[tokio::test]
+async fn a_spawn_over_the_terminal_cap_answers_terminal_limit_and_frees_its_id() {
+    let (state, _) = state_with_clock();
+    state.pty.set_max_terminals_per_project(1);
+    let mut conn = gate_test_ctx(true);
+    let first = spawn(&state, &mut conn, "spawn-1", "p").await.unwrap();
+
+    // Refused: nothing created, the id stays free.
+    let refused = spawn(&state, &mut conn, "spawn-2", "p").await.unwrap_err();
+    assert_eq!(refused.0, "TERMINAL_LIMIT");
+    assert!(refused.1.contains("1 per project"), "{}", refused.1);
+    assert!(refused.1.contains("30 total"), "{}", refused.1);
+    assert_eq!(state.pty.get_all().len(), 1);
+
+    // Another project is unaffected; once a slot frees, the refused id executes.
+    let other = spawn(&state, &mut conn, "spawn-3", "q").await.unwrap();
+    state.pty.force_kill(&str_of(&first, "id")).await.unwrap();
+    let retried = spawn(&state, &mut conn, "spawn-2", "p").await.unwrap();
+
+    state.pty.force_kill(&str_of(&other, "id")).await.unwrap();
+    state.pty.force_kill(&str_of(&retried, "id")).await.unwrap();
+}
+
+#[tokio::test]
 async fn a_failed_spawn_releases_its_id_so_a_retry_executes() {
     let (state, _) = state_with_clock();
     let mut conn = gate_test_ctx(true);

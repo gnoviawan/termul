@@ -54,7 +54,6 @@ export interface AppSettings {
   terminalScreenReaderMode: boolean // xterm screenReaderMode for new terminals (off by default)
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
-  maxTerminalsPerProject: number // Maximum terminals allowed per project
   orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
   orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
   confirmTerminalClose: boolean // Show a confirmation dialog before closing a terminal
@@ -123,15 +122,6 @@ export const FONT_FAMILY_OPTIONS = [
   { value: '"Source Code Pro", Menlo, monospace', label: 'Source Code Pro' },
   { value: '"JetBrains Mono", Menlo, monospace', label: 'JetBrains Mono' },
   { value: '"Fira Code", Menlo, monospace', label: 'Fira Code' }
-]
-
-// Max terminals per project options
-export const MAX_TERMINALS_OPTIONS = [
-  { value: 5, label: '5 terminals' },
-  { value: 10, label: '10 terminals' },
-  { value: 15, label: '15 terminals' },
-  { value: 20, label: '20 terminals' },
-  { value: 50, label: '50 terminals' }
 ]
 
 // Orphan detection timeout options
@@ -254,7 +244,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalScreenReaderMode: false,
   defaultShell: '',
   defaultProjectColor: 'blue',
-  maxTerminalsPerProject: 10,
   orphanDetectionEnabled: true,
   orphanDetectionTimeout: 600000, // 10 minutes
   confirmTerminalClose: true,

@@ -52,7 +52,11 @@ export const WEB_TERMINAL_ERROR_CODES = {
   // The `commandId` was already used for a different request.
   COMMAND_CONFLICT: 'COMMAND_CONFLICT',
   // The `commandId` is not 1-128 characters of `[A-Za-z0-9_-]`.
-  INVALID_COMMAND_ID: 'INVALID_COMMAND_ID'
+  INVALID_COMMAND_ID: 'INVALID_COMMAND_ID',
+  // A `spawn` was refused by a host terminal cap (per project or global).
+  // Nothing was created and no slot is held; the reply `error` names both
+  // limits. The same code is the desktop `terminal_spawn` `IpcResult.code`.
+  TERMINAL_LIMIT: 'TERMINAL_LIMIT'
 } as const
 
 export interface WebTerminalRequest {

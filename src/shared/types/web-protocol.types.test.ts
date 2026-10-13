@@ -445,6 +445,7 @@ describe('web-terminal-protocol.types — error codes', () => {
       'INVALID_COMMAND_ID',
       'OUTCOME_UNKNOWN',
       'PROTOCOL_VERSION_MISMATCH',
+      'TERMINAL_LIMIT',
       'UNAUTHORIZED'
     ])
   })
@@ -462,6 +463,12 @@ describe('web-terminal-protocol.types — error codes', () => {
     )
     expect(WEB_TERMINAL_ERROR_CODES.INVALID_COMMAND_ID.toLowerCase()).toBe(
       WS_ERROR_CODES.INVALID_COMMAND_ID
+    )
+  })
+
+  it('TERMINAL_LIMIT is the SCREAMING form of the /ws `terminal_limit` code', () => {
+    expect(WEB_TERMINAL_ERROR_CODES.TERMINAL_LIMIT.toLowerCase()).toBe(
+      WS_ERROR_CODES.TERMINAL_LIMIT
     )
   })
 })

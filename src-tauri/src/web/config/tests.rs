@@ -95,6 +95,7 @@ fn server_config_bind_addr() {
         event_log_capacity: 4096,
         agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
         overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
+        max_terminals_per_project: DEFAULT_MAX_TERMINALS_PER_PROJECT,
         receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
         partition_gc_age_secs: None,
         partition_byte_budget: None,
@@ -121,6 +122,7 @@ fn server_config_bind_addr() {
         event_log_capacity: 4096,
         agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
         overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
+        max_terminals_per_project: DEFAULT_MAX_TERMINALS_PER_PROJECT,
         receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
         partition_gc_age_secs: None,
         partition_byte_budget: None,
@@ -552,6 +554,7 @@ fn service_account_state_dir_falls_through_empty_env_var() {
         event_log_capacity: 4096,
         agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
         overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
+        max_terminals_per_project: DEFAULT_MAX_TERMINALS_PER_PROJECT,
         receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
         partition_gc_age_secs: None,
         partition_byte_budget: None,
@@ -1359,4 +1362,62 @@ fn a_later_receipt_retention_within_the_maximum_drops_the_clamp_warning() {
         .deprecation_warnings
         .iter()
         .any(|warning| warning.contains("--receipt-retention-secs")));
+}
+
+#[test]
+fn max_terminals_per_project_defaults_to_ten_and_takes_the_flag() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(&[MAX_TERMINALS_PER_PROJECT_ENV]);
+    std::env::remove_var(MAX_TERMINALS_PER_PROJECT_ENV);
+    let default = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
+    let flagged =
+        ServerConfig::from_args(["--max-terminals-per-project", "4"]).expect("parse");
+    restore_env(saved);
+    assert_eq!(DEFAULT_MAX_TERMINALS_PER_PROJECT, 10);
+    assert_eq!(default.max_terminals_per_project, 10);
+    assert_eq!(flagged.max_terminals_per_project, 4);
+}
+
+#[test]
+fn max_terminals_per_project_rejects_zero_non_numeric_and_missing_values() {
+    for bad in ["0", "many", "-1", ""] {
+        assert!(
+            matches!(
+                ServerConfig::from_args(["--max-terminals-per-project", bad]),
+                Err(ParseCliError::Message(_))
+            ),
+            "{bad:?} must be rejected"
+        );
+    }
+    assert_eq!(
+        ServerConfig::from_args(["--max-terminals-per-project"]),
+        Err(ParseCliError::Message(
+            "missing value for --max-terminals-per-project".to_string()
+        ))
+    );
+}
+
+#[test]
+fn max_terminals_per_project_env_fallback_flag_wins_and_invalid_env_warns() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(&[MAX_TERMINALS_PER_PROJECT_ENV]);
+    std::env::set_var(MAX_TERMINALS_PER_PROJECT_ENV, "6");
+    let from_env = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+    let flag_wins =
+        ServerConfig::from_args(["--max-terminals-per-project", "3"]).expect("parse");
+    let desktop = desktop_max_terminals_per_project();
+
+    std::env::set_var(MAX_TERMINALS_PER_PROJECT_ENV, "0");
+    let invalid = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+    let desktop_invalid = desktop_max_terminals_per_project();
+    restore_env(saved);
+
+    assert_eq!(from_env.max_terminals_per_project, 6);
+    assert!(from_env.deprecation_warnings.is_empty());
+    assert_eq!(flag_wins.max_terminals_per_project, 3);
+    assert_eq!(desktop, 6, "the desktop host reads the same env var");
+    assert_eq!(invalid.max_terminals_per_project, DEFAULT_MAX_TERMINALS_PER_PROJECT);
+    assert_eq!(invalid.deprecation_warnings.len(), 1);
+    assert!(invalid.deprecation_warnings[0].contains(MAX_TERMINALS_PER_PROJECT_ENV));
+    assert_eq!(desktop_invalid, DEFAULT_MAX_TERMINALS_PER_PROJECT);
 }

@@ -1,7 +1,7 @@
 /**
  * ADR-004.4: Launch orchestration for terminal-native CLI agents.
  *
- * Sibling of `terminal-spawn.ts`. Reuses the same store-read / limit / env /
+ * Sibling of `terminal-spawn.ts`. Reuses the same store-read / env /
  * symlink mechanics, differing only in: building the agent argv from the Agent
  * Registry, passing `program`/`args`/`kind:'agent'` to the spawn primitive
  * (ADR-004.2), and tagging the created Terminal record with descriptive-only
@@ -16,7 +16,6 @@ import { buildAgentArgv, type TerminalAgentDefinition } from '@/lib/agents/agent
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { ensureWorktreeSymlinks } from '@/lib/worktree-context'
-import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -24,8 +23,6 @@ import { useWorkspaceStore } from '@/stores/workspace-store'
 export interface LaunchAgentOptions {
   /** Project environment variables for spawn. */
   envVars?: Array<{ key: string; value: string; enabled?: boolean }>
-  /** Per-project terminal limit. Spawns are blocked at this count. */
-  maxTerminalsPerProject?: number
 }
 
 export interface LaunchAgentResult {
@@ -71,27 +68,6 @@ export async function launchAgentInPane(
 ): Promise<LaunchAgentResult> {
   const terminalStore = useTerminalStore.getState()
   const workspaceStore = useWorkspaceStore.getState()
-
-  // Per-project terminal limit (mirrors spawnTerminalInPane).
-  if (options?.maxTerminalsPerProject !== undefined) {
-    const projectTerminalCount = terminalStore.terminals.filter(
-      (t) => t.projectId === projectId
-    ).length
-    if (projectTerminalCount >= options.maxTerminalsPerProject) {
-      return {
-        success: false,
-        error: `Maximum ${options.maxTerminalsPerProject} terminals per project`
-      }
-    }
-  }
-
-  // Global terminal limit.
-  if (terminalStore.isTerminalLimitReached()) {
-    return {
-      success: false,
-      error: `Maximum ${terminalStore.terminals.length} terminals allowed across all projects`
-    }
-  }
 
   const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
 
@@ -191,7 +167,7 @@ export async function launchAgentInPane(
 
 /**
  * Convenience wrapper: reads the active pane
- * and per-project limit from stores, then launches the agent. Used by the
+ * from the store, then launches the agent. Used by the
  * launcher UI and command bar.
  */
 export async function launchAgentInActivePane(
@@ -206,10 +182,8 @@ export async function launchAgentInActivePane(
   }
 
   const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
-  const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject
 
   return launchAgentInPane(paneId, projectId, cwd, def, prompt, {
-    envVars: project?.envVars,
-    maxTerminalsPerProject
+    envVars: project?.envVars
   })
 }

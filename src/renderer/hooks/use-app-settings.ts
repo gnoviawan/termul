@@ -112,6 +112,17 @@ export function useAppSettingsLoader(): void {
         // Merge with defaults to handle any missing keys from older versions
         settings = { ...DEFAULT_APP_SETTINGS, ...result.data }
         let shouldPersistSettings = false
+
+        // The per-project terminal limit moved to the host. Drop the retired
+        // key an older version persisted so it is not carried forward.
+        if ('maxTerminalsPerProject' in settings) {
+          const { maxTerminalsPerProject: _retired, ...current } = settings as AppSettings & {
+            maxTerminalsPerProject?: unknown
+          }
+          settings = current
+          shouldPersistSettings = true
+        }
+
         const rawAppearance = result.data.appearanceMode as string | undefined
         const hasLegacyLightThemeId = settings.colorTheme.endsWith('-light')
 
