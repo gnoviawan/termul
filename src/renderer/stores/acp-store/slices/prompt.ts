@@ -47,12 +47,6 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
-  forgetTrackedPermission,
-  forgetTrackedPermissionsForSession,
-  retrackPermission,
-  retrackStillPending
-} from '../permission-denial'
-import {
   activeWirePromptTurns,
   claimPromptTurnEnd,
   commitMessageCollectors,
@@ -580,7 +574,7 @@ type PromptSliceState = Pick<
 >
 
 /** The host's stable `already_resolved` reply: the approval/question ticket was
- *  resolved by another connection, a timeout or a disconnect deny. */
+ *  answered by another connection or released when its turn, session or agent ended. */
 function isAlreadyResolved(err: unknown): boolean {
   return err instanceof AcpTransportError && err.code === WS_ERROR_CODES.ALREADY_RESOLVED
 }
@@ -636,8 +630,6 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
     if (!session?.activeTurn) return
-    // Stop is a user action: a permission it abandons is not a disconnect denial.
-    const forgotten = forgetTrackedPermissionsForSession(sessionId)
     // A prompt still waiting to be confirmed may never have reached the host:
     // Stop abandons the command (no more same-id resends — a late resend must
     // not start a turn the user cancelled) and ends the local turn view itself,
@@ -656,8 +648,6 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.cancelPrompt(session.agentId, sessionId)
     } catch (err) {
-      // The cancel never landed, so the permission is still the server's to deny.
-      retrackStillPending(forgotten, get().pendingPermissions)
       if (!abandonedPending) throw err
       void logFrontendError({
         level: 'warn',
@@ -703,13 +693,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
     try {
       if (sessionTurnBusy(session)) {
-        const forgotten = forgetTrackedPermissionsForSession(sessionId)
-        try {
-          await acpApi.cancelPrompt(session.agentId, sessionId)
-        } catch (err) {
-          retrackStillPending(forgotten, get().pendingPermissions)
-          throw err
-        }
+        await acpApi.cancelPrompt(session.agentId, sessionId)
         await waitForTurnClear(sessionId, get, useAcpStore.subscribe)
       }
       await runPromptTurn(
@@ -861,8 +845,6 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   respondPermission: async (requestId, optionId) => {
     const pending = get().pendingPermissions[requestId]
     if (!pending) return
-    // The user is answering: leaving the store is not a disconnect denial.
-    const tracked = forgetTrackedPermission(requestId)
     // Optimistically remove so a rapid double-click can't fire a second backend
     // call for the same request (which would error as 'unknown request').
     set((s) => {
@@ -873,14 +855,12 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.respondPermission(pending.agentId, requestId, optionId)
     } catch (err) {
-      // Another connection (or a timeout) already resolved this ticket: the
-      // request is gone for good, so restoring it would resurrect a modal
-      // nobody can answer. Mirrors the desktop command's idempotent resolve.
+      // Another connection already answered this ticket, or its turn or session
+      // ended: the request is gone for good, so restoring it would resurrect a
+      // modal nobody can answer. Mirrors the desktop command's idempotent resolve.
       if (isAlreadyResolved(err)) return
-      // Restore the entry so the user can retry, then track it again (after the
-      // restore, so the restore is not read as the request vanishing).
+      // Restore the entry so the user can retry.
       set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
-      if (tracked) retrackPermission(requestId, tracked)
       throw err
     }
   },

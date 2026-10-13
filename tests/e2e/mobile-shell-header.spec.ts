@@ -1032,9 +1032,9 @@ test('attention pill counts the other chats that need you, opens the drawer, and
   request
 }) => {
   // A prompt carrying `[PERMISSION]` makes the fake agent ask for a tool
-  // approval, and the approval stays pending for as long as the page is
-  // connected (the host denies it only after a 60s disconnect grace): that chat
-  // "needs you" for the whole test.
+  // approval, and the approval stays pending until a person answers it (the
+  // host keeps it through disconnects): that chat "needs you" for the whole
+  // test.
   const project = 'shdr-attention-project-with-a-long-name'
   await createProject(request, project, { git: true })
   await openMobileWorkspace(page, project)

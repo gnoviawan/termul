@@ -148,7 +148,6 @@ class FakeWebSocket {
   runtimePolicy = {
     turnTimeoutMs: 3_600_000,
     promptInactivityTimeoutMs: 3_600_000,
-    permissionReconnectGraceMs: 15_000,
     pingIntervalMs: 20_000,
     pongTimeoutMs: 75_000
   }

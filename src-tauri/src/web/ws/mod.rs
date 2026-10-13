@@ -36,7 +36,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
@@ -56,7 +55,6 @@ use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub}
 use crate::web::auth::WebAuth;
 use crate::web::capabilities::{Carrier, CapabilityPolicy};
 use crate::web::connection_runtime::ConnectionRuntime;
-use crate::web::permissions::DEFAULT_PERMISSION_RECONNECT_GRACE;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::{ClientId, EventStream, ReplayResult, StreamItem, WsRelaySink};
 use crate::web::store::WebStore;
@@ -423,9 +421,9 @@ pub enum WsErrorCode {
     /// connection attempting a mutation outside `device/<deviceId>/`).
     Forbidden,
     /// `respond_permission` / `answer_question` named a ticket that was
-    /// already resolved (by this or another connection, a timeout or a
-    /// disconnect deny). Tombstones are bounded: an older ticket reads
-    /// `stale`.
+    /// already resolved (answered by this or another connection, or released
+    /// when its turn, session or agent ended). Tombstones are bounded: an
+    /// older ticket reads `stale`.
     AlreadyResolved,
     /// A spawn failed deterministically: the agent binary is missing, not
     /// installed, or cannot start (AD-5). Definite — never retried
@@ -640,14 +638,13 @@ pub struct RuntimePolicy {
     /// is the **unlimited** sentinel — the client imposes no inactivity timer
     /// (the default). A non-zero value is the bounded inactivity window.
     pub prompt_inactivity_timeout_ms: u64,
-    pub permission_reconnect_grace_ms: u64,
     pub ping_interval_ms: u64,
     pub pong_timeout_ms: u64,
 }
 
 impl RuntimePolicy {
     #[must_use]
-    pub fn resolved(permission_reconnect_grace: Duration) -> Self {
+    pub fn resolved() -> Self {
         let turn_timeout = crate::acp::manager::resolved_turn_timeout(); // Option
         let turn_idle = crate::acp::manager::turn_idle_timeout(); // Option
                                                                   // `turn_timeout_ms`: 0 = unlimited (no hard cap) sentinel; otherwise
@@ -667,7 +664,6 @@ impl RuntimePolicy {
         Self {
             turn_timeout_ms,
             prompt_inactivity_timeout_ms,
-            permission_reconnect_grace_ms: permission_reconnect_grace.as_millis() as u64,
             ping_interval_ms: PING_INTERVAL.as_millis() as u64,
             pong_timeout_ms: PONG_TIMEOUT.as_millis() as u64,
         }

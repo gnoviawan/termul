@@ -43,6 +43,7 @@ use crate::acp::session_persistence::{
 
 mod fanout;
 mod session_log;
+mod tickets;
 mod watch_bridge;
 
 pub use fanout::{ClientId, EventStream, StreamItem};
@@ -285,7 +286,8 @@ pub struct WsRelaySink {
     /// path (the browser-less flow uses the `acp_respond_permission` Tauri
     /// command directly). When set, `emit` snapshots `acp:permission_request`
     /// events into a relay-side ticket table that enforces the rendezvous
-    /// policy (timeout, at-most-one, first-wins, disconnect-deny, TOCTOU).
+    /// policy (at-most-one, first-wins, TOCTOU). Tickets have no timeout; the
+    /// turn end, session close and agent death events release them.
     rendezvous: Mutex<Option<Arc<crate::web::permissions::PermissionRendezvous>>>,
     /// Server-side question rendezvous (issue #411). `None` on the desktop
     /// path (the browser-less flow uses the `acp_answer_question` Tauri
@@ -508,14 +510,13 @@ impl WsRelaySink {
     /// the desktop path leaves this unset (the browser-less flow uses the
     /// `acp_respond_permission` Tauri command directly). Once attached, `emit`
     /// snapshots `acp:permission_request` events into the rendezvous so the
-    /// `/ws` `respond_permission` handler + disconnect cleanup can enforce the
-    /// rendezvous policy.
+    /// `/ws` `respond_permission` handler can enforce the rendezvous policy.
     pub fn set_rendezvous(&self, rendezvous: Arc<crate::web::permissions::PermissionRendezvous>) {
         *self.rendezvous.lock() = Some(rendezvous);
     }
 
     /// The attached rendezvous, if any (server path). Used by the `/ws`
-    /// `respond_permission` handler + disconnect deny-all cleanup.
+    /// `respond_permission` handler and the lifecycle release hooks.
     #[must_use]
     pub fn rendezvous(&self) -> Option<Arc<crate::web::permissions::PermissionRendezvous>> {
         self.rendezvous.lock().clone()
@@ -524,7 +525,7 @@ impl WsRelaySink {
     /// Attach the server-side question rendezvous (issue #411). Server-only;
     /// when set, `emit` snapshots `acp:question_request` events into the
     /// rendezvous so the `/ws` `answer_question` handler can enforce the
-    /// rendezvous policy (first-wins, TOCTOU, timeout).
+    /// rendezvous policy (first-wins, TOCTOU).
     pub fn set_question_rendezvous(
         &self,
         rendezvous: Arc<crate::web::permissions::QuestionRendezvous>,
@@ -533,16 +534,13 @@ impl WsRelaySink {
     }
 
     /// The attached question rendezvous, if any (server path). Used by the `/ws`
-    /// `answer_question` handler + disconnect deny-all cleanup.
+    /// `answer_question` handler.
     #[must_use]
     pub fn question_rendezvous(&self) -> Option<Arc<crate::web::permissions::QuestionRendezvous>> {
         self.question_rendezvous.lock().clone()
     }
 
-    /// Number of clients currently subscribed to `session_id` (Story 1.7
-    /// disconnect-deny: a pending permission is denied only when the
-    /// disconnecting client was the LAST subscriber on its session — otherwise a
-    /// remaining client can still legitimately respond).
+    /// Number of clients currently subscribed to `session_id`.
     #[must_use]
     pub fn session_subscriber_count(&self, session_id: &str) -> usize {
         self.session_subs

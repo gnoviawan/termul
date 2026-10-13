@@ -326,17 +326,11 @@ fn pre_auth_reply(request: &WsRequest, conn: &mut ConnState, env: &HandlerEnv) -
     conn.presence = Some(env.relay.presence().register(&validated, conn.access.carrier()));
     conn.identity = Some(validated);
     conn.authed = true;
-    let reconnect_grace = env
-        .relay
-        .rendezvous()
-        .map_or(DEFAULT_PERMISSION_RECONNECT_GRACE, |rendezvous| {
-            rendezvous.disconnect_grace()
-        });
     WsReply::ok(
         id,
         Some(json!({
             "historyMode": env.history_mode,
-            "runtimePolicy": RuntimePolicy::resolved(reconnect_grace),
+            "runtimePolicy": RuntimePolicy::resolved(),
             "protocolVersion": WS_PROTOCOL_VERSION,
         })),
     )

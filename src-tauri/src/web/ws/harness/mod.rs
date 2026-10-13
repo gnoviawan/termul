@@ -13,6 +13,8 @@ pub(crate) mod carrier;
 pub(crate) mod raw_client;
 
 #[cfg(test)]
+mod relay_approval_tests;
+#[cfg(test)]
 mod relay_bounded_tests;
 #[cfg(test)]
 mod relay_execution_tests;

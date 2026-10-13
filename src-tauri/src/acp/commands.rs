@@ -905,12 +905,13 @@ pub async fn acp_auth_deliver_redirect(
 #[tauri::command]
 pub async fn acp_respond_permission(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<crate::web::WsRelaySink>>,
     agent_id: AgentId,
     request_id: String,
     option_id: Option<String>,
 ) -> Result<(), String> {
-    match manager
-        .respond_permission(&agent_id, request_id, option_id)
+    let result = match manager
+        .respond_permission(&agent_id, request_id.clone(), option_id)
         .await
     {
         Ok(()) => Ok(()),
@@ -918,7 +919,16 @@ pub async fn acp_respond_permission(
         // resolved by the other path. Treat as success (idempotent resolve).
         Err(e) if e.starts_with("unknown permission request") => Ok(()),
         Err(e) => Err(e),
+    };
+    // The agent no longer waits on this ticket (or never did). Tell the relay
+    // rendezvous so the ticket is released and the session's next queued
+    // permission is promoted; tickets have no timer to do it later.
+    if result.is_ok() {
+        if let Some(rendezvous) = relay.rendezvous() {
+            rendezvous.settle(&request_id);
+        }
     }
+    result
 }
 
 /// Route a structured-question answer (issue #411) to a waiting agent request.
@@ -933,12 +943,13 @@ pub async fn acp_respond_permission(
 #[tauri::command]
 pub async fn acp_answer_question(
     manager: State<'_, Arc<AcpManager>>,
+    relay: State<'_, Arc<crate::web::WsRelaySink>>,
     agent_id: AgentId,
     question_id: String,
     values: Option<Vec<String>>,
 ) -> Result<(), String> {
-    match manager
-        .answer_question(&agent_id, question_id, values)
+    let result = match manager
+        .answer_question(&agent_id, question_id.clone(), values)
         .await
     {
         Ok(()) => Ok(()),
@@ -946,7 +957,15 @@ pub async fn acp_answer_question(
         // resolved by the other path. Treat as success (idempotent resolve).
         Err(e) if e.starts_with("unknown question request") => Ok(()),
         Err(e) => Err(e),
+    };
+    // Release the relay ticket so a later answer from another client reads
+    // `already_resolved`.
+    if result.is_ok() {
+        if let Some(rendezvous) = relay.question_rendezvous() {
+            rendezvous.settle(&question_id);
+        }
     }
+    result
 }
 
 /// Probe whether registry package-manager launchers (`npx` / `uvx`) are on PATH.

@@ -86,7 +86,6 @@ import {
   trimLiveToolCalls
 } from './helpers'
 import { setLaunchPlaceholderNotedListener, setLiveLaunchSessionLookup } from './live-turn'
-import { attachPermissionDenialTracking } from './permission-denial'
 import {
   historySeqWatermarks,
   isCurrentRecoveryGeneration,
@@ -493,7 +492,6 @@ export function initAcpEventListeners(): () => void {
   })
   connection.attach()
   teardown = [
-    attachPermissionDenialTracking(useAcpStore),
     // Web only: the agent roster arrives through the `agents` watch (the
     // desktop listens to the Tauri `acp:agent_*` events below).
     ...(transport.watches

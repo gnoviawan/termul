@@ -1496,39 +1496,18 @@ pub fn run() {
                     (relay, manager)
                 }
             };
-            // Attach the server-side permission rendezvous so a phone can
-            // respond to `acp:permission_request` over WS. The desktop renderer
-            // still responds via the `acp_respond_permission` Tauri command
-            // (direct `AcpManager::respond_permission`); the rendezvous's
-            // at-most-one `take_permission` gate ensures whichever path responds
-            // first wins.
-            //
-            // Capture the runtime handle explicitly (`tauri::async_runtime`)
-            // rather than relying on `Handle::try_current()` — `setup` runs on
-            // the main thread and is not guaranteed to be inside a tokio runtime
-            // context, so capturing the handle here keeps `arm_timeout` reliable
-            // when it runs later on the agent driver thread.
-            // Desktop reconnect grace shared by BOTH rendezvous (issue #841
-            // alignment: a phone attached to a desktop host keeps pending
-            // questions and pending permissions open for the same window).
-            let desktop_disconnect_grace = std::time::Duration::from_secs(15);
-            let rendezvous = Arc::new(PermissionRendezvous::with_handle_and_policy(
-                Arc::clone(&acp_manager),
-                std::time::Duration::from_secs(60),
-                desktop_disconnect_grace,
-                tauri::async_runtime::handle().inner().clone(),
-            ));
+            // Attach the permission and question rendezvous so a phone can
+            // answer `acp:permission_request` and structured questions over WS.
+            // The desktop renderer answers through the `acp_respond_permission`
+            // and `acp_answer_question` Tauri commands (direct `AcpManager`
+            // calls); the agent's single-use `take_permission` /
+            // `take_question` gate makes the first answer win, and the commands
+            // tell the rendezvous so the ticket and the session's queue slot
+            // are released. Tickets have no timer, so no runtime handle is
+            // needed here.
+            let rendezvous = Arc::new(PermissionRendezvous::new(Arc::clone(&acp_manager)));
             ws_relay.set_rendezvous(rendezvous);
-            // Attach the server-side question rendezvous so a phone attached
-            // to a desktop host can answer structured questions over WS too
-            // (desktop renderer answers via the `acp_answer_question` Tauri
-            // command; first-response-wins across both paths).
-            let question_rendezvous = Arc::new(QuestionRendezvous::with_handle_and_policy(
-                Arc::clone(&acp_manager),
-                std::time::Duration::from_secs(60),
-                desktop_disconnect_grace,
-                tauri::async_runtime::handle().inner().clone(),
-            ));
+            let question_rendezvous = Arc::new(QuestionRendezvous::new(Arc::clone(&acp_manager)));
             ws_relay.set_question_rendezvous(question_rendezvous);
 
             // Desktop browser-automation host: drives the visible browser

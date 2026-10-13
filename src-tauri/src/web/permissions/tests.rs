@@ -2,6 +2,7 @@
 use super::*;
 use serde_json::json;
 
+
 /// Build `options` JSON matching the ACP `PermissionOption` wire shape.
 fn options_value(ids: &[&str]) -> Value {
     json!(ids
@@ -63,22 +64,16 @@ fn turn_claim_completion_records_stale_watermark() {
     );
 }
 
-// --- Rendezvous bookkeeping tests (Story 1.7 AC3) -------------------------
+// --- Rendezvous bookkeeping tests -----------------------------------------
 //
 // These exercise the relay-side ticket table + the rendezvous policy
-// (at-most-one, first-wins, stale/duplicate, TOCTOU, disconnect-deny,
-// timeout-deny) WITHOUT a real agent. The `AcpManager` is a no-op
-// (`AcpManager::new(vec![])` — `respond_permission` returns an "unknown
-// agent" `Err` which the rendezvous logs-and-continues). Assertions target
-// the ticket state (outstanding/queued/resolved/evicted) + the
+// (at-most-one, first-wins, stale/duplicate, TOCTOU) WITHOUT a real agent. The
+// `AcpManager` is a no-op (`AcpManager::new(vec![])` — `respond_permission`
+// returns an "unknown agent" `Err` which the rendezvous logs-and-continues).
+// Assertions target the ticket state (outstanding/queued/resolved/evicted) + the
 // `try_respond` outcome/error — the agent-side `Responder` resolution is
-// covered by the `#[ignore]` e2e test in `acp/tests.rs`.
-//
-// The rendezvous captures the tokio runtime handle at construction (so the
-// per-ticket timeout can be armed from the agent driver thread). The tests
-// therefore construct the rendezvous + call `register`/`try_respond` INSIDE
-// a single-threaded runtime (`block_on`) so the handle is captured and the
-// `Err`-fallback `tokio::spawn` path (if any) has a runtime to spawn onto.
+// covered by the `#[ignore]` e2e test in `acp/tests.rs`. Lifecycle release and
+// the no-timer rule are in `durable_tests.rs`.
 
 /// Drive an async block on a single-threaded tokio runtime (mirrors the
 /// `handle_sync` helper in `web/ws.rs`).
@@ -90,31 +85,9 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-/// A rendezvous bound to a no-op `AcpManager` with the default 60s timeout
-/// (agent calls log-and-continue). Construct INSIDE a runtime context.
+/// A rendezvous bound to a no-op `AcpManager` (agent calls log-and-continue).
 fn test_rendezvous() -> Arc<PermissionRendezvous> {
-    Arc::new(PermissionRendezvous::with_timeout(
-        Arc::new(AcpManager::new(vec![])),
-        Duration::from_secs(60),
-    ))
-}
-
-/// Build `options` JSON matching the `AskUserQuestionEvent` wire shape
-/// (issue #411) — single-select options (no `cardinality` → single).
-fn question_options_value(values: &[&str]) -> Value {
-    json!(values
-        .iter()
-        .map(|v| json!({ "value": v, "label": v }))
-        .collect::<Vec<_>>())
-}
-
-/// A question rendezvous bound to a no-op `AcpManager` with the default 60s
-/// timeout (issue #411). Construct INSIDE a runtime context.
-fn test_question_rendezvous() -> Arc<QuestionRendezvous> {
-    Arc::new(QuestionRendezvous::with_timeout(
-        Arc::new(AcpManager::new(vec![])),
-        Duration::from_secs(60),
-    ))
+    Arc::new(PermissionRendezvous::new(Arc::new(AcpManager::new(vec![]))))
 }
 
 /// Story 1.7 AC3: first-response-wins — a second client's `try_respond` is
@@ -153,30 +126,6 @@ fn first_response_wins_second_is_rejected_already_resolved() {
     });
 }
 
-/// A ticket resolved by the timeout (deny) is remembered too: a late answer
-/// reads `already_resolved`, not `stale`.
-#[test]
-fn timed_out_permission_reads_already_resolved() {
-    let rdz = Arc::new(PermissionRendezvous::with_timeout(
-        Arc::new(AcpManager::new(vec![])),
-        Duration::from_millis(40),
-    ));
-    block_on(async {
-        rdz.register(
-            "perm-late".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            options_value(&["allow"]),
-        );
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        assert!(!rdz.is_outstanding("perm-late"));
-        let late = rdz
-            .try_respond(ClientId::new(), "perm-late", Some("allow"))
-            .await;
-        assert_eq!(late, Err(RespondError::AlreadyResolved));
-    });
-}
-
 /// Tombstones are bounded: past `RESOLVED_TOMBSTONE_CAPACITY` newer
 /// resolutions the oldest id falls back to `NotFound` (`stale`).
 #[test]
@@ -212,222 +161,6 @@ fn resolved_tombstones_are_bounded() {
             Err(RespondError::AlreadyResolved),
             "the newest is still remembered"
         );
-    });
-}
-
-/// Issue #411: first-response-wins for questions — the second answer is
-/// rejected `already_resolved` (the resolved ticket is tombstoned).
-#[test]
-fn question_first_response_wins_second_is_rejected_already_resolved() {
-    let rdz = test_question_rendezvous();
-    let client = ClientId::new();
-    block_on(async {
-        rdz.register(
-            "q-1".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a", "plan-b"]),
-        );
-        let first = rdz
-            .try_respond(client, "q-1", Some(&["plan-a".to_string()]))
-            .await;
-        assert_eq!(first, Ok(QuestionRespondOutcome::Resolved));
-        let second = rdz
-            .try_respond(client, "q-1", Some(&["plan-b".to_string()]))
-            .await;
-        assert_eq!(second, Err(QuestionRespondError::AlreadyResolved));
-        assert_eq!(second.unwrap_err().wire_code(), "already_resolved");
-        let unknown = rdz.try_respond(client, "q-never", None).await;
-        assert_eq!(unknown, Err(QuestionRespondError::NotFound));
-        assert_eq!(QuestionRespondError::NotFound.wire_code(), "stale");
-    });
-}
-
-/// Issue #411: TOCTOU — a value not among the original immutable options
-/// is rejected as `InvalidOption` (→ `permission_denied`), and the ticket
-/// stays outstanding so a valid answer can still win.
-#[test]
-fn question_toctou_invalid_value_is_rejected() {
-    let rdz = test_question_rendezvous();
-    let client = ClientId::new();
-    block_on(async {
-        rdz.register(
-            "q-toctou".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a", "plan-b"]),
-        );
-        let outcome = rdz
-            .try_respond(client, "q-toctou", Some(&["escalate".to_string()]))
-            .await;
-        assert_eq!(outcome, Err(QuestionRespondError::InvalidOption));
-        assert_eq!(
-            QuestionRespondError::InvalidOption.wire_code(),
-            "permission_denied"
-        );
-        assert!(rdz.is_outstanding("q-toctou"));
-        let ok = rdz
-            .try_respond(client, "q-toctou", Some(&["plan-a".to_string()]))
-            .await;
-        assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
-    });
-}
-
-/// Issue #411: single-select enforces at-most-one value; multi-select
-/// allows several (as long as every value is a registered option).
-#[test]
-fn question_cardinality_single_rejects_multiple_values() {
-    let rdz = test_question_rendezvous();
-    let client = ClientId::new();
-    block_on(async {
-        rdz.register(
-            "q-single".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a", "plan-b"]),
-        );
-        let rejected = rdz
-            .try_respond(
-                client,
-                "q-single",
-                Some(&["plan-a".to_string(), "plan-b".to_string()]),
-            )
-            .await;
-        assert_eq!(rejected, Err(QuestionRespondError::InvalidOption));
-        // multi-select accepts several valid values
-        rdz.register(
-            "q-multi".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            serde_json::json!([
-                { "value": "a", "label": "A", "cardinality": "multi" },
-                { "value": "b", "label": "B", "cardinality": "multi" },
-            ]),
-        );
-        let ok = rdz
-            .try_respond(client, "q-multi", Some(&["a".to_string(), "b".to_string()]))
-            .await;
-        assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
-    });
-}
-
-/// Issue #411: an EMPTY values array is neither a selection nor a cancel
-/// — it must be rejected (clients send `None` to cancel). CodeRabbit.
-#[test]
-fn question_empty_values_array_is_rejected() {
-    let rdz = test_question_rendezvous();
-    let client = ClientId::new();
-    block_on(async {
-        rdz.register(
-            "q-empty".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
-        let rejected = rdz.try_respond(client, "q-empty", Some(&[])).await;
-        assert_eq!(rejected, Err(QuestionRespondError::InvalidOption));
-        // Ticket stays outstanding; a real answer still works.
-        let ok = rdz
-            .try_respond(client, "q-empty", Some(&["plan-a".to_string()]))
-            .await;
-        assert_eq!(ok, Ok(QuestionRespondOutcome::Resolved));
-    });
-}
-
-/// Issue #411: cancel (values=None) is always allowed — resolves the
-/// ticket as cancelled without TOCTOU option validation.
-#[test]
-fn question_cancel_none_resolves_and_evicts() {
-    let rdz = test_question_rendezvous();
-    let client = ClientId::new();
-    block_on(async {
-        rdz.register(
-            "q-cancel".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
-        let outcome = rdz.try_respond(client, "q-cancel", None).await;
-        assert_eq!(outcome, Ok(QuestionRespondOutcome::Resolved));
-        assert!(!rdz.is_outstanding("q-cancel"));
-        let stale = rdz.try_respond(client, "q-cancel", None).await;
-        assert_eq!(stale, Err(QuestionRespondError::AlreadyResolved));
-    });
-}
-
-/// Issue #411: disconnect-deny — when the last subscriber leaves the
-/// session, its outstanding questions are resolved cancelled.
-#[test]
-fn question_disconnect_denies_when_no_subscribers_remain() {
-    let rdz = test_question_rendezvous();
-    block_on(async {
-        rdz.register(
-            "q-disc".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
-        // zero remaining subscribers → deny
-        rdz.deny_all_for_client(|_| 0).await;
-        assert!(!rdz.is_outstanding("q-disc"));
-        // with a remaining subscriber → untouched
-        rdz.register(
-            "q-keep".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
-        rdz.deny_all_for_client(|_| 1).await;
-        assert!(rdz.is_outstanding("q-keep"));
-    });
-}
-
-/// Issue #411: timeout resolves the ticket as cancelled (expiry promotes).
-#[test]
-fn question_timeout_deny_resolves_and_evicts() {
-    let rdz = Arc::new(QuestionRendezvous::with_timeout(
-        Arc::new(AcpManager::new(vec![])),
-        Duration::from_millis(30),
-    ));
-    block_on(async {
-        rdz.register(
-            "q-timeout".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
-        tokio::time::sleep(Duration::from_millis(120)).await;
-        assert!(!rdz.is_outstanding("q-timeout"));
-        let stale = rdz
-            .try_respond(ClientId::new(), "q-timeout", Some(&["plan-a".to_string()]))
-            .await;
-        assert_eq!(stale, Err(QuestionRespondError::AlreadyResolved));
-    });
-}
-
-/// Issue #411: same-client double-respond — exactly one wins; the loser is
-/// `already_resolved`-coded.
-#[test]
-fn question_same_client_double_respond_is_rejected() {
-    let rdz = test_question_rendezvous();
-    let client = ClientId::new();
-    block_on(async {
-        rdz.register(
-            "q-dup".to_string(),
-            AgentId("a1".to_string()),
-            "sess-dup".to_string(),
-            question_options_value(&["plan-a"]),
-        );
-        let answer = vec!["plan-a".to_string()];
-        let (a, b) = tokio::join!(
-            rdz.try_respond(client, "q-dup", Some(&answer)),
-            rdz.try_respond(client, "q-dup", Some(&answer)),
-        );
-        let loser = if a.is_ok() { b } else { a };
-        let winner = if a.is_ok() { a } else { b };
-        assert!(winner.is_ok(), "one answer must win: ({a:?}, {b:?})");
-        assert!(loser.is_err(), "the other must be rejected");
-        assert_eq!(loser.unwrap_err().wire_code(), "already_resolved");
     });
 }
 
@@ -514,116 +247,6 @@ fn at_most_one_outstanding_per_session_queues_the_rest() {
             "queued permission promoted after the first resolves"
         );
         assert_eq!(rdz.queued_count_for_session("sess-q"), 0);
-    });
-}
-
-/// Story 1.7 AC3: timeout → deny. A ticket whose bounded timeout elapses is
-/// resolved as deny and evicted. Uses a tiny timeout + a generous poll loop
-/// (the spawned deny task runs on this single-threaded runtime when the poll
-/// yields). The 60-iteration × 25ms budget (1500ms for a 50ms timeout) gives
-/// 30× headroom; a deterministic `tokio::time::pause`/`advance` driver would
-/// require the `test-util` feature (deferred — the polling is robust enough
-/// for the gate and the deny path is also unit-tested via `deny_after_*`).
-#[test]
-fn timeout_deny_resolves_and_evicts() {
-    let rdz = Arc::new(PermissionRendezvous::with_timeout(
-        Arc::new(AcpManager::new(vec![])),
-        Duration::from_millis(50),
-    ));
-    block_on(async {
-        rdz.register(
-            "perm-tmo".to_string(),
-            AgentId("a1".to_string()),
-            "sess-tmo".to_string(),
-            options_value(&["allow"]),
-        );
-        assert!(rdz.is_outstanding("perm-tmo"));
-        let mut evicted = false;
-        for _ in 0..60 {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            tokio::task::yield_now().await;
-            if !rdz.is_outstanding("perm-tmo") {
-                evicted = true;
-                break;
-            }
-        }
-        assert!(evicted, "timed-out ticket must be evicted");
-        assert!(
-            !rdz.is_outstanding("perm-tmo"),
-            "timed-out ticket is evicted"
-        );
-    });
-}
-
-/// Story 1.7 AC3: expiry → deny is the same resolution path as timeout
-/// (both reach `deny` with `DenyReason::Timeout`). This test asserts the
-/// deny path also promotes the session queue. Same polling approach as
-/// `timeout_deny_resolves_and_evicts` (60×25ms budget for a 50ms timeout).
-#[test]
-fn expiry_deny_promotes_the_queue() {
-    let rdz = Arc::new(PermissionRendezvous::with_timeout(
-        Arc::new(AcpManager::new(vec![])),
-        Duration::from_millis(50),
-    ));
-    block_on(async {
-        rdz.register(
-            "perm-e1".to_string(),
-            AgentId("a1".to_string()),
-            "sess-e".to_string(),
-            options_value(&["allow"]),
-        );
-        // Queue a second on the same session.
-        rdz.register(
-            "perm-e2".to_string(),
-            AgentId("a1".to_string()),
-            "sess-e".to_string(),
-            options_value(&["allow"]),
-        );
-        assert!(!rdz.is_outstanding("perm-e2"));
-        let mut promoted = false;
-        for _ in 0..60 {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            tokio::task::yield_now().await;
-            if rdz.is_outstanding("perm-e2") {
-                promoted = true;
-                break;
-            }
-        }
-        assert!(
-            !rdz.is_outstanding("perm-e1"),
-            "perm-e1 evicted by timeout-deny"
-        );
-        assert!(promoted, "queue (perm-e2) promoted after expiry-deny");
-    });
-}
-
-/// Story 1.7 AC3: disconnect → deny-all. When the last subscriber on a
-/// session disconnects, the outstanding permission is resolved as deny.
-/// When OTHER clients remain subscribed, the ticket is left outstanding.
-#[test]
-fn disconnect_denies_only_when_no_subscribers_remain() {
-    let rdz = test_rendezvous();
-    block_on(async {
-        rdz.register(
-            "perm-dc".to_string(),
-            AgentId("a1".to_string()),
-            "sess-dc".to_string(),
-            options_value(&["allow"]),
-        );
-        assert!(rdz.is_outstanding("perm-dc"));
-        // Simulate a disconnect where OTHER clients remain subscribed → ticket
-        // stays outstanding (a remaining client can still respond).
-        rdz.deny_all_for_client(|_sid| 1usize).await; // 1 remaining subscriber
-        assert!(
-            rdz.is_outstanding("perm-dc"),
-            "ticket stays outstanding when other clients remain"
-        );
-        // Now the last subscriber disconnects → ticket denied + evicted.
-        rdz.deny_all_for_client(|_sid| 0usize).await; // 0 remaining subscribers
-        assert!(
-            !rdz.is_outstanding("perm-dc"),
-            "ticket denied on last-subscriber disconnect"
-        );
     });
 }
 
@@ -723,37 +346,6 @@ fn turn_watermark_forgets_session_state() {
     wm.forget_session("never-existed");
 }
 
-/// Story 1.7 deny-race guard: a `deny` for a ticket that a concurrent
-/// `try_respond` already claimed (set `resolved_by`) must NOT forward a
-/// second resolution to the agent. We simulate the claim by having
-/// `try_respond` succeed first (which sets `resolved_by` + evicts), then
-/// call `deny` — `deny`'s `remove` returns `None` (evicted) → early return,
-/// no double-forward. This is the post-claim-eviction case; the live race
-/// window (claim-set, not-yet-evicted) is structurally guarded by the
-/// `resolved_by.is_some()` check inside `deny`.
-#[test]
-fn deny_after_try_respond_eviction_is_a_noop() {
-    let rdz = test_rendezvous();
-    let client = ClientId::new();
-    block_on(async {
-        rdz.register(
-            "perm-race".to_string(),
-            AgentId("a1".to_string()),
-            "sess-race".to_string(),
-            options_value(&["allow"]),
-        );
-        // Claim + evict via try_respond.
-        let outcome = rdz.try_respond(client, "perm-race", Some("allow")).await;
-        assert_eq!(outcome, Ok(RespondOutcome::Resolved));
-        assert!(!rdz.is_outstanding("perm-race"));
-        // A subsequent deny (e.g. a late timeout) is a no-op — no panic, no
-        // double-resolution (the agent-side responder was already resolved).
-        rdz.deny("perm-race", &AgentId("a1".to_string()), DenyReason::Timeout)
-            .await;
-        assert!(!rdz.is_outstanding("perm-race"));
-    });
-}
-
 /// Story 1.7 AC3: duplicate — the SAME client responding twice is `Duplicate`
 /// (→ wire `err.code: "duplicate"`). The first response resolves (evicts)
 /// the ticket; the same-client second call sees `NotFound` first. The
@@ -807,32 +399,6 @@ fn same_client_double_respond_is_rejected() {
     });
 }
 
-/// A queued (never promoted) permission cancelled by the disconnect deny is
-/// remembered too: a late answer reads `already_resolved`, not `stale`.
-#[test]
-fn queued_permission_denied_on_disconnect_reads_already_resolved() {
-    let rdz = test_rendezvous();
-    block_on(async {
-        for id in ["perm-out", "perm-queued"] {
-            rdz.register(
-                id.to_string(),
-                AgentId("a1".to_string()),
-                "sess-1".to_string(),
-                options_value(&["allow"]),
-            );
-        }
-        assert_eq!(rdz.queued_count_for_session("sess-1"), 1);
-        rdz.deny_all_for_client(|_| 0).await;
-        for id in ["perm-out", "perm-queued"] {
-            assert_eq!(
-                rdz.try_respond(ClientId::new(), id, Some("allow")).await,
-                Err(RespondError::AlreadyResolved),
-                "{id}"
-            );
-        }
-    });
-}
-
 /// The agent reports no outstanding responder (it resolved the request
 /// elsewhere, e.g. at turn completion): THIS answer is `stale`, but the ticket
 /// is remembered so any later answer reads `already_resolved`.
@@ -842,10 +408,7 @@ fn agent_reported_unknown_request_leaves_a_tombstone() {
         let acp = Arc::new(AcpManager::new(vec![]));
         acp.install_test_agent_without_responders(AgentId("a1".to_string()));
 
-        let permissions = Arc::new(PermissionRendezvous::with_timeout(
-            Arc::clone(&acp),
-            Duration::from_secs(60),
-        ));
+        let permissions = Arc::new(PermissionRendezvous::new(Arc::clone(&acp)));
         permissions.register(
             "perm-gone".to_string(),
             AgentId("a1".to_string()),
@@ -859,26 +422,6 @@ fn agent_reported_unknown_request_leaves_a_tombstone() {
         assert_eq!(
             permissions.try_respond(ClientId::new(), "perm-gone", Some("allow")).await,
             Err(RespondError::AlreadyResolved)
-        );
-
-        let questions = Arc::new(QuestionRendezvous::with_timeout(
-            Arc::clone(&acp),
-            Duration::from_secs(60),
-        ));
-        questions.register(
-            "q-gone".to_string(),
-            AgentId("a1".to_string()),
-            "sess-1".to_string(),
-            question_options_value(&["plan-a"]),
-        );
-        let answer = vec!["plan-a".to_string()];
-        assert_eq!(
-            questions.try_respond(ClientId::new(), "q-gone", Some(&answer)).await,
-            Err(QuestionRespondError::NotFound)
-        );
-        assert_eq!(
-            questions.try_respond(ClientId::new(), "q-gone", Some(&answer)).await,
-            Err(QuestionRespondError::AlreadyResolved)
         );
     });
 }

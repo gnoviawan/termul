@@ -3,6 +3,7 @@ use super::*;
 use crate::acp::{AgentId, SpawnOutcome};
 use crate::web::permissions::{PermissionRendezvous, QuestionRendezvous, TurnClaim};
 use std::collections::HashSet;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
@@ -64,20 +65,8 @@ async fn cross_agent_prompt_is_rejected_before_claim_or_persistence() {
 async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
     let relay = Arc::new(WsRelaySink::new());
     let acp = Arc::new(AcpManager::new(vec![]));
-    let permissions = Arc::new(PermissionRendezvous::with_policy(
-        Arc::clone(&acp),
-        Duration::from_secs(60),
-        Duration::ZERO,
-    ));
-    // Issue #841: questions share the permission disconnect grace, so this
-    // test (which asserts immediate teardown) constructs the question
-    // rendezvous with a zero grace — the grace-path behavior is covered by
-    // `question_disconnect_grace_defers_cancel_until_expiry` below.
-    let questions = Arc::new(QuestionRendezvous::with_policy(
-        acp,
-        Duration::from_secs(60),
-        Duration::ZERO,
-    ));
+    let permissions = Arc::new(PermissionRendezvous::new(Arc::clone(&acp)));
+    let questions = Arc::new(QuestionRendezvous::new(acp));
     relay.set_rendezvous(Arc::clone(&permissions));
     relay.set_question_rendezvous(Arc::clone(&questions));
     relay.seed_session_for_test("session-cleanup");
@@ -119,117 +108,10 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
     })
     .await
     .expect("subscriptions cleaned up after connection cleanup");
-    // The zero-grace expiry path runs on a spawned task (issue #841 moved
-    // the deny from inline to the grace task) — wait for it like the
-    // permission grace below instead of asserting synchronously.
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while questions.is_outstanding("question-cleanup") {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("question disconnect policy executed");
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while permissions.is_outstanding("permission-cleanup") {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("permission disconnect policy executed");
-}
-
-/// Issue #841: the last subscriber leaving arms a question disconnect grace
-/// (NOT an instant cancel). Within the grace window the ticket stays
-/// outstanding so a returning user can still answer it; a resubscribe
-/// cancels the grace entirely; after expiry with no subscriber restored the
-/// ticket is resolved as cancelled.
-#[tokio::test]
-async fn question_disconnect_grace_defers_cancel_until_expiry() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let questions = Arc::new(QuestionRendezvous::with_policy(
-        acp,
-        Duration::from_secs(60),
-        Duration::from_millis(80),
-    ));
-    relay.set_question_rendezvous(Arc::clone(&questions));
-    relay.seed_session_for_test("session-q-grace");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-q-grace", None, None, &CancellationToken::new()).await;
-    assert!(matches!(replay, ReplayResult::Ok(0)));
-    questions.register(
-        "question-grace".to_string(),
-        AgentId("agent-q-grace".to_string()),
-        "session-q-grace".to_string(),
-        json!([]),
-    );
-    let subscribed = subscriptions_with("session-q-grace", client_id);
-
-    let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
-    let cleanup_task = tokio::spawn(async move {
-        cleanup.run().await;
-    });
-    let _ = cleanup_task.await;
-
-    // Within the grace window the question is still outstanding.
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(
-        questions.is_outstanding("question-grace"),
-        "question must survive the disconnect within the grace window"
-    );
-
-    // Grace expiry with no subscriber restored → cancelled + evicted.
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while questions.is_outstanding("question-grace") {
-            tokio::task::yield_now().await;
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("question cancelled after grace expiry");
-}
-
-/// Issue #841: a resubscribe within the grace window cancels it — the
-/// question stays outstanding for the returning user to answer.
-#[tokio::test]
-async fn question_disconnect_grace_cancelled_by_resubscribe() {
-    let relay = Arc::new(WsRelaySink::new());
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let questions = Arc::new(QuestionRendezvous::with_policy(
-        acp,
-        Duration::from_secs(60),
-        Duration::from_millis(80),
-    ));
-    relay.set_question_rendezvous(Arc::clone(&questions));
-    relay.seed_session_for_test("session-q-resub");
-    let (client_id, _rx, replay, _) = relay.subscribe("session-q-resub", None, None, &CancellationToken::new()).await;
-    assert!(matches!(replay, ReplayResult::Ok(0)));
-    questions.register(
-        "question-resub".to_string(),
-        AgentId("agent-q-resub".to_string()),
-        "session-q-resub".to_string(),
-        json!([]),
-    );
-    let subscribed = subscriptions_with("session-q-resub", client_id);
-
-    let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
-    let cleanup_task = tokio::spawn(async move {
-        cleanup.run().await;
-    });
-    let _ = cleanup_task.await;
-    assert_eq!(relay.session_subscriber_count("session-q-resub"), 0);
-
-    // A new subscriber arrives within the grace window.
-    let (_client2, _rx2, replay2, _) = relay.subscribe("session-q-resub", None, None, &CancellationToken::new()).await;
-    assert!(matches!(replay2, ReplayResult::Ok(0)));
-    questions.cancel_disconnect_grace("session-q-resub");
-
-    // Well past the original grace window the question is still outstanding
-    // (the grace was cancelled, not expired).
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        questions.is_outstanding("question-resub"),
-        "resubscribe must cancel the grace so the question stays outstanding"
-    );
+    // The last subscriber is gone, but a pending approval or question belongs
+    // to the session, not to a connection: it stays answerable.
+    assert!(permissions.is_outstanding("permission-cleanup"));
+    assert!(questions.is_outstanding("question-cleanup"));
 }
 
 #[tokio::test]

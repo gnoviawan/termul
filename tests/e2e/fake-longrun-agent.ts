@@ -51,8 +51,8 @@
  * `[PERMISSION]` (mobile shell suites): right after accepting the prompt the
  * agent asks the host for a tool permission (`session/request_permission`)
  * and leaves it unanswered, so the chat shows a pending approval — "needs
- * you" — for as long as a client is connected (the host denies it only after
- * its disconnect grace). The turn keeps streaming.
+ * you" — until a person answers it (the host keeps it through disconnects).
+ * The turn keeps streaming.
  *
  * Composer fixture (mobile-composer-row suite, additive): a `session/new`
  * whose cwd contains `composer-row-e2e` advertises two modes plus a model and

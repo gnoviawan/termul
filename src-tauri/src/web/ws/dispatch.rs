@@ -9,47 +9,17 @@ pub(super) async fn cleanup_connection_subscriptions(
     subscriptions: &Subscriptions,
 ) {
     let subscriptions = subscriptions.take_all();
-    let disconnected_sessions: std::collections::HashSet<String> = subscriptions
-        .iter()
-        .map(|(session_id, _)| session_id.clone())
-        .collect();
+    let session_count = subscriptions.len();
+    // A pending approval or question outlives its subscribers: dropping the
+    // last subscriber changes nothing about the ticket, so this only unsubscribes.
     for (session_id, client_id) in subscriptions {
         relay.unsubscribe(&session_id, client_id);
     }
     info!(
         target: "termul::web::ws",
-        session_count = disconnected_sessions.len(),
+        session_count,
         "connection subscriptions cleaned up"
     );
-
-    if let Some(rendezvous) = relay.rendezvous() {
-        for session_id in disconnected_sessions
-            .iter()
-            .filter(|session_id| relay.session_subscriber_count(session_id) == 0)
-        {
-            let relay_for_count = Arc::clone(relay);
-            rendezvous.schedule_disconnect_grace(session_id.clone(), move |candidate| {
-                relay_for_count.session_subscriber_count(candidate)
-            });
-        }
-    }
-    // Issue #841: questions now align with the permission disconnect grace
-    // — the last subscriber leaving arms the same bounded
-    // last-subscriber grace instead of instantly cancelling outstanding
-    // questions (a user who comes back within the window finds them
-    // still pending). Expiry (with no subscriber restored) resolves them
-    // as cancelled, mirroring the permission deny-on-grace-expiry.
-    if let Some(rendezvous) = relay.question_rendezvous() {
-        for session_id in disconnected_sessions
-            .iter()
-            .filter(|session_id| relay.session_subscriber_count(session_id) == 0)
-        {
-            let relay_for_count = Arc::clone(relay);
-            rendezvous.schedule_disconnect_grace(session_id.clone(), move |candidate| {
-                relay_for_count.session_subscriber_count(candidate)
-            });
-        }
-    }
 }
 
 /// Route one validated post-auth request to its handler and return the reply.

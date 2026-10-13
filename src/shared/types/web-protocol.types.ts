@@ -612,8 +612,6 @@ export interface AcpRuntimePolicy {
    *  in ms. `0` is the unlimited sentinel — no inactivity timer is imposed
    *  (the default). */
   promptInactivityTimeoutMs: number
-  /** Grace before a last-subscriber disconnect denies pending permissions. */
-  permissionReconnectGraceMs: number
   pingIntervalMs: number
   pongTimeoutMs: number
 }

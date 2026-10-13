@@ -1120,7 +1120,10 @@ impl AcpManager {
         let caps = self.capabilities(agent_id)?;
         gate_close_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::CloseSession { session_id, reply }).await
+        let closed_session = session_id.0.clone();
+        send_command(&tx, |reply| AcpCommand::CloseSession { session_id, reply }).await?;
+        self.release_session_tickets(&closed_session);
+        Ok(())
     }
 
     pub async fn dispose_ephemeral_session(
@@ -1244,6 +1247,17 @@ impl AcpManager {
         Ok(stop_reason)
     }
 
+    /// Release the relay tickets of `session_id` after the driver resolved its
+    /// parked approvals and questions as cancelled (turn cancel or session
+    /// close). Tickets have no timer, so this frees the session's queue slot.
+    fn release_session_tickets(&self, session_id: &str) {
+        for sink in &self.sinks {
+            if let Some(relay) = sink.as_ws_relay() {
+                relay.release_session_tickets(session_id);
+            }
+        }
+    }
+
     /// Cancel the active turn for a session, resolving pending permissions with
     /// the `cancelled` outcome. No-op (Ok) if there is no active turn.
     pub async fn cancel_prompt(
@@ -1252,7 +1266,12 @@ impl AcpManager {
         session_id: SessionId,
     ) -> Result<(), String> {
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::CancelPrompt { session_id, reply }).await
+        let cancelled_session = session_id.0.clone();
+        let result = send_command(&tx, |reply| AcpCommand::CancelPrompt { session_id, reply }).await;
+        // The driver resolved every parked approval and question of the session
+        // as cancelled before it replied, whatever the reply says.
+        self.release_session_tickets(&cancelled_session);
+        result
     }
 
     /// Issue #837 split-brain guard: reject a reopen (`session/load` /
@@ -1519,6 +1538,9 @@ impl AcpManager {
         for sink in &self.sinks {
             if let Some(relay) = sink.as_ws_relay() {
                 crate::web::watch::publish_agent_removed(relay, &agent_id.0);
+                // The killed agent's approvals can never be answered: release
+                // them and their queue slots (a kill emits no lifecycle event).
+                relay.release_agent_tickets(agent_id);
             }
         }
 

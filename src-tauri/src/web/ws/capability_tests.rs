@@ -8,6 +8,7 @@ use super::tests::{
     ws_read_frame, ws_test_app_state, ws_write_frame,
 };
 use super::*;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 const MUTATIONS: &[&str] = &[

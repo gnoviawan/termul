@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { PermissionOption } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
-import { permissionToolTitle } from '@/lib/permission-denial'
+import { permissionToolTitle } from '@/lib/permission-tool-title'
 import { cn } from '@/lib/utils'
 import { type PendingPermission, useAcpStore } from '@/stores/acp-store'
 import {
