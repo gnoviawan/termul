@@ -124,6 +124,17 @@ beforeEach(() => {
 })
 
 describe('openSSHSession', () => {
+  it('leaves the active local terminal alone', async () => {
+    const terminals = useTerminalStore.getState()
+    const local = terminals.addTerminal('Local', 'project-1')
+    terminals.selectTerminal(local.id)
+    sshApi.openSession.mockImplementation(async ({ sessionId }) => opened(sessionId))
+    openSSHSession('p1')
+    await settle()
+    expect(useTerminalStore.getState().findTerminalByPtyId('term-1')).toBeDefined()
+    expect(useTerminalStore.getState().activeTerminalId).toBe(local.id)
+  })
+
   it('opens a tab, connects it and binds a terminal record', async () => {
     sshApi.openSession.mockImplementation(async ({ sessionId }) => opened(sessionId))
     const tabId = openSSHSession('p1')

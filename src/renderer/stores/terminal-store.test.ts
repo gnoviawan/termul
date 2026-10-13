@@ -107,6 +107,27 @@ describe('terminal-store', () => {
       expect(newTerminal.id).toBeTruthy()
     })
 
+    it('gives terminals added in the same millisecond distinct ids', () => {
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date('2026-10-13T00:00:00.000Z'))
+        const { addTerminal } = useTerminalStore.getState()
+        const first = addTerminal('A', '1')
+        const second = addTerminal('B', '1')
+        expect(first.id).not.toBe(second.id)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('can add a terminal without making it the active one', () => {
+      const { addTerminal, selectTerminal } = useTerminalStore.getState()
+      const local = addTerminal('Local', '1')
+      selectTerminal(local.id)
+      addTerminal('Background', 'ssh-p1', 'ssh', undefined, undefined, { activate: false })
+      expect(useTerminalStore.getState().activeTerminalId).toBe(local.id)
+    })
+
     it('should set activeTerminalId to new terminal', () => {
       const { addTerminal } = useTerminalStore.getState()
       const newTerminal = addTerminal('New', '1')

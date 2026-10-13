@@ -135,11 +135,15 @@ async function runAttempt(tabId: string, options: ConnectOptions): Promise<void>
   const profile = profileOf(session.profileId)
   const terminals = useTerminalStore.getState()
   try {
+    // SSH tabs select their terminal themselves; the global active
+    // terminal belongs to the workspace panes.
     const record = terminals.addTerminal(
       `SSH: ${profile?.name ?? 'host'}`,
       sshTerminalProjectId(session.profileId),
       terminal.shell,
-      terminal.cwd
+      terminal.cwd,
+      undefined,
+      { activate: false }
     )
     terminals.setTerminalPtyId(record.id, terminal.id)
     terminals.setTerminalClaim(terminal.id, terminal.claim)
@@ -339,7 +343,10 @@ async function restoreSessions(): Promise<void> {
         const record = terminals.addTerminal(
           `SSH: ${profile?.name ?? 'host'}`,
           sshTerminalProjectId(live.profileId),
-          'ssh'
+          'ssh',
+          undefined,
+          undefined,
+          { activate: false }
         )
         terminals.setTerminalPtyId(record.id, live.terminalId)
       } catch (error) {

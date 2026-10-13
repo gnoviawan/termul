@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { randomUUID } from '@/lib/uuid'
 import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
 
@@ -44,7 +45,9 @@ export interface TerminalState {
     projectId: string,
     shell?: Terminal['shell'],
     cwd?: string,
-    pendingScrollback?: string[]
+    pendingScrollback?: string[],
+    /** `activate: false` keeps the current active terminal (background terminals). */
+    options?: { activate?: boolean }
   ) => Terminal
   closeTerminal: (id: string, projectId: string) => void
   renameTerminal: (id: string, name: string) => void
@@ -98,10 +101,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     projectId: string,
     shell: Terminal['shell'] = 'powershell',
     cwd?: string,
-    pendingScrollback?: string[]
+    pendingScrollback?: string[],
+    { activate = true }: { activate?: boolean } = {}
   ): Terminal => {
     const newTerminal: Terminal = {
-      id: Date.now().toString(),
+      // Unique even for terminals added in the same millisecond (a restore loop).
+      id: randomUUID(),
       name,
       projectId,
       shell,
@@ -113,7 +118,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
     set((state) => ({
       terminals: [...state.terminals, newTerminal],
-      activeTerminalId: newTerminal.id
+      activeTerminalId: activate ? newTerminal.id : state.activeTerminalId
     }))
     return newTerminal
   },
