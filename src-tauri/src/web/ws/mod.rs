@@ -62,6 +62,7 @@ use crate::web::store::WebStore;
 
 mod access;
 mod agents;
+pub mod channel;
 mod commands;
 mod dispatch;
 mod lifecycle;

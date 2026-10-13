@@ -56,6 +56,64 @@ use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 
 use super::assets;
 
+/// The desktop host pieces a local (in-process) relay connection needs: what
+/// `lib.rs` already built for the Tauri app, shared with every carrier.
+pub struct DesktopLocalParts {
+    pub acp: Arc<AcpManager>,
+    pub pty: Arc<PtyManager>,
+    pub relay: Arc<WsRelaySink>,
+    pub registry: Arc<ProjectRegistry>,
+    pub workspace_manifest: Option<Arc<WorkspaceManifestService>>,
+    pub acp_catalog: Option<Arc<AcpCatalogService>>,
+    pub acp_install: Option<Arc<AcpInstallService>>,
+    pub store: Arc<WebStore>,
+}
+
+impl AppState {
+    /// The state behind the desktop's own Tauri `ipc::Channel` carrier.
+    ///
+    /// Unlike the shared-live host (token gate, every write denied because a
+    /// tunnel forwards public traffic from loopback), the caller here is the
+    /// app's own webview across the process boundary: no token gate
+    /// (`web_auth: None`), writes allowed for the loopback peer
+    /// (`shared_live_writes_denied: false`, `allow_remote_writes: false`).
+    /// Never serve this state from a network listener. It owns a fresh
+    /// [`ConnectionRuntime`] so the exit path can drain its connections.
+    #[must_use]
+    pub fn desktop_local(parts: DesktopLocalParts) -> Self {
+        let history_mode = if parts.relay.persistence().is_some() {
+            HistoryMode::Server
+        } else {
+            HistoryMode::LiveOnly
+        };
+        Self {
+            terminal_events: parts.pty.terminal_events(),
+            cwd_tracker: parts.pty.cwd_tracker(),
+            git_tracker: parts.pty.git_tracker(),
+            exit_code_tracker: parts.pty.exit_code_tracker(),
+            acp: parts.acp,
+            pty: parts.pty,
+            relay: parts.relay,
+            registry: parts.registry,
+            registry_persistence: None,
+            projects_file: None,
+            history_mode,
+            workspace_manifest: parts.workspace_manifest,
+            acp_catalog: parts.acp_catalog,
+            acp_install: parts.acp_install,
+            store: Some(parts.store),
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+            pending_oauth_flows: Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            web_auth: None,
+            connections: ConnectionRuntime::default(),
+        }
+    }
+}
+
 /// Build the ACP web-server Axum router (serves the web client + WS + health).
 ///
 /// `ws_relay` is threaded into the router state so `/ws` can subscribe clients

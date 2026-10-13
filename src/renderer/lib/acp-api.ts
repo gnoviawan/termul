@@ -2,16 +2,17 @@
  * ACP (Agent Client Protocol) renderer facade.
  *
  * This is the ONLY module in the renderer that talks to the P0 ACP backend
- * (Tauri commands `acp_*` / events `acp:*`, or the web WS relay). Components
+ * (the `/ws` relay protocol, carried over a WebSocket on web and a Tauri IPC
+ * Channel on desktop, plus the host-local `acp_*` domain commands). Components
  * and the acp-store go through here.
  *
- * Transport selection (Story 1.6): `getAcpTransport()` picks Tauri IPC when
- * `isTauriContext()` is true, otherwise the multiplexed WS client. Public
- * method names and TypeScript signatures are unchanged.
+ * Transport selection: `getAcpTransport()` returns the desktop subclass of the
+ * `/ws` client when `isTauriContext()` is true, otherwise the plain WS client.
+ * Public method names and TypeScript signatures are unchanged.
  *
- * IMPORTANT: ACP commands surface failures by throwing (Tauri `Result` Err
- * string, or `AcpTransportError` from WS `{ok:false,err}`). Callers (the store)
- * normalize it (toast, etc.).
+ * IMPORTANT: ACP commands surface failures by throwing (`AcpTransportError`
+ * from a `/ws` `{ok:false,err}` reply, or a Tauri `Result` Err string from a
+ * host-local domain command). Callers (the store) normalize it (toast, etc.).
  */
 
 import {
@@ -1223,14 +1224,6 @@ export async function acpRespondPermission(
   requestId: string,
   optionId?: string
 ): Promise<void> {
-  // The desktop `acp_respond_permission` command takes no `commandId` (the
-  // approval is resolved in-process; a duplicate answer is already_resolved):
-  // claiming an id there would be false idempotency, so the desktop path sends
-  // the bare command.
-  if (isTauriContext()) {
-    await getAcpTransport().respondPermission(agentId, requestId, optionId)
-    return
-  }
   await ledgered(
     'respond_permission',
     `${agentId}|${requestId}|${optionId ?? ''}`,
@@ -1248,12 +1241,6 @@ export async function acpAnswerQuestion(
   questionId: string,
   values?: string[]
 ): Promise<void> {
-  // Desktop `acp_answer_question` takes no `commandId` either (see
-  // `acpRespondPermission`): no id is claimed there.
-  if (isTauriContext()) {
-    await getAcpTransport().answerQuestion(agentId, questionId, values)
-    return
-  }
   await ledgered(
     'answer_question',
     `${agentId}|${questionId}`,
@@ -1330,10 +1317,11 @@ export async function acpSetSessionReopenTimeout(secs: number | null): Promise<v
 // --- Event subscription ----------------------------------------------------
 
 /**
- * Subscribe to a backend event. Transport-agnostic: Tauri `listen` on desktop,
- * WS event fan-in on web (Story 1.6). On web, the callback also receives the
- * server envelope seq as `eventSeq` (absent on desktop) for CAP-3 replay
- * seq-dedupe against the authoritative fetched payload.
+ * Subscribe to a backend event. Relay events arrive over the transport's
+ * carrier (WebSocket on web, IPC Channel on desktop); the few desktop-local
+ * `acp:*` events (worktree progress) are plain Tauri events. The callback also
+ * receives the server envelope seq as `eventSeq` for per-session relay events
+ * (CAP-3 replay seq-dedupe against the authoritative fetched payload).
  */
 export function onAcpEvent<T>(
   eventName: string,

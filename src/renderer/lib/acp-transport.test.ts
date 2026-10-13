@@ -3,6 +3,8 @@ import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const gateStatusRef = vi.hoisted(() => ({ current: 'ok' as string }))
+// These suites exercise the real class, not the invoke-backed double from vitest.setup.ts.
+vi.unmock('@/lib/acp-transport/desktop-transport')
 vi.mock('@/lib/web-auth-gate', () => ({
   flagWebAuthUnauthorized: vi.fn(),
   getWebAuthGateState: () => ({ status: gateStatusRef.current, submitting: false })
@@ -19,28 +21,22 @@ vi.mock('@/lib/web-protocol-reload', () => ({
   clearProtocolMismatchLatch: protocolReloadRef.clear
 }))
 
-// Static import of the globally mocked (vitest.setup.ts) Tauri IPC surface —
-// the desktop-path tests assert the exact command names + payloads.
 import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
-import { invoke } from '@tauri-apps/api/core'
 import { logFrontendError } from '@/lib/log-api'
 import { flagWebAuthUnauthorized } from '@/lib/web-auth-gate'
 import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
-  type AcpTransport,
   AcpTransportError,
-  COMMAND_ACCEPTED_CODE,
   COMMAND_IN_PROGRESS_CODE,
   createAcpTransport,
   isOutcomeUncertainError,
   isTransientAcpTransportError,
   resolveWsUrl,
-  toTauriEventName,
   toWsEventType,
   WsAcpTransport
 } from './acp-transport'
-import { createTauriAcpTransport } from './acp-transport/tauri-transport'
+import { DesktopAcpTransport } from './acp-transport/desktop-transport'
 import { classifySetupError } from './agents/acp-spawn-errors'
 
 // Reconnect backoff carries ±25 % jitter; pin it to the neutral factor so the
@@ -621,9 +617,8 @@ describe('acp-transport helpers', () => {
     expect(resolveWsUrl({ protocol: 'https:', host: 'example.com' })).toBe('wss://example.com/ws')
   })
 
-  it('translates acp:* ↔ prefix-dropped event names', () => {
+  it('translates acp:* names to prefix-dropped WS event types', () => {
     expect(toWsEventType('acp:message_chunk')).toBe('message_chunk')
-    expect(toTauriEventName('message_chunk')).toBe('acp:message_chunk')
   })
 })
 
@@ -4066,33 +4061,6 @@ describe('agent_auth_required transport parity (story 7 frozen contract)', () =>
 
     transport.dispose()
   })
-
-  it('Tauri acp_new_session flattened string rejection classifies as an auth setup error', async () => {
-    // Desktop parity: the Tauri command returns Result<_, String>, so invoke
-    // rejects with the bare Rust error string — no Error instance, no .code
-    // (a session/new auth_required failure flattens to the acp Error Display
-    // message, "Authentication required"). Classification must still land on
-    // `auth` via the message-pattern fallback.
-    const { invoke } = await import('@tauri-apps/api/core')
-    vi.mocked(invoke).mockRejectedValueOnce('Authentication required')
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    const err = await transport.newSession('a1', '/work').then(
-      () => {
-        throw new Error('newSession unexpectedly resolved')
-      },
-      (e: unknown) => e
-    )
-
-    // The desktop path surfaces the flattened string verbatim…
-    expect(err).toBe('Authentication required')
-    // …and still classifies as an auth setup error without a coded error.
-    const classified = classifySetupError(err)
-    expect(classified.category).toBe('auth')
-    expect(classified.detail).toBe('Authentication required')
-
-    transport.dispose()
-  })
 })
 
 describe('createAcpTransport selection', () => {
@@ -4100,140 +4068,21 @@ describe('createAcpTransport selection', () => {
     _resetAcpTransportForTests(null)
   })
 
-  it('desktop transports a successful option change without a snapshot', async () => {
-    vi.mocked(invoke).mockResolvedValue(null)
-    const transport = createAcpTransport({ force: 'tauri' })
-    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
-    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
-      agentId: 'a1',
-      sessionId: 's1',
-      configId: 'model',
-      valueId: 'm2'
+  it('selects the desktop Channel transport in a Tauri context and the plain WS client otherwise', () => {
+    const desktop = createAcpTransport({ force: 'tauri' })
+    expect(desktop).toBeInstanceOf(DesktopAcpTransport)
+    // Desktop history stays in the Tauri store whatever the relay negotiates.
+    expect(desktop.historyMode?.()).toBe('tauri_store')
+    desktop.dispose()
+
+    const web = createAcpTransport({
+      force: 'ws',
+      ws: { url: 'ws://test/ws', WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket }
     })
-    transport.dispose()
-  })
-
-  it('desktop load/resume return the typed Tauri invoke outcome', async () => {
-    const outcome = { configOptions: [] }
-    vi.mocked(invoke).mockResolvedValue(outcome)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
-      agentId: 'a1',
-      sessionId: 's1',
-      cwd: '/work'
-    })
-    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
-      agentId: 'a1',
-      sessionId: 's1',
-      cwd: '/work'
-    })
-    transport.dispose()
-  })
-
-  it('desktop recordAgentSwitch invokes acp_record_agent_switch with the exact five camelCase keys', async () => {
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // CAP-2: the durable agent-switch marker — the desktop adapter must
-    // forward every identity field the command validates.
-    await expect(
-      transport.recordAgentSwitch('s-old', {
-        fromConfigId: 'omp',
-        toConfigId: 'claude',
-        newSessionId: 's-new',
-        summaryText: 'Handoff summary'
-      })
-    ).resolves.toBeUndefined()
-    expect(invoke).toHaveBeenCalledWith('acp_record_agent_switch', {
-      sessionId: 's-old',
-      fromConfigId: 'omp',
-      toConfigId: 'claude',
-      newSessionId: 's-new',
-      summaryText: 'Handoff summary'
-    })
-    transport.dispose()
-  })
-
-  it('desktop promoteSession invokes acp_promote_session and resolves on success', async () => {
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // Story 8: the desktop path delegates promotion to the Rust driver via
-    // `acp_promote_session` — a successful command resolves with no payload.
-    await expect(transport.promoteSession?.('a1', 's1')).resolves.toBeUndefined()
-    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
-      agentId: 'a1',
-      sessionId: 's1'
-    })
-    transport.dispose()
-  })
-
-  it('desktop promoteSession propagates a failed promotion outcome', async () => {
-    vi.mocked(invoke).mockRejectedValue(new Error('failed to persist promoted session: disk full'))
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // A backend promote failure must reject so the store can re-mark the
-    // session ephemeral and warn the user (chat stays non-durable).
-    await expect(transport.promoteSession?.('a1', 's1')).rejects.toThrow(
-      'failed to persist promoted session'
-    )
-    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
-      agentId: 'a1',
-      sessionId: 's1'
-    })
-    transport.dispose()
-  })
-
-  it('desktop sendPrompt/sendPromptBlocks forward the client turnId to acp_send_prompt', async () => {
-    vi.mocked(invoke).mockResolvedValue('end_turn')
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // The durable `user_prompt` record must carry the client-minted turnId so
-    // the restored bubble materializes `turn:<turnId>` — id-matching the
-    // optimistic bubble scroll-up backfill anchors on (web parity; a dropped
-    // turnId left the twin as `user:seq-*` and duplicated the first prompt).
-    await expect(transport.sendPrompt('a1', 's1', 'hello', 'turn-1')).resolves.toBe('end_turn')
-    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
-      agentId: 'a1',
-      sessionId: 's1',
-      text: 'hello',
-      turnId: 'turn-1',
-      displayContent: undefined
-    })
-
-    await expect(
-      transport.sendPromptBlocks('a1', 's1', [{ type: 'text', text: 'hi' }], 'turn-2')
-    ).resolves.toBe('end_turn')
-    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
-      agentId: 'a1',
-      sessionId: 's1',
-      content: [{ type: 'text', text: 'hi' }],
-      turnId: 'turn-2',
-      displayContent: undefined
-    })
-    transport.dispose()
-  })
-
-  it('desktop listAgentDetails invokes acp_list_agent_details (CAP-11 parity)', async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const summaries = [
-      {
-        id: 'a1',
-        name: 'Claude',
-        configId: 'claude',
-        namespace: 'config:claude',
-        capabilities: { loadSession: true }
-      }
-    ]
-    vi.mocked(invoke).mockResolvedValue(summaries)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    await expect(transport.listAgentDetails?.()).resolves.toEqual(summaries)
-    expect(invoke).toHaveBeenCalledWith('acp_list_agent_details')
-    transport.dispose()
+    expect(web).toBeInstanceOf(WsAcpTransport)
+    expect(web).not.toBeInstanceOf(DesktopAcpTransport)
+    expect(web.historyMode?.()).toBe('live_only')
+    web.dispose()
   })
 
   it('accepts an injected transport via test helper', async () => {
@@ -4271,28 +4120,6 @@ describe('createAcpTransport selection', () => {
 describe('reopen admission failure parity (ACP_REOPEN_TURN_ACTIVE)', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)
-  })
-
-  it('desktop load/resume surface the admission rejection and recover on retry', async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const transport = createAcpTransport({ force: 'tauri' })
-    // The desktop command rejects the IPC promise with the manager's plain
-    // error string (Result<_, String>).
-    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
-    await expect(transport.loadSession('a1', 's1', '/work')).rejects.toContain(
-      'ACP_REOPEN_TURN_ACTIVE'
-    )
-    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
-    await expect(transport.resumeSession('a1', 's1', '/work')).rejects.toContain(
-      'ACP_REOPEN_TURN_ACTIVE'
-    )
-
-    // Caller recovery: once the active turn finishes, the identical retry succeeds.
-    const outcome = { configOptions: [] }
-    vi.mocked(invoke).mockResolvedValue(outcome)
-    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    transport.dispose()
   })
 
   it('ws load/resume surface the admission rejection and recover on retry', async () => {
@@ -4994,60 +4821,5 @@ describe('WsAcpTransport commands (AD-5)', () => {
       expect(isOutcomeUncertainError(new AcpTransportError(code, 'x'))).toBe(false)
     }
     expect(isOutcomeUncertainError(new Error('closed'))).toBe(false)
-  })
-})
-
-describe('TauriAcpTransport commands (AD-5)', () => {
-  const tauri = (): AcpTransport => createTauriAcpTransport()
-
-  beforeEach(() => {
-    vi.mocked(invoke).mockReset()
-  })
-
-  it('passes commandId as the camelCase argument only when the caller has one', async () => {
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    await tauri().closeSession('a1', 's1', { commandId: 'cmd-1' })
-    await tauri().closeSession('a1', 's1')
-    expect(vi.mocked(invoke).mock.calls).toEqual([
-      ['acp_close_session', { agentId: 'a1', sessionId: 's1', commandId: 'cmd-1' }],
-      ['acp_close_session', { agentId: 'a1', sessionId: 's1' }]
-    ])
-  })
-
-  it.each([
-    ['outcome_unknown: the outcome is no longer known', 'outcome_unknown', true],
-    ['command_in_progress: first run still going', 'command_in_progress', true],
-    ['command_conflict: reused for another request', 'command_conflict', false],
-    ['invalid_command_id: bad id', 'invalid_command_id', false],
-    ['ACP_AGENT_UNAVAILABLE: program not found', 'agent_unavailable', false],
-    ['ACP_INVALID_AGENT_CONFIG: empty name', 'invalid_agent_config', false],
-    ['ACP_PROVIDER_QUOTA_EXCEEDED: usage limit reached', 'provider_quota_exceeded', false],
-    ['ACP_PROVIDER_SESSION_LIMIT: session limit reached', 'provider_session_limit', false],
-    ['ACP_PROVIDER_REQUEST_REJECTED: status 400', 'provider_request_rejected', false]
-  ])('maps the verdict "%s" to a typed %s error (uncertain=%s)', async (text, code, uncertain) => {
-    vi.mocked(invoke).mockRejectedValue(text)
-    const error = await tauri()
-      .spawnAgent({ name: 'n', command: 'c', args: [], env: {} }, { commandId: 'c1' })
-      .catch((e) => e)
-    expect(error).toBeInstanceOf(AcpTransportError)
-    expect(error.code).toBe(code)
-    // The prefix is stripped from the text the user reads.
-    expect(error.message).not.toMatch(/^(ACP_|outcome_|command_|invalid_)/)
-    expect(isOutcomeUncertainError(error)).toBe(uncertain)
-  })
-
-  it('command_accepted is the success of a no-result command, and a typed error where a result is needed', async () => {
-    vi.mocked(invoke).mockRejectedValue(
-      'command_accepted: the command ran; its result is not retained'
-    )
-    await expect(tauri().closeSession('a1', 's1', { commandId: 'c' })).resolves.toBeUndefined()
-    await expect(
-      tauri().spawnAgent({ name: 'n', command: 'c', args: [], env: {} }, { commandId: 'c' })
-    ).rejects.toMatchObject({ code: COMMAND_ACCEPTED_CODE })
-  })
-
-  it('leaves ordinary command errors untouched', async () => {
-    vi.mocked(invoke).mockRejectedValue('backend boom')
-    await expect(tauri().closeSession('a1', 's1', { commandId: 'c' })).rejects.toBe('backend boom')
   })
 })

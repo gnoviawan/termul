@@ -19,6 +19,9 @@ use crate::web::ws::{AppState, ClientIdentity};
 pub enum Carrier {
     /// The multiplexed ACP relay (`/ws`).
     Ws,
+    /// The desktop's in-process Tauri `ipc::Channel` (`ws_channel_*`): the
+    /// same relay as `/ws`, reached without a network socket.
+    Ipc,
     /// The dedicated interactive terminal socket (`/terminal/ws`).
     TerminalWs,
 }
@@ -30,6 +33,7 @@ impl Carrier {
         match self {
             Self::Ws => "ws",
             Self::TerminalWs => "terminal_ws",
+            Self::Ipc => "ipc",
         }
     }
 }

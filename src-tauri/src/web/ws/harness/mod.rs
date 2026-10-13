@@ -11,6 +11,7 @@
 
 pub(crate) mod carrier;
 pub(crate) mod raw_client;
+pub(crate) mod wire;
 
 #[cfg(test)]
 mod relay_approval_tests;
@@ -22,6 +23,8 @@ mod relay_execution_tests;
 mod relay_command_tests;
 #[cfg(test)]
 mod relay_fault_tests;
+#[cfg(test)]
+mod relay_contract_tests;
 #[cfg(test)]
 mod relay_liveness_tests;
 #[cfg(test)]
@@ -51,6 +54,8 @@ pub(crate) const SESSION: &str = "sess-h";
 pub(crate) struct Host {
     pub(crate) relay: Arc<WsRelaySink>,
     pub(crate) state: AppState,
+    /// The desktop Channel host over the same pieces, built on first use.
+    channel: std::sync::OnceLock<(crate::web::ws::channel::WsChannelHost, tempfile::TempDir)>,
 }
 
 impl Host {
@@ -97,7 +102,36 @@ impl Host {
             oauth_base_url: "http://127.0.0.1".to_string(),
             connections: Default::default(),
         };
-        Self { relay, state }
+        Self {
+            relay,
+            state,
+            channel: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The desktop's Channel host (`AppState::desktop_local`) sharing this
+    /// host's ACP manager, relay, registry and PTYs. Its own connection
+    /// runtime is what `WsChannelHost::drain` stops.
+    pub(crate) fn channel_host(&self) -> &crate::web::ws::channel::WsChannelHost {
+        &self
+            .channel
+            .get_or_init(|| {
+                let scratch = tempfile::tempdir().expect("scratch store dir");
+                let store = crate::web::store::WebStore::open(scratch.path().join("store.json"))
+                    .expect("open the scratch store");
+                let state = AppState::desktop_local(crate::web::router::DesktopLocalParts {
+                    acp: Arc::clone(&self.state.acp),
+                    pty: Arc::clone(&self.state.pty),
+                    relay: Arc::clone(&self.relay),
+                    registry: Arc::clone(&self.state.registry),
+                    workspace_manifest: None,
+                    acp_catalog: None,
+                    acp_install: None,
+                    store: Arc::new(store),
+                });
+                (crate::web::ws::channel::WsChannelHost::new(state), scratch)
+            })
+            .0
     }
 
     /// Attach a store (the default host runs without one, as in degraded mode).
@@ -129,7 +163,7 @@ impl Host {
             let _finished = Finished(done_tx);
             // The harness peer is a local, write-capable connection.
             let local_peer = SocketAddr::from(([127, 0, 0, 1], 0));
-            serve_socket(lease, carrier, state, local_peer).await;
+            serve_socket(lease, carrier, state, local_peer, Carrier::Ws).await;
         });
         Conn { peer, task, done }
     }

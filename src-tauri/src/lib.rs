@@ -1109,6 +1109,20 @@ pub fn run() {
     );
 
     let app = builder
+        // A destroyed window must not leak its relay connections: the
+        // `ws_channel_*` connections its webview opened are closed (their
+        // subscriptions and presence released) through the host's one
+        // idempotent close.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                if let Some(host) = window
+                    .app_handle()
+                    .try_state::<web::ws::channel::WsChannelHost>()
+                {
+                    host.close_window(window.label());
+                }
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -1544,15 +1558,34 @@ pub fn run() {
                 ),
             );
 
-            app.manage(acp_manager);
-            app.manage(ws_relay);
+            app.manage(Arc::clone(&acp_manager));
+            app.manage(Arc::clone(&ws_relay));
 
             // In-memory project registry (Epic-4 bridge) — renderer-fed via
             // `remote_sync_projects`; the source for `GET /projects` +
             // `switch_project` cwd resolution on the shared-live web server.
             // Lives only while the server runs; cleared on `remote_server_stop`.
             let project_registry = Arc::new(ProjectRegistry::new());
-            app.manage(project_registry);
+            app.manage(Arc::clone(&project_registry));
+
+            // The desktop's own `/ws` relay carrier: the renderer speaks the
+            // `/ws` contract over one Tauri `ipc::Channel` per connection
+            // (`ws_channel_*`), served by the same relay as shared-live over
+            // the same AcpManager / relay sink / registry / store. Its own
+            // `AppState` (no token gate, writes allowed) is never bound to a
+            // network listener.
+            app.manage(web::ws::channel::WsChannelHost::new(
+                web::AppState::desktop_local(web::router::DesktopLocalParts {
+                    acp: acp_manager,
+                    pty: pty_manager.clone(),
+                    relay: ws_relay,
+                    registry: project_registry,
+                    workspace_manifest: workspace_manifest_service.clone(),
+                    acp_catalog: acp_catalog_service.clone(),
+                    acp_install: acp_install_service.clone(),
+                    store: handle.state::<remote::SharedLiveData>().store.clone(),
+                }),
+            ));
 
             // Create SSH Manager
             let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
@@ -1700,6 +1733,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // OS notification with click-to-focus (issue #865)
             commands::notification_show,
+            // Desktop `/ws` carrier over a Tauri `ipc::Channel`
+            web::ws::channel::commands::ws_channel_open,
+            web::ws::channel::commands::ws_channel_send,
+            web::ws::channel::commands::ws_channel_close,
             // Shell detection commands
             detect_shells,
             get_default_shell,
@@ -1977,6 +2014,11 @@ pub fn run() {
             let agent_reaper = app_handle
                 .try_state::<Arc<web::agent_reaper::AgentReaperHandle>>()
                 .map(|state| state.inner().clone());
+            // The desktop's Channel connections: drained (`channel_closed`
+            // 1001) before PTYs and agents are killed.
+            let ws_channel_host = app_handle
+                .try_state::<web::ws::channel::WsChannelHost>()
+                .map(|state| state.inner().clone());
 
             // OpenPencil canvas mode: join the daemon pool shutdown (stdin
             // EOF → kill) in the exit cleanup so no op-host-web-server
@@ -1998,6 +2040,9 @@ pub fn run() {
                     }
                     if let Some(remote_state) = remote_state {
                         let _ = remote_state.stop().await;
+                    }
+                    if let Some(ws_channel_host) = &ws_channel_host {
+                        ws_channel_host.drain().await;
                     }
                     pty_manager_clone.kill_all().await;
                     if let Some(canvas_pool) = canvas_pool {
@@ -2030,6 +2075,9 @@ pub fn run() {
             } else if let Some(acp_manager) = acp_manager {
                 let app_handle_clone = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Some(ws_channel_host) = &ws_channel_host {
+                        ws_channel_host.drain().await;
+                    }
                     if let Some(canvas_pool) = canvas_pool {
                         canvas_pool.shutdown_all().await;
                     }

@@ -113,17 +113,23 @@ pub async fn ws_upgrade(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     let lease = state.connections.shutdown.admit();
-    ws.on_upgrade(move |socket| serve_socket(lease, socket, state, peer))
+    ws.on_upgrade(move |socket| serve_socket(lease, socket, state, peer, Carrier::Ws))
 }
 
 /// Serve an upgraded socket under its shutdown `lease`: [`run_relay`] until it
-/// ends, or until the host's drain bound forces an abort.
-pub(super) async fn serve_socket<S>(lease: SocketLease, socket: S, state: AppState, peer: SocketAddr)
-where
+/// ends, or until the host's drain bound forces an abort. `carrier` labels the
+/// connection for capabilities and presence.
+pub(super) async fn serve_socket<S>(
+    lease: SocketLease,
+    socket: S,
+    state: AppState,
+    peer: SocketAddr,
+    carrier: Carrier,
+) where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message, Error = axum::Error> + Send + 'static,
 {
     let stop = lease.stop_token();
-    lease.run(run_relay(socket, state, peer, stop)).await;
+    lease.run(run_relay(socket, state, peer, carrier, stop)).await;
 }
 
 /// CAP-3: consume an id-less `background`/`foreground` lifecycle control frame.
@@ -167,8 +173,13 @@ pub(super) fn handle_lifecycle_signal(text: &str, authed: bool, backgrounded: &A
 /// production loop over an in-memory duplex; axum's `WebSocket` satisfies
 /// both bounds, so the production path is unchanged. `stop` is the host
 /// shutdown signal: the write loop answers it with `Close(1001)`.
-pub(super) async fn run_relay<S>(socket: S, state: AppState, peer: SocketAddr, stop: CancellationToken)
-where
+pub(super) async fn run_relay<S>(
+    socket: S,
+    state: AppState,
+    peer: SocketAddr,
+    carrier: Carrier,
+    stop: CancellationToken,
+) where
     S: Stream<Item = Result<Message, axum::Error>>
         + Sink<Message, Error = axum::Error>
         + Send
@@ -190,7 +201,7 @@ where
 
     let liveness = Arc::new(watchdog::Liveness::new());
     let conn = ConnState::new(
-        ConnectionAccess::new(CapabilityPolicy::for_connection(Carrier::Ws, peer, &state)),
+        ConnectionAccess::new(CapabilityPolicy::for_connection(carrier, peer, &state)),
         subscriptions,
     );
     let env = HandlerEnv::new(&state, out_tx.clone(), &conn);

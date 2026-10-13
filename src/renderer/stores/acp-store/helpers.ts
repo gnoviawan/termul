@@ -965,7 +965,10 @@ export function normalizeIndexTitle(title: string): string {
  * transport (its sidebar refetches from the negotiated push).
  */
 export function refreshHostOwnedIndex(get: () => AcpState): void {
-  if (getAcpTransport().historyMode?.() !== undefined) return
+  // The relay-negotiated modes (`server`/`live_only`) refetch from the pushed
+  // index; the desktop's `tauri_store` still reads the host index on demand.
+  const mode = getAcpTransport().historyMode?.()
+  if (mode === 'server' || mode === 'live_only') return
   void get().loadSessionIndex()
 }
 

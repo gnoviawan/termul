@@ -1,8 +1,8 @@
 /**
  * ACP transport contract (Story 1.6): the shared error surface +
- * {@link AcpTransport} interface implemented by both transports —
- * Tauri `invoke`/`listen` on desktop (`./tauri-transport`) and the
- * multiplexed `/ws` client on web/server (`./ws-transport`).
+ * {@link AcpTransport} interface implemented by the multiplexed `/ws` client
+ * (`./ws-transport`) and its desktop subclass over the Tauri IPC Channel
+ * (`./desktop-transport`).
  */
 
 import {
@@ -59,12 +59,11 @@ export class AcpTransportError extends Error {
 
 /**
  * Local code for "the first run of this command is still going" — the `/ws`
- * `{ receipt: "in_progress" }` payload and the Tauri `command_in_progress:`
- * verdict. The command is neither accepted nor rejected: it stays pending.
+ * `{ receipt: "in_progress" }` payload. The command is neither accepted nor rejected: it stays pending.
  */
 export const COMMAND_IN_PROGRESS_CODE = 'command_in_progress'
 /**
- * Local code for the Tauri `command_accepted:` verdict: the command ran, its
+ * Local code for a `command_accepted` verdict: the command ran, its
  * result is not retained. Resolves the command as accepted without a payload.
  */
 export const COMMAND_ACCEPTED_CODE = 'command_accepted'

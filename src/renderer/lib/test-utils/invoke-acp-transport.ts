@@ -1,11 +1,18 @@
 /**
- * Desktop ACP transport (Story 1.6): the Tauri `invoke`/`listen`
- * implementation of {@link AcpTransport}, including the `acp:events`
- * batch-frame fan-out registry.
+ * Test double for the desktop ACP transport: maps every transport method to a
+ * Tauri `invoke` of a per-domain command so store/hook suites can script the
+ * carrier boundary with a single `invoke` mock instead of a `/ws` relay.
+ *
+ * It is NOT production code: the shipped desktop transport is
+ * `DesktopAcpTransport` (the `/ws` protocol over `ChannelSocket`), covered by
+ * `acp-transport-carriers.test.ts`. `vitest.setup.ts` swaps it in for
+ * `DesktopAcpTransport`; suites that exercise the real class opt out with
+ * `vi.unmock('@/lib/acp-transport/desktop-transport')`.
  */
 
 import type { IpcResult } from '@shared/types/ipc.types'
 import type { PersistedSessionSummary, WsAgentSummary } from '@shared/types/web-protocol.types'
+import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type {
@@ -20,63 +27,37 @@ import type {
   SessionReopenOutcome,
   SpawnAgentResult
 } from '@/lib/acp-api'
-import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
-import { mapTauriVerdict } from './tauri-verdicts'
 import {
   type AcpTransport,
   AcpTransportError,
   COMMAND_ACCEPTED_CODE,
+  COMMAND_IN_PROGRESS_CODE,
   type CommandCallOptions
-} from './types'
+} from '@/lib/acp-transport/types'
+import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 
-// --- Batched desktop events -------------------------------------------------
-//
-// The Rust `TauriEventSink` emits bursts as ONE `acp:events` frame carrying
-// `{events:[{type:'acp:<name>', payload}]}`. One Tauri `listen` covers the
-// whole stream; each inner event fans out to the listeners of its `acp:*`
-// name, so subscribers keep the same `onEvent('acp:message_chunk', …)` API.
+// --- Ledger verdict strings -> typed errors ---------------------------------
 
-const TAURI_EVENTS_BATCH = 'acp:events'
+const VERDICT_PREFIXES: ReadonlyArray<readonly [prefix: string, code: string]> = [
+  ['outcome_unknown', WS_ERROR_CODES.OUTCOME_UNKNOWN],
+  ['command_conflict', WS_ERROR_CODES.COMMAND_CONFLICT],
+  ['command_in_progress', COMMAND_IN_PROGRESS_CODE],
+  ['invalid_command_id', WS_ERROR_CODES.INVALID_COMMAND_ID],
+  ['command_accepted', COMMAND_ACCEPTED_CODE],
+  ['ACP_AGENT_UNAVAILABLE', WS_ERROR_CODES.AGENT_UNAVAILABLE],
+  ['ACP_INVALID_AGENT_CONFIG', WS_ERROR_CODES.INVALID_AGENT_CONFIG]
+]
 
-interface TauriBatchInner {
-  type?: string
-  payload?: unknown
-}
-
-const tauriEventListeners = new Map<string, Set<(payload: unknown) => void>>()
-let tauriListenersInstalled = false
-
-function fanOutTauriEvent(name: string, payload: unknown): void {
-  const set = tauriEventListeners.get(name)
-  if (!set) return
-  for (const cb of set) {
-    try {
-      cb(payload)
-    } catch (err) {
-      console.error('[acp-transport] listener error', err)
+function mapVerdict(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null
+  if (message === null) return error
+  for (const [prefix, code] of VERDICT_PREFIXES) {
+    if (message.startsWith(`${prefix}:`)) {
+      const text = message.slice(prefix.length + 1).trim()
+      return new AcpTransportError(code, text || code)
     }
   }
-}
-
-function installTauriEventListeners(): void {
-  if (tauriListenersInstalled) return
-  tauriListenersInstalled = true
-  void listen<{ events?: TauriBatchInner[] }>(TAURI_EVENTS_BATCH, (event) => {
-    const events = event.payload?.events
-    if (!Array.isArray(events)) return
-    for (const inner of events) {
-      if (inner && typeof inner.type === 'string') {
-        fanOutTauriEvent(inner.type, inner.payload)
-      }
-    }
-  }).catch(console.error)
-}
-
-/** Test seam: clear the registry + install flag between tests so a mock
- * `listen` swap observes fresh installs and no callbacks leak across tests. */
-export function _resetTauriEventRegistryForTests(): void {
-  tauriEventListeners.clear()
-  tauriListenersInstalled = false
+  return error
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +81,7 @@ async function invokeCommand<T>(
       options?.commandId ? { ...args, commandId: options.commandId } : args
     )
   } catch (error) {
-    throw mapTauriVerdict(error)
+    throw mapVerdict(error)
   }
 }
 
@@ -125,7 +106,7 @@ async function invokeCommandVoid(
 // Tauri transport
 // ---------------------------------------------------------------------------
 
-export function createTauriAcpTransport(): AcpTransport {
+export function createInvokeAcpTransport(): AcpTransport {
   return {
     installRegistryBinary: (request) =>
       invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request }),
@@ -283,27 +264,17 @@ export function createTauriAcpTransport(): AcpTransport {
     deliverAuthRedirect: (agentId, url, options) =>
       invokeCommand<number>('acp_auth_deliver_redirect', { agentId, url }, options),
     onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
-      // Listener registry: one Tauri `listen` per event name, fanning out to
-      // all subscribers. Required for `acp:events` batches — the fan-out is
-      // registry-keyed, so a per-call `listen` would never see inner events.
-      installTauriEventListeners()
-      let set = tauriEventListeners.get(eventName)
-      if (!set) {
-        set = new Set()
-        tauriEventListeners.set(eventName, set)
-        void listen<T>(eventName, (event) => {
-          fanOutTauriEvent(eventName, event.payload)
-        }).catch(console.error)
-      }
-      const cb = callback as (payload: unknown) => void
-      set.add(cb)
+      let detached = false
+      let unlisten: (() => void) | null = null
+      void Promise.resolve(listen<T>(eventName, (event) => callback(event.payload)))
+        .then((fn) => {
+          if (detached) fn?.()
+          else unlisten = fn ?? null
+        })
+        .catch(console.error)
       return () => {
-        set.delete(cb)
-        // Keep the entry even when empty: its native `listen` above is never
-        // unhooked (one IPC hook per event name — a dead listen would unhook
-        // every subscriber). Deleting it while the native listener stays armed
-        // would let a later `onEvent` install a SECOND native listener, and
-        // both would fan out each emitted event to the new subscriber.
+        detached = true
+        unlisten?.()
       }
     },
     connect: async () => {

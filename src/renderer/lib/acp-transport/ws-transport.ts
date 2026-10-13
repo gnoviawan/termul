@@ -852,8 +852,17 @@ export class WsAcpTransport implements AcpTransport {
 
   // --- Agent lifecycle (desktop parity over WS) ----------------------------
 
-  historyMode(): HistoryMode {
+  historyMode(): HistoryMode | 'tauri_store' {
     return this.negotiatedHistoryMode
+  }
+
+  /**
+   * Token presented on `authenticate`: the resolved web auth token, else the
+   * legacy `'dev'` placeholder ungated servers accept. The desktop carrier
+   * overrides this with `null` (the process boundary is the auth).
+   */
+  protected authenticateToken(): string | null {
+    return getWebAuthToken() ?? 'dev'
   }
 
   async listPersistedSessions(): Promise<PersistedSessionSummary[]> {
@@ -2040,7 +2049,7 @@ export class WsAcpTransport implements AcpTransport {
       try {
         const auth = await this.sendWhenOpen<AcpAuthenticateReply>(
           'authenticate',
-          buildAuthenticatePayload(getWebAuthToken() ?? 'dev')
+          buildAuthenticatePayload(this.authenticateToken())
         )
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
