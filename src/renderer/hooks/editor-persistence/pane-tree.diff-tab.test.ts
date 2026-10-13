@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { serializeTopologyForManifest } from '@/hooks/use-workspace-manifest-sync'
 import { diffTabId } from '@/lib/diff-tab-identity'
 import type { LeafNode } from '@/types/workspace.types'
 import { deserializePaneTree, reconcileTerminalTabs, serializePaneTree } from './pane-tree'
@@ -70,14 +69,5 @@ describe('diff tab persistence', () => {
     expect(restored.activeTabId).toBeNull()
     expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
     expect(mockLogFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
-  })
-
-  it('is absent from the manifest topology', () => {
-    const topology = serializeTopologyForManifest(
-      leaf([{ type: 'diff', id: DIFF_ID, cwd: '/r', path: 'a.ts', staged: false }], DIFF_ID)
-    )
-    if (topology.type !== 'leaf') throw new Error('expected leaf')
-    expect(topology.terminalIds).toEqual([])
-    expect(topology.editorIds).toEqual([])
   })
 })

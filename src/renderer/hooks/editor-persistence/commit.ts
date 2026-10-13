@@ -7,12 +7,10 @@
 
 import { scheduleAutoSave } from '@/lib/editor-auto-save'
 import type { StagedProject } from '@/lib/project-switch/types'
-import { useAcpStore } from '@/stores/acp-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { reattachOpenAgentChats, retainVisibleAgentChats } from './chat-restore'
 import { persistState } from './persist'
@@ -50,13 +48,6 @@ export function commitStagedProject(projectId: string, staged: StagedProject): v
   // The launcher overlay of the project just left (or of a parked tree) must
   // not reappear; WorkspaceLayout treats a tracked launcher pane as open.
   useWorkspaceStore.getState().hideAgentLauncher()
-
-  if (staged.manifestRevision !== undefined) {
-    useWorkspaceManifestSyncStore.getState().setBasedRevision(projectId, staged.manifestRevision)
-  }
-  if (staged.focusedSessionId) {
-    useAcpStore.getState().setActiveSession(staged.focusedSessionId)
-  }
 
   // A parked tree was last reconciled when it was left; use-terminal-tab-sync
   // skips its sync on a project change, so reconcile against the project's

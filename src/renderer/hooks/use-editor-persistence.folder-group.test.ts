@@ -1,9 +1,9 @@
 /**
  * #903 acceptance: two projects in one folder group each have their own pane
  * tree (parked while the other is visible). Switching p1 -> p2 -> p1 must show each project exactly its own chat tabs and
- * must never write one project's chats into the other's `editor-state`. Real
+ * must never write one project's chats into the other's workspace record. Real
  * workspace / lifetime / acp / project stores; only the transports are faked
- * (in-memory persistence map, no manifest, no editor/explorer I/O).
+ * (in-memory persistence map, no editor/explorer I/O).
  */
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -40,14 +40,6 @@ vi.mock('@/lib/api', async (importActual) => {
     }
   }
 })
-
-vi.mock('@/lib/workspace-manifest-api', () => ({
-  workspaceManifestApi: {
-    getManifest: vi.fn(async () => ({ success: true, data: null })),
-    writeManifest: vi.fn(),
-    deleteManifest: vi.fn()
-  }
-}))
 
 const { loadSessionIndexMock } = vi.hoisted(() => ({ loadSessionIndexMock: vi.fn() }))
 vi.mock('@/lib/acp-history-persistence', async (orig) => {
@@ -89,7 +81,6 @@ import { useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
-import { isManifestRestoreInProgressFor } from '@/stores/workspace-manifest-sync-store'
 import {
   getAgentChatSessionIdsInAllTrees,
   getAllLeafPanes,
@@ -172,7 +163,7 @@ describe('#903 folder-group chat tab isolation', () => {
   })
 
   async function restored(projectId: string): Promise<void> {
-    await waitFor(() => expect(isManifestRestoreInProgressFor(projectId)).toBe(false))
+    await waitFor(() => expect(useWorkspaceStore.getState().activeProjectId).toBe(projectId))
   }
 
   async function switchTo(

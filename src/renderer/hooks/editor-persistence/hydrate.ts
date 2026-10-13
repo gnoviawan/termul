@@ -1,14 +1,12 @@
 /**
  * Off-store hydration for the project-switch coordinator: replicates the read
- * path of the old in-hook restore (persisted editor state, host manifest,
- * open files, legacy pane layout) but writes NOTHING to any store. The result
+ * path of the old in-hook restore (the project's workspace record, open files,
+ * pane layout) but writes NOTHING to any store. The result
  * is a {@link StagedProject} the coordinator commits atomically once it is
  * still the latest request; `isCurrent()` is checked after every await so a
  * superseded hydration stops early (its return value is then discarded).
  */
 
-import type { FetchedManifestWorkspace } from '@/hooks/use-workspace-manifest-sync'
-import { fetchManifestWorkspace } from '@/hooks/use-workspace-manifest-sync'
 import { loadPersistedTerminals } from '@/hooks/useTerminalAutoSave'
 import { filesystemApi, persistenceApi } from '@/lib/api'
 import { emptyStagedProject, type StagedProject } from '@/lib/project-switch/types'
@@ -22,8 +20,7 @@ import {
   editorTabId,
   type ProjectWorkspace
 } from '@/stores/workspace-store'
-import type { LeafNode, PaneNode } from '@/types/workspace.types'
-import { mergeNonPortableTabs } from './manifest-merge'
+import type { LeafNode } from '@/types/workspace.types'
 import { deserializePaneTree, reconcileTerminalTabs } from './pane-tree'
 import {
   editorStateKey,
@@ -103,21 +100,10 @@ function legacyEditorWorkspace(
   return { ...fresh, root: leaf }
 }
 
-async function stageManifestEditors(
-  fetched: FetchedManifestWorkspace,
-  editorFiles: Map<string, EditorFileState>
-): Promise<void> {
-  const missing = fetched.editors.filter((descriptor) => !editorFiles.has(descriptor.filePath))
-  const staged = await Promise.all(missing.map((descriptor) => stageFile(descriptor.filePath)))
-  staged.forEach((file, index) => {
-    if (file) editorFiles.set(missing[index].filePath, file)
-  })
-}
-
 /**
  * Build everything needed to show `projectId`. `withTree: false` is for a
  * project that already has a parked tree: only its editor state is staged
- * (`tree: null`, manifest untouched).
+ * (`tree: null`).
  */
 export async function hydrateProject(
   projectId: string,
@@ -131,27 +117,8 @@ export async function hydrateProject(
   if (!isCurrent()) return abandoned
 
   if (!result.success || !result.data) {
-    if (!withTree) return { ...emptyStagedProject(), tree: null, manifestRevision: undefined }
-    // No renderer-local editor state. A host manifest may still exist
-    // (cross-client: this client never opened the project before).
-    const fetched = await fetchManifestWorkspace(projectId)
-    if (!isCurrent()) return abandoned
-    const editorFiles = new Map<string, EditorFileState>()
-    if (fetched) {
-      await stageManifestEditors(fetched, editorFiles)
-      if (!isCurrent()) return abandoned
-    }
-    return {
-      tree: fetched
-        ? buildProjectWorkspace(fetched.root, fetched.activePaneId)
-        : createProjectWorkspace(),
-      editorFiles,
-      activeFilePath: null,
-      expandedDirs: null,
-      focusedSessionId: fetched?.focusedSessionId ?? null,
-      manifestRevision: fetched?.revision ?? null,
-      persistedLayout: undefined
-    }
+    // Nothing stored for this project on this device: a fresh workspace.
+    return withTree ? emptyStagedProject() : { ...emptyStagedProject(), tree: null }
   }
 
   const persisted = result.data
@@ -174,32 +141,12 @@ export async function hydrateProject(
       editorFiles,
       activeFilePath: persisted.activeFilePath,
       expandedDirs,
-      focusedSessionId: null,
-      manifestRevision: undefined,
       persistedLayout: persisted.paneLayout
     }
   }
 
-  // The manifest is authoritative for portable topology (terminalIds +
-  // editorIds + activeTabId + activePaneId); else fall back to the legacy
-  // editorStateKey.paneLayout (carrying every tab variant incl.
-  // browser/git/agent-chat). Non-portable variants are absent on a manifest
-  // restore and are merged back over its topology below.
-  const fetched = await fetchManifestWorkspace(projectId)
-  if (!isCurrent()) return abandoned
-  if (fetched) {
-    await stageManifestEditors(fetched, editorFiles)
-    if (!isCurrent()) return abandoned
-  }
-
   let tree: ProjectWorkspace
-  if (fetched) {
-    let root: PaneNode = fetched.root
-    if (persisted.paneLayout) {
-      root = mergeNonPortableTabs(root, fetched.activePaneId, persisted.paneLayout, projectId).root
-    }
-    tree = buildProjectWorkspace(root, fetched.activePaneId)
-  } else if (persisted.paneLayout) {
+  if (persisted.paneLayout) {
     const liveProjectTerminals = useTerminalStore
       .getState()
       .terminals.filter((terminal) => terminal.projectId === projectId && !!terminal.ptyId)
@@ -223,8 +170,6 @@ export async function hydrateProject(
     editorFiles,
     activeFilePath: persisted.activeFilePath,
     expandedDirs,
-    focusedSessionId: fetched?.focusedSessionId ?? null,
-    manifestRevision: fetched?.revision ?? null,
     persistedLayout: persisted.paneLayout
   }
 }

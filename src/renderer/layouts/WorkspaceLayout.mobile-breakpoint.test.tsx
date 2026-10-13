@@ -344,15 +344,6 @@ vi.mock('@/hooks/use-editor-persistence', () => ({
   persistState: vi.fn()
 }))
 
-vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
-  useWorkspaceManifestSync: vi.fn(),
-  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
-  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
-  performManifestWrite: vi.fn().mockResolvedValue(undefined)
-}))
-vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
-  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
-}))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
 vi.mock('@/pages/AppPreferences', () => ({ AppPreferencesModal: () => <div>preferences</div> }))

@@ -260,15 +260,6 @@ vi.mock('@/hooks/use-editor-persistence', () => ({
 
 // P17: shared canonical mock shape for the Story 6 sync hook + banner —
 // identical inline factories across the three WorkspaceLayout suites.
-vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
-  useWorkspaceManifestSync: vi.fn(),
-  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
-  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
-  performManifestWrite: vi.fn().mockResolvedValue(undefined)
-}))
-vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
-  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
-}))
 
 // The desktop frame is stubbed to its two slots: these suites exercise the
 // close flows wired in WorkspaceLayout, not the Rail / Side panel chrome.

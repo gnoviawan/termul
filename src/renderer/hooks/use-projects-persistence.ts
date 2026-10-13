@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import { editorStateKey } from '@/hooks/editor-persistence/types'
 import { getAcpTransport } from '@/lib/acp-transport'
 import {
   filesystemApi,
@@ -11,13 +12,11 @@ import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useWebAuthGateOk } from '@/lib/web-auth-gate'
 import { webServerProjects } from '@/lib/web-server-api'
-import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
 import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { useWorkspaceManifestSyncStore } from '@/stores/workspace-manifest-sync-store'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
 import type {
   PersistedProject,
@@ -899,35 +898,12 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
     // Delete the project from the store
     useProjectStore.getState().deleteProject(id)
 
-    // Patch 15: evict the deleted project's entries from the manifest sync
-    // store (basedRevision + restore-in-progress flags) so they don't leak.
-    const syncStore = useWorkspaceManifestSyncStore.getState()
-    syncStore.setBasedRevision(id, null)
-    syncStore.setManifestRestoreInProgress(id, false)
-    // Clear a pending conflict that belonged to the deleted project.
-    if (syncStore.pendingConflict?.projectId === id) {
-      syncStore.setPendingConflict(null)
-    }
-
-    // Cascade delete: remove terminal layout and snapshots for this project.
-    // Story 6: also delete the host-owned workspace manifest (best-effort —
-    // a failure is logged but never blocks the project delete; the host's
-    // delete is idempotent whether or not the manifest file existed).
+    // Cascade delete: remove the project's terminal layout, snapshots and
+    // workspace record (open files and pane layout) from this device.
     await Promise.all([
       persistenceApi.delete(PersistenceKeys.terminals(id)),
       persistenceApi.delete(PersistenceKeys.snapshots(id)),
-      workspaceManifestApi
-        .deleteManifest(id)
-        .then((result) => {
-          if (!result.success) {
-            console.warn(
-              `[projects] manifest delete unsuccessful for ${id}: ${result.error} (${result.code})`
-            )
-          }
-        })
-        .catch((error) => {
-          console.warn(`[projects] manifest delete threw for ${id}:`, error)
-        })
+      persistenceApi.delete(editorStateKey(id))
     ])
 
     // Persist the updated projects list

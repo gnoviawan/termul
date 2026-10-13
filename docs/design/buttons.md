@@ -20,7 +20,7 @@ Is it composer send, stop, or launch (ChatInputBar / AgentLauncher)?
       └── Secondary action in a group → variant="secondary"
 ```
 
-One `default` per view. Two filled primary buttons means the screen has no hierarchy (`WorkspaceConflictBanner` keeps one `default`).
+One `default` per view. Two filled primary buttons means the screen has no hierarchy.
 
 A primary action is a `Button`. Do not paint `bg-primary-fill` on a raw `<button>`. Text primary actions use `size="sm"` (h-9), including modal footers and empty states. A control beside a `text-xs` field uses `size="xs"`. Do not use `lg` for these actions. Mobile floors stay on `touch`.
 

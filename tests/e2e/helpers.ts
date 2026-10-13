@@ -9,6 +9,7 @@ import { request } from 'playwright/test'
 import type { APIRequestContext } from 'playwright-core'
 import type { WebSocket as WsSocket } from 'ws'
 import { WebSocket as WsSocketCtor } from 'ws'
+import { WS_PROTOCOL_VERSION } from '../../src/shared/types/web-protocol.types'
 
 export const E2E_TOKEN = 'e2e-test-token-12345'
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8188)
@@ -280,11 +281,20 @@ async function killAndWait(child: ChildProcess, termGraceMs = 3_000): Promise<vo
  * Each call opens its own short-lived connection — simple and sufficient for
  * setup/verification probes.
  */
+/** Who a helper connection authenticates as; store keys under `device/<deviceId>/` are its own. */
+export interface WsIdentity {
+  deviceId: string
+  clientInstanceId: string
+}
+
+const DEFAULT_WS_IDENTITY: WsIdentity = { deviceId: 'e2e-helper', clientInstanceId: 'e2e-helper' }
+
 export function wsRequest<T = unknown>(
   baseUrl: string,
   type: string,
   payload: unknown,
-  timeoutMs = 15_000
+  timeoutMs = 15_000,
+  identity: WsIdentity = DEFAULT_WS_IDENTITY
 ): Promise<T> {
   const wsUrl = baseUrl.replace(/^http/, 'ws')
   return new Promise<T>((resolve, reject) => {
@@ -296,7 +306,11 @@ export function wsRequest<T = unknown>(
     }, timeoutMs)
     socket.on('open', () => {
       socket.send(
-        JSON.stringify({ id: 'auth', type: 'authenticate', payload: { token: E2E_TOKEN } })
+        JSON.stringify({
+          id: 'auth',
+          type: 'authenticate',
+          payload: { token: E2E_TOKEN, protocolVersion: WS_PROTOCOL_VERSION, ...identity }
+        })
       )
     })
     socket.on('message', (data: unknown) => {

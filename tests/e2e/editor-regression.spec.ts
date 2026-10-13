@@ -10,9 +10,8 @@ import { openWorkspace, selectColumnTab, selectProject } from './ui'
  * - EditorPanel renders "Loading..." while a workspace editor tab exists
  *   without a matching editor-store file state; only a SUCCESSFUL
  *   filesystemApi.readFile clears it (editor-store.ts openFile).
- * - On web that read is GET /fs/read — a failure (or a manifest-restore
- *   tab whose read failed) strands the tab on "Loading..." forever
- *   (use-workspace-manifest-sync.ts keeps the tab, swallows the error).
+ * - On web that read is GET /fs/read — a failure (or a restored
+ *   tab whose read failed) strands the tab on "Loading..." forever.
  *
  * These tests pin the healthy paths: file open renders content, and a
  * reload restores the editor tab with content (not a stuck loader).

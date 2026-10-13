@@ -16,7 +16,6 @@
 
 import { logFrontendError } from '@/lib/log-api'
 import { useProjectStore } from '@/stores/project-store'
-import { setManifestRestoreInProgress } from '@/stores/workspace-manifest-sync-store'
 import {
   emptyStagedProject,
   type SwitchDeps,
@@ -39,7 +38,6 @@ interface InFlight {
   projectId: string
   kind: SwitchRequest['kind']
   promise: Promise<SwitchOutcome>
-  release: () => void
 }
 
 function describe(error: unknown): string {
@@ -50,25 +48,6 @@ export function createProjectSwitchCoordinator(deps: SwitchDeps): ProjectSwitchC
   let latest = 0
   let disposed = false
   let inFlight: InFlight | null = null
-  // The manifest-restore guard is per project and runs overlap (A, B, A...):
-  // count holders so a superseded run never clears a newer run's guard.
-  const guardHolders = new Map<string, number>()
-
-  const acquireGuard = (projectId: string): void => {
-    const holders = (guardHolders.get(projectId) ?? 0) + 1
-    guardHolders.set(projectId, holders)
-    if (holders === 1) setManifestRestoreInProgress(projectId, true)
-  }
-  const releaseGuard = (projectId: string): void => {
-    const holders = (guardHolders.get(projectId) ?? 0) - 1
-    if (holders > 0) {
-      guardHolders.set(projectId, holders)
-      return
-    }
-    guardHolders.delete(projectId)
-    setManifestRestoreInProgress(projectId, false)
-  }
-
   const isCurrent = (token: SwitchToken): boolean =>
     !disposed &&
     token.id === latest &&
@@ -159,9 +138,7 @@ export function createProjectSwitchCoordinator(deps: SwitchDeps): ProjectSwitchC
     }
 
     const id = ++latest
-    const previous = inFlight
     inFlight = null
-    previous?.release()
 
     const token: SwitchToken = {
       id,
@@ -178,27 +155,18 @@ export function createProjectSwitchCoordinator(deps: SwitchDeps): ProjectSwitchC
       return Promise.resolve('noop')
     }
 
-    acquireGuard(req.projectId)
-    let released = false
-    const release = (): void => {
-      if (released) return
-      released = true
-      releaseGuard(req.projectId)
-    }
     deps.setStatus({ kind: 'pending', projectId: req.projectId })
 
     const promise = execute(req, token, committed).finally(() => {
-      release()
       if (inFlight?.id === id) inFlight = null
     })
-    inFlight = { id, projectId: req.projectId, kind: req.kind, promise, release }
+    inFlight = { id, projectId: req.projectId, kind: req.kind, promise }
     return promise
   }
 
   const dispose = (): void => {
     if (disposed) return
     disposed = true
-    inFlight?.release()
     inFlight = null
     deps.setStatus({ kind: 'idle' })
   }

@@ -7,7 +7,6 @@ import { useFileWatcher } from '@/hooks/use-file-watcher'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useProjectSwitch } from '@/hooks/use-project-switch'
 import { useShellUnreadTracker } from '@/hooks/use-shell-unread-tracker'
-import { useWorkspaceManifestSync } from '@/hooks/use-workspace-manifest-sync'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { useWorkspaceOverlayBackStack } from '@/layouts/use-workspace-overlay-back-stack'
 import { MobileWorkspaceShell } from '@/layouts/workspace-layout/MobileWorkspaceShell'
@@ -131,11 +130,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Editor state persistence
   useEditorPersistence(activeProjectId)
-
-  // Story 6: cross-client workspace manifest sync (the manifest is read by the
-  // project-switch hydration (fetchManifestWorkspace); this hook wires the
-  // debounced write side + conflict surfacing).
-  useWorkspaceManifestSync(activeProjectId)
 
   useTerminalTabSync({ terminals, activeProjectId })
 

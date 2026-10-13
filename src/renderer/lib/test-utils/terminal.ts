@@ -21,7 +21,6 @@ import type {
   TerminalStateSnapshot
 } from '@shared/types/ipc.types'
 import type { PersistedTerminal, PersistedTerminalLayout } from '@shared/types/persistence.types'
-import type { TerminalDescriptor } from '@shared/types/workspace-manifest.types'
 import type { Terminal } from '@/types/project'
 
 /** In-memory store `Terminal` record. */
@@ -123,20 +122,6 @@ export function mockPreservedPty(
     pid: 1,
     cols: 80,
     rows: 24,
-    ...overrides
-  }
-}
-
-/** Workspace-manifest terminal descriptor (portable cross-client record). */
-export function mockTerminalDescriptor(
-  overrides: Partial<TerminalDescriptor> = {}
-): TerminalDescriptor {
-  return {
-    terminalId: 'term-1',
-    projectId: 'project-1',
-    shell: 'bash',
-    cwd: '/test',
-    name: 'Terminal 1',
     ...overrides
   }
 }

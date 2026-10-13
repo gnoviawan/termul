@@ -1,25 +1,36 @@
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { editorStateKey } from '@/hooks/editor-persistence/types'
 import { useProjectStore } from '@/stores/project-store'
-import { usePersistProjectsImmediate, useProjectsLoader } from './use-projects-persistence'
+import {
+  useDeleteProjectWithCascade,
+  usePersistProjectsImmediate,
+  useProjectsLoader
+} from './use-projects-persistence'
 
 const REDACTED_VALUE = '[REDACTED]'
 
-const { mockPersistenceRead, mockPersistenceWrite, mockSecureStorageGet, mockSecureStorageSet } =
-  vi.hoisted(() => ({
-    mockPersistenceRead: vi.fn(),
-    mockPersistenceWrite: vi.fn(),
-    mockSecureStorageGet: vi.fn(),
-    mockSecureStorageSet: vi.fn()
-  }))
+const {
+  mockPersistenceRead,
+  mockPersistenceWrite,
+  mockPersistenceDelete,
+  mockSecureStorageGet,
+  mockSecureStorageSet
+} = vi.hoisted(() => ({
+  mockPersistenceRead: vi.fn(),
+  mockPersistenceWrite: vi.fn(),
+  mockPersistenceDelete: vi.fn(),
+  mockSecureStorageGet: vi.fn(),
+  mockSecureStorageSet: vi.fn()
+}))
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
     read: mockPersistenceRead,
     write: mockPersistenceWrite,
     writeDebounced: vi.fn(),
-    delete: vi.fn()
+    delete: mockPersistenceDelete
   },
   secureStorageApi: {
     getSecret: mockSecureStorageGet,
@@ -37,6 +48,7 @@ describe('use-projects-persistence', () => {
     vi.clearAllMocks()
     mockPersistenceRead.mockResolvedValue({ success: false })
     mockPersistenceWrite.mockResolvedValue({ success: true, data: undefined })
+    mockPersistenceDelete.mockResolvedValue({ success: true, data: undefined })
     mockSecureStorageGet.mockResolvedValue({ success: false, code: 'KEY_NOT_FOUND' })
     mockSecureStorageSet.mockResolvedValue({ success: true, data: undefined })
 
@@ -127,5 +139,26 @@ describe('use-projects-persistence', () => {
         ]
       })
     ])
+  })
+
+  it('deleting a project also deletes its terminal layout, snapshots and workspace record', async () => {
+    useProjectStore.setState({
+      projects: [{ id: 'project-1', name: 'Doomed', color: 'blue', gitBranch: 'main' }],
+      activeProjectId: 'project-1',
+      isLoaded: true
+    })
+
+    const { result } = renderHook(() => useDeleteProjectWithCascade())
+    await result.current('project-1')
+
+    const deleted = mockPersistenceDelete.mock.calls.map(([key]) => key).sort()
+    expect(deleted).toEqual(
+      [
+        PersistenceKeys.terminals('project-1'),
+        PersistenceKeys.snapshots('project-1'),
+        editorStateKey('project-1')
+      ].sort()
+    )
+    expect(useProjectStore.getState().projects).toEqual([])
   })
 })

@@ -72,7 +72,7 @@ export interface ProjectWorkspace {
   /**
    * Pane id of the dedicated agent-browser pane (spec-acp-browser-automation-v2
    * CAP-3). Runtime-only state, never part of the persisted workspace
-   * manifest; re-validated against the pane tree on every open.
+   * record; re-validated against the pane tree on every open.
    */
   agentBrowserPaneId: string | null
 }

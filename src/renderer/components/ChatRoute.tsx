@@ -11,7 +11,7 @@ import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stor
  * Null-rendering component that triggers `openHistorySession` when the URL
  * contains `#/c/<sessionId>`. This is the refresh-survival mechanism for the
  * active chat — on reload the session restores from the URL before the
- * workspace manifest or session index loads, avoiding the "no active chat"
+ * workspace record or session index loads, avoiding the "no active chat"
  * race.
  *
  * Retries up to 5 times with a 500ms delay because the server's history

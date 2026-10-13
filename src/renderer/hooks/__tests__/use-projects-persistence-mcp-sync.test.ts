@@ -41,19 +41,6 @@ vi.mock('@/stores/acp-store', () => ({
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: { getState: () => ({ terminals: [] }) }
 }))
-vi.mock('@/stores/workspace-manifest-sync-store', () => ({
-  useWorkspaceManifestSyncStore: {
-    getState: () => ({
-      setBasedRevision: vi.fn(),
-      setManifestRestoreInProgress: vi.fn(),
-      pendingConflict: null,
-      setPendingConflict: vi.fn()
-    })
-  }
-}))
-vi.mock('@/lib/workspace-manifest-api', () => ({
-  workspaceManifestApi: { deleteManifest: vi.fn(async () => ({ success: true })) }
-}))
 vi.mock('@/lib/acp-transport', () => ({
   getAcpTransport: () => ({ onEvent: () => () => {} })
 }))

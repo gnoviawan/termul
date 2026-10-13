@@ -33,7 +33,7 @@ import { openWorkspace } from './ui'
  *         Editors list has no search at all.
  *
  * Not automated here, and why: L-17 (the canvas row): the phone shell has no
- * way to open a canvas (the palette hides it there and the workspace manifest
+ * way to open a canvas (the palette hides it there and a saved workspace
  * never restores one), so a canvas row cannot be produced in a browser; the
  * Vitest suites of MobileDrawerSectionList own it. The UNC form of L-20
  * (`//?/UNC/...`) needs a UNC share, so the unit tests of

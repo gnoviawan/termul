@@ -1,12 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
 
 import { logFrontendError } from '@/lib/log-api'
-import {
-  isManifestRestoreInProgressFor,
-  useWorkspaceManifestSyncStore
-} from '@/stores/workspace-manifest-sync-store'
 import { createProjectSwitchCoordinator } from './coordinator'
 import { emptyStagedProject, type StagedProject, type SwitchDeps, type SwitchStatus } from './types'
 
@@ -89,11 +85,6 @@ async function settle(): Promise<void> {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useWorkspaceManifestSyncStore.setState({ manifestRestoreInProgressByProject: {} })
-})
-
-afterEach(() => {
-  useWorkspaceManifestSyncStore.setState({ manifestRestoreInProgressByProject: {} })
 })
 
 describe('project switch coordinator', () => {
@@ -117,8 +108,6 @@ describe('project switch coordinator', () => {
     expect(world.commits.map((c) => c.projectId)).toEqual(['B'])
     expect(world.committed).toBe('B')
     expect(lastStatus()).toEqual({ kind: 'idle' })
-    expect(isManifestRestoreInProgressFor('A')).toBe(false)
-    expect(isManifestRestoreInProgressFor('B')).toBe(false)
   })
 
   it('drops a late completion after the user returned to the committed project', async () => {
@@ -129,15 +118,12 @@ describe('project switch coordinator', () => {
     const a = coordinator.request({ kind: 'pick', projectId: 'A' })
     await settle()
     expect(lastStatus()).toEqual({ kind: 'pending', projectId: 'A' })
-    expect(isManifestRestoreInProgressFor('A')).toBe(true)
 
     // User is back on C before A's hydration lands.
     world.intent = 'C'
     const back = coordinator.request({ kind: 'pick', projectId: 'C' })
     expect(await back).toBe('noop')
     expect(lastStatus()).toEqual({ kind: 'idle' })
-    // The superseded request's guard is released immediately, not when its hydrate lands.
-    expect(isManifestRestoreInProgressFor('A')).toBe(false)
 
     world.hydrates.get('A')?.resolve(staged('A'))
     expect(await a).toBe('superseded')
@@ -185,7 +171,6 @@ describe('project switch coordinator', () => {
 
     coordinator.dispose()
     expect(lastStatus()).toEqual({ kind: 'idle' })
-    expect(isManifestRestoreInProgressFor('A')).toBe(false)
 
     world.hydrates.get('A')?.resolve(staged('A'))
     expect(await a).toBe('cancelled')
@@ -209,7 +194,6 @@ describe('project switch coordinator', () => {
     expect(logFrontendError).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'project-switch' })
     )
-    expect(isManifestRestoreInProgressFor('A')).toBe(false)
   })
 
   it('first-boot failure commits a fresh tree for the landing project', async () => {
@@ -319,30 +303,5 @@ describe('project switch coordinator', () => {
 
     expect(await a).toBe('superseded')
     expect(deps.hydrate).not.toHaveBeenCalled()
-  })
-
-  it('overlapping runs for the same project hold the restore guard until the last one ends', async () => {
-    const { world, deps } = createWorld('C')
-    const coordinator = createProjectSwitchCoordinator(deps)
-
-    world.intent = 'A'
-    const first = coordinator.request({ kind: 'pick', projectId: 'A' })
-    await settle()
-    const firstHydrate = world.hydrates.get('A')
-    world.intent = 'B'
-    void coordinator.request({ kind: 'pick', projectId: 'B' })
-    await settle()
-    world.intent = 'A'
-    const second = coordinator.request({ kind: 'pick', projectId: 'A' })
-    await settle()
-
-    // The first A run was superseded; the second still guards A.
-    expect(isManifestRestoreInProgressFor('A')).toBe(true)
-    firstHydrate?.resolve(staged('A'))
-    expect(await first).toBe('superseded')
-    expect(isManifestRestoreInProgressFor('A')).toBe(true)
-    world.hydrates.get('A')?.resolve(staged('A'))
-    expect(await second).toBe('committed')
-    expect(isManifestRestoreInProgressFor('A')).toBe(false)
   })
 })

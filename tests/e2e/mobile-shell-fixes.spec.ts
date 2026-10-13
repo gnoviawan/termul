@@ -4,14 +4,14 @@ import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, type WsIdentity, wsRequest } from './helpers'
 import { openWorkspace } from './ui'
 
 /**
  * Mobile shell fixes E2E (spec-mobile-shell-fixes): a phone-sized browser
  * drives the web client's mobile shell and checks what jsdom cannot — the real
  * layout of the Files breadcrumb (44px vertical hit-slop, left clip, no header
- * growth), the single rendered leaf of a split tree synced from desktop, the
+ * growth), the single rendered leaf of a saved split tree, the
  * route the drawer returns to, and a PTY surviving a pane switch.
  *
  * Every test registers its own project (fresh workspace, no state shared with
@@ -19,7 +19,7 @@ import { openWorkspace } from './ui'
  * 1440px context against the same server.
  *
  * Not automated here (unit tests own them, see the spec's matrix): the
- * first-leaf fallback warning (the manifest restore repairs a dangling active
+ * first-leaf fallback warning (the layout restore repairs a dangling active
  * pane before the hook can see it), the disabled breadcrumb while a create
  * request is in flight, drive-root and casing normalisation, and the
  * navigateTo guard log.
@@ -35,6 +35,21 @@ test.use({
 })
 
 test.setTimeout(120_000)
+
+/**
+ * The browser's device id (`termul.deviceId` in localStorage, see
+ * `web-client-identity.ts`), fixed so a test can seed what that device reads:
+ * a device key is `device/<deviceId>/<key>` and only its own device may touch it.
+ */
+const E2E_DEVICE_ID = 'e2e-shellfix-phone'
+const E2E_DEVICE: WsIdentity = { deviceId: E2E_DEVICE_ID, clientInstanceId: 'e2e-seed' }
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(
+    (deviceId) => localStorage.setItem('termul.deviceId', deviceId),
+    E2E_DEVICE_ID
+  )
+})
 
 const AUTH_HEADERS = {
   Authorization: `Bearer ${E2E_TOKEN}`,
@@ -89,17 +104,20 @@ async function createProject(
   } finally {
     await api.dispose()
   }
-  await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
-    value: { _version: 1, data: id }
-  })
+  await wsRequest(
+    E2E_BASE_URL,
+    'store_write',
+    { key: `device/${E2E_DEVICE_ID}/active-project`, value: { _version: 1, data: id } },
+    undefined,
+    E2E_DEVICE
+  )
   return { id, name, path }
 }
 
 /**
- * Seed a split workspace the way a desktop client leaves it: two leaves, one
- * editor each, `leaf-b` active. The host stores one manifest per project and
- * every client restores its tree from it.
+ * Seed a split workspace in the phone's own device partition: two leaves, one
+ * editor each, `leaf-b` active. The client restores its pane tree from its
+ * `editor-state/<projectId>` record.
  */
 async function seedSplitWorkspace(
   project: Project,
@@ -109,71 +127,44 @@ async function seedSplitWorkspace(
   const portable = (file: string) => join(project.path, file).replace(/\\/g, '/')
   const aPath = portable(leafAFile)
   const bPath = portable(leafBFile)
-  const manifest = {
-    projectId: project.id,
-    revision: 0,
-    updatedAt: Date.now(),
-    topology: {
+  const openFile = (filePath: string) => ({
+    filePath,
+    cursorPosition: { line: 1, col: 1 },
+    scrollTop: 0,
+    viewMode: 'markdown',
+    isDirty: false,
+    lastModified: Date.now()
+  })
+  const leaf = (id: string, filePath: string) => ({
+    type: 'leaf',
+    id,
+    tabs: [{ type: 'editor', filePath }],
+    activeTabId: `edit-${filePath}`
+  })
+  const workspace = {
+    openFiles: [openFile(aPath), openFile(bPath)],
+    activeFilePath: bPath,
+    expandedDirs: [],
+    activeTabId: `edit-${bPath}`,
+    paneLayout: {
       type: 'split',
       id: 'split-root',
       direction: 'horizontal',
       sizes: [50, 50],
-      children: [
-        {
-          type: 'leaf',
-          id: 'leaf-a',
-          terminalIds: [],
-          editorIds: [`edit-${aPath}`],
-          activeTabId: `edit-${aPath}`
-        },
-        {
-          type: 'leaf',
-          id: 'leaf-b',
-          terminalIds: [],
-          editorIds: [`edit-${bPath}`],
-          activeTabId: `edit-${bPath}`
-        }
-      ]
+      children: [leaf('leaf-a', aPath), leaf('leaf-b', bPath)]
     },
-    activePaneId: 'leaf-b',
-    terminals: [],
-    editors: [
-      { editorId: `edit-${aPath}`, filePath: aPath },
-      { editorId: `edit-${bPath}`, filePath: bPath }
-    ]
+    activePaneId: 'leaf-b'
   }
-  const api = await request.newContext()
-  try {
-    const res = await api.post(`${E2E_BASE_URL}/workspace/${project.id}/write`, {
-      headers: { ...AUTH_HEADERS, 'X-Command-Id': randomUUID() },
-      data: { basedRevision: null, manifest }
-    })
-    const body = (await res.json()) as { success?: boolean; data?: { status?: string } }
-    if (!res.ok() || !body.success || body.data?.status !== 'updated') {
-      throw new Error(`workspace manifest write failed: ${JSON.stringify(body)}`)
-    }
-  } finally {
-    await api.dispose()
-  }
-}
-
-interface ServerManifest {
-  topology?: {
-    type: string
-    children?: Array<{ type: string; id: string }>
-  }
-  editors?: Array<{ filePath: string }>
-}
-
-async function readManifest(project: Project): Promise<ServerManifest | null> {
-  const api = await request.newContext()
-  try {
-    const res = await api.get(`${E2E_BASE_URL}/workspace/${project.id}`, { headers: AUTH_HEADERS })
-    const body = (await res.json()) as { success?: boolean; data?: ServerManifest | null }
-    return body.success ? (body.data ?? null) : null
-  } finally {
-    await api.dispose()
-  }
+  await wsRequest(
+    E2E_BASE_URL,
+    'store_write',
+    {
+      key: `device/${E2E_DEVICE_ID}/editor-state/${project.id}`,
+      value: { _version: 1, data: workspace }
+    },
+    undefined,
+    E2E_DEVICE
+  )
 }
 
 /**
@@ -580,9 +571,7 @@ test('closing a terminal from the drawer hands off to its confirm; Cancel keeps 
 // Split collapse
 // ---------------------------------------------------------------------------
 
-test('a split tree synced from desktop collapses to the active leaf on a phone', async ({
-  page
-}) => {
+test('a saved split tree collapses to the active leaf on a phone', async ({ page }) => {
   const project = await createProject({
     'a.md': 'LEAF-A-CONTENT',
     'b.md': 'LEAF-B-CONTENT'
@@ -622,11 +611,6 @@ test('a split tree synced from desktop collapses to the active leaf on a phone',
   await expect(page.locator('[data-pane-content]')).toHaveCount(1)
   await expect(page.locator('[data-pane-content="leaf-a"]')).toBeVisible()
   await expect(terminalInput).toHaveCount(0)
-
-  // The shared tree is not modified by the collapse.
-  const manifest = await readManifest(project)
-  expect(manifest?.topology?.type).toBe('split')
-  expect(manifest?.topology?.children?.map((child) => child.id)).toEqual(['leaf-a', 'leaf-b'])
 
   // Back to the terminal: it is shown again, and nothing was killed or
   // respawned along the way (one spawn for the whole test, no kill).

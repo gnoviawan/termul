@@ -29,9 +29,6 @@ vi.mock('@/lib/platform', async () => {
 })
 
 vi.mock('@/components/ResizeEdges', () => ({ ResizeEdges: () => null }))
-vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
-  WorkspaceConflictBanner: () => <div data-testid="conflict-banner" />
-}))
 vi.mock('@/hooks/use-pane-dnd', () => ({
   PaneDndProvider: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="pane-dnd">{children}</div>
@@ -144,7 +141,6 @@ describe('ShellFrame', () => {
     expect(dnd).toContainElement(sidePanel)
     expect(dnd).toContainElement(main)
     expect(dnd).not.toContainElement(rail)
-    expect(screen.getByTestId('conflict-banner')).toBeInTheDocument()
     expect(screen.getByTestId('app-modals')).toBeInTheDocument()
   })
 
