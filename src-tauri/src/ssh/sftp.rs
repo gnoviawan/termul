@@ -2,6 +2,7 @@
 
 use russh_sftp::client::fs::Metadata;
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -173,13 +174,17 @@ pub async fn write_file_from_string(
 
 /// Create an empty file; fails when something already exists at the path.
 pub async fn create_file(sftp: &SftpSession, remote_path: &str) -> Result<(), String> {
-    if sftp.try_exists(remote_path).await.unwrap_or(false) {
-        return Err(format!("'{}' already exists", remote_path));
-    }
+    // One exclusive open: an existing file is refused, never truncated.
+    let flags = OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE;
     let mut file = sftp
-        .create(remote_path)
+        .open_with_flags(remote_path, flags)
         .await
-        .map_err(|e| format!("Failed to create '{}': {}", remote_path, e))?;
+        .map_err(|e| {
+            format!(
+                "Could not create '{}' (it may already exist): {}",
+                remote_path, e
+            )
+        })?;
     let _ = file.shutdown().await;
     Ok(())
 }

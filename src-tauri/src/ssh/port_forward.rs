@@ -164,6 +164,12 @@ impl PortForwardManager {
                     }
                 };
                 if connection.is_closed() {
+                    let failed = ActivePortForward {
+                        status: "failed".to_string(),
+                        error: Some("The connection is closed".to_string()),
+                        ..failed_info
+                    };
+                    emit(EVENT_STATUS, serde_json::json!([failed_session, failed]));
                     break;
                 }
                 let connection = connection.clone();

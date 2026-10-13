@@ -285,11 +285,15 @@ pub async fn start(
     let writer_closing = closing.clone();
     let writer_connection = connection.clone();
     tokio::spawn(async move {
+        // A failed send means the connection broke: the reader must then
+        // report "lost", not a close from Termul.
+        let mut closed_by_us = true;
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 ShellCmd::Input(bytes) => {
                     if let Err(e) = write.data(&bytes[..]).await {
                         log::warn!("[SSH] Could not send input: {}", e);
+                        closed_by_us = false;
                         break;
                     }
                 }
@@ -305,7 +309,9 @@ pub async fn start(
             }
         }
         // Closed from Termul, or every handle to the terminal is gone.
-        writer_closing.store(true, Ordering::Release);
+        if closed_by_us {
+            writer_closing.store(true, Ordering::Release);
+        }
         let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
             let _ = write.eof().await;
             let _ = write.close().await;

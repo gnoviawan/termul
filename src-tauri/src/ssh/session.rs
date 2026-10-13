@@ -234,8 +234,10 @@ impl SshSessionManager {
             decision_tx: Mutex::new(Some(decision_tx)),
         });
         {
+            // Lock order: live before pending (see SshSessionManager).
+            let live = lock(&self.live);
             let mut pending_map = lock(&self.pending);
-            if pending_map.contains_key(session_id) || lock(&self.live).contains_key(session_id) {
+            if pending_map.contains_key(session_id) || live.contains_key(session_id) {
                 return Err(ConnectError::new(
                     ConnectErrorKind::Internal,
                     "Session id already in use",
