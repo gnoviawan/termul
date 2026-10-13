@@ -20,6 +20,7 @@ export const APPROVAL_NEEDED = 'Approval needed'
 export const TURN_FINISHED = 'Turn finished'
 export const CONNECTION_RECONNECTING = 'Reconnecting…'
 export const CONNECTION_DISCONNECTED = 'Disconnected'
+export const CONNECTION_HOST_OFFLINE = 'Host offline'
 export const CONNECTION_CONNECTED = 'Connected'
 /** Fallback chat name; matches `agentChatLabel` in `MobileChatShell`. */
 export const DEFAULT_CHAT_LABEL = 'Agent Chat'
@@ -251,6 +252,11 @@ function stepChannel(
       return {
         memory: { state: next, lost: true },
         announcement: CONNECTION_DISCONNECTED
+      }
+    case 'host-offline':
+      return {
+        memory: { state: next, lost: true },
+        announcement: CONNECTION_HOST_OFFLINE
       }
     case 'connected':
       // Recovery is announced only after an announced loss, so the boot

@@ -36,6 +36,7 @@ import {
 import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { useProjectStore } from '@/stores/project-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
@@ -208,6 +209,7 @@ export function AgentChatPanel({
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
   // uses the WS transport, so this stays `false` there.
   const transportReconnecting = useAcpStore((s) => s.transportReconnecting)
+  const hostOffline = useConnectionStatusStore((s) => s.controlChannel === 'host-offline')
   const promptCommand = useAcpStore((s) => s.promptCommandStates[sessionId])
   const recheckPromptCommand = useAcpStore((s) => s.recheckPromptCommand)
 
@@ -782,8 +784,14 @@ export function AgentChatPanel({
           role="status"
           aria-live="polite"
         >
-          <AgentConnectionLamp connected={false} reconnecting decorative size={8} />
-          <span>Reconnecting…</span>
+          <AgentConnectionLamp
+            connected={false}
+            reconnecting={!hostOffline}
+            hostOffline={hostOffline}
+            decorative
+            size={8}
+          />
+          <span>{hostOffline ? 'Host offline' : 'Reconnecting…'}</span>
         </div>
       )}
       <ChatErrorNotice

@@ -2481,6 +2481,99 @@ describe('WsAcpTransport', () => {
 })
 
 // Story 5.3 (AC3, T6) — transport-level reconnect listener.
+describe('WsAcpTransport host-offline (Close 1001)', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function closeWith1001(transport: WsAcpTransport): void {
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.readyState = FakeWebSocket.CLOSED
+    sock.onclose?.(new CloseEvent('close', { code: 1001 }))
+  }
+
+  it('reports host-offline and opens no socket until /health answers, then reconnects once', async () => {
+    vi.useFakeTimers()
+    const created: FakeWebSocket[] = []
+    class TrackedWebSocket extends FakeWebSocket {
+      constructor(...args: ConstructorParameters<typeof FakeWebSocket>) {
+        super(...args)
+        created.push(this)
+      }
+    }
+    let healthy = false
+    const health = vi.fn(async () => ({ ok: healthy }) as Response)
+    vi.stubGlobal('fetch', health)
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: TrackedWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+    await transport.connect()
+    const before = created.length
+
+    closeWith1001(transport)
+    expect(transport.getConnectionState()).toBe('host-offline')
+    expect(states.at(-1)).toBe('host-offline')
+
+    // The fast backoff window passes: no socket opens, only slow health probes.
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(created.length).toBe(before)
+    await expect(transport.connect()).rejects.toThrow(/offline/)
+
+    // The host stays down across two slow probes, then answers.
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(health).toHaveBeenCalled()
+    expect(created.length).toBe(before)
+    healthy = true
+    await vi.advanceTimersByTimeAsync(15_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(created.length).toBe(before + 1)
+    expect(transport.getConnectionState()).toBe('connected')
+    transport.dispose()
+  })
+
+  it('retryHostOffline asks /health at once', async () => {
+    vi.useFakeTimers()
+    const health = vi.fn(async () => ({ ok: true }) as Response)
+    vi.stubGlobal('fetch', health)
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    closeWith1001(transport)
+    expect(health).not.toHaveBeenCalled()
+    transport.retryHostOffline()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(health).toHaveBeenCalledTimes(1)
+    expect(transport.getConnectionState()).toBe('connected')
+    transport.dispose()
+  })
+
+  it('keeps the backoff loop for any other close code', async () => {
+    vi.useFakeTimers()
+    const health = vi.fn(async () => ({ ok: true }) as Response)
+    vi.stubGlobal('fetch', health)
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.readyState = FakeWebSocket.CLOSED
+    sock.onclose?.(new CloseEvent('close', { code: 1006 }))
+    expect(transport.getConnectionState()).not.toBe('host-offline')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(health).not.toHaveBeenCalled()
+    expect((transport as unknown as { socket: FakeWebSocket }).socket).not.toBe(sock)
+    transport.dispose()
+  })
+})
+
 // Verifies the `setReconnectListener` callback fires `true` on
 // `scheduleReconnect` (WS drop) and `false` on `reconnect` success.
 describe('WsAcpTransport reconnect listener (Story 5.3)', () => {

@@ -6,6 +6,7 @@ import {
   APPROVAL_NEEDED,
   CONNECTION_CONNECTED,
   CONNECTION_DISCONNECTED,
+  CONNECTION_HOST_OFFLINE,
   CONNECTION_RECONNECTING,
   type ConnectionAnnouncementMemory,
   type ConnectionAnnouncementState,
@@ -493,6 +494,17 @@ describe('deriveConnectionAnnouncements', () => {
         { controlChannel: 'disconnected', terminalChannel: 'connected' }
       ])
     ).toEqual([[], [CONNECTION_RECONNECTING], [CONNECTION_DISCONNECTED]])
+  })
+
+  it('announces host offline once and then the recovery', () => {
+    expect(
+      run([
+        connected,
+        { controlChannel: 'host-offline', terminalChannel: 'connected' },
+        { controlChannel: 'host-offline', terminalChannel: 'connected' },
+        { controlChannel: 'connected', terminalChannel: 'connected' }
+      ])
+    ).toEqual([[], [CONNECTION_HOST_OFFLINE], [], [CONNECTION_CONNECTED]])
   })
 
   it('does not repeat while a channel stays in the same state', () => {

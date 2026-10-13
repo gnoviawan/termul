@@ -311,6 +311,28 @@ describe('createWebPersistenceApi', () => {
     expect(host.get(`device/${DEVICE}/k`)?.v).toEqual({ _version: 1, data: { a: 1 } })
   })
 
+  it('answers HOST_OFFLINE without opening a socket after Close(1001) until /health answers', async () => {
+    await api.read('warmup')
+    const first = sockets[0]
+    first.readyState = FakeStoreSocket.CLOSED
+    first.onclose?.(new CloseEvent('close', { code: 1001 }))
+
+    const health = vi.fn(async () => ({ ok: false }) as Response)
+    vi.stubGlobal('fetch', health)
+    try {
+      const refused = await api.read('k')
+      expect(refused).toMatchObject({ success: false, code: 'HOST_OFFLINE' })
+      expect(sockets).toHaveLength(1)
+
+      health.mockImplementation(async () => ({ ok: true }) as Response)
+      const answered = await api.read('k')
+      expect(answered).toMatchObject({ code: 'KEY_NOT_FOUND' })
+      expect(sockets).toHaveLength(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('maps a server error code into the IpcResult', async () => {
     // Warm the socket (connect is lazy) before arming the failure.
     await api.read('warmup')

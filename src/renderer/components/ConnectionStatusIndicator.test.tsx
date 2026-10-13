@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
@@ -10,6 +10,12 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 
 const mockIsTauriContext = vi.hoisted(() => vi.fn(() => false))
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: mockIsTauriContext }))
+
+const mockRetryHostOffline = vi.hoisted(() => vi.fn())
+vi.mock('@/stores/connection-status-store', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/stores/connection-status-store')>()),
+  retryHostOffline: mockRetryHostOffline
+}))
 
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { ConnectionStatusIndicator, formatConnectedSummary } from './ConnectionStatusIndicator'
@@ -96,6 +102,19 @@ describe('ConnectionStatusIndicator', () => {
       })
     ).toBeInTheDocument()
     expect(lampClass()).toContain('text-destructive')
+  })
+
+  it('shows a steady Host offline lamp that wins over worse-looking channels and retries on click', () => {
+    useConnectionStatusStore.setState({
+      controlChannel: 'host-offline',
+      terminalChannel: 'disconnected'
+    })
+    renderIndicator()
+    expect(screen.getByRole('status', { name: 'Host offline' })).toBeInTheDocument()
+    expect(lampClass()).not.toContain('animate-pulse')
+    expect(lampClass()).not.toContain('text-destructive')
+    fireEvent.click(screen.getByRole('button', { name: /select to retry/i }))
+    expect(mockRetryHostOffline).toHaveBeenCalledTimes(1)
   })
 
   it('recovers to a filled lamp when the degraded channel reconnects', () => {

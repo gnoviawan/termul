@@ -25,6 +25,7 @@ import {
   type WebTerminalRequestType
 } from '@shared/types/web-terminal-protocol.types'
 import type { AcpConnectionState } from './acp-transport'
+import { HOST_GOING_AWAY_CLOSE_CODE, HostOfflineMonitor } from './acp-transport/host-offline'
 import {
   HANDSHAKE_TIMEOUT_MS,
   jitteredBackoffMs,
@@ -129,6 +130,13 @@ export class WebTerminalClient {
    * helper, which replaces this client). Cleared by a successful handshake.
    */
   private handshakeHalted: Error | null = null
+  /**
+   * The host closed `/terminal/ws` with `1001` (it stopped) while a terminal
+   * was live. No backoff loop runs and `connect()` refuses while set; the slow
+   * health probe (or a user retry) clears it once the host answers.
+   */
+  private hostOffline = false
+  private readonly hostProbe = new HostOfflineMonitor(() => this.onHostAnswered())
   /** Story 10 (F9): handshake bound for the in-flight `connect()` — torn
    * down socket's timer is cleared on open/error/close/forceReconnect. */
   private connectTimer: ReturnType<typeof setTimeout> | null = null
@@ -270,6 +278,11 @@ export class WebTerminalClient {
     return this.connectionState
   }
 
+  /** User retry (or a wake signal) while `host-offline`: ask `/health` now. */
+  retryHostOffline(): void {
+    this.hostProbe.probeNow()
+  }
+
   /**
    * Send one request. A ledgered op (`spawn`/`write`/`kill`/`rotate_claim`/
    * `revoke_claim`) carries its `commandId` on the frame; the host's
@@ -319,6 +332,7 @@ export class WebTerminalClient {
   connect(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('Terminal client disposed'))
     if (this.handshakeHalted) return Promise.reject(this.handshakeHalted)
+    if (this.hostOffline) return Promise.reject(new Error('Host is offline'))
     this.attachVisibilityListeners()
     // The in-flight handshake promise FIRST: while the socket is OPEN but the
     // `authenticate` reply is still pending, the OPEN fast path below would
@@ -426,14 +440,15 @@ export class WebTerminalClient {
         this.connectingReject = null
         reject(new Error('Terminal websocket connection failed'))
       }
-      socket.onclose = () => {
+      socket.onclose = (event?: { code?: number }) => {
         this.clearConnectTimer()
         this.clearStableTimer()
         this.connecting = null
         this.connectingReject = null
         this.socket = null
         this.rejectPending()
-        this.scheduleReconnect()
+        if (event?.code === HOST_GOING_AWAY_CLOSE_CODE) this.enterHostOffline()
+        else this.scheduleReconnect()
       }
     })
     return this.connecting
@@ -967,6 +982,7 @@ export class WebTerminalClient {
     this.detachVisibilityListeners()
     this.clearConnectTimer()
     this.clearStableTimer()
+    this.hostProbe.stop()
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.rejectPending()
     // Story 10: dispose drops every buffered input (in-memory only).
@@ -1132,8 +1148,45 @@ export class WebTerminalClient {
     this.pending.clear()
   }
 
+  /**
+   * The host closed the socket with `1001`: it stopped on purpose, so a backoff
+   * loop would only churn. With a live terminal to recover, report
+   * `host-offline` and ask `/health` slowly; with none, the channel is idle and
+   * connects lazily on next use.
+   */
+  private enterHostOffline(): void {
+    if (this.disposed) return
+    const live = Array.from(this.trackers.values()).some((t) => !t.exited && !t.disconnected)
+    if (!live) {
+      this.emitConnectionState('connected')
+      return
+    }
+    this.hostOffline = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.emitConnectionState('host-offline')
+    void logFrontendError({
+      level: 'warn',
+      source: 'WebTerminalClient.hostOffline',
+      message: 'host closed /terminal/ws with 1001 (host stopping); probing /health slowly'
+    })
+    this.hostProbe.start()
+  }
+
+  /** `/health` answered: leave `host-offline` and reconnect once with a fresh budget. */
+  private onHostAnswered(): void {
+    if (this.disposed || !this.hostOffline) return
+    this.hostOffline = false
+    this.reconnectAttempt = 0
+    this.reconnectExhausted = false
+    this.emitConnectionState('reconnecting')
+    void this.connect().catch(() => this.scheduleReconnect())
+  }
+
   private scheduleReconnect(): void {
-    if (this.disposed || this.reconnectTimer) return
+    if (this.disposed || this.reconnectTimer || this.hostOffline) return
     // AD-15: a protocol/identity refusal never recovers by retrying.
     if (this.handshakeHalted) return
     // An exhausted budget stays latched off until the user re-arms (a
@@ -1236,6 +1289,10 @@ export class WebTerminalClient {
    */
   private maybeReconnectOnReturn(): void {
     if (this.disposed) return
+    if (this.hostOffline) {
+      this.hostProbe.probeNow()
+      return
+    }
     const hiddenAt = this.lastHiddenAt
     this.lastHiddenAt = null
     if (hiddenAt == null) return // never recorded a hide — nothing to recover
@@ -1263,7 +1320,7 @@ export class WebTerminalClient {
    * so the existing backoff + `onopen` re-attach machinery runs unchanged.
    */
   private forceReconnect(reason: string, resetBackoff = true): void {
-    if (this.disposed) return
+    if (this.disposed || this.hostOffline) return
     const old = this.socket
     // Capture the in-flight connect promise's reject BEFORE nulling so it can
     // be settled after the socket teardown. Without this, a `request()`
@@ -1514,6 +1571,11 @@ export function setWebTerminalConnectionStateListener(
  */
 export function getWebTerminalConnectionState(): AcpConnectionState {
   return client.getConnectionState()
+}
+
+/** User retry while the terminal channel is `host-offline`: ask the host's `/health` now. */
+export function retryWebTerminalHostOffline(): void {
+  client.retryHostOffline()
 }
 
 /**

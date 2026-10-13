@@ -1761,18 +1761,25 @@ function ConnectedTerminalComponent({
             >
               <AgentConnectionLamp
                 connected={false}
-                reconnecting={terminalChannel !== 'disconnected'}
+                reconnecting={
+                  terminalChannel !== 'disconnected' && terminalChannel !== 'host-offline'
+                }
+                hostOffline={terminalChannel === 'host-offline'}
                 decorative
                 size={8}
               />
               <span>
                 {terminalChannel === 'disconnected'
                   ? 'Disconnected'
-                  : terminalChannel === 'reconnecting'
+                  : terminalChannel === 'host-offline'
                     ? ptyIdRef.current && isWebTerminalBufferable(ptyIdRef.current)
-                      ? 'Reconnecting — input buffered'
-                      : 'Reconnecting…'
-                    : 'Connecting…'}
+                      ? 'Host offline — input buffered'
+                      : 'Host offline'
+                    : terminalChannel === 'reconnecting'
+                      ? ptyIdRef.current && isWebTerminalBufferable(ptyIdRef.current)
+                        ? 'Reconnecting — input buffered'
+                        : 'Reconnecting…'
+                      : 'Connecting…'}
               </span>
             </div>
           )}

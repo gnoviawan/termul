@@ -28,6 +28,7 @@ import {
 } from '@shared/types/web-protocol.types'
 import { randomUUID } from '@/lib/uuid'
 import { getAcpTransport, resolveWsUrl } from './acp-transport'
+import { HOST_GOING_AWAY_CLOSE_CODE, probeHostHealth } from './acp-transport/host-offline'
 import { HANDSHAKE_TIMEOUT_MS } from './acp-transport/ws-transport-timing'
 import { findUnresolvedCommand, openCommand, resolveCommand } from './command-journal'
 import { logFrontendError } from './log-api'
@@ -72,6 +73,12 @@ export class WebStoreSocket {
    * version mismatch reloads the page once via the shared helper).
    */
   private halted: StoreError | null = null
+  /**
+   * The host closed the socket with `1001` (it stopped). This socket has no
+   * reconnect loop (every request connects on demand), so the flag only makes
+   * the next request ask `GET /health` once instead of opening a doomed socket.
+   */
+  private hostOffline = false
   private readonly pending = new Map<string, PendingRequest>()
   private readonly wsUrl: string
   private readonly wsCtor: typeof WebSocket
@@ -88,6 +95,14 @@ export class WebStoreSocket {
     if (this.halted) throw this.halted
     if (this.socket?.readyState === WebSocket.OPEN && this.authed) return
     if (this.connecting) return this.connecting
+    if (this.hostOffline) {
+      if (!(await probeHostHealth())) {
+        throw { code: 'HOST_OFFLINE', message: 'host is offline' } satisfies StoreError
+      }
+      this.hostOffline = false
+      if (this.socket?.readyState === WebSocket.OPEN && this.authed) return
+      if (this.connecting) return this.connecting
+    }
     this.connecting = this.open()
     try {
       await this.connecting
@@ -181,9 +196,10 @@ export class WebStoreSocket {
         settleErr({ code: 'WS_ERROR', message: 'WebSocket error' })
       }
 
-      ws.onclose = () => {
+      ws.onclose = (ev?: { code?: number }) => {
         this.socket = null
         this.authed = false
+        if (ev?.code === HOST_GOING_AWAY_CLOSE_CODE) this.hostOffline = true
         this.rejectAll({ code: 'WS_ERROR', message: 'WebSocket closed' })
         settleErr({ code: 'WS_ERROR', message: 'WebSocket closed' })
       }

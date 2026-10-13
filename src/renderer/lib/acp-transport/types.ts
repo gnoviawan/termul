@@ -118,9 +118,17 @@ export function isOutcomeUncertainError(error: unknown): error is AcpTransportEr
  * connect in flight; `connected` = socket open + authed; `reconnecting` =
  * drop detected, backoff retry in progress; `disconnected` = gave up (the
  * terminal channel exhausts its retry budget; the control channel retries
- * forever and never reaches this state).
+ * forever and never reaches this state); `host-offline` = the host stopped on
+ * purpose (`Close(1001)`): no backoff loop runs, a slow health probe or a user
+ * retry decides when to reconnect.
  */
-export type AcpConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+export type AcpConnectionState =
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'disconnected'
+  /** The host closed the socket with `1001` (it stopped); no reconnect loop runs. */
+  | 'host-offline'
 
 /**
  * A session replay cursor. `lastSeq` is only meaningful against the host log
@@ -396,6 +404,11 @@ export interface AcpTransport {
    * emitted before wiring are reflected. Only on the WS transport.
    */
   getConnectionState?(): AcpConnectionState
+  /**
+   * Ask the host `GET /health` now while the state is `host-offline`, and
+   * reconnect when it answers. No-op in any other state. Only on the WS transport.
+   */
+  retryHostOffline?(): void
   setRecoveryHandler?(
     handler: (
       recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
