@@ -174,11 +174,6 @@ async fn cascade_stops_sessions_and_terminals_then_removes() {
     let mut closed = host.sink.sids_of(events::EVENT_SESSION_CLOSED);
     closed.sort();
     assert_eq!(closed, [Some("s-1".to_string()), Some("s-3".to_string())]);
-    assert_eq!(
-        host.sink.sids_of(events::EVENT_AGENT_DISCONNECTED),
-        vec![None],
-        "one agent_disconnected for a2"
-    );
     assert!(host.pty.get(&terminal).is_none(), "the bound PTY is gone");
     assert!(host.pty.get(&other_terminal).is_some());
     host.pty.kill_all().await;

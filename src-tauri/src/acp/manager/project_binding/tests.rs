@@ -3,6 +3,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use super::*;
+use crate::acp::events;
 use crate::acp::session_persistence::{SessionPersistence, SessionRegistration};
 use crate::web::sink::AcpEvent;
 use crate::web::EventSink;
@@ -101,26 +102,34 @@ async fn stopping_closes_the_sessions_and_keeps_an_agent_with_other_sessions() {
     );
     assert_eq!(
         sink.of_type(events::EVENT_SESSION_CLOSED),
-        vec![Some("s-1".to_string())]
+        vec![Some("s-1".to_string())],
+        "one close is announced once"
     );
     assert!(sink.of_type(events::EVENT_AGENT_DISCONNECTED).is_empty());
 }
 
 #[tokio::test]
-async fn stopping_the_last_sessions_kills_the_agent_and_says_so() {
+async fn stopping_the_last_sessions_kills_the_agent() {
     let dir = tempfile::tempdir().unwrap();
     let (acp, sink) = manager_with_sessions(dir.path(), &[("s-1", "p-1")]).await;
     acp.install_test_agent_with_closable_sessions(agent("a1"), vec!["s-1".into()], true);
+    let exit = acp.agents.lock().get(&agent("a1")).unwrap().exit.clone();
 
     acp.stop_project_sessions(&agent("a1"), &["s-1".to_string()])
         .await;
 
     assert!(acp.list_agents().is_empty(), "no other session uses the agent");
     assert_eq!(
-        sink.of_type(events::EVENT_SESSION_CLOSED),
-        vec![Some("s-1".to_string())]
+        exit.get(),
+        Some(super::super::exit::ExitIntent::Killed),
+        "the driver teardown announces the stop as a kill"
     );
-    assert_eq!(sink.of_type(events::EVENT_AGENT_DISCONNECTED), vec![None]);
+    assert_eq!(
+        sink.of_type(events::EVENT_SESSION_CLOSED),
+        vec![Some("s-1".to_string())],
+        "the close is announced once; the manager adds no announcement of its own"
+    );
+    assert!(sink.of_type(events::EVENT_AGENT_DISCONNECTED).is_empty());
 }
 
 #[tokio::test]

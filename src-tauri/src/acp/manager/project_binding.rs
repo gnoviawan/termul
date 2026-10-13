@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use crate::acp::config::{AgentId, SessionId};
-use crate::acp::events::{self, AgentDisconnectedEvent, SessionClosedEvent};
 
 use super::AcpManager;
 
@@ -52,12 +51,13 @@ impl AcpManager {
     }
 
     /// Stop `session_ids` on one agent: cancel an active turn and wait for its
-    /// terminator, close the session, and fan out `session_closed`. Afterwards
-    /// the agent is killed (and `agent_disconnected` fanned out) when no
-    /// session outside `session_ids` still uses it — an agent serving other
-    /// sessions is left running. A session that cannot be stopped (an agent
-    /// without `session/close`) is left to that agent-kill rule or reported by
-    /// the caller's next listing.
+    /// terminator, then close the session (the driver announces
+    /// `session_closed`). Afterwards the agent is killed (its teardown
+    /// announces `session_closed` and `agent_disconnected`) when no session
+    /// outside `session_ids` still uses it — an agent serving other sessions
+    /// is left running. A session that cannot be stopped (an agent without
+    /// `session/close`) is left to that agent-kill rule or reported by the
+    /// caller's next listing.
     pub async fn stop_project_sessions(&self, agent_id: &AgentId, session_ids: &[String]) {
         for session_id in session_ids {
             if let Err(error) = self.stop_session(agent_id, session_id).await {
@@ -81,31 +81,10 @@ impl AcpManager {
         // none is left): the agent has no other user.
         if let Err(error) = self.kill(agent_id).await {
             log::warn!("[acp] could not kill agent {agent_id} after a project stop: {error}");
-            return;
         }
-        for session_id in remaining {
-            events::fan_out(
-                &self.sinks,
-                Some(session_id.as_str()),
-                events::EVENT_SESSION_CLOSED,
-                &SessionClosedEvent {
-                    agent_id: agent_id.clone(),
-                    session_id: SessionId::new(session_id.clone()),
-                },
-            );
-        }
-        events::fan_out(
-            &self.sinks,
-            None,
-            events::EVENT_AGENT_DISCONNECTED,
-            &AgentDisconnectedEvent {
-                agent_id: agent_id.clone(),
-            },
-        );
     }
 
-    /// Cancel a session's active turn (waiting for its terminator), close it,
-    /// and fan out `session_closed`.
+    /// Cancel a session's active turn (waiting for its terminator) and close it.
     async fn stop_session(&self, agent_id: &AgentId, session_id: &str) -> Result<(), String> {
         let session = SessionId::new(session_id);
         if self
@@ -127,17 +106,8 @@ impl AcpManager {
                 );
             }
         }
-        self.close_session(agent_id, session.clone()).await?;
-        events::fan_out(
-            &self.sinks,
-            Some(session_id),
-            events::EVENT_SESSION_CLOSED,
-            &SessionClosedEvent {
-                agent_id: agent_id.clone(),
-                session_id: session,
-            },
-        );
-        Ok(())
+        // The driver announces `session_closed` once the session is closed.
+        self.close_session(agent_id, session).await
     }
 }
 
@@ -155,13 +125,14 @@ impl AcpManager {
         sessions: Vec<String>,
         close_works: bool,
     ) -> std::sync::Arc<parking_lot::Mutex<Vec<String>>> {
-        use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
 
         use super::{AcpCommand, AgentEntry, SpawnStamp};
 
         let live = Arc::new(parking_lot::Mutex::new(sessions));
         let live_for_driver = Arc::clone(&live);
+        let sinks = self.sinks.clone();
+        let driver_agent_id = agent_id.clone();
         let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
@@ -175,6 +146,12 @@ impl AcpManager {
                     AcpCommand::CloseSession { session_id, reply } => {
                         if close_works {
                             live_for_driver.lock().retain(|id| *id != session_id.0);
+                            // The real driver announces a close once, itself.
+                            super::close::announce_session_closed(
+                                &sinks,
+                                &driver_agent_id,
+                                &session_id,
+                            );
                             let _ = reply.send(Ok(()));
                         } else {
                             let _ = reply.send(Err("agent refused to close".to_string()));
@@ -196,7 +173,7 @@ impl AcpManager {
                 name: "test-agent".to_string(),
                 config_id: None,
                 join_handle: None,
-                killed: Arc::new(AtomicBool::new(false)),
+                exit: Default::default(),
                 stamp: SpawnStamp::default(),
             },
         );
