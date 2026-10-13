@@ -2,6 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import {
   armMobileOverlayBackStack,
   pressSystemBack,
   settleOverlayBackStack,
@@ -210,11 +216,45 @@ describe('ConfirmDialog focus (modal)', () => {
             props.onConfirm()
             setOpen(false)
           }}
+          onCancel={() => {
+            props.onCancel()
+            setOpen(false)
+          }}
+        />
+      </>
+    )
+  }
+
+  // A Radix menu item raises the confirm; the item unmounts with its menu.
+  function MenuHarness() {
+    const [open, setOpen] = useState(false)
+    return (
+      <>
+        <DropdownMenu defaultOpen>
+          <DropdownMenuTrigger asChild>
+            <button type="button">more</button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem onSelect={() => setOpen(true)}>Delete…</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <ConfirmDialog
+          {...props}
+          variant="danger"
+          isOpen={open}
+          onConfirm={() => setOpen(false)}
           onCancel={() => setOpen(false)}
         />
       </>
     )
   }
+
+  const rememberCheckbox = (
+    <label>
+      <input type="checkbox" />
+      Don't ask again
+    </label>
+  )
 
   beforeEach(() => vi.clearAllMocks())
 
@@ -248,8 +288,59 @@ describe('ConfirmDialog focus (modal)', () => {
     expect(confirm).toHaveFocus()
 
     cancel.focus()
-    fireEvent.keyDown(cancel, { key: 'Enter' })
+    // Not prevented, so the browser activates the focused Cancel (the click).
+    expect(fireEvent.keyDown(cancel, { key: 'Enter' })).toBe(true)
+    fireEvent.click(cancel)
+    expect(props.onCancel).toHaveBeenCalledTimes(1)
     expect(props.onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('wraps Tab over focusable children too', async () => {
+    render(
+      <ConfirmDialog {...props} isOpen variant="danger">
+        {rememberCheckbox}
+      </ConfirmDialog>
+    )
+    const checkbox = screen.getByRole('checkbox')
+    const confirm = screen.getByRole('button', { name: 'Delete' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
+    confirm.focus()
+    fireEvent.keyDown(confirm, { key: 'Tab' })
+    expect(checkbox).toHaveFocus()
+    fireEvent.keyDown(checkbox, { key: 'Tab', shiftKey: true })
+    expect(confirm).toHaveFocus()
+  })
+
+  it('confirms on Enter only from the dialog itself, and not while loading', () => {
+    const { rerender } = render(
+      <ConfirmDialog {...props} isOpen>
+        {rememberCheckbox}
+      </ConfirmDialog>
+    )
+    fireEvent.keyDown(screen.getByRole('checkbox'), { key: 'Enter' })
+    expect(props.onConfirm).not.toHaveBeenCalled()
+
+    const dialog = screen.getByRole('alertdialog')
+    rerender(
+      <ConfirmDialog {...props} isOpen isLoading>
+        {rememberCheckbox}
+      </ConfirmDialog>
+    )
+    fireEvent.keyDown(dialog, { key: 'Enter' })
+    expect(props.onConfirm).not.toHaveBeenCalled()
+
+    rerender(
+      <ConfirmDialog {...props} isOpen>
+        {rememberCheckbox}
+      </ConfirmDialog>
+    )
+    fireEvent.keyDown(dialog, { key: 'Enter' })
+    expect(props.onConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps focus on the dialog when its initial button is disabled (loading)', async () => {
+    render(<ConfirmDialog {...props} isOpen isLoading />)
+    await waitFor(() => expect(screen.getByRole('alertdialog')).toHaveFocus())
   })
 
   it('returns focus to the opener when it closes', async () => {
@@ -260,5 +351,20 @@ describe('ConfirmDialog focus (modal)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toHaveFocus())
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(opener).toHaveFocus())
+  })
+
+  it('returns focus to the menu trigger when a menu item opened it', async () => {
+    render(<MenuHarness />)
+    // The open (modal) menu hides the rest of the page from the a11y tree.
+    const trigger = screen.getByRole('button', { name: 'more', hidden: true })
+    const item = await screen.findByRole('menuitem', { name: 'Delete…' })
+    item.focus()
+    fireEvent.click(item)
+    const cancel = await screen.findByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    expect(screen.queryByRole('menuitem')).not.toBeInTheDocument()
+
+    fireEvent.click(cancel)
+    await waitFor(() => expect(trigger).toHaveFocus())
   })
 })

@@ -12,6 +12,10 @@ import { useOverlayRegistration } from '@/stores/overlay-stack-store'
  */
 export const CONFIRM_DIALOG_OVERLAY_PREFIX = 'confirm-dialog:'
 
+/** Elements Tab reaches, in DOM order (the focus trap wraps over these). */
+const TABBABLE =
+  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
 interface ConfirmDialogProps {
   isOpen: boolean
   title: string
@@ -59,7 +63,11 @@ export function ConfirmDialog({
     returnFocusTo.current = captureFocusReturnTarget()
     const focusInitial = () => {
       const dialog = dialogRef.current
-      if (dialog && !dialog.contains(document.activeElement)) initialFocusRef.current?.focus()
+      if (!dialog || dialog.contains(document.activeElement)) return
+      // Loading disables the initial button; the dialog itself holds focus then.
+      const initial = initialFocusRef.current
+      if (initial && !initial.disabled) initial.focus()
+      else dialog.focus()
     }
     // A layer closing as the confirm opens (a menu that raised it) may take
     // focus back for a few frames; keep pulling it in until it settles.
@@ -100,21 +108,25 @@ export function ConfirmDialog({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (e.key === 'Tab') {
-        // Keep Tab inside the dialog (it is modal).
-        const buttons = Array.from(
-          e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not([disabled])')
-        )
-        const first = buttons[0]
-        const last = buttons[buttons.length - 1]
-        if (e.shiftKey && document.activeElement === first) {
+        // Keep Tab inside the dialog (it is modal), over the children's
+        // controls as well as the footer buttons.
+        const tabbable = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(TABBABLE))
+        const first = tabbable[0]
+        const last = tabbable[tabbable.length - 1]
+        const active = document.activeElement
+        if (!first) {
+          // Nothing tabbable (all disabled while loading): stay on the dialog.
           e.preventDefault()
-          last?.focus()
-        } else if (!e.shiftKey && document.activeElement === last) {
+        } else if (e.shiftKey && (active === first || active === e.currentTarget)) {
           e.preventDefault()
-          first?.focus()
+          last.focus()
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault()
+          first.focus()
         }
-      } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
-        // A focused button handles Enter itself (Cancel must not confirm).
+      } else if (e.key === 'Enter' && e.target === e.currentTarget && !isLoading) {
+        // Only Enter on the dialog itself confirms: a focused control handles
+        // its own Enter (Cancel must not confirm, a checkbox must not either).
         e.preventDefault()
         onConfirm()
       } else if (e.key === 'Escape') {
@@ -122,7 +134,7 @@ export function ConfirmDialog({
         onCancel()
       }
     },
-    [onConfirm, onCancel]
+    [onConfirm, onCancel, isLoading]
   )
 
   return (
