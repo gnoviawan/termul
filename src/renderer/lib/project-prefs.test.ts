@@ -220,6 +220,18 @@ describe('persistProjectPrefs', () => {
     expect(lastRecord().projects.a.gitBranch).toBe('dev')
   })
 
+  it('stores the secrets of a remembered project the watch has not listed yet', async () => {
+    rememberProjectPrefs('new', { envVars: [{ key: 'TOKEN', value: 'hunter2', isSecret: true }] })
+
+    await persistProjectPrefs([project('a')], [], [])
+
+    expect(secrets.get('project:new:env:TOKEN')).toBe('hunter2')
+    expect(lastRecord().projects.new.envVars).toEqual([
+      { key: 'TOKEN', value: '[REDACTED]', isSecret: true }
+    ])
+    expect(JSON.stringify(lastRecord())).not.toContain('hunter2')
+  })
+
   it('keeps the prefs of a project the list does not carry any more', async () => {
     await persistProjectPrefs(
       [project('a', { gitBranch: 'a1' }), project('b', { gitBranch: 'b1' })],

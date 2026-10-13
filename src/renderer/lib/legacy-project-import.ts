@@ -156,7 +156,12 @@ export async function importLegacyProjects(
   const acknowledged = await projectRegistryImport(legacy.map(toSummary), defaultProjectId)
   if (!acknowledged.success) return fail('the host import', acknowledged.error)
 
+  // A record that exists but cannot be read must not be replaced by one built
+  // from the old data alone: stop and retry on the next launch.
   const existing = await persistenceApi.read<ProjectPrefsRecord>(PersistenceKeys.projectPrefs)
+  if (!existing.success && existing.code !== 'KEY_NOT_FOUND') {
+    return fail('reading the saved project prefs', existing.error)
+  }
   const merged = mergePrefs(existing.success ? existing.data : null, legacy, record.groups ?? [])
   const savedPrefs = await persistenceApi.write(PersistenceKeys.projectPrefs, merged)
   if (!savedPrefs.success) return fail('saving the project prefs', savedPrefs.error)
@@ -167,7 +172,14 @@ export async function importLegacyProjects(
   if (activeProjectId && legacy.some((project) => project.id === activeProjectId)) {
     const savedActive = await persistenceApi.read<string>(PersistenceKeys.activeProject)
     if (!savedActive.success) {
-      await persistenceApi.write(PersistenceKeys.activeProject, activeProjectId)
+      if (savedActive.code !== 'KEY_NOT_FOUND') {
+        return fail('reading the saved active project', savedActive.error)
+      }
+      const savedSelection = await persistenceApi.write(
+        PersistenceKeys.activeProject,
+        activeProjectId
+      )
+      if (!savedSelection.success) return fail('saving the active project', savedSelection.error)
     }
   }
 

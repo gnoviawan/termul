@@ -9,13 +9,17 @@ const { store, tauri, hostImport, writeFailures, events } = vi.hoisted(() => ({
   events: [] as string[]
 }))
 
+function readStore(
+  key: string
+): { success: true; data: unknown } | { success: false; code: string; error: string } {
+  return store.has(key)
+    ? { success: true, data: store.get(key) }
+    : { success: false, code: 'KEY_NOT_FOUND', error: `Key not found: ${key}` }
+}
+
 vi.mock('@/lib/api', () => ({
   persistenceApi: {
-    read: vi.fn(async (key: string) =>
-      store.has(key)
-        ? { success: true, data: store.get(key) }
-        : { success: false, code: 'KEY_NOT_FOUND', error: `Key not found: ${key}` }
-    ),
+    read: vi.fn(readStore),
     write: vi.fn(async (key: string, data: unknown) => {
       events.push(`write:${key}`)
       if (writeFailures.has(key)) return { success: false, code: 'WRITE_ERROR', error: 'disk full' }
@@ -68,6 +72,7 @@ beforeEach(() => {
   writeFailures.clear()
   events.length = 0
   tauri.value = true
+  vi.mocked(persistenceApi.read).mockImplementation(async (key: string) => readStore(key))
   hostImport.mockImplementation(async () => {
     events.push('host')
     return { success: true, data: { imported: true } }
@@ -193,6 +198,47 @@ describe('importLegacyProjects', () => {
     expect(await importLegacyProjects()).toBe('failed')
 
     expect(store.has(LEGACY_PROJECTS_KEY)).toBe(true)
+  })
+
+  it('keeps the old record and the saved prefs when the saved prefs cannot be read', async () => {
+    store.set(LEGACY_PROJECTS_KEY, LEGACY_RECORD)
+    store.set('project-prefs', { projects: { p1: { gitBranch: 'kept' } }, groups: [], order: [] })
+    vi.mocked(persistenceApi.read).mockImplementation(async (key: string) =>
+      key === 'project-prefs'
+        ? { success: false, code: 'READ_ERROR', error: 'locked' }
+        : { success: true, data: store.get(key) }
+    )
+
+    expect(await importLegacyProjects()).toBe('failed')
+
+    expect(store.has(LEGACY_PROJECTS_KEY)).toBe(true)
+    expect(events).not.toContain('write:project-prefs')
+  })
+
+  it('keeps the old record when the active project cannot be saved', async () => {
+    store.set(LEGACY_PROJECTS_KEY, LEGACY_RECORD)
+    writeFailures.add('active-project')
+
+    expect(await importLegacyProjects()).toBe('failed')
+
+    expect(store.has(LEGACY_PROJECTS_KEY)).toBe(true)
+    expect(events).not.toContain('delete:projects')
+  })
+
+  it('keeps the old record when the saved active project cannot be read', async () => {
+    store.set(LEGACY_PROJECTS_KEY, LEGACY_RECORD)
+    vi.mocked(persistenceApi.read).mockImplementation(async (key: string) =>
+      key === 'active-project'
+        ? { success: false, code: 'READ_ERROR', error: 'locked' }
+        : store.has(key)
+          ? { success: true, data: store.get(key) }
+          : { success: false, code: 'KEY_NOT_FOUND', error: 'none' }
+    )
+
+    expect(await importLegacyProjects()).toBe('failed')
+
+    expect(store.has(LEGACY_PROJECTS_KEY)).toBe(true)
+    expect(events).not.toContain('write:active-project')
   })
 
   it('still splits the prefs and deletes the key when the host had already imported', async () => {

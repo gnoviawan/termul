@@ -96,13 +96,6 @@ async function storeSecretsAndRedact(
   return result
 }
 
-/** The env vars with every secret value replaced by the placeholder (no secure storage write). */
-function redactSecrets(envVars: EnvVariable[] | undefined): EnvVariable[] | undefined {
-  return envVars?.map((envVar) =>
-    envVar.isSecret ? { ...envVar, value: REDACTED_VALUE, isSecret: true } : envVar
-  )
-}
-
 /** Replace placeholders with the secrets held in secure storage. */
 async function loadSecrets(
   projectId: string,
@@ -288,10 +281,12 @@ export async function persistProjectPrefs(
             previousById.get(projectId)?.envVars,
             fields.envVars
           )
-          envVars = await storeSecretsAndRedact(projectId, fields.envVars)
-        } else {
-          envVars = redactSecrets(fields.envVars)
         }
+        // Unlisted projects go through secure storage too: their secrets are
+        // either read back from it (same value, rewritten) or entered for a
+        // project the watch has not listed yet, and must not be reduced to a
+        // placeholder that has nothing behind it.
+        envVars = await storeSecretsAndRedact(projectId, fields.envVars)
       }
       persisted[projectId] = toPersistedPrefs(fields, envVars)
     }
