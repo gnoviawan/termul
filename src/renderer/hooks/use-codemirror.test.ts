@@ -14,19 +14,19 @@ function renderEditor(onSave?: (content: string) => void) {
   document.body.appendChild(container)
   containers.push(container)
   const onChange = vi.fn()
+  // One ref for the whole test: a new ref object per render would re-run the
+  // editor's setup effect and destroy the view on every re-render.
+  const containerRef = { current: container }
   const hook = renderHook(() =>
-    useCodeMirror(
-      { current: container },
-      {
-        filePath: '/remote/a.txt',
-        content: 'hello',
-        language: 'text',
-        onChange,
-        onCursorChange: vi.fn(),
-        onScrollChange: vi.fn(),
-        onSave
-      }
-    )
+    useCodeMirror(containerRef, {
+      filePath: '/remote/a.txt',
+      content: 'hello',
+      language: 'text',
+      onChange,
+      onCursorChange: vi.fn(),
+      onScrollChange: vi.fn(),
+      onSave
+    })
   )
   return { ...hook, onChange }
 }
