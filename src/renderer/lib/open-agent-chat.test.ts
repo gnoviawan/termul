@@ -42,6 +42,7 @@ function leavesOf(node: FakePane): FakePane[] {
   return node.type === 'leaf' ? [node] : (node.children ?? []).flatMap(leavesOf)
 }
 
+vi.mock('@/lib/active-project', () => ({ writeActiveProject: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { info: mockToastInfo, error: mockToastError } }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/stores/acp-store', () => ({

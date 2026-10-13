@@ -196,7 +196,7 @@ export function ProjectSidebar({
         if (result.success && result.data) {
           const projectPath = result.data
           const folderName = projectPath.split(/[\\/]/).pop() || 'New Project'
-          const newProject = addProject(folderName, 'blue', projectPath)
+          const newProject = await addProject(folderName, 'blue', projectPath)
           moveProjectToGroup(newProject.id, groupId)
           toast({
             title: 'Project created',
@@ -207,7 +207,7 @@ export function ProjectSidebar({
         console.error('Failed to create project:', err)
         toast({
           title: 'Error',
-          description: 'Failed to create project from folder.',
+          description: `Failed to create project from folder: ${err instanceof Error ? err.message : String(err)}`,
           variant: 'destructive'
         })
       }

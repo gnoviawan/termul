@@ -9,15 +9,19 @@
  */
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
+import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
   type AcpRuntimePolicy,
+  type AddProjectPayload,
   type DeleteSessionPayload,
   type HistoryMode,
   type PersistedSessionSummary,
+  type RemoveProjectPayload,
   type SessionCursorReply,
   type SessionSnapshotEvent,
   type SessionSubscribeReply,
+  type UpdateProjectPayload,
   WS_ERROR_CODES,
   WS_EVENT_TYPES,
   WS_WATCH_FRAME_TYPE,
@@ -950,6 +954,39 @@ export class WsAcpTransport implements AcpTransport {
   async deleteSession(sessionId: SessionId): Promise<boolean> {
     const payload: DeleteSessionPayload = { sessionId }
     return this.request<boolean>('delete_session', payload)
+  }
+
+  // --- Host project registry commands --------------------------------------
+
+  async addProject(project: AddProjectPayload): Promise<ProjectSummary> {
+    const reply = await this.request<{ project: ProjectSummary }>('add_project', project)
+    return reply.project
+  }
+
+  async updateProject(
+    projectId: string,
+    patch: {
+      name?: string
+      color?: string
+      isArchived?: boolean
+      path?: string
+      cascade?: boolean
+    }
+  ): Promise<void> {
+    const payload: UpdateProjectPayload = { projectId, ...patch }
+    await this.request<unknown>('update_project', payload)
+  }
+
+  async removeProject(projectId: string, options?: { cascade?: boolean }): Promise<void> {
+    const payload: RemoveProjectPayload = {
+      projectId,
+      ...(options?.cascade ? { cascade: true } : {})
+    }
+    await this.request<unknown>('remove_project', payload)
+  }
+
+  async setDefaultProject(projectId: string): Promise<void> {
+    await this.request<unknown>('set_default_project', { projectId })
   }
 
   // --- WS-mapped session/prompt methods ------------------------------------
@@ -2036,7 +2073,12 @@ export class WsAcpTransport implements AcpTransport {
       pending.resolve(reply.payload)
     } else {
       pending.reject(
-        new AcpTransportError(reply.err.code, reply.err.message || reply.err.code, visibleAt)
+        new AcpTransportError(
+          reply.err.code,
+          reply.err.message || reply.err.code,
+          visibleAt,
+          reply.err.details
+        )
       )
     }
   }

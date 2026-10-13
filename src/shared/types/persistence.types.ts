@@ -90,6 +90,10 @@ export const PersistenceKeys = {
   // selection). Web/remote only: the desktop already persists
   // `activeProjectId` inside the `projects` snapshot.
   activeProject: 'active-project',
+  // Renderer-owned per-project settings and list layout (device scope): the
+  // `ProjectPrefsRecord` keyed by project id. The project list itself lives in
+  // the host registry; this holds only what the host never sees.
+  projectPrefs: 'project-prefs',
   // Per-project workspace record (device scope).
   workspace: (projectId: string): string => `workspace/${projectId}`,
   // Shell-revamp layout record (versioned): rail/side-panel/SSH/graph sizes and
@@ -180,6 +184,38 @@ export interface PersistedModelCatalog {
     options: { value: string; name: string; description?: string | null }[]
   } | null
   updatedAt: number
+}
+
+/**
+ * The renderer-owned `project-prefs` record (`PersistenceKeys.projectPrefs`):
+ * everything about a project the host registry does not carry, keyed by
+ * project id, plus the sidebar layout (groups, order). Secret env var values
+ * are never in it: they sit in secure storage and the record holds the
+ * `[REDACTED]` placeholder.
+ */
+export interface ProjectPrefsRecord {
+  projects: Record<string, PersistedProjectPrefs>
+  groups: PersistedProjectGroup[]
+  /** Project ids in the order the sidebar lists them. */
+  order: string[]
+  updatedAt: string // ISO timestamp
+}
+
+/** One project's client-only settings inside the {@link ProjectPrefsRecord}. */
+export interface PersistedProjectPrefs {
+  gitBranch?: string
+  defaultShell?: string
+  envVars?: PersistedEnvVariable[]
+  worktrees?: PersistedWorktree[]
+  symlinkDirs?: string[]
+  /** Git detection (cached). */
+  isGitRepo?: boolean
+  /**
+   * Resolved project icon (spec-project-icon) incl. the renderer-stamped
+   * `fetchedAt`. Persisted so a previously resolved icon renders on app start
+   * before `use-project-icon` re-resolution completes.
+   */
+  icon?: ProjectIcon
 }
 
 // Persisted project data (stored at projects.json)

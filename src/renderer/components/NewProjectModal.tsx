@@ -30,7 +30,7 @@ interface NewProjectModalProps {
     path?: string,
     defaultShell?: string,
     envVars?: EnvVariable[]
-  ) => Project | undefined
+  ) => Promise<Project | undefined>
 }
 
 /**
@@ -300,7 +300,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           }
         }
 
-        const created = onCreateProject(
+        const created = await onCreateProject(
           trimmedName,
           selectedColor,
           trimmedPath,

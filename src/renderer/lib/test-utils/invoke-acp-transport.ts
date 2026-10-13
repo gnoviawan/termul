@@ -16,6 +16,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type { IpcResult } from '@shared/types/ipc.types'
+import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
@@ -131,6 +132,13 @@ export function createInvokeAcpTransport(): AcpTransport {
       }
       throw new AcpTransportError(result.code, result.error)
     },
+    // The registry commands share the `/ws` request names; a scripted invoke
+    // answers them.
+    addProject: (project) => invoke<ProjectSummary>('add_project', { ...project }),
+    updateProject: (projectId, patch) => invoke<void>('update_project', { projectId, ...patch }),
+    removeProject: (projectId, options) =>
+      invoke<void>('remove_project', { projectId, ...options }),
+    setDefaultProject: (projectId) => invoke<void>('set_default_project', { projectId }),
     listCatalog: async (refresh) => {
       const result = await invoke<IpcResult<AcpCatalog>>('acp_list_catalog', {
         refresh: refresh ?? false

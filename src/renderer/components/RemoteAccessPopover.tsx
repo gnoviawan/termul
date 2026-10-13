@@ -1,17 +1,10 @@
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
-import { toast } from 'sonner'
 import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from '@/components/icons'
 import { STATUS_BAR_HIT_GLYPH, STATUS_BAR_HIT_TARGET } from '@/components/status-bar-hit'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import {
-  nextSyncSeq,
-  noteHostDefault,
-  resetHostDefault,
-  toProjectSummaries
-} from '@/hooks/use-projects-persistence'
-import { remoteServerApi, syncProjects } from '@/lib/api'
+import { remoteServerApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -54,28 +47,16 @@ export function RemoteAccessPopover(): React.JSX.Element {
       const result = enable ? await remoteServerApi.start() : await remoteServerApi.stop()
       if (result.success) {
         useRemoteStatusStore.getState().setStatus(result.data)
-        // Epic-4 bridge: seed the in-memory project registry so the web/remote
-        // client sees the desktop's project list immediately (the live-push
-        // path in `useProjectsAutoSave` keeps it in sync on later mutations).
-        // No env-var values cross the wire — redact-by-omission.
+        // The host registry is durable and the desktop reads it through the
+        // `projects` watch, so there is no project list to seed. Copy the
+        // desktop MCP servers to the active project's file (best-effort, interim
+        // bridge). Desktop-hosted browser history reads the durable Rust
+        // provider directly, so no renderer transcript seed is needed either.
         if (enable) {
-          const { projects, activeProjectId } = useProjectStore.getState()
-          // Await + inspect: a failed seed leaves the web client without a
-          // project list until the next desktop mutation re-syncs — surface it.
-          const syncSeq = nextSyncSeq()
-          const syncResult = await syncProjects(toProjectSummaries(projects))
-          if (!syncResult.success) {
-            toast.error(`Failed to seed remote project list: ${syncResult.error}`)
-          } else {
-            // Baseline for the auto-save sync's change detection, and copy the
-            // desktop MCP servers to the active project's file (best-effort).
-            noteHostDefault(syncSeq, syncResult.data)
-            void useAcpStore.getState().syncMcpRegistryToProjectFile(activeProjectId)
-          }
-          // Desktop-hosted browser history reads the durable Rust provider
-          // directly, so no renderer transcript seed is needed.
+          void useAcpStore
+            .getState()
+            .syncMcpRegistryToProjectFile(useProjectStore.getState().activeProjectId)
         }
-        if (!enable) resetHostDefault()
       } else {
         setRemoteError(result.error)
       }

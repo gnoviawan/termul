@@ -12,9 +12,7 @@ import {
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { useProjectSwitch } from '@/hooks/use-project-switch'
-import { setHostDefaultProject } from '@/lib/tauri-remote-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
-import { webServerProjects } from '@/lib/web-server-api'
+import { projectRegistryApi } from '@/lib/project-registry-api'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 
@@ -40,18 +38,17 @@ const SIDE_CLASS_NAME = {
 } as const
 
 /**
- * Web/remote project switcher (Epic-4 bridge). Mirrors the desktop's available
- * project list (read-only, fetched into the project store by `useProjectsLoader`
- * via `GET /projects`) and makes the picked project this client's active one.
+ * Project switcher. Lists the host's projects (the project store, fed by the
+ * `projects` watch) and makes the picked project this client's active one.
  * Switching is client-only: no host request, no effect on other devices.
  * Archived projects render greyed + are not clickable. The currently active
  * project is marked.
  *
  * Epic 7 (cross-client continuity): a project `isDefault` (the host default,
- * set by the host's `default_project_id`) shows a "host default" badge. A
- * "Set as host default" action calls `set_host_default_project` (Tauri) or
- * `POST /projects/default` (web) depending on transport — distinct from the
- * client-only switch (which only updates this client's `activeProjectId`).
+ * set by the host's `default_project_id`) shows a "host default" badge. The
+ * "Set as host default" action goes through the project registry facade on every
+ * surface — distinct from the client-only switch (which only updates this
+ * client's `activeProjectId`).
  */
 export function ProjectSwitcherDrawer({
   open,
@@ -72,31 +69,17 @@ export function ProjectSwitcherDrawer({
   }
 
   // Explicit host-default change (Epic 7). Distinct from the client-only
-  // switch: updates the host default that new web clients start
-  // with + publishes the project state to every `projects` watcher. Transport parity:
-  // Tauri → `set_host_default_project`; web → `POST /projects/default`.
+  // switch: updates the host default that devices with no choice of their own
+  // start on. The badge moves when the `projects` watch delivers the new state.
   async function handleSetDefault(project: Project): Promise<void> {
     if (defaultingId !== null) return
     setDefaultingId(project.id)
     try {
-      const result = isTauriContext()
-        ? await setHostDefaultProject(project.id)
-        : await webServerProjects.setDefaultProject(project.id)
-      if (!result.success) {
-        // P15: guard against undefined error string (avoid "undefined" toast).
-        toast.error(`Failed to set host default: ${result.error ?? 'unknown error'}`)
-      } else {
-        // P6: update isDefault flags locally so the badge refreshes
-        // immediately (desktop-hosted mode doesn't refetch on set_default;
-        // web mode receives the new list through the `projects` watch
-        // but the local update avoids a flash of the stale badge).
-        useProjectStore.setState((s) => ({
-          projects: s.projects.map((p) => ({ ...p, isDefault: p.id === project.id }))
-        }))
-        toast.success(`"${project.name}" is now the host default`)
-      }
+      await projectRegistryApi.setDefault(project.id)
+      toast.success(`"${project.name}" is now the host default`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err))
+      // P15: guard against an undefined message (avoid an "undefined" toast).
+      toast.error(`Failed to set host default: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setDefaultingId(null)
     }

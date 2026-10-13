@@ -101,9 +101,8 @@ vi.mock('./hooks/use-keyboard-shortcuts', () => ({
   useKeyboardShortcutsLoader: () => undefined
 }))
 
-vi.mock('./hooks/use-projects-persistence', () => ({
-  useProjectsLoader: () => undefined,
-  useProjectsAutoSave: () => undefined
+vi.mock('./hooks/use-project-registry', () => ({
+  useProjectRegistry: () => undefined
 }))
 
 vi.mock('./hooks/use-menu-updater-listener', () => ({

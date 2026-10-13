@@ -2,6 +2,7 @@ import type { ShellInfo } from '@shared/types/ipc.types'
 import { lazy, Suspense } from 'react'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { NewProjectModal } from '@/components/NewProjectModal'
+import { ProjectBusyDialog } from '@/components/ProjectBusyDialog'
 import { SSHPasswordPrompt } from '@/layouts/workspace-layout/SSHPasswordPrompt'
 import type { useCommandPaletteData } from '@/layouts/workspace-layout/use-command-palette-data'
 import type { useOverlayActions } from '@/layouts/workspace-layout/use-overlay-actions'
@@ -124,6 +125,8 @@ export function WorkspaceModals({
         onClose={() => setIsNewProjectModalOpen(false)}
         onCreateProject={addProject}
       />
+
+      <ProjectBusyDialog />
 
       {isThemePickerOpen && (
         <Suspense fallback={null}>

@@ -1,9 +1,41 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const { registry, toastError, writeActiveProject } = vi.hoisted(() => ({
+  registry: {
+    add: vi.fn(),
+    update: vi.fn(),
+    archive: vi.fn(),
+    restore: vi.fn(),
+    remove: vi.fn(),
+    setDefault: vi.fn()
+  },
+  toastError: vi.fn(),
+  writeActiveProject: vi.fn()
+}))
+
+vi.mock('@/lib/project-registry-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/project-registry-api')>()),
+  projectRegistryApi: registry
+}))
+vi.mock('@/lib/active-project', () => ({ writeActiveProject }))
+vi.mock('@/lib/api', () => ({
+  persistenceApi: { read: vi.fn(), write: vi.fn(), writeDebounced: vi.fn() },
+  secureStorageApi: { getSecret: vi.fn(), setSecret: vi.fn(), deleteSecret: vi.fn() }
+}))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
+vi.mock('sonner', () => ({ toast: { error: toastError } }))
+
+import { _resetProjectPrefsForTests, getProjectPrefs } from '@/lib/project-prefs'
+import { ProjectBusyError } from '@/lib/project-registry-api'
+import { useProjectBusyStore } from './project-busy-store'
 import { useProjectStore } from './project-store'
 
 describe('project-store', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
+    for (const command of Object.values(registry)) command.mockResolvedValue(undefined)
+    _resetProjectPrefsForTests()
+    useProjectBusyStore.setState({ requests: [], isResending: false })
     // Reset store to initial state before each test
     useProjectStore.setState({
       projects: [
@@ -23,8 +55,14 @@ describe('project-store', () => {
           gitBranch: 'develop'
         }
       ],
-      activeProjectId: '1'
+      groups: [],
+      activeProjectId: '1',
+      isLoaded: true
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   describe('initial state', () => {
@@ -63,31 +101,84 @@ describe('project-store', () => {
       expect(project1?.isActive).toBe(false)
       expect(project2?.isActive).toBe(true)
     })
+
+    it('writes only the device active-project key, never the registry', () => {
+      useProjectStore.getState().selectProject('2')
+
+      expect(writeActiveProject).toHaveBeenCalledTimes(1)
+      expect(writeActiveProject).toHaveBeenCalledWith('2')
+      for (const command of Object.values(registry)) expect(command).not.toHaveBeenCalled()
+    })
+
+    it('does not rewrite the key when the project is already active', () => {
+      useProjectStore.getState().selectProject('1')
+
+      expect(writeActiveProject).not.toHaveBeenCalled()
+    })
   })
 
   describe('addProject', () => {
-    it('should add a new project to the array', () => {
-      const { addProject } = useProjectStore.getState()
-      const initialCount = useProjectStore.getState().projects.length
+    /** The `projects` watch listing the project, as the host's state frame does. */
+    function listViaWatch(id: string): void {
+      const { projects, setProjects, activeProjectId, groups } = useProjectStore.getState()
+      setProjects(
+        [...projects, { id, name: 'Listed', color: 'red', path: '/test/path' }],
+        activeProjectId,
+        groups
+      )
+    }
 
-      addProject('New Project', 'red', '/test/path')
+    it('registers with a client-minted id and leaves the list to the watch', async () => {
+      const pending = useProjectStore.getState().addProject('New Project', 'red', '/test/path')
+      await vi.waitFor(() => expect(registry.add).toHaveBeenCalledTimes(1))
 
-      const { projects } = useProjectStore.getState()
-      expect(projects.length).toBe(initialCount + 1)
+      const sent = registry.add.mock.calls[0][0] as { id: string }
+      expect(sent).toEqual({
+        id: expect.any(String),
+        name: 'New Project',
+        path: '/test/path',
+        color: 'red'
+      })
+      // Not in the store until the watch lists it.
+      expect(useProjectStore.getState().projects).toHaveLength(2)
+
+      listViaWatch(sent.id)
+      await pending
+      expect(useProjectStore.getState().projects).toHaveLength(3)
     })
 
-    it('should return the created project', () => {
-      const { addProject } = useProjectStore.getState()
-      const newProject = addProject('Test Project', 'green')
+    it('resolves with the listed project and selects it (writing only the device key)', async () => {
+      const pending = useProjectStore.getState().addProject('Auto-Selected Project', 'yellow', '/p')
+      await vi.waitFor(() => expect(registry.add).toHaveBeenCalled())
+      const { id } = registry.add.mock.calls[0][0] as { id: string }
+      listViaWatch(id)
 
-      expect(newProject.name).toBe('Test Project')
-      expect(newProject.color).toBe('green')
-      expect(newProject.id).toBeTruthy()
+      const created = await pending
+
+      expect(created.id).toBe(id)
+      expect(useProjectStore.getState().activeProjectId).toBe(id)
+      expect(writeActiveProject).toHaveBeenCalledWith(id)
     })
 
-    it('should omit gitBranch on creation (auto-detected on activation)', () => {
-      const { addProject } = useProjectStore.getState()
-      const newProject = addProject('Test', 'blue')
+    it('keeps the shell and env vars for the watch state that lists the project', async () => {
+      const envVars = [{ key: 'PORT', value: '3000' }]
+      const pending = useProjectStore
+        .getState()
+        .addProject('Shelly', 'blue', '/p', '/bin/zsh', envVars)
+      await vi.waitFor(() => expect(registry.add).toHaveBeenCalled())
+      const { id } = registry.add.mock.calls[0][0] as { id: string }
+
+      expect(getProjectPrefs(id)).toMatchObject({ defaultShell: '/bin/zsh', envVars })
+
+      listViaWatch(id)
+      await pending
+    })
+
+    it('should omit gitBranch on creation (auto-detected on activation)', async () => {
+      const pending = useProjectStore.getState().addProject('Test', 'blue', '/p')
+      await vi.waitFor(() => expect(registry.add).toHaveBeenCalled())
+      listViaWatch((registry.add.mock.calls[0][0] as { id: string }).id)
+      const newProject = await pending
 
       // No stale hardcoded 'main' default — the status bar used to show 'main'
       // before the real branch was detected. `useProjectGitBranch` now seeds
@@ -95,29 +186,110 @@ describe('project-store', () => {
       expect(newProject.gitBranch).toBeUndefined()
     })
 
-    it('should auto-select the new project as active', () => {
-      const { addProject } = useProjectStore.getState()
-      const newProject = addProject('Auto-Selected Project', 'yellow')
+    it('rejects and changes nothing when the host refuses the registration', async () => {
+      registry.add.mockRejectedValueOnce(new Error('duplicate'))
 
-      const { activeProjectId } = useProjectStore.getState()
-      expect(activeProjectId).toBe(newProject.id)
+      await expect(useProjectStore.getState().addProject('Dup', 'blue', '/p')).rejects.toThrow(
+        'duplicate'
+      )
+
+      expect(useProjectStore.getState().projects).toHaveLength(2)
+      expect(useProjectStore.getState().activeProjectId).toBe('1')
+      expect(writeActiveProject).not.toHaveBeenCalled()
+    })
+
+    it('selects the project after the wait even when the watch is late', async () => {
+      vi.useFakeTimers()
+      const pending = useProjectStore.getState().addProject('Late', 'blue', '/p')
+      await vi.advanceTimersByTimeAsync(5001)
+      const created = await pending
+
+      expect(useProjectStore.getState().activeProjectId).toBe(created.id)
     })
   })
 
   describe('updateProject', () => {
-    it('should update project properties', () => {
+    it('applies client-only prefs locally without asking the host', () => {
       const { updateProject } = useProjectStore.getState()
-      updateProject('1', { name: 'Updated Name' })
+      updateProject('1', { gitBranch: 'feature', defaultShell: '/bin/zsh' })
 
-      const { projects } = useProjectStore.getState()
-      const project = projects.find((p) => p.id === '1')
+      const project = useProjectStore.getState().projects.find((p) => p.id === '1')
+      expect(project).toMatchObject({ gitBranch: 'feature', defaultShell: '/bin/zsh' })
+      expect(registry.update).not.toHaveBeenCalled()
+    })
 
-      expect(project?.name).toBe('Updated Name')
+    it('sends a rename to the host and leaves the name for the watch to deliver', () => {
+      useProjectStore.getState().updateProject('1', { name: 'Updated Name' })
+
+      expect(registry.update).toHaveBeenCalledWith('1', { name: 'Updated Name' }, undefined)
+      const project = useProjectStore.getState().projects.find((p) => p.id === '1')
+      expect(project?.name).toBe('Web App')
+    })
+
+    it('splits one update into the host part and the local part', () => {
+      useProjectStore
+        .getState()
+        .updateProject('1', { color: 'green', envVars: [{ key: 'A', value: '1' }] })
+
+      expect(registry.update).toHaveBeenCalledWith('1', { color: 'green' }, undefined)
+      const project = useProjectStore.getState().projects.find((p) => p.id === '1')
+      expect(project?.envVars).toEqual([{ key: 'A', value: '1' }])
+      expect(project?.color).toBe('blue')
+    })
+
+    it('sends nothing when the name and colour are unchanged', () => {
+      useProjectStore.getState().updateProject('1', { name: 'Web App', color: 'blue' })
+
+      expect(registry.update).not.toHaveBeenCalled()
+    })
+
+    it('sends a root folder change to the host and not an unchanged or empty one', () => {
+      useProjectStore.getState().updateProject('1', { path: '  ~/projects/web-app ' })
+      useProjectStore.getState().updateProject('1', { path: '   ' })
+      expect(registry.update).not.toHaveBeenCalled()
+
+      useProjectStore.getState().updateProject('1', { path: '/elsewhere/web-app' })
+
+      expect(registry.update).toHaveBeenCalledWith('1', { path: '/elsewhere/web-app' }, undefined)
+      const project = useProjectStore.getState().projects.find((p) => p.id === '1')
+      expect(project?.path).toBe('~/projects/web-app')
+    })
+
+    it('parks a busy folder change for the user and resends with cascade after confirmation', async () => {
+      registry.update.mockRejectedValueOnce(new ProjectBusyError('1', ['s1'], ['t1', 't2']))
+      useProjectStore.getState().updateProject('1', { name: 'Renamed', path: '/elsewhere' })
+
+      await vi.waitFor(() => expect(useProjectBusyStore.getState().requests).toHaveLength(1))
+      expect(useProjectBusyStore.getState().requests[0]).toMatchObject({
+        kind: 'move',
+        projectId: '1',
+        projectName: 'Web App',
+        sessions: 1,
+        terminals: 2
+      })
+      expect(registry.update).toHaveBeenCalledTimes(1)
+
+      await useProjectBusyStore.getState().confirm()
+
+      expect(registry.update).toHaveBeenLastCalledWith(
+        '1',
+        { name: 'Renamed', path: '/elsewhere' },
+        { cascade: true }
+      )
+    })
+
+    it('tells the user when the host refuses the change', async () => {
+      registry.update.mockRejectedValueOnce(new Error('not found'))
+      useProjectStore.getState().updateProject('1', { name: 'Nope' })
+
+      await vi.waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith('Could not update the project: not found')
+      )
     })
 
     it('should only update specified properties', () => {
       const { updateProject } = useProjectStore.getState()
-      updateProject('1', { name: 'Updated' })
+      updateProject('1', { gitBranch: 'dev' })
 
       const { projects } = useProjectStore.getState()
       const project = projects.find((p) => p.id === '1')
@@ -128,70 +300,99 @@ describe('project-store', () => {
   })
 
   describe('deleteProject', () => {
-    it('should remove project from array', () => {
-      const { deleteProject } = useProjectStore.getState()
-      const initialCount = useProjectStore.getState().projects.length
+    it('asks the host and leaves the removal to the watch', async () => {
+      await useProjectStore.getState().deleteProject('2')
 
-      deleteProject('2')
-
-      const { projects } = useProjectStore.getState()
-      expect(projects.length).toBe(initialCount - 1)
-      expect(projects.find((p) => p.id === '2')).toBeUndefined()
+      expect(registry.remove).toHaveBeenCalledWith('2', undefined)
+      expect(useProjectStore.getState().projects.find((p) => p.id === '2')).toBeDefined()
     })
 
-    it('should update activeProjectId when deleting active project', () => {
-      const { deleteProject } = useProjectStore.getState()
-      deleteProject('1')
+    it('drops the project from the groups once the host removed it', async () => {
+      useProjectStore.setState({
+        groups: [{ id: 'g', name: 'G', projectIds: ['1', '2'], isCollapsed: false }]
+      })
 
-      const { activeProjectId } = useProjectStore.getState()
-      expect(activeProjectId).toBe('2')
+      await useProjectStore.getState().deleteProject('2')
+
+      expect(useProjectStore.getState().groups[0].projectIds).toEqual(['1'])
     })
 
-    it('should not change activeProjectId when deleting non-active project', () => {
-      const { deleteProject } = useProjectStore.getState()
-      deleteProject('2')
+    it('parks a busy refusal for the user and stops nothing', async () => {
+      registry.remove.mockRejectedValueOnce(new ProjectBusyError('2', ['s1', 's2'], ['t1']))
 
-      const { activeProjectId } = useProjectStore.getState()
-      expect(activeProjectId).toBe('1')
+      await useProjectStore.getState().deleteProject('2')
+
+      const [request] = useProjectBusyStore.getState().requests
+      expect(request).toMatchObject({
+        kind: 'delete',
+        projectId: '2',
+        projectName: 'API Service',
+        sessions: 2,
+        terminals: 1
+      })
+      expect(registry.remove).toHaveBeenCalledTimes(1)
+      expect(toastError).not.toHaveBeenCalled()
+    })
+
+    it('resends with cascade only when the busy request is confirmed', async () => {
+      registry.remove.mockRejectedValueOnce(new ProjectBusyError('2', ['s1'], []))
+      await useProjectStore.getState().deleteProject('2')
+      expect(registry.remove).toHaveBeenCalledTimes(1)
+
+      await useProjectBusyStore.getState().confirm()
+
+      expect(registry.remove).toHaveBeenCalledTimes(2)
+      expect(registry.remove).toHaveBeenLastCalledWith('2', { cascade: true })
+      expect(useProjectBusyStore.getState().requests).toEqual([])
+    })
+
+    it('tells the user when the host refuses for another reason', async () => {
+      registry.remove.mockRejectedValueOnce(new Error('disk full'))
+
+      await useProjectStore.getState().deleteProject('2')
+
+      expect(toastError).toHaveBeenCalledWith('Could not delete the project: disk full')
+      expect(useProjectBusyStore.getState().requests).toEqual([])
     })
   })
 
   describe('archiveProject', () => {
-    it('should set isArchived to true', () => {
-      const { archiveProject } = useProjectStore.getState()
-      archiveProject('1')
+    it('asks the host to archive and leaves the flag to the watch', async () => {
+      await useProjectStore.getState().archiveProject('1')
 
-      const { projects } = useProjectStore.getState()
-      const project = projects.find((p) => p.id === '1')
+      expect(registry.archive).toHaveBeenCalledWith('1', undefined)
+      const project = useProjectStore.getState().projects.find((p) => p.id === '1')
+      expect(project?.isArchived).toBeUndefined()
+    })
 
-      expect(project?.isArchived).toBe(true)
+    it('parks a busy refusal and resends with cascade after confirmation', async () => {
+      registry.archive.mockRejectedValueOnce(new ProjectBusyError('1', [], ['t1', 't2']))
+
+      await useProjectStore.getState().archiveProject('1')
+      expect(useProjectBusyStore.getState().requests[0]).toMatchObject({
+        kind: 'archive',
+        projectName: 'Web App',
+        terminals: 2
+      })
+
+      await useProjectBusyStore.getState().confirm()
+      expect(registry.archive).toHaveBeenLastCalledWith('1', { cascade: true })
     })
   })
 
   describe('restoreProject', () => {
-    it('should set isArchived to false', () => {
-      // First archive the project
-      useProjectStore.getState().archiveProject('1')
+    it('asks the host to restore the project', async () => {
+      await useProjectStore.getState().restoreProject('1')
 
-      // Then restore it
-      const { restoreProject } = useProjectStore.getState()
-      restoreProject('1')
-
-      const { projects } = useProjectStore.getState()
-      const project = projects.find((p) => p.id === '1')
-
-      expect(project?.isArchived).toBe(false)
+      expect(registry.restore).toHaveBeenCalledWith('1')
     })
 
-    it('should handle restoring a project that was not archived', () => {
-      // Project is not archived initially
-      const { restoreProject } = useProjectStore.getState()
-      restoreProject('1')
+    it('tells the user when the host refuses', async () => {
+      registry.restore.mockRejectedValueOnce(new Error('gone'))
 
-      const { projects } = useProjectStore.getState()
-      const project = projects.find((p) => p.id === '1')
+      await useProjectStore.getState().restoreProject('1')
 
-      expect(project?.isArchived).toBe(false)
+      expect(toastError).toHaveBeenCalledWith('Could not restore the project: gone')
     })
   })
 
@@ -234,8 +435,10 @@ describe('project-store', () => {
     })
 
     it('should preserve archived projects at the end', () => {
-      // First archive project 2
-      useProjectStore.getState().archiveProject('2')
+      // The host archived project 2 (delivered by the watch)
+      useProjectStore.setState((state) => ({
+        projects: state.projects.map((p) => (p.id === '2' ? { ...p, isArchived: true } : p))
+      }))
 
       const { reorderProjects } = useProjectStore.getState()
       // Reorder only active projects (just '1' in this case)
@@ -249,10 +452,11 @@ describe('project-store', () => {
     })
 
     it('should handle reordering with multiple projects', () => {
-      // Add a third project
-      useProjectStore.getState().addProject('Third Project', 'green')
-      const { projects: beforeProjects } = useProjectStore.getState()
-      const thirdId = beforeProjects[2].id
+      // The watch lists a third project
+      const thirdId = 'third'
+      useProjectStore.setState((state) => ({
+        projects: [...state.projects, { id: thirdId, name: 'Third Project', color: 'green' }]
+      }))
 
       const { reorderProjects } = useProjectStore.getState()
       // Move third project to first position
@@ -302,31 +506,39 @@ describe('project-store', () => {
       updateProject('1', { envVars })
 
       // Then update a different property
-      updateProject('1', { name: 'New Name' })
+      updateProject('1', { gitBranch: 'new-branch' })
 
       const { projects } = useProjectStore.getState()
       const project = projects.find((p) => p.id === '1')
 
       expect(project?.envVars).toEqual(envVars)
-      expect(project?.name).toBe('New Name')
+      expect(project?.gitBranch).toBe('new-branch')
     })
   })
 
   describe('removeGroup', () => {
-    it('should update activeProjectId when deleting a group with active project', () => {
-      // Set up a group containing project '1'
+    it('removes the group and keeps its projects when asked to', () => {
       useProjectStore.setState({
-        groups: [{ id: 'group1', name: 'My Group', projectIds: ['1'], isCollapsed: false }],
-        activeProjectId: '1'
+        groups: [{ id: 'group1', name: 'My Group', projectIds: ['1'], isCollapsed: false }]
       })
 
-      const { removeGroup } = useProjectStore.getState()
-      removeGroup('group1', true)
+      useProjectStore.getState().removeGroup('group1', false)
 
-      const { projects, activeProjectId } = useProjectStore.getState()
-      // Project '1' is deleted, so project '2' should be the active one
-      expect(projects.find((p) => p.id === '1')).toBeUndefined()
-      expect(activeProjectId).toBe('2')
+      expect(useProjectStore.getState().groups).toEqual([])
+      expect(registry.remove).not.toHaveBeenCalled()
+    })
+
+    it('asks the host to remove every project in the group when deleting with its projects', async () => {
+      useProjectStore.setState({
+        groups: [{ id: 'group1', name: 'My Group', projectIds: ['1', '2'], isCollapsed: false }]
+      })
+
+      useProjectStore.getState().removeGroup('group1', true)
+
+      await vi.waitFor(() => expect(registry.remove).toHaveBeenCalledTimes(2))
+      expect(registry.remove.mock.calls.map((call) => call[0])).toEqual(['1', '2'])
+      // The projects stay in the store until the watch drops them.
+      expect(useProjectStore.getState().projects).toHaveLength(2)
     })
   })
 })
