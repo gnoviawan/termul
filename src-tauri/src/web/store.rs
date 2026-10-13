@@ -512,14 +512,15 @@ impl WebStore {
             .unwrap_or_default();
         let mut next = state.clone();
         next.import_dir = None;
-        let adoption = legacy::adopt(
+        let mut adoption = legacy::adopt(
             &mut next.data,
             &mut next.host,
             &identity.device_id,
             now_ms,
             workspaces,
         );
-        if adoption.is_some() {
+        if let Some(adoption) = adoption.as_mut() {
+            self.fit_adopted_workspaces(&mut next, &identity.device_id, adoption);
             next.persist(&self.path, &self.extra, now_ms)?;
         }
         if let Some(dir) = &manifests {
@@ -530,12 +531,42 @@ impl WebStore {
                 target: "termul::web::store",
                 device_id = %ClientIdentity::log_label(&identity.device_id),
                 parked = adoption.parked,
-                workspaces = adoption.workspaces,
+                workspaces = adoption.workspaces.len(),
                 "device adopted the pre-v2 store keys"
             );
         }
         *state = next;
         Ok(())
+    }
+
+    /// Keep the adopting device's partition within the byte budget that every
+    /// later write enforces: an adoption that overshot it would make each write
+    /// that grows the partition fail. The imported workspaces that do not fit
+    /// (the last ones by project id) are dropped with a warning; they stay in
+    /// the renamed manifest directory.
+    fn fit_adopted_workspaces(
+        &self,
+        next: &mut State,
+        device_id: &str,
+        adoption: &mut legacy::Adoption,
+    ) {
+        let Some(prefix) = device_prefix(device_id) else {
+            return;
+        };
+        let budget = self.policy.partition_byte_budget;
+        let mut used = next.partition_bytes(&prefix);
+        while used as u64 > budget {
+            let Some(key) = adoption.workspaces.pop() else {
+                break;
+            };
+            if let Some(record) = next.data.remove(&key) {
+                used -= records::record_bytes(&key, &record);
+            }
+            warn!(
+                target: "termul::web::store",
+                "dropped the imported workspace '{key}': the device partition would exceed its {budget} byte budget"
+            );
+        }
     }
 
     /// Read `key` for the connection `identity`. A key that cannot be read is

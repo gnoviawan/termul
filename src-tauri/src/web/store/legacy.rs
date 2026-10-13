@@ -104,12 +104,13 @@ fn imported(value: Value) -> Record {
 }
 
 /// What one adoption moved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Adoption {
     /// Parked pre-v2 keys moved into the partition.
     pub parked: usize,
-    /// Retired workspace manifests written as `workspace/<projectId>`.
-    pub workspaces: usize,
+    /// Full keys of the retired workspace manifests written as
+    /// `workspace/<projectId>`, in write order.
+    pub workspaces: Vec<String>,
 }
 
 /// Move the parked keys, then the converted workspace manifests
@@ -133,11 +134,12 @@ pub fn adopt(
         data.entry(format!("{prefix}{}", adopted_key(&key)))
             .or_insert_with(|| imported(value));
     }
-    let mut written = 0;
+    let mut written = Vec::new();
     for (project_id, value) in workspaces {
-        if let Entry::Vacant(slot) = data.entry(format!("{prefix}workspace/{project_id}")) {
+        let key = format!("{prefix}workspace/{project_id}");
+        if let Entry::Vacant(slot) = data.entry(key.clone()) {
             slot.insert(imported(value));
-            written += 1;
+            written.push(key);
         }
     }
     host.adopted = Some(Adopted {

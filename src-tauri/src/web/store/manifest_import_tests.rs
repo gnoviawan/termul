@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use super::manifest_import::read_workspaces;
-use super::tests::{cleanup, on_disk, open, tempdir_like, who};
-use super::{StoreError, WebStore};
+use super::tests::{cleanup, on_disk, open, open_with, tempdir_like, who};
+use super::{StoreError, StorePolicy, WebStore};
 
 fn envelope(manifest: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({ "schemaVersion": 1, "manifest": manifest })).unwrap()
@@ -304,6 +304,31 @@ fn the_first_device_adopts_every_manifest_and_the_directory_is_renamed_once() {
     let again = fx.store();
     assert!(again.read("device/phone/workspace/p3", &phone, 5_000_003).unwrap().value.is_none());
     assert!(fx.manifests.is_dir(), "an adopted store never touches the directory again");
+}
+
+#[test]
+fn an_import_that_overshoots_the_partition_budget_drops_the_last_workspaces() {
+    let fx = Fixture::new("budget");
+    for id in ["p1", "p2", "p3"] {
+        write_manifest(&fx.manifests, id, &split_manifest(id));
+    }
+    let value_bytes = serde_json::to_vec(&read_workspaces(&fx.manifests)[0].1).unwrap().len();
+    // Room for two records (each adds under 180 bytes of key and metadata), not three.
+    let policy = StorePolicy {
+        partition_byte_budget: (2 * (value_bytes + 180)) as u64,
+        ..StorePolicy::default()
+    };
+    let store = open_with(&fx.file, policy).with_legacy_manifests(fx.manifests.clone());
+    let phone = who("phone", "t1");
+
+    assert!(store.read("device/phone/workspace/p1", &phone, 5_000_000).unwrap().value.is_some());
+    assert!(store.read("device/phone/workspace/p2", &phone, 5_000_001).unwrap().value.is_some());
+    assert!(store.read("device/phone/workspace/p3", &phone, 5_000_002).unwrap().value.is_none());
+    let disk = on_disk(&fx.file);
+    assert!(disk["data"]["device/phone/workspace/p3"].is_null());
+    assert_eq!(disk["host"]["adopted"]["deviceId"], json!("phone"));
+    // The dropped manifest stays in the renamed directory.
+    assert!(fx.backups()[0].join("p3.json").is_file());
 }
 
 #[test]
