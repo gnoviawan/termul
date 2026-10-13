@@ -55,6 +55,27 @@ describe('useSftpBrowser', () => {
     expect(result.current.expandedDirs.has('/home/u/docs')).toBe(false)
   })
 
+  it('drops a folder listing that returns after the root was reloaded', async () => {
+    const { result } = renderHook(() => useSftpBrowser('s1'))
+    await waitFor(() => expect(result.current.currentPath).toBe('/home/u'))
+    let resolveChild: (value: unknown) => void = () => {}
+    sshApi.sftpListDir.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveChild = resolve))
+    )
+    let pending: Promise<void> = Promise.resolve()
+    act(() => {
+      pending = result.current.toggleDirectory('/home/u/docs')
+    })
+    await act(() => result.current.loadDirectory('/home/u'))
+    await act(async () => {
+      resolveChild({ success: true, data: [entry('stale.md')] })
+      await pending
+    })
+    expect(result.current.expandedDirs.has('/home/u/docs')).toBe(false)
+    expect(result.current.childEntries.has('/home/u/docs')).toBe(false)
+    expect(result.current.loadingDirs.has('/home/u/docs')).toBe(false)
+  })
+
   it('reports errors so the view can offer a retry', async () => {
     sshApi.sftpRealpath.mockResolvedValue({ success: false, error: 'SFTP refused', code: 'X' })
     const { result } = renderHook(() => useSftpBrowser('s1'))

@@ -101,7 +101,7 @@ export function describeSSHError(code: string, profile: HostContext): SSHMessage
     case 'SSH_HOST_KEY_REJECTED':
       return msg(
         'Server not trusted',
-        'You chose not to trust this server, so nothing was sent to it. Connect again to review its key.'
+        'Sign-in stopped before your credentials were sent, because the server key was not trusted. Connect again to review its key.'
       )
     case 'SSH_HOST_KEY_CHANGED':
       return msg(

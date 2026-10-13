@@ -101,6 +101,7 @@ export function useSftpBrowser(connectionId: string | null) {
         return
       }
       setLoadingDirs((prev) => new Set(prev).add(path))
+      const rootAtStart = rootRequest.current
       const result = await sshApi.sftpListDir(connectionId, path)
       if (session !== activeSession.current) return
       setLoadingDirs((prev) => {
@@ -108,6 +109,9 @@ export function useSftpBrowser(connectionId: string | null) {
         next.delete(path)
         return next
       })
+      // The root was reloaded meanwhile (refresh, navigation): this listing
+      // belongs to a tree that is gone.
+      if (rootAtStart !== rootRequest.current) return
       if (result.success) {
         setError(null)
         setChildEntries((prev) => new Map(prev).set(path, result.data))
