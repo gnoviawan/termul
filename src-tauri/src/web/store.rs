@@ -248,6 +248,20 @@ struct State {
     last_flush_ms: u64,
 }
 
+/// Most deleted-key revision floors kept in the host metadata.
+const MAX_DELETED_REVS: usize = 1024;
+
+/// Keep `rev` as the revision floor of the deleted shared `key`.
+fn remember_deleted_rev(host: &mut HostMeta, key: &str, rev: u64) {
+    host.deleted_revs.insert(key.to_string(), rev);
+    while host.deleted_revs.len() > MAX_DELETED_REVS {
+        match host.deleted_revs.keys().find(|k| k.as_str() != key).cloned() {
+            Some(oldest) => host.deleted_revs.remove(&oldest),
+            None => break,
+        };
+    }
+}
+
 impl State {
     /// Serialize and atomically replace the file.
     fn persist(&mut self, path: &Path, extra: &ExtraKeys, now_ms: u64) -> io::Result<()> {
@@ -495,7 +509,10 @@ impl WebStore {
         self.with_state(|state| {
             self.enter(state, identity, now_ms)?;
             let current = state.data.get(key);
-            let next_rev = current.map_or(1, |record| record.rev + 1);
+            let next_rev = current.map_or_else(
+                || state.host.deleted_revs.get(key).copied().unwrap_or(0) + 1,
+                |record| record.rev + 1,
+            );
             let cid = identity.client_instance_id.clone();
             let (record, outcome) = match scope {
                 KeyScope::Device => (
@@ -566,6 +583,7 @@ impl WebStore {
                 }
             };
             self.put(state, key, record, now_ms)?;
+            state.host.deleted_revs.remove(key);
             Ok(outcome)
         })
     }
@@ -605,7 +623,17 @@ impl WebStore {
                 return Ok(false);
             }
             let previous = state.data.remove(key);
+            let floor_before = state.host.deleted_revs.get(key).copied();
+            if scope != KeyScope::Device {
+                if let Some(previous) = &previous {
+                    remember_deleted_rev(&mut state.host, key, previous.rev);
+                }
+            }
             if let Err(error) = state.persist(&self.path, &self.extra, now_ms) {
+                match floor_before {
+                    Some(rev) => state.host.deleted_revs.insert(key.to_string(), rev),
+                    None => state.host.deleted_revs.remove(key),
+                };
                 if let Some(previous) = previous {
                     state.data.insert(key.to_string(), previous);
                 }

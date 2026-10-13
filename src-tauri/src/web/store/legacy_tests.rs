@@ -71,19 +71,19 @@ fn a_v1_store_is_backed_up_then_migrated_in_place() {
     assert_eq!(backups.len(), 1);
     assert_eq!(std::fs::read(&backups[0]).unwrap(), flat_v1());
 
+    // Device keys are parked, not served under any scope, until adopted (the first request adopts them).
+    let disk = on_disk(&file);
+    assert_eq!(disk["schemaVersion"], json!(2));
+    assert_eq!(disk["host"]["legacy"]["shell-layout"], json!({ "_version": 1, "data": { "cols": 2 } }));
+    assert_eq!(disk["host"]["legacy"]["terminals/p1"], json!([1, 2]));
+    assert!(disk["data"].get("shell-layout").is_none());
+
     // Shared keys were renamed in place; revisions start at 1.
     let lww = store.read("shared/lww/settings/app", &a, 1).unwrap();
     assert_eq!(lww.value, Some(json!({ "_version": 1, "data": { "theme": "dark" } })));
     assert_eq!(lww.revision, 1);
     let cas = store.read("shared/cas/ssh/profiles", &a, 1).unwrap();
     assert_eq!(cas.value, Some(json!({ "_version": 1, "data": ["p1"] })));
-
-    // Device keys are parked, not served under any scope, until adopted.
-    let disk = on_disk(&file);
-    assert_eq!(disk["schemaVersion"], json!(2));
-    assert_eq!(disk["host"]["legacy"]["shell-layout"], json!({ "_version": 1, "data": { "cols": 2 } }));
-    assert_eq!(disk["host"]["legacy"]["terminals/p1"], json!([1, 2]));
-    assert!(disk["data"].get("shell-layout").is_none());
 
     // A restart reads the v2 file without taking another backup.
     drop(store);
@@ -105,12 +105,12 @@ fn a_pre_versioning_bare_map_migrates_straight_to_v2() {
     let backups = backups_with_prefix(&dir, "store.json.pre-v2-");
     assert_eq!(backups.len(), 1);
     assert_eq!(std::fs::read(&backups[0]).unwrap(), bare);
+    assert_eq!(on_disk(&file)["host"]["legacy"]["schemaVersion"], json!(7));
     let a = who("dev-a", "t");
     assert_eq!(
         store.read("shared/lww/settings/app", &a, 1).unwrap().value,
         Some(json!({ "theme": "dark" }))
     );
-    assert_eq!(on_disk(&file)["host"]["legacy"]["schemaVersion"], json!(7));
     cleanup(&dir);
 }
 

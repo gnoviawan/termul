@@ -92,20 +92,20 @@ fn store_and_identity(
     id: &str,
     store: Option<&Arc<WebStore>>,
     identity: Option<&ClientIdentity>,
-) -> Result<(Arc<WebStore>, ClientIdentity), WsReply> {
+) -> Result<(Arc<WebStore>, ClientIdentity), Box<WsReply>> {
     let Some(store) = store.cloned() else {
-        return Err(WsReply::err_with_code(
+        return Err(Box::new(WsReply::err_with_code(
             id,
             "STORE_UNAVAILABLE",
             "server store is unavailable",
-        ));
+        )));
     };
     let Some(identity) = identity.cloned() else {
-        return Err(WsReply::err(
+        return Err(Box::new(WsReply::err(
             id,
             WsErrorCode::Unauthorized,
             "store requests need an authenticated connection",
-        ));
+        )));
     };
     Ok((store, identity))
 }
@@ -148,7 +148,7 @@ pub(super) async fn handle_store_read(
     };
     let (store, identity) = match store_and_identity(&id, store, identity) {
         Ok(pair) => pair,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     if let Some(reply) = validate_store_key(&id, &parsed.key) {
         return reply;
@@ -183,7 +183,7 @@ pub(super) async fn handle_store_write(
     };
     let (store, identity) = match store_and_identity(&id, store, identity) {
         Ok(pair) => pair,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     if let Some(reply) = validate_store_key(&id, &parsed.key) {
         return reply;
@@ -246,7 +246,7 @@ pub(super) async fn handle_store_delete(
     };
     let (store, identity) = match store_and_identity(&id, store, identity) {
         Ok(pair) => pair,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     if let Some(reply) = validate_store_key(&id, &parsed.key) {
         return reply;

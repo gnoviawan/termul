@@ -174,21 +174,26 @@ class FakeStoreSocket {
       if (rec && typeof p.baseRevision !== 'number') return fail('STORE_BASE_REQUIRED')
       const base = (p.baseRevision as number | undefined) ?? 0
       const cur = (rec?.v as { data: Record<string, unknown> } | undefined)?.data ?? {}
-      const fields: Record<string, number> = { ...(rec?.fields ?? {}) }
-      const merged: Record<string, unknown> = { ...cur }
+      const fields = new Map<string, number>(Object.entries(rec?.fields ?? {}))
+      const merged = new Map<string, unknown>(Object.entries(cur))
       let changed = !rec
       for (const [f, fv] of Object.entries(value.data as Record<string, unknown>)) {
-        if ((fields[f] ?? 0) <= base) {
+        if ((fields.get(f) ?? 0) <= base) {
           if (!deepEqual(cur[f], fv) || !rec) {
-            merged[f] = fv
-            fields[f] = nextRev
+            merged.set(f, fv)
+            fields.set(f, nextRev)
             changed = true
           }
         }
       }
-      const mergedValue = { _version: value._version, data: merged }
+      const mergedValue = { _version: value._version, data: Object.fromEntries(merged) }
       const rev = changed ? nextRev : (rec?.rev ?? 0)
-      host.set(key, { v: mergedValue, rev, cid: this.clientInstanceId, fields })
+      host.set(key, {
+        v: mergedValue,
+        rev,
+        cid: this.clientInstanceId,
+        fields: Object.fromEntries(fields)
+      })
       return {
         ok: true,
         payload: { value: mergedValue, revision: rev, merged: !deepEqual(mergedValue, value) }

@@ -56,6 +56,10 @@ pub struct HostMeta {
     /// Set once the parked keys were adopted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adopted: Option<Adopted>,
+    /// Last revision of each deleted shared key. A key written again starts
+    /// above this floor, so a stale writer cannot overwrite the new value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deleted_revs: BTreeMap<String, u64>,
 }
 
 /// Borrowed envelope for serialization (no clone of the map per write).

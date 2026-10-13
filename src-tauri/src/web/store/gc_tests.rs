@@ -93,7 +93,7 @@ fn the_sweep_runs_when_the_store_opens() {
         ),
     )
     .unwrap();
-    let store = open(&file);
+    let store = open_with(&file, StorePolicy::default());
     assert_eq!(store.read("device/old/k", &who("old", "t"), unix_ms()).unwrap().revision, 0);
     cleanup(&dir);
 }

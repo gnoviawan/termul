@@ -28,8 +28,14 @@ pub(super) fn who(device: &str, tab: &str) -> ClientIdentity {
     }
 }
 
+/// Opens with garbage collection effectively off: tests stamp requests with
+/// small fake clocks, which the sweep at open would read as ancient.
 pub(super) fn open(file: &Path) -> WebStore {
-    WebStore::open(file.to_path_buf(), StorePolicy::default()).unwrap()
+    let policy = StorePolicy {
+        partition_gc_age_secs: u64::MAX,
+        ..StorePolicy::default()
+    };
+    WebStore::open(file.to_path_buf(), policy).unwrap()
 }
 
 pub(super) fn open_with(file: &Path, policy: StorePolicy) -> WebStore {
@@ -309,6 +315,37 @@ fn shared_delete_follows_the_same_preconditions() {
     assert!(matches!(store.delete(lww_key, stale, &a, 3), Err(StoreError::CasFailed(_))));
     let current = Precondition { base_revision: Some(1), ..Precondition::default() };
     assert!(store.delete(lww_key, current, &a, 3).unwrap());
+    cleanup(&dir);
+}
+
+#[test]
+fn a_deleted_shared_key_restarts_above_its_old_revision_across_a_restart() {
+    let dir = tempdir_like("delete-floor");
+    let file = dir.join("store.json");
+    let a = who("dev-a", "t");
+    let key = "shared/lww/settings/app";
+    {
+        let store = open(&file);
+        put(&store, key, json!({ "a": 1 }), &a);
+        let pre = Precondition { base_revision: Some(1), ..Precondition::default() };
+        store.write(key, json!({ "a": 2 }), pre, &a, 2).unwrap();
+        let pre = Precondition { base_revision: Some(2), ..Precondition::default() };
+        assert!(store.delete(key, pre, &a, 3).unwrap());
+    }
+    let store = open(&file);
+    let WriteOutcome::Shared { revision, .. } = put(&store, key, json!({ "a": 9 }), &a) else {
+        panic!("shared outcome");
+    };
+    assert_eq!(revision, 3);
+    // A writer that cached revision 2 before the delete must not overwrite it.
+    let stale = Precondition { base_revision: Some(2), ..Precondition::default() };
+    let WriteOutcome::Shared { value, merged, .. } =
+        store.write(key, json!({ "a": 5 }), stale, &a, 5).unwrap()
+    else {
+        panic!("shared outcome");
+    };
+    assert_eq!(value, json!({ "a": 9 }));
+    assert!(merged);
     cleanup(&dir);
 }
 

@@ -661,6 +661,7 @@ export function createWebPersistenceApi(opts?: {
       listeners.set(key, set)
       return () => {
         set.delete(listener)
+        if (set.size === 0 && listeners.get(key) === set) listeners.delete(key)
       }
     }
   }

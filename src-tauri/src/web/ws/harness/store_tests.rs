@@ -262,11 +262,11 @@ async fn a_v1_store_is_migrated_and_adopted_by_the_first_device_to_connect() {
 
     let mut first = connect_as(&host, "first", "tab").await;
     let mut second = connect_as(&host, "second", "tab").await;
-    let shared = read(&mut second, "shared/lww/settings/app").await;
-    assert_eq!(shared["payload"]["value"], json!({ "_version": 1, "data": { "theme": "dark" } }));
     // The first device to ask adopts the parked layout; the second gets none.
     let adopted = read(&mut first, "device/first/shell-layout").await;
     assert_eq!(adopted["payload"]["value"], json!({ "_version": 1, "data": { "cols": 3 } }));
+    let shared = read(&mut second, "shared/lww/settings/app").await;
+    assert_eq!(shared["payload"]["value"], json!({ "_version": 1, "data": { "theme": "dark" } }));
     assert_eq!(read(&mut second, "device/second/shell-layout").await["payload"]["revision"], json!(0));
 }
 
