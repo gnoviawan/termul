@@ -51,7 +51,6 @@ export function WorkspaceMain({
   handleCloseTabs,
   closingTerminalIds
 }: WorkspaceMainProps): React.JSX.Element {
-  const { activeSSHProfile, sshProfileWithPassword, sshConn } = ssh
   const { renameTerminal } = useTerminalActions()
   const appDefaultShell = useDefaultShell()
   // Every visited project's tree stays mounted; only the active one is visible.
@@ -73,9 +72,9 @@ export function WorkspaceMain({
 
   return (
     <>
-      {activeSSHProfile ? (
+      {ssh.workspaceOpen ? (
         <Suspense fallback={<ShellSkeleton />}>
-          <SSHWorkspace profile={sshProfileWithPassword!} conn={sshConn} topRow={sshTopRow} />
+          <SSHWorkspace topRow={sshTopRow} />
         </Suspense>
       ) : projects.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center bg-background px-6 rounded-xl">

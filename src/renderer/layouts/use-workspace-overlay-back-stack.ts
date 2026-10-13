@@ -20,9 +20,6 @@ interface WorkspaceOverlayBackStackArgs {
   setIsCommandPaletteOpen: (open: boolean) => void
   isCommandHistoryOpen: boolean
   setIsCommandHistoryOpen: (open: boolean) => void
-  isSshPasswordPromptOpen: boolean
-  /** Clears the SSH password prompt and its input, as its Cancel button does. */
-  closeSshPasswordPrompt: () => void
   /**
    * The router location's `key` (`useLocation().key`). A change after mount
    * means a route was pushed or replaced, which fires no `popstate`: the overlay
@@ -66,8 +63,6 @@ export function useWorkspaceOverlayBackStack({
   setIsCommandPaletteOpen,
   isCommandHistoryOpen,
   setIsCommandHistoryOpen,
-  isSshPasswordPromptOpen,
-  closeSshPasswordPrompt,
   locationKey
 }: WorkspaceOverlayBackStackArgs): void {
   const settingsModalOpen = useSettingsModalView() !== null
@@ -115,12 +110,6 @@ export function useWorkspaceOverlayBackStack({
     themePickerOpen,
     // Reverts the preview and closes, the same as Esc.
     () => useThemePickerStore.getState().cancel(),
-    MOBILE_SHELL_ONLY
-  )
-  useOverlayRegistration(
-    'ssh-password-prompt',
-    isSshPasswordPromptOpen,
-    closeSshPasswordPrompt,
     MOBILE_SHELL_ONLY
   )
 

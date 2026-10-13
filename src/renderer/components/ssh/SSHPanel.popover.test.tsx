@@ -6,20 +6,22 @@ import type { SSHPanelDialogsController } from './SSHPanelDialogs'
 
 const { profilesRef } = vi.hoisted(() => ({ profilesRef: { current: [] as SSHProfile[] } }))
 
-vi.mock('@/stores/ssh-store', () => ({
+vi.mock('@/stores/ssh-store', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   useSSHProfiles: () => profilesRef.current,
-  useSSHConnections: () => [],
+  useSSHSessions: () => [],
   useSSHActions: () => ({
     loadProfiles: vi.fn(),
-    disconnect: vi.fn(),
     importConfig: vi.fn(),
+    duplicateProfile: vi.fn(),
     deleteProfile: vi.fn(),
     selectProfile: vi.fn()
   })
 }))
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => true }))
-vi.mock('./SSHProfileForm', () => ({
-  SSHProfileForm: () => <div data-testid="ssh-profile-form" />
+vi.mock('./SSHHostEditor', () => ({
+  SSHHostEditor: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="ssh-profile-form" /> : null
 }))
 vi.mock('@/components/ui/context-menu', () => ({
   ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -65,9 +67,9 @@ describe('SSHPanel popover hooks', () => {
     profilesRef.current = [makeProfile('a')]
     const dialogs = makeDialogs()
     render(<SSHPanel dialogs={dialogs} />)
-    fireEvent.click(screen.getByTitle('Edit profile'))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit host-a' }))
     expect(dialogs.openForm).toHaveBeenCalledWith(profilesRef.current[0])
-    fireEvent.click(screen.getByRole('button', { name: 'New SSH Profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New host' }))
     expect(dialogs.openForm).toHaveBeenCalledWith(null)
     expect(screen.queryByTestId('ssh-profile-form')).toBeNull()
   })
@@ -75,7 +77,7 @@ describe('SSHPanel popover hooks', () => {
   it('keeps its own dialogs when no controller is given', () => {
     profilesRef.current = [makeProfile('a')]
     render(<SSHPanel />)
-    fireEvent.click(screen.getByTitle('Edit profile'))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit host-a' }))
     expect(screen.getByTestId('ssh-profile-form')).toBeInTheDocument()
   })
 
@@ -92,10 +94,11 @@ describe('SSHPanel popover hooks', () => {
     expect(screen.getByTestId('ssh-host-row-a')).not.toHaveAttribute('tabindex')
   })
 
-  it('focusableRows: arrows move between rows and Enter selects', () => {
+  it('focusableRows: arrows move between rows, Enter connects, Space opens the host', () => {
     profilesRef.current = [makeProfile('a'), makeProfile('b')]
     const onSelectProfile = vi.fn()
-    render(<SSHPanel focusableRows onSelectProfile={onSelectProfile} />)
+    const onConnect = vi.fn()
+    render(<SSHPanel focusableRows onSelectProfile={onSelectProfile} onConnect={onConnect} />)
     const a = screen.getByTestId('ssh-host-row-a')
     const b = screen.getByTestId('ssh-host-row-b')
     a.focus()
@@ -104,6 +107,8 @@ describe('SSHPanel popover hooks', () => {
     fireEvent.keyDown(b, { key: 'ArrowUp' })
     expect(document.activeElement).toBe(a)
     fireEvent.keyDown(b, { key: 'Enter' })
+    expect(onConnect).toHaveBeenCalledWith('b')
+    fireEvent.keyDown(b, { key: ' ' })
     expect(onSelectProfile).toHaveBeenCalledWith('b')
   })
 })

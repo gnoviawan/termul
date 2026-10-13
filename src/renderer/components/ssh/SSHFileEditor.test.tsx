@@ -1,3 +1,4 @@
+import { EditorView } from '@codemirror/view'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -12,15 +13,17 @@ import { SSHFileEditor } from './SSHFileEditor'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
-vi.mock('@/lib/api', () => ({
+const { sshApi } = vi.hoisted(() => ({
   sshApi: { sftpWriteFile: vi.fn().mockResolvedValue({ success: true }) }
 }))
+vi.mock('@/lib/api', () => ({ sshApi }))
 
 const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
 
 function seedFile(dirty: boolean): void {
   useSSHStore.setState({
     editingFile: {
+      connectionId: 'conn-1',
       path: '/srv/app/notes.txt',
       name: 'notes.txt',
       content: 'original',
@@ -34,6 +37,64 @@ function seedFile(dirty: boolean): void {
 function pressClose(): void {
   fireEvent.click(screen.getByTitle('Close'))
 }
+
+describe('SSHFileEditor code view', () => {
+  afterEach(() => {
+    useSSHStore.setState({ editingFile: null, editingContent: '' })
+  })
+
+  it('shows line numbers', async () => {
+    seedFile(false)
+    useSSHStore.setState({ editingContent: 'one\ntwo\nthree' })
+    const { container } = render(<SSHFileEditor connectionId="conn-1" />)
+    await waitFor(() => expect(container.querySelector('.cm-lineNumbers')).not.toBeNull())
+    const gutter = container.querySelector('.cm-lineNumbers') as HTMLElement
+    expect(gutter.textContent).toContain('3')
+  })
+
+  it('does not carry a pending edit over to the next opened file', async () => {
+    seedFile(false)
+    const { container } = render(<SSHFileEditor connectionId="conn-1" />)
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor') as HTMLElement)
+    act(() => {
+      view?.dispatch({ changes: { from: 0, insert: 'unsaved ' } })
+      useSSHStore.setState({
+        editingFile: {
+          connectionId: 'conn-1',
+          path: '/srv/app/other.txt',
+          name: 'other.txt',
+          content: 'other',
+          originalContent: 'other'
+        },
+        editingContent: 'other'
+      })
+    })
+    await waitFor(() => expect(container.querySelector('.cm-content')?.textContent).toBe('other'))
+    expect(useSSHStore.getState().editingContent).toBe('other')
+  })
+
+  it('saves the latest text to the remote file on Ctrl+S', async () => {
+    seedFile(false)
+    const { container } = render(<SSHFileEditor connectionId="conn-1" />)
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor') as HTMLElement)
+    act(() => {
+      view?.dispatch({ changes: { from: view.state.doc.length, insert: ' + typed' } })
+    })
+    fireEvent.keyDown(container.querySelector('.cm-content') as HTMLElement, {
+      key: 's',
+      ctrlKey: true
+    })
+    await waitFor(() =>
+      expect(sshApi.sftpWriteFile).toHaveBeenCalledWith(
+        'conn-1',
+        '/srv/app/notes.txt',
+        'original + typed'
+      )
+    )
+  })
+})
 
 describe('SSHFileEditor unsaved-changes confirm and the overlay back stack', () => {
   let cleanup: () => void

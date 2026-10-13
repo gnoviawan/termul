@@ -3,7 +3,6 @@ import { lazy, Suspense } from 'react'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ProjectBusyDialog } from '@/components/ProjectBusyDialog'
-import { SSHPasswordPrompt } from '@/layouts/workspace-layout/SSHPasswordPrompt'
 import type { useCommandPaletteData } from '@/layouts/workspace-layout/use-command-palette-data'
 import type { useOverlayActions } from '@/layouts/workspace-layout/use-overlay-actions'
 import type { useShortcutLabels } from '@/layouts/workspace-layout/use-shortcut-labels'
@@ -92,15 +91,7 @@ export function WorkspaceModals({
 }: WorkspaceModalsProps): React.JSX.Element {
   const settingsModalView = useSettingsModalView()
   const isThemePickerOpen = useThemePickerOpen()
-  const {
-    sshProfiles,
-    sshPasswordPrompt,
-    sshPasswordInput,
-    setSSHPasswordInput,
-    closeSshPasswordPrompt,
-    handleSSHConnect,
-    handleSSHPasswordSubmit
-  } = ssh
+  const { sshProfiles, handleSSHConnect } = ssh
   const {
     handleOpenSnapshotModal,
     handleOpenProjectSettings,
@@ -202,17 +193,6 @@ export function WorkspaceModals({
         <Suspense fallback={null}>
           <AppPreferencesModal />
         </Suspense>
-      )}
-
-      {/* SSH Password Prompt */}
-      {sshPasswordPrompt && (
-        <SSHPasswordPrompt
-          profileName={sshPasswordPrompt.profileName}
-          passwordInput={sshPasswordInput}
-          onPasswordInputChange={setSSHPasswordInput}
-          onSubmit={handleSSHPasswordSubmit}
-          onCancel={closeSshPasswordPrompt}
-        />
       )}
 
       <WorkspaceCloseDialogs

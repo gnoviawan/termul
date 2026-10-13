@@ -26,8 +26,6 @@ function makeArgs(overrides: Partial<Args> = {}): Args {
     setIsCommandPaletteOpen: vi.fn(),
     isCommandHistoryOpen: false,
     setIsCommandHistoryOpen: vi.fn(),
-    isSshPasswordPromptOpen: false,
-    closeSshPasswordPrompt: vi.fn(),
     locationKey: 'k1',
     ...overrides
   }
@@ -183,24 +181,11 @@ describe('useWorkspaceOverlayBackStack', () => {
       expect(useThemePickerStore.getState().isOpen).toBe(false)
     })
 
-    it('ssh-password-prompt closes by clearing the prompt, as Cancel does', () => {
-      const { args, rerender } = mountHook()
-      rerender({ ...args, isSshPasswordPromptOpen: true })
-
-      expect(stackIds()).toEqual(['ssh-password-prompt'])
-      useOverlayStackStore.getState().closeTopmostOverlay()
-      expect(args.closeSshPasswordPrompt).toHaveBeenCalledTimes(1)
-    })
-
     it('are inert on desktop: nothing registers and nothing is pushed', async () => {
       const pushSpy = vi.spyOn(history, 'pushState')
       const { args, rerender } = mountHook({ isMobileWebShell: false })
 
-      rerender({
-        ...args,
-        isCommandHistoryOpen: true,
-        isSshPasswordPromptOpen: true
-      })
+      rerender({ ...args, isCommandHistoryOpen: true })
       act(() => {
         showLauncherOnPaneWithTabs()
         useThemePickerStore.getState().open('termul')
@@ -311,16 +296,9 @@ describe('useWorkspaceOverlayBackStack', () => {
       expect(readOverlaySentinelDepth(history.state)).toBe(1)
     })
 
-    it('system back closes the ssh password prompt and the theme picker through their owners', async () => {
-      const { args, rerender } = mountHook()
+    it('system back closes the theme picker through its owner', async () => {
+      mountHook()
 
-      rerender({ ...args, isSshPasswordPromptOpen: true })
-      await waitForSentinelDepth(1)
-      await pressSystemBack()
-      expect(args.closeSshPasswordPrompt).toHaveBeenCalledTimes(1)
-      expect(readOverlaySentinelDepth(history.state)).toBe(0)
-
-      rerender({ ...args, isSshPasswordPromptOpen: false })
       act(() => useThemePickerStore.getState().open('termul'))
       await waitForSentinelDepth(1)
       await pressSystemBack()
@@ -495,31 +473,27 @@ describe('useWorkspaceOverlayBackStack', () => {
       const [isMobileWebShell, setIsMobileWebShell] = useState(true)
       const [gitSheetOpen, setGitSheetOpen] = useState(false)
       const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
-      const [isSshPasswordPromptOpen, setIsSshPasswordPromptOpen] = useState(false)
       useWorkspaceOverlayBackStack(
         makeArgs({
           isMobileWebShell,
           gitSheetOpen,
           setGitSheetOpen,
           isCommandHistoryOpen,
-          setIsCommandHistoryOpen,
-          isSshPasswordPromptOpen,
-          closeSshPasswordPrompt: () => setIsSshPasswordPromptOpen(false)
+          setIsCommandHistoryOpen
         })
       )
       return {
         gitSheetOpen,
         setIsMobileWebShell,
         setGitSheetOpen,
-        setIsCommandHistoryOpen,
-        setIsSshPasswordPromptOpen
+        setIsCommandHistoryOpen
       }
     }
 
     it('consumes every stranded sentinel when only mobile-only overlays were open, so the next back is a route back', async () => {
       const { result } = renderHook(() => useFlipOwners())
       act(() => result.current.setIsCommandHistoryOpen(true))
-      act(() => result.current.setIsSshPasswordPromptOpen(true))
+      act(() => useThemePickerStore.getState().open('termul'))
       await waitForSentinelDepth(2)
       const goSpy = vi.spyOn(history, 'go')
 

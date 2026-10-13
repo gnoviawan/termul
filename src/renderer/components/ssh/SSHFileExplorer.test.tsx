@@ -1,114 +1,142 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import type { SFTPEntry } from '@shared/types/ssh.types'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useSSHStore } from '@/stores/ssh-store'
 import { SSHFileExplorer } from './SSHFileExplorer'
 
-vi.mock('@/stores/ssh-store', () => ({
-  useSSHActions: () => ({
-    setEditingFile: vi.fn(),
-    setEditingContent: vi.fn()
-  })
-}))
-
-vi.mock('@/lib/api', () => ({
+const { sshApi } = vi.hoisted(() => ({
   sshApi: {
-    sftpReadFile: vi.fn()
+    sftpRealpath: vi.fn(),
+    sftpListDir: vi.fn(),
+    sftpReadFile: vi.fn(),
+    sftpMkdir: vi.fn(),
+    sftpCreateFile: vi.fn(),
+    sftpRename: vi.fn(),
+    sftpDelete: vi.fn()
   }
 }))
+vi.mock('@/lib/api', () => ({ sshApi }))
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
-vi.mock('sonner', () => ({
-  toast: {
-    error: vi.fn()
+const ok = <T,>(data: T) => ({ success: true as const, data })
+
+const entries: SFTPEntry[] = [
+  {
+    name: 'logs',
+    path: '/home/u/logs',
+    entryType: 'directory',
+    size: 0,
+    permissions: 0o40755,
+    modifiedAt: ''
+  },
+  {
+    name: 'app.conf',
+    path: '/home/u/app.conf',
+    entryType: 'file',
+    size: 2048,
+    permissions: 0o100644,
+    modifiedAt: ''
   }
-}))
+]
+
+async function renderExplorer() {
+  render(<SSHFileExplorer connectionId="s1" profileName="Web" />)
+  await screen.findByText('app.conf')
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  sshApi.sftpRealpath.mockResolvedValue(ok('/home/u'))
+  sshApi.sftpListDir.mockResolvedValue(ok(entries))
+  for (const op of ['sftpMkdir', 'sftpCreateFile', 'sftpRename', 'sftpDelete'] as const) {
+    sshApi[op].mockResolvedValue(ok(undefined))
+  }
+  useSSHStore.setState({ editingFile: null, editingContent: '' })
+})
 
 describe('SSHFileExplorer', () => {
-  it('keeps long file names on the truncate path', () => {
-    const longName =
-      'xxxxxxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxx_xxxxxxxxxxxxxxxx_rev.docx'
-
-    render(
-      <SSHFileExplorer
-        connectionId="conn-1"
-        isConnected={true}
-        sftpReady={true}
-        entries={[
-          {
-            path: `/srv/${longName}`,
-            name: longName,
-            size: 1024,
-            entryType: 'file',
-            permissions: 0o644,
-            modifiedAt: '2026-06-10T00:00:00.000Z'
-          }
-        ]}
-        currentPath="/srv"
-        expandedDirs={new Set()}
-        childEntries={new Map()}
-        loadingDirs={new Set()}
-        isLoadingRoot={false}
-        profileName="server"
-        onConnect={vi.fn()}
-        onBrowseFiles={vi.fn()}
-        onToggleDir={vi.fn()}
-        onLoadDir={vi.fn()}
-        onMkdir={vi.fn()}
-        onCreateFile={vi.fn()}
-        onDelete={vi.fn()}
-        onRename={vi.fn()}
-      />
-    )
-
-    const nameEl = screen.getByText(longName)
-    expect(nameEl).toHaveClass('min-w-0', 'flex-1', 'truncate')
-    expect(nameEl.parentElement).toHaveClass('min-w-0', 'overflow-hidden')
+  it('lists the login directory with sizes and the current path', async () => {
+    await renderExplorer()
+    expect(screen.getByRole('region', { name: 'Files on Web' })).toBeInTheDocument()
+    expect(screen.getByTitle('/home/u')).toBeInTheDocument()
+    expect(screen.getByText('2.0 KB')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'logs' })).toHaveAttribute('aria-expanded', 'false')
   })
-  it('keeps row actions mounted with the opacity reveal pattern (no display toggle)', () => {
-    render(
-      <SSHFileExplorer
-        connectionId="conn-1"
-        isConnected={true}
-        sftpReady={true}
-        entries={[
-          {
-            path: '/srv/a.txt',
-            name: 'a.txt',
-            size: 1024,
-            entryType: 'file',
-            permissions: 0o644,
-            modifiedAt: '2026-06-10T00:00:00.000Z'
-          }
-        ]}
-        currentPath="/srv"
-        expandedDirs={new Set()}
-        childEntries={new Map()}
-        loadingDirs={new Set()}
-        isLoadingRoot={false}
-        profileName="server"
-        onConnect={vi.fn()}
-        onBrowseFiles={vi.fn()}
-        onToggleDir={vi.fn()}
-        onLoadDir={vi.fn()}
-        onMkdir={vi.fn()}
-        onCreateFile={vi.fn()}
-        onDelete={vi.fn()}
-        onRename={vi.fn()}
-      />
+
+  it('opens a file in the editor, bound to the session', async () => {
+    sshApi.sftpReadFile.mockResolvedValue(ok('listen 80;'))
+    await renderExplorer()
+    fireEvent.click(screen.getByTitle('Open app.conf'))
+    await waitFor(() =>
+      expect(useSSHStore.getState().editingFile).toMatchObject({
+        connectionId: 's1',
+        path: '/home/u/app.conf',
+        content: 'listen 80;'
+      })
     )
+  })
 
-    const actions = screen.getByTitle('Delete').parentElement
-    expect(actions).toHaveClass('flex')
-    expect(actions).toHaveClass('pointer-fine:opacity-0')
-    expect(actions).toHaveClass('pointer-fine:group-hover:opacity-100')
-    expect(actions).toHaveClass('group-focus-within:opacity-100')
-    expect(actions).not.toHaveClass('hidden')
-    expect(actions).not.toHaveClass('group-hover:flex')
+  it('creates a folder through a named dialog and refreshes', async () => {
+    await renderExplorer()
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }))
+    const name = await screen.findByLabelText('Name')
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText('Enter a name.')).toBeInTheDocument()
+    fireEvent.change(name, { target: { value: 'a/b' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText('A name cannot contain “/”.')).toBeInTheDocument()
+    fireEvent.change(name, { target: { value: 'backups' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(sshApi.sftpMkdir).toHaveBeenCalledWith('s1', '/home/u/backups'))
+    await waitFor(() => expect(screen.queryByLabelText('Name')).toBeNull())
+    expect(sshApi.sftpListDir).toHaveBeenCalledTimes(2)
+  })
 
-    // The size span is non-interactive — pointer hover reveal only, no
-    // focus-within rule.
-    const sizeEl = screen.getByText('1.0 KB')
-    expect(sizeEl).toHaveClass('pointer-fine:opacity-0')
-    expect(sizeEl).toHaveClass('pointer-fine:group-hover:opacity-100')
-    expect(sizeEl).not.toHaveClass('group-focus-within:opacity-100')
-    expect(sizeEl).not.toHaveClass('hidden')
+  it('shows a server error inside the dialog', async () => {
+    sshApi.sftpCreateFile.mockResolvedValue({
+      success: false,
+      error: "'x' already exists",
+      code: 'E'
+    })
+    await renderExplorer()
+    fireEvent.click(screen.getByRole('button', { name: 'New file' }))
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(await screen.findByText("'x' already exists")).toBeInTheDocument()
+  })
+
+  it('renames in place', async () => {
+    await renderExplorer()
+    fireEvent.click(screen.getByRole('button', { name: 'Rename app.conf' }))
+    const name = await screen.findByLabelText('Name')
+    expect(name).toHaveValue('app.conf')
+    fireEvent.change(name, { target: { value: 'site.conf' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await waitFor(() =>
+      expect(sshApi.sftpRename).toHaveBeenCalledWith('s1', '/home/u/app.conf', '/home/u/site.conf')
+    )
+  })
+
+  it('deletes only after confirmation', async () => {
+    await renderExplorer()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete app.conf' }))
+    expect(screen.getByText("Delete “app.conf” on Web? This can't be undone.")).toBeInTheDocument()
+    expect(sshApi.sftpDelete).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(sshApi.sftpDelete).toHaveBeenCalledWith('s1', '/home/u/app.conf'))
+  })
+
+  it('goes up a folder and offers a retry when listing fails', async () => {
+    await renderExplorer()
+    sshApi.sftpListDir.mockResolvedValueOnce({
+      success: false,
+      error: 'Permission denied',
+      code: 'E'
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Up one folder' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied')
+    expect(sshApi.sftpListDir).toHaveBeenLastCalledWith('s1', '/home')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await screen.findByText('app.conf')
   })
 })

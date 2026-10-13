@@ -20,8 +20,8 @@ interface ExplorerColumnProps {
   activeProject: Project | undefined
   ssh: SSHWorkspaceState
   /**
-   * Shell Side panel that fills the file column. Not rendered while an SSH
-   * profile is active: the SSH block then stands alone.
+   * Shell Side panel that fills the file column. Not rendered while the SSH
+   * workspace is open: the remote file browser then stands alone.
    */
   sidePanel: ReactNode
 }
@@ -39,21 +39,19 @@ export function ExplorerColumn({
 }: ExplorerColumnProps): React.JSX.Element {
   const reducedMotion = useReducedMotion() ?? false
   const isExplorerVisible = useFileExplorerVisible()
-  const {
-    activeSSHProfile,
-    sshConn,
-    handleSSHMkdir,
-    handleSSHCreateFile,
-    handleSSHDelete,
-    handleSSHRename
-  } = ssh
+  const { workspaceOpen, activeSSHProfile, activeSSHSession } = ssh
   const showFileColumn = Boolean(
-    isExplorerVisible && activeProject?.path && !(sidePanel && activeSSHProfile)
+    isExplorerVisible && activeProject?.path && !(sidePanel && workspaceOpen)
   )
+  // Remote files of the active, connected session tab.
+  const sftpSession =
+    workspaceOpen && isExplorerVisible && activeSSHSession?.status === 'connected'
+      ? activeSSHSession
+      : null
 
   return (
     <AnimatePresence initial={false}>
-      {showFileColumn || activeSSHProfile ? (
+      {showFileColumn || sftpSession ? (
         <motion.div
           key="explorer-column"
           className="flex-shrink-0 h-full overflow-hidden"
@@ -64,7 +62,7 @@ export function ExplorerColumn({
               {showFileColumn && (
                 <motion.div
                   key="file-explorer-panel"
-                  className={cn('overflow-hidden', activeSSHProfile ? 'flex-1 min-h-0' : 'h-full')}
+                  className={cn('overflow-hidden', sftpSession ? 'flex-1 min-h-0' : 'h-full')}
                   {...panelRevealMotion(reducedMotion)}
                 >
                   <Suspense fallback={<ShellSkeleton />}>{sidePanel}</Suspense>
@@ -72,7 +70,7 @@ export function ExplorerColumn({
               )}
             </AnimatePresence>
             <AnimatePresence initial={false}>
-              {activeSSHProfile && (
+              {sftpSession && (
                 <motion.div
                   key="ssh-explorer-panel"
                   className="flex-1 min-h-0 overflow-hidden"
@@ -88,24 +86,9 @@ export function ExplorerColumn({
                   >
                     <Suspense fallback={<ShellSkeleton />}>
                       <SSHFileExplorer
-                        connectionId={sshConn.connectionId ?? ''}
-                        isConnected={sshConn.isConnected}
-                        sftpReady={sshConn.sftpReady}
-                        entries={sshConn.entries}
-                        currentPath={sshConn.currentPath}
-                        expandedDirs={sshConn.expandedDirs}
-                        childEntries={sshConn.childEntries}
-                        loadingDirs={sshConn.loadingDirs}
-                        isLoadingRoot={sshConn.isLoadingRoot}
-                        profileName={activeSSHProfile.name}
-                        onConnect={sshConn.handleConnect}
-                        onBrowseFiles={sshConn.handleBrowseFiles}
-                        onToggleDir={sshConn.toggleDirectory}
-                        onLoadDir={sshConn.loadDirectory}
-                        onMkdir={handleSSHMkdir}
-                        onCreateFile={handleSSHCreateFile}
-                        onDelete={handleSSHDelete}
-                        onRename={handleSSHRename}
+                        key={sftpSession.attemptId}
+                        connectionId={sftpSession.attemptId}
+                        profileName={activeSSHProfile?.name ?? 'host'}
                       />
                     </Suspense>
                   </div>

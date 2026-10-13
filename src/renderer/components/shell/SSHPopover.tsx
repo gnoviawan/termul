@@ -20,7 +20,7 @@ interface SSHPopoverProps {
 
 /**
  * Collapsed-Rail SSH entry (revamp, desktop only): an icon that opens the same
- * host list and actions as the sidebar section. The profile form and delete
+ * host list and actions as the sidebar section. The host editor and delete
  * confirm live outside the popover: a request closes the popover first, then
  * opens the dialog, and focus returns to the icon once the dialog closes.
  */
@@ -31,7 +31,7 @@ export function SSHPopover({
 }: SSHPopoverProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const dialogs = useSSHPanelDialogs(activeProfileId)
+  const dialogs = useSSHPanelDialogs()
   const dialogOpen = dialogs.isOpen
   const wasDialogOpen = useRef(false)
 

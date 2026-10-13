@@ -1,24 +1,44 @@
-import type { SSHConnectionStatus } from '@shared/types/ssh.types'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
+import type { SSHSession } from '@/stores/ssh-store'
 
-/** Row state for one SSH host. `idle` = no connection record or disconnected. */
-export type SSHHostState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
+/**
+ * Display state of a host or a session tab. `idle` = no session;
+ * `attention` = a connect waits for the user (host key, password).
+ */
+export type SSHHostState =
+  | 'idle'
+  | 'connecting'
+  | 'attention'
+  | 'connected'
+  | 'disconnected'
+  | 'failed'
 
-export function resolveSSHHostState(
-  status: SSHConnectionStatus | undefined,
-  isConnecting: boolean
-): SSHHostState {
-  if (isConnecting || status === 'connecting') return 'connecting'
-  if (status === 'connected') return 'connected'
-  if (status === 'failed') return 'failed'
-  if (status === 'reconnecting') return 'reconnecting'
-  return 'idle'
+export function sessionHostState(session: Pick<SSHSession, 'status'>): SSHHostState {
+  switch (session.status) {
+    case 'connecting':
+      return 'connecting'
+    case 'awaitingInput':
+      return 'attention'
+    case 'connected':
+      return 'connected'
+    case 'disconnected':
+      return 'disconnected'
+    case 'failed':
+      return 'failed'
+  }
+}
+
+/** A host's state from its session tabs (the most actionable one wins). */
+export function resolveSSHHostState(sessions: Pick<SSHSession, 'status'>[]): SSHHostState {
+  const states = sessions.map(sessionHostState)
+  const order: SSHHostState[] = ['attention', 'connected', 'connecting', 'failed', 'disconnected']
+  return order.find((state) => states.includes(state)) ?? 'idle'
 }
 
 /**
- * One place for each host state's look (docs/design/status.md): the word,
- * its ink, and the lamp dot. A `null` lamp is a 9px warning spinner.
+ * One place for each state's look (docs/design/status.md): the word, its
+ * ink, and the lamp dot. A `null` lamp is a 9px warning spinner.
  */
 const HOST_STATE: Record<
   SSHHostState,
@@ -26,13 +46,18 @@ const HOST_STATE: Record<
 > = {
   idle: { word: 'Idle', wordClass: 'text-muted-foreground', lampClass: 'bg-muted-foreground/50' },
   connecting: { word: 'Connecting', wordClass: 'text-muted-foreground', lampClass: null },
+  attention: { word: 'Needs input', wordClass: 'text-warning', lampClass: 'bg-warning' },
   connected: { word: 'Connected', wordClass: 'text-muted-foreground', lampClass: 'bg-success' },
-  reconnecting: {
-    word: 'Reconnecting',
+  disconnected: {
+    word: 'Disconnected',
     wordClass: 'text-muted-foreground',
-    lampClass: 'bg-warning'
+    lampClass: 'bg-muted-foreground/50'
   },
   failed: { word: 'Failed', wordClass: 'text-destructive', lampClass: 'bg-destructive' }
+}
+
+export function hostStateWord(state: SSHHostState): string {
+  return HOST_STATE[state].word
 }
 
 /** 7px status lamp; connecting is a 9px warning spinner. */

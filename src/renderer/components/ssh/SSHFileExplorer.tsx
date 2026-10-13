@@ -1,275 +1,364 @@
 import type { SFTPEntry } from '@shared/types/ssh.types'
-import { useCallback } from 'react'
+import { useId, useState } from 'react'
 import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
+  ArrowUp,
   ChevronDown,
   ChevronRight,
   File,
-  FileEdit,
   FilePlus,
   Folder,
   FolderPlus,
-  FolderTree,
   Link2,
   Pencil,
   RefreshCw,
-  Trash2,
-  Wifi,
-  WifiOff
+  Trash2
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { FOCUS_RING_CLASS, QUIET_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { Spinner } from '@/components/ui/spinner'
+import { joinPath, parentPath, useSftpBrowser } from '@/hooks/use-sftp-browser'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useSSHActions } from '@/stores/ssh-store'
 
 interface SSHFileExplorerProps {
+  /** Backend id of the connected session whose files are shown */
   connectionId: string
-  isConnected: boolean
-  sftpReady: boolean
-  entries: SFTPEntry[]
-  currentPath: string
-  expandedDirs: Set<string>
-  childEntries: Map<string, SFTPEntry[]>
-  loadingDirs: Set<string>
-  isLoadingRoot: boolean
   profileName: string
-  onConnect: () => void
-  onBrowseFiles: () => void
-  onToggleDir: (path: string) => void
-  onLoadDir: (path: string) => void
-  onMkdir: () => void
-  onCreateFile: () => void
-  onDelete: (entry: SFTPEntry) => void
-  onRename: (entry: SFTPEntry) => void
 }
 
+type NameDialog = { kind: 'folder' } | { kind: 'file' } | { kind: 'rename'; entry: SFTPEntry }
+
+const ICON_BUTTON = `${QUIET_ICON_BUTTON_CLASS} size-6`
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`
+  return `${(bytes / 1073741824).toFixed(1)} GB`
+}
+
+function validName(name: string): string | null {
+  if (!name.trim()) return 'Enter a name.'
+  if (name.includes('/')) return 'A name cannot contain “/”.'
+  if (name === '.' || name === '..') return 'Choose a different name.'
+  return null
+}
+
+/** Remote file browser for the active session (SFTP over its connection). */
 export function SSHFileExplorer({
   connectionId,
-  isConnected,
-  sftpReady,
-  entries,
-  currentPath,
-  expandedDirs,
-  childEntries,
-  loadingDirs,
-  isLoadingRoot,
-  profileName,
-  onConnect,
-  onBrowseFiles,
-  onToggleDir,
-  onLoadDir,
-  onMkdir,
-  onCreateFile,
-  onDelete,
-  onRename
+  profileName
 }: SSHFileExplorerProps): React.JSX.Element {
-  const { setEditingFile: setStoreFile, setEditingContent: setStoreContent } = useSSHActions()
+  const browser = useSftpBrowser(connectionId)
+  const { setEditingFile, setEditingContent } = useSSHActions()
+  const [nameDialog, setNameDialog] = useState<NameDialog | null>(null)
+  const [nameValue, setNameValue] = useState('')
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [deleteEntry, setDeleteEntry] = useState<SFTPEntry | null>(null)
+  const nameId = useId()
 
-  const handleOpenFile = useCallback(
-    async (entry: SFTPEntry) => {
-      if (!connectionId) return
-      try {
-        const result = await sshApi.sftpReadFile(connectionId, entry.path)
-        if (result.success) {
-          setStoreFile({
-            path: entry.path,
-            content: result.data,
-            name: entry.name,
-            originalContent: result.data
-          })
-          setStoreContent(result.data)
-        } else {
-          toast.error(`Failed to open: ${result.error}`)
-        }
-      } catch (error) {
-        toast.error(`Failed to open: ${error instanceof Error ? error.message : String(error)}`)
+  const openFile = async (entry: SFTPEntry) => {
+    const result = await sshApi.sftpReadFile(connectionId, entry.path)
+    if (!result.success) {
+      toast.error(`Couldn't open ${entry.name}: ${result.error}`)
+      return
+    }
+    setEditingFile({
+      connectionId,
+      path: entry.path,
+      name: entry.name,
+      content: result.data,
+      originalContent: result.data
+    })
+    setEditingContent(result.data)
+  }
+
+  const showNameDialog = (dialog: NameDialog) => {
+    setNameDialog(dialog)
+    setNameValue(dialog.kind === 'rename' ? dialog.entry.name : '')
+    setNameError(null)
+  }
+
+  const submitName = async () => {
+    if (!nameDialog || !browser.currentPath) return
+    const problem = validName(nameValue)
+    if (problem) {
+      setNameError(problem)
+      return
+    }
+    const name = nameValue.trim()
+    setBusy(true)
+    try {
+      const result =
+        nameDialog.kind === 'rename'
+          ? await sshApi.sftpRename(
+              connectionId,
+              nameDialog.entry.path,
+              joinPath(parentPath(nameDialog.entry.path), name)
+            )
+          : nameDialog.kind === 'folder'
+            ? await sshApi.sftpMkdir(connectionId, joinPath(browser.currentPath, name))
+            : await sshApi.sftpCreateFile(connectionId, joinPath(browser.currentPath, name))
+      if (!result.success) {
+        setNameError(result.error)
+        return
       }
-    },
-    [connectionId, setStoreFile, setStoreContent]
-  )
+      setNameDialog(null)
+      browser.refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
 
-  const handleDelete = useCallback(
-    (entry: SFTPEntry) => {
-      onDelete(entry)
-    },
-    [onDelete]
-  )
+  const confirmDelete = async () => {
+    const entry = deleteEntry
+    setDeleteEntry(null)
+    if (!entry) return
+    const result = await sshApi.sftpDelete(connectionId, entry.path)
+    if (result.success) {
+      toast.success(`Deleted ${entry.name}`)
+      browser.refresh()
+    } else {
+      toast.error(`Couldn't delete ${entry.name}: ${result.error}`)
+    }
+  }
 
-  const handleRename = useCallback(
-    (entry: SFTPEntry) => {
-      onRename(entry)
-    },
-    [onRename]
-  )
-
-  const formatSize = (b: number): string =>
-    b < 1024
-      ? `${b} B`
-      : b < 1048576
-        ? `${(b / 1024).toFixed(1)} KB`
-        : b < 1073741824
-          ? `${(b / 1048576).toFixed(1)} MB`
-          : `${(b / 1073741824).toFixed(1)} GB`
-
-  const renderEntry = (entry: SFTPEntry, depth = 0) => {
+  const renderEntry = (entry: SFTPEntry, depth = 0): React.JSX.Element => {
     const isDir = entry.entryType === 'directory'
-    const isExp = expandedDirs.has(entry.path)
-    const isLoading = loadingDirs.has(entry.path)
-    const children = childEntries.get(entry.path) ?? []
+    const expanded = browser.expandedDirs.has(entry.path)
+    const loading = browser.loadingDirs.has(entry.path)
+    const children = browser.childEntries.get(entry.path) ?? []
     const Icon = isDir ? Folder : entry.entryType === 'symlink' ? Link2 : File
     return (
-      <div key={entry.path}>
-        <div
-          className="group flex min-w-0 items-center gap-1 overflow-hidden px-2 py-0.5 text-xs hover:bg-accent/50 cursor-pointer"
-          style={{ paddingLeft: `${depth * 14 + 8}px` }}
-          onClick={() => (isDir ? onToggleDir(entry.path) : handleOpenFile(entry))}
-        >
-          {isDir && (
-            <span className="flex-shrink-0 w-3.5">
-              {isLoading ? (
-                <Spinner size={12} decorative className="text-muted-foreground" />
-              ) : isExp ? (
-                <ChevronDown className="h-3 w-3 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-3 w-3 text-muted-foreground" />
-              )}
-            </span>
-          )}
-          {!isDir && <span className="w-3.5" />}
-          <Icon
+      <li key={entry.path}>
+        <div className="group flex min-w-0 items-center pr-1 hover:bg-foreground/[0.03]">
+          <button
+            type="button"
             className={cn(
-              'h-3.5 w-3.5 flex-shrink-0',
-              isDir ? 'text-primary' : 'text-muted-foreground'
+              'flex h-7 min-w-0 flex-1 items-center gap-1.5 text-left text-xs',
+              FOCUS_RING_CLASS
             )}
-          />
-          <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-          {!isDir && (
-            <span className="shrink-0 text-3xs text-muted-foreground transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100">
-              {formatSize(entry.size)}
+            style={{ paddingLeft: `${depth * 14 + 8}px` }}
+            onClick={() =>
+              isDir ? void browser.toggleDirectory(entry.path) : void openFile(entry)
+            }
+            aria-expanded={isDir ? expanded : undefined}
+            title={isDir ? entry.path : `Open ${entry.name}`}
+          >
+            <span className="flex w-3.5 shrink-0 justify-center" aria-hidden="true">
+              {isDir &&
+                (loading ? (
+                  <Spinner size={12} decorative className="text-muted-foreground" />
+                ) : expanded ? (
+                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                ))}
             </span>
-          )}
-          <div className="flex shrink-0 items-center gap-0.5 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">
+            <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{entry.name}</span>
             {!isDir && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleOpenFile(entry)
-                }}
-                className="p-0.5 rounded hover:bg-accent"
-                title="Edit"
-              >
-                <FileEdit className="h-3 w-3 text-muted-foreground" />
-              </button>
+              <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
+                {formatSize(entry.size)}
+              </span>
             )}
+          </button>
+          <div className="flex shrink-0 items-center transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">
             <button
-              onClick={(e) => {
-                e.stopPropagation()
-                handleRename(entry)
-              }}
-              className="p-0.5 rounded hover:bg-accent"
+              type="button"
+              className={ICON_BUTTON}
+              onClick={() => showNameDialog({ kind: 'rename', entry })}
+              aria-label={`Rename ${entry.name}`}
               title="Rename"
             >
-              <Pencil className="h-3 w-3 text-muted-foreground" />
+              <Pencil size={12} />
             </button>
             <button
-              onClick={(e) => {
-                e.stopPropagation()
-                handleDelete(entry)
-              }}
-              className="p-0.5 rounded hover:bg-destructive/20"
+              type="button"
+              className={cn(ICON_BUTTON, 'hover:text-destructive')}
+              onClick={() => setDeleteEntry(entry)}
+              aria-label={`Delete ${entry.name}`}
               title="Delete"
             >
-              <Trash2 className="h-3 w-3 text-muted-foreground" />
+              <Trash2 size={12} />
             </button>
           </div>
         </div>
-        {isDir && isExp && children.map((c) => renderEntry(c, depth + 1))}
-      </div>
+        {isDir && expanded && children.length > 0 && (
+          <ul>{children.map((child) => renderEntry(child, depth + 1))}</ul>
+        )}
+      </li>
     )
   }
 
+  const atRoot = browser.currentPath === '/'
+
   return (
-    <div className="w-full h-full flex flex-col">
-      <div className="h-9 flex items-center justify-between px-3 border-b border-border">
-        <div className="flex items-center gap-1.5">
-          <FolderTree className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-xs font-medium truncate">{profileName}</span>
-        </div>
-        <div className="flex items-center gap-0.5">
-          {isConnected ? (
-            <>
-              <button
-                onClick={onMkdir}
-                className="p-1 rounded hover:bg-accent text-muted-foreground"
-                title="New folder"
-              >
-                <FolderPlus className="h-3 w-3" />
-              </button>
-              <button
-                onClick={onCreateFile}
-                className="p-1 rounded hover:bg-accent text-muted-foreground"
-                title="New file"
-              >
-                <FilePlus className="h-3 w-3" />
-              </button>
-              <button
-                onClick={() => onLoadDir(currentPath)}
-                className="p-1 rounded hover:bg-accent text-muted-foreground"
-                title="Refresh"
-              >
-                <RefreshCw className="h-3 w-3" />
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={onConnect}
-              className="p-1 rounded hover:bg-accent text-success"
-              title="Connect"
-            >
-              <Wifi className="h-3.5 w-3.5" />
-            </button>
-          )}
+    <section className="flex h-full w-full flex-col" aria-label={`Files on ${profileName}`}>
+      <div className="flex h-9 items-center justify-between gap-1 border-b border-border px-2">
+        <span className="min-w-0 truncate pl-1 text-xs font-medium">Files</span>
+        <div className="flex items-center">
+          <button
+            type="button"
+            className={ICON_BUTTON}
+            onClick={() =>
+              browser.currentPath && void browser.loadDirectory(parentPath(browser.currentPath))
+            }
+            disabled={!browser.currentPath || atRoot}
+            aria-label="Up one folder"
+            title="Up one folder"
+          >
+            <ArrowUp size={12} />
+          </button>
+          <button
+            type="button"
+            className={ICON_BUTTON}
+            onClick={() => showNameDialog({ kind: 'folder' })}
+            disabled={!browser.currentPath}
+            aria-label="New folder"
+            title="New folder"
+          >
+            <FolderPlus size={12} />
+          </button>
+          <button
+            type="button"
+            className={ICON_BUTTON}
+            onClick={() => showNameDialog({ kind: 'file' })}
+            disabled={!browser.currentPath}
+            aria-label="New file"
+            title="New file"
+          >
+            <FilePlus size={12} />
+          </button>
+          <button
+            type="button"
+            className={ICON_BUTTON}
+            onClick={browser.refresh}
+            aria-label="Refresh"
+            title="Refresh"
+          >
+            <RefreshCw size={12} />
+          </button>
         </div>
       </div>
 
-      {isConnected && (
-        <div className="px-3 py-1 border-b border-border">
-          <span className="text-3xs text-muted-foreground font-mono truncate block">
-            {currentPath}
+      {browser.currentPath && (
+        <div className="border-b border-border px-3 py-1">
+          <span
+            className="block truncate font-mono text-3xs text-muted-foreground"
+            title={browser.currentPath}
+          >
+            {browser.currentPath}
           </span>
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
-        {!isConnected ? (
-          <div className="flex flex-col items-center justify-center h-full px-4 text-center gap-2">
-            <WifiOff className="h-6 w-6 text-muted-foreground/30" />
-            <p className="text-xs text-muted-foreground">Not connected</p>
-            <Button type="button" size="sm" onClick={onConnect}>
-              Connect
+      <div className="min-h-0 flex-1 overflow-y-auto" aria-busy={browser.isLoadingRoot}>
+        {browser.error && !browser.isLoadingRoot ? (
+          <div className="flex flex-col items-center gap-2 px-4 py-6 text-center" role="alert">
+            <p className="text-xs text-foreground">Couldn't load the files</p>
+            <p className="break-all text-3xs text-muted-foreground">{browser.error}</p>
+            <Button type="button" size="xs" variant="outline" onClick={browser.refresh}>
+              Try again
             </Button>
           </div>
-        ) : !sftpReady ? (
-          <div className="flex flex-col items-center justify-center h-full px-4 text-center gap-2">
-            <FolderTree className="h-6 w-6 text-muted-foreground/30" />
-            <p className="text-xs text-muted-foreground">SFTP not started</p>
-            <Button type="button" size="sm" onClick={onBrowseFiles}>
-              Browse Files
-            </Button>
+        ) : browser.isLoadingRoot ? (
+          <div className="flex h-20 items-center justify-center">
+            <Spinner size={18} className="text-muted-foreground" label="Loading files" />
           </div>
-        ) : isLoadingRoot ? (
-          <div className="flex items-center justify-center h-20">
-            <Spinner size={20} decorative className="text-muted-foreground" />
-          </div>
-        ) : entries.length === 0 ? (
-          <div className="p-4 text-center">
-            <p className="text-xs text-muted-foreground">Empty directory</p>
-          </div>
+        ) : browser.entries.length === 0 ? (
+          <p className="p-4 text-center text-xs text-muted-foreground">This folder is empty.</p>
         ) : (
-          <div className="py-1">{entries.map((e) => renderEntry(e))}</div>
+          <ul className="py-1">{browser.entries.map((entry) => renderEntry(entry))}</ul>
         )}
       </div>
-    </div>
+
+      <Dialog open={nameDialog !== null} onOpenChange={(open) => !open && setNameDialog(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">
+              {nameDialog?.kind === 'rename'
+                ? 'Rename'
+                : nameDialog?.kind === 'folder'
+                  ? 'New folder'
+                  : 'New file'}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {nameDialog?.kind === 'rename'
+                ? `Rename “${nameDialog.entry.name}”.`
+                : `In ${browser.currentPath ?? ''}`}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void submitName()
+            }}
+            className="space-y-1.5"
+          >
+            <Label htmlFor={nameId} className="text-xs">
+              Name
+            </Label>
+            <Input
+              id={nameId}
+              value={nameValue}
+              onChange={(e) => {
+                setNameValue(e.target.value)
+                setNameError(null)
+              }}
+              autoFocus
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={Boolean(nameError)}
+              aria-describedby={nameError ? `${nameId}-error` : undefined}
+              className="h-9 font-mono"
+            />
+            {nameError && (
+              <p id={`${nameId}-error`} className="text-xs text-destructive">
+                {nameError}
+              </p>
+            )}
+            <DialogFooter className="gap-2 pt-3 sm:space-x-0">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setNameDialog(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={busy}>
+                {nameDialog?.kind === 'rename' ? 'Rename' : 'Create'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <ConfirmDialog
+        isOpen={deleteEntry !== null}
+        title={deleteEntry?.entryType === 'directory' ? 'Delete folder' : 'Delete file'}
+        message={
+          deleteEntry
+            ? deleteEntry.entryType === 'directory'
+              ? `Delete the folder “${deleteEntry.name}” on ${profileName}? It must be empty. This can't be undone.`
+              : `Delete “${deleteEntry.name}” on ${profileName}? This can't be undone.`
+            : ''
+        }
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setDeleteEntry(null)}
+      />
+    </section>
   )
 }

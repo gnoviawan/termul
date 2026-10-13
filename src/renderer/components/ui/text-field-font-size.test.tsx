@@ -283,17 +283,8 @@ const DESKTOP_ONLY: ReadonlyArray<AllowRule & { file: string; reason: string }> 
     reason: 'the tab strip mounts only in the desktop return'
   },
   {
-    file: 'components/ssh/SSHProfileForm.tsx',
-    reason: 'SSH entries are isTauriContext()-gated, and the shell never runs in Tauri'
-  },
-  {
     file: 'components/ssh/SSHFileEditor.tsx',
     reason: 'SSH entries are isTauriContext()-gated, and the shell never runs in Tauri'
-  },
-  {
-    file: 'layouts/workspace-layout/SSHPasswordPrompt.tsx',
-    tagIncludes: 'type="password"',
-    reason: 'the SSH password prompt; SSH is isTauriContext()-gated'
   },
   {
     file: 'components/browser/BrowserControls.tsx',

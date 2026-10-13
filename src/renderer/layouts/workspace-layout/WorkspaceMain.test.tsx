@@ -37,9 +37,7 @@ function renderMain(mode: TopRowMode | null, platform: TopRowPlatform = desktop)
       activeProject={undefined}
       ssh={
         {
-          activeSSHProfile: { id: 's1' },
-          sshProfileWithPassword: { id: 's1' },
-          sshConn: {}
+          workspaceOpen: true
         } as never
       }
       setIsNewProjectModalOpen={vi.fn()}

@@ -74,7 +74,7 @@ export function ShellFrame({
   const paneRoot = usePaneRoot()
   const fullscreenPaneId = useFullscreenPaneId()
   const pathname = useLocation().pathname
-  const mode: TopRowMode = ssh.activeSSHProfile
+  const mode: TopRowMode = ssh.workspaceOpen
     ? 'ssh'
     : projects.length === 0 || !isWorkspaceRoutePath(pathname)
       ? 'fallback'

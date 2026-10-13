@@ -26,6 +26,7 @@ import { useGitStatusRefresh } from './hooks/use-git-status-refresh'
 import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useProjectIcon } from './hooks/use-project-icon'
 import { useRemoteProjects } from './hooks/use-remote-projects'
+import { useSSHSessionEvents } from './hooks/use-ssh-session-events'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
 import { useTerminalIdleNotification } from './hooks/use-terminal-idle-notification'
@@ -148,6 +149,7 @@ function AppEffects(): null {
   useTerminalRestore()
   useCrashRecovery()
   useTerminalDetachedOutput()
+  useSSHSessionEvents()
   useCwd()
   useGitBranch()
   useProjectGitBranch()

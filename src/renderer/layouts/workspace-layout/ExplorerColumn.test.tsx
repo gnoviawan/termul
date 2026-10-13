@@ -16,28 +16,13 @@ vi.mock('@/components/ssh/SSHFileExplorer', () => ({
 
 const project = { id: 'p1', name: 'One', path: '/repo', color: 'blue' } as Project
 
-function makeSsh(active: boolean): SSHWorkspaceState {
+/** SSH state: workspace closed, open on the Hosts tab, or open on a connected session. */
+function makeSsh(mode: 'closed' | 'hosts' | 'session'): SSHWorkspaceState {
   return {
-    activeSSHProfile: active ? { id: 's1', name: 'Box' } : null,
-    sshConn: {
-      connectionId: null,
-      isConnected: false,
-      sftpReady: false,
-      entries: [],
-      currentPath: '/',
-      expandedDirs: new Set(),
-      childEntries: {},
-      loadingDirs: new Set(),
-      isLoadingRoot: false,
-      handleConnect: vi.fn(),
-      handleBrowseFiles: vi.fn(),
-      toggleDirectory: vi.fn(),
-      loadDirectory: vi.fn()
-    },
-    handleSSHMkdir: vi.fn(),
-    handleSSHCreateFile: vi.fn(),
-    handleSSHDelete: vi.fn(),
-    handleSSHRename: vi.fn()
+    workspaceOpen: mode !== 'closed',
+    activeSSHProfile: mode === 'session' ? { id: 's1', name: 'Box' } : null,
+    activeSSHSession:
+      mode === 'session' ? { id: 'tab', attemptId: 'attempt-1', status: 'connected' } : null
   } as unknown as SSHWorkspaceState
 }
 
@@ -49,20 +34,26 @@ describe('ExplorerColumn', () => {
   })
 
   it('renders the sidePanel slot in place of the File Explorer', async () => {
-    render(<ExplorerColumn activeProject={project} ssh={makeSsh(false)} sidePanel={slot} />)
+    render(<ExplorerColumn activeProject={project} ssh={makeSsh('closed')} sidePanel={slot} />)
     expect(await screen.findByTestId('side-panel-slot')).toBeInTheDocument()
   })
 
-  it('shows only the SSH block, at its own width, while an SSH profile is active', async () => {
-    render(<ExplorerColumn activeProject={project} ssh={makeSsh(true)} sidePanel={slot} />)
+  it('shows only the remote files, at their own width, for a connected session', async () => {
+    render(<ExplorerColumn activeProject={project} ssh={makeSsh('session')} sidePanel={slot} />)
     const ssh = await screen.findByTestId('ssh-explorer')
     expect(screen.queryByTestId('side-panel-slot')).toBeNull()
     expect(ssh.parentElement).toHaveClass('w-64')
   })
 
+  it('shows neither column on the Hosts tab', () => {
+    render(<ExplorerColumn activeProject={project} ssh={makeSsh('hosts')} sidePanel={slot} />)
+    expect(screen.queryByTestId('ssh-explorer')).toBeNull()
+    expect(screen.queryByTestId('side-panel-slot')).toBeNull()
+  })
+
   it('renders nothing for the slot while the explorer is hidden', () => {
     visible.value = false
-    render(<ExplorerColumn activeProject={project} ssh={makeSsh(false)} sidePanel={slot} />)
+    render(<ExplorerColumn activeProject={project} ssh={makeSsh('closed')} sidePanel={slot} />)
     expect(screen.queryByTestId('side-panel-slot')).toBeNull()
   })
 })

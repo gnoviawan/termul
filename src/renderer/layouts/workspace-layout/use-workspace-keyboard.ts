@@ -4,6 +4,7 @@ import { useUpdateAppSetting, useUpdatePanelVisibility } from '@/hooks/use-app-s
 import { getShortcutTargetContext } from '@/layouts/workspace-layout/shortcut-target'
 import { keyboardApi } from '@/lib/api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
+import { cycleSSHTab, requestCloseSSHSession } from '@/lib/ssh-sessions'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getWebAuthGateState } from '@/lib/web-auth-gate'
 import { useUiZoomLevel } from '@/stores/app-settings-store'
@@ -11,6 +12,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { matchesShortcut } from '@/stores/keyboard-shortcuts-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
+import { SSH_HOSTS_TAB, useSSHStore } from '@/stores/ssh-store'
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
@@ -123,6 +125,35 @@ export function useWorkspaceKeyboard({
       if (e.defaultPrevented) return
 
       const { isInEditor, isInTerminal, isInInput } = getShortcutTargetContext(e.target)
+
+      // SSH workspace: the tab shortcuts act on its tabs (Hosts + sessions).
+      if (useSSHStore.getState().workspaceOpen && !isAgentLauncherOpen) {
+        if (matchesShortcut(e, getActiveKey('closeTab'))) {
+          e.preventDefault()
+          const { activeTab: sshTab } = useSSHStore.getState()
+          if (sshTab !== SSH_HOSTS_TAB) requestCloseSSHSession(sshTab)
+          return
+        }
+        if (matchesShortcut(e, getActiveKey('nextTerminal'))) {
+          e.preventDefault()
+          e.stopPropagation()
+          cycleSSHTab(1)
+          return
+        }
+        if (matchesShortcut(e, getActiveKey('prevTerminal'))) {
+          e.preventDefault()
+          e.stopPropagation()
+          cycleSSHTab(-1)
+          return
+        }
+        // New tab = pick a host to connect to.
+        if (matchesShortcut(e, getActiveKey('newTerminal'))) {
+          e.preventDefault()
+          e.stopPropagation()
+          useSSHStore.getState().setActiveTab(SSH_HOSTS_TAB)
+          return
+        }
+      }
 
       // Close Tab (Ctrl+W / ⌘+W)
       // On macOS: ⌘+W closes tab, Ctrl+W is forwarded to shell (backward-kill-word)

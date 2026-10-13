@@ -1,15 +1,69 @@
-import { useCallback, useId, useState } from 'react'
+import { type MutableRefObject, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { FileEdit, Save, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { useCodeMirror } from '@/hooks/use-codemirror'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { detectLanguage } from '@/stores/editor-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
-import { useSSHActions, useSSHEditorContent, useSSHEditorFile } from '@/stores/ssh-store'
+import {
+  useSSHActions,
+  useSSHEditorContent,
+  useSSHEditorFile,
+  useSSHStore
+} from '@/stores/ssh-store'
 
 interface SSHFileEditorProps {
   connectionId: string
+}
+
+const ignore = (): void => {}
+
+interface RemoteCodeViewProps {
+  path: string
+  name: string
+  content: string
+  onChange: (content: string) => void
+  onSave: () => void
+  flushRef: MutableRefObject<(() => void) | null>
+}
+
+/** The shared code editor (line numbers, syntax, theme) for one remote file. */
+function RemoteCodeView({
+  path,
+  name,
+  content,
+  onChange,
+  onSave,
+  flushRef
+}: RemoteCodeViewProps): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const { view, flushPendingContent } = useCodeMirror(containerRef, {
+    filePath: path,
+    content,
+    language: detectLanguage(name),
+    // The unmount flush of a replaced file must not land on the next one.
+    onChange: (text) => {
+      if (useSSHStore.getState().editingFile?.path === path) onChange(text)
+    },
+    onCursorChange: ignore,
+    onScrollChange: ignore,
+    onSave
+  })
+
+  useEffect(() => {
+    flushRef.current = flushPendingContent
+    return () => {
+      flushRef.current = null
+    }
+  }, [flushRef, flushPendingContent])
+
+  useEffect(() => {
+    view?.contentDOM.setAttribute('aria-label', `Contents of ${path}`)
+  }, [view, path])
+
+  return <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden" />
 }
 
 export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.Element {
@@ -20,16 +74,21 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
   const [saveAnimating, setSaveAnimating] = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
 
+  const flushRef = useRef<(() => void) | null>(null)
+
   const isDirty = editingFile !== null && editingContent !== editingFile.originalContent
 
   const handleSave = useCallback(async () => {
     if (!editingFile || !connectionId) return
+    // The code view reports edits after a short debounce; take the latest text.
+    flushRef.current?.()
+    const content = useSSHStore.getState().editingContent
     setIsSaving(true)
     setSaveAnimating(true)
     try {
-      const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, editingContent)
+      const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, content)
       if (result.success) {
-        setStoreFile({ ...editingFile, originalContent: editingContent })
+        setStoreFile({ ...editingFile, originalContent: content })
         setConfirmClose(false)
         toast.success(`Saved: ${editingFile.name}`)
         setTimeout(() => setSaveAnimating(false), 600)
@@ -43,7 +102,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
     } finally {
       setIsSaving(false)
     }
-  }, [editingFile, connectionId, editingContent, setStoreFile])
+  }, [editingFile, connectionId, setStoreFile])
 
   const handleClose = useCallback(() => {
     if (isDirty) setConfirmClose(true)
@@ -65,7 +124,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
 
   return (
     <>
-      <div className="flex-1 flex flex-col">
+      <div className="flex h-full flex-1 flex-col">
         <div className="h-8 flex items-center justify-between px-3 border-b border-border bg-muted/30">
           <div className="flex items-center gap-2">
             <FileEdit className="h-3 w-3 text-muted-foreground" />
@@ -73,8 +132,12 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
           </div>
           <div className="flex items-center gap-1">
             <button
+              type="button"
               onClick={handleSave}
               disabled={isSaving}
+              aria-label={
+                isDirty ? `Save ${editingFile.name} (unsaved changes)` : `Save ${editingFile.name}`
+              }
               className={cn(
                 'p-1 rounded transition-all duration-300',
                 saveAnimating
@@ -88,19 +151,24 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
               <Save className={cn('h-3 w-3', saveAnimating && 'animate-pulse')} />
             </button>
             <button
+              type="button"
               onClick={handleClose}
               className="p-1 rounded hover:bg-accent text-muted-foreground"
               title="Close"
+              aria-label={`Close ${editingFile.name}`}
             >
               <X className="h-3 w-3" />
             </button>
           </div>
         </div>
-        <textarea
-          value={editingContent}
-          onChange={(e) => setStoreContent(e.target.value)}
-          className={`flex-1 w-full p-3 text-xs font-mono bg-background resize-none focus-visible:ring-inset ${FOCUS_RING_CLASS}`}
-          spellCheck={false}
+        <RemoteCodeView
+          key={editingFile.path}
+          path={editingFile.path}
+          name={editingFile.name}
+          content={editingContent}
+          onChange={setStoreContent}
+          onSave={() => void handleSave()}
+          flushRef={flushRef}
         />
       </div>
 

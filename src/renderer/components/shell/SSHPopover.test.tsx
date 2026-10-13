@@ -43,20 +43,26 @@ vi.mock('@/components/ssh/SSHPanel', () => ({
     )
   }
 }))
-vi.mock('@/components/ssh/SSHProfileForm', () => ({
-  SSHProfileForm: ({ onClose }: { onClose: () => void }) => (
-    <div role="dialog" aria-label="profile form">
-      <button type="button" onClick={onClose}>
-        close-form
-      </button>
-    </div>
-  )
+vi.mock('@/components/ssh/SSHHostEditor', () => ({
+  SSHHostEditor: ({
+    open,
+    onOpenChange
+  }: {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+  }) =>
+    open ? (
+      <div role="dialog" aria-label="profile form">
+        <button type="button" onClick={() => onOpenChange(false)}>
+          close-form
+        </button>
+      </div>
+    ) : null
 }))
-vi.mock('@/stores/ssh-store', () => ({
-  useSSHConnections: () => [],
+vi.mock('@/stores/ssh-store', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   useSSHActions: () => ({
     loadProfiles: vi.fn(),
-    disconnect: vi.fn(),
     deleteProfile: vi.fn(),
     selectProfile: vi.fn()
   })

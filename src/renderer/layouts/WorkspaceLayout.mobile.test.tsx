@@ -443,7 +443,7 @@ vi.mock('@/components/mobile/MobileTerminalControls', () => ({
 
 // CAP-6 Patch 3: SSH workspace lazy/Suspense boundary test.
 // Stub SSHWorkspace + SSHFileExplorer so the lazy chunks resolve to
-// lightweight markers. The ssh-store and ssh-connection hooks are stubbed
+// lightweight markers. The ssh-store hooks are stubbed
 // with a controllable profile ref so the SSH render path activates.
 const { sshProfileRef, sshProfilesRef } = vi.hoisted(() => ({
   sshProfileRef: {
@@ -468,7 +468,9 @@ const { sshProfileRef, sshProfilesRef } = vi.hoisted(() => ({
   }
 }))
 
-vi.mock('@/stores/ssh-store', () => ({
+vi.mock('@/stores/ssh-store', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useSSHWorkspaceOpen: () => sshProfileRef.current !== null,
   useActiveSSHProfile: () => sshProfileRef.current,
   useActiveSSHProfileId: () => (sshProfileRef.current ? 'ssh-1' : null),
   useSSHActions: () => ({
@@ -494,28 +496,8 @@ vi.mock('@/stores/ssh-store', () => ({
   })
 }))
 
-vi.mock('@/hooks/use-ssh-connection', () => ({
-  useSSHConnection: () => ({
-    connectionId: 'conn-1',
-    isConnected: true,
-    sftpReady: true,
-    entries: [],
-    currentPath: '/home',
-    expandedDirs: new Set(),
-    childEntries: {},
-    loadingDirs: new Set(),
-    isLoadingRoot: false,
-    handleConnect: vi.fn(),
-    handleBrowseFiles: vi.fn(),
-    toggleDirectory: vi.fn(),
-    loadDirectory: vi.fn()
-  })
-}))
-
 vi.mock('@/components/ssh/SSHWorkspace', () => ({
-  SSHWorkspace: ({ profile }: { profile: { name?: string } }) => (
-    <div data-testid="ssh-workspace-stub">SSH: {profile?.name}</div>
-  )
+  SSHWorkspace: () => <div data-testid="ssh-workspace-stub">SSH workspace</div>
 }))
 
 vi.mock('@/components/ssh/SSHFileExplorer', () => ({
@@ -1269,52 +1251,6 @@ describe('WorkspaceLayout mobile branch', () => {
         pushSpy.mockRestore()
       })
 
-      describe('SSH password prompt', () => {
-        async function openSshPrompt(): Promise<void> {
-          sshProfilesRef.current = [
-            {
-              id: 'ssh-9',
-              name: 'Build box',
-              host: 'build.example',
-              username: 'dev',
-              authMethod: 'password',
-              hasStoredPassword: false
-            }
-          ]
-          renderLayout()
-          await chooseMoreItem('Command palette')
-          await waitForSentinelDepth(1)
-
-          // The palette closes and the inline prompt opens in one batch.
-          fireEvent.click(await screen.findByRole('button', { name: 'Connect SSH profile' }))
-          expect(await screen.findByText('SSH Password')).toBeInTheDocument()
-          await settleOverlayBackStack()
-          expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
-        }
-
-        it('system back closes the prompt and clears it', async () => {
-          await openSshPrompt()
-          const hashBefore = window.location.hash
-
-          await pressSystemBack()
-
-          await waitFor(() => expect(screen.queryByText('SSH Password')).not.toBeInTheDocument())
-          expect(window.location.hash).toBe(hashBefore)
-          expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
-        })
-
-        it('its Cancel button consumes the sentinel', async () => {
-          await openSshPrompt()
-
-          await act(async () => {
-            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-          })
-
-          expect(screen.queryByText('SSH Password')).not.toBeInTheDocument()
-          await waitForSentinelDepth(0)
-        })
-      })
-
       it('system back closes App Preferences', async () => {
         renderLayout()
         await screen.findByLabelText('More')
@@ -1929,7 +1865,7 @@ describe('WorkspaceLayout SSH workspace lazy/Suspense boundary (CAP-6 Patch 3)',
     }
   })
 
-  it('renders SSHWorkspace through React.lazy + <Suspense> when an SSH profile is active', async () => {
+  it('renders SSHWorkspace through React.lazy + <Suspense> when the SSH workspace is open', async () => {
     renderLayout()
 
     // SSHWorkspace is React.lazy — <Suspense> shows ShellSkeleton first, then
@@ -1937,6 +1873,6 @@ describe('WorkspaceLayout SSH workspace lazy/Suspense boundary (CAP-6 Patch 3)',
     // (also lazy) wraps workspaceMain which contains the SSH render site.
     const ssh = await screen.findByTestId('ssh-workspace-stub')
     expect(ssh).toBeInTheDocument()
-    expect(ssh).toHaveTextContent('Test SSH')
+    expect(ssh).toHaveTextContent('SSH workspace')
   })
 })

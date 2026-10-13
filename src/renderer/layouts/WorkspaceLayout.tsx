@@ -98,15 +98,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCommandPaletteOpen,
     isCommandHistoryOpen,
     setIsCommandHistoryOpen,
-    isSshPasswordPromptOpen: ssh.sshPasswordPrompt !== null,
-    closeSshPasswordPrompt: ssh.closeSshPasswordPrompt,
     locationKey: location.key
   })
 
   const handleSelectProject = useCallback(
     (id: string) => {
       selectProject(id)
-      ssh.selectSSHProfile(null) // Deselect SSH when switching to project
+      ssh.selectSSHProfile(null) // Leave the SSH workspace when switching to a project
     },
     [selectProject, ssh.selectSSHProfile]
   )

@@ -45,6 +45,7 @@ import { useProjectRegistry } from './hooks/use-project-registry'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useShellLayoutHydration } from './hooks/use-shell-layout-hydration'
 import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
+import { useSSHSessionEvents } from './hooks/use-ssh-session-events'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
 import { useTerminalIdleNotification } from './hooks/use-terminal-idle-notification'
@@ -79,6 +80,7 @@ function AppEffects(): null {
   useTerminalRestore()
   useCrashRecovery()
   useTerminalDetachedOutput()
+  useSSHSessionEvents()
   useCwd()
   useGitBranch()
   useProjectGitBranch()
