@@ -2,7 +2,7 @@
  * Web/remote project list wire contract (runtime-neutral).
  *
  * Every host (the desktop included) owns one durable project registry. Clients
- * read it through the `projects` watch (full state, then the replacement list on
+ * read it through the `projects` watch (full state, then the replacement state (the project list and the default project id) on
  * each change) and change it with the `add_project` / `update_project` /
  * `remove_project` / `set_default_project` commands. `GET /projects` returns the
  * same list over HTTP.
