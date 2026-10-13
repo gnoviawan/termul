@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest'
 const DECLARED_SCOPES: Record<keyof typeof PersistenceKeys, KeyScope> = {
   terminals: 'device',
   snapshots: 'device',
-  projects: 'device',
+  projectPrefs: 'device',
   windowState: 'device',
   appSettings: 'sharedLww',
   keyboardShortcuts: 'sharedLww',
