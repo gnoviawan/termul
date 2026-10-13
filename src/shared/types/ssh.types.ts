@@ -179,44 +179,7 @@ export interface SFTPTransferProgress {
 // SSH IPC API Interface
 // ============================================================================
 
-// Legacy connection API, still used by the current SSH panel. Removed once
-// the session-based SSH workspace replaces it.
-export type SSHConnectionStatus =
-  | 'disconnected'
-  | 'connecting'
-  | 'connected'
-  | 'reconnecting'
-  | 'failed'
-
-export interface SSHConnection {
-  id: string
-  profileId: string
-  status: SSHConnectionStatus
-  /** PTY terminal ID for the interactive shell */
-  terminalId?: string
-  /** Active port forwards */
-  activeForwards: ActivePortForward[]
-  /** Error message if status is 'failed' */
-  error?: string
-  /** Number of reconnect attempts */
-  reconnectAttempts: number
-  /** Timestamp of connection start */
-  connectedAt?: string
-}
-
-export type SSHConnectionStatusCallback = (
-  connectionId: string,
-  status: SSHConnectionStatus,
-  error?: string
-) => void
-
 export interface SSHApi {
-  // Legacy connection management (see SSHConnection)
-  connect: (profileId: string, password?: string) => Promise<IpcResult<SSHConnection>>
-  disconnect: (connectionId: string) => Promise<IpcResult<void>>
-  getConnections: () => Promise<IpcResult<SSHConnection[]>>
-  onConnectionStatusChanged: (callback: SSHConnectionStatusCallback) => () => void
-
   // Profile management
   listProfiles: () => Promise<IpcResult<SSHProfile[]>>
   saveProfile: (profile: SSHProfile) => Promise<IpcResult<void>>

@@ -40,7 +40,7 @@ vi.mock('../persistence-api', () => ({
 }))
 
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { createAskpassScript, createSSHApi } from '../ssh-api'
+import { createSSHApi } from '../ssh-api'
 
 const profile = (overrides: Partial<SSHProfile> = {}): SSHProfile => ({
   id: 'p-1',
@@ -203,17 +203,6 @@ describe('sshApi (web branch)', () => {
     expect(mockPersistenceApi.write).toHaveBeenCalledTimes(1)
   })
 
-  it('connect returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
-    const api = createSSHApi()
-    const result = await api.connect('profile-1')
-
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockInvoke).not.toHaveBeenCalled()
-  })
-
   it('session commands return WEB_UNSUPPORTED when !isTauriContext()', async () => {
     const api = createSSHApi()
     const results = await Promise.all([
@@ -251,16 +240,6 @@ describe('sshApi (web branch)', () => {
   it('sftpListDir returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
     const api = createSSHApi()
     const result = await api.sftpListDir('conn-1', '/remote')
-
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockInvoke).not.toHaveBeenCalled()
-  })
-
-  it('createAskpassScript returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
-    const result = await createAskpassScript('secret')
 
     expect(result.success).toBe(false)
     if (!result.success) {

@@ -7,9 +7,6 @@ import type {
   SFTPEntry,
   SFTPTransferProgress,
   SSHApi,
-  SSHConnection,
-  SSHConnectionStatus,
-  SSHConnectionStatusCallback,
   SSHHostKeyPrompt,
   SSHKeyFileInfo,
   SSHLiveSession,
@@ -63,7 +60,6 @@ async function readProfilesSnapshot(): Promise<
 }
 
 const SSH_EVENTS = {
-  CONNECTION_STATUS_CHANGED: 'ssh-connection-status-changed',
   PORT_FORWARD_STATUS_CHANGED: 'ssh-port-forward-status-changed',
   TRANSFER_PROGRESS: 'ssh-transfer-progress',
   SESSION_PROGRESS: 'ssh-session-progress',
@@ -95,12 +91,7 @@ const SSH_COMMANDS = {
   SESSION_LIST: 'ssh_session_list',
   DUPLICATE_PROFILE: 'ssh_duplicate_profile',
   INSPECT_KEY: 'ssh_inspect_key',
-  LIST_KEYS: 'ssh_list_keys',
-  // Legacy connection commands (see SSHConnection)
-  CONNECT: 'ssh_connect',
-  DISCONNECT: 'ssh_disconnect',
-  GET_CONNECTIONS: 'ssh_get_connections',
-  CREATE_ASKPASS: 'ssh_create_askpass'
+  LIST_KEYS: 'ssh_list_keys'
 } as const
 
 async function invokeIpc<T>(
@@ -191,28 +182,6 @@ export function createSSHApi(): SSHApi {
 
     async importConfig(): Promise<IpcResult<SSHProfile[]>> {
       return invokeIpc<SSHProfile[]>(SSH_COMMANDS.IMPORT_CONFIG)
-    },
-
-    // Legacy connection management (see SSHConnection)
-    async connect(profileId: string, password?: string): Promise<IpcResult<SSHConnection>> {
-      return invokeIpc<SSHConnection>(SSH_COMMANDS.CONNECT, {
-        request: { profileId, password }
-      })
-    },
-
-    async disconnect(connectionId: string): Promise<IpcResult<void>> {
-      return invokeIpc<void>(SSH_COMMANDS.DISCONNECT, { connectionId })
-    },
-
-    async getConnections(): Promise<IpcResult<SSHConnection[]>> {
-      return invokeIpc<SSHConnection[]>(SSH_COMMANDS.GET_CONNECTIONS)
-    },
-
-    onConnectionStatusChanged(callback: SSHConnectionStatusCallback): () => void {
-      return listenDesktop<{ id: string; status: SSHConnectionStatus; error?: string }>(
-        SSH_EVENTS.CONNECTION_STATUS_CHANGED,
-        (payload) => callback(payload.id, payload.status, payload.error)
-      )
     },
 
     // Port forwarding
@@ -377,11 +346,3 @@ export function createSSHApi(): SSHApi {
 }
 
 export const sshApi = createSSHApi()
-
-/**
- * Legacy: create an SSH_ASKPASS helper script in the temp directory and
- * return its path. Removed with the legacy connection API.
- */
-export async function createAskpassScript(password: string): Promise<IpcResult<string>> {
-  return invokeIpc<string>(SSH_COMMANDS.CREATE_ASKPASS, { password })
-}
