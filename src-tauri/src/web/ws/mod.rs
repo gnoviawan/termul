@@ -33,7 +33,6 @@
 //! replay. Unknown request types return `err.code: "not_implemented"`.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -47,7 +46,7 @@ use tracing::{debug, info, warn};
 
 use crate::acp::config::AgentConfig;
 use crate::acp::provider_errors::ProviderErrorKind;
-use crate::acp::{AcpManager, FileProjectRegistry, SessionCreationContext};
+use crate::acp::{AcpManager, SessionCreationContext};
 // Only the harness and the ws tests name these (through `super::*`).
 #[cfg(test)]
 use crate::acp::{AgentId, SessionId};
@@ -565,10 +564,6 @@ pub struct AppState {
     /// The host's durable project registry — source for `GET /projects`,
     /// default-project resolution and the fs/git boundary.
     pub registry: Arc<ProjectRegistry>,
-    /// Unused: removed in the next change.
-    pub registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    /// Unused: removed in the next change.
-    pub projects_file: Option<Arc<PathBuf>>,
     /// Deployment history provider exposed to authenticated browser clients.
     pub history_mode: HistoryMode,
     /// Host-owned versioned workspace manifest service (CAP-5 / Story 5).

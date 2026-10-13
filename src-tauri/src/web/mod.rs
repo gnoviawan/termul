@@ -67,7 +67,6 @@ pub use ws::{AppState, HistoryMode, ReliabilityTier, RuntimePolicy, SequencedEve
 
 use std::future::Future;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
@@ -146,8 +145,6 @@ pub async fn serve(
     exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
-    registry_persistence: Option<Arc<parking_lot::Mutex<crate::acp::FileProjectRegistry>>>,
-    projects_file: Option<PathBuf>,
     cfg: ServerConfig,
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
@@ -184,8 +181,6 @@ pub async fn serve(
         exit_code_tracker,
         ws_relay,
         registry,
-        registry_persistence,
-        projects_file,
         cfg,
         shutdown_signal_future(),
         workspace_manifest,
@@ -287,8 +282,6 @@ pub async fn serve_router(
     exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
-    registry_persistence: Option<Arc<parking_lot::Mutex<crate::acp::FileProjectRegistry>>>,
-    projects_file: Option<PathBuf>,
     cfg: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
@@ -363,8 +356,6 @@ pub async fn serve_router(
         exit_code_tracker,
         Arc::clone(&ws_relay),
         Arc::clone(&registry),
-        registry_persistence,
-        projects_file,
         history_mode,
         workspace_manifest,
         acp_catalog,

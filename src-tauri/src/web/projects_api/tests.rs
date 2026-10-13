@@ -24,8 +24,6 @@ fn state_for(host: &TestHost) -> AppState {
         pty,
         relay: Arc::clone(&host.relay),
         registry: Arc::clone(&host.registry),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
         pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         oauth_base_url: "http://127.0.0.1".to_string(),

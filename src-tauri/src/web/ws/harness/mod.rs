@@ -88,8 +88,6 @@ impl Host {
             pty,
             relay: Arc::clone(&relay),
             registry: Arc::new(ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
             history_mode,
             workspace_manifest: None,
             acp_catalog: None,

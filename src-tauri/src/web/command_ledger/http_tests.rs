@@ -64,8 +64,6 @@ fn host_with(root: &Path, relay: WsRelaySink) -> AppState {
         pty,
         relay: Arc::new(relay),
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(root),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
         pending_oauth_flows: Arc::new(parking_lot::RwLock::new(Default::default())),
         oauth_base_url: "http://127.0.0.1".to_string(),

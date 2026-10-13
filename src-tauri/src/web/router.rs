@@ -7,7 +7,7 @@
 //! mount (AC1).
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
@@ -24,7 +24,7 @@ use crate::web::acp_api;
 use crate::web::auth::WebAuth;
 
 use crate::acp::{
-    AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService,
+    AcpCatalogService, AcpInstallService, AcpManager, WorkspaceManifestService,
 };
 use crate::canvas::pool::CanvasDaemonPool;
 use crate::pty::PtyManager;
@@ -163,8 +163,6 @@ pub fn router(
     exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
-    registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    projects_file: Option<PathBuf>,
     history_mode: HistoryMode,
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
@@ -389,8 +387,6 @@ pub fn router(
         exit_code_tracker,
         relay: ws_relay,
         registry,
-        registry_persistence,
-        projects_file: projects_file.map(Arc::new),
         history_mode,
         workspace_manifest,
         acp_catalog,
@@ -673,8 +669,6 @@ pub fn router_with_static(
             pty,
             relay: ws_relay,
             registry,
-            registry_persistence: None,
-            projects_file: None,
             history_mode: HistoryMode::LiveOnly,
             workspace_manifest: None,
             acp_catalog: None,

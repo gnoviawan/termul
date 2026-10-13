@@ -49,8 +49,6 @@ fn test_state(root: &std::path::Path) -> AppState {
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
             &root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         ),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: HistoryMode::LiveOnly,
         workspace_manifest: None,
         acp_catalog: None,
@@ -547,8 +545,6 @@ fn production_router(root: &std::path::Path) -> axum::Router {
         pty.exit_code_tracker(),
         Arc::new(WsRelaySink::new()),
         ProjectRegistry::seeded_for_test(&project_root),
-        None,
-        None,
         HistoryMode::LiveOnly,
         None,
         None,

@@ -27,8 +27,6 @@ fn app_with_registry(registry: Arc<crate::web::project_registry::ProjectRegistry
         pty,
         relay: Arc::new(WsRelaySink::new()),
         registry,
-        registry_persistence: None,
-        projects_file: None,
         history_mode: HistoryMode::LiveOnly,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
@@ -174,8 +172,6 @@ async fn put_refused_in_shared_live_mode() {
         pty,
         relay: Arc::new(WsRelaySink::new()),
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(&dir),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: HistoryMode::LiveOnly,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),

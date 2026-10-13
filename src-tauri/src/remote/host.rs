@@ -476,8 +476,6 @@ impl RemoteServerState {
             pty.exit_code_tracker(),
             ws_relay,
             registry,
-            None,
-            None,
             cfg,
             shutdown,
             workspace_manifest,

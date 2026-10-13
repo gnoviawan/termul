@@ -432,8 +432,6 @@ fn main() -> ExitCode {
             exit_code_tracker,
             ws_relay,
             registry,
-            None,
-            None,
             cfg,
             workspace_manifest,
             acp_catalog,

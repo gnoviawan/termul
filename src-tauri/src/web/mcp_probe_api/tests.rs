@@ -33,8 +33,6 @@ fn test_app_with(allow_remote_writes: bool, shared_live_writes_denied: bool) -> 
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
             &std::env::temp_dir(),
         ),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: HistoryMode::LiveOnly,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),

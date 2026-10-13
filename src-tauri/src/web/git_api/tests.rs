@@ -49,8 +49,6 @@ fn test_state(root: &std::path::Path) -> AppState {
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
             &root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         ),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: HistoryMode::LiveOnly,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
