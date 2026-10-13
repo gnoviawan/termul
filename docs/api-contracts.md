@@ -583,6 +583,23 @@ The project list, the chat-history index and the agent roster are state, not ses
 - The client applies a delta only when it is `n + 1` of the same `hostEpoch`. A skipped `n`, a different epoch (a new serve start), a `resync` marker or a reconnect makes it send `watch` again and rebuild from the fresh state.
 - `projects_changed` and `chat_history_changed` no longer exist, and the relay no longer sends `agent_spawned`, `agent_crashed`, `agent_error` or `agent_disconnected` without a session as `seq = 0` events. `browser_open_request`, `worktree_branch_renamed` and `fs_changed` keep their current delivery. The web client reads the watches: the project switcher rebuilds its list from `projects`, the chat-history sidebar installs the `chat_history` index and refetches on a delta, and the agent store reconciles its roster from `agents`.
 
+### Project registry commands
+
+One durable `ProjectRegistry` per host owns the project list: `termul-server` keeps it in its projects file, the desktop in `<app data dir>/projects.json` (locked beside `store.json`, opened once at setup, **not** cleared by `remote_server_stop`). Every command below runs through one host command service: it validates, writes the candidate to disk (temp file, fsync, rename) and only then swaps memory, so a failed write replies an error and changes nothing; then it publishes the new state to every `projects` watcher.
+
+| `/ws` request | HTTP | Request fields | Reply |
+| --- | --- | --- | --- |
+| `add_project` | `POST /projects` | `id` (client-minted), `name`, `path`, `color`, `isArchived?` | `{project}`. Repeating the same `id` and folder is ok; the same `id` with another folder is `duplicate` (`DUPLICATE`); a reserved id or an unusable folder is `unsupported` (`VALIDATION_ERROR`) |
+| `update_project` | `PUT /projects/{id}` | `projectId`, `name?`, `color?`, `isArchived?`, `cascade?` | `{}`; `not_found` for an unknown id |
+| `remove_project` | `DELETE /projects/{id}?cascade=` | `projectId`, `cascade?` | `{}`; an absent id is ok |
+| `set_default_project` | `POST /projects/default` | `projectId` | `{}`; `not_found` unless the project is registered, not archived and has a folder |
+
+- Add, update and remove are idempotent by `projectId`, so they carry no ledger `commandId`. Archiving or removing the default project clears the default; the default only changes through `set_default_project`.
+- `project_busy` (HTTP `IpcBody.code` `PROJECT_BUSY`): removing or archiving a project that still has live sessions (host-stamped `projectId`) or terminals is refused and nothing changes. `err.details` (HTTP `details`) is `{"sessions":[sessionId…],"terminals":[terminalId…]}`. With `cascade: true` (HTTP: `?cascade=true` on DELETE, `"cascade":true` in the PUT body) the host cancels and closes the bound sessions (an agent is stopped only when no other session uses it), force-kills the bound terminals, drops the project's fs watches, then removes or archives the project; session/terminal events fan out through their usual paths. If something cannot be stopped the project stays and `project_busy` lists the leftovers. While a remove or archive runs, `create_session` and terminal `spawn` for that project are refused `project_busy`.
+- `WsError` gains the optional `details` field (additive; today only `project_busy` sets it) and `IpcBody` the same `details`.
+- Registry file: schema 4 (`imported: bool` added to v3). A v1-v3 file loads and is copied to `<name>.pre-v4-<ts>.bak` before its first rewrite; a newer schema is refused and never overwritten; a corrupt file is copied to `<name>.corrupt-<ts>.bak`. The synthetic seed project (`--project-root` / desktop default) lives in memory only.
+- Tauri: `project_registry_import({projects: ProjectSummary[], defaultProjectId?}) -> {imported: boolean}` is the desktop's one-shot import of the renderer's old project list. It runs only while the file says nothing was imported, adds ids that are not registered (existing ids are kept, never overwritten), applies the default only when none is set and sets `imported` durably even for an empty list; a repeat replies `{imported: false}`. Until the renderer reads the registry through the projects watch, `remote_sync_projects` (full-list push) and `set_host_default_project` keep their behavior and are written through to `projects.json`.
+
 ## Notes
 
 - This is an **internal desktop IPC API**, not a third-party/public integration API.

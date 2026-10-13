@@ -9,6 +9,8 @@ import {
   MAX_CLIENT_ID_LEN,
   MAX_COMMAND_ID_LEN,
   type ReliabilityTier,
+  type RemoveProjectPayload,
+  type UpdateProjectPayload,
   WS_COMMAND_CLASSES,
   WS_ERROR_CODES,
   WS_EVENT_TIERS,
@@ -389,10 +391,29 @@ describe('web-protocol.types — envelope shapes (AC2 + AC3)', () => {
     expect(err.err?.message).toContain('authenticate')
   })
 
-  it('WsError shape is { code, message }', () => {
+  it('WsError shape is { code, message } with optional details', () => {
     const e: WsError = { code: 'stale', message: 'cursor gap' }
     expect(e.code).toBe('stale')
     expect(e.message).toBe('cursor gap')
+    expect(e.details).toBeUndefined()
+  })
+
+  it('a project_busy WsError carries the bound entity ids in details', () => {
+    const e: WsError = {
+      code: 'project_busy',
+      message: "project 'p-1' has live sessions or terminals",
+      details: { sessions: ['s-1'], terminals: ['t-1', 't-2'] }
+    }
+    const reply: WsReply = { id: 'r1', ok: false, err: e }
+    expect(reply.ok === false && reply.err.details?.terminals).toEqual(['t-1', 't-2'])
+  })
+
+  it('remove_project / update_project payloads take an optional cascade', () => {
+    const remove: RemoveProjectPayload = { projectId: 'p-1', cascade: true }
+    const archive: UpdateProjectPayload = { projectId: 'p-1', isArchived: true, cascade: true }
+    expect(remove.cascade).toBe(true)
+    expect(archive.cascade).toBe(true)
+    expect(({ projectId: 'p-1' } satisfies RemoveProjectPayload).projectId).toBe('p-1')
   })
 
   it('compile-time: WsEventType / WsRequestType / ReliabilityTier are string unions', () => {
@@ -444,6 +465,7 @@ describe('web-terminal-protocol.types — error codes', () => {
       'INVALID_CLIENT_IDENTITY',
       'INVALID_COMMAND_ID',
       'OUTCOME_UNKNOWN',
+      'PROJECT_BUSY',
       'PROTOCOL_VERSION_MISMATCH',
       'TERMINAL_LIMIT',
       'UNAUTHORIZED'
@@ -452,6 +474,10 @@ describe('web-terminal-protocol.types — error codes', () => {
 
   it('FORBIDDEN is the SCREAMING form of the /ws `forbidden` code', () => {
     expect(WEB_TERMINAL_ERROR_CODES.FORBIDDEN.toLowerCase()).toBe(WS_ERROR_CODES.FORBIDDEN)
+  })
+
+  it('PROJECT_BUSY is the SCREAMING form of the /ws `project_busy` code', () => {
+    expect(WEB_TERMINAL_ERROR_CODES.PROJECT_BUSY.toLowerCase()).toBe(WS_ERROR_CODES.PROJECT_BUSY)
   })
 
   it('the command verdicts are the SCREAMING form of the /ws codes', () => {

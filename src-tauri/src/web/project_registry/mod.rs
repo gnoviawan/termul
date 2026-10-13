@@ -1,21 +1,40 @@
-//! In-memory project registry for web/remote project listing and switching.
+//! The host's single project registry.
 //!
-//! The standalone server seeds it from the file-backed VFS-root registry; the
-//! desktop shared-live server receives renderer snapshots. The browser reads it
-//! through `GET /projects`; `create_session` resolves project ids and cwds to
-//! registered projects here, and private cwd/MCP context lives alongside. Public summaries remain redact-by-omission.
+//! One durable [`ProjectRegistry`] exists per host: the standalone
+//! `termul-server` opens it from `--projects-file`, the desktop builds it once
+//! at setup from `<app_data_dir>/projects.json` and hands the same instance to
+//! the shared-live host, so stopping shared-live never touches it. The browser
+//! reads it through `GET /projects` and the `projects` watch;
+//! `create_session` resolves project ids and cwds to registered projects here.
+//! Public summaries remain redact-by-omission; private MCP context lives
+//! alongside and is persisted with the project.
 //!
-//! The registry itself is not durable. VPS mode persists the default id through
-//! the separately retained `FileProjectRegistry`; desktop mode remains file-free.
+//! # Layout
+//!
+//! - this module: the wire types, the read model and the boundary readers;
+//! - [`store`]: the durable commit path (`validate → persist candidate →
+//!   swap memory`) and every mutation built on it;
+//! - [`commands`]: the one command service shared by HTTP, `/ws` and the
+//!   desktop (add / update / remove / set default / import), plus the single
+//!   change notification;
+//! - [`busy`]: the live sessions and terminals bound to a project and the
+//!   cascade that stops them.
+//!
+//! # Commit path
+//!
+//! Every mutation runs through one commit: a candidate is built from the
+//! current state, validated, written to the registry file (temp + fsync +
+//! rename) and only then swapped into memory. A failed write therefore leaves
+//! memory exactly as it was — rollback is "never swapped". Registries built
+//! with [`ProjectRegistry::new`] have no file and skip the write.
 //!
 //! # Host default vs per-client active (Epic 7 — cross-client continuity)
 //!
 //! The host owns a single `default_project_id` — the project NEW web clients
 //! start with on their initial `GET /projects`. It is NOT "whoever switched
 //! last": switching projects is client-only and never reaches the host. The
-//! default changes only via `set_default_project` (an explicit user action); `set`
-//! stores whatever default its caller passes (the desktop project-list sync
-//! passes the existing default, so navigation never moves it).
+//! default changes only via an explicit set-default command; it is cleared
+//! when its project is archived or removed.
 //!
 //! # Boundary
 //!
@@ -27,8 +46,10 @@
 //!
 //! A synthetic seed project (see [`ProjectRegistry::seed_root_if_no_usable_project`])
 //! keeps the boundary usable while no real project is registered; it is
-//! retired as soon as a real usable project is added.
+//! retired as soon as a real usable project is added and is never written to
+//! the registry file.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -37,7 +58,27 @@ use serde::{Deserialize, Serialize};
 
 use agent_client_protocol::schema::v1::McpServer;
 
-use crate::acp::{FileProjectRegistry, VfsRoot};
+use crate::acp::VfsRoot;
+
+mod busy;
+mod commands;
+#[cfg(test)]
+mod fixtures;
+mod store;
+#[cfg(test)]
+mod command_tests;
+#[cfg(test)]
+mod store_tests;
+#[cfg(test)]
+pub(crate) mod test_host;
+
+pub use busy::{BoundEntities, BoundSession};
+pub use commands::{
+    import_projects, notify_changed, replace_projects, set_default_project, AddProject,
+    ProjectCommandError, ProjectHost, UpdateProject,
+};
+pub use crate::acp::RootCheck;
+pub use store::ImportOutcome;
 
 /// Id of the project [`ProjectRegistry::seed_root_if_no_usable_project`] registers.
 pub const SEEDED_PROJECT_ID: &str = "default";
@@ -88,10 +129,50 @@ pub struct ProjectSwitchContext {
     pub mcp_servers: Vec<McpServer>,
 }
 
+
+/// The registry's state: the project list, the default, the one-shot import
+/// marker and the private per-project MCP attachments. Cloned into a candidate
+/// by every commit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RegistryData {
     projects: Vec<ProjectSummary>,
     default_project_id: Option<String>,
+    /// The desktop's one-shot import of the renderer's old project list has run.
+    imported: bool,
+    /// Project-scoped MCP attachments (never part of a public summary).
+    mcp_servers: HashMap<String, Vec<McpServer>>,
+    /// `true` while the project with id [`SEEDED_PROJECT_ID`] is the synthetic
+    /// seed (kept in memory only, never written to the registry file).
+    seeded: bool,
+}
+
+impl RegistryData {
+    fn project(&self, project_id: &str) -> Option<&ProjectSummary> {
+        self.projects.iter().find(|p| p.id == project_id)
+    }
+
+    /// Restore the invariants every commit ends with: no dangling or archived
+    /// default (P4), `is_default` flags derived from the default id, MCP
+    /// attachments only for registered projects, and `seeded` only while the
+    /// seed project exists.
+    fn normalize(&mut self) {
+        if self
+            .default_project_id
+            .as_deref()
+            .is_some_and(|id| !self.project(id).is_some_and(|p| !p.is_archived))
+        {
+            self.default_project_id = None;
+        }
+        let default_id = self.default_project_id.as_deref();
+        for project in &mut self.projects {
+            project.is_default = default_id == Some(project.id.as_str());
+        }
+        let ids: HashSet<&str> = self.projects.iter().map(|p| p.id.as_str()).collect();
+        self.mcp_servers.retain(|id, _| ids.contains(id.as_str()));
+        if !ids.contains(SEEDED_PROJECT_ID) {
+            self.seeded = false;
+        }
+    }
 }
 
 /// The cached canonical roots and the registry epoch they were built at.
@@ -120,21 +201,29 @@ struct CachedRoot {
     canonical: Option<PathBuf>,
 }
 
-/// In-memory project registry shared by VPS and desktop-hosted web modes.
+/// The host's project registry (see the module docs).
 ///
 /// `Arc<ProjectRegistry>` is shared between the router (read path + switch
-/// resolution), the `remote_sync_projects` command (write path), and
-/// `remote_server_stop` (clear). All mutation is behind a single
-/// `parking_lot::Mutex` so a renderer sync and a `/projects` read never race.
+/// resolution), the command service and the desktop commands. Readers take the
+/// `inner` mutex only for a short clone; writers go through `commit`, which
+/// holds `commit` (not `inner`) across the registry-file write so reads never
+/// wait on the disk.
 ///
 /// `roots` caches the canonical root of every non-archived project with a
-/// path. Every mutator (`set`/`upsert`/`update`/`remove`/`clear`) rebuilds it
-/// after its change lands, serialized by `roots_rebuild` so the last rebuild
-/// always reflects the latest registry state. Boundary checks only read it.
+/// path. Every commit rebuilds it after the swap, serialized by
+/// `roots_rebuild` so the last rebuild always reflects the latest registry
+/// state. Boundary checks only read it.
 #[derive(Default)]
 pub struct ProjectRegistry {
     inner: Mutex<RegistryData>,
-    mcp_servers: Mutex<std::collections::HashMap<String, Vec<McpServer>>>,
+    /// The registry file, or `None` for an in-memory registry.
+    file: Option<PathBuf>,
+    /// Serializes commits: one candidate is validated, persisted and swapped
+    /// at a time, so two writers never persist from the same base.
+    commit: Mutex<()>,
+    /// Project ids whose remove/archive is running: new sessions and terminals
+    /// are refused for them (see [`ProjectRegistry::begin_removal`]).
+    removing: Mutex<HashSet<String>>,
     roots: RwLock<RootsCache>,
     roots_rebuild: Mutex<()>,
     /// Bumped under `inner` by every mutation that can change the boundary;
@@ -143,173 +232,11 @@ pub struct ProjectRegistry {
 }
 
 impl ProjectRegistry {
-    /// Create an empty registry.
+    /// Create an empty in-memory registry (no file): tests and hosts without a
+    /// resolvable state directory.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Replace the whole mirror atomically. Called by `remote_sync_projects`
-    /// (renderer push — desktop-hosted mode, the desktop's active IS the default)
-    /// and `set_default_project` (explicit host-default change) with the
-    /// desktop's current non-archived + archived summaries + default id. The
-    /// renderer is the source of truth in desktop-hosted mode — a fresh `set`
-    /// fully supersedes the prior snapshot.
-    pub fn set(&self, mut projects: Vec<ProjectSummary>, default_id: Option<String>) {
-        // The unassigned sentinel names no project; a renderer-fed entry
-        // carrying it would make its sessions indistinguishable from
-        // unassigned ones, so it is never registered.
-        let before = projects.len();
-        projects.retain(|p| p.id != crate::acp::session_persistence::UNASSIGNED_PROJECT_ID);
-        if projects.len() != before {
-            tracing::warn!(
-                target: "termul::web::project_registry",
-                "set: dropped a project carrying the reserved unassigned id"
-            );
-        }
-        // A default naming the sentinel would dangle (P4).
-        let default_id =
-            default_id.filter(|id| id != crate::acp::session_persistence::UNASSIGNED_PROJECT_ID);
-        for project in &mut projects {
-            project.is_default = default_id.as_deref() == Some(project.id.as_str());
-        }
-        {
-            let mut g = self.inner.lock();
-            g.projects = projects;
-            g.default_project_id = default_id;
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-        }
-        self.rebuild_roots();
-    }
-    /// Replace the whole mirror, choosing the new default from the registry's
-    /// CURRENT default under the same lock (`derive(current)`), so a
-    /// concurrent `set_default_project` can never be overwritten by a default
-    /// derived from a stale read. Returns the default that was stored.
-    pub fn set_with_default_from(
-        &self,
-        mut projects: Vec<ProjectSummary>,
-        derive: impl FnOnce(&[ProjectSummary], Option<&str>) -> Option<String>,
-    ) -> Option<String> {
-        let default_id = {
-            let mut g = self.inner.lock();
-            let default_id = derive(&projects, g.default_project_id.as_deref());
-            for project in &mut projects {
-                project.is_default = default_id.as_deref() == Some(project.id.as_str());
-            }
-            g.projects = projects;
-            g.default_project_id = default_id.clone();
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-            default_id
-        };
-        self.rebuild_roots();
-        default_id
-    }
-
-    /// Insert or replace a single project summary by `id` in the in-memory
-    /// mirror (Option B: web-client project create/update). A root with an
-    /// existing `id` is replaced in place (preserving order); a new id is
-    /// appended. When the new project is the only one and no default is set,
-    /// the caller may set it via `set_default_project`.
-    ///
-    /// F-020: `is_default` is recomputed from `default_project_id` on every
-    /// upsert — a caller-supplied flag is advisory only, so upserting the
-    /// current default can never clear its flag while `default_project_id`
-    /// still points at it. P4 (no dangling default): when the upsert archives
-    /// the current default, `default_project_id` is cleared — same posture as
-    /// `update`/`remove`/`load`.
-    pub fn upsert(&self, project: ProjectSummary) {
-        // Same reservation as `set`: the sentinel never becomes a project.
-        if project.id == crate::acp::session_persistence::UNASSIGNED_PROJECT_ID {
-            tracing::warn!(
-                target: "termul::web::project_registry",
-                "upsert: refused a project carrying the reserved unassigned id"
-            );
-            return;
-        }
-        {
-            let mut g = self.inner.lock();
-            let adds_real_project = project.id != SEEDED_PROJECT_ID && is_usable(&project);
-            let new_id = project.id.clone();
-            if let Some(existing) = g.projects.iter_mut().find(|p| p.id == project.id) {
-                *existing = project;
-            } else {
-                g.projects.push(project);
-            }
-            // A real usable project retires the synthetic seed (and takes
-            // over as default when the seed was it).
-            if adds_real_project && g.projects.iter().any(|p| p.id == SEEDED_PROJECT_ID) {
-                g.projects.retain(|p| p.id != SEEDED_PROJECT_ID);
-                if g.default_project_id.as_deref() == Some(SEEDED_PROJECT_ID) {
-                    g.default_project_id = Some(new_id);
-                }
-            }
-            let mut default_id = g.default_project_id.clone();
-            if default_id
-                .as_deref()
-                .is_some_and(|id| g.projects.iter().any(|p| p.id == id && p.is_archived))
-            {
-                default_id = None;
-            }
-            for p in &mut g.projects {
-                p.is_default = default_id.as_deref() == Some(p.id.as_str());
-            }
-            g.default_project_id = default_id;
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-        }
-        self.rebuild_roots();
-    }
-
-    /// Remove a project summary by `id` from the in-memory mirror. Clears the
-    /// default when it referenced the removed project (P4: no dangling
-    /// default). Returns `true` when a project was removed.
-    pub fn remove(&self, project_id: &str) -> bool {
-        {
-            let mut g = self.inner.lock();
-            let before = g.projects.len();
-            g.projects.retain(|p| p.id != project_id);
-            if g.projects.len() == before {
-                return false;
-            }
-            if g.default_project_id.as_deref() == Some(project_id) {
-                g.default_project_id = None;
-            }
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-        }
-        self.rebuild_roots();
-        true
-    }
-
-    /// Patch a single project's display fields (name, color, archived) by
-    /// `id`. Returns `false` when the id is absent. Clears the default when the
-    /// project is archived (P4: an archived default is not switchable).
-    pub fn update(
-        &self,
-        project_id: &str,
-        name: Option<String>,
-        color: Option<String>,
-        is_archived: Option<bool>,
-    ) -> bool {
-        {
-            let mut g = self.inner.lock();
-            let Some(project) = g.projects.iter_mut().find(|p| p.id == project_id) else {
-                return false;
-            };
-            if let Some(name) = name {
-                project.name = name;
-            }
-            if let Some(color) = color {
-                project.color = color;
-            }
-            if let Some(is_archived) = is_archived {
-                project.is_archived = is_archived;
-            }
-            if project.is_archived && g.default_project_id.as_deref() == Some(project_id) {
-                g.default_project_id = None;
-            }
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-        }
-        self.rebuild_roots();
-        true
     }
 
     /// Snapshot the current mirror for `GET /projects`. Clones the vec under
@@ -321,6 +248,12 @@ impl ProjectRegistry {
             projects: g.projects.clone(),
             default_project_id: g.default_project_id.clone(),
         }
+    }
+
+    /// `true` once the one-shot import of the renderer's old project list ran.
+    #[must_use]
+    pub fn is_imported(&self) -> bool {
+        self.inner.lock().imported
     }
 
     /// Resolve a complete switchable project context. Archived, unknown, and
@@ -337,42 +270,12 @@ impl ProjectRegistry {
         if cwd.is_empty() {
             return None;
         }
-        let mcp_servers = self
-            .mcp_servers
-            .lock()
-            .get(project_id)
-            .cloned()
-            .unwrap_or_default();
+        let mcp_servers = g.mcp_servers.get(project_id).cloned().unwrap_or_default();
         Some(ProjectSwitchContext {
             project_id: project.id.clone(),
             cwd,
             mcp_servers,
         })
-    }
-
-    /// Atomically update the default id and every summary's `is_default` flag.
-    /// Called by the explicit `set_default_project` operation (Tauri command +
-    /// WS request + HTTP route). Returns `false` when the target is unknown,
-    /// archived, or pathless (not switchable) — the caller replies `NOT_FOUND`.
-    /// Only the default pointer moves — the boundary is the set of registered
-    /// roots, which this does not change.
-    pub fn set_default_project(&self, project_id: &str) -> bool {
-        let mut g = self.inner.lock();
-        let valid = g.projects.iter().any(|p| {
-            p.id == project_id
-                && !p.is_archived
-                && p.path
-                    .as_deref()
-                    .is_some_and(|path| !path.trim().is_empty())
-        });
-        if !valid {
-            return false;
-        }
-        g.default_project_id = Some(project_id.to_string());
-        for project in &mut g.projects {
-            project.is_default = project.id == project_id;
-        }
-        true
     }
 
     /// Whether `project_id` is a registered project (archived or not). Used by
@@ -436,74 +339,13 @@ impl ProjectRegistry {
         ancestor.map(|(_, id)| id)
     }
 
-    /// Seed one registered project at `root` (also the default) when no
-    /// usable project is registered (none non-archived with a path), so the
-    /// registry-only boundary does not reject every request on a standalone
-    /// `--project-root` server or a freshly started desktop host that has not
-    /// received its project list yet. Returns `true` when a project was
-    /// seeded. A registry that already has a usable project is left alone, and
-    /// the seed is retired once a real usable project is upserted.
-    /// The check and the insert happen under one lock, so a concurrent `set`
-    /// (renderer sync) either lands first and the seed is skipped, or lands
-    /// after and supersedes the seed — it is never overwritten by it.
-    pub fn seed_root_if_no_usable_project(&self, root: &Path) -> bool {
-        let name = root
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| "Project".to_string());
-        {
-            let mut g = self.inner.lock();
-            if g.projects.iter().any(is_usable) {
-                return false;
-            }
-            g.projects.retain(|p| p.id != SEEDED_PROJECT_ID);
-            g.projects.push(ProjectSummary {
-                id: SEEDED_PROJECT_ID.to_string(),
-                name,
-                color: "blue".to_string(),
-                path: Some(root.to_string_lossy().into_owned()),
-                is_archived: false,
-                is_default: true,
-            });
-            g.default_project_id = Some(SEEDED_PROJECT_ID.to_string());
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-        }
-        self.rebuild_roots();
-        tracing::info!(root = %root.display(), "seeded one registered project from the configured project root");
-        true
-    }
-
-    /// Test fixture: a shared registry with `root` registered as the one
-    /// (default) project, i.e. the boundary an `AppState` rooted at `root`
-    /// used to have.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn seeded_for_test(root: &Path) -> std::sync::Arc<Self> {
-        let registry = std::sync::Arc::new(Self::new());
-        registry.seed_root_if_no_usable_project(root);
-        registry
-    }
-
-    /// Clear the mirror (called on `remote_server_stop` so a stale list does
-    /// not linger after the server is off). Idempotent.
-    pub fn clear(&self) {
-        {
-            let mut g = self.inner.lock();
-            *g = RegistryData::default();
-            self.mcp_servers.lock().clear();
-            self.epoch.fetch_add(1, Ordering::AcqRel);
-        }
-        self.rebuild_roots();
-    }
-
-    /// Number of projects currently mirrored (test helper / diagnostics).
+    /// Number of registered projects (test helper / diagnostics).
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.lock().projects.len()
     }
 
-    /// `true` when the mirror holds no projects.
+    /// `true` when the registry holds no projects.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -617,7 +459,7 @@ impl ProjectRegistry {
                 let canonical = std::fs::canonicalize(&raw).ok();
                 if canonical.is_none() {
                     tracing::warn!(
-                        project_id = %project_id,
+                        project_id = project_id.as_str(),
                         "project root cannot be canonicalized; it is rechecked lazily"
                     );
                 }
@@ -649,57 +491,26 @@ fn is_within_dir(candidate: &str, dir: &str) -> bool {
             .is_some_and(|ch| ch == '/' || ch == '\\')
 }
 
-/// Map a file-backed VFS root to the wire [`ProjectSummary`] (VPS-mode seed).
+/// Map a file-backed VFS root to the wire [`ProjectSummary`].
 ///
 /// The `web -> acp` direction is already established (`web` depends on
 /// `acp::AcpManager`), so this mapping lives here — NOT in `acp` (which must
 /// not import `web`, the no-cycle invariant). `is_default` is left `false`
-/// per-entry; the caller ([`seed_from_file`]) derives the default flag from
-/// `default_project_id` after the full list is built.
+/// per-entry; [`RegistryData::normalize`] derives it from the default id.
 impl From<VfsRoot> for ProjectSummary {
     fn from(root: VfsRoot) -> Self {
         Self {
             id: root.id,
             name: root.name,
             color: root.color,
-            // ProjectSummary.path is Option<String>; surface the root's
-            // canonical path only when non-empty (a canonicalized root is
-            // always non-empty, but the guard mirrors find_path's skip).
+            // ProjectSummary.path is Option<String>; surface the root's path
+            // only when non-empty (a pathless project stores an empty path).
             path: (!root.path.as_os_str().is_empty())
                 .then(|| root.path.to_string_lossy().into_owned()),
             is_archived: root.is_archived,
             is_default: false,
         }
     }
-}
-
-/// Seed an in-memory [`ProjectRegistry`] from a file-backed
-/// [`FileProjectRegistry`] (the VPS-mode load path). Maps each VFS root to a
-/// [`ProjectSummary`], marks the default one, and calls [`ProjectRegistry::set`].
-/// The standalone `termul-server` binary calls this after `load`; the
-/// desktop-hosted path seeds via `remote_sync_projects` instead (it never
-/// constructs a `FileProjectRegistry`).
-pub fn seed_from_file(registry: &ProjectRegistry, file_reg: &FileProjectRegistry) {
-    let default_id = file_reg.default_project_id().map(str::to_string);
-    let mcp_by_project = file_reg
-        .roots()
-        .iter()
-        .map(|root| (root.id.clone(), root.mcp_servers.clone()))
-        .collect();
-    let mut summaries: Vec<ProjectSummary> = file_reg
-        .roots()
-        .iter()
-        .map(|r| ProjectSummary::from(r.clone()))
-        .collect();
-    if let Some(ref id) = default_id {
-        for s in &mut summaries {
-            if s.id == *id {
-                s.is_default = true;
-            }
-        }
-    }
-    registry.set(summaries, default_id);
-    *registry.mcp_servers.lock() = mcp_by_project;
 }
 
 #[cfg(test)]

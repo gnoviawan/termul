@@ -122,19 +122,14 @@ pub async fn remote_server_start(
 /// Stop the desktop-hosted web server.
 ///
 /// Signals graceful shutdown to the serve task. The desktop's live agents are
-/// NOT killed — they survive a shared-live toggle-off. The in-memory project
-/// registry is cleared (it lives only while the server runs — Epic-4 bridge).
+/// NOT killed — they survive a shared-live toggle-off. The durable project
+/// registry is NOT cleared: it belongs to the desktop, not to the server, and
+/// keeps serving the project list while shared-live is off.
 #[tauri::command]
 pub async fn remote_server_stop(
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
-    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
-    let result = remote_state.stop().await;
-    // Clear the in-memory project mirror so a stale list does not linger after
-    // the server is off (the registry is renderer-fed; it is repopulated on the
-    // next server start via `remote_sync_projects`).
-    project_registry.clear();
-    match result {
+    match remote_state.stop().await {
         Ok(status) => Ok(IpcResult::success(status)),
         Err(e) => Ok(IpcResult::error(e, "REMOTE_STOP_FAILED")),
     }
@@ -148,11 +143,12 @@ pub async fn remote_server_status(
     Ok(IpcResult::success(remote_state.status()))
 }
 
-/// Push the desktop renderer's current project list into the in-memory
-/// `ProjectRegistry` (Epic-4 bridge) and publish the new state to every
-/// `projects` watcher so connected web clients rebuild their list. Called by the renderer
-/// on server-start success + on every project-store mutation while the server
-/// runs. No env-var values cross the wire — `ProjectSummary` redacts-by-omission.
+/// Push the desktop renderer's current project list into the durable
+/// [`ProjectRegistry`] (written through to `projects.json`) and publish the new
+/// state to every `projects` watcher. Called by the renderer on server-start
+/// success + on every project-store mutation while it is still the writer
+/// (transitional until it reads the registry through the projects watch). No
+/// env-var values cross the wire — `ProjectSummary` redacts-by-omission.
 ///
 /// Desktop navigation does not move the host default: the payload carries no
 /// `defaultProjectId`. The registry keeps its CURRENT default while that
@@ -193,52 +189,82 @@ pub async fn remote_sync_projects(
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<Option<String>>, String> {
-    let default_id = project_registry.set_with_default_from(payload.projects, default_after_sync);
-    crate::web::watch::publish_projects(ws_relay.inner(), &project_registry);
-    Ok(IpcResult::success(default_id))
+    match crate::web::project_registry::replace_projects(
+        project_registry.inner(),
+        ws_relay.inner(),
+        payload.projects,
+        default_after_sync,
+    ) {
+        Ok(default_id) => Ok(IpcResult::success(default_id)),
+        Err(error) => {
+            log::error!("remote_sync_projects: {error}");
+            Ok(IpcResult::error(error.message(), error.http_code()))
+        }
+    }
 }
 
 /// Explicitly set the host's default project (Epic 7 — cross-client
 /// workspace continuity). Distinct from a per-connection `switch_project`:
 /// this changes the host default that new web clients start with. Validates
-/// the project is switchable, updates `registry.set_default_project`, and
-/// publishes the project state to every `projects` watcher. Desktop-hosted
-/// mode has no `FileProjectRegistry` (the file registry is VPS-only). This is
-/// the only desktop path that moves the host default; it stores the default
-/// and rebinds nothing.
+/// the project is switchable, persists, and publishes the project state to
+/// every `projects` watcher. This is the only desktop path that moves the host
+/// default; it stores the default and rebinds nothing.
 #[tauri::command]
 pub async fn set_host_default_project(
     project_id: String,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
 ) -> Result<IpcResult<()>, String> {
-    // Validate via switch_context (unknown/archived/pathless → NOT_FOUND).
-    if project_registry.switch_context(&project_id).is_none() {
-        log::warn!(
-            "set_host_default_project: project '{}' not found or not switchable",
-            project_id
-        );
-        return Ok(IpcResult::error(
-            format!("project '{project_id}' not found or not switchable"),
-            "NOT_FOUND",
-        ));
+    match crate::web::project_registry::set_default_project(
+        project_registry.inner(),
+        ws_relay.inner(),
+        &project_id,
+    ) {
+        Ok(()) => {
+            log::info!("set_host_default_project: host default updated to '{project_id}'");
+            Ok(IpcResult::success(()))
+        }
+        Err(error) => {
+            log::warn!("set_host_default_project: project '{project_id}': {error}");
+            Ok(IpcResult::error(error.message(), error.http_code()))
+        }
     }
-    if !project_registry.set_default_project(&project_id) {
-        log::warn!(
-            "set_host_default_project: project '{}' became unavailable before commit",
-            project_id
-        );
-        return Ok(IpcResult::error(
-            "target project became unavailable before commit".to_string(),
-            "NOT_FOUND",
-        ));
+}
+
+/// Payload of [`project_registry_import`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRegistryImportPayload {
+    pub projects: Vec<crate::web::ProjectSummary>,
+    #[serde(default)]
+    pub default_project_id: Option<String>,
+}
+
+/// One-shot import of the renderer's old project list into the durable
+/// registry (first launch after the upgrade). Allowed only while the registry
+/// file says nothing was imported: ids not yet registered are added, existing
+/// ids are kept (never overwritten), the default applies only when none is
+/// set, and the registry is marked imported — durably, even for an empty list.
+/// A repeat is an ok no-op replying `{ imported: false }`. The renderer deletes
+/// its own `projects` key only after this acknowledges.
+#[tauri::command]
+pub async fn project_registry_import(
+    payload: ProjectRegistryImportPayload,
+    project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
+    ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
+) -> Result<IpcResult<crate::web::project_registry::ImportOutcome>, String> {
+    match crate::web::project_registry::import_projects(
+        project_registry.inner(),
+        ws_relay.inner(),
+        payload.projects,
+        payload.default_project_id,
+    ) {
+        Ok(outcome) => Ok(IpcResult::success(outcome)),
+        Err(error) => {
+            log::error!("project_registry_import: {error}");
+            Ok(IpcResult::error(error.message(), error.http_code()))
+        }
     }
-    crate::web::watch::publish_projects(ws_relay.inner(), &project_registry);
-    log::info!(
-        "set_host_default_project: host default updated to '{}' + published",
-        project_id
-    );
-    Ok(IpcResult::success(()))
 }
 
 /// Compatibility refresh command for older renderer callers.

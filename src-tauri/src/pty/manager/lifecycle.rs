@@ -244,6 +244,21 @@ impl PtyManager {
         self.terminals.read().values().cloned().collect()
     }
 
+    /// Ids of the live terminals bound to `project_id` (the write-once project
+    /// stamped at spawn), sorted for a stable listing. The project registry
+    /// refuses to remove or archive a project while this is non-empty.
+    pub fn terminal_ids_for_project(&self, project_id: &str) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .terminals
+            .read()
+            .values()
+            .filter(|instance| instance.project_matches(project_id))
+            .map(|instance| instance.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
     /// Get terminal count
     pub fn get_count(&self) -> usize {
         self.terminals.read().len()

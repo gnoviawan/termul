@@ -186,7 +186,7 @@ fn desktop_lock_set_covers_app_data_and_its_overridable_stores() {
     let app_data = root.join("com.termul.app");
 
     let held = lock_desktop_data(&app_data).unwrap();
-    assert!(held.len() >= 6);
+    assert!(held.len() >= 7);
     let mut rival_install = DataLocks::new();
     assert!(rival_install
         .lock_dir(&app_data.join(ACP_INSTALL_DIR_NAME))
@@ -205,6 +205,10 @@ fn desktop_lock_set_covers_app_data_and_its_overridable_stores() {
         .is_busy());
     assert!(rival
         .lock_file(&desktop_store_file(&app_data))
+        .unwrap_err()
+        .is_busy());
+    assert!(rival
+        .lock_file(&desktop_projects_file(&app_data))
         .unwrap_err()
         .is_busy());
     drop(held);

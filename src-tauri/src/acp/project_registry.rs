@@ -1,24 +1,12 @@
-//! File-backed project registry (VPS-mode-only) — server-owned VFS roots.
+//! File-backed project registry — the durable persistence layer of the host's
+//! single `web::ProjectRegistry`.
 //!
-//! The standalone `termul-server` binary loads this at startup so the web
-//! client can list and switch between the operator's projects without the
-//! browser holding any project state. The registry is the source of truth for
-//! the `GET /projects` list and the `switch_project` WS request's cwd
-//! resolution in VPS mode.
-//!
-//! # VPS-mode-only scope (architecture Gap #3)
-//!
-//! Desktop-hosted shared-live mode queries the live desktop `AcpManager` via
-//! the in-memory `web::project_registry` renderer-fed bridge; this file is
-//! NOT consulted there. The two registries are complementary, never
-//! co-existing at runtime:
-//!
-//! - **VPS mode** (this module): the standalone binary has no desktop renderer
-//!   to feed it, so it loads VFS roots from a JSON file at startup and seeds
-//!   the in-memory `web::ProjectRegistry` from it (see `server_main.rs`).
-//! - **Desktop-hosted mode**: `remote_sync_projects` pushes the renderer's
-//!   project list into the in-memory `web::ProjectRegistry`; this file is
-//!   never loaded.
+//! Every host (standalone `termul-server` via `--projects-file`, desktop via
+//! `<app_data_dir>/projects.json`) opens its durable registry once at startup;
+//! `web::ProjectRegistry` owns the in-memory read model and writes a candidate
+//! through [`FileProjectRegistry::save_atomic`] before it swaps memory, so a
+//! failed write leaves the registry exactly as it was. This module only knows
+//! the on-disk shape, validation of roots and crash-safe writes.
 //!
 //! # Atomic writes + crash safety
 //!
@@ -27,7 +15,9 @@
 //! `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` on Windows), and (Unix-only)
 //! `fsync`s the parent directory so the rename's directory-entry update is
 //! durable. A corrupt present file is backed up before `load` errors out so
-//! the operator can recover.
+//! the operator can recover. The first write over an older schema keeps the
+//! original in `<name>.pre-v<N>-<ts>.bak` (AD-18); a newer schema is never
+//! read or overwritten.
 //!
 //! # No `web` imports (module-cycle invariant)
 //!
@@ -50,8 +40,10 @@ use tracing::{info, warn};
 /// changes; [`FileProjectRegistry::load`] routes any other version through
 /// the [`migrate`] hook. v3 renamed `activeProjectId` → `defaultProjectId`
 /// (the host default, distinct from any client's active selection); v2 files
-/// deserialize transparently via `#[serde(alias = "activeProjectId")]`.
-pub const SCHEMA_VERSION: u32 = 3;
+/// deserialize transparently via `#[serde(alias = "activeProjectId")]`. v4
+/// added `imported` (the desktop's one-shot import of the renderer's old
+/// project list has run).
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// A single VFS root served to the web client in VPS mode.
 ///
@@ -97,18 +89,35 @@ pub struct RegistryFile {
     pub default_project_id: Option<String>,
     /// The VFS roots (non-archived + archived; the web list shows both).
     pub projects: Vec<VfsRoot>,
+    /// `true` once the desktop's one-shot import of the renderer's old
+    /// project list has run (v4). Files written before v4 read `false`.
+    #[serde(default)]
+    pub imported: bool,
 }
 
-/// In-memory loaded form of the registry (post-load + post-validation).
+/// In-memory loaded form of the registry file (post-load + post-validation).
 ///
-/// Built by [`load`] from a `RegistryFile` (paths canonicalized, schema
-/// checked, roots validated). The standalone binary retains this registry so a
-/// successful `set_default_project` can persist the default id with
-/// [`save_atomic`].
+/// Built by [`FileProjectRegistry::load`] from a `RegistryFile` (schema
+/// checked, roots validated) and by the host registry as the candidate it
+/// writes through [`FileProjectRegistry::save_atomic`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileProjectRegistry {
     roots: Vec<VfsRoot>,
     default_project_id: Option<String>,
+    imported: bool,
+}
+
+/// How [`FileProjectRegistry::load_with`] treats a root whose path cannot be
+/// resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootCheck {
+    /// Fail the load (`InvalidRoot`): a misconfigured VPS aborts startup.
+    Strict,
+    /// Keep the root as stored (an empty path means "no working directory");
+    /// a moved or deleted directory stays in the list and the boundary
+    /// rechecks it lazily. Used by the desktop, where a project folder that
+    /// is currently unmounted must not take the whole list down.
+    Lenient,
 }
 
 /// Load / save failure for [`FileProjectRegistry`].
@@ -135,13 +144,6 @@ pub enum ProjectRegistryError {
         /// Why the path was rejected (canonicalize / not-a-directory message).
         reason: String,
     },
-    /// Active-project mutation targeted a root that is not switchable.
-    InvalidActiveProject {
-        /// Requested project id.
-        id: String,
-        /// Stable operator-facing reason.
-        reason: String,
-    },
 }
 
 impl std::fmt::Display for ProjectRegistryError {
@@ -156,9 +158,6 @@ impl std::fmt::Display for ProjectRegistryError {
             Self::InvalidRoot { id, reason } => {
                 write!(f, "registry root '{id}' is invalid: {reason}")
             }
-            Self::InvalidActiveProject { id, reason } => {
-                write!(f, "project '{id}' cannot become active: {reason}")
-            }
         }
     }
 }
@@ -168,32 +167,30 @@ impl std::error::Error for ProjectRegistryError {
         match self {
             Self::Io(e) => Some(e),
             Self::Parse(e) => Some(e),
-            Self::BadSchemaVersion { .. }
-            | Self::InvalidRoot { .. }
-            | Self::InvalidActiveProject { .. } => None,
+            Self::BadSchemaVersion { .. } | Self::InvalidRoot { .. } => None,
         }
     }
 }
 
 impl FileProjectRegistry {
-    /// An empty registry (no roots, no default project). The Ok path for a
-    /// missing registry file — the binary still serves; `GET /projects`
-    /// returns an empty list.
+    /// An empty registry (no roots, no default project, nothing imported).
+    /// The Ok path for a missing registry file.
     #[must_use]
     pub fn empty() -> Self {
         Self {
             roots: Vec::new(),
             default_project_id: None,
+            imported: false,
         }
     }
 
     /// Build a registry from already-loaded roots + a default id. Used by
-    /// tests and seeders that construct the registry in-memory rather than
-    /// from a file; the VPS runtime path is [`load`](Self::load).
+    /// tests that construct the registry in memory rather than from a file.
     ///
     /// Drops `default_project_id` to `None` when it references a project not
     /// in `roots` (P4: no dangling default — a stale id left by a deleted
     /// project must not survive into the in-memory registry).
+    #[cfg(test)]
     #[must_use]
     pub fn from_roots(roots: Vec<VfsRoot>, default_project_id: Option<String>) -> Self {
         let default_project_id = default_project_id.filter(|id| {
@@ -204,28 +201,53 @@ impl FileProjectRegistry {
         Self {
             roots,
             default_project_id,
+            imported: false,
         }
+    }
+
+    /// Build the candidate the host registry writes through
+    /// [`save_atomic`](Self::save_atomic). The caller has already normalized
+    /// `default_project_id`, so nothing is filtered here.
+    #[must_use]
+    pub fn from_parts(
+        roots: Vec<VfsRoot>,
+        default_project_id: Option<String>,
+        imported: bool,
+    ) -> Self {
+        Self {
+            roots,
+            default_project_id,
+            imported,
+        }
+    }
+
+    /// Load + validate a registry file, failing on a root whose path cannot
+    /// be resolved ([`RootCheck::Strict`]; the standalone server's posture).
+    #[cfg(test)]
+    pub fn load(path: &Path) -> Result<Self, ProjectRegistryError> {
+        Self::load_with(path, RootCheck::Strict)
     }
 
     /// Load + validate a registry file.
     ///
-    /// - **Missing file → `Ok(empty)`**: a missing `--projects-file` is not a
-    ///   fatal server error; `/projects` returns an empty list (the in-memory
-    ///   bridge's "empty is valid success" semantics). An `info!` log surfaces it.
+    /// - **Missing file → `Ok(empty)`**: not fatal; the host serves an empty
+    ///   list and creates the file on its first write.
     /// - **Corrupt file → `Err(Parse)`**: the bad file is copied aside to
     ///   `<path>.corrupt-<nanos>.bak` BEFORE returning so the operator can
     ///   recover (best-effort; a backup failure only warns).
     /// - **Bad schema version → `Err(BadSchemaVersion)`** via the [`migrate`]
-    ///   hook (today: reject; future: upgrade in-memory).
-    /// - **Invalid root → `Err(InvalidRoot)`** (fail-first): each `VfsRoot.path`
-    ///   is canonicalized + must be a directory so the fs boundary check is
-    ///   stable and a misconfigured VPS aborts startup clearly.
-    pub fn load(path: &Path) -> Result<Self, ProjectRegistryError> {
+    ///   hook: older versions upgrade in memory (the first write keeps the
+    ///   original, AD-18); a newer version is refused.
+    /// - **Invalid root**: with [`RootCheck::Strict`] → `Err(InvalidRoot)`
+    ///   (canonicalize + must be a directory, fail-first). With
+    ///   [`RootCheck::Lenient`] the root is kept (canonicalized when it
+    ///   resolves, as stored otherwise).
+    pub fn load_with(path: &Path, check: RootCheck) -> Result<Self, ProjectRegistryError> {
         let bytes = match fs::read(path) {
             Ok(b) => b,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 info!(
-                    "projects file '{}' not found; serving an empty project list",
+                    "projects file '{}' not found; starting with an empty project list",
                     path.display()
                 );
                 return Ok(Self::empty());
@@ -233,6 +255,16 @@ impl FileProjectRegistry {
             Err(e) => return Err(ProjectRegistryError::Io(e)),
         };
 
+        // A newer schema is refused before it is parsed as this version's
+        // shape: it is neither read nor backed up as corrupt.
+        if let Some(found) = crate::acp::atomic_file::peek_schema_version(&bytes) {
+            if found > SCHEMA_VERSION {
+                return Err(ProjectRegistryError::BadSchemaVersion {
+                    expected: SCHEMA_VERSION,
+                    found,
+                });
+            }
+        }
         let file: RegistryFile = match serde_json::from_slice(&bytes) {
             Ok(f) => f,
             Err(e) => {
@@ -241,34 +273,46 @@ impl FileProjectRegistry {
             }
         };
 
-        // Route any non-current schema through the migration hook. v1/v2
-        // upgrade to v3: v1→v2 added empty per-project MCP configuration;
-        // v2→v3 renamed `activeProjectId` → `defaultProjectId` (the serde
-        // alias on the field handles the rename transparently, so the migrate
-        // arm only bumps the version). Unknown versions fail.
+        // Route any non-current schema through the migration hook (v1/v2/v3
+        // upgrade to v4; unknown versions fail).
         let file = if file.schema_version != SCHEMA_VERSION {
             migrate(file.schema_version, file)?
         } else {
             file
         };
 
-        // Fail-first on a bad root: canonicalize + must-be-a-directory so the
-        // boundary check is stable and a misconfigured VPS aborts startup.
         let mut roots = Vec::with_capacity(file.projects.len());
         for mut root in file.projects {
-            root.path = validate_root_path(&root.path).map_err(|reason| {
-                ProjectRegistryError::InvalidRoot {
-                    id: root.id.clone(),
-                    reason,
+            match check {
+                // Fail-first on a bad root: canonicalize + must-be-a-directory
+                // so the boundary check is stable and a misconfigured VPS
+                // aborts startup.
+                RootCheck::Strict => {
+                    root.path = validate_root_path(&root.path).map_err(|reason| {
+                        ProjectRegistryError::InvalidRoot {
+                            id: root.id.clone(),
+                            reason,
+                        }
+                    })?;
                 }
-            })?;
+                RootCheck::Lenient => {
+                    if let Ok(canonical) = validate_root_path(&root.path) {
+                        root.path = canonical;
+                    } else if !root.path.as_os_str().is_empty() {
+                        warn!(
+                            project_id = root.id.as_str(),
+                            "registered project path cannot be resolved; keeping it and rechecking lazily"
+                        );
+                    }
+                }
+            }
             roots.push(root);
         }
 
         // P4: drop a default_project_id that references a project not in the
         // loaded roots (a stale id left by a deleted project must not survive
         // into the in-memory registry). Also reject archived/empty-path
-        // defaults (not switchable — same conditions as `set_default_project`).
+        // defaults (not switchable).
         let default_project_id = file.default_project_id.filter(|id| {
             roots
                 .iter()
@@ -278,6 +322,7 @@ impl FileProjectRegistry {
         Ok(Self {
             roots,
             default_project_id,
+            imported: file.imported,
         })
     }
 
@@ -295,12 +340,13 @@ impl FileProjectRegistry {
             schema_version: SCHEMA_VERSION,
             default_project_id: self.default_project_id.clone(),
             projects: self.roots.clone(),
+            imported: self.imported,
         };
         let bytes = serde_json::to_vec_pretty(&file).map_err(ProjectRegistryError::Parse)?;
 
-        // AD-18: `load` migrates 1/2 -> 3 in memory only. The first write
+        // AD-18: `load` migrates older schemas in memory only. The first write
         // after that replaces the old-schema bytes, so preserve them in
-        // `<name>.pre-v3-<ts>.bak` first; a backup failure aborts the write
+        // `<name>.pre-v<N>-<ts>.bak` first; a backup failure aborts the write
         // (no migration without a recoverable original). A newer-schema file
         // is never overwritten (same refusal `load` gives it).
         match fs::read(path) {
@@ -315,10 +361,10 @@ impl FileProjectRegistry {
                         found,
                     });
                 }
-                // Only versions `migrate` knows (1, 2) may be rewritten; any
-                // other lower version (e.g. 0) is rejected exactly as `load`
-                // rejects it, never backed up and overwritten.
-                Some(found) if found < SCHEMA_VERSION && !matches!(found, 1 | 2) => {
+                // Only versions `migrate` knows (1, 2, 3) may be rewritten;
+                // any other lower version (e.g. 0) is rejected exactly as
+                // `load` rejects it, never backed up and overwritten.
+                Some(found) if found < SCHEMA_VERSION && !matches!(found, 1..=3) => {
                     warn!(
                         "refusing to overwrite projects file '{}': unsupported schema version {found}",
                         path.display()
@@ -368,167 +414,32 @@ impl FileProjectRegistry {
         self.default_project_id.as_deref()
     }
 
-    /// Validate and update the default project id in memory.
-    ///
-    /// Persistence remains an explicit caller-owned `save_atomic` step so a
-    /// `set_default_project` transaction can broadcast + persist atomically
-    /// (the caller persists after the registry + broadcast succeed, with
-    /// rollback on failure).
-    pub fn set_default_project(&mut self, project_id: &str) -> Result<(), ProjectRegistryError> {
-        let root = self
-            .roots
-            .iter()
-            .find(|root| root.id == project_id)
-            .ok_or_else(|| ProjectRegistryError::InvalidActiveProject {
-                id: project_id.to_string(),
-                reason: "unknown project".to_string(),
-            })?;
-        if root.is_archived {
-            return Err(ProjectRegistryError::InvalidActiveProject {
-                id: project_id.to_string(),
-                reason: "project is archived".to_string(),
-            });
-        }
-        if root.path.as_os_str().is_empty() {
-            return Err(ProjectRegistryError::InvalidActiveProject {
-                id: project_id.to_string(),
-                reason: "project has no working directory".to_string(),
-            });
-        }
-        self.default_project_id = Some(project_id.to_string());
-        Ok(())
-    }
-
-    /// Restore a previously captured default id during transaction rollback.
-    ///
-    /// This deliberately does not revalidate: the value came from this loaded
-    /// registry immediately before a validated mutation, and may legitimately
-    /// be `None`. Callers must persist the restored value with `save_atomic`.
-    pub(crate) fn restore_default_project(&mut self, default_project_id: Option<String>) {
-        self.default_project_id = default_project_id;
-    }
-    /// Insert or replace a VFS root by `id`, canonicalizing + validating its
-    /// path. Used by the web-client project create/update mutations (Option B:
-    /// the standalone server is a first-class project-list authority).
-    ///
-    /// The path is canonicalized + must-be-a-directory (same `validate_root_path`
-    /// leaf `load` uses) so the fs boundary check is stable. A root with an
-    /// existing `id` is replaced in place (preserving order); a new id is
-    /// appended. Does NOT touch `default_project_id` — the caller persists
-    /// separately via `set_default_project` if the new root should be default.
-    /// Persistence is an explicit caller-owned `save_atomic` step (same posture
-    /// as `set_default_project`).
-    pub fn upsert_root(&mut self, root: VfsRoot) -> Result<(), ProjectRegistryError> {
-        let mut root = root;
-        root.path =
-            validate_root_path(&root.path).map_err(|reason| ProjectRegistryError::InvalidRoot {
-                id: root.id.clone(),
-                reason,
-            })?;
-        if let Some(existing) = self.roots.iter_mut().find(|r| r.id == root.id) {
-            *existing = root;
-        } else {
-            self.roots.push(root);
-        }
-        Ok(())
-    }
-
-    /// Remove a VFS root by `id`. Returns `false` (and the caller replies
-    /// `NOT_FOUND`) when the id is absent. Clears `default_project_id` when it
-    /// referenced the removed root (P4: no dangling default — mirrors `load`'s
-    /// post-load cleanup). Persistence is a caller-owned `save_atomic` step.
-    pub fn remove_root(&mut self, project_id: &str) -> bool {
-        let before = self.roots.len();
-        self.roots.retain(|r| r.id != project_id);
-        if self.roots.len() == before {
-            return false;
-        }
-        if self.default_project_id.as_deref() == Some(project_id) {
-            self.default_project_id = None;
-        }
-        true
-    }
-
-    /// Patch a subset of a root's display fields (name, color, archived) by
-    /// `id` without re-canonicalizing the path. Used by the web-client
-    /// rename/color/archive mutations. Returns `false` when the id is absent.
-    /// Persistence is a caller-owned `save_atomic` step.
-    pub fn update_root(
-        &mut self,
-        project_id: &str,
-        name: Option<String>,
-        color: Option<String>,
-        is_archived: Option<bool>,
-    ) -> bool {
-        let Some(root) = self.roots.iter_mut().find(|r| r.id == project_id) else {
-            return false;
-        };
-        if let Some(name) = name {
-            root.name = name;
-        }
-        if let Some(color) = color {
-            root.color = color;
-        }
-        if let Some(is_archived) = is_archived {
-            root.is_archived = is_archived;
-        }
-        // P4: an archived default is not switchable — clear the default so a
-        // stale id does not survive (mirrors `set_default_project` + `load`).
-        if root.is_archived && self.default_project_id.as_deref() == Some(project_id) {
-            self.default_project_id = None;
-        }
-        true
-    }
-
-    /// Resolve a project id → its canonical VFS root path. Returns `None` for
-    /// an unknown id, an archived root, or an empty path (mirrors
-    /// `web::ProjectRegistry::find_path`'s skip semantics — the shared
-    /// read-path `switch_project` uses).
+    /// `true` once the desktop's one-shot import has run.
     #[must_use]
-    pub fn resolve_path(&self, id: &str) -> Option<PathBuf> {
-        self.roots
-            .iter()
-            .find(|r| r.id == id && !r.is_archived)
-            .and_then(|r| {
-                if r.path.as_os_str().is_empty() {
-                    None
-                } else {
-                    Some(r.path.clone())
-                }
-            })
+    pub fn imported(&self) -> bool {
+        self.imported
     }
 
     /// `true` when the registry holds no roots.
+    #[cfg(test)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty()
     }
 }
 
-/// Single schema migration seam. v1 upgrades in-memory to v3; v2 upgrades to
-/// v3 (the `activeProjectId` → `defaultProjectId` rename is handled transparently
-/// by the `#[serde(alias)]` on `RegistryFile.default_project_id`, so the v2
-/// arm only bumps the version); unknown versions are rejected without
-/// reinterpretation.
+/// Single schema migration seam. v1, v2 and v3 upgrade in memory to v4;
+/// unknown versions are rejected without reinterpretation.
+///
+/// - v1 had the same project fields except project-scoped MCP servers, which
+///   deserialize with `default`.
+/// - v2 → v3 renamed `activeProjectId` → `defaultProjectId`; the serde alias
+///   on `RegistryFile.default_project_id` reads both names, so only the
+///   version moves.
+/// - v3 → v4 added `imported`, which reads `false` from an older file.
 fn migrate(from: u32, mut file: RegistryFile) -> Result<RegistryFile, ProjectRegistryError> {
     match from {
-        // v1 had the same project fields except project-scoped MCP servers.
-        // `VfsRoot.mcp_servers` deserializes with `default`, so the explicit
-        // migration is lossless and makes the new meaning/version deliberate.
-        // v1 also used `activeProjectId` (now `defaultProjectId`); the serde
-        // alias on the field accepts both names, so no manual field rename is
-        // needed — the bump to v3 records the semantic change.
-        1 => {
-            file.schema_version = SCHEMA_VERSION;
-            Ok(file)
-        }
-        // v2 → v3: the registry's `activeProjectId` became `defaultProjectId`
-        // (the host default for new web clients, distinct from any client's
-        // per-connection active selection). The serde alias on
-        // `RegistryFile.default_project_id` deserializes a v2 file's
-        // `activeProjectId` transparently, so the migration only bumps the
-        // recorded schema version.
-        2 => {
+        1..=3 => {
             file.schema_version = SCHEMA_VERSION;
             Ok(file)
         }
@@ -538,21 +449,13 @@ fn migrate(from: u32, mut file: RegistryFile) -> Result<RegistryFile, ProjectReg
         }),
     }
 }
-/// Public alias for [`validate_root_path`] so the web HTTP layer can validate
-/// a path without constructing a full `VfsRoot` + `upsert_root` (e.g. the
-/// desktop-hosted path with no file registry). Kept as a thin wrapper rather
-/// than renaming `validate_root_path` (which is `pub(crate)`-private) to avoid
-/// widening the leaf's visibility beyond what the module-cycle invariant
-/// requires.
-pub fn validate_root_path_pub(raw: &Path) -> Result<PathBuf, String> {
-    validate_root_path(raw)
-}
+
 /// Validate a raw VFS-root path: canonicalize (exists + accessible) and require
 /// a directory. Mirrors `web::config::resolve_and_validate_project_root` but is
 /// duplicated here as a std-only leaf so this module never imports `web::*`
 /// (the `web -> acp -> web` cycle invariant). Returns the canonical absolute
 /// path on success, or an operator-facing message on failure.
-fn validate_root_path(raw: &Path) -> Result<PathBuf, String> {
+pub fn validate_root_path(raw: &Path) -> Result<PathBuf, String> {
     let canonical = raw
         .canonicalize()
         .map_err(|e| format!("project root '{}' is not accessible: {e}", raw.display()))?;

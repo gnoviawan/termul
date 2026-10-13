@@ -122,18 +122,18 @@ fn find_path_resolves_known_with_cwd() {
 }
 
 #[test]
-fn clear_empties_the_mirror() {
+fn replacing_with_an_empty_list_empties_the_registry() {
     let reg = ProjectRegistry::new();
     reg.set(
         vec![sample("p-1", Some("/a"), false)],
         Some("p-1".to_string()),
     );
     assert!(!reg.is_empty());
-    reg.clear();
+    reg.set(Vec::new(), None);
     assert!(reg.is_empty());
     assert_eq!(reg.snapshot().default_project_id, None);
-    // Clear is idempotent.
-    reg.clear();
+    // Idempotent.
+    reg.set(Vec::new(), None);
     assert!(reg.is_empty());
 }
 
@@ -176,7 +176,7 @@ fn vfs_root_maps_to_project_summary_redacting_env() {
     assert_eq!(summary.color, "blue");
     assert_eq!(summary.path.as_deref(), Some("/some/cwd"));
     assert!(!summary.is_archived);
-    // is_default is left false per-entry; seed_from_file derives it.
+    // is_default is left false per-entry; the registry derives it from the default id.
     assert!(!summary.is_default);
 
     // Redact-by-omission: the wire shape carries NO env-var field.
@@ -247,29 +247,38 @@ fn set_default_project_rejects_archived_and_pathless() {
 
 #[test]
 fn switch_context_rejects_archived_and_carries_private_mcp() {
-    use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
+    let dir = tempdir_like("mcp-context");
+    let live_dir = dir.join("live");
+    std::fs::create_dir_all(&live_dir).unwrap();
+    let file = dir.join("projects.json");
+    std::fs::write(
+        &file,
+        serde_json::json!({
+            "schemaVersion": 4,
+            "defaultProjectId": "live",
+            "projects": [
+                { "id": "live", "name": "Live", "path": live_dir, "color": "blue", "isArchived": false,
+                  "mcpServers": [{ "name": "project-mcp", "command": "mcp-bin", "args": [], "env": [] }] },
+                { "id": "old", "name": "Old", "path": live_dir, "color": "blue", "isArchived": true }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
 
-    let reg = ProjectRegistry::new();
-    reg.set(
-        vec![
-            sample("live", Some("/a"), false),
-            sample("old", Some("/b"), true),
-        ],
-        Some("live".to_string()),
-    );
-    reg.mcp_servers.lock().insert(
-        "live".to_string(),
-        vec![McpServer::Stdio(McpServerStdio::new(
-            "project-mcp",
-            std::path::PathBuf::from("mcp-bin"),
-        ))],
-    );
+    let reg = ProjectRegistry::open_durable(&file, RootCheck::Strict).expect("open");
     assert!(reg.switch_context("old").is_none());
     let context = reg.switch_context("live").expect("live context");
-    assert_eq!(context.cwd, "/a");
+    assert_eq!(context.cwd, live_dir.canonicalize().unwrap().to_string_lossy());
     assert_eq!(context.mcp_servers.len(), 1);
     let public = serde_json::to_value(reg.snapshot()).expect("public snapshot");
     assert!(public["projects"][0].get("mcpServers").is_none());
+
+    // A commit rewrites the file without losing the project's MCP config.
+    reg.commit_update("live", Some("Renamed".to_string()), None, None).unwrap();
+    let reopened = ProjectRegistry::open_durable(&file, RootCheck::Strict).expect("reopen");
+    assert_eq!(reopened.switch_context("live").unwrap().mcp_servers.len(), 1);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// CAP-2 attribution: `find_by_path` resolves an exact project path, and
@@ -419,7 +428,7 @@ fn boundary_cache_follows_set_upsert_update_remove_clear() {
 
     reg.set(vec![sample("p-b", Some(path_str(&a)), false)], None);
     assert!(reg.is_within_any_registered_root(&a));
-    reg.clear();
+    reg.set(Vec::new(), None);
     assert!(!reg.is_within_any_registered_root(&a));
     for d in [a, b] {
         let _ = std::fs::remove_dir_all(d);

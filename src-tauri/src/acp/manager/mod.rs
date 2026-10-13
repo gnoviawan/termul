@@ -72,6 +72,7 @@ mod close;
 mod exit;
 pub(crate) use gates::{ConfigOptionValue, GatewayAuthInput};
 mod history;
+mod project_binding;
 mod reopen;
 mod spawn_error;
 mod stderr_ring;

@@ -225,11 +225,13 @@ export const WS_REQUEST_TYPES = [
   'store_read',
   'store_write',
   'store_delete',
-  // Option B: project-list mutations (the standalone server is a first-class
-  // project-list authority). Mirrors `POST /projects`, `PUT /projects/{id}`,
-  // `DELETE /projects/{id}` HTTP routes (transport parity). The WS variants
-  // persist to `FileProjectRegistry` (VPS) with rollback + publish the new
-  // state to every `projects` watcher.
+  // Project registry commands (one host command service shared with the HTTP
+  // routes `POST /projects`, `PUT /projects/{id}`, `DELETE /projects/{id}`).
+  // They persist to the host's durable registry, then publish the new state to
+  // every `projects` watcher. Add / update / remove are idempotent by
+  // `projectId`; a remove or archive with live sessions/PTYs is refused
+  // `project_busy` (`err.details` lists them) unless the request carries
+  // `cascade: true`.
   'add_project',
   'update_project',
   'remove_project',
@@ -499,17 +501,38 @@ export interface AddProjectPayload {
   isArchived?: boolean
 }
 
-/** `update_project` request payload. All fields optional. Reply: `{}`. */
+/**
+ * `update_project` request payload. All fields optional. Reply: `{}`.
+ * `isArchived` archives/restores; archiving a project with live sessions or
+ * PTYs is refused `project_busy` unless `cascade` is `true`, which makes the
+ * host stop them first.
+ */
 export interface UpdateProjectPayload {
   projectId: string
   name?: string
   color?: string
   isArchived?: boolean
+  cascade?: boolean
 }
 
-/** `remove_project` request payload. Reply: `{}`. */
+/**
+ * `remove_project` request payload. Reply: `{}` (an absent id is ok). A
+ * project with live sessions or PTYs is refused `project_busy` unless `cascade`
+ * is `true`, which makes the host stop them first.
+ */
 export interface RemoveProjectPayload {
   projectId: string
+  cascade?: boolean
+}
+
+/**
+ * `err.details` of a `project_busy` refusal (HTTP `IpcBody.details` carries the
+ * same shape under `PROJECT_BUSY`): the ids of the live sessions and terminals
+ * bound to the project — with `cascade: true`, the ones the host could not stop.
+ */
+export interface ProjectBusyDetails {
+  sessions: string[]
+  terminals: string[]
 }
 
 // ============================================================================
@@ -550,8 +573,9 @@ export const WS_ERROR_CODES = {
   // A host terminal cap (per project or global) refused a spawn. The terminal
   // carriers answer it as `TERMINAL_LIMIT` (`WEB_TERMINAL_ERROR_CODES`).
   TERMINAL_LIMIT: 'terminal_limit',
-  // Reserved names — handler behavior lands in later slices.
-  // Project remove/archive refused while bound sessions/PTYs are live.
+  // Project remove/archive refused while bound sessions/PTYs are live;
+  // `err.details` is a `ProjectBusyDetails`. Resend with `cascade: true` to
+  // have the host stop them.
   PROJECT_BUSY: 'project_busy',
   // A command resend found no stored outcome (evicted ledger entry or an
   // interrupted handler); never re-executed.
@@ -1001,7 +1025,7 @@ export type WsReply<T = unknown> =
       id: string
       ok: false
       payload?: never
-      err: { code: WsErrorCode; message: string }
+      err: { code: WsErrorCode; message: string; details?: ProjectBusyDetails }
       visible_at?: unknown
     }
 
@@ -1011,4 +1035,6 @@ export type WsReply<T = unknown> =
 export interface WsError {
   code: WsErrorCode
   message: string
+  /** Structured context for the code (additive): set on `project_busy`. */
+  details?: ProjectBusyDetails
 }

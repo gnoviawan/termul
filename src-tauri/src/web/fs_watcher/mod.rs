@@ -248,6 +248,21 @@ impl FsWatchHub {
         }
     }
 
+    /// Drop the watcher of a project that was archived or removed, whatever
+    /// connections were subscribed. Returns how many subscriptions ended.
+    pub(crate) fn unwatch_project(&self, project_id: &str) -> usize {
+        let Some(watch) = self.watches.lock().remove(project_id) else {
+            return 0;
+        };
+        watch.cancel.cancel();
+        info!(
+            project_id,
+            subscribers = watch.subscribers.len(),
+            "[fs-watch] project archived or removed; watcher dropped"
+        );
+        watch.subscribers.len()
+    }
+
     /// Wait until `project_id`'s notify watcher is armed (events under the
     /// root are observed from then on). `false` on timeout or when the project
     /// has no watch. Lets tests act only once the watcher is live.

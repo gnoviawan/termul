@@ -182,8 +182,8 @@ pub fn router(
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
-        // Project list mirror (Epic-4 bridge): the web client reads the
-        // desktop's non-archived + archived projects here. Registered AHEAD of
+        // The host's project registry: the web client reads the non-archived +
+        // archived projects here and adds one with `POST`. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
         .route(
             "/projects",
@@ -193,12 +193,12 @@ pub fn router(
         // continuity). Mirrors the `set_default_project` WS request + the
         // `set_host_default_project` Tauri command (transport parity).
         .route("/projects/default", post(projects_api::set_default_project))
-        // Option B: project-list mutations (the standalone server is a
-        // first-class project-list authority, not just a read-only mirror).
-        // `PUT /projects/{id}` patches display fields; `DELETE /projects/{id}`
-        // removes the root. Both persist to `FileProjectRegistry` (VPS) with
-        // rollback + publish the project state. Mirrors the
-        // `add_project`/`update_project`/`remove_project` WS requests.
+        // Project mutations through the shared command service.
+        // `PUT /projects/{id}` patches display fields and archives/restores
+        // (`isArchived`); `DELETE /projects/{id}` removes the project. Both
+        // refuse `PROJECT_BUSY` while sessions/terminals are bound unless
+        // `cascade` is set. Mirrors the `update_project`/`remove_project` WS
+        // requests.
         .route(
             "/projects/{projectId}",
             put(projects_api::update_project).delete(projects_api::remove_project),

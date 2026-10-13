@@ -61,7 +61,7 @@ pub mod ws;
 pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
 pub use permissions::QuestionRendezvous;
-pub use project_registry::{seed_from_file, ProjectListPayload, ProjectRegistry, ProjectSummary};
+pub use project_registry::{ProjectListPayload, ProjectRegistry, ProjectSummary};
 pub use sink::{fan_out, EventSink, EventStream, StreamItem, TauriEventSink, WsRelaySink};
 pub use ws::{AppState, HistoryMode, ReliabilityTier, RuntimePolicy, SequencedEvent, WsErrorCode};
 
@@ -102,13 +102,12 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// machine. It is threaded into the `/canvas/*` routes and shut down
 /// (stdin-EOF → kill) in the serve cleanup, after Axum drains.
 ///
-/// `registry` is the in-memory [`ProjectRegistry`] the router reads for
-/// `GET /projects` + `switch_project` cwd resolution. The standalone binary
-/// seeds it from the file-backed [`crate::acp::project_registry::FileProjectRegistry`]
-/// at startup (VPS mode — `projects_file` resolves from `--projects-file` /
-/// `$TERMUL_PROJECTS_FILE` / the state-dir default); the desktop host seeds
-/// it via `remote_sync_projects` and calls [`serve_router`] directly (it
-/// never reaches this `serve` wrapper).
+/// `registry` is the host's durable [`ProjectRegistry`] the router reads for
+/// `GET /projects` + `switch_project` cwd resolution and writes through the
+/// project command service. The standalone binary opens it at startup from its
+/// projects file (`--projects-file` / `$TERMUL_PROJECTS_FILE` / the state-dir
+/// default); the desktop host builds its own once at setup and calls
+/// [`serve_router`] directly (it never reaches this `serve` wrapper).
 ///
 /// `workspace_manifest` is the host-owned [`WorkspaceManifestService`] for
 /// CAP-5 / Story 5 — atomically persists one versioned workspace manifest per

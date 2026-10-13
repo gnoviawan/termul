@@ -71,6 +71,15 @@ pub(super) async fn spawn(
             "spawn requires a non-empty projectId".to_string(),
         ));
     }
+    // A project being removed or archived takes no new terminals.
+    if let Some(project_id) = options.project_id.as_deref() {
+        if state.registry.is_removing(project_id) {
+            return Err((
+                "PROJECT_BUSY",
+                format!("project '{project_id}' is being removed or archived"),
+            ));
+        }
+    }
     info!(
         "[terminal-ws] spawn requested project_id={}",
         options.project_id.as_deref().unwrap_or("?")

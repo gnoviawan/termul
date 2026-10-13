@@ -67,7 +67,7 @@ pub use install::{
 #[allow(unused_imports)]
 pub use manager::{AcpManager, AgentSummary, SessionCreationContext, SpawnOutcome};
 pub use session::AgentActivity;
-pub use project_registry::{FileProjectRegistry, VfsRoot};
+pub use project_registry::{FileProjectRegistry, ProjectRegistryError, RootCheck, VfsRoot};
 #[allow(unused_imports)]
 pub use session_persistence::{
     PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionPersistence,

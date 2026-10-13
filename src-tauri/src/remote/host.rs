@@ -429,10 +429,9 @@ impl RemoteServerState {
             partition_byte_budget: crate::web::config::DEFAULT_PARTITION_BYTE_BUDGET,
             deprecation_warnings: Vec::new(),
             project_root,
-            // Desktop-hosted shared-live mode queries the live desktop
-            // `AcpManager` via the in-memory renderer-fed registry, NOT a
-            // server-owned file (AC2 / architecture Gap #3). The
-            // file-backed `acp::project_registry` is VPS-mode-only.
+            // The desktop's durable registry (`<app_data_dir>/projects.json`)
+            // is built once at setup and passed to `start`; the config path
+            // is standalone-only.
             projects_file: None,
             sessions_dir: None,
             // CAP-5 / Story 5: this path-override field is standalone-only.

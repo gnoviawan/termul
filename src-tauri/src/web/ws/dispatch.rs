@@ -37,8 +37,6 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
     let acp = &env.acp;
     let relay = &env.relay;
     let registry = &env.registry;
-    let registry_persistence = env.registry_persistence.as_ref();
-    let projects_file = env.projects_file.as_deref();
     let out_tx = &env.out_tx;
     let subscribed_clients = &*env.subscriptions;
     let history_mode = env.history_mode;
@@ -140,61 +138,16 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // full state now, deltas under a contiguous revision after.
         "watch" => handle_watch(id, &req.payload, env),
         "unwatch" => handle_unwatch(id, &req.payload, env),
-        // Explicit host-default change (Epic 7 — cross-client continuity).
-        // Updates the host's
-        // `default_project_id`, persists to `FileProjectRegistry` (VPS, with
-        // rollback), and publishes the project state to every watcher. Any
-        // authenticated client can set the default for now (Epic 2 wires auth).
-        "set_default_project" => {
-            handle_set_default_project(
-                id,
-                &req.payload,
-                relay,
-                registry,
-                registry_persistence,
-                projects_file,
-            )
-            .await
-        }
-        // Option B: project-list mutations. The standalone server is a
-        // first-class project-list authority; these persist to
-        // `FileProjectRegistry` (VPS, with rollback) + publish
-        // the project state. Mirrors the `POST /projects`,
-        // `PUT /projects/{id}`, `DELETE /projects/{id}` HTTP routes
-        // (transport parity). Any authenticated client for now (Epic 2).
-        "add_project" => {
-            handle_add_project(
-                id,
-                &req.payload,
-                relay,
-                registry,
-                registry_persistence,
-                projects_file,
-            )
-            .await
-        }
-        "update_project" => {
-            handle_update_project(
-                id,
-                &req.payload,
-                relay,
-                registry,
-                registry_persistence,
-                projects_file,
-            )
-            .await
-        }
-        "remove_project" => {
-            handle_remove_project(
-                id,
-                &req.payload,
-                relay,
-                registry,
-                registry_persistence,
-                projects_file,
-            )
-            .await
-        }
+        // Project registry commands — one command service shared with the
+        // HTTP routes and the desktop (`web::project_registry::commands`):
+        // each validates, persists to the durable registry, then notifies.
+        // Add / update / remove are idempotent by `projectId`; a remove or
+        // archive of a busy project is refused `project_busy` unless
+        // `cascade` is set. `set_default_project` is the only default change.
+        "set_default_project" => handle_set_default_project(id, &req.payload, env).await,
+        "add_project" => handle_add_project(id, &req.payload, env).await,
+        "update_project" => handle_update_project(id, &req.payload, env).await,
+        "remove_project" => handle_remove_project(id, &req.payload, env).await,
         "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, req.command_id.clone()).await,
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent

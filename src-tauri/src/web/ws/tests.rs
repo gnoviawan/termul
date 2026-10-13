@@ -1073,8 +1073,7 @@ pub(super) fn test_env(
         acp: Arc::clone(acp),
         relay: Arc::clone(relay),
         registry: Arc::clone(registry),
-        registry_persistence: None,
-        projects_file: None,
+        pty: crate::web::test_pty_manager(),
         history_mode: HistoryMode::LiveOnly,
         acp_catalog: None,
         acp_install: None,
@@ -3679,151 +3678,89 @@ async fn get_session_payload_standalone_corrupt_log_is_unsupported() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// `set_default_project` WS request (Epic 7): updates the host default,
-/// persists to the `FileProjectRegistry` (VPS, rollback-safe), and
-/// broadcasts `projects_changed`. Mirrors the `set_host_default_project`
-/// Tauri command + `POST /projects/default` HTTP route (transport parity).
+fn project_summary_for_test(
+    id: &str,
+    path: Option<&str>,
+    archived: bool,
+) -> crate::web::project_registry::ProjectSummary {
+    crate::web::project_registry::ProjectSummary {
+        id: id.to_string(),
+        name: format!("Proj {id}"),
+        color: "blue".to_string(),
+        path: path.map(str::to_string),
+        is_archived: archived,
+        is_default: false,
+    }
+}
+
+/// `set_default_project` WS request (Epic 7): updates the host default and
+/// writes it through to the durable registry file. Mirrors the
+/// `set_host_default_project` Tauri command + `POST /projects/default` HTTP
+/// route (transport parity).
 #[tokio::test]
 async fn handle_set_default_project_updates_host_default_and_persists() {
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("projects.json");
+    let registry = Arc::new(ProjectRegistry::open_durable(&file, crate::acp::RootCheck::Lenient).unwrap());
     registry.set(
         vec![
-            crate::web::project_registry::ProjectSummary {
-                id: "p-1".to_string(),
-                name: "Proj p-1".to_string(),
-                color: "blue".to_string(),
-                path: Some("/a".to_string()),
-                is_archived: false,
-                is_default: true,
-            },
-            crate::web::project_registry::ProjectSummary {
-                id: "p-2".to_string(),
-                name: "Proj p-2".to_string(),
-                color: "green".to_string(),
-                path: Some("/b".to_string()),
-                is_archived: false,
-                is_default: false,
-            },
+            project_summary_for_test("p-1", Some("/a"), false),
+            project_summary_for_test("p-2", Some("/b"), false),
         ],
         Some("p-1".to_string()),
     );
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![
-            crate::acp::VfsRoot {
-                id: "p-1".to_string(),
-                name: "Proj p-1".to_string(),
-                path: PathBuf::from("/a"),
-                color: "blue".to_string(),
-                is_archived: false,
-                mcp_servers: vec![],
-            },
-            crate::acp::VfsRoot {
-                id: "p-2".to_string(),
-                name: "Proj p-2".to_string(),
-                path: PathBuf::from("/b"),
-                color: "green".to_string(),
-                is_archived: false,
-                mcp_servers: vec![],
-            },
-        ],
-        Some("p-1".to_string()),
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let path = std::env::temp_dir().join(format!(
-        "termul-ws-set-default-{}-{}.json",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let relay = Arc::new(WsRelaySink::new());
+    let (tx, _rx) = test_outbound();
+    let env = test_env(&acp, &relay, &registry, &tx, &Arc::new(Subscriptions::default()));
 
-    let reply = handle_set_default_project(
-        "r1".to_string(),
-        &json!({ "projectId": "p-2" }),
-        &relay,
-        &registry,
-        Some(&file_registry),
-        Some(&path),
+    let reply = route(
+        r#"{"id":"r1","type":"set_default_project","payload":{"projectId":"p-2"}}"#,
+        &env,
     )
     .await;
-    let saved = std::fs::read_to_string(&path).ok();
-    let _ = std::fs::remove_file(&path);
     assert!(reply.ok, "{:?}", reply.err);
-    // In-memory registry default + flags updated.
     let snap = registry.snapshot();
     assert_eq!(snap.default_project_id.as_deref(), Some("p-2"));
     assert!(!snap.projects[0].is_default);
     assert!(snap.projects[1].is_default);
-    // File registry persisted (VPS mode).
-    assert_eq!(file_registry.lock().default_project_id(), Some("p-2"));
-    let saved = saved.expect("persisted file written");
-    let v: Value = serde_json::from_str(&saved).expect("valid json");
-    assert_eq!(v["schemaVersion"], 3);
-    assert_eq!(v["defaultProjectId"], "p-2");
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file).expect("persisted")).unwrap();
+    assert_eq!(saved["schemaVersion"], 4);
+    assert_eq!(saved["defaultProjectId"], "p-2");
 }
 
 /// `set_default_project` WS request with an unknown/archived/pathless id →
 /// `NOT_FOUND` (validation rejects before any mutation or persistence).
 #[tokio::test]
 async fn handle_set_default_project_unknown_id_is_not_found() {
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("projects.json");
+    let registry = Arc::new(ProjectRegistry::open_durable(&file, crate::acp::RootCheck::Lenient).unwrap());
     registry.set(
         vec![
-            crate::web::project_registry::ProjectSummary {
-                id: "p-1".to_string(),
-                name: "Proj p-1".to_string(),
-                color: "blue".to_string(),
-                path: Some("/a".to_string()),
-                is_archived: false,
-                is_default: true,
-            },
-            crate::web::project_registry::ProjectSummary {
-                id: "p-archived".to_string(),
-                name: "Archived".to_string(),
-                color: "blue".to_string(),
-                path: Some("/b".to_string()),
-                is_archived: true,
-                is_default: false,
-            },
-            crate::web::project_registry::ProjectSummary {
-                id: "p-pathless".to_string(),
-                name: "Pathless".to_string(),
-                color: "blue".to_string(),
-                path: None,
-                is_archived: false,
-                is_default: false,
-            },
+            project_summary_for_test("p-1", Some("/a"), false),
+            project_summary_for_test("p-archived", Some("/b"), true),
+            project_summary_for_test("p-pathless", None, false),
         ],
         Some("p-1".to_string()),
     );
-    let path = std::env::temp_dir().join(format!(
-        "termul-ws-set-default-nf-{}-{}.json",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
+    let written = std::fs::read(&file).unwrap();
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let relay = Arc::new(WsRelaySink::new());
+    let (tx, _rx) = test_outbound();
+    let env = test_env(&acp, &relay, &registry, &tx, &Arc::new(Subscriptions::default()));
     for bad in ["missing", "p-archived", "p-pathless"] {
         let reply = handle_set_default_project(
             "r1".to_string(),
             &json!({ "projectId": bad }),
-            &relay,
-            &registry,
-            None,
-            Some(&path),
+            &env,
         )
         .await;
         assert!(!reply.ok, "{bad} should be rejected");
         assert_eq!(reply.err.unwrap().code, "not_found");
-        // Default unchanged.
-        assert_eq!(
-            registry.snapshot().default_project_id.as_deref(),
-            Some("p-1")
-        );
+        assert_eq!(registry.snapshot().default_project_id.as_deref(), Some("p-1"));
     }
-    // No file was written (validation rejected before persistence).
-    assert!(
-        !path.exists(),
-        "no file should be written on validation failure"
-    );
+    assert_eq!(std::fs::read(&file).unwrap(), written, "nothing was rewritten");
 }
 
 /// `set_default_project` changes the host default and publishes the project
@@ -3832,17 +3769,7 @@ async fn handle_set_default_project_unknown_id_is_not_found() {
 async fn handle_set_default_project_publishes_to_all_watchers() {
     let relay = Arc::new(WsRelaySink::new());
     let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![crate::web::project_registry::ProjectSummary {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            color: "blue".to_string(),
-            path: Some("/a".to_string()),
-            is_archived: false,
-            is_default: false,
-        }],
-        None,
-    );
+    registry.set(vec![project_summary_for_test("p-1", Some("/a"), false)], None);
     // A watcher with no session subscription proves the delta reaches it.
     let (out, mut rx) = outbound_channel(16, 15);
     relay
@@ -3850,14 +3777,14 @@ async fn handle_set_default_project_publishes_to_all_watchers() {
         .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
         .expect("watch");
     let _state = rx.try_recv().expect("full-state frame");
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let (tx, _out) = test_outbound();
+    let env = test_env(&acp, &relay, &registry, &tx, &Arc::new(Subscriptions::default()));
 
     let reply = handle_set_default_project(
         "r1".to_string(),
         &json!({ "projectId": "p-1" }),
-        &relay,
-        &registry,
-        None,
-        None,
+        &env,
     )
     .await;
     assert!(reply.ok, "{:?}", reply.err);

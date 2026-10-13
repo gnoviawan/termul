@@ -43,7 +43,7 @@ use axum::response::IntoResponse;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::acp::config::AgentConfig;
 use crate::acp::provider_errors::ProviderErrorKind;
@@ -328,8 +328,25 @@ impl WsReply {
             err: Some(WsError {
                 code: code.as_str().to_string(),
                 message: message.into(),
+                details: None,
             }),
         }
+    }
+
+    /// Build a failure reply whose `err.details` carries structured context
+    /// (the `project_busy` entity list).
+    #[must_use]
+    pub fn err_with_details(
+        id: impl Into<String>,
+        code: WsErrorCode,
+        message: impl Into<String>,
+        details: Value,
+    ) -> Self {
+        let mut reply = Self::err(id, code, message);
+        if let Some(err) = reply.err.as_mut() {
+            err.details = Some(details);
+        }
+        reply
     }
 
     /// Build a failure reply with a raw (SCREAMING_SNAKE_CASE) code string.
@@ -355,6 +372,7 @@ impl WsReply {
             err: Some(WsError {
                 code: code.into(),
                 message: message.into(),
+                details: None,
             }),
         }
     }
@@ -367,6 +385,11 @@ pub struct WsError {
     pub code: String,
     /// Human-readable message.
     pub message: String,
+    /// Optional structured context for the code (additive): a `project_busy`
+    /// refusal lists the bound entities as
+    /// `{"sessions":[sessionId…],"terminals":[terminalId…]}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 /// The stable `err.code` machine strings (AC2). Mirrors the TS
@@ -525,7 +548,7 @@ pub fn map_prompt_error_code(err: &str) -> Option<WsErrorCode> {
 // ---------------------------------------------------------------------------
 
 /// Shared Axum state for the standalone server: the ACP manager + the live
-/// WS relay sink + the in-memory project registry (Epic-4 bridge). Typed
+/// WS relay sink + the host's durable project registry. Typed
 /// struct (preferred over tuple state past 2 fields).
 #[derive(Clone)]
 pub struct AppState {
@@ -539,12 +562,12 @@ pub struct AppState {
     pub exit_code_tracker: Arc<ExitCodeTracker>,
     /// The live WS relay sink (owns per-session logs + seq counters + subs).
     pub relay: Arc<WsRelaySink>,
-    /// In-memory, renderer-fed project registry — source for `GET /projects`
-    /// + default-project resolution. Empty on the standalone path.
+    /// The host's durable project registry — source for `GET /projects`,
+    /// default-project resolution and the fs/git boundary.
     pub registry: Arc<ProjectRegistry>,
-    /// Optional writable VPS file registry + configured path. Desktop shared-live
-    /// passes `None`, so switching there remains file-free.
+    /// Unused: removed in the next change.
     pub registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
+    /// Unused: removed in the next change.
     pub projects_file: Option<Arc<PathBuf>>,
     /// Deployment history provider exposed to authenticated browser clients.
     pub history_mode: HistoryMode,
@@ -769,6 +792,8 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
 mod capability_tests;
 #[cfg(test)]
 mod project_binding_tests;
+#[cfg(test)]
+mod project_command_tests;
 #[cfg(test)]
 mod provider_error_tests;
 #[cfg(test)]

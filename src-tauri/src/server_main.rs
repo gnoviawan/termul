@@ -25,13 +25,14 @@ use termul_manager_lib::server_update::{
 use termul_manager_lib::web::auth::{resolve as resolve_web_auth, WebAuthResolution};
 use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
-    seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
+    serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
     WsRelaySink,
 };
+use termul_manager_lib::web::project_registry::RootCheck;
 use termul_manager_lib::web::store::{StorePolicy, WebStore};
 use termul_manager_lib::{
     AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
-    FileProjectRegistry, GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
+    GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
     WorkspaceManifestService,
 };
 use tracing::{error, info, warn};
@@ -351,30 +352,25 @@ fn main() -> ExitCode {
         ws_relay.set_rendezvous(rendezvous);
         let question_rendezvous = Arc::new(QuestionRendezvous::new(Arc::clone(&acp)));
         ws_relay.set_question_rendezvous(question_rendezvous);
-        // Story 4.1: the in-memory project registry. In VPS mode the
-        // standalone binary is the source of truth — it seeds the registry
-        // from the file-backed `FileProjectRegistry` at startup.
-        // `cfg.projects_file` is resolved by `ServerConfig::from_args` from
-        // --projects-file / $TERMUL_PROJECTS_FILE / the state-dir default
+        // The host's ONE project registry, durable at the resolved projects
+        // file. `cfg.projects_file` is resolved by `ServerConfig::from_args`
+        // from --projects-file / $TERMUL_PROJECTS_FILE / the state-dir default
         // (<state dir>/projects.json), so `None` only survives when no
         // platform state dir is discoverable. A missing file is not fatal
-        // (loads as empty, so `/projects` returns empty); a corrupt/invalid
-        // file IS fatal (abort startup so a misconfigured VPS is obvious).
-        // Desktop-hosted mode never reaches here (it calls `serve_router`
-        // directly with a renderer-fed registry).
-        let registry = Arc::new(ProjectRegistry::new());
-        let mut registry_persistence = None;
-        if let Some(ref projects_file) = cfg.projects_file {
-            match FileProjectRegistry::load(projects_file) {
-                Ok(file_reg) => {
-                    let n = file_reg.roots().len();
+        // (opens empty, so `/projects` returns empty and the first project
+        // command creates the file); a corrupt/invalid/newer-schema file IS
+        // fatal (abort startup so a misconfigured VPS is obvious). Desktop
+        // shared-live never reaches here: it builds its own registry once at
+        // desktop setup and calls `serve_router` directly.
+        let registry = if let Some(ref projects_file) = cfg.projects_file {
+            match ProjectRegistry::open_durable(projects_file, RootCheck::Strict) {
+                Ok(registry) => {
                     info!(
-                        "loaded {} project root(s) from '{}'",
-                        n,
+                        "loaded {} project(s) from '{}'",
+                        registry.len(),
                         projects_file.display()
                     );
-                    seed_from_file(&registry, &file_reg);
-                    registry_persistence = Some(Arc::new(parking_lot::Mutex::new(file_reg)));
+                    Arc::new(registry)
                 }
                 Err(e) => {
                     eprintln!(
@@ -395,7 +391,8 @@ fn main() -> ExitCode {
                  registry is in-memory only and projects will NOT persist \
                  across restarts"
             );
-        }
+            Arc::new(ProjectRegistry::new())
+        };
         // The standalone binary owns its interactive PTYs and kills them only
         // after Axum drains. Desktop shared-live passes its existing manager and
         // never reaches that cleanup path.
@@ -414,7 +411,6 @@ fn main() -> ExitCode {
         ));
         pty.set_max_terminals_per_project(cfg.max_terminals_per_project);
 
-        let projects_file = cfg.projects_file.clone();
         // OpenPencil canvas mode (spec-openpencil-canvas-mode): the
         // standalone server owns its own canvas daemon pool — NEVER shared
         // with a desktop host on the same machine. `web::serve` joins its
@@ -436,8 +432,8 @@ fn main() -> ExitCode {
             exit_code_tracker,
             ws_relay,
             registry,
-            registry_persistence,
-            projects_file,
+            None,
+            None,
             cfg,
             workspace_manifest,
             acp_catalog,

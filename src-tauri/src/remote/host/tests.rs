@@ -294,6 +294,56 @@ async fn remote_server_state_start_stop_does_not_kill_agents() {
     // call kill_all. This test guards the path end-to-end.)
 }
 
+#[tokio::test]
+async fn the_durable_registry_survives_a_shared_live_stop_and_restart() {
+    // The registry belongs to the desktop, not to the server: stopping and
+    // starting shared-live neither clears it nor loses what it persisted.
+    let (acp, pty, relay, _in_memory) = lifecycle_fixtures();
+    let (data, data_dir) = shared_live_fixture();
+    let project_dir = data_dir.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let file = crate::data_lock::desktop_projects_file(data_dir.path());
+    let registry = Arc::new(
+        ProjectRegistry::open_durable(&file, crate::acp::RootCheck::Lenient).expect("open"),
+    );
+    registry.set(
+        vec![crate::web::ProjectSummary {
+            id: "p-1".to_string(),
+            name: "One".to_string(),
+            color: "blue".to_string(),
+            path: Some(project_dir.to_string_lossy().into_owned()),
+            is_archived: false,
+            is_default: false,
+        }],
+        Some("p-1".to_string()),
+    );
+
+    let state = RemoteServerState::new();
+    for _ in 0..2 {
+        state
+            .start(
+                acp.clone(),
+                pty.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+                false,
+                &data,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("start succeeds");
+        assert_eq!(registry.len(), 1, "the list is served while running");
+        state.stop().await.expect("stop succeeds");
+        assert_eq!(registry.len(), 1, "stop leaves the list alone");
+    }
+    let reopened =
+        ProjectRegistry::open_durable(&file, crate::acp::RootCheck::Lenient).expect("reopen");
+    assert_eq!(reopened.snapshot().default_project_id.as_deref(), Some("p-1"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn status_clears_tunnel_url_when_cloudflared_child_exits() {
     // The watchdog flips `tunnel_dead` once the child exits; `status()`

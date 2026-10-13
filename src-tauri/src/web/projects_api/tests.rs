@@ -1,32 +1,33 @@
 use super::*;
-use crate::acp::{AcpManager, FileProjectRegistry};
-use crate::web::project_registry::{seed_from_file, ProjectRegistry, ProjectSummary};
-use crate::web::sink::WsRelaySink;
-use crate::web::test_pty_manager;
+use crate::acp::RootCheck;
+use crate::web::project_registry::test_host::TestHost;
+use crate::web::project_registry::{ProjectRegistry, ProjectSummary};
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{Request, StatusCode};
+use axum::http::Request;
+use serde::de::DeserializeOwned;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
-    let pty = test_pty_manager();
+const LOOPBACK: [u8; 4] = [127, 0, 0, 1];
+const LAN: [u8; 4] = [10, 0, 0, 5];
+
+fn state_for(host: &TestHost) -> AppState {
+    let pty = Arc::clone(&host.pty);
     AppState {
-        acp: Arc::new(AcpManager::new(vec![])),
+        acp: Arc::clone(&host.acp),
         terminal_events: pty.terminal_events(),
         cwd_tracker: pty.cwd_tracker(),
         git_tracker: pty.git_tracker(),
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry,
+        relay: Arc::clone(&host.relay),
+        registry: Arc::clone(&host.registry),
         registry_persistence: None,
         projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
+        pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         oauth_base_url: "http://127.0.0.1".to_string(),
         workspace_manifest: None,
         acp_catalog: None,
@@ -39,892 +40,287 @@ fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
     }
 }
 
-/// Same as `state_with` but wires a VPS-mode `FileProjectRegistry` + path
-/// (for P11: the HTTP `set_default_project` persistence + rollback test).
-fn state_with_persistence(
-    registry: Arc<ProjectRegistry>,
-    file_registry: Arc<parking_lot::Mutex<FileProjectRegistry>>,
-    relay: Arc<WsRelaySink>,
-    projects_file: std::path::PathBuf,
-) -> AppState {
-    let pty = test_pty_manager();
-    AppState {
-        acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay,
-        registry,
-        registry_persistence: Some(file_registry),
-        projects_file: Some(Arc::new(projects_file)),
-        history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
-            std::collections::HashMap::new(),
-        )),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None,
-        web_auth: None,
-        allow_remote_writes: false,
-        shared_live_writes_denied: false,
-        connections: Default::default(),
-    }
-}
-
-fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> ProjectSummary {
-    ProjectSummary {
-        id: id.to_string(),
-        name: format!("Proj {id}"),
-        color: "blue".to_string(),
-        path: path.map(str::to_string),
-        is_archived: archived,
-        is_default: default,
-    }
-}
-
-#[tokio::test]
-async fn projects_returns_synced_list() {
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![
-            summary("p-1", Some("/a"), false, true),
-            summary("p-2", Some("/b"), false, false),
-            summary("p-old", Some("/c"), true, false),
-        ],
-        Some("p-1".to_string()),
-    );
-    let app = axum::Router::new()
-        .route("/projects", axum::routing::get(list))
-        .with_state(state_with(registry));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/projects")
-                .body(Body::empty())
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<ProjectListPayload> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success);
-    let data = parsed.data.expect("data");
-    assert_eq!(data.projects.len(), 3);
-    assert_eq!(data.default_project_id.as_deref(), Some("p-1"));
-    assert_eq!(data.projects[0].id, "p-1");
-    assert!(data.projects[0].is_default);
-    assert!(data.projects[2].is_archived);
-    // No env-var values cross the wire (redact-by-omission): ProjectSummary
-    // simply has no env-var field — assert the shape.
-    assert!(
-        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["data"]["projects"][0]
-            .as_object()
-            .unwrap()
-            .get("envVars")
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn projects_returns_empty_success_when_unsynced() {
-    let registry = Arc::new(ProjectRegistry::new());
-    let app = axum::Router::new()
-        .route("/projects", axum::routing::get(list))
-        .with_state(state_with(registry));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/projects")
-                .body(Body::empty())
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<ProjectListPayload> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success);
-    assert!(parsed.data.unwrap().projects.is_empty());
-}
-
-/// Minimal std-only temp dir (reuses `web::config`'s pid+nanos pattern —
-/// no `tempfile` dev-dep). Caller must `cleanup` it.
-fn tempdir_like(label: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let p = std::env::temp_dir().join(format!(
-        "termul-projects-api-{label}-{}-{nanos}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&p).expect("create tempdir");
-    p
-}
-
-fn cleanup(p: &std::path::Path) {
-    let _ = std::fs::remove_dir_all(p);
-}
-
-// T5.9(a) — VPS mode: the standalone binary loads the file-backed
-// registry and seeds the in-memory registry from it. GET /projects
-// returns the file's VFS roots; switch_project resolves the cwd from the
-// seeded registry via the SAME in-memory read-path (handle_switch_project
-// calls registry.find_path — see web/ws.rs:894). FileProjectRegistry IS
-// constructed here; the mode difference vs desktop is the SEED source.
-#[tokio::test]
-async fn vps_mode_seeds_from_file_then_lists_and_resolves_cwd() {
-    let dir = tempdir_like("vps-mode");
-    let root_a = dir.join("proj-a");
-    std::fs::create_dir_all(&root_a).expect("mkdir root-a");
-    let file = dir.join("projects.json");
-    std::fs::write(
-            &file,
-            serde_json::json!({
-                "schemaVersion": 1,
-                "activeProjectId": "p-1",
-                "projects": [
-                    { "id": "p-1", "name": "Project p-1", "path": root_a, "color": "blue", "isArchived": false },
-                    { "id": "p-old", "name": "Project p-old", "path": root_a, "color": "green", "isArchived": true },
-                ]
-            })
-            .to_string(),
-        )
-        .expect("write registry json");
-
-    // VPS load path.
-    let file_reg = FileProjectRegistry::load(&file).expect("load ok");
-    assert_eq!(file_reg.roots().len(), 2);
-    let registry = Arc::new(ProjectRegistry::new());
-    seed_from_file(&registry, &file_reg);
-
-    // GET /projects returns the file's VFS roots (list() = snapshot()).
-    let app = axum::Router::new()
-        .route("/projects", axum::routing::get(list))
-        .with_state(state_with(Arc::clone(&registry)));
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/projects")
-                .body(Body::empty())
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<ProjectListPayload> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success);
-    let data = parsed.data.expect("data");
-    assert_eq!(data.projects.len(), 2, "file's VFS roots");
-    assert_eq!(data.default_project_id.as_deref(), Some("p-1"));
-    assert_eq!(data.projects[0].id, "p-1");
-    assert!(
-        data.projects[0].is_default,
-        "default flag derived from default_project_id"
-    );
-    assert!(data.projects[1].is_archived);
-
-    // switch_project resolves the cwd from the seeded registry via the
-    // shared in-memory read-path (find_path). The active root's path is
-    // the canonicalized VFS root.
-    let expected_cwd = root_a
-        .canonicalize()
-        .expect("canonicalize")
-        .to_string_lossy()
-        .into_owned();
-    assert_eq!(
-        registry.find_path("p-1").as_deref(),
-        Some(expected_cwd.as_str()),
-        "switch_project (handle_switch_project) resolves the cwd via find_path"
-    );
-    cleanup(&dir);
-}
-
-// T5.9(b) — Desktop-hosted mode: the renderer feeds the in-memory registry
-// via remote_sync_projects (here a direct set, the same call the command
-// makes). GET /projects returns the renderer list; switch_project resolves
-// the cwd. FileProjectRegistry is NOT constructed in the desktop path.
-#[tokio::test]
-async fn desktop_mode_seeds_from_renderer_then_lists_and_resolves_cwd() {
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![
-            summary("d-1", Some("/renderer/cwd-a"), false, true),
-            summary("d-2", Some("/renderer/cwd-b"), false, false),
-        ],
-        Some("d-1".to_string()),
-    );
-
-    let app = axum::Router::new()
-        .route("/projects", axum::routing::get(list))
-        .with_state(state_with(Arc::clone(&registry)));
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/projects")
-                .body(Body::empty())
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<ProjectListPayload> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success);
-    let data = parsed.data.expect("data");
-    assert_eq!(data.projects.len(), 2, "renderer-fed list");
-    assert_eq!(data.default_project_id.as_deref(), Some("d-1"));
-    assert_eq!(data.projects[0].id, "d-1");
-    assert!(data.projects[0].is_default);
-
-    // switch_project resolves the cwd from the renderer-fed registry.
-    assert_eq!(
-        registry.find_path("d-1").as_deref(),
-        Some("/renderer/cwd-a")
-    );
-    assert_eq!(
-        registry.find_path("d-2").as_deref(),
-        Some("/renderer/cwd-b")
-    );
-}
-
-/// `POST /projects/default` updates the host default in the in-memory
-/// registry (desktop-hosted mode: no `FileProjectRegistry`). Mirrors the
-/// `set_default_project` WS request + the `set_host_default_project` Tauri
-/// command (transport parity — Epic 7).
-#[tokio::test]
-async fn set_default_project_updates_host_default_and_flags() {
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![
-            summary("p-1", Some("/a"), false, true),
-            summary("p-2", Some("/b"), false, false),
-        ],
-        Some("p-1".to_string()),
-    );
-    let app = axum::Router::new()
-        .route(
-            "/projects/default",
-            axum::routing::post(set_default_project),
-        )
-        .with_state(state_with(Arc::clone(&registry)));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/projects/default")
-                .header("content-type", "application/json")
-                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                .body(Body::from(
-                    serde_json::json!({ "projectId": "p-2" }).to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success, "set_default_project succeeds: {parsed:?}");
-    let snap = registry.snapshot();
-    assert_eq!(snap.default_project_id.as_deref(), Some("p-2"));
-    assert!(!snap.projects[0].is_default);
-    assert!(snap.projects[1].is_default);
-}
-
-/// `POST /projects/default` with an unknown/archived/pathless project →
-/// `NOT_FOUND` (the registry validation rejects it before any mutation).
-#[tokio::test]
-async fn set_default_project_unknown_id_is_not_found() {
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![
-            summary("p-1", Some("/a"), false, true),
-            summary("p-archived", Some("/b"), true, false),
-            summary("p-pathless", None, false, false),
-        ],
-        Some("p-1".to_string()),
-    );
-    let app = axum::Router::new()
-        .route(
-            "/projects/default",
-            axum::routing::post(set_default_project),
-        )
-        .with_state(state_with(Arc::clone(&registry)));
-
-    for bad in ["missing", "p-archived", "p-pathless"] {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/projects/default")
-                    .header("content-type", "application/json")
-                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                    .body(Body::from(
-                        serde_json::json!({ "projectId": bad }).to_string(),
-                    ))
-                    .expect("build request"),
-            )
-            .await
-            .expect("router response");
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .expect("read body");
-        let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-        assert!(!parsed.success, "{bad} should be rejected");
-        assert_eq!(parsed.code.as_deref(), Some("NOT_FOUND"));
-        // The registry default is unchanged.
-        assert_eq!(
-            registry.snapshot().default_project_id.as_deref(),
-            Some("p-1")
-        );
-    }
-}
-
-/// P11 — `POST /projects/default` with VPS-mode `registry_persistence` +
-/// `projects_file` exercises the file persistence path. The file registry +
-/// the on-disk file carry the new default after the request succeeds.
-#[tokio::test]
-async fn set_default_project_http_persists_to_file_registry_vps_mode() {
-    let dir = tempdir_like("http-vps-persist");
-    let root_a = dir.join("proj-a");
-    let root_b = dir.join("proj-b");
-    std::fs::create_dir_all(&root_a).expect("mkdir root-a");
-    std::fs::create_dir_all(&root_b).expect("mkdir root-b");
-    let file = dir.join("projects.json");
-
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![
-            crate::acp::VfsRoot {
-                id: "p-1".to_string(),
-                name: "Proj p-1".to_string(),
-                path: root_a,
-                color: "blue".to_string(),
-                is_archived: false,
-                mcp_servers: vec![],
-            },
-            crate::acp::VfsRoot {
-                id: "p-2".to_string(),
-                name: "Proj p-2".to_string(),
-                path: root_b,
-                color: "green".to_string(),
-                is_archived: false,
-                mcp_servers: vec![],
-            },
-        ],
-        Some("p-1".to_string()),
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    // Seed the in-memory registry from the file (VPS load path).
-    seed_from_file(&registry, &file_registry.lock());
-
-    let app = axum::Router::new()
-        .route(
-            "/projects/default",
-            axum::routing::post(set_default_project),
-        )
-        .with_state(state_with_persistence(
-            Arc::clone(&registry),
-            Arc::clone(&file_registry),
-            Arc::clone(&relay),
-            file.clone(),
-        ));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/projects/default")
-                .header("content-type", "application/json")
-                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                .body(Body::from(
-                    serde_json::json!({ "projectId": "p-2" }).to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-    assert!(
-        parsed.success,
-        "VPS set_default_project succeeds: {parsed:?}"
-    );
-
-    // The in-memory registry default updated.
-    let snap = registry.snapshot();
-    assert_eq!(snap.default_project_id.as_deref(), Some("p-2"));
-    // The file registry persisted (VPS mode).
-    assert_eq!(file_registry.lock().default_project_id(), Some("p-2"));
-    // The on-disk file carries the new default under the v3 field name.
-    let saved = std::fs::read_to_string(&file).expect("persisted file exists");
-    let v: serde_json::Value = serde_json::from_str(&saved).expect("valid json");
-    assert_eq!(v["schemaVersion"], 3);
-    assert_eq!(v["defaultProjectId"], "p-2");
-
-    // P11 rollback: a second request with an UNKNOWN id must NOT corrupt
-    // the file (the validation rejects before persistence; the file stays
-    // at p-2).
-    let app2 = axum::Router::new()
-        .route(
-            "/projects/default",
-            axum::routing::post(set_default_project),
-        )
-        .with_state(state_with_persistence(
-            Arc::clone(&registry),
-            Arc::clone(&file_registry),
-            Arc::clone(&relay),
-            file.clone(),
-        ));
-    let resp2 = app2
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/projects/default")
-                .header("content-type", "application/json")
-                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                .body(Body::from(
-                    serde_json::json!({ "projectId": "missing" }).to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    let body2 = axum::body::to_bytes(resp2.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed2: IpcBody<()> = serde_json::from_slice(&body2).expect("parse body");
-    assert!(!parsed2.success);
-    assert_eq!(parsed2.code.as_deref(), Some("NOT_FOUND"));
-    // File unchanged after the rejected request.
-    assert_eq!(file_registry.lock().default_project_id(), Some("p-2"));
-
-    cleanup(&dir);
-}
-
-/// `POST /projects/default` from a non-loopback peer → `FORBIDDEN`. The
-/// route mutates host state (persists + broadcasts), so a LAN client on a
-/// `0.0.0.0` bind must be rejected before any mutation (security parity
-/// with the fs/git/workspace write routes).
-#[tokio::test]
-async fn set_default_project_rejects_non_loopback_peer() {
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![summary("p-1", Some("/a"), false, true)],
-        Some("p-1".to_string()),
-    );
-    let app = axum::Router::new()
-        .route(
-            "/projects/default",
-            axum::routing::post(set_default_project),
-        )
-        .with_state(state_with(Arc::clone(&registry)));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/projects/default")
-                .header("content-type", "application/json")
-                // A LAN peer (10.0.0.5), not loopback.
-                .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
-                .body(Body::from(
-                    serde_json::json!({ "projectId": "p-1" }).to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-    assert!(!parsed.success, "non-loopback peer must be rejected");
-    assert_eq!(parsed.code.as_deref(), Some("FORBIDDEN"));
-    // The host default is untouched.
-    assert_eq!(
-        registry.snapshot().default_project_id.as_deref(),
-        Some("p-1")
-    );
-}
-
-/// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
-/// `/projects/default` (the inline guard honors the opt-in) and the host
-/// default is actually mutated. Mirrors the refusal test with the flag on.
-#[tokio::test]
-async fn set_default_project_admits_non_loopback_peer_when_opt_in() {
-    let registry = Arc::new(ProjectRegistry::new());
-    registry.set(
-        vec![
-            summary("p-1", Some("/a"), false, true),
-            summary("p-2", Some("/b"), false, false),
-        ],
-        Some("p-1".to_string()),
-    );
-    let mut state = state_with(Arc::clone(&registry));
-    state.allow_remote_writes = true;
-    let app = axum::Router::new()
-        .route(
-            "/projects/default",
-            axum::routing::post(set_default_project),
-        )
-        .with_state(state);
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/projects/default")
-                .header("content-type", "application/json")
-                // A LAN peer (10.0.0.5), not loopback.
-                .extension(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 54321))))
-                .body(Body::from(
-                    serde_json::json!({ "projectId": "p-2" }).to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-    assert!(
-        parsed.success,
-        "opt-in must admit non-loopback peer: {:?}",
-        parsed.error
-    );
-    // The host default flipped to p-2.
-    assert_eq!(
-        registry.snapshot().default_project_id.as_deref(),
-        Some("p-2")
-    );
-}
-
-/// Option B — `POST /projects` (VPS mode) creates a new VFS root, persists
-/// it to the `FileProjectRegistry` file, and mirrors it into the in-memory
-/// registry. The file + `GET /projects` both reflect the new project after
-/// the request succeeds.
-#[tokio::test]
-async fn create_project_http_persists_to_file_registry_vps_mode() {
-    let dir = tempdir_like("http-create-vps");
-    let root_a = dir.join("proj-a");
-    std::fs::create_dir_all(&root_a).expect("mkdir root-a");
-    let file = dir.join("projects.json");
-    let file_registry = Arc::new(parking_lot::Mutex::new(FileProjectRegistry::empty()));
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-
-    let app = axum::Router::new()
-        .route("/projects", axum::routing::post(create_project))
-        .with_state(state_with_persistence(
-            Arc::clone(&registry),
-            file_registry,
-            relay,
-            file.clone(),
-        ));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/projects")
-                .header("content-type", "application/json")
-                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                .body(Body::from(
-                    serde_json::json!({
-                        "id": "new-proj",
-                        "name": "New Project",
-                        "path": root_a,
-                        "color": "blue",
-                        "isArchived": false
-                    })
-                    .to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<ProjectSummary> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success, "create_project succeeds: {parsed:?}");
-    assert_eq!(parsed.data.as_ref().unwrap().id, "new-proj");
-
-    // File persistence: the on-disk file carries the new root.
-    let reloaded = FileProjectRegistry::load(&file).expect("reload");
-    assert_eq!(reloaded.roots().len(), 1);
-    assert_eq!(reloaded.roots()[0].id, "new-proj");
-    assert_eq!(reloaded.roots()[0].name, "New Project");
-
-    // In-memory mirror: GET /projects reflects the new project.
-    let snap = registry.snapshot();
-    assert_eq!(snap.projects.len(), 1);
-    assert_eq!(snap.projects[0].id, "new-proj");
-
-    cleanup(&dir);
-}
-
-/// F-020 regression: `POST /projects` upserting an EXISTING project must
-/// (a) preserve its file-side `mcp_servers` (the old code built the
-/// VfsRoot with `mcp_servers: Vec::new()`, wiping MCP config on every
-/// re-register), and (b) keep `is_default` when the upserted project is
-/// the current default (the old code always wrote `is_default: false`
-/// while `default_project_id` still pointed at it).
-#[tokio::test]
-async fn create_project_upsert_preserves_mcp_and_default() {
-    use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
-
-    let dir = tempdir_like("http-upsert-preserve");
-    let root_a = dir.join("proj-a");
-    std::fs::create_dir_all(&root_a).expect("mkdir root-a");
-    let file = dir.join("projects.json");
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![crate::acp::VfsRoot {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            path: root_a.clone(),
-            color: "blue".to_string(),
-            is_archived: false,
-            mcp_servers: vec![McpServer::Stdio(McpServerStdio::new(
-                "project-mcp",
-                std::path::PathBuf::from("mcp-bin"),
-            ))],
-        }],
-        Some("p-1".to_string()),
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    seed_from_file(&registry, &file_registry.lock());
-
-    let app = axum::Router::new()
-        .route("/projects", axum::routing::post(create_project))
-        .with_state(state_with_persistence(
-            Arc::clone(&registry),
-            Arc::clone(&file_registry),
-            relay,
-            file.clone(),
-        ));
-
-    // Re-register p-1 (rename) — an upsert of the current default.
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/projects")
-                .header("content-type", "application/json")
-                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                .body(Body::from(
-                    serde_json::json!({
-                        "id": "p-1",
-                        "name": "Renamed p-1",
-                        "path": root_a,
-                        "color": "red",
-                        "isArchived": false
-                    })
-                    .to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<ProjectSummary> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success, "upsert succeeds: {parsed:?}");
-    // The response summary keeps is_default (p-1 is still the default).
-    assert!(
-        parsed.data.as_ref().unwrap().is_default,
-        "upserting the default must keep is_default in the response"
-    );
-
-    // File-side mcp_servers survived the upsert.
-    let reloaded = FileProjectRegistry::load(&file).expect("reload");
-    assert_eq!(
-        reloaded.roots()[0].mcp_servers.len(),
-        1,
-        "upsert must preserve file-side mcp_servers"
-    );
-
-    // In-memory mirror: p-1 still default, still flagged.
-    let snap = registry.snapshot();
-    assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
-    assert!(snap.projects[0].is_default);
-
-    cleanup(&dir);
-}
-
-/// Option B — `DELETE /projects/{id}` (VPS mode) removes the root from the
-/// file + in-memory registry and clears a dangling default.
-#[tokio::test]
-async fn remove_project_http_persists_and_clears_default() {
-    let dir = tempdir_like("http-remove-vps");
-    let root_a = dir.join("proj-a");
-    std::fs::create_dir_all(&root_a).expect("mkdir root-a");
-    let file = dir.join("projects.json");
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![crate::acp::VfsRoot {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            path: root_a,
-            color: "blue".to_string(),
-            is_archived: false,
-            mcp_servers: vec![],
-        }],
-        Some("p-1".to_string()),
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    seed_from_file(&registry, &file_registry.lock());
-
-    let app = axum::Router::new()
+fn app(state: AppState) -> axum::Router {
+    axum::Router::new()
+        .route("/projects", axum::routing::get(list).post(create_project))
+        .route("/projects/default", axum::routing::post(set_default_project))
         .route(
             "/projects/{projectId}",
-            axum::routing::delete(remove_project),
+            axum::routing::put(update_project).delete(remove_project),
         )
-        .with_state(state_with_persistence(
-            Arc::clone(&registry),
-            file_registry,
-            relay,
-            file.clone(),
-        ));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri("/projects/p-1")
-                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                .body(Body::empty())
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success, "remove_project succeeds: {parsed:?}");
-
-    // File persistence: the root is gone + default cleared.
-    let reloaded = FileProjectRegistry::load(&file).expect("reload");
-    assert!(reloaded.roots().is_empty());
-    assert!(reloaded.default_project_id().is_none());
-
-    // In-memory mirror: the project is removed.
-    assert!(registry.snapshot().projects.is_empty());
-
-    cleanup(&dir);
+        .with_state(state)
 }
 
-/// Option B — `PUT /projects/{id}` (VPS mode) patches the display fields
-/// and persists to the file.
-#[tokio::test]
-async fn update_project_http_persists_renamed_and_archived() {
-    let dir = tempdir_like("http-update-vps");
-    let root_a = dir.join("proj-a");
-    std::fs::create_dir_all(&root_a).expect("mkdir root-a");
-    let file = dir.join("projects.json");
-    let file_registry = FileProjectRegistry::from_roots(
-        vec![crate::acp::VfsRoot {
-            id: "p-1".to_string(),
-            name: "Proj p-1".to_string(),
-            path: root_a,
-            color: "blue".to_string(),
-            is_archived: false,
-            mcp_servers: vec![],
-        }],
-        Some("p-1".to_string()),
-    );
-    let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
-    let relay = Arc::new(WsRelaySink::new());
-    let registry = Arc::new(ProjectRegistry::new());
-    seed_from_file(&registry, &file_registry.lock());
-
-    let app = axum::Router::new()
-        .route("/projects/{projectId}", axum::routing::put(update_project))
-        .with_state(state_with_persistence(
-            Arc::clone(&registry),
-            file_registry,
-            relay,
-            file.clone(),
-        ));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri("/projects/p-1")
-                .header("content-type", "application/json")
-                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
-                .body(Body::from(
-                    serde_json::json!({
-                        "name": "Renamed",
-                        "color": "green",
-                        "isArchived": true
-                    })
-                    .to_string(),
-                ))
-                .expect("build request"),
-        )
-        .await
-        .expect("router response");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+async fn call<T: DeserializeOwned>(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<serde_json::Value>,
+    peer: [u8; 4],
+) -> IpcBody<T> {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .extension(ConnectInfo(SocketAddr::from((peer, 54321))))
+        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+        .expect("build request");
+    let response = app.clone().oneshot(request).await.expect("router response");
+    assert_eq!(response.status(), 200, "app-level failures ride in the body");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read body");
-    let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-    assert!(parsed.success, "update_project succeeds: {parsed:?}");
+    serde_json::from_slice(&bytes).expect("parse body")
+}
 
-    // File persistence: renamed + archived + default cleared.
-    let reloaded = FileProjectRegistry::load(&file).expect("reload");
-    assert_eq!(reloaded.roots()[0].name, "Renamed");
-    assert_eq!(reloaded.roots()[0].color, "green");
-    assert!(reloaded.roots()[0].is_archived);
-    assert!(
-        reloaded.default_project_id().is_none(),
-        "archived default cleared"
+fn new_project(host: &TestHost, id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "name": format!("Project {id}"),
+        "path": host.project_dir, "color": "blue"
+    })
+}
+
+#[tokio::test]
+async fn get_projects_lists_the_registry_and_is_an_empty_success_when_empty() {
+    let host = TestHost::new(&[], true).await;
+    let app = app(state_for(&host));
+    let empty: IpcBody<ProjectListPayload> = call(&app, "GET", "/projects", None, LAN).await;
+    assert!(empty.success);
+    assert!(empty.data.unwrap().projects.is_empty());
+
+    host.add_project("p-1").await;
+    assert!(host.registry.set_default_project("p-1"));
+    let listed: IpcBody<ProjectListPayload> = call(&app, "GET", "/projects", None, LAN).await;
+    let data = listed.data.unwrap();
+    assert_eq!(data.default_project_id.as_deref(), Some("p-1"));
+    assert!(data.projects[0].is_default);
+}
+
+#[tokio::test]
+async fn a_durable_registry_serves_what_a_restart_reloads() {
+    let host = TestHost::new(&[], true).await;
+    let app_one = app(state_for(&host));
+    let added: IpcBody<ProjectSummary> =
+        call(&app_one, "POST", "/projects", Some(new_project(&host, "my-api")), LOOPBACK).await;
+    assert!(added.success, "{added:?}");
+    let stored = added.data.unwrap();
+    assert_eq!(stored.id, "my-api");
+    assert_eq!(
+        stored.path.as_deref(),
+        Some(std::fs::canonicalize(&host.project_dir).unwrap().to_str().unwrap())
     );
 
-    // In-memory mirror.
-    let snap = registry.snapshot();
-    assert_eq!(snap.projects[0].name, "Renamed");
-    assert!(snap.projects[0].is_archived);
+    // A new server process over the same file lists the project.
+    let reopened = Arc::new(
+        ProjectRegistry::open_durable(&host.registry_file, RootCheck::Strict).unwrap(),
+    );
+    let mut state = state_for(&host);
+    state.registry = reopened;
+    let listed: IpcBody<ProjectListPayload> =
+        call(&app(state), "GET", "/projects", None, LAN).await;
+    assert_eq!(listed.data.unwrap().projects[0].id, "my-api");
+}
 
-    cleanup(&dir);
+#[tokio::test]
+async fn add_is_idempotent_and_refuses_a_different_path() {
+    let host = TestHost::new(&[], true).await;
+    let app = app(state_for(&host));
+    let first: IpcBody<ProjectSummary> =
+        call(&app, "POST", "/projects", Some(new_project(&host, "p-1")), LOOPBACK).await;
+    let repeat: IpcBody<ProjectSummary> =
+        call(&app, "POST", "/projects", Some(new_project(&host, "p-1")), LOOPBACK).await;
+    assert!(first.success && repeat.success);
+    assert_eq!(host.registry.len(), 1);
+
+    let mut moved = new_project(&host, "p-1");
+    moved["path"] = serde_json::json!(host.project_dir.parent().unwrap());
+    let refused: IpcBody<ProjectSummary> =
+        call(&app, "POST", "/projects", Some(moved), LOOPBACK).await;
+    assert!(!refused.success);
+    assert_eq!(refused.code.as_deref(), Some("DUPLICATE"));
+
+    let mut bad = new_project(&host, "p-2");
+    bad["path"] = serde_json::json!("/definitely/not/a/dir");
+    let invalid: IpcBody<ProjectSummary> =
+        call(&app, "POST", "/projects", Some(bad), LOOPBACK).await;
+    assert_eq!(invalid.code.as_deref(), Some("VALIDATION_ERROR"));
+    assert_eq!(host.registry.len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_registry_write_is_persist_failed_and_changes_nothing() {
+    let host = TestHost::new(&[], true).await;
+    let app = app(state_for(&host));
+    std::fs::create_dir(&host.registry_file).unwrap();
+    let refused: IpcBody<ProjectSummary> =
+        call(&app, "POST", "/projects", Some(new_project(&host, "p-1")), LOOPBACK).await;
+    assert_eq!(refused.code.as_deref(), Some("PERSIST_FAILED"));
+    assert!(host.registry.is_empty());
+}
+
+#[tokio::test]
+async fn update_patches_fields_and_archive_clears_the_default() {
+    let host = TestHost::new(&[], true).await;
+    host.add_project("p-1").await;
+    assert!(host.registry.set_default_project("p-1"));
+    let app = app(state_for(&host));
+
+    let renamed: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/p-1",
+        Some(serde_json::json!({ "name": "Renamed", "color": "red" })),
+        LOOPBACK,
+    )
+    .await;
+    assert!(renamed.success);
+    assert_eq!(host.registry.get("p-1").unwrap().name, "Renamed");
+
+    let archived: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/p-1",
+        Some(serde_json::json!({ "isArchived": true })),
+        LOOPBACK,
+    )
+    .await;
+    assert!(archived.success);
+    assert_eq!(host.registry.snapshot().default_project_id, None);
+
+    let missing: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/ghost",
+        Some(serde_json::json!({ "name": "x" })),
+        LOOPBACK,
+    )
+    .await;
+    assert_eq!(missing.code.as_deref(), Some("NOT_FOUND"));
+}
+
+#[tokio::test]
+async fn delete_removes_and_an_absent_id_is_ok() {
+    let host = TestHost::new(&[], true).await;
+    host.add_project("p-1").await;
+    let app = app(state_for(&host));
+    let removed: IpcBody<()> = call(&app, "DELETE", "/projects/p-1", None, LOOPBACK).await;
+    assert!(removed.success);
+    assert!(host.registry.is_empty());
+    let again: IpcBody<()> = call(&app, "DELETE", "/projects/p-1", None, LOOPBACK).await;
+    assert!(again.success, "removing an absent project is ok");
+}
+
+#[tokio::test]
+async fn set_default_is_explicit_and_validates_the_target() {
+    let host = TestHost::new(&[], true).await;
+    host.add_project("p-1").await;
+    let app = app(state_for(&host));
+    let ok: IpcBody<()> = call(
+        &app,
+        "POST",
+        "/projects/default",
+        Some(serde_json::json!({ "projectId": "p-1" })),
+        LOOPBACK,
+    )
+    .await;
+    assert!(ok.success);
+    assert_eq!(host.registry.snapshot().default_project_id.as_deref(), Some("p-1"));
+
+    let unknown: IpcBody<()> = call(
+        &app,
+        "POST",
+        "/projects/default",
+        Some(serde_json::json!({ "projectId": "ghost" })),
+        LOOPBACK,
+    )
+    .await;
+    assert_eq!(unknown.code.as_deref(), Some("NOT_FOUND"));
+}
+
+#[tokio::test]
+async fn project_writes_refuse_a_lan_peer_unless_remote_writes_are_allowed() {
+    let host = TestHost::new(&[], true).await;
+    host.add_project("p-1").await;
+    let denied = app(state_for(&host));
+    for (method, uri, body) in [
+        ("POST", "/projects", Some(new_project(&host, "p-2"))),
+        ("PUT", "/projects/p-1", Some(serde_json::json!({ "name": "x" }))),
+        ("DELETE", "/projects/p-1", None),
+        (
+            "POST",
+            "/projects/default",
+            Some(serde_json::json!({ "projectId": "p-1" })),
+        ),
+    ] {
+        let reply: IpcBody<serde_json::Value> = call(&denied, method, uri, body, LAN).await;
+        assert_eq!(reply.code.as_deref(), Some("FORBIDDEN"), "{method} {uri}");
+    }
+    assert_eq!(host.registry.len(), 1);
+    assert_eq!(host.registry.get("p-1").unwrap().name, "Project p-1");
+
+    let mut state = state_for(&host);
+    state.allow_remote_writes = true;
+    let admitted: IpcBody<()> = call(&app(state), "DELETE", "/projects/p-1", None, LAN).await;
+    assert!(admitted.success);
+    assert!(host.registry.is_empty());
+}
+
+#[tokio::test]
+async fn busy_remove_lists_the_entities_over_http_and_cascade_stops_them() {
+    let host = TestHost::new(&[("a1", "s-1", "p-1")], true).await;
+    host.add_project("p-1").await;
+    let terminal = host.spawn_terminal("p-1").await;
+    let app = app(state_for(&host));
+
+    let refused: IpcBody<()> = call(&app, "DELETE", "/projects/p-1", None, LOOPBACK).await;
+    assert!(!refused.success);
+    assert_eq!(refused.code.as_deref(), Some("PROJECT_BUSY"));
+    assert_eq!(
+        refused.details,
+        Some(serde_json::json!({ "sessions": ["s-1"], "terminals": [terminal] }))
+    );
+    assert!(host.registry.contains("p-1"));
+    assert_eq!(host.live_sessions("a1"), ["s-1"]);
+
+    let cascaded: IpcBody<()> =
+        call(&app, "DELETE", "/projects/p-1?cascade=true", None, LOOPBACK).await;
+    assert!(cascaded.success, "{cascaded:?}");
+    assert!(!host.registry.contains("p-1"));
+    assert!(host.live_sessions("a1").is_empty());
+    assert!(host.pty.get(&terminal).is_none());
+    host.pty.kill_all().await;
+}
+
+#[tokio::test]
+async fn busy_archive_over_http_honors_cascade_in_the_body() {
+    let host = TestHost::new(&[("a1", "s-1", "p-1")], true).await;
+    host.add_project("p-1").await;
+    let app = app(state_for(&host));
+
+    let refused: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/p-1",
+        Some(serde_json::json!({ "isArchived": true })),
+        LOOPBACK,
+    )
+    .await;
+    assert_eq!(refused.code.as_deref(), Some("PROJECT_BUSY"));
+    assert_eq!(
+        refused.details,
+        Some(serde_json::json!({ "sessions": ["s-1"], "terminals": [] }))
+    );
+    assert!(!host.registry.get("p-1").unwrap().is_archived);
+
+    let archived: IpcBody<()> = call(
+        &app,
+        "PUT",
+        "/projects/p-1",
+        Some(serde_json::json!({ "isArchived": true, "cascade": true })),
+        LOOPBACK,
+    )
+    .await;
+    assert!(archived.success);
+    assert!(host.registry.get("p-1").unwrap().is_archived);
+    assert!(host.live_sessions("a1").is_empty());
 }

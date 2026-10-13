@@ -1718,7 +1718,7 @@ async fn operations_accept_registered_non_default_project() {
 async fn mkdir_remote_refused_when_no_project_is_registered() {
     let dir = TempDir::new("mkdir-empty-registry");
     let state = test_state_remote_writes_with_root(dir.path());
-    state.registry.clear();
+    state.registry.set(Vec::new(), None);
     let target = dir.path().join("made");
     let remote = SocketAddr::from(([10, 0, 0, 5], 50000));
     let resp = post_json_from(

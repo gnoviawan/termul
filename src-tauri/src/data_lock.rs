@@ -40,6 +40,9 @@ pub const DIR_LOCK_FILE_NAME: &str = ".termul.lock";
 /// File name of the desktop's web store under `app_data_dir`.
 pub const DESKTOP_STORE_FILE_NAME: &str = "store.json";
 
+/// File name of the desktop's durable project registry under `app_data_dir`.
+pub const DESKTOP_PROJECTS_FILE_NAME: &str = "projects.json";
+
 /// Directory of the verified ACP install root, under the state / app data dir.
 pub const ACP_INSTALL_DIR_NAME: &str = "acp-registry-binaries";
 
@@ -345,7 +348,7 @@ impl StandalonePaths {
 /// Lock everything the desktop host keeps under `app_data_dir`: the directory
 /// itself plus the stores a standalone server could be pointed at by override
 /// (`acp-sessions`, `workspace-manifests`, `acp-catalog`, `acp-registry-binaries`,
-/// `store.json`), so an
+/// `store.json`, `projects.json`), so an
 /// override into the desktop's data dir is detected too.
 pub fn lock_desktop_data(app_data_dir: &Path) -> Result<DataLocks, DataLockError> {
     let mut locks = DataLocks::new();
@@ -355,6 +358,7 @@ pub fn lock_desktop_data(app_data_dir: &Path) -> Result<DataLocks, DataLockError
     locks.lock_dir(&app_data_dir.join("acp-catalog"))?;
     locks.lock_dir(&app_data_dir.join(ACP_INSTALL_DIR_NAME))?;
     locks.lock_file(&desktop_store_file(app_data_dir))?;
+    locks.lock_file(&desktop_projects_file(app_data_dir))?;
     Ok(locks)
 }
 
@@ -362,6 +366,12 @@ pub fn lock_desktop_data(app_data_dir: &Path) -> Result<DataLocks, DataLockError
 #[must_use]
 pub fn desktop_store_file(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(DESKTOP_STORE_FILE_NAME)
+}
+
+/// Path of the desktop's durable project registry.
+#[must_use]
+pub fn desktop_projects_file(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(DESKTOP_PROJECTS_FILE_NAME)
 }
 
 #[cfg(test)]
