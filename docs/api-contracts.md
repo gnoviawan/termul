@@ -598,6 +598,24 @@ One durable `ProjectRegistry` per host owns the project list: `termul-server` ke
 - `WsError` gains the optional `details` field (additive; today only `project_busy` sets it) and `IpcBody` the same `details`.
 - Registry file: schema 4 (`imported: bool` added to v3). A v1-v3 file loads and is copied to `<name>.pre-v4-<ts>.bak` before its first rewrite; a newer schema is refused and never overwritten; a corrupt file is copied to `<name>.corrupt-<ts>.bak`. The synthetic seed project (`--project-root` / desktop default) lives in memory only.
 - Tauri: `project_registry_import({projects: ProjectSummary[], defaultProjectId?}) -> {imported: boolean}` is the desktop's one-shot import of the renderer's old project list. It runs only while the file says nothing was imported, adds ids that are not registered (existing ids are kept, never overwritten), applies the default only when none is set (the synthetic seed does not count as one) and sets `imported` durably even for an empty list; a repeat replies `{imported: false}`. Until the renderer reads the registry through the projects watch, `remote_sync_projects` (full-list push) and `set_host_default_project` keep their behavior and are written through to `projects.json`.
+- Registry file: schema 4 (`imported: bool` added to v3). A v1-v3 file loads and is copied to `<name>.pre-v4-<ts>.bak` before its first rewrite; a newer schema is refused and never overwritten; a corrupt file is copied to `<name>.corrupt-<ts>.bak`. The synthetic seed project (only from the removed `--project-root` / `$TERMUL_PROJECT_ROOT`) lives in memory only; the desktop never seeds one.
+- Tauri: `project_registry_import({projects: ProjectSummary[], defaultProjectId?}) -> {imported: boolean}` is the desktop's one-shot import of the renderer's old project list. It runs only while the file says nothing was imported, adds ids that are not registered (existing ids are kept, never overwritten), applies the default only when none is set and sets `imported` durably even for an empty list; a repeat replies `{imported: false}`. Until the renderer reads the registry through the projects watch, `remote_sync_projects` (full-list push) and `set_host_default_project` keep their behavior and are written through to `projects.json`.
+
+### MCP and OAuth operations name a project
+
+The MCP server list is a file per project, `{project root}/.termul/mcp-servers.json`; there is no single host project root. Every operation names `projectId`, resolved through `ProjectRegistry::canonical_root`: an unknown, archived or pathless project (or one whose folder is gone) is refused `NOT_FOUND` and nothing is read or written.
+
+| Operation | HTTP | Request | Reply |
+| --- | --- | --- | --- |
+| Read the list | `GET /mcp-servers?projectId=` | n/a | `[McpServer…]` (empty when the file is absent) |
+| Write the list | `PUT /mcp-servers?projectId=` | JSON array | `{}`; a write guard (`FORBIDDEN`) applies before the project is resolved |
+| Start OAuth | `POST /mcp-servers/oauth/start` | `{projectId, serverUrl}` | `{authUrl, redirectUri}`; the URL must be an enabled http/sse entry of THAT project's list, else `UNAUTHORIZED_SERVER_URL` |
+| OAuth status | `POST /mcp-servers/oauth/status` | `{projectId, serverUrl}` | `{hasToken}` |
+| OAuth disconnect | `POST /mcp-servers/oauth/disconnect` | `{projectId, serverUrl}` | `{}` |
+
+- OAuth tokens stay keyed by server URL and are host-global (`acp/mcp_oauth.rs`): a token is the host's credential for that URL, not a project's. `status` and `disconnect` validate the project but read and delete the one URL-keyed token.
+- Tauri: `remote_sync_mcp_registry({projectId, registry})` writes that project's file (same refusal as above, no default-project or home-directory fallback). The desktop OAuth/probe commands (`acp_mcp_oauth_*`, `acp_probe_mcp_server`) authorize and write nothing, so they take the server URL / config only. `POST /mcp-servers/probe` is unchanged.
+- `--project-root` (and `$TERMUL_PROJECT_ROOT`) are removed options: still parsed for one minor release with a startup warning, they only seed one in-memory project while the registry has no usable project. No flag, no seed; the onboard wizard no longer asks for a root.
 
 ### Host offline
 

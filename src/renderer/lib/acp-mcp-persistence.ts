@@ -174,16 +174,22 @@ export function selectMcpServersForAgent(
   return { servers, skipped, pending }
 }
 
-export async function loadMcpServers(): Promise<StoredMcpServer[]> {
+/**
+ * The registry is one list. Desktop keeps it once in the app store; a web
+ * client reads the host file of the project it names (`projectId`, the active
+ * project); an empty id (no project yet) loads nothing.
+ */
+export async function loadMcpServers(projectId: string): Promise<StoredMcpServer[]> {
+  if (!isTauriContext() && !projectId) return []
   const res = isTauriContext()
     ? await persistenceApi.read<unknown>(ACP_MCP_KEY)
-    : await webServerMcpServers.get()
+    : await webServerMcpServers.get(projectId as string)
   if (res.success) return normalizeMcpRegistry(res.data)
   if (res.code === 'KEY_NOT_FOUND') return []
   throw new Error(res.error ?? 'Failed to load MCP servers')
 }
 
-export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
+export async function saveMcpServers(list: StoredMcpServer[], projectId: string): Promise<void> {
   const normalized = normalizeMcpRegistry(list)
   if (isTauriContext()) {
     const res = await persistenceApi.write(ACP_MCP_KEY, normalized)
@@ -191,13 +197,15 @@ export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
       throw new Error(res.error ?? 'Failed to persist MCP servers')
     }
     // CAP-7: mirror the app-store registry to the active project's
-    // `.termul/mcp-servers.json` so the web `GET /mcp-servers` route (file-based)
-    // serves the same registry. Best-effort — a sync failure is logged but
-    // never blocks the app-store save (the save above already succeeded).
-    await syncMcpRegistryToProjectBestEffort(normalized)
+    // `.termul/mcp-servers.json` so the web `GET /mcp-servers?projectId=` route
+    // (file-based) serves the same registry. Best-effort — a sync failure is
+    // logged but never blocks the app-store save (the save above already
+    // succeeded).
+    await syncMcpRegistryToProjectBestEffort(projectId, normalized)
     return
   }
-  const res = await webServerMcpServers.put(normalized)
+  if (!projectId) throw new Error('Select a project to save MCP servers')
+  const res = await webServerMcpServers.put(projectId, normalized)
   if (!res.success) {
     throw new Error(res.error ?? 'Failed to persist MCP servers')
   }
@@ -206,16 +214,21 @@ export async function saveMcpServers(list: StoredMcpServer[]): Promise<void> {
 /**
  * Best-effort wrapper for `syncMcpRegistryToProject`: logs a failure via
  * `logFrontendError` (with the IpcResult error/code) and never throws. Shared by
- * the `saveMcpServers` desktop hook and the acp-store project-switch hook so the
- * error path stays identical (CAP-7 — registry sync is always non-fatal).
+ * the `saveMcpServers` desktop hook and the acp-store mirror so the error path
+ * stays identical (CAP-7 — registry sync is always non-fatal). An empty
+ * project id (none active yet) mirrors nothing; a project the host registry does
+ * not hold yet (`NOT_FOUND`, e.g. shared-live off) is expected and only noted.
  */
 export async function syncMcpRegistryToProjectBestEffort(
+  projectId: string,
   registry: StoredMcpServer[]
 ): Promise<void> {
+  if (!projectId) return
   try {
-    const result = await syncMcpRegistryToProject(registry)
+    const result = await syncMcpRegistryToProject(projectId, registry)
     if (!result.success) {
       void logFrontendError({
+        level: result.code === 'NOT_FOUND' ? 'info' : 'error',
         source: 'acp-mcp-persistence.syncMcpRegistryToProject',
         message: `MCP registry project-file sync failed (${result.error ?? result.code ?? 'unknown'})`
       })

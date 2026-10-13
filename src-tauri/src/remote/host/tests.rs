@@ -720,12 +720,11 @@ fn remote_server_state_default_equals_new() {
     let _ = RemoteServerState::default();
 }
 
-/// A host started with an empty registry seeds exactly one registered project
-/// (the resolved seed root) so the registry-only boundary does not reject
-/// everything before the renderer's first project sync; a non-empty registry
-/// is left alone.
+/// A desktop host started with an empty registry registers nothing: there is
+/// no host project root to seed from, the durable registry is fed by the
+/// renderer's project list.
 #[tokio::test]
-async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
+async fn shared_live_start_never_seeds_a_project() {
     let (acp, pty, relay, registry) = lifecycle_fixtures();
     assert!(registry.is_empty());
     let (data, _data_dir) = shared_live_fixture();
@@ -745,12 +744,8 @@ async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
         )
         .await
         .expect("start with an empty registry");
-    let snap = registry.snapshot();
-    assert_eq!(snap.projects.len(), 1, "one seeded project");
-    assert_eq!(
-        snap.default_project_id.as_deref(),
-        Some(crate::web::project_registry::SEEDED_PROJECT_ID)
-    );
+    assert!(registry.is_empty(), "start must not seed a project");
+    assert_eq!(registry.snapshot().default_project_id, None);
     let _ = state.stop().await;
 }
 
@@ -780,10 +775,13 @@ async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
 async fn shared_live_boundary_is_any_registered_cross_drive_project() {
     let (acp, pty, relay, registry) = lifecycle_fixtures();
 
-    // Resolve the user home dir the way the buggy `default_project_root()`
-    // does, then pick a base provably OUTSIDE the home tree so the project
-    // dirs reproduce the cross-drive / outside-home rejection the bug caused.
-    let Some(home) = crate::web::config::default_project_root() else {
+    // Resolve the user home dir the way the old host project-root default did,
+    // then pick a base provably OUTSIDE the home tree so the project dirs
+    // reproduce the cross-drive / outside-home rejection the bug caused.
+    let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+    else {
         eprintln!("skip: cannot resolve user home dir for cross-drive test");
         return;
     };

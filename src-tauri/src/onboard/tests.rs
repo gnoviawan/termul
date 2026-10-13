@@ -4,7 +4,6 @@ fn answers_localhost() -> OnboardAnswers {
     OnboardAnswers {
         host: "127.0.0.1".into(),
         port: 8080,
-        project_root: PathBuf::from("/home/opus"),
         sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
         projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
         allow_remote_writes: false,
@@ -17,7 +16,6 @@ fn answers_expose_remote() -> OnboardAnswers {
     OnboardAnswers {
         host: "0.0.0.0".into(),
         port: 8080,
-        project_root: PathBuf::from("/home/opus"),
         sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
         projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
         allow_remote_writes: true,
@@ -30,7 +28,6 @@ fn answers_with_update() -> OnboardAnswers {
     OnboardAnswers {
         host: "127.0.0.1".into(),
         port: 8080,
-        project_root: PathBuf::from("/home/opus"),
         sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
         projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
         allow_remote_writes: false,
@@ -50,8 +47,6 @@ fn command_args_loopback_no_remote_writes() {
             "127.0.0.1".into(),
             "--port".into(),
             "8080".into(),
-            "--project-root".into(),
-            "/home/opus".into(),
             "--sessions-dir".into(),
             "/home/opus/.local/state/termul/sessions".into(),
             "--projects-file".to_string(),
@@ -139,14 +134,7 @@ fn collect_wires_typed_projects_file_through_args_and_config() {
     // each typed value lands in its own field — a prompt-wiring miswire
     // (e.g. sessions_dir cloned into projects_file) fails here. No env
     // dependence: every value the loop consumes comes from the script.
-    // The project-root prompt validates via resolve_and_validate_project_root
-    // (canonicalize + must be an existing directory), so the scripted root
-    // must exist on every test platform — /tmp would fail validation on
-    // Windows, misaligning the remaining scripted lines. CARGO_MANIFEST_DIR
-    // is always an existing directory when tests compile.
-    let project_root = env!("CARGO_MANIFEST_DIR");
-    let input =
-        format!("\n\n{project_root}\n/tmp/qa-collect-sessions\n/tmp/qa-collect-projects.json\n\n");
+    let input = "\n\n/tmp/qa-collect-sessions\n/tmp/qa-collect-projects.json\n\n";
     let mut stdin = std::io::BufReader::new(input.as_bytes());
     let mut stdout = Vec::new();
     let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
@@ -183,9 +171,7 @@ fn collect_normalizes_relative_projects_file_to_absolute() {
     // systemd unit (whose working directory is unpredictable). Absolute
     // answers are preserved verbatim (covered by
     // collect_wires_typed_projects_file_through_args_and_config).
-    let project_root = env!("CARGO_MANIFEST_DIR");
-    let input =
-        format!("\n\n{project_root}\n/tmp/qa-collect-sessions\nqa-relative/projects.json\n\n");
+    let input = "\n\n/tmp/qa-collect-sessions\nqa-relative/projects.json\n\n";
     let mut stdin = std::io::BufReader::new(input.as_bytes());
     let mut stdout = Vec::new();
     let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
@@ -281,7 +267,7 @@ fn to_server_config_loopback_disables_remote_writes() {
     assert!(!cfg.allow_remote_writes);
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
-    assert_eq!(cfg.project_root, PathBuf::from("/home/opus"));
+    assert_eq!(cfg.seed_project_root, None, "onboard never seeds a project root");
     assert_eq!(
         cfg.sessions_dir.as_ref(),
         Some(&PathBuf::from("/home/opus/.local/state/termul/sessions"))

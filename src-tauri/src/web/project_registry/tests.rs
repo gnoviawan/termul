@@ -466,7 +466,7 @@ fn seed_root_registers_one_default_project_only_when_empty() {
     assert_eq!(snap.default_project_id.as_deref(), Some(SEEDED_PROJECT_ID));
     assert_eq!(snap.projects[0].path.as_deref(), Some(path_str(&dir)));
     assert!(reg.is_within_any_registered_root(&dir));
-    assert_eq!(reg.default_canonical_root().as_deref(), Some(dir.as_path()));
+    assert_eq!(reg.canonical_root(SEEDED_PROJECT_ID), dir.canonicalize().ok());
 
     let other = tempdir_like("seed2");
     assert!(

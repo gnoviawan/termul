@@ -807,20 +807,22 @@ export function useProjectsAutoSave(): void {
             if (!result.success) {
               console.warn('[projects] remote sync unsuccessful:', result.error)
             }
-            // CAP-7 interim bridge: the web MCP registry file lives under the
-            // host default project, so mirror the MCP registry when the host's
-            // EFFECTIVE default changed — the stored default flag moved (an
-            // explicit set-default) or the host fell back to another project —
-            // never on navigation. Best-effort + non-fatal; only after the
-            // sync landed. The first reply counts as a change (the file for the
-            // default the host picked has not been mirrored yet).
+            // CAP-7 interim bridge: mirror the MCP registry to the ACTIVE
+            // project's file (named explicitly — the host has no default MCP
+            // target) when the host's EFFECTIVE default changed — the stored
+            // default flag moved (an explicit set-default) or the host fell
+            // back to another project — never on navigation. Best-effort +
+            // non-fatal; only after the sync landed, so the host registry
+            // already knows the project. The first reply counts as a change.
             if (result.success) {
               const outcome = noteHostDefault(syncSeq, result.data)
               // A stale reply never writes: the newer reply already carries the
               // effective default, and a second mirror could replace a file
               // update made in between.
               if (outcome !== 'stale' && (defaultChanged || outcome === 'changed')) {
-                void useAcpStore.getState().syncMcpRegistryToProjectFile()
+                void useAcpStore
+                  .getState()
+                  .syncMcpRegistryToProjectFile(useProjectStore.getState().activeProjectId)
               }
             }
           })

@@ -59,7 +59,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
         // path in `useProjectsAutoSave` keeps it in sync on later mutations).
         // No env-var values cross the wire — redact-by-omission.
         if (enable) {
-          const { projects } = useProjectStore.getState()
+          const { projects, activeProjectId } = useProjectStore.getState()
           // Await + inspect: a failed seed leaves the web client without a
           // project list until the next desktop mutation re-syncs — surface it.
           const syncSeq = nextSyncSeq()
@@ -68,10 +68,9 @@ export function RemoteAccessPopover(): React.JSX.Element {
             toast.error(`Failed to seed remote project list: ${syncResult.error}`)
           } else {
             // Baseline for the auto-save sync's change detection, and copy the
-            // desktop MCP servers to the file of the default the host picked
-            // (best-effort, interim bridge).
+            // desktop MCP servers to the active project's file (best-effort).
             noteHostDefault(syncSeq, syncResult.data)
-            void useAcpStore.getState().syncMcpRegistryToProjectFile()
+            void useAcpStore.getState().syncMcpRegistryToProjectFile(activeProjectId)
           }
           // Desktop-hosted browser history reads the durable Rust provider
           // directly, so no renderer transcript seed is needed.

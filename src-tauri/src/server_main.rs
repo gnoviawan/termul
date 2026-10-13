@@ -697,10 +697,12 @@ OPTIONS:
                                   [default: $TERMUL_SESSIONS_DIR, else
                                   <--state-dir>/sessions when --state-dir
                                   is set, else the platform state dir]
-    --project-root <PATH>         Boundary for /git/*, /skills, /search/content
-                                  routes (NOT /fs/* — ADR-007). Must exist and
-                                  be a directory; validated at startup.
-                                  [default: $TERMUL_PROJECT_ROOT or $HOME]
+    --project-root <PATH>         REMOVED (still parsed, with a startup
+                                  warning). There is no single host project
+                                  root: the boundary is "inside any registered
+                                  project". The value only seeds one project
+                                  while the registry is empty. Must exist and
+                                  be a directory. [default: none]
     --projects-file <PATH>        VFS-roots registry file. A missing file loads
                                   as an empty registry (not fatal); a corrupt
                                   file is fatal. With no state dir
@@ -782,7 +784,7 @@ OPTIONS:
     --allow-remote-writes         Admit non-loopback peers on all guarded write
                                   routes. /fs/* writes reject only .. traversal
                                   (ADR-007 breadth, any path); /git/* and
-                                  /worktree/* writes confined to --project-root;
+                                  /worktree/* writes confined to registered projects;
                                   AND host-state writes (/projects/default,
                                   /acp/install, /log/frontend-error,
                                   /workspace/*). Loopback callers keep ADR-007
@@ -840,7 +842,7 @@ ENVIRONMENT:
                                   Fallback: <tmp>/termul
     RUST_LOG                      tracing filter (floor: info). Try
                                   RUST_LOG=termul_manager_lib=debug
-    TERMUL_PROJECT_ROOT           Fallback for --project-root
+    TERMUL_PROJECT_ROOT           Removed fallback for --project-root (seed only)
     TERMUL_PROJECTS_FILE          Fallback for --projects-file
     TERMUL_SESSIONS_DIR           Fallback for --sessions-dir
     TERMUL_STORE_FILE             Fallback for --store-file
@@ -853,19 +855,17 @@ ENVIRONMENT:
 
 EXAMPLES:
     # Local: serve the embedded web client on loopback
-    termul-server --project-root $HOME/src/myproj
+    termul-server
 
     # LAN: expose to phone browsers on the trusted network
-    termul-server --host 0.0.0.0 --port 8080 \
-        --project-root $HOME/src/myproj
+    termul-server --host 0.0.0.0 --port 8080
 
     # LAN with remote writes (trusted network only)
-    termul-server --host 0.0.0.0 --project-root $HOME/src/myproj \
-        --allow-remote-writes
+    termul-server --host 0.0.0.0 --allow-remote-writes
 
     # Background with debug logging
     RUST_LOG=termul_manager_lib=debug termul-server --host 0.0.0.0 \
-        --project-root $HOME/src/myproj > /tmp/termul-server.log 2>&1 &
+        > /tmp/termul-server.log 2>&1 &
 
     # Guided setup (auto-detects systemd or setsid, survives SSH logout)
     termul-server onboard

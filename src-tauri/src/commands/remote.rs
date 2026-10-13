@@ -316,37 +316,38 @@ pub async fn remote_sync_chat_history(
     Ok(IpcResult::success(()))
 }
 
-/// Mirror the desktop app-store MCP registry to the host default project's
-/// `.termul/mcp-servers.json` (CAP-7 — registry sync gap; interim bridge until
-/// per-project MCP naming).
+/// Mirror the desktop app-store MCP registry to the named project's
+/// `.termul/mcp-servers.json` (CAP-7 — registry sync gap).
 ///
 /// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`
-/// (tauri-plugin-store, app-data dir), while the web `GET /mcp-servers` route
-/// reads `{default_project_root}/.termul/mcp-servers.json`. Without this bridge the web
+/// (tauri-plugin-store, app-data dir), while the web `GET /mcp-servers?projectId=`
+/// route reads `{project_root}/.termul/mcp-servers.json`. Without this bridge the web
 /// route never sees desktop-configured servers, so `McpBadge` stays hidden on
 /// web/mobile. Called best-effort after every desktop MCP save and when the
 /// host default project changes — a sync failure is logged but never blocks the app-store save.
 ///
-/// Resolves the root via the same chain `RemoteServerState::start`
-/// uses: the registry's default-project path (canonicalized), falling back to
-/// `default_project_root()` (`$TERMUL_PROJECT_ROOT` / `$HOME`) when the
-/// registry has no default (server stopped / never started). The write reuses
+/// The caller names the project (`projectId`); its canonical root comes from the
+/// durable registry (`canonical_root`), exactly like the web route — an unknown,
+/// archived or pathless project is refused `NOT_FOUND`, never redirected to a
+/// default or to the home directory. The write reuses
 /// `mcp_servers_api::registry_path` + `atomic_file::replace` so the sync writes
 /// the exact file the web route reads.
 #[tauri::command]
 pub async fn remote_sync_mcp_registry(
+    project_id: String,
     registry: serde_json::Value,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
 ) -> Result<IpcResult<()>, String> {
-    Ok(sync_mcp_registry_to_project_file(project_registry.inner(), registry).await)
+    Ok(sync_mcp_registry_to_project_file(project_registry.inner(), &project_id, registry).await)
 }
 
 /// Testable core of `remote_sync_mcp_registry`: writes `registry` to
-/// `{default_project_root}/.termul/mcp-servers.json` via `atomic_file::replace`.
+/// `{project_root}/.termul/mcp-servers.json` via `atomic_file::replace`.
 /// Extracted so a Rust unit test can exercise the write path without a Tauri
 /// `AppHandle` (CAP-7 regression guard).
 pub(crate) async fn sync_mcp_registry_to_project_file(
     project_registry: &crate::web::ProjectRegistry,
+    project_id: &str,
     registry: serde_json::Value,
 ) -> IpcResult<()> {
     log::info!("remote_sync_mcp_registry: start");
@@ -373,61 +374,16 @@ pub(crate) async fn sync_mcp_registry_to_project_file(
         }
     };
 
-    // Resolve the active project root (same chain as `RemoteServerState::start`):
-    // registry default → canonicalize; else `default_project_root()` → canonicalize.
-    // A present-but-invalid default path returns an error rather than silently
-    // falling back to the home directory (which the web route never reads).
-    let project_root = match project_registry.default_project_path() {
-        Some(p) => {
-            match crate::web::config::resolve_and_validate_project_root(std::path::Path::new(&p)) {
-                Ok(root) => root,
-                Err(e) => {
-                    log::error!(
-                        "remote_sync_mcp_registry: default project path '{}' \
-                     failed canonicalization: {}",
-                        p,
-                        e
-                    );
-                    return IpcResult::error(
-                        "No active project root available for MCP registry sync",
-                        "NO_ACTIVE_PROJECT_ROOT",
-                    );
-                }
-            }
-        }
-        None => {
-            log::warn!(
-                "remote_sync_mcp_registry: no active project path in registry; \
-                 falling back to default_project_root"
-            );
-            match crate::web::config::default_project_root() {
-                Some(raw) => match crate::web::config::resolve_and_validate_project_root(&raw) {
-                    Ok(root) => root,
-                    Err(e) => {
-                        log::error!(
-                            "remote_sync_mcp_registry: default project root '{}' \
-                             failed canonicalization: {}",
-                            raw.display(),
-                            e
-                        );
-                        return IpcResult::error(
-                            "No active project root available for MCP registry sync",
-                            "NO_ACTIVE_PROJECT_ROOT",
-                        );
-                    }
-                },
-                None => {
-                    log::error!(
-                        "remote_sync_mcp_registry: no active project root and \
-                         default_project_root unavailable"
-                    );
-                    return IpcResult::error(
-                        "No active project root available for MCP registry sync",
-                        "NO_ACTIVE_PROJECT_ROOT",
-                    );
-                }
-            }
-        }
+    let Some(project_root) = crate::web::mcp_servers_api::project_root(project_registry, project_id)
+    else {
+        log::warn!(
+            "remote_sync_mcp_registry: project '{project_id}' is unknown, archived or has no \
+             usable path"
+        );
+        return IpcResult::error(
+            crate::web::mcp_servers_api::PROJECT_NOT_FOUND_MESSAGE,
+            crate::web::mcp_servers_api::PROJECT_NOT_FOUND_CODE,
+        );
     };
 
     let path = crate::web::mcp_servers_api::registry_path(&project_root);

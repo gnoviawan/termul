@@ -1,7 +1,8 @@
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import type { FrontendErrorPayload } from '@/lib/log-api'
+import { useProjectStore } from '@/stores/project-store'
 
 const mocks = vi.hoisted(() => ({
   loadMcpServers: vi.fn(),
@@ -33,6 +34,9 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: mocks.logFrontendError
 }))
 
+const runtime = vi.hoisted(() => ({ tauri: false }))
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => runtime.tauri }))
+
 import { _resetAutoProbedMcpServersForTesting, useAcpMcp } from './use-acp-mcp'
 
 const stdioServer = (id: string, enabled?: boolean): StoredMcpServer => {
@@ -63,6 +67,27 @@ describe('useAcpMcp — auto-probe pass', () => {
     renderHook(() => useAcpMcp())
     expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
     expect(mocks.probeMcpServer).not.toHaveBeenCalled()
+  })
+
+  it('a web client reloads the registry when the active project changes; the desktop does not', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    const web = renderHook(() => useAcpMcp())
+    expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
+    act(() => useProjectStore.setState({ activeProjectId: 'p2' }))
+    expect(mocks.loadMcpServers).toHaveBeenCalledTimes(2)
+    web.unmount()
+
+    runtime.tauri = true
+    try {
+      mocks.loadMcpServers.mockClear()
+      const desktop = renderHook(() => useAcpMcp())
+      expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
+      act(() => useProjectStore.setState({ activeProjectId: 'p3' }))
+      expect(mocks.loadMcpServers).toHaveBeenCalledTimes(1)
+      desktop.unmount()
+    } finally {
+      runtime.tauri = false
+    }
   })
 
   it('probes every enabled server once after the registry loads (deferred to idle)', async () => {

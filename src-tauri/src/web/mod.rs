@@ -320,21 +320,21 @@ pub async fn serve_router(
     } else {
         HistoryMode::LiveOnly
     };
-    // The boundary is "inside any registered project": when no usable project
-    // is registered yet (standalone `--project-root` with an empty file
-    // registry, or a freshly started desktop host awaiting its first project
-    // sync), seed one project from the configured root so nothing is rejected.
-    // With real projects registered the configured root is NOT a boundary by
-    // itself — say so when it is not inside one, so an operator is not
-    // surprised by `OUTSIDE_PROJECT_ROOT`.
-    registry.seed_root_if_no_usable_project(&cfg.project_root);
-    if !registry.is_within_any_registered_root(&cfg.project_root) {
-        warn!(
-            "configured project root '{}' is not inside any registered project; \
-             git/worktree/search/skills/canvas and remote /fs writes only accept \
-             registered project roots",
-            cfg.project_root.display()
-        );
+    // The boundary is "inside any registered project"; there is no single host
+    // project root. Only the removed `--project-root` flag (or its
+    // `$TERMUL_PROJECT_ROOT` fallback) seeds one in-memory project, and only
+    // while the registry has no usable project — a registry with real
+    // projects ignores it. The desktop host never passes one.
+    if let Some(seed_root) = cfg.seed_project_root.as_deref() {
+        registry.seed_root_if_no_usable_project(seed_root);
+        if !registry.is_within_any_registered_root(seed_root) {
+            warn!(
+                "configured project root '{}' is not inside any registered project; \
+                 git/worktree/search/skills/canvas and remote /fs writes only accept \
+                 registered project roots",
+                seed_root.display()
+            );
+        }
     }
     // AD-19: one shutdown handle + overflow tolerance for every socket this
     // host upgrades.

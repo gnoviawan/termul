@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { logFrontendError } from '@/lib/log-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 
 /**
  * Load the persisted MCP server registry once at app mount, then auto-probe
@@ -48,9 +50,14 @@ export function useAcpMcp(): void {
   const probeMcpServer = useAcpStore((s) => s.probeMcpServer)
   const mcpServers = useAcpStore((s) => s.mcpServers)
   const mcpServersLoaded = useAcpStore((s) => s.mcpServersLoaded)
+  // A web client reads the host MCP file of the active project, so the load
+  // re-runs when the active project changes. The desktop reads its one app
+  // store list either way and never reloads on a switch.
+  const webProjectKey = useProjectStore((s) => (isTauriContext() ? '' : s.activeProjectId))
   // Registry load — best-effort; the store's action catches its own failures
   // (toast + boundary log), and the `.catch` here guards a transport-level
   // rejection from surfacing as an unhandled rejection.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `webProjectKey` is the trigger — the store action reads the active project itself.
   useEffect(() => {
     loadMcpServers().catch((err: unknown) => {
       void logFrontendError({
@@ -58,7 +65,7 @@ export function useAcpMcp(): void {
         message: `MCP registry load rejected (${String(err)})`
       })
     })
-  }, [loadMcpServers])
+  }, [loadMcpServers, webProjectKey])
 
   // Auto-probe pass — only after the registry has loaded, and each enabled
   // id at most once per app run (`autoProbedServerIds`). `mcpServers` is

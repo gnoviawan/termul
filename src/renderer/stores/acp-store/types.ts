@@ -748,12 +748,12 @@ export interface AcpState {
    */
   upsertCanvasMcpServer: (projectId: string, url: string, token?: string) => Promise<void>
   /**
-   * CAP-7: mirror the app-store MCP registry to the active project's
-   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
-   * host-level project switch so the new project's file is synced with the
-   * desktop's app-store registry before the web route reads it.
+   * CAP-7: mirror the app-store MCP registry to the named project's
+   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called when the host
+   * project list lands and when shared-live starts, so the web route reads the
+   * desktop's app-store registry for that project.
    */
-  syncMcpRegistryToProjectFile: () => Promise<void>
+  syncMcpRegistryToProjectFile: (projectId: string) => Promise<void>
 
   // Actions — MCP probe (on-demand, read-only). State slices above.
   /**
@@ -770,13 +770,15 @@ export interface AcpState {
    * loaded; otherwise delegates to `probeMcpServer(id)`.
    */
   loadMcpTools: (id: string) => Promise<void>
-  /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`.
-   * Opens the system browser, waits for the callback, stores the token. */
-  connectMcpOAuth: (id: string) => Promise<void>
+  /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`,
+   * on behalf of `projectId` (the web host authorizes the URL against that
+   * project's MCP list). Opens the system browser, waits for the callback,
+   * stores the token. */
+  connectMcpOAuth: (projectId: string, id: string) => Promise<void>
   /** Check whether a stored OAuth token exists and update `mcpOAuthConnected`. */
-  checkMcpOAuthStatus: (id: string) => Promise<void>
+  checkMcpOAuthStatus: (projectId: string, id: string) => Promise<void>
   /** Delete the stored OAuth token (the "Disconnect" action). */
-  disconnectMcpOAuth: (id: string) => Promise<void>
+  disconnectMcpOAuth: (projectId: string, id: string) => Promise<void>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>

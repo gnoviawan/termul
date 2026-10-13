@@ -81,21 +81,23 @@ export async function setHostDefaultProject(projectId: string): Promise<IpcResul
 }
 
 /**
- * Mirror the desktop app-store MCP registry to the host default project's
- * `.termul/mcp-servers.json` (CAP-7 — registry sync gap; interim bridge until
- * per-project MCP naming). The Rust `remote_sync_mcp_registry` command
- * resolves the default project root via the shared `ProjectRegistry` and
- * writes the registry via `atomic_file::replace`, so the web `GET /mcp-servers`
- * route (file-based) serves the same registry the desktop app store holds.
+ * Mirror the desktop app-store MCP registry to the named project's
+ * `.termul/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
+ * `remote_sync_mcp_registry` command resolves `projectId` through the shared
+ * `ProjectRegistry` (an unknown, archived or pathless project is refused
+ * `NOT_FOUND`) and writes the registry via `atomic_file::replace`, so the web
+ * `GET /mcp-servers?projectId=` route (file-based) serves the same registry the
+ * desktop app store holds.
  *
  * Best-effort: the result is `IpcResult<void>` (never throws — invoke errors map
  * to `{ success: false, code: 'INVOKE_ERROR' }`). Callers log a failure but never
  * let it block the app-store save or the project switch.
  */
 export async function syncMcpRegistryToProject(
+  projectId: string,
   registry: StoredMcpServer[]
 ): Promise<IpcResult<void>> {
-  return invokeIpc<void>('remote_sync_mcp_registry', { registry })
+  return invokeIpc<void>('remote_sync_mcp_registry', { projectId, registry })
 }
 
 /**

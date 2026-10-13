@@ -385,7 +385,8 @@ impl ProjectRegistry {
     /// the id is unknown/archived/pathless or its directory cannot be
     /// resolved right now. Resolved fresh from the registered path (outside
     /// the `roots` guard), so a deleted or moved root is never returned
-    /// stale. Used by the per-project fs watch and the MCP bridge.
+    /// stale. Used by the per-project fs watch and the project-named MCP/OAuth
+    /// operations.
     #[must_use]
     pub fn canonical_root(&self, project_id: &str) -> Option<PathBuf> {
         self.ensure_roots_current();
@@ -406,31 +407,6 @@ impl ProjectRegistry {
         if self.roots.read().epoch != self.epoch.load(Ordering::Acquire) {
             self.rebuild_roots();
         }
-    }
-
-    /// Canonical root of the host default project, or `None` when there is no
-    /// default (or its directory cannot be resolved). Interim bridge for the
-    /// MCP server/OAuth files, which are still host-wide until per-project
-    /// naming lands.
-    #[must_use]
-    pub fn default_canonical_root(&self) -> Option<PathBuf> {
-        let default_id = self.inner.lock().default_project_id.clone()?;
-        self.canonical_root(&default_id)
-    }
-
-    /// The default project's cwd `path` (display form, not canonicalized), or
-    /// `None` when the registry has no default or the default has no path.
-    /// Callers that need a boundary-grade path MUST canonicalize it through
-    /// `resolve_and_validate_project_root`.
-    #[must_use]
-    pub(crate) fn default_project_path(&self) -> Option<String> {
-        let g = self.inner.lock();
-        let default_id = g.default_project_id.as_deref()?;
-        g.projects
-            .iter()
-            .find(|p| p.id == default_id)
-            .and_then(|p| p.path.clone())
-            .filter(|p| !p.trim().is_empty())
     }
 
     /// Rebuild the cached canonical roots from the current registry state.

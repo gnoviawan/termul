@@ -467,14 +467,18 @@ export const webServerProjects = {
   }
 }
 
-/** Global MCP registry persistence shared by standalone and desktop-hosted web clients. */
+/**
+ * MCP registry persistence shared by standalone and desktop-hosted web clients.
+ * The host keeps one `.termul/mcp-servers.json` per project, so every call names
+ * the `projectId` (an unknown or archived project is refused `NOT_FOUND`).
+ */
 export const webServerMcpServers = {
-  async get(): Promise<IpcResult<unknown>> {
-    return getJson<unknown>('/mcp-servers')
+  async get(projectId: string): Promise<IpcResult<unknown>> {
+    return getJson<unknown>(`/mcp-servers?projectId=${encodeURIComponent(projectId)}`)
   },
 
-  async put(registry: unknown[]): Promise<IpcResult<void>> {
-    return putJson<void>('/mcp-servers', registry)
+  async put(projectId: string, registry: unknown[]): Promise<IpcResult<void>> {
+    return putJson<void>(`/mcp-servers?projectId=${encodeURIComponent(projectId)}`, registry)
   }
 }
 
@@ -722,20 +726,27 @@ export const webServerWorktree = {
     })
   }
 }
-/** MCP OAuth web parity — mirrors the desktop Tauri commands. */
+/**
+ * MCP OAuth web parity — mirrors the desktop Tauri commands. Every call names
+ * the `projectId` it acts for; `start` authorizes the server URL against that
+ * project's MCP list. Tokens stay keyed by server URL on the host.
+ */
 export const webServerMcpOAuth = {
   /** Start the OAuth flow; returns the auth URL to redirect the browser to. */
-  async start(serverUrl: string): Promise<IpcResult<{ authUrl: string; redirectUri: string }>> {
-    return postJson('/mcp-servers/oauth/start', { serverUrl })
+  async start(
+    projectId: string,
+    serverUrl: string
+  ): Promise<IpcResult<{ authUrl: string; redirectUri: string }>> {
+    return postJson('/mcp-servers/oauth/start', { projectId, serverUrl })
   },
 
   /** Check whether a stored OAuth token exists for a server URL. */
-  async status(serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
-    return postJson('/mcp-servers/oauth/status', { serverUrl })
+  async status(projectId: string, serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
+    return postJson('/mcp-servers/oauth/status', { projectId, serverUrl })
   },
 
   /** Delete the stored OAuth token for a server URL. */
-  async disconnect(serverUrl: string): Promise<IpcResult<void>> {
-    return postJson('/mcp-servers/oauth/disconnect', { serverUrl })
+  async disconnect(projectId: string, serverUrl: string): Promise<IpcResult<void>> {
+    return postJson('/mcp-servers/oauth/disconnect', { projectId, serverUrl })
   }
 }

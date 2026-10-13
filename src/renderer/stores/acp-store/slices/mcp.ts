@@ -14,6 +14,7 @@ import {
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getWebAuthToken } from '@/lib/web-auth-token'
+import { useProjectStore } from '@/stores/project-store'
 import type { AcpState } from '../types'
 
 // MCP registry mutations (save/import/toggle/delete) are serialized through a
@@ -32,6 +33,11 @@ function canvasMcpServerId(projectId: string): string {
 }
 
 const CANVAS_MCP_SERVER_NAME = 'OpenPencil Canvas'
+
+/** The project the host MCP file is addressed through (`''` until one is selected). */
+function activeProjectId(): string {
+  return useProjectStore.getState().activeProjectId
+}
 
 async function runSerializedMcpRegistryMutation(mutation: () => Promise<void>): Promise<void> {
   const run = mcpRegistryQueue.then(mutation)
@@ -66,9 +72,9 @@ type McpSliceState = Pick<
 >
 
 // A project-file mirror requested before the MCP registry finished loading is
-// kept and performed as soon as the registry loads (mirroring the empty
-// pre-load state would clobber the project's file).
-let projectFileMirrorPending = false
+// kept (with the project it named) and performed as soon as the registry loads
+// (mirroring the empty pre-load state would clobber the project's file).
+let projectFileMirrorPending: string | null = null
 
 export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (set, get) => ({
   mcpServers: [],
@@ -83,11 +89,12 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
 
   loadMcpServers: async () => {
     try {
-      const list = await loadMcpServersFromDisk()
+      const list = await loadMcpServersFromDisk(activeProjectId())
       set({ mcpServers: list, mcpServersLoaded: true })
       if (projectFileMirrorPending) {
-        projectFileMirrorPending = false
-        await syncMcpRegistryToProjectBestEffort(list)
+        const projectId = projectFileMirrorPending
+        projectFileMirrorPending = null
+        await syncMcpRegistryToProjectBestEffort(projectId, list)
       }
     } catch (err) {
       void logFrontendError({
@@ -109,7 +116,7 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
           : list.map((item) => (item.id === server.id ? nextServer : item))
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next)
+        await saveMcpServersToDisk(next, activeProjectId())
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -127,7 +134,7 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
       const next = [...list, ...servers]
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next)
+        await saveMcpServersToDisk(next, activeProjectId())
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -145,7 +152,7 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
       const next = list.map((server) => (server.id === id ? { ...server, enabled } : server))
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next)
+        await saveMcpServersToDisk(next, activeProjectId())
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -162,7 +169,7 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
       const next = list.filter((server) => server.id !== id)
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next)
+        await saveMcpServersToDisk(next, activeProjectId())
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -242,7 +249,7 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
         : [...list, entry]
       set({ mcpServers: next })
       try {
-        await saveMcpServersToDisk(next)
+        await saveMcpServersToDisk(next, activeProjectId())
       } catch (err) {
         set({ mcpServers: list })
         void logFrontendError({
@@ -253,20 +260,20 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
       }
     }),
 
-  // CAP-7: on a desktop host-level project switch, mirror the app-store MCP
-  // registry to the new project's `.termul/mcp-servers.json` so the web
-  // `GET /mcp-servers` route (file-based) serves the same registry. Invoked
-  // from `useProjectsAutoSave` AFTER `syncProjects` lands so the backend
-  // `ProjectRegistry` (and thus the resolved project root) reflects the new
-  // default. Best-effort + non-fatal — the wrapper logs failures and never
-  // throws, so a switch still completes even if the sync write fails.
-  syncMcpRegistryToProjectFile: async () => {
+  // CAP-7: mirror the app-store MCP registry to the named project's
+  // `.termul/mcp-servers.json` so the web `GET /mcp-servers?projectId=` route
+  // (file-based) serves the same registry. Invoked from `useProjectsAutoSave`
+  // AFTER `syncProjects` lands (so the backend `ProjectRegistry` knows the
+  // project) and when shared-live starts. Best-effort + non-fatal — the wrapper
+  // logs failures and never throws, so a switch still completes even if the
+  // sync write fails.
+  syncMcpRegistryToProjectFile: async (projectId) => {
     if (!isTauriContext()) return
     if (!get().mcpServersLoaded) {
-      projectFileMirrorPending = true
+      projectFileMirrorPending = projectId
       return
     }
-    await syncMcpRegistryToProjectBestEffort(get().mcpServers)
+    await syncMcpRegistryToProjectBestEffort(projectId, get().mcpServers)
   },
 
   // MCP probe (on-demand, read-only). No persistence, no rollback. Dedupes
@@ -323,7 +330,7 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
     if (get().mcpToolsLoaded[id] || get().mcpProbing[id]) return
     await get().probeMcpServer(id)
   },
-  connectMcpOAuth: async (id) => {
+  connectMcpOAuth: async (projectId, id) => {
     const server = get().mcpServers.find((s) => s.id === id)
     if (!server) return
     const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
@@ -334,7 +341,7 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
       message: `OAuth flow started for server '${server.name}'`
     })
     try {
-      await acpApi.startMcpOAuth(url)
+      await acpApi.startMcpOAuth(projectId, url)
       // startMcpOAuth now blocks until the token is stored (desktop: the
       // Tauri command blocks; web: polls the status endpoint). Setting
       // connected state here is correct — the token is confirmed.
@@ -358,26 +365,26 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
     }
   },
 
-  checkMcpOAuthStatus: async (id) => {
+  checkMcpOAuthStatus: async (projectId, id) => {
     const server = get().mcpServers.find((s) => s.id === id)
     if (!server) return
     const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
     if (!url) return
     try {
-      const hasToken = await acpApi.hasMcpOAuthToken(url)
+      const hasToken = await acpApi.hasMcpOAuthToken(projectId, url)
       set((s) => ({ mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: hasToken } }))
     } catch {
       // Best-effort — the probe will still detect authRequired.
     }
   },
 
-  disconnectMcpOAuth: async (id) => {
+  disconnectMcpOAuth: async (projectId, id) => {
     const server = get().mcpServers.find((s) => s.id === id)
     if (!server) return
     const url = (server as Extract<StoredMcpServer, { type: 'http' | 'sse' }>).url
     if (!url) return
     try {
-      await acpApi.disconnectMcpOAuth(url)
+      await acpApi.disconnectMcpOAuth(projectId, url)
       set((s) => ({ mcpOAuthConnected: { ...s.mcpOAuthConnected, [id]: false } }))
       void logFrontendError({
         source: 'acp-store.disconnectMcpOAuth',
