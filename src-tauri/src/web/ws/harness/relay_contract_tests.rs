@@ -8,7 +8,7 @@
 use agent_client_protocol::schema::v1::StopReason;
 
 use super::carrier::Peer;
-use super::wire::{authenticate, request, send_request, ChannelPeer, Wire};
+use super::wire::{authenticate, command_request, request, send_request, ChannelPeer, Wire};
 use super::*;
 use crate::acp::manager::FakeTurn;
 use crate::web::connection_runtime::{CLOSE_GOING_AWAY, CLOSE_REASON_HOST_STOPPING};
@@ -73,7 +73,7 @@ async fn handshake_without_a_token_grants_write<W: Wire>() {
     wire.wait_event("auth_required").await;
     assert_eq!(wire.arrivals()[0], "event:auth_required");
 
-    let early = request(&mut wire, "early", "promote_session", json!({"agentId": AGENT, "sessionId": SESSION})).await;
+    let early = command_request(&mut wire, "early", "promote_session", json!({"agentId": AGENT, "sessionId": SESSION}), "cmd-early").await;
     assert_eq!(early["ok"], false, "pre-auth request must be refused: {early}");
 
     let mut stale = super::wire::authenticate_payload();
@@ -81,14 +81,14 @@ async fn handshake_without_a_token_grants_write<W: Wire>() {
     let refused = request(&mut wire, "stale", "authenticate", stale).await;
     assert_eq!(refused["err"]["code"], "protocol_version_mismatch", "{refused}");
     let still_pre_auth =
-        request(&mut wire, "still", "promote_session", json!({"agentId": AGENT, "sessionId": SESSION})).await;
+        command_request(&mut wire, "still", "promote_session", json!({"agentId": AGENT, "sessionId": SESSION}), "cmd-still").await;
     assert_eq!(still_pre_auth["ok"], false, "{still_pre_auth}");
 
     let reply = request(&mut wire, "auth", "authenticate", super::wire::authenticate_payload()).await;
     assert_eq!(reply["ok"], true, "{reply}");
     assert_eq!(reply["payload"]["historyMode"], "live_only", "{reply}");
 
-    let write = request(&mut wire, "w", "promote_session", json!({"agentId": AGENT, "sessionId": SESSION})).await;
+    let write = command_request(&mut wire, "w", "promote_session", json!({"agentId": AGENT, "sessionId": SESSION}), "cmd-write").await;
     assert_eq!(write["ok"], true, "no token, loopback peer: write capability: {write}");
     let presence = host.relay.presence().device("device-harness").expect("registered");
     assert_eq!(presence.carriers, std::collections::BTreeSet::from([W::CARRIER_LABEL]));

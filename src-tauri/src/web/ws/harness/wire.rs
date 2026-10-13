@@ -308,3 +308,17 @@ pub(crate) async fn request<W: Wire>(wire: &mut W, id: &str, type_: &str, payloa
 pub(crate) fn send_request<W: Wire>(wire: &W, id: &str, type_: &str, payload: Value) {
     wire.send_json(&serde_json::json!({"id": id, "type": type_, "payload": payload}));
 }
+
+/// Like [`request`] for a ledgered write: the frame carries a `command_id`.
+pub(crate) async fn command_request<W: Wire>(
+    wire: &mut W,
+    id: &str,
+    type_: &str,
+    payload: Value,
+    command_id: &str,
+) -> Value {
+    wire.send_json(
+        &serde_json::json!({"id": id, "type": type_, "payload": payload, "command_id": command_id}),
+    );
+    wire.wait_reply(id).await
+}
