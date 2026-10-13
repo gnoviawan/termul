@@ -16,7 +16,6 @@ const {
   mockAddAgentChatTab,
   mockOpenHistorySession,
   mockOpenInOwnProject,
-  mockNavigate,
   mockOpeningHistoryIds,
   mockRouteClosedChats,
   mockUseWorkspaceStore,
@@ -96,7 +95,6 @@ const {
     mockAddAgentChatTab,
     mockOpenHistorySession: vi.fn(),
     mockOpenInOwnProject: vi.fn(),
-    mockNavigate: vi.fn(),
     mockOpeningHistoryIds,
     mockRouteClosedChats,
     mockRetainedByProject,
@@ -161,11 +159,6 @@ vi.mock('@/stores/agent-chat-lifetime-store', () => ({
   useAgentChatLifetimeStore: mockUseAgentChatLifetimeStore
 }))
 
-vi.mock('@/lib/router-navigate', () => ({
-  navigateToChatSession: mockNavigate,
-  clearChatRoute: vi.fn()
-}))
-
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: { getState: () => ({ activeProjectId: activeProjectRef.current }) }
 }))
@@ -190,7 +183,9 @@ function RouteNavigate({ to }: { to: string }): null {
   return null
 }
 
+// The app routes through the URL hash: the URL names the route at mount.
 function renderChatRoute(path: string): { rerender: Rerender } {
+  window.location.hash = `#${path}`
   const { rerender } = render(
     <MemoryRouter initialEntries={[path]}>
       <ChatRoute />
@@ -252,13 +247,12 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
   beforeEach(() => {
     mockAddAgentChatTab.mockClear()
     mockOpenHistorySession.mockReset()
-    mockNavigate.mockReset()
     mockUseWorkspaceStore.mockClear()
     mockUseAgentChatLifetimeStore.mockClear()
     acpStateRef.current = {}
     acpIndexRef.current = []
     activeProjectRef.current = 'p1'
-    mockOpenInOwnProject.mockClear()
+    mockOpenInOwnProject.mockReset()
     vi.mocked(logFrontendError).mockClear()
     mockOpeningHistoryIds.current = {}
     mockRouteClosedChats.current = new Set<string>()
@@ -494,11 +488,13 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
 
     // Navigate to B's chat route (route target change). MemoryRouter's
     // initialEntries only seed the first mount, so drive the navigation
-    // through the router's history (what a real hash change does).
+    // through the router's history (what a real hash change does). ChatRoute
+    // keeps its place, so the same instance sees the route change.
+    window.location.hash = '#/c/s-b'
     rerender(
       <MemoryRouter>
-        <RouteNavigate to="/c/s-b" />
         <ChatRoute />
+        <RouteNavigate to="/c/s-b" />
       </MemoryRouter>
     )
     // RouteNavigate commits in an effect — wait for the navigation to land.
@@ -515,11 +511,14 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     expect(mockRouteClosedChats.current.has('s-b')).toBe(false)
 
     // With the mark cleared by the re-open, a later pane-tree change still
-    // re-delegates (the stale mark no longer suppresses reactivation).
+    // re-delegates (the stale mark no longer suppresses reactivation). The
+    // record is still 'closed', so the re-delegation re-opens it first.
     const leafAfterReopen = workspaceRootRef.current as LeafNode
     window.dispatchEvent(new Event('pointerdown'))
     setRootAndRerender(rerender, { ...leafAfterReopen, id: 'pane-swapped' }, '/c/s-b')
-    expect(mockAddAgentChatTab).toHaveBeenCalledTimes(3)
+    await vi.waitFor(() => {
+      expect(mockAddAgentChatTab).toHaveBeenCalledTimes(3)
+    })
     expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('s-b')
   })
 
@@ -715,6 +714,84 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
         's-other'
       ])
       expect(mockOpenInOwnProject).not.toHaveBeenCalled()
+    })
+
+    describe('after the URL left the chat route', () => {
+      // Opening in the owner project selects the owner, as the real helper does.
+      beforeEach(() => {
+        mockOpenInOwnProject.mockImplementation((sessionId: string) => {
+          activeProjectRef.current =
+            acpStateRef.current[sessionId]?.projectId ?? activeProjectRef.current
+        })
+      })
+
+      it('keeps the picked project when its tree commits before the router leaves the chat route', () => {
+        acpStateRef.current = { 's-a': { status: 'active', projectId: 'p1' } }
+        const { rerender } = renderChatRoute('/c/s-a')
+        expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-a')
+
+        // The user picks project p2 in the rail: the URL leaves the chat route
+        // at once, but the router commits its new location in a transition
+        // (`v7_startTransition`). The tree of p2 commits first, so ChatRoute
+        // runs again on the old route.
+        window.dispatchEvent(new Event('pointerdown'))
+        activeProjectRef.current = 'p2'
+        window.location.hash = '#/'
+        setRootAndRerender(rerender, terminalOnlyRoot, '/c/s-a')
+
+        expect(mockOpenInOwnProject).not.toHaveBeenCalled()
+        expect(activeProjectRef.current).toBe('p2')
+        expect(chatTab(workspaceRootRef.current, 's-a')).toBeUndefined()
+      })
+
+      it('does not act on a chat that loads after the URL left its route', async () => {
+        let task: Promise<void> | undefined
+        let resolveOpen: (() => void) | undefined
+        mockOpenHistorySession.mockImplementation((id: string) => {
+          task = new Promise<void>((resolve) => {
+            resolveOpen = () => {
+              acpStateRef.current = { [id]: { status: 'active', projectId: 'p1' } }
+              resolve()
+            }
+          })
+          return task
+        })
+        renderChatRoute('/c/s-a')
+        expect(mockOpenHistorySession).toHaveBeenCalledWith('s-a')
+
+        // The user picks project p2 while the chat still loads.
+        activeProjectRef.current = 'p2'
+        window.location.hash = '#/'
+        resolveOpen?.()
+        await task
+
+        expect(mockOpenInOwnProject).not.toHaveBeenCalled()
+        expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+        expect(activeProjectRef.current).toBe('p2')
+      })
+
+      it('still opens a chat of another project when the route moves to it', async () => {
+        acpStateRef.current = {
+          's-a': { status: 'active', projectId: 'p1' },
+          's-b': { status: 'active', projectId: 'p2' }
+        }
+        const { rerender } = renderChatRoute('/c/s-a')
+
+        // A `#/c/<sid>` link or Back names a chat of project p2.
+        window.location.hash = '#/c/s-b'
+        rerender(
+          <MemoryRouter>
+            <ChatRoute />
+            <RouteNavigate to="/c/s-b" />
+          </MemoryRouter>
+        )
+
+        await vi.waitFor(() =>
+          expect(mockOpenInOwnProject).toHaveBeenCalledWith('s-b', 'ChatRoute')
+        )
+        expect(activeProjectRef.current).toBe('p2')
+        expect(chatTab(workspaceRootRef.current, 's-b')).toBeUndefined()
+      })
     })
   })
 })

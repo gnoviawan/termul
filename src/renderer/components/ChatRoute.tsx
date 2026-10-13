@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { logFrontendError } from '@/lib/log-api'
 import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
+import { isChatRouteCurrent } from '@/lib/router-navigate'
 import { clearChatClosedOnRoute, isChatClosedOnRoute } from '@/lib/web-tab-session'
 import { sessionProjectId, useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -67,6 +68,12 @@ import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stor
  *   own pane tree, so the tab is never inserted into the active project's.
  *   Unknown ownership opens in place.
  *
+ * - A run on a route the URL already left does nothing. The router commits
+ *   its location in a transition (`v7_startTransition`), so a project pick
+ *   that leaves the chat route (`#/`) can commit the picked project's tree
+ *   first: the re-run still sees the old route and must not re-select the
+ *   chat's project. The run for the new location follows.
+ *
  * Loop-safe: a gated re-activation runs the store's idempotent
  * addAgentChatTab (no-op when the tab is already active+focused), so the
  * follow-up run sees the same state and stops delegating (swap →
@@ -119,7 +126,7 @@ export function ChatRoute(): null {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: root intentionally retriggers the effect; the gate below is about WHEN to re-delegate, not a duplicate of the store's activation no-op predicate
   useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId || !isChatRouteCurrent(sessionId)) return
     const firstRun = isFirstRunRef.current
     isFirstRunRef.current = false
     const tabId = agentChatTabId(sessionId)
@@ -197,8 +204,8 @@ export function ChatRoute(): null {
       try {
         await openHistorySession(sessionId)
         // The opened record may only now reveal the owner (index not loaded
-        // before the open).
-        if (!cancelled && !openRouteInOwnerProject(sessionId)) {
+        // before the open). The URL may have left the route while it loaded.
+        if (!cancelled && isChatRouteCurrent(sessionId) && !openRouteInOwnerProject(sessionId)) {
           useWorkspaceStore.getState().addAgentChatTab(sessionId)
           // Same as the live branch: the (re-)opened chat clears any stale
           // closed-on-route mark from a previous visit.
