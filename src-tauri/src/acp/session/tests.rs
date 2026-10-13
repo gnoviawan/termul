@@ -391,3 +391,59 @@ fn session_roots_snapshot_lists_every_registered_root() {
         "a closed session no longer reports a root"
     );
 }
+
+#[test]
+fn activity_reports_turns_and_stamps_the_clock() {
+    let mut state = DriverState::new();
+    let created = state.activity(0);
+    assert!(!created.has_evidence());
+
+    let handles = state.try_begin_turn("sess-1").expect("turn starts");
+    let during = state.activity(0);
+    assert_eq!(during.active_turns, 1);
+    assert!(during.has_evidence());
+    assert!(during.last_active_at >= created.last_active_at);
+
+    // A session update during the turn counts as activity.
+    state.signal_idle("sess-1");
+    let nudged = state.activity(0);
+    assert!(nudged.last_active_at >= during.last_active_at);
+
+    let _ = state.finish_turn("sess-1");
+    let after = state.activity(0);
+    assert_eq!(after.active_turns, 0);
+    assert!(!after.has_evidence());
+    assert!(after.last_active_at >= nudged.last_active_at);
+    drop(handles);
+}
+
+#[test]
+fn reopens_and_running_terminals_are_evidence() {
+    let mut state = DriverState::new();
+    assert!(state.try_begin_reopen_reservation("sess-1"));
+    assert_eq!(state.activity(0).reopens_in_flight, 1);
+    assert!(state.activity(0).has_evidence());
+    state.finish_reopen_reservation("sess-1");
+    assert!(!state.activity(0).has_evidence());
+
+    let running = state.activity(2);
+    assert_eq!(running.running_terminals, 2);
+    assert!(running.has_evidence());
+}
+
+#[test]
+fn reapable_needs_no_evidence_and_a_whole_quiet_window() {
+    use std::time::{Duration, Instant};
+    let state = DriverState::new();
+    let activity = state.activity(0);
+    let window = Duration::from_secs(30);
+    let stamp = activity.last_active_at;
+
+    assert!(!activity.is_reapable(stamp + Duration::from_secs(29), window));
+    assert!(activity.is_reapable(stamp + Duration::from_secs(30), window));
+    // A stamp newer than the caller's clock reading is never quiet.
+    assert!(!activity.is_reapable(stamp - Duration::from_secs(1), window));
+    // Evidence blocks the reap no matter how stale the stamp.
+    let busy = state.activity(1);
+    assert!(!busy.is_reapable(Instant::now() + Duration::from_secs(3600), window));
+}

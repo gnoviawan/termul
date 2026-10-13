@@ -1,258 +1,184 @@
-//! Idle ACP-agent reaper for the standalone `termul-server` (issue #837).
+//! The one idle ACP-agent reaper per host process (issue #837).
 //!
-//! Reload-heavy web usage leaks agent processes: every page load can spawn a
-//! fresh agent, and nothing on the server side ever stops them once the client
-//! that created them is gone (the QA run measured 10 opencode + 7 codex trees,
-//! ~7 GB RSS, for 2 chats). The desktop reaps its own agents in the renderer
-//! (`use-agent-idle-shutdown`); the standalone server has no renderer, so this
-//! task owns the equivalent lifecycle server-side.
+//! Reload-heavy usage leaks agent processes: every page load can spawn a fresh
+//! agent, and nothing stops them once the client that created them is gone.
+//! The host owns that lifecycle: the standalone `termul-server` (`serve`) and
+//! the desktop app (`lib.rs` setup) each start exactly one reaper over their
+//! `AcpManager`, with one idle window (`ServerConfig.agent_idle_window_secs`).
 //!
-//! An agent is reapable when nothing pins it for the whole idle window:
+//! An agent is reaped only when the host itself saw no sign of life:
 //!
-//! - a session with an in-flight prompt turn always pins the agent,
-//! - a session with a live WS subscriber always pins the agent,
-//! - a durable (non-ephemeral) session with NEITHER is not pinned: the
-//!   renderer reloads durable history on a fresh agent, so an idle durable
-//!   owner is reaped with its process after the window,
-//! - an ephemeral session (warm-pool seed) with none of the above pins nothing
-//!   once the idle window lapses — it is disposed, then the agent is stopped.
+//! - no running prompt turn,
+//! - no unanswered permission, question or elicitation,
+//! - no running agent-owned ACP terminal ("reported background work"),
+//! - no session reopen in flight, and
+//! - `last_active_at` (turn start/end, session updates, ticket
+//!   register/resolve, prompt send) is at least one whole window old.
 //!
-//! An agent with zero owned sessions (process-only prewarm) is the direct leak
-//! shape and reaps after the window.
+//! Connections, subscriptions, presence, tabs and renderer references never
+//! feed the decision: a disconnect never reaps, and an open viewer never pins.
+//! Ephemeral sessions (warm-pool seeds) are disposed first, then the agent is
+//! re-probed immediately before the stop and left alone if anything happened
+//! meanwhile. The stop is announced to every sink as `session_closed` per live
+//! session then `agent_disconnected{reason: reaped}`.
 //!
-//! Deliberately NOT wired into `serve_router`: the desktop shared-live host
-//! calls that function with the desktop's own live agents in the same manager,
-//! and its renderer does not subscribe through the WS relay — a relay-based
-//! subscriber check there could stop agents the desktop still uses. The
-//! desktop keeps its renderer-driven reaper; only `serve` (standalone binary)
-//! spawns this one.
+//! Deliberately NOT started from `serve_router` / `remote/host.rs`: the
+//! desktop's shared-live toggle calls that function with the desktop's own
+//! live agents in the same manager, so the desktop host starts its reaper once
+//! at startup instead.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tracing::{info, warn};
+use crate::acp::{AcpManager, AgentId, SessionId};
 
-use crate::acp::{AgentId, AcpManager, SessionId};
-use crate::web::sink::WsRelaySink;
+const LOG_TARGET: &str = "termul::web::agent_reaper";
 
-/// Default sweep cadence: each sweep re-evaluates every live agent's pins.
+/// Default sweep cadence: each sweep re-probes every live agent.
 pub(crate) const DEFAULT_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Shutdown signal for the reaper loop (`serve` resolves it on SIGINT/SIGTERM).
 pub type ShutdownSignal = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// True when the agent may be reaped now: no owned session pins it. `pins`
-/// carries one entry per owned session with its pinned flag (durable,
-/// mid-turn, or subscribed). Pure over the observed state so the policy is
-/// unit-testable without a real agent process.
-#[must_use]
-pub fn agent_is_reapable(pins: &[(String, bool)]) -> bool {
-    pins.iter().all(|(_, pinned)| !pinned)
+/// Whether the agent is quiet right now: probe it and apply the reap rule.
+/// `false` when the agent is gone (nothing left to stop) or the probe fails.
+async fn is_quiet(
+    acp: &Arc<AcpManager>,
+    agent_id: &AgentId,
+    now: Instant,
+    window: Duration,
+) -> bool {
+    match acp.agent_activity(agent_id).await {
+        Ok(activity) => activity.is_reapable(now, window),
+        Err(error) => {
+            log::debug!(target: LOG_TARGET, "idle reaper: probe of agent {} failed: {error}", agent_id.0);
+            false
+        }
+    }
 }
 
-/// Per-session pin check for one owned session: pinned when the session is
-/// mid-turn or carrying a live WS subscriber. A durable (non-ephemeral)
-/// session pins only while someone is actually using it — a durable session
-/// with no subscriber and no turn must not pin forever (CodeRabbit: the
-/// renderer can reload durable history on a fresh agent, so the old owner
-/// becomes pure dead weight).
-async fn session_pins_agent(
-    acp: &Arc<AcpManager>,
-    relay: &Arc<WsRelaySink>,
-    agent_id: &AgentId,
-    session_id: &str,
-) -> bool {
-    if relay.session_subscriber_count(session_id) > 0 {
-        return true;
-    }
-    let sid = SessionId(session_id.to_string());
-    // In-flight turn pins both durable and ephemeral sessions alike.
-    // A driver that vanished mid-query or an unknown session cannot pin
-    // (the agent is on its way out anyway).
-    acp.is_turn_active(agent_id, sid)
-        .await
-        .unwrap_or(true) // unknown turn state: assume busy, never kill mid-turn
-}
-
-/// Fresh pin evaluation for one agent, from a freshly listed session set (so a
-/// session created since the sweep's snapshot is covered too). `false` when the
-/// agent is gone (nothing left to stop) or any owned session is pinned.
-///
-/// `swept_sessions` are the sessions the sweep saw before it disposed any
-/// ephemeral ones. A disposed session no longer appears in the fresh listing,
-/// so a subscriber that registered on it during disposal is checked here by id.
-pub(crate) async fn agent_still_unpinned(
-    acp: &Arc<AcpManager>,
-    relay: &Arc<WsRelaySink>,
-    agent_id: &AgentId,
-    swept_sessions: &[String],
-) -> bool {
-    if swept_sessions
-        .iter()
-        .any(|session_id| relay.session_subscriber_count(session_id) > 0)
-    {
-        return false;
-    }
-    let summaries = acp.list_agent_summaries_with_ownership().await;
-    let Some(summary) = summaries.iter().find(|summary| summary.id == *agent_id) else {
-        return false;
+/// Dispose the agent's ephemeral sessions (durable ones need nothing; the
+/// process stop releases them). `false` when any disposal could not be
+/// confirmed — the agent is then left for the next sweep, since a failure
+/// means its state changed (a prompt arrived, or it was promoted).
+async fn dispose_ephemeral_sessions(acp: &Arc<AcpManager>, agent_id: &AgentId) -> bool {
+    let session_ids = match acp.agent_session_ids(agent_id).await {
+        Ok(ids) => ids,
+        Err(error) => {
+            log::warn!(
+                target: LOG_TARGET,
+                "idle reaper: session listing of agent {} failed ({error}); deferring to the next sweep",
+                agent_id.0
+            );
+            return false;
+        }
     };
-    for session_id in &summary.owns_session {
-        if session_pins_agent(acp, relay, agent_id, session_id).await {
+    for session_id in session_ids {
+        match acp
+            .is_ephemeral_session(agent_id, SessionId(session_id.clone()))
+            .await
+        {
+            Ok(false) => continue,
+            Ok(true) => {}
+            Err(error) => {
+                log::warn!(
+                    target: LOG_TARGET,
+                    "idle reaper: ephemeral check on agent {} failed ({error}); deferring to the next sweep",
+                    agent_id.0
+                );
+                return false;
+            }
+        }
+        if let Err(error) = acp
+            .dispose_ephemeral_session(agent_id, SessionId(session_id))
+            .await
+        {
+            log::warn!(
+                target: LOG_TARGET,
+                "idle reaper: ephemeral disposal on agent {} failed ({error}); deferring to the next sweep",
+                agent_id.0
+            );
             return false;
         }
     }
     true
 }
 
-/// One reaper sweep: evaluate every live agent, stop the ones whose owned
-/// sessions have all been unpinned for the window. `unpinned_since` carries
-/// the first instant each agent was seen unpinned (survives across sweeps).
-/// Returns the agent ids reaped this sweep (logged by the caller).
+/// One reaper sweep over every live agent. `now` is the sweep's clock reading;
+/// an agent is reaped only if it is quiet for the whole `window` as of `now`
+/// both at the first probe and again right before the stop. Returns the agent
+/// ids reaped (logged by the caller).
 pub(crate) async fn reap_idle_agents(
     acp: &Arc<AcpManager>,
-    relay: &Arc<WsRelaySink>,
-    unpinned_since: &mut std::collections::HashMap<AgentId, Instant>,
     now: Instant,
     window: Duration,
 ) -> Vec<AgentId> {
-    let summaries = acp.list_agent_summaries_with_ownership().await;
     let mut reaped = Vec::new();
-    for summary in &summaries {
-        let agent_id = summary.id.clone();
-        let mut pins = Vec::with_capacity(summary.owns_session.len());
-        for session_id in &summary.owns_session {
-            let pinned = session_pins_agent(acp, relay, &agent_id, session_id).await;
-            pins.push((session_id.clone(), pinned));
-        }
-        if !agent_is_reapable(&pins) {
-            unpinned_since.remove(&agent_id);
+    for agent_id in acp.list_agents() {
+        if !is_quiet(acp, &agent_id, now, window).await {
             continue;
         }
-        let first_unpinned = *unpinned_since.entry(agent_id.clone()).or_insert(now);
-        if now.duration_since(first_unpinned) < window {
+        if !dispose_ephemeral_sessions(acp, &agent_id).await {
             continue;
         }
-        // Reap: dispose every owned ephemeral session, then stop the agent.
-        // Durable sessions have nothing to dispose (the driver answers
-        // `session is not ephemeral`), so they are skipped — the process stop
-        // alone releases them (SINK-F2). A disposal failure of an ephemeral
-        // session means its state changed after the pin check (a prompt
-        // arrived, or it was promoted to durable) — do NOT kill the agent in
-        // that case; the next sweep re-evaluates it with fresh pin state
-        // (CodeRabbit: kill on disposal failure can stop a newly active agent).
-        let mut disposal_failed = false;
-        for session_id in &summary.owns_session {
-            match acp
-                .is_ephemeral_session(&agent_id, SessionId(session_id.clone()))
-                .await
-            {
-                Ok(true) => {}
-                // Durable: nothing to dispose.
-                Ok(false) => continue,
-                Err(error) => {
-                    disposal_failed = true;
-                    warn!(
-                        target: "termul::web::agent_reaper",
-                        agent_id = %agent_id.0,
-                        session_id = %session_id,
-                        error = %error,
-                        "idle reaper: ephemeral check failed; deferring the agent stop to the next sweep"
-                    );
-                    continue;
-                }
-            }
-            if let Err(error) = acp
-                .dispose_ephemeral_session(&agent_id, SessionId(session_id.clone()))
-                .await
-            {
-                disposal_failed = true;
-                warn!(
-                    target: "termul::web::agent_reaper",
-                    agent_id = %agent_id.0,
-                    session_id = %session_id,
-                    error = %error,
-                    "idle reaper: ephemeral session disposal failed; deferring the agent stop to the next sweep"
-                );
-            }
-        }
-        if disposal_failed {
-            unpinned_since.remove(&agent_id);
+        // The probe above and the disposals awaited since give a prompt, an
+        // approval request or a reopen time to land; killing on the stale
+        // snapshot would stop a now-active agent mid-turn.
+        if !is_quiet(acp, &agent_id, now, window).await {
+            log::debug!(
+                target: LOG_TARGET,
+                "idle reaper: agent {} became active before the stop; keeping it",
+                agent_id.0
+            );
             continue;
         }
-        // Last-moment re-check: the pin evaluation above is a snapshot, and the
-        // ephemeral probes/disposals awaited since then give a prompt, a
-        // subscriber or a new session time to land. Killing on the stale
-        // snapshot would stop a now-active agent mid-turn. The next sweep
-        // re-evaluates from a fresh idle window.
-        if !agent_still_unpinned(acp, relay, &agent_id, &summary.owns_session).await {
-            unpinned_since.remove(&agent_id);
-            continue;
-        }
-        match acp.kill(&agent_id).await {
+        match acp.reap_agent(&agent_id).await {
             Ok(()) => {
-                info!(
-                    target: "termul::web::agent_reaper",
-                    agent_id = %agent_id.0,
-                    window_secs = window.as_secs(),
-                    "idle reaper stopped agent (no sessions/subscribers for the idle window)"
+                log::info!(
+                    target: LOG_TARGET,
+                    "idle reaper stopped agent {} (no activity for {}s)",
+                    agent_id.0,
+                    window.as_secs()
                 );
-                reaped.push(agent_id.clone());
+                reaped.push(agent_id);
             }
             Err(error) => {
-                warn!(
-                    target: "termul::web::agent_reaper",
-                    agent_id = %agent_id.0,
-                    error = %error,
-                    "idle reaper failed to stop agent"
+                log::warn!(
+                    target: LOG_TARGET,
+                    "idle reaper failed to stop agent {}: {error}; retrying next sweep",
+                    agent_id.0
                 );
             }
         }
-        unpinned_since.remove(&agent_id);
     }
-    // Agents that vanished between listing and the pin checks leave stale
-    // entries; prune anything not seen this sweep.
-    unpinned_since.retain(|id, _| {
-        summaries
-            .iter()
-            .any(|summary| summary.id == *id)
-    });
     reaped
 }
 
-/// Run the reaper loop until `shutdown` resolves. Exported for `serve` (and
+/// Run the reaper loop until `shutdown` resolves. Exported for the hosts (and
 /// directly testable with an injected window + tiny sweep interval).
 pub async fn run_agent_idle_reaper(
     acp: Arc<AcpManager>,
-    relay: Arc<WsRelaySink>,
     window: Duration,
     sweep_interval: Duration,
     mut shutdown: ShutdownSignal,
 ) {
-    let mut unpinned_since = std::collections::HashMap::new();
     let mut tick = tokio::time::interval(sweep_interval.max(Duration::from_millis(1)));
-    // First sweep immediately so a short test window can fire on the first
-    // elapsed tick without waiting a full interval.
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = shutdown.as_mut() => {
-                info!(
-                    target: "termul::web::agent_reaper",
-                    "idle agent reaper shutting down"
-                );
+                log::info!(target: LOG_TARGET, "idle agent reaper shutting down");
                 return;
             }
             _ = tick.tick() => {
-                let now = Instant::now();
-                let reaped = reap_idle_agents(&acp, &relay, &mut unpinned_since, now, window).await;
+                let reaped = reap_idle_agents(&acp, Instant::now(), window).await;
                 if !reaped.is_empty() {
-                    info!(
-                        target: "termul::web::agent_reaper",
-                        count = reaped.len(),
-                        "idle agent reaper sweep stopped agents"
+                    log::info!(
+                        target: LOG_TARGET,
+                        "idle agent reaper sweep stopped {} agent(s)",
+                        reaped.len()
                     );
                 }
             }
@@ -260,19 +186,58 @@ pub async fn run_agent_idle_reaper(
     }
 }
 
-/// Spawn the reaper on the current runtime (standalone `serve` only).
-/// `window` is `ServerConfig.agent_idle_window_secs` (flag → env → default).
+/// Spawn the reaper on the current runtime. `window` is
+/// `ServerConfig.agent_idle_window_secs` (flag → env → default).
 pub fn spawn_agent_idle_reaper(
     acp: Arc<AcpManager>,
-    relay: Arc<WsRelaySink>,
     window: Duration,
     shutdown: ShutdownSignal,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(run_agent_idle_reaper(
         acp,
-        relay,
         window,
         DEFAULT_SWEEP_INTERVAL,
         shutdown,
     ))
+}
+
+/// A running reaper plus its stop signal, for hosts that must stop it at exit
+/// (the desktop keeps one as managed state). Stopping before `kill_all` keeps a
+/// late sweep from racing the process-shutdown teardown.
+pub struct AgentReaperHandle {
+    running: parking_lot::Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::task::JoinHandle<()>,
+        )>,
+    >,
+}
+
+impl AgentReaperHandle {
+    /// Start the reaper on `runtime` (the desktop `setup` hook is not inside a
+    /// Tokio context, so the runtime is passed explicitly).
+    #[must_use]
+    pub fn start(acp: Arc<AcpManager>, window: Duration, runtime: &tokio::runtime::Handle) -> Self {
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let join = runtime.spawn(run_agent_idle_reaper(
+            acp,
+            window,
+            DEFAULT_SWEEP_INTERVAL,
+            Box::pin(async move {
+                let _ = stop_rx.await;
+            }),
+        ));
+        Self {
+            running: parking_lot::Mutex::new(Some((stop_tx, join))),
+        }
+    }
+
+    /// Stop the reaper and wait for its loop to end. Idempotent.
+    pub async fn stop(&self) {
+        let running = self.running.lock().take();
+        if let Some((stop_tx, join)) = running {
+            let _ = stop_tx.send(());
+            let _ = join.await;
+        }
+    }
 }

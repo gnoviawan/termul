@@ -311,7 +311,7 @@ fn from_args_tunable_defaults() {
     }
     let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
     restore_env(saved);
-    assert_eq!(cfg.agent_idle_window_secs, 900);
+    assert_eq!(cfg.agent_idle_window_secs, 1800);
     assert_eq!(cfg.overflow_tolerance, 15);
     assert_eq!(cfg.receipt_retention_secs, 600);
     assert_eq!(cfg.partition_gc_age_secs, None);

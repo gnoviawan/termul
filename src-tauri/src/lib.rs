@@ -1510,6 +1510,15 @@ pub fn run() {
             let question_rendezvous = Arc::new(QuestionRendezvous::new(Arc::clone(&acp_manager)));
             ws_relay.set_question_rendezvous(question_rendezvous);
 
+            // The one host-owned idle-agent reaper for the desktop process
+            // (probe-based; see `web::agent_reaper`). Never started from
+            // `serve_router`, whose shared-live toggle reuses these agents.
+            app.manage(Arc::new(web::agent_reaper::AgentReaperHandle::start(
+                Arc::clone(&acp_manager),
+                std::time::Duration::from_secs(web::config::DEFAULT_AGENT_IDLE_WINDOW_SECS),
+                tauri::async_runtime::handle().inner(),
+            )));
+
             // Desktop browser-automation host: drives the visible browser
             // pane via BrowserTabManager; registered globally so host_mcp
             // FrameKind::Browser frames dispatch here. Without registration
@@ -1963,6 +1972,9 @@ pub fn run() {
             let acp_manager = app_handle
                 .try_state::<Arc<AcpManager>>()
                 .map(|state| state.inner().clone());
+            let agent_reaper = app_handle
+                .try_state::<Arc<web::agent_reaper::AgentReaperHandle>>()
+                .map(|state| state.inner().clone());
 
             // OpenPencil canvas mode: join the daemon pool shutdown (stdin
             // EOF → kill) in the exit cleanup so no op-host-web-server
@@ -1995,6 +2007,9 @@ pub fn run() {
                         // drains them, appends the interrupted marker for an open
                         // turn, and persists status closed. A single-agent kill
                         // does not take this path.
+                        if let Some(agent_reaper) = &agent_reaper {
+                            agent_reaper.stop().await;
+                        }
                         acp_manager.kill_all().await;
                         if let Err(error) = acp_manager.shutdown_persistence().await {
                             log::error!(
@@ -2015,6 +2030,9 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     if let Some(canvas_pool) = canvas_pool {
                         canvas_pool.shutdown_all().await;
+                    }
+                    if let Some(agent_reaper) = &agent_reaper {
+                        agent_reaper.stop().await;
                     }
                     acp_manager.kill_all().await;
                     if let Err(error) = acp_manager.shutdown_persistence().await {

@@ -831,7 +831,7 @@ describe('acp provider authentication & recovery', () => {
     await vi.waitFor(() => expect(gates).toHaveLength(1))
     // Mid-flight disconnect clears the dedup map; the re-sign-in sends a second
     // frame (correct — the process's auth state is unknown).
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     const second = useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
     await vi.waitFor(() => expect(gates).toHaveLength(2))
     // The stale first round-trip settles; its late cleanup must leave the newer
@@ -1181,7 +1181,7 @@ describe('acp provider authentication & recovery', () => {
     useAcpStore.setState((s) => ({
       pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-2': 'https://auth.example.com/y' }
     }))
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-2' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-2', reason: 'crashed' })
     expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
   })
 

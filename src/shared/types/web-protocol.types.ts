@@ -888,13 +888,7 @@ export interface ChatHistoryWatchDelta {
  * as an event.
  */
 export interface AgentsWatchDelta {
-  event:
-    | 'agent_spawned'
-    | 'agent_crashed'
-    | 'agent_error'
-    | 'agent_disconnected'
-    // An intentional kill emits no lifecycle event; the payload is `{ agentId }`.
-    | 'agent_removed'
+  event: 'agent_spawned' | 'agent_crashed' | 'agent_error' | 'agent_disconnected'
   payload: unknown
 }
 

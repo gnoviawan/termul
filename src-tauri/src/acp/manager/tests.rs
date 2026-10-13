@@ -97,7 +97,7 @@ async fn owns_session_queries_authoritative_agent_driver_state() {
             name: "test-agent".to_string(),
             config_id: None,
             join_handle: None,
-            killed: Arc::new(AtomicBool::new(false)),
+            exit: Default::default(),
             stamp: SpawnStamp::default(),
         },
     );
@@ -135,7 +135,7 @@ fn list_agent_summaries_returns_identity_rich_entries() {
                 name: name.to_string(),
                 config_id: config_id.map(str::to_string),
                 join_handle: None,
-                killed: Arc::new(AtomicBool::new(false)),
+                exit: Default::default(),
                 stamp: SpawnStamp::default(),
             },
         );
@@ -2129,7 +2129,7 @@ async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
             name: "test-agent".to_string(),
             config_id: None,
             join_handle: None,
-            killed: Arc::new(AtomicBool::new(false)),
+            exit: Default::default(),
             stamp: SpawnStamp::default(),
         },
     );
@@ -2590,4 +2590,70 @@ mod spawn_error_cases {
             assert!(!is_launch_refusal(detail), "{detail}");
         }
     }
+}
+
+/// What the teardown announces follows the host's recorded intent: no intent
+/// is a crash, kill/reap carry their reason, process shutdown is silent.
+#[test]
+fn teardown_reason_follows_the_recorded_exit_intent() {
+    use super::exit::{announced_reason, ExitIntent, ExitSignal};
+    let signal = ExitSignal::default();
+    assert_eq!(
+        announced_reason(signal.get()),
+        Some(AgentExitReason::Crashed)
+    );
+    signal.set(ExitIntent::Killed);
+    assert_eq!(
+        announced_reason(signal.get()),
+        Some(AgentExitReason::Killed)
+    );
+    signal.set(ExitIntent::Reaped);
+    assert_eq!(
+        announced_reason(signal.get()),
+        Some(AgentExitReason::Reaped)
+    );
+    signal.set(ExitIntent::Shutdown);
+    assert_eq!(announced_reason(signal.get()), None);
+}
+
+/// The wire form of the exit reason is the lowercase word the clients match on.
+#[test]
+fn exit_reason_serializes_to_the_wire_words() {
+    for (reason, word) in [
+        (AgentExitReason::Killed, "killed"),
+        (AgentExitReason::Reaped, "reaped"),
+        (AgentExitReason::Crashed, "crashed"),
+        (AgentExitReason::Closed, "closed"),
+    ] {
+        assert_eq!(serde_json::to_value(reason).unwrap(), word);
+    }
+    let event = SessionClosedEvent {
+        agent_id: AgentId("a".to_string()),
+        session_id: SessionId::new("s"),
+        reason: AgentExitReason::Closed,
+    };
+    assert_eq!(serde_json::to_value(&event).unwrap()["reason"], "closed");
+}
+
+/// A close with no running turn proceeds at once; a turn that ends
+/// proceeds; a dropped waiter or a terminator that never comes is an error so
+/// the caller forces local cleanup instead of hanging.
+#[tokio::test(start_paused = true)]
+async fn close_waits_for_the_turn_terminator_and_gives_up_after_the_bound() {
+    assert!(await_turn_terminator(None).await.is_ok());
+
+    let (done_tx, done_rx) = oneshot::channel();
+    done_tx.send(()).unwrap();
+    assert!(await_turn_terminator(Some(done_rx)).await.is_ok());
+
+    let (dropped_tx, dropped_rx) = oneshot::channel::<()>();
+    drop(dropped_tx);
+    assert!(await_turn_terminator(Some(dropped_rx))
+        .await
+        .unwrap_err()
+        .contains("dropped"));
+
+    let (_never_tx, never_rx) = oneshot::channel::<()>();
+    let error = await_turn_terminator(Some(never_rx)).await.unwrap_err();
+    assert!(error.contains("timed out"), "{error}");
 }

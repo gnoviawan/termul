@@ -157,8 +157,9 @@ pub async fn serve(
     web_auth: Option<Arc<auth::WebAuth>>,
     canvas_pool: Option<Arc<crate::canvas::pool::CanvasDaemonPool>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Issue #837: idle agent reaper (standalone server only — see the module
-    // doc for why this is NOT in `serve_router`). The shutdown future resolves
+    // Idle agent reaper (standalone server; the desktop starts its own from
+    // `lib.rs` — see the module doc for why this is NOT in `serve_router`).
+    // The shutdown future resolves
     // on SIGINT/SIGTERM OR when the router task finishes for any other reason
     // (bind failure, panic, early exit) so `serve` never hangs waiting on a
     // reaper whose signal can no longer arrive in-process.
@@ -166,7 +167,6 @@ pub async fn serve(
     let reaper_window = std::time::Duration::from_secs(cfg.agent_idle_window_secs);
     let reaper_handle = agent_reaper::spawn_agent_idle_reaper(
         acp.clone(),
-        ws_relay.clone(),
         reaper_window,
         Box::pin(async move {
             tokio::select! {

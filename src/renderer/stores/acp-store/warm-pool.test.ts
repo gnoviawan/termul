@@ -494,7 +494,7 @@ describe('warm session pool', () => {
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
     const key = prepareChatKey('cfg-1', '/work', undefined)
     await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-9' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-9', reason: 'crashed' })
     // Pooled warm slot dropped so a later startChat does not promote a dead session.
     expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
     // No orphan "Untitled Chat" is persisted to the history index on disconnect.
@@ -540,10 +540,10 @@ describe('warm session pool', () => {
         }
       }
     }))
-    // Renderer-initiated kill (idle shutdown / last tab closed): the backend
-    // emits no lifecycle events for an intentional kill, so the action itself
-    // must retire the slot — a stale one routes launcher option calls to the
-    // dead agent (`unknown agent`).
+    // Renderer-initiated kill (idle shutdown / last tab closed): the action
+    // itself retires the slot without waiting for the host's lifecycle events
+    // — a stale one routes launcher option calls to the dead agent
+    // (`unknown agent`).
     await useAcpStore.getState().killAgent('agent-9')
     expect(invoke).toHaveBeenCalledWith('acp_kill_agent', { agentId: 'agent-9' })
     expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
@@ -601,7 +601,9 @@ describe('warm session pool', () => {
         ]
       }
     }))
-    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-9', sessionId: 'sess-prep' })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-9', sessionId: 'sess-prep', reason: 'closed' })
     expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
     // Content-bearing session is persisted/closed, not deleted outright.
     expect(useAcpStore.getState().sessions['sess-prep']?.status).toBe('closed')

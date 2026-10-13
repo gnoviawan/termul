@@ -601,12 +601,20 @@ export function parseAcpErrorDetail(payload: unknown): AcpErrorDetail {
   if (data !== undefined && data !== null) detail.data = data
   return detail
 }
+/**
+ * Why an agent or one of its sessions ended (mirror of the host's
+ * `AgentExitReason`). `closed` is only ever sent for an explicit
+ * `close_session`; `crashed` is the only reason that keeps the error state.
+ */
+export type AgentExitReason = 'killed' | 'reaped' | 'crashed' | 'closed'
 export interface AgentDisconnectedEvent {
   agentId: AgentId
+  reason: AgentExitReason
 }
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
+  reason: AgentExitReason
 }
 /** OpenCode 2 compaction marker from `session_info_update` `_meta`. */
 export interface OpenCodeCompactionNotice {

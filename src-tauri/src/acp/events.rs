@@ -841,22 +841,43 @@ pub struct AgentCrashedEvent {
     pub data: Option<serde_json::Value>,
 }
 
+/// Why an agent (or one of its sessions) ended. Additive on the wire so every
+/// viewer can tell a deliberate stop from a crash.
+///
+/// `closed` is used only for an explicit `close_session`; the other three
+/// describe agent-level endings. Process shutdown stays silent and has no
+/// reason.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentExitReason {
+    /// An explicit kill from a client.
+    Killed,
+    /// The idle reaper stopped the agent after its quiet window.
+    Reaped,
+    /// The agent process or its connection died on its own.
+    Crashed,
+    /// A single session was closed explicitly; the agent keeps running.
+    Closed,
+}
+
 /// `acp:agent_disconnected`
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDisconnectedEvent {
     pub agent_id: AgentId,
+    pub reason: AgentExitReason,
 }
 
 /// `acp:session_closed`
 ///
-/// Emitted when a session ends — either via an explicit close or because the
-/// owning agent disconnected/crashed while the session was active.
+/// Emitted when a session ends — via an explicit close, or because the owning
+/// agent was killed, reaped or crashed while the session was active.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionClosedEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
+    pub reason: AgentExitReason,
 }
 
 /// OpenCode compaction marker carried on `session_info_update` `_meta`.

@@ -22,9 +22,9 @@ fn trimmed_env_path(key: &str) -> Option<PathBuf> {
     })
 }
 
-/// Default idle-agent reap window in seconds (15 min) — the value the
-/// standalone server used before the window became a [`ServerConfig`] field.
-pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 900;
+/// Default idle-agent reap window in seconds (30 min). The one definition the
+/// standalone server and the desktop host both read; no client holds a copy.
+pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 1800;
 /// Default reliable-queue overflow tolerance per client.
 pub const DEFAULT_OVERFLOW_TOLERANCE: usize = 15;
 /// Default command-receipt retention in seconds (10 min).
@@ -342,8 +342,8 @@ pub struct ServerConfig {
     pub event_log_capacity: usize,
     /// Idle window (seconds) after which the host reaps an idle agent.
     /// `--agent-idle-window-secs` → `$TERMUL_AGENT_IDLE_REAP_SECS` →
-    /// [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (900, the pre-existing server
-    /// value). The desktop host reads the same default const.
+    /// [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (1800). The desktop host reads the
+    /// same default const.
     pub agent_idle_window_secs: u64,
     /// Outbound-queue overflow tolerance per client: consecutive failed
     /// enqueues before a peer that stopped draining is closed.

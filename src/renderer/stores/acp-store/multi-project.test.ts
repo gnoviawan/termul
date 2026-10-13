@@ -221,7 +221,7 @@ describe('acp-store multi-project isolation', () => {
       }
     }))
     // Project A's process dies.
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-a' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-a', reason: 'crashed' })
     expect(useAcpStore.getState().sessions['s-a'].status).toBe('closed')
     expect(useAcpStore.getState().agentStatus['agent-a']).toBe('error')
     // Project B is untouched.
@@ -414,7 +414,7 @@ describe('acp-store multi-project isolation', () => {
     })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
     // 3. Disconnect event — must NOT overwrite 'error' to 'closed'
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
     expect(useAcpStore.getState().sessions['s1'].lastError).toBe('child exited')
     expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
@@ -474,7 +474,9 @@ describe('acp-store multi-project isolation', () => {
   // must NOT resurrect it to 'error'.
   it('agent_crashed does not resurrect a closed session', () => {
     seedSession('s1', 'agent-1')
-    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     useAcpStore.getState()._onAgentCrashed({
       agentId: 'agent-1',
@@ -535,7 +537,7 @@ describe('acp-store multi-project isolation', () => {
       agentId: 'agent-1',
       message: 'fatal: api key revoked'
     })
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     expect(useAcpStore.getState().sessions['s1'].lastError).toBe('fatal: api key revoked')
   })

@@ -276,6 +276,32 @@ impl TerminalRegistry {
             }
         }
     }
+
+    /// Number of terminals whose command is still running. A terminal whose
+    /// child has exited but was never polled is observed here (`try_wait`) and
+    /// cached, so a finished command stops counting as background work.
+    /// A terminal whose child is out of the registry (a `wait_for_exit` is in
+    /// flight) has no recorded exit, so it counts as running.
+    pub fn running_count(&mut self) -> usize {
+        let mut running = 0;
+        for term in self.terminals.values_mut() {
+            if term.exit.is_some() {
+                continue;
+            }
+            let Some(child) = term.child.as_mut() else {
+                running += 1;
+                continue;
+            };
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    term.exit = Some(to_exit_status(status));
+                    term.child = None;
+                }
+                Ok(None) | Err(_) => running += 1,
+            }
+        }
+        running
+    }
 }
 
 /// Kill and reap a child without blocking: start termination, then await its

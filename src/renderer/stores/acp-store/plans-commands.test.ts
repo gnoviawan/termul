@@ -204,7 +204,9 @@ describe('ACP agent plan store', () => {
         'sess-1': [{ content: 'old plan', status: 'completed' }]
       }
     })
-    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-1' })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-1', reason: 'closed' })
     expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
   })
 

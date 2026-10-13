@@ -5,8 +5,8 @@
 //! A connection registers when its `authenticate` succeeds and unregisters
 //! when its [`PresenceGuard`] drops (connection cleanup, including a read
 //! task that is aborted or panics). The first connection of a device and the
-//! last disconnect of a device are logged at info; nothing consumes presence
-//! for reaping yet (viewer-aware reap is a later story), so it only logs and
+//! last disconnect of a device are logged at info. Presence never feeds a reap
+//! decision (agent reaping is activity-based only), so it only logs and
 //! answers queries.
 
 use std::collections::{BTreeSet, HashMap};

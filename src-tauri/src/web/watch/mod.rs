@@ -15,7 +15,7 @@ pub use hub::{
     SubscribeError, WatchFrame, WatchHub, WatchKind, WatchRevision, WS_WATCH_TYPE,
 };
 pub use sources::{
-    agents_state, chat_history_state, projects_state, publish_agent_event, publish_agent_removed,
+    agents_state, chat_history_state, projects_state, publish_agent_event,
     publish_chat_history, publish_projects, AGENT_ROSTER_EVENTS,
 };
 

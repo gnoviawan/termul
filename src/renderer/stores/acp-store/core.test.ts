@@ -400,7 +400,7 @@ describe('acp-store', () => {
               message: 'agent crashed'
             })
           } else {
-            store._onAgentDisconnected({ agentId: 'agent-1' })
+            store._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
           }
           return new Promise<string>(() => {})
         }

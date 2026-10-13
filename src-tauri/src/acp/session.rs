@@ -25,6 +25,10 @@ use tokio::sync::{oneshot, watch};
 
 use crate::acp::session_persistence::SessionRegistration;
 
+mod activity;
+pub(crate) use activity::ActivityClock;
+pub use activity::AgentActivity;
+
 /// A permission request awaiting the user's decision.
 ///
 /// The `responder` completes the agent's in-flight `session/request_permission`
@@ -129,6 +133,9 @@ pub(crate) struct DriverState {
     /// trusting the client. Dropped on promotion (`unmark_ephemeral`) and on
     /// disposal (`remove_session_root`).
     promotable_sessions: HashMap<String, SessionRegistration>,
+    /// When this agent last showed host-observed activity (see
+    /// [`AgentActivity`]). The idle reaper's only clock.
+    last_active: ActivityClock,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -256,6 +263,7 @@ impl DriverState {
         session_id: String,
         responder: Responder<RequestPermissionResponse>,
     ) -> String {
+        self.last_active.touch();
         let request_id = format!("perm-{}", uuid::Uuid::new_v4());
         self.pending_permissions.insert(
             request_id.clone(),
@@ -269,6 +277,7 @@ impl DriverState {
 
     /// Remove and return a pending permission by its correlation id.
     pub(crate) fn take_permission(&mut self, request_id: &str) -> Option<PendingPermission> {
+        self.last_active.touch();
         self.pending_permissions.remove(request_id)
     }
 
@@ -282,6 +291,7 @@ impl DriverState {
         session_id: String,
         responder: Responder<Value>,
     ) -> String {
+        self.last_active.touch();
         let question_id = format!("q-{}", uuid::Uuid::new_v4());
         self.pending_questions.insert(
             question_id.clone(),
@@ -296,6 +306,7 @@ impl DriverState {
 
     /// Remove and return a pending question by its correlation id.
     pub(crate) fn take_question(&mut self, question_id: &str) -> Option<PendingQuestion> {
+        self.last_active.touch();
         self.pending_questions.remove(question_id)
     }
 
@@ -305,6 +316,7 @@ impl DriverState {
         session_id: String,
         responder: Responder<CreateElicitationResponse>,
     ) -> String {
+        self.last_active.touch();
         let request_id = format!("elicit-{}", uuid::Uuid::new_v4());
         self.pending_elicitations.insert(
             request_id.clone(),
@@ -317,6 +329,7 @@ impl DriverState {
     }
 
     pub(crate) fn take_elicitation(&mut self, request_id: &str) -> Option<PendingElicitation> {
+        self.last_active.touch();
         self.pending_elicitations.remove(request_id)
     }
 
@@ -383,6 +396,7 @@ impl DriverState {
     /// Record the canonicalized workspace root for a session. Agent `fs`
     /// reads/writes for this session must stay within this root.
     pub(crate) fn set_session_root(&mut self, session_id: String, root: PathBuf) {
+        self.last_active.touch();
         self.session_roots.insert(session_id, root);
     }
 
@@ -487,6 +501,7 @@ impl DriverState {
         if self.active_turns.contains_key(session_id) {
             return false;
         }
+        self.last_active.touch();
         self.replay_windows
             .entry(session_id.to_string())
             .or_default()
@@ -507,6 +522,7 @@ impl DriverState {
         if self.active_turns.contains_key(session_id) {
             return false;
         }
+        self.last_active.touch();
         *self
             .reopen_reservations
             .entry(session_id.to_string())
@@ -518,6 +534,7 @@ impl DriverState {
     /// release removes it so prompt turns are admitted again. Unknown
     /// sessions are ignored.
     pub(crate) fn finish_reopen_reservation(&mut self, session_id: &str) {
+        self.last_active.touch();
         let Some(count) = self.reopen_reservations.get_mut(session_id) else {
             return;
         };
@@ -532,6 +549,7 @@ impl DriverState {
     /// out exactly once, at final close; returns 0 for unknown sessions and
     /// while references remain.
     pub(crate) fn finish_replay_window(&mut self, session_id: &str) -> u64 {
+        self.last_active.touch();
         let Some(window) = self.replay_windows.get_mut(session_id) else {
             return 0;
         };
@@ -617,6 +635,7 @@ impl DriverState {
         {
             return None;
         }
+        self.last_active.touch();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let (idle_tx, idle_rx) = watch::channel(());
         self.active_turns
@@ -702,6 +721,7 @@ impl DriverState {
     /// session. `watch` coalesces: a burst of notifications resets once, which
     /// is all the idle clock needs ("activity happened since the last reset").
     pub(crate) fn signal_idle(&mut self, session_id: &str) {
+        self.last_active.touch();
         if let Some(tx) = self.idle_resets.get(session_id) {
             let _ = tx.send(());
         }
@@ -710,7 +730,9 @@ impl DriverState {
     /// Mark a session's turn finished and return any still-pending permissions
     /// for that session (to be resolved cancelled). Idempotent.
     pub(crate) fn finish_turn(&mut self, session_id: &str) -> Vec<PendingPermission> {
-        self.active_turns.remove(session_id);
+        if self.active_turns.remove(session_id).is_some() {
+            self.last_active.touch();
+        }
         self.active_turn_ids.remove(session_id);
         self.idle_resets.remove(session_id);
         if let Some(waiters) = self.turn_idle_waiters.remove(session_id) {
@@ -744,6 +766,25 @@ impl DriverState {
         let questions = self.finish_turn_questions(session_id);
         let elicitations = self.finish_turn_elicitations(session_id);
         (permissions, questions, elicitations)
+    }
+
+    /// Activity evidence for the idle reaper. `running_terminals` comes from
+    /// the agent's terminal registry, which lives beside this state.
+    pub(crate) fn activity(&self, running_terminals: usize) -> AgentActivity {
+        AgentActivity {
+            active_turns: self.active_turns.len(),
+            pending_permissions: self.pending_permissions.len(),
+            pending_questions: self.pending_questions.len(),
+            pending_elicitations: self.pending_elicitations.len(),
+            running_terminals,
+            reopens_in_flight: self.reopen_reservations.values().sum::<usize>()
+                + self
+                    .replay_windows
+                    .values()
+                    .map(|w| w.open_count)
+                    .sum::<usize>(),
+            last_active_at: self.last_active.last(),
+        }
     }
 }
 

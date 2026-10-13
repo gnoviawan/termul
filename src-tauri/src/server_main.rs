@@ -745,7 +745,7 @@ OPTIONS:
                                   Idle window after which an idle agent is
                                   reaped. Positive integer.
                                   [env: TERMUL_AGENT_IDLE_REAP_SECS]
-                                  [default: 900]
+                                  [default: 1800]
     --overflow-tolerance <N>      Reliable-queue overflow tolerance per client.
                                   Positive integer. Reserved: the host
                                   validates it but does not read it yet.

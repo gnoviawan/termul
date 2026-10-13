@@ -635,8 +635,10 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         agentStatus,
         configToLiveAgent,
         sessions,
-        // An intentional kill emits no lifecycle events (L4), so no event
-        // handler will retire this agent's warm-pool slots — drop them here.
+        // The host also announces the kill (`session_closed` +
+        // `agent_disconnected`) and that handler converges on the same state;
+        // drop the warm-pool slots here too so the result never depends on
+        // event order.
         preparedSessions: dropPreparedSlots(
           s.preparedSessions,
           (sid) => s.sessions[sid]?.agentId === agentId
@@ -1023,7 +1025,23 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     const affected: SessionId[] = []
     const dropTranscriptIds: SessionId[] = []
     set((s) => {
-      const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      // A deliberate end (kill / idle reap / close) is not an error: drop the
+      // agent exactly like a local `killAgent` does, so a stopped agent never
+      // lingers as 'error' or stays mapped from its config. Only a crash keeps
+      // the 'error' status (manual restart). Both paths are idempotent.
+      const deliberate = e.reason !== 'crashed'
+      const agentStatus = deliberate
+        ? { ...s.agentStatus }
+        : { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      const agents = { ...s.agents }
+      const configToLiveAgent = { ...s.configToLiveAgent }
+      if (deliberate) {
+        delete agentStatus[e.agentId]
+        delete agents[e.agentId]
+        for (const cid of Object.keys(configToLiveAgent)) {
+          if (configToLiveAgent[cid] === e.agentId) delete configToLiveAgent[cid]
+        }
+      }
       // Same stale-marker rule as _onAgentCrashed: a disconnected agent can
       // never land a launch still marked in flight.
       const launchingSessionIds = { ...s.launchingSessionIds }
@@ -1089,6 +1107,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       return {
         agentStatus,
         launchingSessionIds,
+        ...(deliberate ? { agents, configToLiveAgent } : {}),
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
         pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, e.agentId),

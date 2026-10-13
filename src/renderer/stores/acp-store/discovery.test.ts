@@ -312,7 +312,9 @@ describe('session discovery (gh-407)', () => {
     })
 
     // Closing the session triggers persistSession projection.
-    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'disc-1' })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 'disc-1', reason: 'closed' })
 
     const projected = useAcpStore.getState().sessionIndex.find((e) => e.id === 'disc-1')
     // If projected at all, it MUST keep `discovered: true` — never `false`
@@ -389,7 +391,7 @@ describe('session discovery (gh-407)', () => {
         [discoveryKey('agent-2', '/work')]: [{ sessionId: 'sess-2', cwd: '/work' }]
       }
     })
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(
       useAcpStore.getState().discoveredSessions[discoveryKey('agent-1', '/work')]
     ).toBeUndefined()
