@@ -57,7 +57,7 @@ function attach(eventName: string, subscription: LocalSubscription): void {
       subscription.unlisten = unlisten
     },
     (err) => {
-      subscriptions.delete(eventName)
+      if (subscriptions.get(eventName) === subscription) subscriptions.delete(eventName)
       void logFrontendError({
         level: 'error',
         source: 'desktop-local-events',

@@ -142,6 +142,30 @@ describe('DesktopAcpTransport desktop-local events', () => {
     transport.dispose()
   })
 
+  it('keeps a newer subscription when an older listen() rejects after it was replaced', async () => {
+    const first = Promise.withResolvers<() => void>()
+    tauri.listen.mockImplementationOnce(() => first.promise)
+    const transport = new DesktopAcpTransport()
+
+    const stopFirst = transport.onEvent('acp:worktree_progress', () => {})
+    stopFirst()
+    const seen: unknown[] = []
+    const stopSecond = transport.onEvent('acp:worktree_progress', (p) => seen.push(p))
+    await Promise.resolve()
+
+    first.reject(new Error('listen failed'))
+    await Promise.resolve()
+    await Promise.resolve()
+    const stopThird = transport.onEvent('acp:worktree_progress', () => {})
+
+    expect(tauri.listen).toHaveBeenCalledTimes(2)
+    tauri.handlers.get('acp:worktree_progress')?.({ payload: 'live' })
+    expect(seen).toEqual(['live'])
+    stopSecond()
+    stopThird()
+    transport.dispose()
+  })
+
   it('delivers relay events (every other acp:* name) through the inherited WS listener registry', () => {
     const transport = new DesktopAcpTransport()
     const relayOnEvent = vi.spyOn(WsAcpTransport.prototype, 'onEvent').mockReturnValue(() => {})
