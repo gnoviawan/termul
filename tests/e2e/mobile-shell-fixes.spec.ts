@@ -111,13 +111,7 @@ async function createProject(
   } finally {
     await api.dispose()
   }
-  await wsRequest(
-    E2E_BASE_URL,
-    'store_write',
-    { key: `device/${E2E_DEVICE_ID}/active-project`, value: { _version: 1, data: id } },
-    undefined,
-    E2E_DEVICE
-  )
+  await storeWrite('active-project', id, E2E_DEVICE)
   return { id, name, path }
 }
 
@@ -162,16 +156,7 @@ async function seedSplitWorkspace(
     },
     activePaneId: 'leaf-b'
   }
-  await wsRequest(
-    E2E_BASE_URL,
-    'store_write',
-    {
-      key: `device/${E2E_DEVICE_ID}/workspace/${project.id}`,
-      value: { _version: 1, data: workspace }
-    },
-    undefined,
-    E2E_DEVICE
-  )
+  await storeWrite(`workspace/${project.id}`, workspace, E2E_DEVICE)
 }
 
 /**
