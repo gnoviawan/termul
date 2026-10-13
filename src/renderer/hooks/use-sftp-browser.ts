@@ -28,16 +28,35 @@ export function useSftpBrowser(connectionId: string | null) {
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set())
   const [isLoadingRoot, setIsLoadingRoot] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const generation = useRef(0)
+  // A new token per connection change; replies for an older token are dropped
+  // (even when switching back to the same id).
+  const [session, setSession] = useState({ id: connectionId })
+  const activeSession = useRef(session)
+  activeSession.current = session
+  // Bumped by each root listing, so only the latest one lands.
+  const rootRequest = useRef(0)
+
+  // A new connection starts fresh at the login directory. Reset while
+  // rendering so no frame shows the previous session's files.
+  if (session.id !== connectionId) {
+    setSession({ id: connectionId })
+    setCurrentPath(null)
+    setEntries([])
+    setExpandedDirs(new Set())
+    setChildEntries(new Map())
+    setLoadingDirs(new Set())
+    setError(null)
+    setIsLoadingRoot(false)
+  }
 
   const loadDirectory = useCallback(
     async (path: string) => {
       if (!connectionId) return
-      const current = generation.current
+      const request = ++rootRequest.current
       setIsLoadingRoot(true)
       setError(null)
       const result = await sshApi.sftpListDir(connectionId, path)
-      if (current !== generation.current) return
+      if (session !== activeSession.current || request !== rootRequest.current) return
       setIsLoadingRoot(false)
       if (result.success) {
         setEntries(result.data)
@@ -48,34 +67,25 @@ export function useSftpBrowser(connectionId: string | null) {
         setError(result.error)
       }
     },
-    [connectionId]
+    [connectionId, session]
   )
 
   const openHome = useCallback(async () => {
     if (!connectionId) return
-    const current = generation.current
+    const request = ++rootRequest.current
     setIsLoadingRoot(true)
     setError(null)
     const home = await sshApi.sftpRealpath(connectionId, '.')
-    if (current !== generation.current) return
+    if (session !== activeSession.current || request !== rootRequest.current) return
     if (!home.success) {
       setIsLoadingRoot(false)
       setError(home.error)
       return
     }
     await loadDirectory(home.data)
-  }, [connectionId, loadDirectory])
+  }, [connectionId, session, loadDirectory])
 
-  // A new connection starts fresh at the login directory.
   useEffect(() => {
-    generation.current += 1
-    setCurrentPath(null)
-    setEntries([])
-    setExpandedDirs(new Set())
-    setChildEntries(new Map())
-    setLoadingDirs(new Set())
-    setError(null)
-    setIsLoadingRoot(false)
     if (connectionId) void openHome()
   }, [connectionId, openHome])
 
@@ -90,23 +100,23 @@ export function useSftpBrowser(connectionId: string | null) {
         })
         return
       }
-      const current = generation.current
       setLoadingDirs((prev) => new Set(prev).add(path))
       const result = await sshApi.sftpListDir(connectionId, path)
-      if (current !== generation.current) return
+      if (session !== activeSession.current) return
       setLoadingDirs((prev) => {
         const next = new Set(prev)
         next.delete(path)
         return next
       })
       if (result.success) {
+        setError(null)
         setChildEntries((prev) => new Map(prev).set(path, result.data))
         setExpandedDirs((prev) => new Set(prev).add(path))
       } else {
         setError(result.error)
       }
     },
-    [connectionId, expandedDirs]
+    [connectionId, session, expandedDirs]
   )
 
   const refresh = useCallback(() => {

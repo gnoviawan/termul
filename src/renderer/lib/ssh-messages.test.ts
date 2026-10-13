@@ -83,6 +83,15 @@ describe('labels', () => {
     expect(addressLabel(profile)).toBe('deploy@web.example:2222')
   })
 
+  it('brackets IPv6 addresses before a port', () => {
+    const v6 = { ...profile, host: '::1' }
+    expect(hostLabel({ host: '::1', port: 22 })).toBe('::1')
+    expect(hostLabel(v6)).toBe('[::1]:2222')
+    expect(hostLabel({ host: '[::1]', port: 2222 })).toBe('[::1]:2222')
+    expect(addressLabel(v6)).toBe('deploy@[::1]:2222')
+    expect(stageLabel('connecting', v6)).toBe('Connect to [::1]:2222')
+  })
+
   it('labels every stage', () => {
     expect(SSH_STAGES.map((stage) => stageLabel(stage, profile))).toEqual([
       'Connect to web.example:2222',
@@ -104,5 +113,8 @@ describe('describeSessionEnd', () => {
     expect(describeSessionEnd({ reason: 'exited', exitCode: 0, detail: null }, profile).body).toBe(
       'The remote shell exited.'
     )
+    expect(
+      describeSessionEnd({ reason: 'closed', exitCode: null, detail: null }, profile).title
+    ).toBe('Session closed')
   })
 })

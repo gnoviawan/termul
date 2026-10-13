@@ -78,6 +78,12 @@ describe('splitAddress', () => {
     expect(split).toMatchObject({ host: 'db.internal', username: 'ops' })
   })
 
+  it('keeps a port that was edited separately', () => {
+    const values = { ...base, host: 'db.internal:2200', port: '2022' }
+    expect(splitAddress(values, true)).toMatchObject({ host: 'db.internal', port: '2022' })
+    expect(splitAddress(values)).toMatchObject({ host: 'db.internal', port: '2200' })
+  })
+
   it('leaves IPv6 literals alone and reads bracketed ports', () => {
     expect(splitAddress({ ...base, host: 'fe80::1' }).host).toBe('fe80::1')
     expect(splitAddress({ ...base, host: '[fe80::1]:2222' })).toMatchObject({
@@ -98,7 +104,7 @@ describe('toProfile', () => {
     const profile = toProfile({ ...base, password: '' }, null)
     expect(profile.name).toBe('example.com')
     expect(profile.password).toBeUndefined()
-    expect(profile.id).toMatch(/[0-9a-f-]{36}/)
+    expect(profile.id).toMatch(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i)
   })
 
   it('keeps metadata of an existing host and sends only the new secret', () => {

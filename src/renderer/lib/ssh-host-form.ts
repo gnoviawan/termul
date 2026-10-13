@@ -63,9 +63,10 @@ export function validateHostForm(values: HostFormValues): HostFormErrors {
 /**
  * Split a pasted `user@host:port` into its parts. Only fills the username
  * and port when they were not typed separately; IPv6 literals (several
- * colons) keep their colons.
+ * colons) keep their colons. The port field always holds a value, so the
+ * caller passes `portEdited` once the user has changed it.
  */
-export function splitAddress(values: HostFormValues): HostFormValues {
+export function splitAddress(values: HostFormValues, portEdited = false): HostFormValues {
   let host = values.host.trim()
   let username = values.username
   let port = values.port
@@ -77,7 +78,7 @@ export function splitAddress(values: HostFormValues): HostFormValues {
   const portMatch = /^([^:[\]]+):(\d{1,5})$/.exec(host) ?? /^\[([^\]]+)\]:(\d{1,5})$/.exec(host)
   if (portMatch) {
     host = portMatch[1]
-    port = portMatch[2]
+    if (!portEdited) port = portMatch[2]
   }
   return { ...values, host, username, port }
 }

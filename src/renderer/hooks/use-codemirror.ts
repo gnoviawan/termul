@@ -147,8 +147,11 @@ interface UseCodeMirrorOptions {
   onCursorChange: (line: number, col: number) => void
   onScrollChange: (scrollTop: number) => void
   onVisibleRangeChange?: (range: VisibleLineRange) => void
-  /** Replaces the editor-store save on Mod-s (e.g. a remote SFTP file). */
-  onSave?: () => void
+  /**
+   * Replaces the editor-store save on Mod-s (e.g. a remote SFTP file). Gets
+   * the text on screen, since `onChange` lags behind by its debounce.
+   */
+  onSave?: (content: string) => void
 }
 
 interface UseCodeMirrorResult {
@@ -259,8 +262,8 @@ export function useCodeMirror(
         keymap.of([
           {
             key: 'Mod-s',
-            run: () => {
-              if (onSaveRef.current) onSaveRef.current()
+            run: (view) => {
+              if (onSaveRef.current) onSaveRef.current(view.state.doc.toString())
               else void requestSaveEditorFile(filePathRef.current)
               return true
             },

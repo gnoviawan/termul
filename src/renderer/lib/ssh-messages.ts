@@ -15,7 +15,11 @@ export interface SSHMessage {
 }
 
 export function hostLabel(profile: Pick<SSHProfile, 'host' | 'port'>): string {
-  return profile.port === 22 ? profile.host : `${profile.host}:${profile.port}`
+  if (profile.port === 22) return profile.host
+  // An IPv6 literal needs brackets, or the port reads as part of the address.
+  const bare = profile.host.includes(':') && !profile.host.startsWith('[')
+  const host = bare ? `[${profile.host}]` : profile.host
+  return `${host}:${profile.port}`
 }
 
 export function addressLabel(profile: Pick<SSHProfile, 'host' | 'port' | 'username'>): string {
