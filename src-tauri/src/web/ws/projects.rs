@@ -106,13 +106,14 @@ pub(super) async fn handle_create_session(
             format!("project '{project_id}' is being removed or archived"),
         );
     }
+    let was_active = registry.is_active(&project_id);
     match acp
         .new_session_with_context(
             &parsed.agent_id,
             parsed.cwd,
             parsed.mcp_servers,
             SessionCreationContext {
-                project_id: Some(project_id),
+                project_id: Some(project_id.clone()),
                 ephemeral: parsed.ephemeral,
                 promotable: parsed.promotable,
                 additional_directories: parsed.additional_directories,
@@ -122,7 +123,29 @@ pub(super) async fn handle_create_session(
         )
         .await
     {
-        Ok(outcome) => ok_with_payload(id, &outcome),
+        Ok(outcome) => {
+            // The session took a while to start. A remove or archive that began
+            // meanwhile could not see it, so stop it here instead of leaving it
+            // bound to a project that is going away or gone.
+            if registry.project_left_while_starting(&project_id, was_active) {
+                warn!(
+                    target: "termul::web::ws",
+                    project_id = %project_id,
+                    "create_session: project was removed while the session started; stopping it"
+                );
+                acp.stop_project_sessions(
+                    &parsed.agent_id,
+                    std::slice::from_ref(&outcome.session_id.0),
+                )
+                .await;
+                return WsReply::err(
+                    id,
+                    WsErrorCode::ProjectBusy,
+                    format!("project '{project_id}' is being removed or archived"),
+                );
+            }
+            ok_with_payload(id, &outcome)
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }

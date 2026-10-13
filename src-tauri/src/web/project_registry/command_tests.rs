@@ -251,6 +251,27 @@ async fn a_session_that_cannot_be_stopped_keeps_the_project_and_is_listed() {
 }
 
 #[tokio::test]
+async fn a_session_or_terminal_that_started_during_a_removal_is_flagged() {
+    let host = TestHost::new(&[], true).await;
+    host.add_project("p-1").await;
+    assert!(host.registry.is_active("p-1"));
+    assert!(!host.registry.project_left_while_starting("p-1", true));
+
+    // The entity started before the mark; the removal is still running.
+    let guard = host.registry.begin_removal("p-1").expect("removal");
+    assert!(host.registry.project_left_while_starting("p-1", true));
+    assert!(host.registry.project_left_while_starting("p-1", false));
+    drop(guard);
+    assert!(!host.registry.project_left_while_starting("p-1", true));
+
+    // The removal finished before the entity did: the project is gone.
+    host.host().remove("p-1", false).await.unwrap();
+    assert!(host.registry.project_left_while_starting("p-1", true));
+    // A project that was never active (unassigned, archived) is not held to it.
+    assert!(!host.registry.project_left_while_starting("p-1", false));
+}
+
+#[tokio::test]
 async fn a_second_removal_of_the_same_project_is_refused_while_one_runs() {
     let host = TestHost::new(&[], true).await;
     host.add_project("p-1").await;

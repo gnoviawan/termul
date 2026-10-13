@@ -284,6 +284,71 @@ fn the_synthetic_seed_is_never_persisted() {
 }
 
 #[test]
+fn the_import_applies_the_renderer_default_over_the_seed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("projects.json");
+    let registry = open(&file);
+    assert!(registry.seed_root_if_no_usable_project(&project_dir(tmp.path(), "seed")));
+
+    // The first real project retires the seed; the renderer's own default must
+    // still win over the project that happened to be listed first.
+    registry
+        .commit_import(
+            vec![
+                summary("first", &project_dir(tmp.path(), "first")),
+                summary("chosen", &project_dir(tmp.path(), "chosen")),
+            ],
+            Some("chosen".to_string()),
+        )
+        .unwrap();
+    let snapshot = registry.snapshot();
+    assert_eq!(
+        snapshot.projects.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+        ["first", "chosen"],
+        "the seed is retired"
+    );
+    assert_eq!(snapshot.default_project_id.as_deref(), Some("chosen"));
+    assert_eq!(open(&file).snapshot(), snapshot);
+}
+
+#[test]
+fn the_import_keeps_a_real_default_over_the_renderer_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("projects.json");
+    let registry = open(&file);
+    registry
+        .commit_add(summary("kept", &project_dir(tmp.path(), "kept")))
+        .unwrap();
+    registry.commit_set_default("kept").unwrap();
+
+    registry
+        .commit_import(
+            vec![summary("other", &project_dir(tmp.path(), "other"))],
+            Some("other".to_string()),
+        )
+        .unwrap();
+    assert_eq!(registry.snapshot().default_project_id.as_deref(), Some("kept"));
+}
+
+#[test]
+fn seeding_never_replaces_a_real_project_that_uses_the_seed_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("projects.json");
+    let registry = open(&file);
+    let mut archived = summary("default", &project_dir(tmp.path(), "real"));
+    archived.is_archived = true;
+    registry.commit_add(archived).unwrap();
+    let before = registry.snapshot();
+
+    assert!(!registry.seed_root_if_no_usable_project(&project_dir(tmp.path(), "seed")));
+    assert_eq!(registry.snapshot(), before, "the real project is untouched");
+    registry.commit_import(Vec::new(), None).unwrap();
+    let saved = open(&file).snapshot();
+    assert_eq!(saved.projects.len(), 1, "the real project is still on disk");
+    assert!(saved.projects[0].is_archived);
+}
+
+#[test]
 fn the_renderer_push_is_written_through() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("projects.json");

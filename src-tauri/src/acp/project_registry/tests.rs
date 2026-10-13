@@ -480,6 +480,34 @@ fn v3_migrates_to_v4_with_imported_false_and_a_backup() {
     cleanup(&dir);
 }
 
+/// A lenient load keeps a resolvable root exactly as stored: the display path
+/// the user chose (and that a session cwd is matched against) is not replaced
+/// by its canonical form.
+#[test]
+fn lenient_load_keeps_the_stored_form_of_a_resolvable_root() {
+    let dir = tempdir_like("lenient-stored");
+    let project = dir.join("project");
+    fs::create_dir_all(&project).unwrap();
+    // Resolves to `project`, yet differs from its canonical form.
+    let stored = project.join("..").join("project");
+    let file = dir.join("projects.json");
+    write_json(
+        &file,
+        &serde_json::json!({
+            "schemaVersion": 4,
+            "projects": [
+                { "id": "p-1", "name": "One", "path": stored, "color": "blue", "isArchived": false }
+            ]
+        })
+        .to_string(),
+    );
+    let reg = FileProjectRegistry::load_with(&file, RootCheck::Lenient).expect("lenient");
+    assert_eq!(reg.roots()[0].path, stored);
+    let strict = FileProjectRegistry::load(&file).expect("strict");
+    assert_ne!(strict.roots()[0].path, stored, "strict canonicalizes");
+    cleanup(&dir);
+}
+
 /// A lenient load keeps a root whose directory is gone and a pathless one; a
 /// strict load refuses it.
 #[test]

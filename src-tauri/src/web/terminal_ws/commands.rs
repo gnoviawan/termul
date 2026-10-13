@@ -86,9 +86,31 @@ pub(super) async fn spawn(
     );
     // CAP-3: spawn is the only issuance path. The reply carries the
     // flattened info + claim (same camelCase shape as desktop).
+    let project_id = options.project_id.clone().unwrap_or_default();
+    let was_active = state.registry.is_active(&project_id);
     let outcome = ledgered::spawn(state.relay.ledger(), &state.pty, options, None).await;
     let spawned = match outcome.into_result(ledgered::SPAWN)? {
         Done::Executed(spawned) => {
+            // A remove or archive that began while the terminal started could
+            // not see it. Stop the terminal here instead of leaving it bound
+            // to a project that is going away or gone.
+            if state
+                .registry
+                .project_left_while_starting(&project_id, was_active)
+            {
+                if let Err(error) = state.pty.force_kill(&spawned.info.id).await {
+                    if !error.starts_with("Terminal not found") {
+                        warn!(
+                            "[terminal-ws] could not stop terminal {} of removed project {project_id}: {error}",
+                            spawned.info.id
+                        );
+                    }
+                }
+                return Err((
+                    "PROJECT_BUSY",
+                    format!("project '{project_id}' is being removed or archived"),
+                ));
+            }
             ctx.authorize(&spawned.info.id);
             spawned
         }

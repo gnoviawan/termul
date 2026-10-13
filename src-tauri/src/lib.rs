@@ -1186,14 +1186,27 @@ pub fn run() {
                     return Ok(());
                 }
                 Err(error) => {
+                    // Only a parse failure copied the file aside; a read failure
+                    // (for example permission denied) left it in place and keeps
+                    // every later save failing until it can be read again.
+                    let (log_note, dialog_note) = match &error {
+                        acp::ProjectRegistryError::Parse(_) => (
+                            "starting with an empty project list (the corrupt file was copied aside)",
+                            "It started with an empty list; the unreadable file was kept next to it as a .corrupt backup.",
+                        ),
+                        _ => (
+                            "starting with an empty project list (the file was not changed; project changes are not saved until it can be read)",
+                            "It started with an empty list. Project changes will not be saved until the file can be read.",
+                        ),
+                    };
                     log::error!(
-                        "[startup] could not load the project registry '{}': {error}; starting with an empty project list (a corrupt file was copied aside)",
+                        "[startup] could not load the project registry '{}': {error}; {log_note}",
                         projects_file.display()
                     );
                     handle
                         .dialog()
                         .message(format!(
-                            "Termul could not read its saved project list ({error}). It started with an empty list; the unreadable file was kept next to it as a .corrupt backup."
+                            "Termul could not read its saved project list ({error}). {dialog_note}"
                         ))
                         .title("Project list unavailable")
                         .kind(MessageDialogKind::Error)

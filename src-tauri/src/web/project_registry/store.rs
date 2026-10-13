@@ -246,8 +246,8 @@ impl ProjectRegistry {
 
     /// The desktop's one-shot import: only while `imported` is false. Merges
     /// (ids not present are added, existing ids are kept, never overwritten),
-    /// applies `default_project_id` only when no default is set, and marks
-    /// the registry imported — durably, even for an empty list.
+    /// applies `default_project_id` only when no default is set (the synthetic
+    /// seed does not count as one), and marks the registry imported — durably, even for an empty list.
     pub(super) fn commit_import(
         &self,
         projects: Vec<ProjectSummary>,
@@ -257,14 +257,22 @@ impl ProjectRegistry {
             if data.imported {
                 return Ok(false);
             }
+            // The synthetic seed counts as no default. Read this before the
+            // merge: the first real project retires the seed and takes over
+            // its default, which would hide the renderer's own choice.
+            let default_unset = data.default_project_id.is_none() || data.seeded;
             for project in projects {
                 if project.id == UNASSIGNED_PROJECT_ID || data.project(&project.id).is_some() {
                     continue;
                 }
                 insert_project(data, project);
             }
-            if data.default_project_id.is_none() {
-                data.default_project_id = default_project_id;
+            if default_unset {
+                if let Some(id) = default_project_id {
+                    if data.project(&id).is_some_and(|p| !p.is_archived) {
+                        data.default_project_id = Some(id);
+                    }
+                }
             }
             data.imported = true;
             Ok(true)
@@ -276,7 +284,8 @@ impl ProjectRegistry {
     /// registry-only boundary does not reject every request on a standalone
     /// `--project-root` server or a freshly started desktop host with an empty
     /// list. Returns `true` when a project was seeded. A registry that already
-    /// has a usable project is left alone, and the seed is retired once a real
+    /// has a usable project is left alone, as is one where a real project
+    /// already owns the seed's id, and the seed is retired once a real
     /// usable project is added. The seed lives in memory only — it is never
     /// written to the registry file.
     ///
@@ -293,6 +302,12 @@ impl ProjectRegistry {
             let _serial = self.commit.lock();
             let mut candidate = self.inner.lock().clone();
             if candidate.projects.iter().any(is_usable) {
+                return false;
+            }
+            // A real project (archived or without a path) that already owns
+            // the seed's id must not be replaced by the synthetic seed: the
+            // seed is never written, so the real project would be lost.
+            if !candidate.seeded && candidate.projects.iter().any(|p| p.id == SEEDED_PROJECT_ID) {
                 return false;
             }
             candidate.projects.retain(|p| p.id != SEEDED_PROJECT_ID);

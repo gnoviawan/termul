@@ -240,8 +240,8 @@ impl FileProjectRegistry {
     ///   original, AD-18); a newer version is refused.
     /// - **Invalid root**: with [`RootCheck::Strict`] → `Err(InvalidRoot)`
     ///   (canonicalize + must be a directory, fail-first). With
-    ///   [`RootCheck::Lenient`] the root is kept (canonicalized when it
-    ///   resolves, as stored otherwise).
+    ///   [`RootCheck::Lenient`] the root is kept exactly as stored (it is
+    ///   not canonicalized, so the display path the user chose stays stable).
     pub fn load_with(path: &Path, check: RootCheck) -> Result<Self, ProjectRegistryError> {
         let bytes = match fs::read(path) {
             Ok(b) => b,
@@ -296,9 +296,8 @@ impl FileProjectRegistry {
                     })?;
                 }
                 RootCheck::Lenient => {
-                    if let Ok(canonical) = validate_root_path(&root.path) {
-                        root.path = canonical;
-                    } else if !root.path.as_os_str().is_empty() {
+                    if validate_root_path(&root.path).is_err() && !root.path.as_os_str().is_empty()
+                    {
                         warn!(
                             project_id = root.id.as_str(),
                             "registered project path cannot be resolved; keeping it and rechecking lazily"

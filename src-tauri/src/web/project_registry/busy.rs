@@ -132,4 +132,30 @@ impl ProjectRegistry {
     pub fn is_removing(&self, project_id: &str) -> bool {
         self.removing.lock().contains(project_id)
     }
+
+    /// `true` while `project_id` is registered and not archived.
+    #[must_use]
+    pub fn is_active(&self, project_id: &str) -> bool {
+        self.inner
+            .lock()
+            .project(project_id)
+            .is_some_and(|p| !p.is_archived)
+    }
+
+    /// `true` when a session or terminal that has just been created in
+    /// `project_id` missed the remove or archive: one still runs, or it has
+    /// finished and took the project away. The caller then stops the new
+    /// entity and answers `project_busy`. `was_active` is
+    /// [`is_active`](Self::is_active) read before the entity was created, so
+    /// a project that was never active (unassigned, archived) is not held to
+    /// this check.
+    ///
+    /// The `removing` mark lives until the remove or archive has committed. An
+    /// entity created before the mark is found by the bound-entity check. An
+    /// entity that is created while the mark is held, or after the commit, is
+    /// caught here.
+    #[must_use]
+    pub fn project_left_while_starting(&self, project_id: &str, was_active: bool) -> bool {
+        self.is_removing(project_id) || (was_active && !self.is_active(project_id))
+    }
 }
