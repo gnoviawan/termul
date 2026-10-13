@@ -29,6 +29,11 @@ pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 1800;
 pub const DEFAULT_OVERFLOW_TOLERANCE: usize = 15;
 /// Default command-receipt retention in seconds (10 min).
 pub const DEFAULT_RECEIPT_RETENTION_SECS: u64 = 600;
+/// Default age after which an unseen, absent device's store partition is
+/// garbage collected: 90 days.
+pub const DEFAULT_PARTITION_GC_AGE_SECS: u64 = 90 * 24 * 60 * 60;
+/// Default per-device store partition byte budget: 16 MiB.
+pub const DEFAULT_PARTITION_BYTE_BUDGET: u64 = 16 * 1024 * 1024;
 /// Longest command-receipt retention the host honors (7 days); a larger
 /// `--receipt-retention-secs` is clamped to it at startup.
 pub const MAX_RECEIPT_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
@@ -356,15 +361,16 @@ pub struct ServerConfig {
     /// `termul-server` builds its ledger from it; the desktop shared-live host
     /// uses the default.
     pub receipt_retention_secs: u64,
-    /// Age (seconds) after which an unused per-device partition is garbage
-    /// collected. `None` (unset) until the device-state work picks a value;
-    /// `--partition-gc-age-secs` → `$TERMUL_PARTITION_GC_AGE_SECS`.
-    pub partition_gc_age_secs: Option<u64>,
-    /// Per-device partition byte budget. `None` (unset) until the
-    /// device-state work picks a value; `--partition-byte-budget` →
-    /// `$TERMUL_PARTITION_BYTE_BUDGET`. Reserved: no runtime code reads it
-    /// yet.
-    pub partition_byte_budget: Option<u64>,
+    /// Age (seconds) after which an unused per-device store partition is
+    /// garbage collected. `--partition-gc-age-secs` →
+    /// `$TERMUL_PARTITION_GC_AGE_SECS` → [`DEFAULT_PARTITION_GC_AGE_SECS`]
+    /// (90 days). Read by the host's [`crate::web::store::StorePolicy`].
+    pub partition_gc_age_secs: u64,
+    /// Per-device store partition byte budget. `--partition-byte-budget` →
+    /// `$TERMUL_PARTITION_BYTE_BUDGET` → [`DEFAULT_PARTITION_BYTE_BUDGET`]
+    /// (16 MiB). A write that would push a partition past it is refused
+    /// `STORE_PARTITION_FULL`.
+    pub partition_byte_budget: u64,
     /// Startup warnings gathered while parsing: removed flags that are still
     /// accepted and ignored, and invalid tunable env values that were
     /// ignored. Tracing is initialised after parsing, so
@@ -937,9 +943,11 @@ impl ServerConfig {
             .or_else(|| positive_env::<u64>(AGENT_IDLE_WINDOW_ENV, &mut deprecation_warnings))
             .unwrap_or(DEFAULT_AGENT_IDLE_WINDOW_SECS);
         let partition_gc_age_secs = partition_gc_age_secs
-            .or_else(|| positive_env::<u64>(PARTITION_GC_AGE_ENV, &mut deprecation_warnings));
+            .or_else(|| positive_env::<u64>(PARTITION_GC_AGE_ENV, &mut deprecation_warnings))
+            .unwrap_or(DEFAULT_PARTITION_GC_AGE_SECS);
         let partition_byte_budget = partition_byte_budget
-            .or_else(|| positive_env::<u64>(PARTITION_BYTE_BUDGET_ENV, &mut deprecation_warnings));
+            .or_else(|| positive_env::<u64>(PARTITION_BYTE_BUDGET_ENV, &mut deprecation_warnings))
+            .unwrap_or(DEFAULT_PARTITION_BYTE_BUDGET);
 
         Ok(Self {
             host,

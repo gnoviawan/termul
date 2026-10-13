@@ -28,6 +28,7 @@ mod relay_liveness_tests;
 mod relay_prompt_tests;
 #[cfg(test)]
 mod watch_hub_tests;
+mod store_tests;
 #[cfg(test)]
 mod watch_tests;
 
@@ -99,6 +100,12 @@ impl Host {
         Self { relay, state }
     }
 
+    /// Attach a store (the default host runs without one, as in degraded mode).
+    pub(crate) fn with_store(mut self, store: Arc<crate::web::store::WebStore>) -> Self {
+        self.state.store = Some(store);
+        self
+    }
+
     /// Open a connection: the production relay loop on a fault carrier.
     pub(crate) fn connect(&self) -> Conn {
         let (carrier, peer) = pair();
@@ -139,14 +146,19 @@ pub(crate) struct Conn {
 impl Conn {
     /// Run the versioned `authenticate` handshake and require `ok`.
     pub(crate) async fn authenticate(&mut self) {
+        self.authenticate_as("device-harness", "tab-harness").await;
+    }
+
+    /// `authenticate` as one tab of one device.
+    pub(crate) async fn authenticate_as(&mut self, device_id: &str, client_instance_id: &str) {
         let reply = self
             .request(
                 "auth",
                 "authenticate",
                 json!({
                     "protocolVersion": WS_PROTOCOL_VERSION,
-                    "deviceId": "device-harness",
-                    "clientInstanceId": "tab-harness",
+                    "deviceId": device_id,
+                    "clientInstanceId": client_instance_id,
                 }),
             )
             .await;

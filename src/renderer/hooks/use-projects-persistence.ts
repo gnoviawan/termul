@@ -490,7 +490,7 @@ export function useProjectsLoader(): void {
           // Initial load: prefer THIS client's persisted selection (issue
           // #855), then the host default.
           let restored: string | null = null
-          const persisted = await persistenceApi.read<string>(PersistenceKeys.webActiveProject)
+          const persisted = await persistenceApi.read<string>(PersistenceKeys.activeProject)
           if (
             persisted.success &&
             persisted.data &&
@@ -542,12 +542,12 @@ export function useProjectsLoader(): void {
         if (state.activeProjectId === prevState.activeProjectId) return
         if (!state.activeProjectId) return
         void persistenceApi
-          .write(PersistenceKeys.webActiveProject, state.activeProjectId)
+          .write(PersistenceKeys.activeProject, state.activeProjectId)
           .then((res) => {
             if (!res.success) {
               void logFrontendError({
                 level: 'warn',
-                source: 'useProjectsLoader.webActiveProject',
+                source: 'useProjectsLoader.activeProject',
                 message: `persisting the web active project failed: ${res.error ?? 'unknown'}`
               })
             }

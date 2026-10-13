@@ -344,6 +344,24 @@ describe('tauriPersistenceApi', () => {
     })
   })
 
+  describe('readStamped', () => {
+    it('reports revision 0 and no writer stamp for a stored value', async () => {
+      currentMockStore.get.mockResolvedValue({ _version: 1, data: { a: 1 } })
+      expect(await tauriPersistenceApi.readStamped('k')).toEqual({
+        success: true,
+        data: { value: { a: 1 }, revision: 0, clientInstanceId: null }
+      })
+    })
+
+    it('passes KEY_NOT_FOUND through', async () => {
+      currentMockStore.get.mockResolvedValue(null)
+      expect(await tauriPersistenceApi.readStamped('k')).toMatchObject({
+        success: false,
+        code: 'KEY_NOT_FOUND'
+      })
+    })
+  })
+
   describe('interface consistency', () => {
     it('should maintain consistent IpcResult<T> pattern for all methods', async () => {
       const testKey = 'consistency-key'

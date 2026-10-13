@@ -39,9 +39,25 @@ function toStoredProfile(profile: SSHProfile): SSHProfile {
 
 /** Read web profiles from the server-side store; first run = empty list. */
 async function readProfilesFromStore(): Promise<IpcResult<SSHProfile[]>> {
+  const result = await readProfilesSnapshot()
+  return result.success ? { success: true, data: result.data.profiles } : result
+}
+
+/**
+ * The profile list plus the CAS precondition for rewriting it: the list the
+ * host holds, or `null` when the key does not exist yet (first run) so the
+ * first write asserts "key must be absent".
+ */
+async function readProfilesSnapshot(): Promise<
+  IpcResult<{ profiles: SSHProfile[]; expected: SSHProfile[] | null }>
+> {
   const result = await persistenceApi.read<SSHProfile[]>(SSH_PROFILES_KEY)
-  if (result.success) return { success: true, data: result.data }
-  if (result.code === 'KEY_NOT_FOUND') return { success: true, data: [] }
+  if (result.success) {
+    return { success: true, data: { profiles: result.data, expected: result.data } }
+  }
+  if (result.code === 'KEY_NOT_FOUND') {
+    return { success: true, data: { profiles: [], expected: null } }
+  }
   return result
 }
 
@@ -131,14 +147,17 @@ export function createSSHApi(): SSHApi {
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
         for (let attempt = 0; attempt < 5; attempt++) {
-          const list = await readProfilesFromStore()
+          const list = await readProfilesSnapshot()
           if (!list.success) return list
-          const updated = list.data.filter((p) => p.id !== profile.id)
+          const updated = list.data.profiles.filter((p) => p.id !== profile.id)
           updated.push(toStoredProfile(profile))
 
-          // webPersistenceApi supports CAS via an undocumented 3rd parameter `expected`
-          // We cast it to any to bypass the strict signature in ipc.types.ts
-          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          // `ssh/profiles` is a shared/cas key: the write is only accepted while
+          // the host still holds `expected` (null = key absent). The facade
+          // journals the commandId, so a resend of this exact write reuses it.
+          const res = await persistenceApi.write(SSH_PROFILES_KEY, updated, {
+            expected: list.data.expected
+          })
           if (res.success || res.code !== 'STORE_CAS_FAILED') return res
         }
         return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }
@@ -149,12 +168,15 @@ export function createSSHApi(): SSHApi {
     async deleteProfile(profileId: string): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
         for (let attempt = 0; attempt < 5; attempt++) {
-          const list = await readProfilesFromStore()
+          const list = await readProfilesSnapshot()
           if (!list.success) return list
-          const updated = list.data.filter((p) => p.id !== profileId)
-          if (updated.length === list.data.length) return { success: true, data: undefined }
+          const updated = list.data.profiles.filter((p) => p.id !== profileId)
+          if (updated.length === list.data.profiles.length)
+            return { success: true, data: undefined }
 
-          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          const res = await persistenceApi.write(SSH_PROFILES_KEY, updated, {
+            expected: list.data.expected
+          })
           if (res.success || res.code !== 'STORE_CAS_FAILED') return res
         }
         return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }

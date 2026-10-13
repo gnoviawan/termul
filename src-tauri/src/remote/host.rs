@@ -424,8 +424,8 @@ impl RemoteServerState {
             overflow_tolerance: crate::web::config::DEFAULT_OVERFLOW_TOLERANCE,
             receipt_retention_secs: ws_relay.ledger().retention().as_secs(),
             // Unset until the device-state work picks values.
-            partition_gc_age_secs: None,
-            partition_byte_budget: None,
+            partition_gc_age_secs: crate::web::config::DEFAULT_PARTITION_GC_AGE_SECS,
+            partition_byte_budget: crate::web::config::DEFAULT_PARTITION_BYTE_BUDGET,
             deprecation_warnings: Vec::new(),
             project_root,
             // Desktop-hosted shared-live mode queries the live desktop

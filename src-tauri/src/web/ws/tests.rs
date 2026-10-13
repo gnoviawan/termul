@@ -618,109 +618,99 @@ async fn deliver_auth_redirect_malformed_payload_returns_validation_error() {
     assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
 }
 
-// ---- Issue #613: server-side generic key-value store WS handlers ----
+// ---- Issue #613 / #1073: server-side generic key-value store WS handlers ----
 
-/// Dispatch `text` through `handle_request` with a real `WebStore` attached.
+fn store_identity(device: &str) -> Arc<std::sync::OnceLock<ClientIdentity>> {
+    let identity = Arc::new(std::sync::OnceLock::new());
+    let _ = identity.set(ClientIdentity {
+        device_id: device.to_string(),
+        client_instance_id: format!("tab-{device}"),
+    });
+    identity
+}
+
+fn open_store(label: &str) -> (Arc<WebStore>, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("termul-ws-store-{label}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = WebStore::open(dir.join("store.json"), crate::web::store::StorePolicy::default()).unwrap();
+    (Arc::new(store), dir)
+}
+
+/// Dispatch `text` through `route_request` with a real `WebStore` attached,
+/// as device `dev-a`.
 async fn handle_request_with_store(text: &str, store: &Arc<WebStore>) -> WsReply {
     let relay = Arc::new(WsRelaySink::new());
     let acp = Arc::new(AcpManager::new(vec![]));
     let (tx, _rx) = test_outbound();
     let subs = Arc::new(Subscriptions::default());
     let registry = Arc::new(ProjectRegistry::new());
-    route(text, &HandlerEnv { store: Some(store.clone()), ..test_env(&acp, &relay, &registry, &tx, &subs) })
+    route(
+        text,
+        &HandlerEnv {
+            store: Some(store.clone()),
+            identity: store_identity("dev-a"),
+            ..test_env(&acp, &relay, &registry, &tx, &subs)
+        },
+    )
     .await
 }
 
 #[tokio::test]
-async fn store_write_then_read_roundtrips() {
-    let dir = std::env::temp_dir().join(format!("termul-ws-store-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = Arc::new(WebStore::open(dir.join("store.json")).unwrap());
-
+async fn store_write_then_read_roundtrips_with_a_stamp() {
+    let (store, dir) = open_store("roundtrip");
     let write = handle_request_with_store(
-        r#"{"id":"r1","type":"store_write","payload":{"key":"settings","value":{"theme":"dark"}}}"#,
+        r#"{"id":"r1","type":"store_write","payload":{"key":"device/dev-a/settings","value":{"theme":"dark"}}}"#,
         &store,
     )
     .await;
     assert!(write.ok, "write ok: {:?}", write.err);
+    assert_eq!(write.payload, Some(json!({ "revision": 1 })));
 
     let read = handle_request_with_store(
-        r#"{"id":"r2","type":"store_read","payload":{"key":"settings"}}"#,
+        r#"{"id":"r2","type":"store_read","payload":{"key":"device/dev-a/settings"}}"#,
         &store,
     )
     .await;
-    assert!(read.ok, "read ok: {:?}", read.err);
     assert_eq!(
-        read.payload.as_ref().and_then(|p| p.get("value")),
-        Some(&json!({ "theme": "dark" }))
-    );
-
-    // A second open (fresh connection) still sees the value — server-side
-    // persistence, not per-connection memory.
-    let reopened = Arc::new(WebStore::open(dir.join("store.json")).unwrap());
-    let read2 = handle_request_with_store(
-        r#"{"id":"r3","type":"store_read","payload":{"key":"settings"}}"#,
-        &reopened,
-    )
-    .await;
-    assert_eq!(
-        read2.payload.as_ref().and_then(|p| p.get("value")),
-        Some(&json!({ "theme": "dark" }))
+        read.payload,
+        Some(json!({ "value": { "theme": "dark" }, "revision": 1, "clientInstanceId": "tab-dev-a" }))
     );
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
-async fn store_read_missing_key_returns_null_value() {
-    let dir = std::env::temp_dir().join(format!("termul-ws-store-miss-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = Arc::new(WebStore::open(dir.join("store.json")).unwrap());
+async fn store_read_missing_key_is_revision_zero_with_a_null_value() {
+    let (store, dir) = open_store("miss");
     let reply = handle_request_with_store(
-        r#"{"id":"r1","type":"store_read","payload":{"key":"nope"}}"#,
+        r#"{"id":"r1","type":"store_read","payload":{"key":"device/dev-a/nope"}}"#,
         &store,
     )
     .await;
     assert!(reply.ok, "missing key is not an error: {:?}", reply.err);
     assert_eq!(
-        reply.payload.as_ref().and_then(|p| p.get("value")),
-        Some(&Value::Null)
+        reply.payload,
+        Some(json!({ "value": null, "revision": 0, "clientInstanceId": null }))
     );
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
 async fn store_delete_removes_and_reports_existed() {
-    let dir = std::env::temp_dir().join(format!("termul-ws-store-del-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = Arc::new(WebStore::open(dir.join("store.json")).unwrap());
-    store.write("k", json!("v"), None).unwrap();
-
-    let del = handle_request_with_store(
-        r#"{"id":"r1","type":"store_delete","payload":{"key":"k"}}"#,
+    let (store, dir) = open_store("del");
+    handle_request_with_store(
+        r#"{"id":"w","type":"store_write","payload":{"key":"device/dev-a/k","value":"v"}}"#,
         &store,
     )
     .await;
-    assert!(del.ok, "delete ok: {:?}", del.err);
-    assert_eq!(
-        del.payload.as_ref().and_then(|p| p.get("existed")),
-        Some(&json!(true))
-    );
-    assert_eq!(store.read("k").unwrap(), None);
-
-    let del2 = handle_request_with_store(
-        r#"{"id":"r2","type":"store_delete","payload":{"key":"k"}}"#,
-        &store,
-    )
-    .await;
-    assert!(
-        del2.ok,
-        "delete of missing key is not an error: {:?}",
-        del2.err
-    );
-    assert_eq!(
-        del2.payload.as_ref().and_then(|p| p.get("existed")),
-        Some(&json!(false))
-    );
+    for (id, existed) in [("r1", true), ("r2", false)] {
+        let del = handle_request_with_store(
+            &format!(r#"{{"id":"{id}","type":"store_delete","payload":{{"key":"device/dev-a/k"}}}}"#),
+            &store,
+        )
+        .await;
+        assert!(del.ok, "delete ok: {:?}", del.err);
+        assert_eq!(del.payload, Some(json!({ "existed": existed })));
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -745,10 +735,7 @@ async fn store_handlers_degraded_return_unavailable() {
 /// rejected the same way on read/write/delete.
 #[tokio::test]
 async fn store_empty_key_is_validation_error() {
-    let dir = std::env::temp_dir().join(format!("termul-ws-store-empty-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = Arc::new(WebStore::open(dir.join("store.json")).unwrap());
-    store.write("keep", json!(1), None).unwrap();
+    let (store, dir) = open_store("empty");
     for frame in [
         r#"{"id":"r1","type":"store_read","payload":{"key":""}}"#,
         r#"{"id":"r2","type":"store_write","payload":{"key":"","value":1}}"#,
@@ -757,17 +744,8 @@ async fn store_empty_key_is_validation_error() {
     ] {
         let reply = handle_request_with_store(frame, &store).await;
         assert!(!reply.ok, "empty-key {frame} must fail");
-        assert_eq!(
-            reply.err.as_ref().unwrap().code,
-            "VALIDATION_ERROR",
-            "{frame}"
-        );
+        assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR", "{frame}");
     }
-    // No state change: the pre-existing value survives and the empty /
-    // whitespace keys were never written.
-    assert_eq!(store.read("keep").unwrap(), Some(json!(1)));
-    assert_eq!(store.read("").unwrap(), None);
-    assert_eq!(store.read("   ").unwrap(), None);
 
     // Over-long key (> 1024 bytes): same VALIDATION_ERROR on all three ops.
     let long_key = "k".repeat(1025);
@@ -778,18 +756,10 @@ async fn store_empty_key_is_validation_error() {
     ] {
         let reply = handle_request_with_store(&frame, &store).await;
         assert!(!reply.ok, "over-long-key {frame} must fail");
-        assert_eq!(
-            reply.err.as_ref().unwrap().code,
-            "VALIDATION_ERROR",
-            "{frame}"
-        );
-        assert_eq!(
-            reply.err.as_ref().unwrap().message,
-            "key too long",
-            "{frame}"
-        );
+        assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR", "{frame}");
+        assert_eq!(reply.err.as_ref().unwrap().message, "key too long", "{frame}");
     }
-    assert_eq!(store.read(&long_key).unwrap(), None);
+    assert!(!dir.join("store.json").exists(), "a refused request never writes the file");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -798,59 +768,45 @@ async fn store_empty_key_is_validation_error() {
 /// accepted (the check is strictly-greater).
 #[tokio::test]
 async fn store_write_rejects_value_over_256kib() {
-    let dir = std::env::temp_dir().join(format!("termul-ws-store-big-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = Arc::new(WebStore::open(dir.join("store.json")).unwrap());
-    store.write("keep", json!(1), None).unwrap();
-
+    let (store, dir) = open_store("big");
     // 256 KiB + 1 char of string content → serialized size 256 KiB + 3
     // bytes (quotes) → over the cap.
     let oversized = "x".repeat(256 * 1024 + 1);
     let frame = format!(
-        r#"{{"id":"r1","type":"store_write","payload":{{"key":"big","value":"{oversized}"}}}}"#
+        r#"{{"id":"r1","type":"store_write","payload":{{"key":"device/dev-a/big","value":"{oversized}"}}}}"#
     );
     let reply = handle_request_with_store(&frame, &store).await;
     assert!(!reply.ok, "oversized value must fail");
     assert_eq!(reply.err.as_ref().unwrap().code, "STORE_VALUE_TOO_LARGE");
-    // The store file is untouched: nothing persisted under "big", the
-    // pre-existing value survives.
-    assert_eq!(store.read("big").unwrap(), None);
-    assert_eq!(store.read("keep").unwrap(), Some(json!(1)));
+    assert!(!dir.join("store.json").exists(), "the file is untouched");
 
     // Boundary: content sized so the serialized value is exactly 256 KiB
     // (262142 chars + 2 quote bytes) is accepted.
     let exact = "x".repeat(256 * 1024 - 2);
     let frame = format!(
-        r#"{{"id":"r2","type":"store_write","payload":{{"key":"big","value":"{exact}"}}}}"#
+        r#"{{"id":"r2","type":"store_write","payload":{{"key":"device/dev-a/big","value":"{exact}"}}}}"#
     );
     let reply = handle_request_with_store(&frame, &store).await;
-    assert!(
-        reply.ok,
-        "exactly-256-KiB value is accepted: {:?}",
-        reply.err
-    );
-    assert_eq!(store.read("big").unwrap(), Some(json!(exact)));
+    assert!(reply.ok, "exactly-256-KiB value is accepted: {:?}", reply.err);
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
 async fn store_malformed_payload_returns_validation_error() {
-    let dir = std::env::temp_dir().join(format!("termul-ws-store-bad-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let store = Arc::new(WebStore::open(dir.join("store.json")).unwrap());
-    // Missing `key` fails the payload serde.
-    let reply =
-        handle_request_with_store(r#"{"id":"r1","type":"store_read","payload":{}}"#, &store).await;
-    assert!(!reply.ok);
-    assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
-    // store_write without a `value` also fails serde.
-    let reply2 = handle_request_with_store(
-        r#"{"id":"r2","type":"store_write","payload":{"key":"k"}}"#,
-        &store,
-    )
-    .await;
-    assert!(!reply2.ok);
-    assert_eq!(reply2.err.as_ref().unwrap().code, "VALIDATION_ERROR");
+    let (store, dir) = open_store("bad");
+    for frame in [
+        // Missing `key`.
+        r#"{"id":"r1","type":"store_read","payload":{}}"#,
+        // store_write without a `value`.
+        r#"{"id":"r2","type":"store_write","payload":{"key":"device/dev-a/k"}}"#,
+        // A flat-protocol field the scoped store does not know.
+        r#"{"id":"r3","type":"store_write","payload":{"key":"device/dev-a/k","value":1,"unknown":true}}"#,
+        r#"{"id":"r4","type":"store_write","payload":{"key":"device/dev-a/k","value":1,"baseRevision":-1}}"#,
+    ] {
+        let reply = handle_request_with_store(frame, &store).await;
+        assert!(!reply.ok, "{frame}");
+        assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR", "{frame}");
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1123,6 +1079,7 @@ pub(super) fn test_env(
         acp_catalog: None,
         acp_install: None,
         store: None,
+        identity: Arc::new(std::sync::OnceLock::new()),
         web_auth: None,
         out_tx: out_tx.clone(),
         subscriptions: Arc::clone(subscriptions),
@@ -1215,9 +1172,12 @@ fn handle_sync_unstamped(
     let registry = Arc::new(ProjectRegistry::new());
     let mut conn = ConnState::new(*access, Arc::new(Subscriptions::default()));
     conn.authed = *authed;
-    conn.identity = identity.take();
+    if let Some(presented) = identity.take() {
+        let _ = conn.identity.set(presented);
+    }
     let env = HandlerEnv {
         web_auth: web_auth.cloned(),
+        identity: Arc::clone(&conn.identity),
         ..test_env(&acp, &relay, &registry, &tx, &conn.subscriptions)
     };
     let reply = tokio::runtime::Builder::new_current_thread()
@@ -1233,7 +1193,7 @@ fn handle_sync_unstamped(
             }
         });
     *authed = conn.authed;
-    *identity = conn.identity.take();
+    *identity = conn.identity.get().cloned();
     *access = conn.access;
     reply
 }

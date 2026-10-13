@@ -8,6 +8,7 @@
 
 import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { __resetCommandJournalForTesting } from '../command-journal'
 import { createWebPersistenceApi } from '../web-persistence-api'
 
 const mockHandleProtocolVersionMismatch = vi.hoisted(() => vi.fn())
@@ -39,6 +40,23 @@ function validateHandshake(payload: Record<string, unknown>): string | null {
 /** Test knob: force this refusal on every `authenticate` (null = validate). */
 let forcedAuthRefusal: string | null = null
 
+interface HostRecord {
+  v: unknown
+  rev: number
+  cid: string | null
+  cmd?: string
+  fields?: Record<string, number>
+}
+
+/** The one fake host store shared by every fake socket (like one real host). */
+const host = new Map<string, HostRecord>()
+/** Every request the host saw, in arrival order (all connections). */
+const hostLog: { deviceId: string; type: string; payload: Record<string, unknown> }[] = []
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
 class FakeStoreSocket {
   static OPEN = 1
   static CONNECTING = 0
@@ -54,9 +72,12 @@ class FakeStoreSocket {
   closed = false
   /** Handshake stall injection: 'upgrade' never opens; 'authenticate' never answers. */
   static stall: 'none' | 'upgrade' | 'authenticate' = 'none'
-  store = new Map<string, unknown>()
   /** When set, every non-auth request replies with this error. */
   failCode: string | null = null
+  /** One-shot: the next store request is APPLIED, then answered with this error (lost reply). */
+  applyThenFail: string | null = null
+  deviceId = ''
+  clientInstanceId = ''
 
   constructor(public url: string) {
     if (FakeStoreSocket.stall === 'upgrade') return
@@ -71,43 +92,115 @@ class FakeStoreSocket {
     this.onmessage?.({ data: JSON.stringify(msg) } as MessageEvent)
   }
 
+  private err(id: string, code: string, message = code): void {
+    this.emit({ id, ok: false, err: { code, message } })
+  }
+
   send(data: string): void {
     this.sent.push(data)
     const req = JSON.parse(data) as {
       id: string
       type: string
-      payload: { key?: string; value?: unknown }
+      payload: Record<string, unknown>
     }
     if (req.type === 'authenticate') {
       if (FakeStoreSocket.stall === 'authenticate') return
-      const refusal = forcedAuthRefusal ?? validateHandshake(req.payload as Record<string, unknown>)
+      const refusal = forcedAuthRefusal ?? validateHandshake(req.payload)
       if (refusal) {
-        this.emit({ id: req.id, ok: false, err: { code: refusal, message: refusal } })
+        this.err(req.id, refusal)
         return
       }
+      this.deviceId = req.payload.deviceId as string
+      this.clientInstanceId = req.payload.clientInstanceId as string
       this.emit({ id: req.id, ok: true, payload: {} })
       return
     }
     if (this.failCode) {
-      this.emit({ id: req.id, ok: false, err: { code: this.failCode, message: 'store failed' } })
+      this.err(req.id, this.failCode, 'store failed')
       return
     }
-    const key = req.payload.key as string
-    if (req.type === 'store_read') {
-      this.emit({ id: req.id, ok: true, payload: { value: this.store.get(key) ?? null } })
+    hostLog.push({ deviceId: this.deviceId, type: req.type, payload: req.payload })
+    const lost = this.applyThenFail
+    this.applyThenFail = null
+    const reply = this.handle(req.type, req.payload)
+    if (lost && reply.ok) {
+      this.err(req.id, lost)
       return
     }
-    if (req.type === 'store_write') {
-      this.store.set(key, req.payload.value)
-      this.emit({ id: req.id, ok: true, payload: {} })
-      return
+    this.emit({ id: req.id, ...reply })
+  }
+
+  /** Mirrors the Rust host's scope enforcement, LWW merge and CAS rules. */
+  private handle(
+    type: string,
+    p: Record<string, unknown>
+  ): { ok: true; payload: unknown } | { ok: false; err: { code: string; message: string } } {
+    const fail = (code: string) => ({ ok: false as const, err: { code, message: code } })
+    const key = p.key as string
+    const device = key.match(/^device\/([^/]+)\//)
+    const scope = device
+      ? 'device'
+      : key.startsWith('shared/lww/')
+        ? 'lww'
+        : key.startsWith('shared/cas/')
+          ? 'cas'
+          : null
+    if (!scope || (device && device[1] !== this.deviceId)) return fail('STORE_KEY_SCOPE')
+    const rec = host.get(key)
+    if (type === 'store_read') {
+      return {
+        ok: true,
+        payload: {
+          value: rec?.v ?? null,
+          revision: rec?.rev ?? 0,
+          clientInstanceId: rec?.cid ?? null
+        }
+      }
     }
-    if (req.type === 'store_delete') {
-      const existed = this.store.delete(key)
-      this.emit({ id: req.id, ok: true, payload: { existed } })
-      return
+    if (type === 'store_delete') {
+      if (scope === 'lww' && rec && typeof p.baseRevision !== 'number')
+        return fail('STORE_BASE_REQUIRED')
+      if (scope === 'cas' && !('expected' in p)) return fail('VALIDATION_ERROR')
+      host.delete(key)
+      return { ok: true, payload: { existed: !!rec } }
     }
-    this.emit({ id: req.id, ok: false, err: { code: 'not_implemented', message: 'unknown' } })
+    const value = p.value as { _version: number; data: unknown }
+    const nextRev = (rec?.rev ?? 0) + 1
+    if (scope === 'device') {
+      host.set(key, { v: value, rev: nextRev, cid: this.clientInstanceId })
+      return { ok: true, payload: { revision: nextRev } }
+    }
+    if (scope === 'lww') {
+      if (rec && typeof p.baseRevision !== 'number') return fail('STORE_BASE_REQUIRED')
+      const base = (p.baseRevision as number | undefined) ?? 0
+      const cur = (rec?.v as { data: Record<string, unknown> } | undefined)?.data ?? {}
+      const fields: Record<string, number> = { ...(rec?.fields ?? {}) }
+      const merged: Record<string, unknown> = { ...cur }
+      let changed = !rec
+      for (const [f, fv] of Object.entries(value.data as Record<string, unknown>)) {
+        if ((fields[f] ?? 0) <= base) {
+          if (!deepEqual(cur[f], fv) || !rec) {
+            merged[f] = fv
+            fields[f] = nextRev
+            changed = true
+          }
+        }
+      }
+      const mergedValue = { _version: value._version, data: merged }
+      const rev = changed ? nextRev : (rec?.rev ?? 0)
+      host.set(key, { v: mergedValue, rev, cid: this.clientInstanceId, fields })
+      return {
+        ok: true,
+        payload: { value: mergedValue, revision: rev, merged: !deepEqual(mergedValue, value) }
+      }
+    }
+    // shared/cas
+    if (!('expected' in p) || typeof p.commandId !== 'string') return fail('VALIDATION_ERROR')
+    const resend = rec?.cmd === p.commandId && deepEqual(rec.v, value)
+    if (!resend && !deepEqual(p.expected, rec?.v ?? null)) return fail('STORE_CAS_FAILED')
+    const rev = resend ? rec.rev : nextRev
+    host.set(key, { v: value, rev, cid: this.clientInstanceId, cmd: p.commandId })
+    return { ok: true, payload: { value, revision: rev } }
   }
 
   close(): void {
@@ -117,23 +210,45 @@ class FakeStoreSocket {
 
 const okVoid = { success: true, data: undefined }
 
+const DEVICE = 'device-a'
+
 describe('createWebPersistenceApi', () => {
   let sockets: FakeStoreSocket[]
   let api: ReturnType<typeof createWebPersistenceApi>
 
-  beforeEach(() => {
-    sockets = []
+  /** A fresh api (own revision book / hydration state) for another device or tab. */
+  function makeApi(deviceId: string): ReturnType<typeof createWebPersistenceApi> {
     class TrackerSocket extends FakeStoreSocket {
       constructor(url: string) {
         super(url)
         sockets.push(this)
       }
     }
-    api = createWebPersistenceApi({ WebSocketImpl: TrackerSocket as unknown as typeof WebSocket })
+    return createWebPersistenceApi({
+      WebSocketImpl: TrackerSocket as unknown as typeof WebSocket,
+      deviceId
+    })
+  }
+
+  /** The `store_*` frames an api sent (handshake excluded), in order. */
+  function storeFrames(socketIndex = 0): { type: string; payload: Record<string, unknown> }[] {
+    return sockets[socketIndex].sent
+      .map((s) => JSON.parse(s) as { type: string; payload: Record<string, unknown> })
+      .filter((r) => r.type.startsWith('store_'))
+  }
+
+  beforeEach(() => {
+    sockets = []
+    host.clear()
+    hostLog.length = 0
+    window.sessionStorage.clear()
+    __resetCommandJournalForTesting()
+    api = makeApi(DEVICE)
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     forcedAuthRefusal = null
     mockHandleProtocolVersionMismatch.mockClear()
   })
@@ -153,18 +268,20 @@ describe('createWebPersistenceApi', () => {
     expect(result).toEqual({ success: true, data: { theme: 'dark' } })
   })
 
-  it('write persists a versioned payload to the server', async () => {
+  it('write persists a versioned payload under the device partition', async () => {
     const result = await api.write('settings', { theme: 'dark' })
     expect(result).toEqual(okVoid)
-    const stored = sockets[0].store.get('settings') as { _version: number; data: unknown }
-    expect(stored).toEqual({ _version: 1, data: { theme: 'dark' } })
+    expect(host.get(`device/${DEVICE}/settings`)?.v).toEqual({
+      _version: 1,
+      data: { theme: 'dark' }
+    })
   })
 
   it('delete removes a key', async () => {
     await api.write('k', 1)
     const result = await api.delete('k')
     expect(result).toEqual(okVoid)
-    expect(sockets[0].store.has('k')).toBe(false)
+    expect(host.has(`device/${DEVICE}/k`)).toBe(false)
   })
 
   it('writeDebounced coalesces rapid writes into a single store_write', async () => {
@@ -175,10 +292,9 @@ describe('createWebPersistenceApi', () => {
     await expect(p1).resolves.toEqual(okVoid)
     await expect(p2).resolves.toEqual(okVoid)
 
-    const writes = sockets[0].sent.filter((s) => JSON.parse(s).type === 'store_write')
+    const writes = storeFrames().filter((f) => f.type === 'store_write')
     expect(writes).toHaveLength(1)
-    const stored = JSON.parse(writes[0]).payload.value as { data: unknown }
-    expect(stored.data).toBe(2)
+    expect((writes[0].payload.value as { data: unknown }).data).toBe(2)
   })
 
   it('flushPendingWrites flushes immediately', async () => {
@@ -187,7 +303,7 @@ describe('createWebPersistenceApi', () => {
     const result = await api.flushPendingWrites()
     expect(result).toEqual(okVoid)
     await expect(p).resolves.toEqual(okVoid)
-    expect(sockets[0].store.get('k')).toEqual({ _version: 1, data: { a: 1 } })
+    expect(host.get(`device/${DEVICE}/k`)?.v).toEqual({ _version: 1, data: { a: 1 } })
   })
 
   it('maps a server error code into the IpcResult', async () => {
@@ -201,6 +317,7 @@ describe('createWebPersistenceApi', () => {
       code: 'STORE_UNAVAILABLE'
     })
   })
+
   // CAP-1 interim gate: the store socket must present the resolved web auth
   // token on its `authenticate` frame — a gated server refuses 'dev'.
   describe('web auth token presentation', () => {
@@ -235,7 +352,7 @@ describe('createWebPersistenceApi', () => {
       expect(sentAuthenticate().payload).toEqual({
         token: 'dev',
         protocolVersion: WS_PROTOCOL_VERSION,
-        deviceId: window.localStorage.getItem('termul.deviceId'),
+        deviceId: DEVICE,
         clientInstanceId: window.sessionStorage.getItem('termul.clientInstanceId')
       })
     })
@@ -249,7 +366,7 @@ describe('createWebPersistenceApi', () => {
       expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledTimes(1)
       expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledWith('WebStoreSocket')
 
-      const second = await api.write('k', 1)
+      const second = await api.write('other', 1)
       expect(second).toMatchObject({ success: false, code: 'protocol_version_mismatch' })
       expect(sockets).toHaveLength(1)
       expect(mockHandleProtocolVersionMismatch).toHaveBeenCalledTimes(1)
@@ -316,6 +433,308 @@ describe('createWebPersistenceApi', () => {
       expect(flushed).toBeUndefined()
       await vi.advanceTimersByTimeAsync(1)
       expect(flushed).toMatchObject({ success: false, code: 'WS_TIMEOUT' })
+    })
+  })
+
+  describe('key scopes', () => {
+    it('keeps each device in its own partition: two devices, one logical key', async () => {
+      const phone = makeApi('phone')
+      await api.write('shell-layout', { rail: 'wide' })
+      await phone.write('shell-layout', { rail: 'narrow' })
+
+      expect(await api.read('shell-layout')).toEqual({ success: true, data: { rail: 'wide' } })
+      expect(await phone.read('shell-layout')).toEqual({ success: true, data: { rail: 'narrow' } })
+      expect([...host.keys()].sort()).toEqual([
+        `device/${DEVICE}/shell-layout`,
+        'device/phone/shell-layout'
+      ])
+    })
+
+    it('never addresses another partition: every device key sent carries the own device id', async () => {
+      await api.write('terminals/p1', { t: 1 })
+      await api.read('window-state')
+      await api.delete('snapshots/p1')
+      const keys = storeFrames().map((f) => f.payload.key)
+      expect(keys).toEqual([
+        `device/${DEVICE}/terminals/p1`,
+        `device/${DEVICE}/window-state`,
+        `device/${DEVICE}/snapshots/p1`
+      ])
+    })
+
+    it('stores shared keys under shared/lww/ and shared/cas/', async () => {
+      await api.read('settings/app')
+      await api.write('settings/app', { theme: 'dark' })
+      await api.read('ssh/profiles')
+      await api.write('ssh/profiles', [], { expected: null })
+      expect([...host.keys()].sort()).toEqual([
+        'shared/cas/ssh/profiles',
+        'shared/lww/settings/app'
+      ])
+    })
+
+    it('readStamped returns the value with its revision and writer stamp', async () => {
+      await api.write('k', 'a')
+      await api.write('k', 'b')
+      const stamped = await api.readStamped<string>('k')
+      expect(stamped).toEqual({
+        success: true,
+        data: {
+          value: 'b',
+          revision: 2,
+          clientInstanceId: window.sessionStorage.getItem('termul.clientInstanceId')
+        }
+      })
+    })
+
+    it('readStamped on a missing key is KEY_NOT_FOUND', async () => {
+      expect(await api.readStamped('nope')).toMatchObject({ success: false, code: 'KEY_NOT_FOUND' })
+    })
+  })
+
+  describe('shared/lww merge', () => {
+    it('sends the revision it read as baseRevision', async () => {
+      await api.read('settings/app')
+      await api.write('settings/app', { f1: 1 })
+      await api.write('settings/app', { f1: 2 })
+      const writes = storeFrames().filter((f) => f.type === 'store_write')
+      // absent key reads as revision 0; the second write carries the revision the first reply set.
+      expect(writes.map((w) => w.payload.baseRevision)).toEqual([0, 1])
+      expect((host.get('shared/lww/settings/app')?.v as { data: unknown }).data).toEqual({ f1: 2 })
+    })
+
+    it('merges concurrent field edits from two devices and reports the merged reply', async () => {
+      const desktop = api
+      const phone = makeApi('phone')
+      await desktop.read('settings/app')
+      await desktop.write('settings/app', { f0: 0 })
+      await desktop.read('settings/app')
+      await phone.read('settings/app')
+
+      const seen: { data: unknown; revision: number }[] = []
+      phone.onSharedChange('settings/app', (data, revision) => seen.push({ data, revision }))
+
+      await desktop.write('settings/app', { f0: 0, f1: 'desktop' })
+      const result = await phone.write('settings/app', { f0: 0, f2: 'phone' })
+
+      expect(result).toEqual(okVoid)
+      expect((host.get('shared/lww/settings/app')?.v as { data: unknown }).data).toEqual({
+        f0: 0,
+        f1: 'desktop',
+        f2: 'phone'
+      })
+      expect(seen).toEqual([{ data: { f0: 0, f1: 'desktop', f2: 'phone' }, revision: 3 }])
+    })
+
+    it('does not notify when the host kept exactly what was written', async () => {
+      const spy = vi.fn()
+      api.onSharedChange('settings/app', spy)
+      await api.read('settings/app')
+      await api.write('settings/app', { f1: 1 })
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('stops notifying after unsubscribe', async () => {
+      const phone = makeApi('phone')
+      await api.read('settings/app')
+      await api.write('settings/app', { f0: 0 })
+      await phone.read('settings/app')
+      const spy = vi.fn()
+      const off = phone.onSharedChange('settings/app', spy)
+      off()
+      await api.read('settings/app')
+      await api.write('settings/app', { f0: 0, f1: 1 })
+      await phone.write('settings/app', { f0: 0, f2: 2 })
+      expect(spy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('hydration guard', () => {
+    it('refuses to write a key whose read failed, and sends nothing', async () => {
+      await api.read('warmup')
+      sockets[0].failCode = 'STORE_UNAVAILABLE'
+      expect(await api.read('shell-layout')).toMatchObject({
+        success: false,
+        code: 'STORE_UNAVAILABLE'
+      })
+      sockets[0].failCode = null
+
+      const before = storeFrames().length
+      expect(await api.write('shell-layout', { defaults: true })).toMatchObject({
+        success: false,
+        code: 'STORE_NOT_HYDRATED'
+      })
+      expect(await api.delete('shell-layout')).toMatchObject({
+        success: false,
+        code: 'STORE_NOT_HYDRATED'
+      })
+      expect(storeFrames()).toHaveLength(before)
+      expect(host.size).toBe(0)
+    })
+
+    it('the guard is per key: other keys still write', async () => {
+      await api.read('warmup')
+      sockets[0].failCode = 'STORE_UNAVAILABLE'
+      await api.read('shell-layout')
+      sockets[0].failCode = null
+      expect(await api.write('window-state', { w: 1 })).toEqual(okVoid)
+    })
+
+    it('a later successful read lifts the guard', async () => {
+      await api.read('warmup')
+      sockets[0].failCode = 'STORE_UNAVAILABLE'
+      await api.read('shell-layout')
+      sockets[0].failCode = null
+      // KEY_NOT_FOUND is a successful read of an absent key.
+      expect(await api.read('shell-layout')).toMatchObject({ code: 'KEY_NOT_FOUND' })
+      expect(await api.write('shell-layout', { ok: true })).toEqual(okVoid)
+    })
+
+    it('a debounced write to a guarded key settles with STORE_NOT_HYDRATED', async () => {
+      vi.useFakeTimers()
+      await api.read('warmup')
+      sockets[0].failCode = 'STORE_UNAVAILABLE'
+      await api.read('settings/app')
+      sockets[0].failCode = null
+      const pending = api.writeDebounced('settings/app', { theme: 'dark' })
+      await vi.advanceTimersByTimeAsync(500)
+      await expect(pending).resolves.toMatchObject({ success: false, code: 'STORE_NOT_HYDRATED' })
+      expect(storeFrames().filter((f) => f.type === 'store_write')).toHaveLength(0)
+    })
+
+    it('blocks a shared key that was never read in this page (host would refuse STORE_BASE_REQUIRED)', async () => {
+      expect(await api.write('settings/app', { theme: 'dark' })).toMatchObject({
+        success: false,
+        code: 'STORE_BASE_REQUIRED'
+      })
+      expect(await api.delete('settings/app')).toMatchObject({
+        success: false,
+        code: 'STORE_BASE_REQUIRED'
+      })
+      expect(sockets).toHaveLength(0)
+    })
+
+    it('a shared key read as KEY_NOT_FOUND is writable (revision 0 is known)', async () => {
+      expect(await api.read('settings/app')).toMatchObject({ code: 'KEY_NOT_FOUND' })
+      expect(await api.write('settings/app', { theme: 'dark' })).toEqual(okVoid)
+      expect(storeFrames().find((f) => f.type === 'store_write')?.payload.baseRevision).toBe(0)
+    })
+  })
+
+  describe('shared/cas writes', () => {
+    const writes = (): { expected: unknown; commandId: string; key: unknown }[] =>
+      storeFrames()
+        .filter((f) => f.type === 'store_write')
+        .map((f) => f.payload as { expected: unknown; commandId: string; key: unknown })
+
+    it('first write asserts the key is absent (expected null), later ones the stored list', async () => {
+      await api.read('ssh/profiles')
+      await api.write('ssh/profiles', [{ id: 'a' }], { expected: null })
+      await api.write('ssh/profiles', [{ id: 'a' }, { id: 'b' }], { expected: [{ id: 'a' }] })
+
+      const sent = writes()
+      expect(sent[0].expected).toBeNull()
+      expect(sent[1].expected).toEqual({ _version: 1, data: [{ id: 'a' }] })
+      expect(sent[0].commandId).toBeTruthy()
+      expect(sent[1].commandId).not.toBe(sent[0].commandId)
+    })
+
+    it('resends the same commandId for the same write after a lost reply', async () => {
+      await api.read('ssh/profiles')
+      sockets[0].applyThenFail = 'WS_ERROR'
+      const first = await api.write('ssh/profiles', [{ id: 'a' }], { expected: null })
+      expect(first).toMatchObject({ success: false, code: 'WS_ERROR' })
+
+      // The host applied it; the identical resend must succeed despite the stale `expected`.
+      const second = await api.write('ssh/profiles', [{ id: 'a' }], { expected: null })
+      expect(second).toEqual(okVoid)
+      const sent = writes()
+      expect(sent).toHaveLength(2)
+      expect(sent[1].commandId).toBe(sent[0].commandId)
+    })
+
+    it('a different write with a stale expected is STORE_CAS_FAILED and mints a new commandId next time', async () => {
+      await api.read('ssh/profiles')
+      await api.write('ssh/profiles', [{ id: 'a' }], { expected: null })
+
+      const stale = await api.write('ssh/profiles', [{ id: 'z' }], { expected: null })
+      expect(stale).toMatchObject({ success: false, code: 'STORE_CAS_FAILED' })
+      const retry = await api.write('ssh/profiles', [{ id: 'z' }], { expected: null })
+      expect(retry).toMatchObject({ success: false, code: 'STORE_CAS_FAILED' })
+
+      const sent = writes()
+      expect(sent[2].commandId).not.toBe(sent[1].commandId)
+    })
+
+    it('uses an explicit commandId as given', async () => {
+      await api.read('ssh/profiles')
+      await api.write('ssh/profiles', [], { expected: null, commandId: 'cmd-explicit' })
+      expect(writes()[0].commandId).toBe('cmd-explicit')
+    })
+
+    it('defaults expected to the last value this page saw', async () => {
+      await api.read('ssh/profiles')
+      await api.write('ssh/profiles', [1], { expected: null })
+      await api.write('ssh/profiles', [1, 2])
+      expect(writes()[1].expected).toEqual({ _version: 1, data: [1] })
+    })
+  })
+
+  describe('value cap', () => {
+    it('refuses an oversized value client-side with STORE_VALUE_TOO_LARGE and sends nothing', async () => {
+      const result = await api.write('k', 'x'.repeat(256 * 1024))
+      expect(result).toMatchObject({ success: false, code: 'STORE_VALUE_TOO_LARGE' })
+      expect(sockets).toHaveLength(0)
+    })
+
+    it('accepts a value just under the cap', async () => {
+      const overhead = JSON.stringify({ _version: 1, data: '' }).length
+      expect(await api.write('k', 'x'.repeat(256 * 1024 - overhead))).toEqual(okVoid)
+    })
+
+    it('a debounced oversized write settles with the error', async () => {
+      vi.useFakeTimers()
+      const pending = api.writeDebounced('k', 'x'.repeat(256 * 1024))
+      await vi.advanceTimersByTimeAsync(500)
+      await expect(pending).resolves.toMatchObject({ code: 'STORE_VALUE_TOO_LARGE' })
+    })
+  })
+
+  describe('flush on page lifecycle', () => {
+    function setVisibility(state: 'hidden' | 'visible'): void {
+      vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(state)
+    }
+
+    it('flushes a pending debounced write when the page is hidden', async () => {
+      const pending = api.writeDebounced('k', { a: 1 })
+      setVisibility('hidden')
+      document.dispatchEvent(new Event('visibilitychange'))
+      await expect(pending).resolves.toEqual(okVoid)
+      expect(host.get(`device/${DEVICE}/k`)?.v).toEqual({ _version: 1, data: { a: 1 } })
+    })
+
+    it('does not flush when the page becomes visible', async () => {
+      vi.useFakeTimers()
+      void api.writeDebounced('k', { a: 1 })
+      setVisibility('visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(100)
+      expect(sockets).toHaveLength(0)
+    })
+
+    it('flushes on pagehide', async () => {
+      const pending = api.writeDebounced('k', { a: 2 })
+      window.dispatchEvent(new Event('pagehide'))
+      await expect(pending).resolves.toEqual(okVoid)
+      expect(host.get(`device/${DEVICE}/k`)?.v).toEqual({ _version: 1, data: { a: 2 } })
+    })
+
+    it('registers its lifecycle listeners once per api instance', async () => {
+      const pending = api.writeDebounced('k', 1)
+      window.dispatchEvent(new Event('pagehide'))
+      window.dispatchEvent(new Event('pagehide'))
+      await pending
+      expect(storeFrames().filter((f) => f.type === 'store_write')).toHaveLength(1)
     })
   })
 })

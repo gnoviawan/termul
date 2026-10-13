@@ -96,8 +96,8 @@ fn server_config_bind_addr() {
         agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
         overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
         receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
-        partition_gc_age_secs: None,
-        partition_byte_budget: None,
+        partition_gc_age_secs: DEFAULT_PARTITION_GC_AGE_SECS,
+        partition_byte_budget: DEFAULT_PARTITION_BYTE_BUDGET,
         deprecation_warnings: Vec::new(),
         project_root: PathBuf::from("/tmp"),
         projects_file: None,
@@ -122,8 +122,8 @@ fn server_config_bind_addr() {
         agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
         overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
         receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
-        partition_gc_age_secs: None,
-        partition_byte_budget: None,
+        partition_gc_age_secs: DEFAULT_PARTITION_GC_AGE_SECS,
+        partition_byte_budget: DEFAULT_PARTITION_BYTE_BUDGET,
         deprecation_warnings: Vec::new(),
         project_root: PathBuf::from("/tmp"),
         projects_file: None,
@@ -314,8 +314,8 @@ fn from_args_tunable_defaults() {
     assert_eq!(cfg.agent_idle_window_secs, 1800);
     assert_eq!(cfg.overflow_tolerance, 15);
     assert_eq!(cfg.receipt_retention_secs, 600);
-    assert_eq!(cfg.partition_gc_age_secs, None);
-    assert_eq!(cfg.partition_byte_budget, None);
+    assert_eq!(cfg.partition_gc_age_secs, 90 * 24 * 60 * 60);
+    assert_eq!(cfg.partition_byte_budget, 16 * 1024 * 1024);
 }
 
 #[test]
@@ -337,8 +337,8 @@ fn from_args_accepts_tunable_flags() {
     assert_eq!(cfg.agent_idle_window_secs, 120);
     assert_eq!(cfg.overflow_tolerance, 7);
     assert_eq!(cfg.receipt_retention_secs, 30);
-    assert_eq!(cfg.partition_gc_age_secs, Some(86400));
-    assert_eq!(cfg.partition_byte_budget, Some(1_048_576));
+    assert_eq!(cfg.partition_gc_age_secs, 86400);
+    assert_eq!(cfg.partition_byte_budget, 1_048_576);
 }
 
 #[test]
@@ -388,14 +388,14 @@ fn from_args_tunable_env_fallback_flag_wins_and_invalid_env_warns() {
     restore_env(saved);
 
     assert_eq!(from_env.agent_idle_window_secs, 45);
-    assert_eq!(from_env.partition_gc_age_secs, Some(3600));
-    assert_eq!(from_env.partition_byte_budget, Some(2048));
+    assert_eq!(from_env.partition_gc_age_secs, 3600);
+    assert_eq!(from_env.partition_byte_budget, 2048);
     assert!(from_env.deprecation_warnings.is_empty());
     assert_eq!(flag_wins.agent_idle_window_secs, 60);
 
     assert_eq!(invalid.agent_idle_window_secs, DEFAULT_AGENT_IDLE_WINDOW_SECS);
-    assert_eq!(invalid.partition_gc_age_secs, None);
-    assert_eq!(invalid.partition_byte_budget, None);
+    assert_eq!(invalid.partition_gc_age_secs, DEFAULT_PARTITION_GC_AGE_SECS);
+    assert_eq!(invalid.partition_byte_budget, DEFAULT_PARTITION_BYTE_BUDGET);
     assert_eq!(invalid.deprecation_warnings.len(), 2, "blank env is silent");
     assert!(invalid.deprecation_warnings[0].contains(AGENT_IDLE_WINDOW_ENV));
     assert!(invalid.deprecation_warnings[1].contains(PARTITION_GC_AGE_ENV));
@@ -553,8 +553,8 @@ fn service_account_state_dir_falls_through_empty_env_var() {
         agent_idle_window_secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
         overflow_tolerance: DEFAULT_OVERFLOW_TOLERANCE,
         receipt_retention_secs: DEFAULT_RECEIPT_RETENTION_SECS,
-        partition_gc_age_secs: None,
-        partition_byte_budget: None,
+        partition_gc_age_secs: DEFAULT_PARTITION_GC_AGE_SECS,
+        partition_byte_budget: DEFAULT_PARTITION_BYTE_BUDGET,
         deprecation_warnings: Vec::new(),
         project_root: PathBuf::from("/tmp"),
         projects_file: None,

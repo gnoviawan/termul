@@ -28,7 +28,7 @@ use termul_manager_lib::web::{
     seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
     WsRelaySink,
 };
-use termul_manager_lib::web::store::WebStore;
+use termul_manager_lib::web::store::{StorePolicy, WebStore};
 use termul_manager_lib::{
     AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
     FileProjectRegistry, GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
@@ -268,7 +268,7 @@ fn main() -> ExitCode {
         // held. A newer-schema file (or a legacy file that cannot be backed
         // up before migration) refuses startup visibly instead of degrading;
         // the file is left untouched.
-        let store = match WebStore::open(data_paths.store_file.clone()) {
+        let store = match WebStore::open(data_paths.store_file.clone(), StorePolicy::from_config(&cfg)) {
             Ok(store) => Arc::new(store),
             Err(error) => {
                 error!("termul-server: refusing to start: {error}");
@@ -759,18 +759,18 @@ OPTIONS:
                                   clamped.
                                   [default: 600]
     --partition-gc-age-secs <SECS>
-                                  Age after which an unused device partition
-                                  is garbage collected. Positive integer.
-                                  Reserved: the host validates it but does
-                                  not read it yet.
+                                  Age after which the web store partition of
+                                  a device that has not connected (and is not
+                                  connected now) is garbage collected.
+                                  Positive integer.
                                   [env: TERMUL_PARTITION_GC_AGE_SECS]
-                                  [default: unset]
+                                  [default: 7776000]
     --partition-byte-budget <BYTES>
-                                  Per-device partition byte budget. Positive
-                                  integer. Reserved: the host validates it
-                                  but does not read it yet.
+                                  Per-device web store partition byte budget;
+                                  a write past it is refused
+                                  (STORE_PARTITION_FULL). Positive integer.
                                   [env: TERMUL_PARTITION_BYTE_BUDGET]
-                                  [default: unset]
+                                  [default: 16777216]
     --permission-timeout <SECS>, --permission-reconnect-grace <SECS>
                                   Removed. Still accepted so existing launch
                                   commands keep starting, but ignored (a

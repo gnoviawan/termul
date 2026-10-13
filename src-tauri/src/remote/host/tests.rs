@@ -135,7 +135,10 @@ fn lifecycle_fixtures() -> (
 /// returned guard alive for the test.
 fn shared_live_fixture() -> (SharedLiveData, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("temp app_data_dir");
-    let store = WebStore::open(crate::data_lock::desktop_store_file(dir.path()))
+    let store = WebStore::open(
+        crate::data_lock::desktop_store_file(dir.path()),
+        crate::web::store::StorePolicy::default(),
+    )
         .expect("open the desktop web store");
     let data = SharedLiveData {
         store: Arc::new(store),
@@ -600,8 +603,18 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
         crate::data_lock::desktop_store_file(data_dir.path()),
         "the shared-live store is app_data_dir/store.json"
     );
+    let identity = crate::web::ws::ClientIdentity {
+        device_id: "desktop-test".to_string(),
+        client_instance_id: "tab".to_string(),
+    };
     data.store
-        .write("sentinel", serde_json::json!("kept"), None)
+        .write(
+            "device/desktop-test/sentinel",
+            serde_json::json!("kept"),
+            crate::web::store::Precondition::default(),
+            &identity,
+            1,
+        )
         .expect("seed the store");
 
     let state = RemoteServerState::new();
@@ -622,7 +635,10 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
             .await
             .unwrap_or_else(|e| panic!("start round {round} must not lock again: {e}"));
         assert_eq!(
-            data.store.read("sentinel").expect("read"),
+            data.store
+                .read("device/desktop-test/sentinel", &identity, 2)
+                .expect("read")
+                .value,
             Some(serde_json::json!("kept")),
             "the same store instance survives round {round}"
         );

@@ -210,11 +210,18 @@ export const WS_REQUEST_TYPES = [
   // Issue #613: server-side generic key-value store — the web client routes
   // its `persistenceApi` through these (replacing the per-browser localStorage
   // stub) so settings / layout / command history / SSH profiles survive
-  // browser switches + server restarts. Errors carry SCREAMING_SNAKE_CASE
-  // codes via `err_with_code`: `STORE_UNAVAILABLE` (no store attached),
-  // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`
-  // (malformed payload, empty/whitespace key, key > 1024 bytes — CAP-11),
-  // `STORE_VALUE_TOO_LARGE` (serialized value > 256 KiB — CAP-11).
+  // browser switches + server restarts. Keys are scoped by prefix
+  // (`device/<deviceId>/…`, `shared/lww/…`, `shared/cas/…`) and every record
+  // carries a revision + the writing `clientInstanceId` (issue #1073). Errors
+  // carry SCREAMING_SNAKE_CASE codes via `err_with_code`: `STORE_UNAVAILABLE`
+  // (no store attached / unreadable), `STORE_WRITE_FAILED` /
+  // `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR` (malformed payload,
+  // empty/whitespace key, key > 1024 bytes — CAP-11), `STORE_VALUE_TOO_LARGE`
+  // (serialized value > 256 KiB — CAP-11), `STORE_KEY_SCOPE` (key outside the
+  // three scopes or another device's partition), `STORE_BASE_REQUIRED`
+  // (shared/lww write to an existing key without `baseRevision`),
+  // `STORE_CAS_FAILED` (shared/cas `expected` mismatch), `STORE_PARTITION_FULL`
+  // (the device partition would exceed its byte budget).
   'store_read',
   'store_write',
   'store_delete',
@@ -417,20 +424,66 @@ export interface WsAgentSummary {
 // Server-side key-value store (issue #613) — request payloads + replies
 // ============================================================================
 
-/** `store_read` request payload. Reply: `{ value: unknown | null }`. */
+/** `store_read` request payload. */
 export interface StoreReadPayload {
   key: string
 }
 
-/** `store_write` request payload. `value` is any JSON value. Reply: `{}`. */
+/**
+ * `store_read` reply. `revision` 0 = the key is absent (`value` is `null`,
+ * `clientInstanceId` is `null`). A read that fails is an error reply, never a
+ * default value.
+ */
+export interface StoreReadReply {
+  value: unknown | null
+  revision: number
+  clientInstanceId: string | null
+}
+
+/**
+ * `store_write` request payload. `value` is any JSON value.
+ * - `device/<own id>/…`: last arrival wins; `baseRevision` is ignored.
+ * - `shared/lww/…`: `baseRevision` is the revision the value was derived from
+ *   (required when the key already exists); the host merges per field.
+ * - `shared/cas/…`: `expected` (the whole current value, `null` = key must be
+ *   absent; the field must be present) and `commandId` are required; a resend
+ *   with the same `commandId` and value succeeds even when `expected` is stale.
+ */
 export interface StoreWritePayload {
   key: string
   value: unknown
+  baseRevision?: number
+  expected?: unknown | null
+  commandId?: string
 }
 
-/** `store_delete` request payload. Reply: `{ existed: boolean }`. */
+/** `store_write` reply: `{ revision }` for device keys. */
+export interface StoreDeviceWriteReply {
+  revision: number
+}
+
+/**
+ * `store_write` reply for shared scopes: the stored (merged) value and its
+ * revision. `merged` is `true` when the stored value differs from the value
+ * the client sent (lww only; always `false` for cas).
+ */
+export interface StoreSharedWriteReply {
+  value: unknown
+  revision: number
+  merged: boolean
+}
+
+/** `store_delete` request payload; shared scopes follow the write preconditions. */
 export interface StoreDeletePayload {
   key: string
+  baseRevision?: number
+  expected?: unknown | null
+  commandId?: string
+}
+
+/** `store_delete` reply. */
+export interface StoreDeleteReply {
+  existed: boolean
 }
 
 // ============================================================================
@@ -620,7 +673,7 @@ export interface AcpRuntimePolicy {
  * The `authenticate` protocol version this client speaks. Mirrors the Rust
  * `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
  */
-export const WS_PROTOCOL_VERSION = 6
+export const WS_PROTOCOL_VERSION = 7
 
 /** Longest accepted `deviceId` / `clientInstanceId`, in bytes. */
 export const MAX_CLIENT_ID_LEN = 128

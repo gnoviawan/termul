@@ -6,8 +6,8 @@
 //! when its [`PresenceGuard`] drops (connection cleanup, including a read
 //! task that is aborted or panics). The first connection of a device and the
 //! last disconnect of a device are logged at info. Presence never feeds a reap
-//! decision (agent reaping is activity-based only), so it only logs and
-//! answers queries.
+//! decision (agent reaping is activity-based only). The web store's
+//! stale-partition sweep consumes it (a present device is never collected).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,6 +128,13 @@ impl PresenceRegistry {
                 .map(|entry| entry.carrier.as_str())
                 .collect(),
         })
+    }
+
+    /// Ids of the devices with at least one live connection (the store sweep
+    /// never collects these).
+    #[must_use]
+    pub fn device_ids(&self) -> std::collections::HashSet<String> {
+        self.devices.lock().keys().cloned().collect()
     }
 
     /// Number of devices with at least one live connection.

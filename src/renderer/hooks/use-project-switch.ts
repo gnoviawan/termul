@@ -47,7 +47,7 @@ function requestMostRecentChat(projectId: string): string | null {
 /**
  * The one project-switch routine behind the project sheet and the mobile
  * command palette. Switching is client-only: it changes this client's active
- * project (the persisted `web-active-project` choice) and nothing on the host —
+ * project (the persisted `active-project` choice) and nothing on the host —
  * no request is sent, so sessions and PTYs, here and on every other device,
  * are untouched. Chats are bound to their project by the host when they are
  * created (`create_session.projectId`).

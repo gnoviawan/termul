@@ -351,6 +351,7 @@ pub async fn serve_router(
     // the epoch change rebuilds its watched state from a fresh full-state frame.
     ws_relay.watches().renew_epoch();
     info!(target: "termul::web::watch", "watch hub host epoch renewed for this serve start");
+    let store_for_gc = Arc::clone(&store);
     let socket_shutdown = connections.shutdown.clone();
     let app = router::router(
         Arc::clone(&acp),
@@ -387,6 +388,9 @@ pub async fn serve_router(
         connections,
     );
 
+    // Stale device partitions are swept daily while this host serves; the
+    // task stops with it (the desktop shared-live host starts and stops).
+    let store_gc = store::spawn_gc_task(store_for_gc, Arc::clone(ws_relay.presence()));
     let handle = tokio::spawn(async move {
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so
         // the fs WRITE routes can extract `ConnectInfo<SocketAddr>` for the
@@ -416,6 +420,7 @@ pub async fn serve_router(
             error!("ACP web server stopped with {stragglers} socket task(s) still running");
         }
 
+        store_gc.abort();
         match serve_result {
             Ok(()) => info!("ACP web server stopped"),
             Err(e) => error!("ACP web server stopped with error: {}", e),

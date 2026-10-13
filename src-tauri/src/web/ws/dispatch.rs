@@ -45,6 +45,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
     let acp_catalog = env.acp_catalog.as_ref();
     let acp_install = env.acp_install.as_ref();
     let store = env.store.as_ref();
+    let identity = env.identity.get();
     match req.type_.as_str() {
         "authenticate" => {
             // Idempotent re-auth — accept and succeed.
@@ -222,9 +223,9 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // routes its `persistenceApi` through these (replacing the per-browser
         // localStorage stub) so settings / layout / command history / SSH
         // profiles survive browser switches + server restarts.
-        "store_read" => handle_store_read(id, &req.payload, store).await,
-        "store_write" => handle_store_write(id, &req.payload, store).await,
-        "store_delete" => handle_store_delete(id, &req.payload, store).await,
+        "store_read" => handle_store_read(id, &req.payload, store, identity).await,
+        "store_write" => handle_store_write(id, &req.payload, store, identity).await,
+        "store_delete" => handle_store_delete(id, &req.payload, store, identity).await,
         "kill_agent" => handle_kill_agent(id, &req.payload, acp).await,
         "list_agents" => handle_list_agents(id, acp).await,
         // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.

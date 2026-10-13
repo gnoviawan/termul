@@ -577,10 +577,29 @@ export interface ShellApi {
   getAvailableShells: () => Promise<IpcResult<DetectedShells>>
 }
 
+// Optional precondition/idempotency options for `PersistenceApi.write`.
+export interface PersistenceWriteOpts {
+  // Compare-and-set precondition (shared/cas keys): the logical value the key
+  // must currently hold; `null` means the key must be absent.
+  expected?: unknown
+  // Idempotency id; a resend of the same write reuses it so the host can
+  // recognise its own applied write.
+  commandId?: string
+}
+
+// A read that also reports the host's per-key revision stamp.
+export interface StampedValue<T> {
+  value: T
+  // 0 = key absent (desktop plugin-store has no revisions and always reports 0).
+  revision: number
+  clientInstanceId: string | null
+}
+
 // Persistence API for renderer
 export interface PersistenceApi {
   read: <T>(key: string) => Promise<IpcResult<T>>
-  write: <T>(key: string, data: T) => Promise<IpcResult<void>>
+  readStamped: <T>(key: string) => Promise<IpcResult<StampedValue<T>>>
+  write: <T>(key: string, data: T, opts?: PersistenceWriteOpts) => Promise<IpcResult<void>>
   writeDebounced: <T>(key: string, data: T) => Promise<IpcResult<void>>
   flushPendingWrites: () => Promise<IpcResult<void>>
   delete: (key: string) => Promise<IpcResult<void>>

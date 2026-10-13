@@ -1,8 +1,10 @@
+use serde_json::json;
+
 use super::*;
 
 /// Minimal std-only temp dir (reuses the repo's pid+nanos pattern — no
 /// `tempfile` dev-dep).
-fn tempdir_like(label: &str) -> PathBuf {
+pub(super) fn tempdir_like(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -15,72 +17,359 @@ fn tempdir_like(label: &str) -> PathBuf {
     p
 }
 
-fn cleanup(p: &PathBuf) {
+pub(super) fn cleanup(p: &PathBuf) {
     let _ = std::fs::remove_dir_all(p);
 }
 
-#[test]
-fn missing_file_opens_empty_and_round_trips() {
-    let dir = tempdir_like("roundtrip");
-    let file = dir.join("store.json");
-    let store = WebStore::open(file.clone()).unwrap();
-    assert_eq!(store.read("missing").unwrap(), None);
-
-    store
-        .write("terminals/p1", serde_json::json!({ "active": "t1" }), None)
-        .unwrap();
-    store
-        .write("settings", serde_json::json!({ "theme": "dark" }), None)
-        .unwrap();
-    assert_eq!(
-        store.read("settings").unwrap(),
-        Some(serde_json::json!({ "theme": "dark" }))
-    );
-    assert_eq!(
-        store.read("terminals/p1").unwrap(),
-        Some(serde_json::json!({ "active": "t1" }))
-    );
-
-    // A second open (simulating a restart) reloads the persisted map.
-    let reloaded = WebStore::open(file.clone()).unwrap();
-    assert_eq!(
-        reloaded.read("settings").unwrap(),
-        Some(serde_json::json!({ "theme": "dark" }))
-    );
-
-    // delete removes + persists.
-    assert!(reloaded.delete("settings").unwrap());
-    assert_eq!(reloaded.read("settings").unwrap(), None);
-    assert!(!reloaded.delete("settings").unwrap());
-    let reloaded_again = WebStore::open(file.clone()).unwrap();
-    assert_eq!(reloaded_again.read("settings").unwrap(), None);
-    assert_eq!(
-        reloaded_again.read("terminals/p1").unwrap(),
-        Some(serde_json::json!({ "active": "t1" }))
-    );
-    cleanup(&dir);
+pub(super) fn who(device: &str, tab: &str) -> ClientIdentity {
+    ClientIdentity {
+        device_id: device.to_string(),
+        client_instance_id: tab.to_string(),
+    }
 }
 
-#[test]
-fn write_replaces_existing_value_and_no_temp_leaks() {
-    let dir = tempdir_like("replace");
-    let file = dir.join("store.json");
-    let store = WebStore::open(file.clone()).unwrap();
-    store.write("k", serde_json::json!(1), None).unwrap();
-    store.write("k", serde_json::json!(2), None).unwrap();
-    assert_eq!(store.read("k").unwrap(), Some(serde_json::json!(2)));
+pub(super) fn open(file: &Path) -> WebStore {
+    WebStore::open(file.to_path_buf(), StorePolicy::default()).unwrap()
+}
 
-    let temps: Vec<_> = std::fs::read_dir(&dir)
+pub(super) fn open_with(file: &Path, policy: StorePolicy) -> WebStore {
+    WebStore::open(file.to_path_buf(), policy).unwrap()
+}
+
+pub(super) fn backups_with_prefix(dir: &PathBuf, prefix: &str) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
         .expect("read dir")
         .filter_map(Result::ok)
         .filter(|e| {
             e.file_name()
                 .to_str()
-                .map(|n| n.ends_with(".tmp"))
-                .unwrap_or(false)
+                .is_some_and(|n| n.starts_with(prefix) && n.ends_with(".bak"))
         })
-        .collect();
-    assert!(temps.is_empty(), "no lingering temp files: {temps:?}");
+        .map(|e| e.path())
+        .collect()
+}
+
+pub(super) fn on_disk(file: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
+}
+
+/// Device-key write with no preconditions.
+pub(super) fn put(store: &WebStore, key: &str, value: Value, who: &ClientIdentity) -> WriteOutcome {
+    store
+        .write(key, value, Precondition::default(), who, 1)
+        .unwrap()
+}
+
+fn cas(expected: Value, command_id: &str) -> Precondition {
+    Precondition {
+        expected: Some(expected),
+        command_id: Some(command_id.to_string()),
+        ..Precondition::default()
+    }
+}
+
+#[test]
+fn device_values_round_trip_with_revisions_across_a_restart() {
+    let dir = tempdir_like("roundtrip");
+    let file = dir.join("store.json");
+    let a1 = who("dev-a", "tab-1");
+    let store = open(&file);
+    let missing = store.read("device/dev-a/missing", &a1, 1).unwrap();
+    assert_eq!(
+        missing,
+        Stamped {
+            value: None,
+            revision: 0,
+            client_instance_id: None
+        }
+    );
+
+    assert_eq!(
+        put(&store, "device/dev-a/layout", json!({ "n": 1 }), &a1),
+        WriteOutcome::Device { revision: 1 }
+    );
+    assert_eq!(
+        put(&store, "device/dev-a/layout", json!({ "n": 2 }), &a1),
+        WriteOutcome::Device { revision: 2 }
+    );
+
+    // A restart reloads the value AND its revision: a watermark must not reset.
+    let reloaded = open(&file);
+    let read = reloaded.read("device/dev-a/layout", &a1, 2).unwrap();
+    assert_eq!(read.value, Some(json!({ "n": 2 })));
+    assert_eq!(read.revision, 2);
+    assert_eq!(read.client_instance_id.as_deref(), Some("tab-1"));
+    assert_eq!(
+        put(&reloaded, "device/dev-a/layout", json!({ "n": 3 }), &a1),
+        WriteOutcome::Device { revision: 3 }
+    );
+
+    assert!(reloaded
+        .delete("device/dev-a/layout", Precondition::default(), &a1, 3)
+        .unwrap());
+    assert!(!reloaded
+        .delete("device/dev-a/layout", Precondition::default(), &a1, 3)
+        .unwrap());
+    assert_eq!(open(&file).read("device/dev-a/layout", &a1, 4).unwrap().revision, 0);
+    cleanup(&dir);
+}
+
+#[test]
+fn two_tabs_of_one_device_converge_on_the_last_arrival_with_its_stamp() {
+    let dir = tempdir_like("two-tabs");
+    let store = open(&dir.join("store.json"));
+    let tab1 = who("dev-a", "tab-1");
+    let tab2 = who("dev-a", "tab-2");
+    put(&store, "device/dev-a/shell-layout", json!("from-1"), &tab1);
+    // A stale base from tab 2 does not matter on a device key.
+    let late = Precondition {
+        base_revision: Some(0),
+        ..Precondition::default()
+    };
+    let outcome = store
+        .write("device/dev-a/shell-layout", json!("from-2"), late, &tab2, 2)
+        .unwrap();
+    assert_eq!(outcome, WriteOutcome::Device { revision: 2 });
+    for reader in [&tab1, &tab2] {
+        let read = store.read("device/dev-a/shell-layout", reader, 3).unwrap();
+        assert_eq!(read.value, Some(json!("from-2")));
+        assert_eq!(read.revision, 2);
+        assert_eq!(read.client_instance_id.as_deref(), Some("tab-2"));
+    }
+    cleanup(&dir);
+}
+
+#[test]
+fn devices_are_isolated_and_cannot_touch_each_others_partitions() {
+    let dir = tempdir_like("isolation");
+    let store = open(&dir.join("store.json"));
+    let a = who("dev-a", "t");
+    let b = who("dev-b", "t");
+    put(&store, "device/dev-a/shell-layout", json!("desktop"), &a);
+    put(&store, "device/dev-b/shell-layout", json!("phone"), &b);
+    assert_eq!(
+        store.read("device/dev-a/shell-layout", &a, 1).unwrap().value,
+        Some(json!("desktop"))
+    );
+    assert_eq!(
+        store.read("device/dev-b/shell-layout", &b, 1).unwrap().value,
+        Some(json!("phone"))
+    );
+    assert!(matches!(
+        store.read("device/dev-a/shell-layout", &b, 1),
+        Err(StoreError::Scope(_))
+    ));
+    assert!(matches!(
+        store.write("device/dev-a/shell-layout", json!("x"), Precondition::default(), &b, 1),
+        Err(StoreError::Scope(_))
+    ));
+    assert!(matches!(
+        store.delete("device/dev-a/shell-layout", Precondition::default(), &b, 1),
+        Err(StoreError::Scope(_))
+    ));
+    assert_eq!(
+        store.read("device/dev-a/shell-layout", &a, 1).unwrap().value,
+        Some(json!("desktop")),
+        "a refused request changes nothing"
+    );
+    cleanup(&dir);
+}
+
+#[test]
+fn a_device_id_with_a_slash_has_no_namespace() {
+    let dir = tempdir_like("slash-device");
+    let store = open(&dir.join("store.json"));
+    let odd = who("a/b", "t");
+    for key in ["device/a/b/k", "device/a/k", "device//k"] {
+        assert!(
+            matches!(
+                store.write(key, json!(1), Precondition::default(), &odd, 1),
+                Err(StoreError::Scope(_))
+            ),
+            "{key}"
+        );
+    }
+    cleanup(&dir);
+}
+
+#[test]
+fn keys_outside_the_three_scopes_are_refused_before_the_store_is_touched() {
+    let dir = tempdir_like("unscoped");
+    let file = dir.join("store.json");
+    let store = open(&file);
+    let a = who("dev-a", "t");
+    for key in ["shell-layout", "host/x", "legacy/x", "shared/other/x", "shared/lww/", "device/dev-a/"] {
+        assert!(
+            matches!(store.read(key, &a, 1), Err(StoreError::Scope(_))),
+            "read {key}"
+        );
+        assert!(
+            matches!(
+                store.write(key, json!(1), Precondition::default(), &a, 1),
+                Err(StoreError::Scope(_))
+            ),
+            "write {key}"
+        );
+    }
+    assert!(!file.exists(), "a refused request never writes the file");
+    cleanup(&dir);
+}
+
+#[test]
+fn cas_needs_expected_and_a_command_id() {
+    let dir = tempdir_like("cas-required");
+    let store = open(&dir.join("store.json"));
+    let a = who("dev-a", "t");
+    let write = |pre: Precondition| store.write("shared/cas/ssh/profiles", json!(1), pre, &a, 1);
+    assert!(matches!(write(Precondition::default()), Err(StoreError::Invalid(_))));
+    assert!(matches!(
+        write(Precondition {
+            command_id: Some("c1".into()),
+            ..Precondition::default()
+        }),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        write(Precondition {
+            expected: Some(Value::Null),
+            ..Precondition::default()
+        }),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(write(cas(Value::Null, "bad id!")), Err(StoreError::Invalid(_))));
+    assert!(matches!(write(cas(Value::Null, "c1")), Ok(WriteOutcome::Shared { .. })));
+    cleanup(&dir);
+}
+
+#[test]
+fn cas_resend_with_the_same_command_id_succeeds_and_a_stale_expected_does_not() {
+    let dir = tempdir_like("cas");
+    let file = dir.join("store.json");
+    let store = open(&file);
+    let a = who("dev-a", "t");
+    let b = who("dev-b", "t");
+    let key = "shared/cas/ssh/profiles";
+    let v1 = json!({ "_version": 1, "data": ["p1"] });
+    let first = store.write(key, v1.clone(), cas(Value::Null, "cmd-1"), &a, 1).unwrap();
+    assert_eq!(
+        first,
+        WriteOutcome::Shared { value: v1.clone(), revision: 1, merged: false }
+    );
+
+    // The reply was lost; the client resends the identical write.
+    let resend = store.write(key, v1.clone(), cas(Value::Null, "cmd-1"), &a, 2).unwrap();
+    assert_eq!(resend, first, "no revision bump on a resend");
+
+    // Another command with the stale `expected` loses.
+    let stale = store.write(key, json!({ "_version": 1, "data": ["p2"] }), cas(Value::Null, "cmd-2"), &b, 3);
+    assert!(matches!(stale, Err(StoreError::CasFailed(_))));
+
+    // Same command id, different value: not a resend.
+    let reused = store.write(key, json!({ "_version": 1, "data": ["p3"] }), cas(Value::Null, "cmd-1"), &a, 4);
+    assert!(matches!(reused, Err(StoreError::CasFailed(_))));
+
+    // With the right `expected` it applies and the record keeps the new command.
+    let v2 = json!({ "_version": 1, "data": ["p1", "p2"] });
+    let applied = store.write(key, v2.clone(), cas(v1.clone(), "cmd-2"), &b, 5).unwrap();
+    assert_eq!(applied, WriteOutcome::Shared { value: v2.clone(), revision: 2, merged: false });
+    let again = store.write(key, v2.clone(), cas(v1, "cmd-2"), &b, 6).unwrap();
+    assert_eq!(again, applied);
+
+    // The stored command id survives a restart.
+    let reloaded = open(&file);
+    let after_restart = reloaded.write(key, v2, cas(Value::Null, "cmd-2"), &b, 7).unwrap();
+    assert_eq!(after_restart, applied);
+    cleanup(&dir);
+}
+
+#[test]
+fn shared_delete_follows_the_same_preconditions() {
+    let dir = tempdir_like("shared-delete");
+    let store = open(&dir.join("store.json"));
+    let a = who("dev-a", "t");
+    let cas_key = "shared/cas/ssh/profiles";
+    store.write(cas_key, json!(["p"]), cas(Value::Null, "c1"), &a, 1).unwrap();
+    assert!(matches!(
+        store.delete(cas_key, Precondition::default(), &a, 2),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        store.delete(cas_key, cas(json!(["other"]), "c2"), &a, 2),
+        Err(StoreError::CasFailed(_))
+    ));
+    assert!(store.delete(cas_key, cas(json!(["p"]), "c2"), &a, 2).unwrap());
+
+    let lww_key = "shared/lww/settings/app";
+    put(&store, lww_key, json!({ "a": 1 }), &a);
+    assert!(matches!(
+        store.delete(lww_key, Precondition::default(), &a, 3),
+        Err(StoreError::BaseRequired)
+    ));
+    let stale = Precondition { base_revision: Some(0), ..Precondition::default() };
+    assert!(matches!(store.delete(lww_key, stale, &a, 3), Err(StoreError::CasFailed(_))));
+    let current = Precondition { base_revision: Some(1), ..Precondition::default() };
+    assert!(store.delete(lww_key, current, &a, 3).unwrap());
+    cleanup(&dir);
+}
+
+#[test]
+fn a_partition_over_its_byte_budget_refuses_growth_and_leaves_the_file_untouched() {
+    let dir = tempdir_like("budget");
+    let file = dir.join("store.json");
+    let store = open_with(
+        &file,
+        StorePolicy { partition_byte_budget: 600, ..StorePolicy::default() },
+    );
+    let a = who("dev-a", "t");
+    let b = who("dev-b", "t");
+    put(&store, "device/dev-a/k1", json!("x".repeat(300)), &a);
+    let before = std::fs::read(&file).unwrap();
+    let full = store.write("device/dev-a/k2", json!("y".repeat(400)), Precondition::default(), &a, 2);
+    assert!(matches!(full, Err(StoreError::PartitionFull { budget: 600, .. })), "{full:?}");
+    assert_eq!(std::fs::read(&file).unwrap(), before, "file untouched");
+
+    // The budget is per device, shrinking is always allowed, and a smaller
+    // replacement of the same key fits.
+    put(&store, "device/dev-b/k1", json!("z".repeat(400)), &b);
+    put(&store, "device/dev-a/k1", json!("x"), &a);
+    put(&store, "device/dev-a/k2", json!("y".repeat(300)), &a);
+    cleanup(&dir);
+}
+
+#[test]
+fn an_unreadable_store_is_unavailable_never_empty() {
+    let dir = tempdir_like("unavailable");
+    // A directory where the file should be: not NotFound, so a real read error.
+    let file = dir.join("store.json");
+    std::fs::create_dir_all(&file).unwrap();
+    let store = open(&file);
+    let a = who("dev-a", "t");
+    assert!(matches!(store.read("device/dev-a/k", &a, 1), Err(StoreError::Unavailable)));
+    assert!(matches!(
+        store.write("device/dev-a/k", json!(1), Precondition::default(), &a, 1),
+        Err(StoreError::Unavailable)
+    ));
+    assert!(matches!(
+        store.delete("device/dev-a/k", Precondition::default(), &a, 1),
+        Err(StoreError::Unavailable)
+    ));
+    cleanup(&dir);
+}
+
+#[test]
+fn a_failed_write_leaves_the_previous_record_in_place() {
+    let dir = tempdir_like("failed-write");
+    let file = dir.join("store.json");
+    let store = open(&file);
+    let a = who("dev-a", "t");
+    put(&store, "device/dev-a/k", json!(1), &a);
+    // Replace the target with a directory so the atomic rename fails.
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir_all(&file).unwrap();
+    let error = store.write("device/dev-a/k", json!(2), Precondition::default(), &a, 2);
+    assert!(matches!(error, Err(StoreError::Io(_))), "{error:?}");
+    let read = store.read("device/dev-a/k", &a, 3).unwrap();
+    assert_eq!((read.value, read.revision), (Some(json!(1)), 1));
     cleanup(&dir);
 }
 
@@ -90,89 +379,42 @@ fn corrupt_file_is_backed_up_and_treated_as_empty() {
     let file = dir.join("store.json");
     std::fs::write(&file, "{ not valid json").expect("write garbage");
 
-    let store = WebStore::open(file.clone()).unwrap();
-    assert_eq!(store.read("anything").unwrap(), None);
+    let store = open(&file);
+    let a = who("dev-a", "t");
+    assert_eq!(store.read("device/dev-a/anything", &a, 1).unwrap().revision, 0);
+    assert_eq!(
+        backups_with_prefix(&dir, "store.json.corrupt-").len(),
+        1,
+        "exactly one corrupt backup"
+    );
 
-    let backups: Vec<_> = std::fs::read_dir(&dir)
-        .expect("read dir")
-        .filter_map(Result::ok)
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|n| n.starts_with("store.json.corrupt-") && n.ends_with(".bak"))
-                .unwrap_or(false)
-        })
-        .collect();
-    assert_eq!(backups.len(), 1, "exactly one corrupt backup");
-
-    // A write after recovery recreates a valid file.
-    store.write("k", serde_json::json!("v"), None).unwrap();
-    let reloaded = WebStore::open(file).unwrap();
-    assert_eq!(reloaded.read("k").unwrap(), Some(serde_json::json!("v")));
+    put(&store, "device/dev-a/k", json!("v"), &a);
+    let reloaded = open(&file);
+    assert_eq!(
+        reloaded.read("device/dev-a/k", &a, 2).unwrap().value,
+        Some(json!("v"))
+    );
     cleanup(&dir);
 }
 
-fn backups_with_prefix(dir: &PathBuf, prefix: &str) -> Vec<PathBuf> {
-    std::fs::read_dir(dir)
-        .expect("read dir")
-        .filter_map(Result::ok)
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|n| n.starts_with(prefix) && n.ends_with(".bak"))
-                .unwrap_or(false)
-        })
-        .map(|e| e.path())
-        .collect()
-}
-
 #[test]
-fn writes_are_stored_in_the_schema_v1_envelope() {
+fn writes_are_stored_in_the_schema_v2_envelope() {
     let dir = tempdir_like("envelope");
     let file = dir.join("store.json");
-    let store = WebStore::open(file.clone()).unwrap();
-    store.write("k", serde_json::json!({ "a": 1 }), None).unwrap();
+    let store = open(&file);
+    let a = who("dev-a", "tab-1");
+    store
+        .write("device/dev-a/k", json!({ "a": 1 }), Precondition::default(), &a, 5)
+        .unwrap();
 
-    let on_disk: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let disk = on_disk(&file);
+    assert_eq!(disk["schemaVersion"], json!(2));
     assert_eq!(
-        on_disk,
-        serde_json::json!({ "schemaVersion": 1, "data": { "k": { "a": 1 } } })
+        disk["data"]["device/dev-a/k"],
+        json!({ "v": { "a": 1 }, "rev": 1, "cid": "tab-1" })
     );
+    assert_eq!(disk["host"]["lastSeen"]["dev-a"], json!(5));
     assert_eq!(store.path(), file.as_path());
-    cleanup(&dir);
-}
-
-#[test]
-fn legacy_bare_map_is_backed_up_then_migrated_to_the_envelope() {
-    let dir = tempdir_like("legacy");
-    let file = dir.join("store.json");
-    let legacy = br#"{"settings":{"theme":"dark"},"terminals/p1":[1,2]}"#;
-    std::fs::write(&file, legacy).unwrap();
-
-    let store = WebStore::open(file.clone()).unwrap();
-    assert_eq!(
-        store.read("settings").unwrap(),
-        Some(serde_json::json!({ "theme": "dark" }))
-    );
-
-    // Original bytes preserved verbatim in exactly one pre-v1 backup.
-    let backups = backups_with_prefix(&dir, "store.json.pre-v1-");
-    assert_eq!(backups.len(), 1, "exactly one pre-migration backup");
-    assert_eq!(std::fs::read(&backups[0]).unwrap(), legacy);
-
-    // The file itself is already in the envelope (rewritten on open) and a
-    // restart reloads it without taking another backup.
-    let on_disk: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    assert_eq!(on_disk["schemaVersion"], serde_json::json!(1));
-    assert_eq!(on_disk["data"]["settings"], serde_json::json!({ "theme": "dark" }));
-    let reloaded = WebStore::open(file.clone()).unwrap();
-    assert_eq!(
-        reloaded.read("terminals/p1").unwrap(),
-        Some(serde_json::json!([1, 2]))
-    );
-    assert_eq!(backups_with_prefix(&dir, "store.json.pre-v1-").len(), 1);
     cleanup(&dir);
 }
 
@@ -180,16 +422,16 @@ fn legacy_bare_map_is_backed_up_then_migrated_to_the_envelope() {
 fn newer_schema_is_refused_and_the_file_is_left_byte_identical() {
     let dir = tempdir_like("newer");
     let file = dir.join("store.json");
-    let future = br#"{"schemaVersion":2,"data":{"k":1},"newThing":{"x":[1]}}"#;
+    let future = br#"{"schemaVersion":3,"data":{"k":1},"newThing":{"x":[1]}}"#;
     std::fs::write(&file, future).unwrap();
 
-    let error = match WebStore::open(file.clone()) {
+    let error = match WebStore::open(file.clone(), StorePolicy::default()) {
         Ok(_) => panic!("a newer schema must be refused"),
         Err(error) => error,
     };
     match &error {
         WebStoreError::NewerSchema(newer) => {
-            assert_eq!((newer.found, newer.supported), (2, STORE_SCHEMA_VERSION));
+            assert_eq!((newer.found, newer.supported), (3, STORE_SCHEMA_VERSION));
             assert_eq!(newer.path, file);
         }
         other => panic!("expected NewerSchema, got {other:?}"),
@@ -204,69 +446,27 @@ fn newer_schema_is_refused_and_the_file_is_left_byte_identical() {
 }
 
 #[test]
-fn bare_map_with_a_user_key_named_schema_version_is_legacy_not_an_envelope() {
-    let dir = tempdir_like("legacy-schema-key");
-    let file = dir.join("store.json");
-    // A numeric user key `schemaVersion` (even a "newer" looking one) without
-    // a `data` envelope is user data, not a version marker.
-    let legacy = br#"{"schemaVersion":7,"settings":{"theme":"dark"}}"#;
-    std::fs::write(&file, legacy).unwrap();
-
-    let store = WebStore::open(file.clone()).unwrap();
-    assert_eq!(store.read("schemaVersion").unwrap(), Some(serde_json::json!(7)));
-    assert_eq!(
-        store.read("settings").unwrap(),
-        Some(serde_json::json!({ "theme": "dark" }))
-    );
-    let backups = backups_with_prefix(&dir, "store.json.pre-v1-");
-    assert_eq!(backups.len(), 1);
-    assert_eq!(std::fs::read(&backups[0]).unwrap(), legacy);
-    let on_disk: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    assert_eq!(on_disk["data"]["schemaVersion"], serde_json::json!(7));
-    cleanup(&dir);
-}
-
-#[test]
-fn envelope_with_non_object_data_is_not_an_envelope() {
-    let dir = tempdir_like("bad-envelope");
-    let file = dir.join("store.json");
-    std::fs::write(&file, br#"{"schemaVersion":1,"data":[1,2]}"#).unwrap();
-
-    let store = WebStore::open(file.clone()).unwrap();
-    // Read as a legacy map: nothing is lost, and the original is backed up.
-    assert_eq!(store.read("data").unwrap(), Some(serde_json::json!([1, 2])));
-    assert_eq!(backups_with_prefix(&dir, "store.json.pre-v1-").len(), 1);
-    cleanup(&dir);
-}
-
-#[test]
 fn unknown_top_level_envelope_keys_survive_writes_and_deletes() {
     let dir = tempdir_like("extra-keys");
     let file = dir.join("store.json");
+    let a = who("dev-a", "t");
     std::fs::write(
         &file,
-        br#"{"schemaVersion":1,"data":{"k":1},"futureThing":{"x":[1,2]}}"#,
+        br#"{"schemaVersion":2,"data":{"device/dev-a/k":{"v":1,"rev":1,"cid":"t"}},"futureThing":{"x":[1,2]}}"#,
     )
     .unwrap();
 
-    let store = WebStore::open(file.clone()).unwrap();
-    assert!(backups_with_prefix(&dir, "store.json.").is_empty());
-    store.write("j", serde_json::json!(2), None).unwrap();
-    store.delete("k").unwrap();
+    let store = open(&file);
+    assert!(backups_with_prefix(&dir, "store.json.").is_empty(), "a v2 file is not migrated");
+    put(&store, "device/dev-a/j", json!(2), &a);
+    store
+        .delete("device/dev-a/k", Precondition::default(), &a, 1)
+        .unwrap();
 
-    let reopened = WebStore::open(file.clone()).unwrap();
-    assert_eq!(reopened.read("j").unwrap(), Some(serde_json::json!(2)));
-    let on_disk: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    assert_eq!(
-        on_disk,
-        serde_json::json!({
-            "schemaVersion": 1,
-            "data": { "j": 2 },
-            "futureThing": { "x": [1, 2] }
-        })
-    );
+    let disk = on_disk(&file);
+    assert_eq!(disk["futureThing"], json!({ "x": [1, 2] }));
+    assert_eq!(disk["data"]["device/dev-a/j"]["v"], json!(2));
+    assert!(disk["data"].get("device/dev-a/k").is_none());
     cleanup(&dir);
 }
 
@@ -274,25 +474,35 @@ fn unknown_top_level_envelope_keys_survive_writes_and_deletes() {
 fn write_limit_applies_to_the_data_payload_not_the_envelope() {
     let dir = tempdir_like("limit");
     let file = dir.join("store.json");
-    // A bare map whose payload is just under the limit: its envelope is
-    // larger than the limit, yet writes must keep working after migration.
-    let value_len = MAX_DATA_BYTES - br#"{"a":""}"#.len() - 4;
-    let legacy = format!(r#"{{"a":"{}"}}"#, "x".repeat(value_len));
-    assert!(legacy.len() < MAX_DATA_BYTES);
-    std::fs::write(&file, &legacy).unwrap();
+    let a = who("dev-a", "t");
+    // A v2 file whose `data` payload is just under the limit: the envelope
+    // around it (host object, extra keys) pushes the file past it, yet writes
+    // of the same size must keep working.
+    let record_overhead = br#"{"device/dev-a/a":{"v":"","rev":1,"cid":"t"}}"#.len();
+    let value_len = MAX_DATA_BYTES - record_overhead - 8;
+    let seed = format!(
+        r#"{{"schemaVersion":2,"data":{{"device/dev-a/a":{{"v":"{}","rev":1,"cid":"t"}}}},"pad":"{}"}}"#,
+        "x".repeat(value_len),
+        "p".repeat(64)
+    );
+    std::fs::write(&file, &seed).unwrap();
 
-    let store = WebStore::open(file.clone()).unwrap();
+    let store = open_with(
+        &file,
+        StorePolicy { partition_byte_budget: u64::MAX, ..StorePolicy::default() },
+    );
+    // Same-size rewrite fits although the whole file is over the limit.
+    put(&store, "device/dev-a/a", json!("y".repeat(value_len)), &a);
     assert!(std::fs::metadata(&file).unwrap().len() as usize > MAX_DATA_BYTES);
-    // Same-size rewrite fits (payload unchanged) although the file is over 10 MiB.
-    assert!(store
-        .write("a", serde_json::json!("y".repeat(value_len)), None)
-        .unwrap());
-    // Growing the payload past the limit is still refused, file untouched.
+    // Growing the payload past the limit is refused, file untouched.
     let before = std::fs::read(&file).unwrap();
     let error = store
-        .write("a", serde_json::json!("y".repeat(value_len + 10)), None)
+        .write("device/dev-a/a", json!("y".repeat(value_len + 64)), Precondition::default(), &a, 2)
         .unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    match error {
+        StoreError::Io(io) => assert_eq!(io.kind(), io::ErrorKind::InvalidData),
+        other => panic!("expected the file cap, got {other:?}"),
+    }
     assert_eq!(std::fs::read(&file).unwrap(), before);
     cleanup(&dir);
 }

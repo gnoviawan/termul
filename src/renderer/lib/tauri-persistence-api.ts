@@ -1,4 +1,4 @@
-import type { IpcResult } from '@shared/types/ipc.types'
+import type { IpcResult, StampedValue } from '@shared/types/ipc.types'
 import { Store } from '@tauri-apps/plugin-store'
 
 const STORE_FILE = 'termul-data.json'
@@ -135,6 +135,13 @@ export const tauriPersistenceApi = {
     } catch (err) {
       return { success: false, error: String(err), code: 'READ_ERROR' }
     }
+  },
+
+  // The desktop plugin-store keeps no revisions or writer stamps.
+  async readStamped<T>(key: string): Promise<IpcResult<StampedValue<T>>> {
+    const result = await this.read<T>(key)
+    if (!result.success) return result
+    return { success: true, data: { value: result.data, revision: 0, clientInstanceId: null } }
   },
 
   async write<T>(key: string, data: T): Promise<IpcResult<void>> {

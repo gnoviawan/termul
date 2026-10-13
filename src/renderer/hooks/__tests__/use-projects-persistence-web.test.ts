@@ -79,10 +79,10 @@ describe('useProjectsLoader (web/remote mode)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // The plugin-store stub must NEVER be read for the projects snapshot in
-    // web mode; the webActiveProject key IS read (issue #855) and defaults to
+    // web mode; the activeProject key IS read (issue #855) and defaults to
     // "not found" (a fresh client with no persisted selection).
     mockPersistenceRead.mockImplementation((key: string) =>
-      key === 'web-active-project'
+      key === 'active-project'
         ? Promise.resolve({ success: false })
         : Promise.resolve({ success: false })
     )
@@ -107,10 +107,10 @@ describe('useProjectsLoader (web/remote mode)', () => {
       expect(useProjectStore.getState().projects).toHaveLength(2)
     })
     // The projects snapshot is NEVER read from the plugin-store in web mode.
-    // (The webActiveProject read happens — issue #855 — but with the default
+    // (The activeProject read happens — issue #855 — but with the default
     // failure result it does not change the seeded selection.)
     expect(mockPersistenceRead).toHaveBeenCalledTimes(1)
-    expect(mockPersistenceRead).toHaveBeenCalledWith('web-active-project')
+    expect(mockPersistenceRead).toHaveBeenCalledWith('active-project')
     // Epic 7: the initial load seeds activeProjectId from the host default.
     expect(useProjectStore.getState().activeProjectId).toBe('p1')
     expect(useProjectStore.getState().projects[1].isArchived).toBe(false)
@@ -371,7 +371,7 @@ describe('useProjectsLoader (web/remote mode)', () => {
     // Simulate a reload: the store is fresh (isLoaded: false) but the client
     // previously selected p2 and the server-side store persisted it.
     mockPersistenceRead.mockImplementation((key: string) =>
-      key === 'web-active-project'
+      key === 'active-project'
         ? Promise.resolve({ success: true, data: 'p2' })
         : Promise.resolve({ success: false })
     )
@@ -391,7 +391,7 @@ describe('useProjectsLoader (web/remote mode)', () => {
     // The persisted selection (p-deleted) references a project no longer in
     // the list — the restore must not seed a dangling id.
     mockPersistenceRead.mockImplementation((key: string) =>
-      key === 'web-active-project'
+      key === 'active-project'
         ? Promise.resolve({ success: true, data: 'p-deleted' })
         : Promise.resolve({ success: false })
     )
@@ -417,7 +417,7 @@ describe('useProjectsLoader (web/remote mode)', () => {
     useProjectStore.getState().selectProject('p2')
 
     await waitFor(() => {
-      expect(mockPersistenceWrite).toHaveBeenCalledWith('web-active-project', 'p2')
+      expect(mockPersistenceWrite).toHaveBeenCalledWith('active-project', 'p2')
     })
     // The loader's own initial-load write of the seeded selection also flows
     // through the same key — but a switch AFTER the initial seed overwrites
@@ -428,7 +428,7 @@ describe('useProjectsLoader (web/remote mode)', () => {
     // Degraded server store (read fails): reload must still work, seeding
     // from the host default as before (issue #855 is best-effort).
     mockPersistenceRead.mockImplementation((key: string) =>
-      key === 'web-active-project'
+      key === 'active-project'
         ? Promise.resolve({ success: false, error: 'STORE_UNAVAILABLE', code: 'STORE_UNAVAILABLE' })
         : Promise.resolve({ success: false })
     )

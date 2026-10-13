@@ -67,7 +67,6 @@ export const PersistenceKeys = {
   terminals: (projectId: string): string => `terminals/${projectId}`,
   snapshots: (projectId: string): string => `snapshots/${projectId}`,
   projects: 'projects',
-  settings: 'settings',
   windowState: 'window-state',
   // ADR-004.3 / ADR-004.6: user-defined terminal-native agent definitions.
   customAgents: 'agents/custom',
@@ -87,17 +86,65 @@ export const PersistenceKeys = {
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
   mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`,
-  // Issue #855: the web client's own active project (per client — the host
-  // default is a different concept). Restored after `GET /projects` lands so
-  // a reload returns to the project the user switched to, not the first one.
-  // Web/remote only: the desktop already persists `activeProjectId` inside
-  // the `projects` snapshot (plugin-store), so it never reads this key.
-  webActiveProject: 'web-active-project',
+  // The device's own active project (device scope: each device keeps its own
+  // selection). Web/remote only: the desktop already persists
+  // `activeProjectId` inside the `projects` snapshot.
+  activeProject: 'active-project',
+  // Per-project workspace record (device scope).
+  workspace: (projectId: string): string => `workspace/${projectId}`,
   // Shell-revamp layout record (versioned): rail/side-panel/SSH/graph sizes and
   // visibility plus per-project last column tab and worktree pick. Owned by
   // `stores/shell-layout-store.ts`; written on both desktop and web.
   shellLayout: 'shell-layout'
 } as const
+
+/**
+ * Scope table for logical persistence keys (spec 9). The ONE declaration of
+ * which keys are shared between devices; every other logical key is
+ * device-scoped. The Rust legacy-migration table is pinned equal to this block
+ * by a parity test that parses it textually: keep one single-quoted literal per
+ * line and no quote characters inside comments here.
+ *
+ * - `sharedLww`: stored under `shared/lww/<key>`, merged per field by the host.
+ * - `sharedCas`: stored under `shared/cas/<key>`, whole-value compare-and-set.
+ */
+// biome-ignore format: one literal per line, parsed textually by the Rust parity test
+export const KEY_SCOPES = {
+  sharedLww: [
+    'settings/app',
+    'settings/keyboard-shortcuts',
+    'settings/context-bar',
+    'settings/toc',
+    'settings/pinned-commands',
+    'agents/custom',
+    'acp/agents',
+    'acp/auth-methods',
+    'acp/mcp-servers'
+  ],
+  sharedCas: [
+    'ssh/profiles'
+  ]
+} as const
+
+export type KeyScope = 'device' | 'sharedLww' | 'sharedCas'
+
+export function scopeOf(logicalKey: string): KeyScope {
+  if ((KEY_SCOPES.sharedLww as readonly string[]).includes(logicalKey)) return 'sharedLww'
+  if ((KEY_SCOPES.sharedCas as readonly string[]).includes(logicalKey)) return 'sharedCas'
+  return 'device'
+}
+
+/** The host-store key for a logical key: `device/<deviceId>/<k>`, `shared/lww/<k>` or `shared/cas/<k>`. */
+export function scopedKey(logicalKey: string, deviceId: string): string {
+  switch (scopeOf(logicalKey)) {
+    case 'sharedLww':
+      return `shared/lww/${logicalKey}`
+    case 'sharedCas':
+      return `shared/cas/${logicalKey}`
+    case 'device':
+      return `device/${deviceId}/${logicalKey}`
+  }
+}
 
 // GH-289: persisted launcher selection — the chosen agent plus its call mode.
 // Legacy persisted values may be `{ agentId }` only (migrated to mode 'cli').

@@ -1138,7 +1138,10 @@ pub fn run() {
             // locked `app_data_dir`. Shared-live receives this instance on
             // every start and never opens its own, so stop/start cycles reuse
             // it. A newer-schema file refuses startup visibly, untouched.
-            match web::store::WebStore::open(data_lock::desktop_store_file(&app_data_dir)) {
+            match web::store::WebStore::open(
+                data_lock::desktop_store_file(&app_data_dir),
+                web::store::StorePolicy::default(),
+            ) {
                 Ok(store) => {
                     app.manage(remote::SharedLiveData {
                         store: Arc::new(store),

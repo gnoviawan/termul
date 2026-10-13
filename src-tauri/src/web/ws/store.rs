@@ -1,7 +1,12 @@
-//! `store_*` WS handlers (Issue #613): server-side generic key-value store
-//! read/write/delete behind the degraded-mode `Option<Arc<WebStore>>`.
+//! `store_*` WS handlers (Issue #613, scoped in #1073): server-side generic
+//! key-value store read/write/delete behind the degraded-mode
+//! `Option<Arc<WebStore>>`, acting for the connection's authenticated
+//! identity (the store enforces the key scopes against its `deviceId`).
+
+use serde::Deserializer;
 
 use super::*;
+use crate::web::store::{unix_ms, Precondition, StoreError, WriteOutcome};
 
 // --- Issue #613: server-side generic key-value store -------------------------
 
@@ -40,6 +45,12 @@ pub(super) struct StoreReadPayload {
     key: String,
 }
 
+/// `expected` is "present" even when JSON `null` (the key must be absent), so
+/// `null` is told apart from a missing field.
+fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// `store_write` WS request payload. `value` is any JSON value.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -47,7 +58,11 @@ pub(super) struct StoreWritePayload {
     key: String,
     value: Value,
     #[serde(default)]
+    base_revision: Option<u64>,
+    #[serde(default, deserialize_with = "present")]
     expected: Option<Value>,
+    #[serde(default)]
+    command_id: Option<String>,
 }
 
 /// `store_delete` WS request payload.
@@ -55,64 +70,120 @@ pub(super) struct StoreWritePayload {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct StoreDeletePayload {
     key: String,
+    #[serde(default)]
+    base_revision: Option<u64>,
+    #[serde(default, deserialize_with = "present")]
+    expected: Option<Value>,
+    #[serde(default)]
+    command_id: Option<String>,
 }
 
-/// `store_read` → `WebStore::read`. Reply = `{ value: <json | null> }`.
-/// Degrade-mode (`store: None`) returns `STORE_UNAVAILABLE`.
+fn malformed(id: String, request: &str, wants: &str, error: serde_json::Error) -> WsReply {
+    WsReply::err_with_code(
+        id,
+        "VALIDATION_ERROR",
+        format!("malformed {request} payload (want {wants}): {error}"),
+    )
+}
+
+/// The store and the caller's identity, or the error reply when either is
+/// missing (degraded store; a request that somehow ran before `authenticate`).
+fn store_and_identity(
+    id: &str,
+    store: Option<&Arc<WebStore>>,
+    identity: Option<&ClientIdentity>,
+) -> Result<(Arc<WebStore>, ClientIdentity), WsReply> {
+    let Some(store) = store.cloned() else {
+        return Err(WsReply::err_with_code(
+            id,
+            "STORE_UNAVAILABLE",
+            "server store is unavailable",
+        ));
+    };
+    let Some(identity) = identity.cloned() else {
+        return Err(WsReply::err(
+            id,
+            WsErrorCode::Unauthorized,
+            "store requests need an authenticated connection",
+        ));
+    };
+    Ok((store, identity))
+}
+
+/// Map a store failure to its stable code. `io_code` names an IO failure of
+/// the calling operation.
+fn store_error_reply(id: String, error: StoreError, io_code: &str) -> WsReply {
+    let code = match &error {
+        StoreError::Unavailable => "STORE_UNAVAILABLE",
+        StoreError::Scope(_) => "STORE_KEY_SCOPE",
+        StoreError::BaseRequired => "STORE_BASE_REQUIRED",
+        StoreError::CasFailed(_) => "STORE_CAS_FAILED",
+        StoreError::PartitionFull { .. } => "STORE_PARTITION_FULL",
+        StoreError::Invalid(_) => "VALIDATION_ERROR",
+        StoreError::Io(io) => {
+            tracing::warn!("store operation failed ({io_code}): {io}");
+            return WsReply::err_with_code(id, io_code, format!("store operation failed: {error}"));
+        }
+    };
+    WsReply::err_with_code(id, code, error.to_string())
+}
+
+fn task_failed(id: String, code: &str, error: tokio::task::JoinError) -> WsReply {
+    tracing::warn!("store task failed: {error}");
+    WsReply::err_with_code(id, code, format!("store task failed: {error}"))
+}
+
+/// `store_read` → `WebStore::read`. Reply = `{ value: <json | null>,
+/// revision, clientInstanceId }` (`revision` 0 = absent). Degrade-mode
+/// (`store: None`) returns `STORE_UNAVAILABLE`.
 pub(super) async fn handle_store_read(
     id: String,
     payload: &Value,
     store: Option<&Arc<WebStore>>,
+    identity: Option<&ClientIdentity>,
 ) -> WsReply {
     let parsed: StoreReadPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => {
-            return WsReply::err_with_code(
-                id,
-                "VALIDATION_ERROR",
-                format!("malformed store_read payload (want key): {e}"),
-            )
-        }
+        Err(e) => return malformed(id, "store_read", "key", e),
     };
-    let Some(store) = store.cloned() else {
-        return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
+    let (store, identity) = match store_and_identity(&id, store, identity) {
+        Ok(pair) => pair,
+        Err(reply) => return reply,
     };
     if let Some(reply) = validate_store_key(&id, &parsed.key) {
         return reply;
     }
-    let result = tokio::task::spawn_blocking(move || store.read(&parsed.key)).await;
+    let result =
+        tokio::task::spawn_blocking(move || store.read(&parsed.key, &identity, unix_ms())).await;
     match result {
-        Ok(Ok(value)) => WsReply::ok(id, Some(json!({ "value": value }))),
-        Ok(Err(e)) => WsReply::err_with_code(id, "STORE_UNAVAILABLE", e.to_string()),
-        Err(join_err) => {
-            tracing::warn!("store_read task failed: {join_err}");
-            WsReply::err_with_code(
-                id,
-                "STORE_UNAVAILABLE",
-                format!("store read task failed: {join_err}"),
-            )
-        }
+        Ok(Ok(stamped)) => WsReply::ok(
+            id,
+            Some(json!({
+                "value": stamped.value,
+                "revision": stamped.revision,
+                "clientInstanceId": stamped.client_instance_id,
+            })),
+        ),
+        Ok(Err(error)) => store_error_reply(id, error, "STORE_UNAVAILABLE"),
+        Err(join_err) => task_failed(id, "STORE_UNAVAILABLE", join_err),
     }
 }
 
-/// `store_write` → `WebStore::write` (atomic replace). Reply = `{}`.
+/// `store_write` → `WebStore::write` (atomic replace). Reply = `{ revision }`
+/// for a device key, `{ value, revision, merged }` for a shared key.
 pub(super) async fn handle_store_write(
     id: String,
     payload: &Value,
     store: Option<&Arc<WebStore>>,
+    identity: Option<&ClientIdentity>,
 ) -> WsReply {
     let parsed: StoreWritePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => {
-            return WsReply::err_with_code(
-                id,
-                "VALIDATION_ERROR",
-                format!("malformed store_write payload (want key + value): {e}"),
-            )
-        }
+        Err(e) => return malformed(id, "store_write", "key + value", e),
     };
-    let Some(store) = store.cloned() else {
-        return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
+    let (store, identity) = match store_and_identity(&id, store, identity) {
+        Ok(pair) => pair,
+        Err(reply) => return reply,
     };
     if let Some(reply) = validate_store_key(&id, &parsed.key) {
         return reply;
@@ -136,30 +207,29 @@ pub(super) async fn handle_store_write(
             format!("value is {value_len} bytes (max {STORE_VALUE_MAX_BYTES})"),
         );
     }
-    let store_clone = store.clone();
+    let precondition = Precondition {
+        base_revision: parsed.base_revision,
+        expected: parsed.expected,
+        command_id: parsed.command_id,
+    };
     let result = tokio::task::spawn_blocking(move || {
-        store_clone.write(&parsed.key, parsed.value, parsed.expected)
+        store.write(&parsed.key, parsed.value, precondition, &identity, unix_ms())
     })
     .await;
     match result {
-        Ok(Ok(true)) => WsReply::ok(id, Some(json!({}))),
-        Ok(Ok(false)) => WsReply::err_with_code(
+        Ok(Ok(WriteOutcome::Device { revision })) => {
+            WsReply::ok(id, Some(json!({ "revision": revision })))
+        }
+        Ok(Ok(WriteOutcome::Shared {
+            value,
+            revision,
+            merged,
+        })) => WsReply::ok(
             id,
-            "STORE_CAS_FAILED",
-            "store write rejected: value changed concurrently",
+            Some(json!({ "value": value, "revision": revision, "merged": merged })),
         ),
-        Ok(Err(error)) => {
-            tracing::warn!("store_write failed: {error}");
-            WsReply::err_with_code(
-                id,
-                "STORE_WRITE_FAILED",
-                format!("store write failed: {error}"),
-            )
-        }
-        Err(join_err) => {
-            tracing::warn!("store_write task failed: {join_err}");
-            WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("task failed: {join_err}"))
-        }
+        Ok(Err(error)) => store_error_reply(id, error, "STORE_WRITE_FAILED"),
+        Err(join_err) => task_failed(id, "STORE_WRITE_FAILED", join_err),
     }
 }
 
@@ -168,42 +238,31 @@ pub(super) async fn handle_store_delete(
     id: String,
     payload: &Value,
     store: Option<&Arc<WebStore>>,
+    identity: Option<&ClientIdentity>,
 ) -> WsReply {
     let parsed: StoreDeletePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
-        Err(e) => {
-            return WsReply::err_with_code(
-                id,
-                "VALIDATION_ERROR",
-                format!("malformed store_delete payload (want key): {e}"),
-            )
-        }
+        Err(e) => return malformed(id, "store_delete", "key", e),
     };
-    let Some(store) = store.cloned() else {
-        return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
+    let (store, identity) = match store_and_identity(&id, store, identity) {
+        Ok(pair) => pair,
+        Err(reply) => return reply,
     };
     if let Some(reply) = validate_store_key(&id, &parsed.key) {
         return reply;
     }
-    let store_clone = store.clone();
-    let result = tokio::task::spawn_blocking(move || store_clone.delete(&parsed.key)).await;
+    let precondition = Precondition {
+        base_revision: parsed.base_revision,
+        expected: parsed.expected,
+        command_id: parsed.command_id,
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        store.delete(&parsed.key, precondition, &identity, unix_ms())
+    })
+    .await;
     match result {
         Ok(Ok(existed)) => WsReply::ok(id, Some(json!({ "existed": existed }))),
-        Ok(Err(error)) => {
-            tracing::warn!("store_delete failed: {error}");
-            WsReply::err_with_code(
-                id,
-                "STORE_DELETE_FAILED",
-                format!("store delete failed: {error}"),
-            )
-        }
-        Err(join_err) => {
-            tracing::warn!("store_delete task failed: {join_err}");
-            WsReply::err_with_code(
-                id,
-                "STORE_DELETE_FAILED",
-                format!("task failed: {join_err}"),
-            )
-        }
+        Ok(Err(error)) => store_error_reply(id, error, "STORE_DELETE_FAILED"),
+        Err(join_err) => task_failed(id, "STORE_DELETE_FAILED", join_err),
     }
 }
