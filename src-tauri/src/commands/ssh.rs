@@ -80,12 +80,23 @@ pub async fn ssh_save_profile(
     profile: SSHProfile,
     ssh_manager: State<'_, Arc<SSHManager>>,
 ) -> Result<IpcResult<()>, String> {
-    // A new secret makes the in-memory copy kept for live sessions stale.
+    // A new secret, or a different host/user/auth, makes the in-memory copy
+    // kept for live sessions stale (a later tab would try the old one first).
     let profile_id = profile.id.clone();
     let secret_changed = profile.password.is_some() || profile.passphrase.is_some();
+    let target_changed = match ssh_manager.profiles.get(&profile_id) {
+        Ok(Some(previous)) => {
+            previous.host != profile.host
+                || previous.port != profile.port
+                || previous.username != profile.username
+                || previous.auth_method != profile.auth_method
+                || previous.private_key_path != profile.private_key_path
+        }
+        _ => false,
+    };
     match ssh_manager.profiles.save(profile) {
         Ok(()) => {
-            if secret_changed {
+            if secret_changed || target_changed {
                 ssh_manager.sessions.forget_secret(&profile_id);
             }
             Ok(IpcResult::success(()))
@@ -282,7 +293,10 @@ pub async fn ssh_session_close(
             Err(e) => Ok(IpcResult::error(e, "SSH_SESSION_CLOSE_ERROR")),
         },
         None => {
-            ssh_manager.sessions.cancel(&session_id);
+            // Still connecting, or connected but its shell not yet adopted.
+            if !ssh_manager.sessions.cancel(&session_id) {
+                ssh_manager.sessions.close_unadopted(&session_id).await;
+            }
             Ok(IpcResult::success(()))
         }
     }

@@ -124,11 +124,33 @@ pub async fn read_file_to_string(sftp: &SftpSession, remote_path: &str) -> Resul
             MAX_EDIT_BYTES / 1024 / 1024
         ));
     }
-    let bytes = sftp
-        .read(remote_path)
+    // The size above is advisory (it can be missing or stale), so the read
+    // itself stops one byte past the limit.
+    let mut file = sftp
+        .open(remote_path)
         .await
         .map_err(|e| format!("Failed to read '{}': {}", remote_path, e))?;
+    let bytes = read_capped(&mut file, MAX_EDIT_BYTES)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", remote_path, e))?
+        .ok_or_else(|| {
+            format!(
+                "'{}' is larger than {} MB; download it instead",
+                remote_path,
+                MAX_EDIT_BYTES / 1024 / 1024
+            )
+        })?;
     String::from_utf8(bytes).map_err(|_| format!("'{}' is not a text file", remote_path))
+}
+
+/// Read at most `limit` bytes; `None` when the source holds more.
+pub(crate) async fn read_capped<R>(reader: &mut R, limit: u64) -> std::io::Result<Option<Vec<u8>>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    reader.take(limit + 1).read_to_end(&mut bytes).await?;
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
 }
 
 /// Write content to a remote file (creates or overwrites).
@@ -219,12 +241,13 @@ impl Progress<'_> {
     }
 }
 
-/// Copy `reader` to `writer`, reporting progress; returns bytes copied.
+/// Copy `reader` to `writer`, reporting progress; returns bytes copied. A
+/// failure carries the bytes copied before it, for the final progress event.
 async fn copy_with_progress<R, W>(
     reader: &mut R,
     writer: &mut W,
     progress: &Progress<'_>,
-) -> Result<u64, String>
+) -> Result<u64, (u64, String)>
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -236,14 +259,14 @@ where
         let n = reader
             .read(&mut buffer)
             .await
-            .map_err(|e| format!("Read error: {}", e))?;
+            .map_err(|e| (transferred, format!("Read error: {}", e)))?;
         if n == 0 {
             break;
         }
         writer
             .write_all(&buffer[..n])
             .await
-            .map_err(|e| format!("Write error: {}", e))?;
+            .map_err(|e| (transferred, format!("Write error: {}", e)))?;
         transferred += n as u64;
         if transferred - last_emit >= PROGRESS_STEP {
             progress.emit(transferred, "in-progress", None);
@@ -253,7 +276,7 @@ where
     writer
         .shutdown()
         .await
-        .map_err(|e| format!("Write error: {}", e))?;
+        .map_err(|e| (transferred, format!("Write error: {}", e)))?;
     Ok(transferred)
 }
 
@@ -282,10 +305,10 @@ pub async fn download_file(
         let mut remote = sftp
             .open(remote_path)
             .await
-            .map_err(|e| format!("Failed to open '{}': {}", remote_path, e))?;
+            .map_err(|e| (0, format!("Failed to open '{}': {}", remote_path, e)))?;
         let mut local = tokio::fs::File::create(local_path)
             .await
-            .map_err(|e| format!("Failed to create '{}': {}", local_path, e))?;
+            .map_err(|e| (0, format!("Failed to create '{}': {}", local_path, e)))?;
         copy_with_progress(&mut remote, &mut local, &progress).await
     }
     .await;
@@ -294,8 +317,8 @@ pub async fn download_file(
             progress.emit(transferred, "completed", None);
             Ok(())
         }
-        Err(e) => {
-            progress.emit(0, "failed", Some(e.clone()));
+        Err((transferred, e)) => {
+            progress.emit(transferred, "failed", Some(e.clone()));
             Err(e)
         }
     }
@@ -323,11 +346,11 @@ pub async fn upload_file(
     let result = async {
         let mut local = tokio::fs::File::open(local_path)
             .await
-            .map_err(|e| format!("Failed to open '{}': {}", local_path, e))?;
+            .map_err(|e| (0, format!("Failed to open '{}': {}", local_path, e)))?;
         let mut remote = sftp
             .create(remote_path)
             .await
-            .map_err(|e| format!("Failed to create '{}': {}", remote_path, e))?;
+            .map_err(|e| (0, format!("Failed to create '{}': {}", remote_path, e)))?;
         copy_with_progress(&mut local, &mut remote, &progress).await
     }
     .await;
@@ -336,8 +359,8 @@ pub async fn upload_file(
             progress.emit(transferred, "completed", None);
             Ok(())
         }
-        Err(e) => {
-            progress.emit(0, "failed", Some(e.clone()));
+        Err((transferred, e)) => {
+            progress.emit(transferred, "failed", Some(e.clone()));
             Err(e)
         }
     }

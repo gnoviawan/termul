@@ -100,8 +100,22 @@ fn verdict_handles_wildcards_negation_and_markers() {
     // A revoked key is refused even with no other entry for the host.
     assert_eq!(
         verdict(&contents, "anything.org", &key(KEY_B)),
-        FileVerdict::Mismatch
+        FileVerdict::Revoked
     );
+}
+
+#[test]
+fn revocation_wins_regardless_of_line_order_or_store() {
+    // A trusting line before the revocation must not win.
+    let contents = format!("example.com {KEY_A}\n@revoked example.com {KEY_A}\n");
+    assert_eq!(
+        verdict(&contents, "example.com", &key(KEY_A)),
+        FileVerdict::Revoked
+    );
+    // Nor may a match in the other store.
+    use FileVerdict::*;
+    assert_eq!(combine(Match, Revoked), HostKeyStatus::Revoked);
+    assert_eq!(combine(Revoked, Match), HostKeyStatus::Revoked);
 }
 
 #[test]
@@ -144,6 +158,13 @@ example.com,10.0.0.1 ssh-rsa AAAAlist
     let kept_port = without_entry(contents, "[example.com]:2222");
     assert!(!kept_port.contains("AAAAport"));
     assert!(kept_port.contains("AAAAold"));
+}
+
+#[test]
+fn without_entry_matches_host_names_case_insensitively() {
+    // A key rotation must not leave the old key trusted under other casing.
+    let kept = without_entry("Example.COM ssh-ed25519 AAAAold\n", "example.com");
+    assert_eq!(kept, "");
 }
 
 #[test]

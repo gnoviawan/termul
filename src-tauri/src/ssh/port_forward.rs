@@ -9,9 +9,14 @@ use super::session::Emit;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::task::JoinHandle;
+use std::time::Duration;
+use tokio::task::{JoinHandle, JoinSet};
 
 pub const EVENT_STATUS: &str = "ssh-port-forward-status-changed";
+
+/// Consecutive `accept` failures after which a forward is marked failed
+/// (a closed or broken listener would otherwise spin).
+const MAX_ACCEPT_FAILURES: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,12 +127,39 @@ impl PortForwardManager {
         };
         let remote_host = request.remote_host.clone();
         let remote_port = u32::from(request.remote_port);
+        let emit = self.emit.clone();
+        let failed_session = session_id.to_string();
+        let failed_info = info.clone();
         let task = tokio::spawn(async move {
+            // Tunnels live in this set, so aborting the forward (stop, replace,
+            // session end) drops the set and aborts every open tunnel with it.
+            let mut tunnels = JoinSet::new();
+            let mut failures = 0;
             loop {
+                while tunnels.try_join_next().is_some() {}
                 let (mut socket, peer) = match listener.accept().await {
-                    Ok(accepted) => accepted,
+                    Ok(accepted) => {
+                        failures = 0;
+                        accepted
+                    }
                     Err(e) => {
-                        log::warn!("[SSH-PF] Accept failed: {}", e);
+                        failures += 1;
+                        log::warn!(
+                            "[SSH-PF] Accept failed ({}/{}): {}",
+                            failures,
+                            MAX_ACCEPT_FAILURES,
+                            e
+                        );
+                        if failures >= MAX_ACCEPT_FAILURES {
+                            let failed = ActivePortForward {
+                                status: "failed".to_string(),
+                                error: Some(format!("Stopped accepting connections: {e}")),
+                                ..failed_info
+                            };
+                            emit(EVENT_STATUS, serde_json::json!([failed_session, failed]));
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100 * u64::from(failures))).await;
                         continue;
                     }
                 };
@@ -136,7 +168,7 @@ impl PortForwardManager {
                 }
                 let connection = connection.clone();
                 let remote_host = remote_host.clone();
-                tokio::spawn(async move {
+                tunnels.spawn(async move {
                     let channel = match connection
                         .handle()
                         .channel_open_direct_tcpip(
@@ -175,7 +207,7 @@ impl PortForwardManager {
         log::info!(
             "[SSH-PF] Forwarding local port {} for session {}",
             request.local_port,
-            session_id
+            crate::logging::redact_session_id(session_id)
         );
         self.emit_status(session_id, &info);
         Ok(info)

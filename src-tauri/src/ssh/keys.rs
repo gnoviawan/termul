@@ -5,8 +5,9 @@
 //! private key and whether it needs a passphrase. Key material never leaves
 //! this module and is never logged.
 
+use super::config_parser::ssh_dir;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Larger files are not private keys; refuse to slurp them.
 const MAX_KEY_FILE_BYTES: u64 = 64 * 1024;
@@ -166,13 +167,6 @@ pub fn inspect(path: &str) -> KeyFileInfo {
         }
         Err(_) => info(KeyFileStatus::Unreadable, false, None),
     }
-}
-
-fn ssh_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)?;
-    Some(home.join(".ssh"))
 }
 
 /// Private keys found in `~/.ssh`, sorted by file name.

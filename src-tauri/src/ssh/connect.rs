@@ -218,6 +218,16 @@ impl client::Handler for ClientHandler {
             return Ok(true);
         }
         let info = known_hosts::info_for(&self.host, self.port, &key);
+        if status == HostKeyStatus::Revoked {
+            log::warn!("[SSH] Host key for {} is revoked in known_hosts", info.host);
+            return self.reject(ConnectError::new(
+                ConnectErrorKind::HostKeyRejected,
+                format!(
+                    "This host key is marked @revoked in known_hosts ({})",
+                    info.fingerprint
+                ),
+            ));
+        }
         self.state.prompting.store(true, Ordering::Release);
         let decision = self.hooks.host_key(info.clone(), status).await;
         self.state.prompting.store(false, Ordering::Release);
@@ -311,10 +321,17 @@ pub(crate) fn classify_io(error: &std::io::Error) -> ConnectErrorKind {
 /// Resolve and connect with one shared deadline across all addresses, so a
 /// dual-stack host whose IPv6 route black-holes still falls back to IPv4.
 pub async fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, ConnectError> {
-    let resolved: Vec<_> = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|e| ConnectError::new(ConnectErrorKind::DnsFailed, e.to_string()))?
-        .collect();
+    // One deadline covers the lookup and the connect attempts, so a stalled
+    // resolver cannot hold this step past it.
+    let deadline = Instant::now() + TCP_CONNECT_TIMEOUT;
+    let resolved: Vec<_> =
+        tokio::time::timeout(TCP_CONNECT_TIMEOUT, tokio::net::lookup_host((host, port)))
+            .await
+            .map_err(|_| {
+                ConnectError::new(ConnectErrorKind::DnsFailed, "Looking up the host timed out")
+            })?
+            .map_err(|e| ConnectError::new(ConnectErrorKind::DnsFailed, e.to_string()))?
+            .collect();
     if resolved.is_empty() {
         return Err(ConnectError::new(
             ConnectErrorKind::DnsFailed,
@@ -322,7 +339,6 @@ pub async fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, ConnectErro
         ));
     }
 
-    let deadline = Instant::now() + TCP_CONNECT_TIMEOUT;
     let per_attempt = std::cmp::max(
         TCP_CONNECT_TIMEOUT / resolved.len() as u32,
         Duration::from_secs(2),
@@ -628,10 +644,12 @@ async fn authenticate_with_agent(
     state: &ConnectionState,
 ) -> Result<bool, ConnectError> {
     let agent_error = |e: String| ConnectError::new(ConnectErrorKind::AgentUnavailable, e);
-    let mut agent = connect_agent().await.map_err(agent_error)?;
-    let identities = agent
-        .request_identities()
-        .await
+    // An unresponsive agent must still honour cancel and the step timeout.
+    let mut agent = guarded(connect_agent(), hooks, state)
+        .await?
+        .map_err(agent_error)?;
+    let identities = guarded(agent.request_identities(), hooks, state)
+        .await?
         .map_err(|e| agent_error(e.to_string()))?;
     let keys: Vec<PublicKey> = identities
         .into_iter()

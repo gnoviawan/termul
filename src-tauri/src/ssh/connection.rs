@@ -13,6 +13,8 @@ use tokio::sync::Mutex;
 
 /// Bound on opening the SFTP subsystem and on each SFTP request.
 const SFTP_TIMEOUT_SECS: u64 = 30;
+/// Bound on a polite SFTP close before disconnecting.
+const SFTP_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct SshConnection {
     handle: Handle<ClientHandler>,
@@ -77,8 +79,12 @@ impl SshConnection {
 
     /// Close the whole connection (shell, SFTP, forwards). Idempotent.
     pub async fn close(&self) {
-        if let Some(sftp) = self.sftp.lock().await.take() {
-            let _ = sftp.close().await;
+        // An SFTP start in progress holds the slot for up to its timeout;
+        // never wait for it — the disconnect below ends it anyway.
+        if let Ok(mut slot) = self.sftp.try_lock() {
+            if let Some(sftp) = slot.take() {
+                let _ = tokio::time::timeout(SFTP_CLOSE_TIMEOUT, sftp.close()).await;
+            }
         }
         if !self.is_closed() {
             let _ = self

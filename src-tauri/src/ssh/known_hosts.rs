@@ -11,6 +11,7 @@
 //! negation and the `@revoked` marker. Lines it cannot read are skipped, so
 //! one exotic entry never blocks every connection.
 
+use super::config_parser::ssh_dir;
 use hmac::{Hmac, KeyInit, Mac};
 use russh::keys::{HashAlg, PublicKey};
 use serde::Serialize;
@@ -40,14 +41,16 @@ pub enum HostKeyStatus {
     Trusted,
     /// No entry for this host (with this key type) in either store.
     Unknown,
-    /// An entry exists for this host and key type, but with a different key
-    /// (or the presented key is marked `@revoked`).
+    /// An entry exists for this host and key type, but with a different key.
     Changed,
+    /// The presented key is marked `@revoked`: never trusted, never asked.
+    Revoked,
 }
 
 /// Result of checking one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileVerdict {
+    Revoked,
     Match,
     Mismatch,
     NotFound,
@@ -122,7 +125,7 @@ pub(crate) fn patterns_match(patterns: &str, entry: &str) -> bool {
 
 /// Check `key` against the contents of one known_hosts file.
 pub(crate) fn verdict(contents: &str, entry: &str, key: &PublicKey) -> FileVerdict {
-    let mut mismatch = false;
+    let (mut matched, mut mismatch) = (false, false);
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -144,9 +147,10 @@ pub(crate) fn verdict(contents: &str, entry: &str, key: &PublicKey) -> FileVerdi
             continue;
         };
         match marker.as_deref() {
-            // A revoked key is never trusted, whatever else the file says.
+            // A revoked key is never trusted, whatever else the file says,
+            // and wherever the line sits in the file.
             Some("revoked") if recorded.key_data() == key.key_data() => {
-                return FileVerdict::Mismatch
+                return FileVerdict::Revoked
             }
             Some(_) => continue,
             None => {}
@@ -155,40 +159,63 @@ pub(crate) fn verdict(contents: &str, entry: &str, key: &PublicKey) -> FileVerdi
             continue;
         }
         if recorded.key_data() == key.key_data() {
-            return FileVerdict::Match;
+            matched = true;
+        } else {
+            mismatch = true;
         }
-        mismatch = true;
     }
-    if mismatch {
+    if matched {
+        FileVerdict::Match
+    } else if mismatch {
         FileVerdict::Mismatch
     } else {
         FileVerdict::NotFound
     }
 }
 
-/// Combine the per-file results. Either store matching is enough; a
-/// mismatch in either store with no match anywhere means the key changed.
+/// Combine the per-file results. A revocation in either store wins; then
+/// either store matching is enough; a mismatch in either store with no match
+/// anywhere means the key changed.
 pub(crate) fn combine(app: FileVerdict, user: FileVerdict) -> HostKeyStatus {
     match (app, user) {
+        (FileVerdict::Revoked, _) | (_, FileVerdict::Revoked) => HostKeyStatus::Revoked,
         (FileVerdict::Match, _) | (_, FileVerdict::Match) => HostKeyStatus::Trusted,
         (FileVerdict::Mismatch, _) | (_, FileVerdict::Mismatch) => HostKeyStatus::Changed,
         _ => HostKeyStatus::Unknown,
     }
 }
 
-fn ssh_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)?;
-    Some(home.join(".ssh"))
+/// Tests against a real server point both stores here instead of `~/.ssh`.
+#[cfg(test)]
+static TEST_STORE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Use a fresh empty directory for both stores in this test process, so a
+/// test server's key never lands in the user's real known_hosts files.
+#[cfg(test)]
+pub(crate) fn isolate_stores_for_tests() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("termul-known-hosts-{}", uuid::Uuid::new_v4()));
+    *TEST_STORE_DIR.lock().unwrap_or_else(|p| p.into_inner()) = Some(dir.clone());
+    dir
+}
+
+fn store_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = TEST_STORE_DIR
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+    {
+        return Some(dir);
+    }
+    ssh_dir()
 }
 
 pub(crate) fn app_known_hosts_path() -> Option<PathBuf> {
-    ssh_dir().map(|d| d.join("known_hosts_termul"))
+    store_dir().map(|d| d.join("known_hosts_termul"))
 }
 
 fn user_known_hosts_path() -> Option<PathBuf> {
-    ssh_dir().map(|d| d.join("known_hosts"))
+    store_dir().map(|d| d.join("known_hosts"))
 }
 
 /// Read a known_hosts file; a missing file is empty. `strict` makes other
@@ -229,7 +256,10 @@ pub(crate) fn without_entry(contents: &str, entry: &str) -> String {
     let mut kept = String::with_capacity(contents.len());
     for line in contents.lines() {
         let first = line.split_whitespace().next().unwrap_or("");
-        let names_host = first.split(',').any(|name| name == entry);
+        // Host names compare case-insensitively, as in OpenSSH.
+        let names_host = first
+            .split(',')
+            .any(|name| name.eq_ignore_ascii_case(entry));
         if !names_host {
             kept.push_str(line);
             kept.push('\n');

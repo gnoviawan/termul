@@ -21,6 +21,30 @@ use tokio::sync::mpsc;
 const OUTPUT_QUEUE: usize = 256;
 /// Wait for the server to accept the shell request.
 const SHELL_START_TIMEOUT: Duration = Duration::from_secs(15);
+/// Output kept from before the shell request is confirmed.
+const EARLY_OUTPUT_LIMIT: usize = 64 * 1024;
+
+/// Exit status a shell reports for a process killed by `signal`.
+fn signal_exit_code(signal: &russh::Sig) -> i32 {
+    use russh::Sig;
+    let number = match signal {
+        Sig::HUP => 1,
+        Sig::INT => 2,
+        Sig::QUIT => 3,
+        Sig::ILL => 4,
+        Sig::ABRT => 6,
+        Sig::FPE => 8,
+        Sig::KILL => 9,
+        Sig::USR1 => 10,
+        Sig::SEGV => 11,
+        Sig::PIPE => 13,
+        Sig::ALRM => 14,
+        Sig::TERM => 15,
+        // Unknown number: still a failure, never success.
+        Sig::Custom(_) => return 255,
+    };
+    128 + number
+}
 /// Bound on the graceful close handshake.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -225,15 +249,27 @@ pub async fn start(
 
     // The server answers the shell request before any output; keep anything
     // that arrives first anyway.
+    // One deadline for the whole wait: a server that keeps sending must not
+    // extend it, and what it sends first is capped.
+    let deadline = tokio::time::Instant::now() + SHELL_START_TIMEOUT;
     let mut early: Vec<Vec<u8>> = Vec::new();
+    let mut early_bytes = 0;
     loop {
-        match tokio::time::timeout(SHELL_START_TIMEOUT, read.wait()).await {
+        match tokio::time::timeout_at(deadline, read.wait()).await {
             Ok(Some(ChannelMsg::Success)) => break,
             Ok(Some(ChannelMsg::Failure)) => {
                 return Err(shell_error("The server refused to start a shell"))
             }
             Ok(Some(ChannelMsg::Data { data }))
-            | Ok(Some(ChannelMsg::ExtendedData { data, .. })) => early.push(data.to_vec()),
+            | Ok(Some(ChannelMsg::ExtendedData { data, .. })) => {
+                early_bytes += data.len();
+                if early_bytes > EARLY_OUTPUT_LIMIT {
+                    return Err(shell_error(
+                        "The server sent too much output before starting the shell",
+                    ));
+                }
+                early.push(data.to_vec());
+            }
             Ok(Some(_)) => {}
             Ok(None) => return Err(shell_error("The channel closed before the shell started")),
             Err(_) => return Err(shell_error("The server did not start a shell in time")),
@@ -298,6 +334,8 @@ pub async fn start(
                 }
                 Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
                     log::info!("[SSH] Remote shell ended by signal {:?}", signal_name);
+                    // Report it like a shell would (128 + signal), never as 0.
+                    exit.get_or_insert(signal_exit_code(&signal_name));
                 }
                 Some(ChannelMsg::Close) => {
                     break if closing.load(Ordering::Acquire) {

@@ -20,22 +20,19 @@ pub struct ParsedSSHProfile {
     pub imported_from: Option<String>,
 }
 
+/// `~/.ssh`, resolving home the way OpenSSH does on each platform
+/// (`USERPROFILE` first on Windows). Shared by config, keys and known_hosts.
+pub(crate) fn ssh_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).ok();
+    #[cfg(not(target_os = "windows"))]
+    let home = env::var("HOME").ok();
+    home.map(|home| PathBuf::from(home).join(".ssh"))
+}
+
 /// Get the path to ~/.ssh/config
 fn get_ssh_config_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        env::var("USERPROFILE")
-            .or_else(|_| env::var("HOME"))
-            .ok()
-            .map(|home| PathBuf::from(home).join(".ssh").join("config"))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        env::var("HOME")
-            .ok()
-            .map(|home| PathBuf::from(home).join(".ssh").join("config"))
-    }
+    ssh_dir().map(|dir| dir.join("config"))
 }
 
 /// Expand ~ in paths to the user's home directory

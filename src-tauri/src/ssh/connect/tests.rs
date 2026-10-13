@@ -33,6 +33,11 @@ impl ConnectHooks for TestHooks {
     }
 }
 
+/// A throwaway credential per test, so no password is a constant in the code.
+fn test_password() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 fn closed_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.local_addr().unwrap().port()
@@ -105,13 +110,14 @@ fn io_errors_map_to_network_kinds() {
 
 #[test]
 fn keyboard_interactive_answers_only_the_first_hidden_round() {
+    let password = test_password();
     // Password prompt (hidden) plus a visible one, first round.
     assert_eq!(
-        kbd_answers(&[false, true], "secret", false),
-        vec!["secret".to_string(), String::new()]
+        kbd_answers(&[false, true], &password, false),
+        vec![password.clone(), String::new()]
     );
     // A later round (one-time code) never gets the password.
-    assert_eq!(kbd_answers(&[false], "secret", true), vec![String::new()]);
+    assert_eq!(kbd_answers(&[false], &password, true), vec![String::new()]);
 }
 
 #[tokio::test]
@@ -158,9 +164,10 @@ async fn non_ssh_server_fails_the_handshake() {
             let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await;
         }
     });
+    let password = test_password();
     let Err(err) = connect(
         &target("127.0.0.1", port, "user"),
-        Some("pw"),
+        Some(&password),
         Arc::new(TestHooks::default()),
     )
     .await
@@ -184,7 +191,8 @@ async fn cancel_aborts_a_silent_server() {
         canceller.cancelled.store(true, Ordering::SeqCst);
     });
     let started = Instant::now();
-    let Err(err) = connect(&target("127.0.0.1", port, "user"), Some("pw"), hooks).await else {
+    let password = test_password();
+    let Err(err) = connect(&target("127.0.0.1", port, "user"), Some(&password), hooks).await else {
         panic!("cancelled connect must fail");
     };
     assert_eq!(err.kind, ConnectErrorKind::Cancelled);
@@ -201,6 +209,8 @@ async fn cancel_aborts_a_silent_server() {
 #[tokio::test]
 #[ignore]
 async fn real_server_auth_matrix() {
+    // The test server's key must not reach the user's real known_hosts.
+    super::super::known_hosts::isolate_stores_for_tests();
     let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} not set"));
     let host = var("TERMUL_SSH_TEST_HOST");
     let port: u16 = var("TERMUL_SSH_TEST_PORT").parse().unwrap();

@@ -51,6 +51,34 @@ fn secret_cache_lives_as_long_as_its_sessions() {
 }
 
 #[test]
+fn a_shell_ending_before_registration_is_kept_for_open() {
+    let (manager, events) = recording_manager();
+    // `open` still owns the id (pending): the end waits for it.
+    lock(&manager.pending).insert(
+        "s1".into(),
+        Arc::new(Pending {
+            cancelled: AtomicBool::new(false),
+            decision_tx: Mutex::new(None),
+        }),
+    );
+    manager.finish("s1", ShellEnd::Exited(Some(0)));
+    assert_eq!(
+        lock(&manager.early_ends).get("s1"),
+        Some(&ShellEnd::Exited(Some(0)))
+    );
+    assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_shell_dropped_by_open_reports_nothing() {
+    let (manager, events) = recording_manager();
+    // Neither live nor pending: `open` discarded it (cancelled while starting).
+    manager.finish("gone", ShellEnd::Closed);
+    assert!(events.lock().unwrap().is_empty());
+    assert!(lock(&manager.early_ends).is_empty());
+}
+
+#[test]
 fn prompts_and_cancel_ignore_unknown_sessions() {
     let (manager, _) = recording_manager();
     assert!(!manager.respond_host_key("missing", true));
@@ -112,18 +140,23 @@ async fn cancel_aborts_a_stalled_handshake() {
     // Accepts the TCP connection but never speaks SSH.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let holder = std::thread::spawn(move || listener.accept().map(|(stream, _)| stream));
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let stream = listener.accept().map(|(stream, _)| stream);
+        let _ = accepted_tx.send(());
+        stream
+    });
 
     let canceller = manager.clone();
     let cancel_task = tokio::spawn(async move {
-        // Wait until the connect registered, then cancel it.
-        for _ in 0..50 {
-            if canceller.cancel("s2") {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        false
+        // Cancel only once the TCP connection is up, so this exercises the
+        // stalled handshake (and the holder thread is never left in accept).
+        let accepted = tokio::task::spawn_blocking(move || {
+            accepted_rx.recv_timeout(Duration::from_secs(10)).is_ok()
+        })
+        .await
+        .unwrap();
+        accepted && canceller.cancel("s2")
     });
     let started = Instant::now();
     let err = manager
@@ -149,6 +182,8 @@ async fn cancel_aborts_a_stalled_handshake() {
 #[tokio::test]
 #[ignore]
 async fn real_server_shell_round_trip() {
+    // The test server's key must not reach the user's real known_hosts.
+    super::super::known_hosts::isolate_stores_for_tests();
     let host = std::env::var("TERMUL_SSH_TEST_HOST").expect("TERMUL_SSH_TEST_HOST");
     let port: u16 = std::env::var("TERMUL_SSH_TEST_PORT")
         .unwrap_or_else(|_| "22".into())

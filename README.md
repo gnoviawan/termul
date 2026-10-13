@@ -347,7 +347,7 @@ bun run tauri <command>  # Direct Tauri CLI access
 
 Design and decisions: [`docs/ssh-native.md`](docs/ssh-native.md).
 
-- SSH runs natively on [`russh`](https://crates.io/crates/russh) (pure Rust, `aws-lc-rs` backend): no system `ssh`, OpenSSL or Perl is needed on any platform. Each session tab owns one connection; the shell, the SFTP browser and port forwards are channels on it.
+- SSH runs natively on [`russh`](https://crates.io/crates/russh) (a Rust SSH library; its crypto comes from `aws-lc-rs`, which the app already builds): no system `ssh`, OpenSSL or Perl is needed on any platform. Each session tab owns one connection; the shell, the SFTP browser and port forwards are channels on it.
 - The remote shell is adopted by `PtyManager` as a regular terminal (`pty/manager/external.rs`), so xterm, scrollback replay, claims, resize and kill work as for local terminals.
 - SSH passwords and key passphrases are stored through the OS keychain, never in `ssh-profiles.json`. A secret that worked stays in process memory only while a session to that host is open (so a second tab does not ask again); SSH agent authentication avoids it entirely.
 - Host keys are never accepted silently: a first-seen or changed key is shown with its SHA256 fingerprint and must be confirmed. Trust is written to `~/.ssh/known_hosts_termul`; `~/.ssh/known_hosts` is read but never modified.

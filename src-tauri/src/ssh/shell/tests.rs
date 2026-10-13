@@ -80,3 +80,10 @@ fn kill_after_end_does_not_error() {
     };
     assert!(child.kill().is_ok());
 }
+
+#[test]
+fn a_signal_ending_reports_a_failing_exit_code() {
+    assert_eq!(signal_exit_code(&russh::Sig::INT), 130);
+    assert_eq!(signal_exit_code(&russh::Sig::KILL), 137);
+    assert_ne!(signal_exit_code(&russh::Sig::Custom("XCPU".to_string())), 0);
+}

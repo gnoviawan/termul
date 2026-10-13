@@ -50,3 +50,18 @@ fn entry_type_reads_permission_bits() {
     assert_eq!(entry_type(&meta(0o120777)), "symlink");
     assert_eq!(entry_type(&meta(0o100644)), "file");
 }
+
+#[tokio::test]
+async fn read_capped_stops_one_byte_past_the_limit() {
+    // The editor cap holds even when the reported file size is missing.
+    let mut at_limit = std::io::Cursor::new(vec![b'a'; 8]);
+    assert_eq!(
+        read_capped(&mut at_limit, 8)
+            .await
+            .unwrap()
+            .map(|b| b.len()),
+        Some(8)
+    );
+    let mut over = std::io::Cursor::new(vec![b'a'; 9]);
+    assert_eq!(read_capped(&mut over, 8).await.unwrap(), None);
+}

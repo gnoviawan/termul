@@ -389,6 +389,13 @@ impl ProfileManager {
         let mut copy = self
             .get_with_credentials(id)?
             .ok_or_else(|| format!("Profile not found: {}", id))?;
+        // A keychain read failure must not produce a copy that silently lost
+        // its saved secret.
+        if (copy.has_stored_password && copy.password.is_none())
+            || (copy.has_stored_passphrase && copy.passphrase.is_none())
+        {
+            return Err("Could not read the saved secret from the system keychain".to_string());
+        }
         copy.id = uuid::Uuid::new_v4().to_string();
         copy.name = format!("{} (copy)", copy.name);
         copy.last_connected = None;
@@ -405,6 +412,11 @@ impl ProfileManager {
     /// key passphrase) to the OS keychain, e.g. after the user ticked
     /// "Save to keychain" at a connect prompt.
     pub fn store_secret(&self, id: &str, secret: &str) -> Result<(), String> {
+        // `save` skips empty secrets, so storing one would report a save that
+        // never happened.
+        if secret.is_empty() {
+            return Err("There is no secret to save".to_string());
+        }
         let mut profile = self
             .get(id)?
             .ok_or_else(|| format!("Profile not found: {}", id))?;

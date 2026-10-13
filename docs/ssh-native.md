@@ -1,7 +1,9 @@
 # Native SSH — design and plan
 
-Status: implemented on `dev` (desktop). This document is the plan the refactor
-followed, kept as the reference for the SSH surface.
+Status: desktop SSH, delivered as a series of PRs (#1099–#1104). The backend
+(#1101) and the session workspace UI (#1103) must land together: the backend
+removes the commands the previous SSH panel called. This document is the plan
+the refactor followed, kept as the reference for the SSH surface.
 
 ## 1. Problems in the previous implementation (evidence)
 
