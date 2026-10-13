@@ -1,8 +1,9 @@
 /**
  * ACP install API singleton (CAP-6 / Story 9).
  *
- * Resolves to the Tauri IPC impl when running inside a Tauri webview; the
- * fetch-backed HTTP impl when running as a web/remote client. Both impls
+ * Resolves to the desktop impl (the `install_acp_agent` request over the Tauri
+ * IPC channel carrier) when running inside a Tauri webview; the fetch-backed
+ * HTTP impl when running as a web/remote client. Both impls
  * return the same `IpcResult<...>` shape byte-for-byte (the
  * `parity-checklist.test.ts` pins this).
  *
@@ -14,19 +15,19 @@
  */
 
 import type { AcpInstallApi } from '@shared/types/acp-install.types'
-import { createTauriAcpInstallApi } from './tauri-acp-install-api'
+import { createDesktopAcpInstallApi } from './desktop-acp-install-api'
 import { isTauriContext } from './tauri-runtime'
 import { webAcpInstallApi } from './web-acp-install-api'
 
 /**
  * Singleton `AcpInstallApi` instance.
  *
- * Uses the Tauri IPC implementation when running in a Tauri webview.
+ * Uses the desktop implementation when running in a Tauri webview.
  * Uses the fetch-backed HTTP implementation when running in a browser.
  */
 export const acpInstallApi: AcpInstallApi = isTauriContext()
-  ? createTauriAcpInstallApi()
+  ? createDesktopAcpInstallApi()
   : webAcpInstallApi
 
-export { createTauriAcpInstallApi } from './tauri-acp-install-api'
+export { createDesktopAcpInstallApi } from './desktop-acp-install-api'
 export { webAcpInstallApi } from './web-acp-install-api'

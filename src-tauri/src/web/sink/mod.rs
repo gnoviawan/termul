@@ -3,38 +3,30 @@
 //! The dispatcher (see `crate::acp::manager` + `crate::acp::client`) emits every
 //! agent/session event through a fan-out of [`EventSink`] trait objects instead
 //! of calling `AppHandle::emit` directly. That decouples the live session stream
-//! from Tauri so the same dispatcher can feed:
-//!
-//! - the desktop's Tauri events ([`TauriEventSink`] — byte-for-byte preserves the
-//!   existing `acp:*` event names + payloads the renderer depends on), and
-//! - the future web's WebSocket relay ([`WsRelaySink`] — stubbed here as an
-//!   in-memory recorder; wired live in Story 1.4).
+//! from Tauri: the desktop app and the standalone `termul-server` both feed the
+//! same [`WsRelaySink`], the per-session event log every `/ws` carrier reads
+//! (a WebSocket for browsers and phones, a Tauri `ipc::Channel` for the desktop
+//! renderer).
 //!
 //! # Design rules baked in (do not deviate)
 //!
 //! - **Serialize ONCE, fan out N.** [`fan_out`] serializes the payload to a
-//!   `serde_json::Value` once; every sink emits the same `Value`, so
-//!   `TauriEventSink` and `WsRelaySink` emit byte-identical payloads.
-//! - **`type_` keeps the `acp:` prefix.** [`TauriEventSink`] emits it verbatim
-//!   (today's behavior); `WsRelaySink` will strip the prefix when the WS relay
-//!   lands in Story 1.4. For this story the stub records the full string.
+//!   `serde_json::Value` once; every sink emits the same `Value`.
+//! - **`type_` keeps the `acp:` prefix.** [`WsRelaySink`] strips it on the wire.
 //! - **`sid` is `Option<String>`.** `None` for agent-level events
 //!   (`agent_spawned`, `agent_disconnected`, `agent_error` without a session);
 //!   `Some(session_id)` for session-scoped events. Matches the WS envelope
-//!   `{sid, seq, type, payload}` shape (Story 1.4).
+//!   `{sid, seq, type, payload}` shape.
 //!
 //! `AcpManager` holds `Vec<Arc<dyn EventSink>>` and threads clones into every
-//! driver spawn site, so `AppHandle` no longer reaches the driver thread. The
-//! ONLY remaining `AppHandle` reference in the ACP stack lives inside
-//! [`TauriEventSink`] (the desktop's sink — intentionally Tauri-aware).
+//! driver spawn site, so no `AppHandle` reaches the driver thread.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use serde_json::Value;
 use tracing::warn;
 
 use crate::acp::session_persistence::{
@@ -61,9 +53,8 @@ use session_log::{RelaySeqAuthority, SessionState};
 ///
 /// `sid` is the session id (`None` for agent-level events like `agent_spawned`
 /// / `agent_disconnected`). `type_` is the existing `acp:*` event name with the
-/// `acp:` prefix (e.g. `"acp:message_chunk"`) — [`TauriEventSink`] emits it
-/// verbatim; `WsRelaySink` will strip the prefix when the WS relay lands in
-/// Story 1.4. `payload` is the serialized JSON value so every sink emits
+/// `acp:` prefix (e.g. `"acp:message_chunk"`) — `WsRelaySink` strips it on the
+/// wire. `payload` is the serialized JSON value so every sink emits
 /// byte-identical bytes (serialize ONCE, fan out N times).
 #[derive(Clone, Debug)]
 pub struct AcpEvent {
@@ -86,8 +77,8 @@ pub trait EventSink: Send + Sync {
     /// Issue #836: notification that a session just registered with the
     /// durable store. The WS relay uses it to flush events it buffered while
     /// the session's durable writer was not yet installed (the agent's first
-    /// emits can beat `register_session`). Default no-op so the desktop
-    /// Tauri sink (and test sinks) need no change.
+    /// emits can beat `register_session`). Default no-op so sinks that do not
+    /// buffer (test recorders) need no change.
     fn note_session_registered(&self, _session_id: &str) {}
 
     /// The live relay behind this sink, if it is one. Host-authored records
@@ -97,143 +88,6 @@ pub trait EventSink: Send + Sync {
         None
     }
 }
-
-/// Batched desktop event name: one `acp:events` emit carries `events:
-/// [{type, payload}]`, and the renderer fans each inner event out to the
-/// listeners of its `acp:*` name. Each inner event keeps the full `acp:`
-/// prefix so the fan-out key is the name clients already subscribe to.
-pub const TAURI_EVENTS_BATCH: &str = "acp:events";
-
-/// Coalesce window for desktop batches: 8ms ≈ one frame at 120Hz — tight
-/// enough to be invisible in the UI, long enough to fold a streaming burst
-/// into a single IPC crossing.
-const TAURI_BATCH_WINDOW_MS: u64 = 8;
-
-/// Flush early once this many events are buffered — a hard cap on batch
-/// latency (a saturated queue flushes immediately, never waits the window).
-const TAURI_BATCH_MAX: usize = 32;
-
-/// Buffered event awaiting its batch flush. Owned clone of the emit inputs
-/// (the dispatcher's `&AcpEvent` borrows don't outlive the call).
-struct PendingTauriEvent {
-    type_: String,
-    payload: Value,
-}
-
-/// Desktop sink: forwards events to the Tauri renderer, batching bursts into
-/// `acp:events` frames.
-///
-/// The dispatcher calls `emit` synchronously from driver threads and one
-/// `app.emit` was one webview IPC crossing — under an 8-agent stream that is
-/// ~160 crossings/sec of `MessagePort` dispatch + JSON parse. Buffering into
-/// a shared `pending` queue and emitting one frame per window collapses the
-/// burst: N crossings → 1, identical payload order.
-///
-/// Ordering: `pending` is a single FIFO and a `scheduled` flag admits exactly
-/// one flusher task per window, so batches leave in strict emit order — the
-/// `acp:events` payload preserves it verbatim. Loss window: ~8ms at process
-/// teardown (unavoidable for any buffered sink; persistence mirrors every
-/// event so replayed history is unaffected).
-pub struct TauriEventSink {
-    app: AppHandle,
-    pending: Arc<Mutex<Vec<PendingTauriEvent>>>,
-    scheduled: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl TauriEventSink {
-    /// Wrap a Tauri app handle. The sink is cheap to construct and `Clone`-free
-    /// (it shares the handle via `AppHandle`'s internal `Arc`).
-    #[must_use]
-    pub fn new(app: AppHandle) -> Self {
-        Self {
-            app,
-            pending: Arc::new(Mutex::new(Vec::new())),
-            scheduled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-
-    /// Emit everything currently buffered as one `acp:events` frame.
-    ///
-    /// The `pending` lock is HELD ACROSS `app.emit`: pushes block for the
-    /// duration of the serialize+post (~µs), so concurrent flushers (the
-    /// timer task and an inline saturated emit) can never interleave batch
-    /// contents — frames leave in strict FIFO order.
-    fn flush_pending(app: &AppHandle, pending: &Arc<Mutex<Vec<PendingTauriEvent>>>) {
-        let mut q = pending.lock();
-        if q.is_empty() {
-            return;
-        }
-        let events = std::mem::take(&mut *q);
-        let batch = json!({
-            "events": events
-                .iter()
-                .map(|e| json!({ "type": e.type_, "payload": e.payload }))
-                .collect::<Vec<_>>()
-        });
-        if let Err(e) = app.emit(TAURI_EVENTS_BATCH, batch) {
-            log::error!(
-                "[acp] failed to emit {} batch ({} events): {e}",
-                TAURI_EVENTS_BATCH,
-                events.len()
-            );
-        }
-    }
-
-    /// Queue a batch flush: the timer races the size cap; whichever fires
-    /// first drains the queue. The `scheduled` flag keeps exactly one flusher
-    /// in flight so emission order is strictly FIFO.
-    fn schedule_flush(&self) {
-        if self
-            .scheduled
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
-            return; // a flusher is already armed
-        }
-        let app = self.app.clone();
-        let pending = Arc::clone(&self.pending);
-        let scheduled = Arc::clone(&self.scheduled);
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(TAURI_BATCH_WINDOW_MS)).await;
-            loop {
-                Self::flush_pending(&app, &pending);
-                // Release the flag only once the queue is empty, then recheck
-                // BEFORE letting go: a push that ran between the empty check
-                // and the store sees `scheduled == false` and arms its own
-                // flusher; a push whose event is already in the queue is
-                // caught by the recheck and flushed by this task. No event
-                // can strand.
-                let q = pending.lock();
-                if q.is_empty() {
-                    scheduled.store(false, std::sync::atomic::Ordering::Release);
-                    if q.is_empty() {
-                        break;
-                    }
-                }
-            }
-        });
-    }
-}
-
-impl EventSink for TauriEventSink {
-    fn emit(&self, event: &AcpEvent) {
-        let saturated = {
-            let mut q = self.pending.lock();
-            q.push(PendingTauriEvent {
-                type_: event.type_.to_string(),
-                payload: event.payload.clone(),
-            });
-            q.len() >= TAURI_BATCH_MAX
-        };
-        if saturated {
-            // Size cap hit: drain inline (serialized on `pending`, so order
-            // is preserved against any in-flight timer flush), then let the
-            // armed task sweep whatever queued after this batch.
-            Self::flush_pending(&self.app, &self.pending);
-        }
-        self.schedule_flush();
-    }
-}
-
 
 /// Live WS relay sink (Story 1.4 — replaces the Story 1.1 in-memory recorder).
 ///
@@ -265,8 +119,8 @@ impl EventSink for TauriEventSink {
 ///   the relay sends it through (like reliable) and the client dedups by
 ///   `seq` (Dev Notes #6).
 ///
-/// Constructible WITHOUT a Tauri `AppHandle` (Story 1.1 invariant — the
-/// standalone `termul-server` binary has no Tauri app). `Send + Sync` so clones
+/// Constructible WITHOUT a Tauri `AppHandle` (the standalone `termul-server`
+/// binary has no Tauri app). `Send + Sync` so clones
 /// of `Arc<WsRelaySink>` can cross from the Tauri command thread into each
 /// agent's dedicated driver thread.
 pub struct WsRelaySink {
@@ -282,16 +136,16 @@ pub struct WsRelaySink {
     event_log_capacity: usize,
     /// Capacity of each subscription's bounded channel into its connection.
     client_queue_capacity: usize,
-    /// Server-side permission rendezvous (Story 1.7). `None` on the desktop
-    /// path (the browser-less flow uses the `acp_respond_permission` Tauri
-    /// command directly). When set, `emit` snapshots `acp:permission_request`
+    /// Server-side permission rendezvous (Story 1.7). `None` for a relay built
+    /// without one (unit tests); the desktop host and `termul-server` attach
+    /// one at startup. When set, `emit` snapshots `acp:permission_request`
     /// events into a relay-side ticket table that enforces the rendezvous
     /// policy (at-most-one, first-wins, TOCTOU). Tickets have no timeout; the
     /// turn end, session close and agent death events release them.
     rendezvous: Mutex<Option<Arc<crate::web::permissions::PermissionRendezvous>>>,
-    /// Server-side question rendezvous (issue #411). `None` on the desktop
-    /// path (the browser-less flow uses the `acp_answer_question` Tauri
-    /// command directly). When set, `emit` snapshots `acp:question_request`
+    /// Server-side question rendezvous (issue #411). `None` for a relay built
+    /// without one (unit tests); the desktop host and `termul-server` attach
+    /// one at startup. When set, `emit` snapshots `acp:question_request`
     /// events into a relay-side ticket table (first-wins, TOCTOU, timeout).
     question_rendezvous: Mutex<Option<Arc<crate::web::permissions::QuestionRendezvous>>>,
     /// Server-side turn-id watermark (Story 1.7 T7.2 — FR13/FR11 plumbing).
@@ -506,9 +360,7 @@ impl WsRelaySink {
         self.event_log_capacity
     }
 
-    /// Attach the server-side permission rendezvous (Story 1.7). Server-only;
-    /// the desktop path leaves this unset (the browser-less flow uses the
-    /// `acp_respond_permission` Tauri command directly). Once attached, `emit`
+    /// Attach the server-side permission rendezvous (Story 1.7). Once attached, `emit`
     /// snapshots `acp:permission_request` events into the rendezvous so the
     /// `/ws` `respond_permission` handler can enforce the rendezvous policy.
     pub fn set_rendezvous(&self, rendezvous: Arc<crate::web::permissions::PermissionRendezvous>) {
@@ -634,8 +486,7 @@ impl Default for WsRelaySink {
 /// `sid` is `None` for agent-level events, `Some(session_id)` for
 /// session-scoped events. `type_` is the `acp:*` event name (with prefix).
 /// `payload` is serialized to a `serde_json::Value` here, then handed to each
-/// sink by reference — `TauriEventSink` re-serializes via `app.emit` (which
-/// accepts a `Value` directly) and `WsRelaySink` records the `Value` as-is.
+/// sink by reference — `WsRelaySink` records the `Value` as-is.
 ///
 /// Returns early without emitting when `sinks` is empty (avoids a wasted
 /// serialization + allocation on the `vec![]` path blessed for unit tests) or
@@ -676,7 +527,7 @@ pub enum HostRecordFanout {
     /// Only the relay (a durable record whose desktop twin is a different
     /// event the caller fans out itself).
     RelayOnly,
-    /// Every other sink too (the desktop renderer gets the same event).
+    /// Every other sink too (any sink besides the relay gets the same event).
     AllSinks,
 }
 

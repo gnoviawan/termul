@@ -4,10 +4,10 @@
 //! through, plus the standalone Axum server (Stories 1.2–1.3) and the live WS
 //! relay (Story 1.4).
 //!
-//! - Desktop registers a [`sink::TauriEventSink`] (`acp:*` Tauri events).
-//! - Standalone `termul-server` registers a live [`sink::WsRelaySink`] (Story
-//!   1.4 — owns per-session event logs + seq counters + subscriber set) and
-//!   calls [`serve`].
+//! - Desktop and standalone `termul-server` both register a live
+//!   [`sink::WsRelaySink`] (owns per-session event logs + seq counters +
+//!   subscriber set). The desktop renderer reads it over a Tauri
+//!   `ipc::Channel` ([`ws::channel`]); `termul-server` calls [`serve`].
 //! - Dev static serving of `dist-web/` is [`assets`] (Story 1.3); production
 //!   rust-embed embedding/serving is complete.
 //!
@@ -62,7 +62,7 @@ pub use config::ServerConfig;
 pub use permissions::PermissionRendezvous;
 pub use permissions::QuestionRendezvous;
 pub use project_registry::{ProjectListPayload, ProjectRegistry, ProjectSummary};
-pub use sink::{fan_out, EventSink, EventStream, StreamItem, TauriEventSink, WsRelaySink};
+pub use sink::{fan_out, EventSink, EventStream, StreamItem, WsRelaySink};
 pub use ws::{AppState, HistoryMode, ReliabilityTier, RuntimePolicy, SequencedEvent, WsErrorCode};
 
 use std::future::Future;

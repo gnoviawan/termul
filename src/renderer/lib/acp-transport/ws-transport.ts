@@ -8,6 +8,7 @@
  * (`.message` is the human string callers already toast).
  */
 
+import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import {
   type AcpAuthenticateReply,
   type AcpRuntimePolicy,
@@ -755,6 +756,16 @@ export class WsAcpTransport implements AcpTransport {
     )
   }
 
+  /** `list_acp_catalog`: the host-resolved catalog (see {@link AcpTransport.listCatalog}). */
+  async listCatalog(refresh = false): Promise<AcpCatalog> {
+    return this.request<AcpCatalog>('list_acp_catalog', { refresh })
+  }
+
+  /** `set_catalog_opt_in`: persist the host catalog opt-in. */
+  async setCatalogOptIn(enabled: boolean): Promise<void> {
+    await this.request<unknown>('set_catalog_opt_in', { enabled })
+  }
+
   /**
    * CAP-6 / Story 8: probeRuntime is replaced by the host-resolved catalog.
    * The web client calls `acpCatalogApi.listCatalog()` (the facade) which
@@ -1257,7 +1268,6 @@ export class WsAcpTransport implements AcpTransport {
     // authenticated WS connection. The host runs the method on the agent
     // process (the provider owns the login UX, often opening its own
     // browser); Termul never invents a redirect URL or stores credentials.
-    // Mirrors the desktop `acp_authenticate` Tauri command.
     await this.connect()
     await this.request('authenticate_agent', { agentId, methodId, gateway }, undefined, options)
   }
@@ -1267,8 +1277,7 @@ export class WsAcpTransport implements AcpTransport {
    * the host's `AcpManager::deliver_auth_redirect` over the authenticated WS
    * connection. The host SSRF-guards (http(s) + loopback only) then replays
    * the URL to the agent's callback listener; the reply `{ status }` is the
-   * replay's HTTP status. Mirrors the desktop `acp_auth_deliver_redirect`
-   * Tauri command.
+   * replay's HTTP status.
    */
   async deliverAuthRedirect(
     agentId: AgentId,
@@ -2318,10 +2327,10 @@ export class WsAcpTransport implements AcpTransport {
         serverHardCapMs > 0 ? Date.now() + serverHardCapMs + SEND_PROMPT_GRACE_MS : undefined
       // `authenticate_agent` is an interactive agent auth flow (the provider
       // may open a browser + wait for the user to sign in) — apply NO
-      // client-side timeout (0 = no timer), matching the desktop
-      // `acp_authenticate` path (which awaits the agent reply indefinitely)
-      // and the `send_prompt` unlimited-policy pattern. A reply, disconnect,
-      // or disposal resolves/rejects the pending request.
+      // client-side timeout (0 = no timer), matching the `send_prompt`
+      // unlimited-policy pattern (the host awaits the agent reply
+      // indefinitely). A reply, disconnect, or disposal resolves/rejects the
+      // pending request.
       const isAuthenticateAgent = type === 'authenticate_agent'
       // Per-request-type table (CLI-F2): each timer is >= the host's own bound
       // for that operation (install, catalog refresh, session open/reopen).

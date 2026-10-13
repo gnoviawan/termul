@@ -16,12 +16,11 @@
 //! sending [`AcpCommand`] variants (each carrying a `tokio::sync::oneshot`
 //! reply sender) over a `tokio::sync::mpsc` channel, then `.await` the `Send`
 //! oneshot reply. Streaming `session/update` notifications and inbound agent
-//! requests (permission, fs) are fanned out to the renderer (and, in Story 1.4,
-//! the WS relay) through a cloned `Vec<Arc<dyn EventSink>>` — NOT via a Tauri
+//! requests (permission, fs) are fanned out to the WS relay (which serves the
+//! renderer and any browser/phone) through a cloned `Vec<Arc<dyn EventSink>>` — NOT via a Tauri
 //! `AppHandle` directly (Story 1.1 / architecture D2 decoupling).
 //!
-//! This mirrors how `PtyManager` isolates per-PTY I/O on its own threads and
-//! emits to the renderer through its own sink fan-out.
+//! This mirrors how `PtyManager` isolates per-PTY I/O on its own threads.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -343,14 +342,13 @@ struct InitOutcome {
 }
 
 /// Authoritative spawn result returned by [`AcpManager::spawn`] and mirrored
-/// verbatim by both the Tauri `acp_spawn_agent` command and the WS
-/// `spawn_agent` handler (CAP-4: metadata delivery cannot depend on a session
+/// verbatim by the WS `spawn_agent` handler (CAP-4: metadata delivery cannot depend on a session
 /// subscription that does not yet exist). Carries everything the renderer needs
 /// to populate the store synchronously: the negotiated capabilities, advertised
 /// auth methods, host-auth readiness, and stable namespace. The
 /// `acp:agent_spawned` event is still emitted for observers but is no longer the
-/// source of truth — the spawn response is. Serialized camelCase on the wire so
-/// desktop (Tauri `Result`) and web (`WsReply` payload) share one contract.
+/// source of truth — the spawn response is. Serialized camelCase on the wire
+/// (the `WsReply` payload every carrier shares).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnOutcome {
@@ -367,7 +365,7 @@ pub struct SpawnOutcome {
 }
 
 /// Identity-rich summary of a live agent (CAP-11). Returned by the WS
-/// `list_agents` handler + the desktop `acp_list_agent_details` command so
+/// `list_agents` handler so
 /// clients can render/agent-route without a second lookup. `configId` and
 /// `namespace` are omitted when absent (`skip_serializing_if`).
 #[derive(Debug, Clone, Serialize)]
@@ -443,16 +441,12 @@ struct SpawnStamp {
 ///
 /// `AcpManager` is **transport-neutral**: it holds `Vec<Arc<dyn EventSink>>`
 /// and fans every `acp:*` event out through them. It does NOT hold a Tauri
-/// `AppHandle`. The desktop app constructs it with
-/// `vec![Arc::new(TauriEventSink::new(handle))]` (see `lib.rs`); the standalone
-/// `termul-server` binary (Story 1.2) will construct it with a
-/// `WsRelaySink`-backed sink list and NO `AppHandle` at all.
+/// `AppHandle`. The desktop app and the standalone `termul-server` binary both
+/// construct it with a `WsRelaySink`-backed sink list (see `lib.rs`,
+/// `server_main.rs`).
 ///
-/// The ONLY `AppHandle` reference in the ACP stack lives inside
-/// `crate::web::TauriEventSink::emit` (the desktop's sink — intentionally
-/// Tauri-aware). No code under `src-tauri/src/acp/` may call `app.emit("acp:..")`
-/// directly (AC7); all emission goes through [`events::fan_out`] against
-/// `self.sinks`.
+/// No code under `src-tauri/src/acp/` may call `app.emit("acp:..")` directly
+/// (AC7); all emission goes through [`events::fan_out`] against `self.sinks`.
 pub struct AcpManager {
     sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
@@ -483,10 +477,8 @@ pub struct AcpManager {
 impl AcpManager {
     /// Create a new manager that fans `acp:*` events out to the given sinks.
     ///
-    /// Pass `vec![Arc::new(TauriEventSink::new(handle))]` for the desktop app
-    /// (byte-for-byte preserves today's Tauri event flow), or a
-    /// `WsRelaySink`-backed list for the headless `termul-server` binary
-    /// (Story 1.2). An empty `vec![]` is legal (used by unit tests that only
+    /// Pass a `WsRelaySink`-backed list (the desktop app and the headless
+    /// `termul-server` binary both do). An empty `vec![]` is legal (used by unit tests that only
     /// exercise the command channel) — `fan_out` over zero sinks is a no-op.
     #[must_use]
     pub fn new(sinks: Vec<Arc<dyn EventSink>>) -> Self {
@@ -557,8 +549,8 @@ impl AcpManager {
     }
     /// Host-authored durable agent-switch marker (CAP-2): the relay numbers,
     /// persists and delivers it through this manager's sinks, then the flush
-    /// is the durability boundary. Sinks are the Tauri renderer plus the WS
-    /// relay on desktop, and the relay alone on the standalone server.
+    /// is the durability boundary. The relay is the only sink on desktop and on
+    /// the standalone server.
     pub async fn record_agent_switch(
         &self,
         session_id: String,
@@ -887,9 +879,8 @@ impl AcpManager {
 
     /// Return identity-rich summaries of all currently registered agents
     /// (CAP-11): `{ id, name, configId?, namespace?, capabilities }`. The WS
-    /// `list_agents` handler serves these; the desktop `acp_list_agents`
-    /// command keeps returning bare ids and `acp_list_agent_details` serves
-    /// the summaries.
+    /// `list_agents` handler serves these (clients that only need ids map
+    /// `.id`).
     #[must_use]
     pub fn list_agent_summaries(&self) -> Vec<AgentSummary> {
         self.agents

@@ -74,7 +74,7 @@ export interface PromptReceipt {
   receipt: 'in_progress' | 'accepted'
 }
 
-/** `send_prompt` / `acp_send_prompt` result: a stop reason or a receipt. */
+/** `send_prompt` result: a stop reason or a receipt. */
 export type PromptDispatchResult = StopReason | PromptReceipt
 
 export function isPromptReceipt(value: unknown): value is PromptReceipt {
@@ -303,7 +303,7 @@ export interface ProbeResult {
   error?: string
   wwwAuthenticateHeader?: string
 }
-/** Wire type forwarded verbatim to the backend `acp_new_session` command. */
+/** Wire type forwarded verbatim to the backend `create_session` request. */
 export type McpServer = McpServerConfig
 
 export interface AgentConfig {
@@ -410,10 +410,9 @@ export interface BrowserOpenRequestEvent {
 }
 
 /**
- * Authoritative spawn result returned by `acp_spawn_agent` (Tauri) and
- * `spawn_agent` (WS) — the single contract for both transports (CAP-4: the
- * spawn response — not the async `acp:agent_spawned` event — is the source of
- * truth). The renderer populates `capabilities` + `authMethods` synchronously
+ * Authoritative spawn result returned by the `spawn_agent` WS request — the
+ * single contract for every carrier (CAP-4: the spawn response — not the async
+ * `acp:agent_spawned` event — is the source of truth). The renderer populates `capabilities` + `authMethods` synchronously
  * from this response, eliminating the former 250ms no-auth fallback.
  */
 export interface SpawnAgentResult {
@@ -786,9 +785,8 @@ export async function acpInstallRegistryBinary(
  * CAP-6 / Story 9: host-owned verified-atomic install. The request is
  * `{ agentId }` only; the host resolves everything (archive URL, cmd, args,
  * sha256) from the trusted catalog. The outcome `{ command, args }` flows
- * through `installedBinaryConfig` → `saveAgentConfig` unchanged. Mirrors the
- * `acp_install_agent` Tauri command + `POST /acp/install` + WS
- * `install_acp_agent` byte-for-byte.
+ * through `installedBinaryConfig` → `saveAgentConfig` unchanged. Mirrors
+ * `POST /acp/install` + WS `install_acp_agent` byte-for-byte.
  */
 export async function acpInstallAcpAgent(
   agentId: string
@@ -1140,9 +1138,8 @@ export async function acpRegisterDiscoveredSession(input: {
 
 /**
  * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch marker.
- * Host is the sole author — the Tauri command (`acp_record_agent_switch`)
- * and the WS route (`record_agent_switch`) author ONE `agent_switch`
- * record: the host relay numbers it, persists it and delivers the same event
+ * Host is the sole author — the WS route (`record_agent_switch`) authors ONE
+ * `agent_switch` record: the host relay numbers it, persists it and delivers the same event
  * live under that seq; the host then flushes. Throws on a host
  * write failure (record absent, no partial state — the caller surfaces it).
  */

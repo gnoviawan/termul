@@ -5,6 +5,7 @@
  * (`./desktop-transport`).
  */
 
+import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import {
   type HistoryMode,
   type PersistedSessionSummary,
@@ -135,16 +136,26 @@ export interface AcpTransport {
     request: InstallAcpRegistryBinaryRequest
   ): Promise<InstallAcpRegistryBinaryOutcome>
   /**
-   * CAP-6 / Story 9: host-owned verified-atomic install. The web/remote
-   * transport falls back to the `acpInstallApi` facade (Tauri vs HTTP
-   * resolved at runtime); the desktop transport delegates to the new
-   * `acp_install_agent` Tauri command. The request is `{ agentId }` only; the
-   * host resolves everything from the trusted catalog.
+   * Host-owned verified-atomic install (`install_acp_agent`). Every carrier
+   * sends it over `/ws`. The request is `{ agentId }` only; the host resolves
+   * everything from the trusted catalog.
    */
   installAcpAgent(
     agentId: string,
     options?: CommandCallOptions
   ): Promise<InstallAcpRegistryBinaryOutcome>
+  /**
+   * Host-resolved ACP catalog (`list_acp_catalog`): OS/arch/runtime
+   * availability plus per-agent status. `refresh` bypasses the host's TTL.
+   * Failures throw {@link AcpTransportError} carrying the host's
+   * SCREAMING_SNAKE_CASE code (`ACP_CATALOG_UNAVAILABLE`, `CATALOG_LOAD_FAILED`).
+   */
+  listCatalog(refresh?: boolean): Promise<AcpCatalog>
+  /**
+   * Persist the host-side catalog opt-in (`set_catalog_opt_in`) that gates the
+   * CDN registry augmentation. Failures throw {@link AcpTransportError}.
+   */
+  setCatalogOptIn(enabled: boolean): Promise<void>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>
@@ -167,8 +178,8 @@ export interface AcpTransport {
   listAgents(): Promise<AgentId[]>
   /**
    * CAP-11: identity-rich agent summaries (`{ id, name, configId?, namespace?,
-   * capabilities, ownsSession? }`). WS: the `list_agents` reply; desktop: the
-   * `acp_list_agent_details` command. `listAgents` keeps returning bare ids.
+   * capabilities, ownsSession? }`): the `list_agents` reply. `listAgents` keeps
+   * returning bare ids.
    * `ownsSession` (issue #837) is the agent's owned-session set — current
    * servers always send it; older servers omit it (treated as unknown/none).
    */
@@ -264,9 +275,8 @@ export interface AcpTransport {
   /**
    * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch
    * marker. Host is the sole author — one `agent_switch` record that the
-   * relay numbers, persists and delivers live under the same seq.
-   * Tauri: `acp_record_agent_switch`; WS: `record_agent_switch`. Throws on
-   * a host write failure (no partial state).
+   * relay numbers, persists and delivers live under the same seq. WS:
+   * `record_agent_switch`. Throws on a host write failure (no partial state).
    */
   recordAgentSwitch(
     sessionId: SessionId,
@@ -331,8 +341,8 @@ export interface AcpTransport {
    * Headless ACP auth paste-back (spec-acp-terminal-auth): deliver a
    * user-pasted loopback OAuth redirect URL to the agent's callback listener
    * on the host. The host validates http(s) + loopback-only before fetching
-   * (SSRF guard) and returns the replay's HTTP status. Tauri:
-   * `acp_auth_deliver_redirect`; WS: `acp_deliver_auth_redirect`.
+   * (SSRF guard) and returns the replay's HTTP status. WS:
+   * `acp_deliver_auth_redirect`.
    */
   deliverAuthRedirect(agentId: AgentId, url: string, options?: CommandCallOptions): Promise<number>
   /**

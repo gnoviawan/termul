@@ -1,4 +1,5 @@
-//! Tauri event payloads emitted by the ACP backend to the renderer.
+//! Event payloads emitted by the ACP backend. They fan out through the event
+//! sinks; the WS relay serves them to the renderer and to browsers.
 //!
 //! Every payload derives `Serialize + Clone` and uses `#[serde(rename_all =
 //! "camelCase")]` so the wire shape matches the renderer contract. Schema
@@ -22,8 +23,8 @@ use serde::{Deserialize, Serialize};
 /// events::EVENT_*, &payload)` — the `events::` namespace is preserved, the
 /// `app` parameter is gone.
 ///
-/// The ONLY place that still calls `AppHandle::emit` for `acp:*` events is
-/// `crate::web::TauriEventSink::emit` (the desktop's sink). See AC7.
+/// No code under `src-tauri/src/acp/` calls `AppHandle::emit` for `acp:*`
+/// events: every one goes through the sinks. See AC7.
 pub(crate) use crate::web::fan_out;
 
 /// A single selectable model advertised by an ACP agent.
@@ -145,8 +146,8 @@ pub const EVENT_PERMISSION_REQUEST: &str = "acp:permission_request";
 ///
 /// The renderer shows a morphing `AskUserQuestion` panel (choice cards,
 /// checkboxes, approval buttons) instead of a free-text prompt; the user's
-/// answer flows back via `acp_answer_question` (desktop) or `answer_question`
-/// (web), mirroring the permission machinery exactly-once.
+/// answer flows back via the `answer_question` request, mirroring the
+/// permission machinery exactly-once.
 pub const EVENT_QUESTION_REQUEST: &str = "acp:question_request";
 /// Event name: the agent requested structured user input (elicitation).
 pub const EVENT_ELICITATION_REQUEST: &str = "acp:elicitation_request";
@@ -349,7 +350,7 @@ pub struct ConfigOptionsUpdateEvent {
 pub struct PermissionRequestEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
-    /// Correlation id used by `acp_respond_permission` to route the user's choice
+    /// Correlation id used by `respond_permission` to route the user's choice
     /// back to the waiting agent request.
     pub request_id: String,
     pub tool_call: ToolCallUpdate,
@@ -1095,9 +1096,8 @@ pub struct UsageUpdateEvent {
 
 // Story 1.1 (AC7): the legacy `events::emit(app, event, payload)` free function
 // was REMOVED. All emission now goes through [`fan_out`] against the
-// dispatcher's `Vec<Arc<dyn EventSink>>`. The `AppHandle`-aware path lives
-// exclusively in `crate::web::TauriEventSink::emit` (the desktop's sink), so no
-// new `app.emit("acp:..")` call sites may be introduced outside that sink.
+// dispatcher's `Vec<Arc<dyn EventSink>>`, so no `app.emit("acp:..")` call
+// site may be introduced for these events.
 
 #[cfg(test)]
 mod tests;

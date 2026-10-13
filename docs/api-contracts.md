@@ -268,7 +268,7 @@ methods carry `type` only — the renderer shows them disabled ("not supported")
 never sends them to `authenticate`. `logout` remains out of scope (Ask First).
 
 **2. Authenticate before `session/new`.** The store retains the advertised methods
-and, before creating a session (`acp_new_session`), runs `acp_authenticate`
+and, before creating a session (`create_session`), runs `authenticate_agent`
 (`authenticate(methodId)`) when the agent advertises auth:
 
 - exactly one method **of type `agent`** → authenticate that method, then create
@@ -345,8 +345,7 @@ status and the same Open/Copy controls if browser popups are blocked. Its
 device-pairing flow completes when Droid confirms sign-in; paste-back remains
 available if the provider uses a localhost callback instead.
 
-- WS request `acp_deliver_auth_redirect {agentId, url}` / Tauri command
-  `acp_auth_deliver_redirect` → the host validates **http(s) scheme AND loopback
+- WS request `acp_deliver_auth_redirect {agentId, url}` → the host validates **http(s) scheme AND loopback
   host** (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`) — non-loopback is
   rejected before any fetch (SSRF guard) — then GETs the URL with redirects
   disabled and returns the HTTP status. The agent's own callback listener binds
@@ -514,13 +513,13 @@ duplicate plan UI.
   - Keeps optional `cost` only when `amount` is finite and `> 0` and `currency` is non-empty; otherwise omits cost (zero/placeholder costs are not stored).
 - TypeScript mirror: `UsageUpdateEvent` / `ACP_EVENTS.usageUpdate` in `src/renderer/lib/acp-api.ts`. Keep Rust and TypeScript field names (`agentId`, `sessionId`, `used`, `size`, `cost`) aligned.
 
-### `acp_send_prompt` errors
+### `send_prompt` errors
 
 When a *different* prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`; on `/ws` the same case is `err.code: "rate_limited"`). Do not reword this prefix without updating both sides.
 
-### `acp_send_prompt` / WS `send_prompt` reply and `turnId` dedupe
+### `send_prompt` reply and `turnId` dedupe
 
-Both carriers run the same shared service (`src-tauri/src/web/prompt_turn.rs`). The reply is either the ACP stop reason string (the turn ran on this call) or a receipt object for a resend of a `turnId` the host already saw:
+Every carrier (the WebSocket and the desktop's Tauri channel) runs the same shared service (`src-tauri/src/web/prompt_turn.rs`). The reply is either the ACP stop reason string (the turn ran on this call) or a receipt object for a resend of a `turnId` the host already saw:
 
 - `{"receipt":"in_progress"}` — the same `turnId` is still running;
 - `{"receipt":"accepted"}` — the same `turnId` already finished (including by error, timeout or crash).
@@ -539,9 +538,9 @@ Every ending of an agent is announced to every connected client, never only to t
 
 The host reaps an agent only after `--agent-idle-window-secs` (default 1800) with no host-observed activity: no running turn, no unanswered approval, question or elicitation, no running agent-owned terminal and no reopen in flight. Connections, subscriptions and presence never keep an agent alive, and a disconnect never stops one.
 
-### `acp_send_prompt` durability ordering
+### `send_prompt` durability ordering
 
-Desktop prompt persistence mirrors the WS `send_prompt` handler so a transport failure can never erase an accepted user message. The command:
+The `send_prompt` handler persists the prompt so a transport failure can never erase an accepted user message. The handler:
 
 1. verifies authoritative session ownership (`AcpManager::owns_session`) — rejects a cross-agent session id before any durable write;
 2. claims the turn by `turnId` (above);

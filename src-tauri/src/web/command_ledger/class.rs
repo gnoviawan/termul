@@ -1,5 +1,4 @@
-//! The command class table: how every `/ws` request type (and, through the
-//! shared admission helper, every Tauri `acp_*` command) is treated by the
+//! The command class table: how every `/ws` request type is treated by the
 //! receipt ledger. Mirrored 1:1 by `WS_COMMAND_CLASSES` in
 //! `src/shared/types/web-protocol.types.ts`; `class_tests` pins the parity.
 //!
@@ -98,8 +97,7 @@ impl CommandClass {
     }
 }
 
-/// Every `/ws` request type and its class. Tauri `acp_*` commands map onto
-/// these rows by [`tauri_request_type`].
+/// Every `/ws` request type and its class.
 pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("send_prompt", CommandClass::command(Replay::Entity)),
     ("cancel_prompt", CommandClass::idempotent()),
@@ -185,35 +183,10 @@ pub fn class_of(request_type: &str) -> Option<(&'static str, CommandClass)> {
         .map(|(name, class)| (*name, *class))
 }
 
-/// The class-table row a Tauri `acp_*` command shares with its `/ws`
-/// request type, for the commands the table covers.
-#[must_use]
-pub fn tauri_request_type(command: &str) -> Option<&'static str> {
-    Some(match command {
-        "acp_spawn_agent" => "spawn_agent",
-        "acp_new_session" => "create_session",
-        "acp_load_session" => "load_session",
-        "acp_resume_session" => "resume_session",
-        "acp_close_session" => "close_session",
-        "acp_dispose_ephemeral_session" => "dispose_ephemeral_session",
-        "acp_promote_session" => "promote_session",
-        "acp_register_discovered_session" => "register_discovered_session",
-        "acp_record_agent_switch" => "record_agent_switch",
-        "acp_authenticate" => "authenticate_agent",
-        "acp_logout" => "logout_agent",
-        "acp_auth_deliver_redirect" => "acp_deliver_auth_redirect",
-        "acp_respond_elicitation" => "respond_elicitation",
-        "acp_delete_agent_session" => "delete_agent_session",
-        "acp_install_agent" => "install_acp_agent",
-        _ => return None,
-    })
-}
-
 /// The payload fields that identify WHAT a request of this type acts on:
 /// entity names only (dotted paths reach into objects). Never args, env, text,
 /// urls, tokens or any other content, so a fingerprint derives from nothing
-/// secret and one id is consistent across the `/ws` and Tauri carriers (which
-/// build the same field names).
+/// secret.
 fn identifying_fields(request_type: &str) -> &'static [&'static str] {
     match request_type {
         "create_session" => &["agentId", "cwd", "projectId"],

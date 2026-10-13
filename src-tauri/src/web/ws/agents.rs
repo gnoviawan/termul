@@ -11,8 +11,8 @@ use super::*;
 // emitted by `AcpManager` (via `fan_out` → `WsRelaySink`) flow back to the
 // browser automatically — these handlers only own the request/reply half.
 
-/// `spawn_agent` → `AcpManager::spawn(config)`. Mirrors Tauri `acp_spawn_agent`
-/// invoke args `{ config }`. Reply payload = the [`SpawnOutcome`] (camelCase:
+/// `spawn_agent` → `AcpManager::spawn(config)`. Request payload `{ config }`.
+/// Reply payload = the [`SpawnOutcome`] (camelCase:
 /// `agentId`/`capabilities`/`authMethods`/`stableNamespace?`) — the
 /// authoritative spawn metadata so the renderer populates the store
 /// synchronously from the response (CAP-4: the spawn response — not the async
@@ -39,7 +39,7 @@ pub(super) async fn handle_spawn_agent(
             )
         }
     };
-    // Shared with Tauri `acp_spawn_agent`: trim + non-empty name/command/configId.
+    // Trim + non-empty name/command/configId.
     if let Err(e) = crate::acp::config::validate_spawn_config(&mut parsed.config) {
         return acp_err_to_reply(id, e);
     }
@@ -49,7 +49,7 @@ pub(super) async fn handle_spawn_agent(
     }
 }
 
-/// `kill_agent` → `AcpManager::kill(agent_id)`. Mirrors Tauri `acp_kill_agent`.
+/// `kill_agent` → `AcpManager::kill(agent_id)`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct KillAgentPayload {
@@ -81,7 +81,7 @@ pub(super) async fn handle_kill_agent(
 /// `AgentSummary[]` — identity-rich `{ id, name, configId?, namespace?,
 /// capabilities }` objects, replacing bare id strings. The only in-repo
 /// consumer (`WsAcpTransport.listAgents`) maps `.id`; `listAgentDetails`
-/// keeps the full summaries. Desktop parity: `acp_list_agent_details`.
+/// keeps the full summaries.
 pub(super) async fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
     // Issue #837: enrich each summary with the agent's owned-session set so a
     // reloading web client can resolve "which live agent owns this session"
@@ -208,9 +208,8 @@ pub(super) struct InstallAcpAgentPayload {
     agent_id: String,
 }
 
-/// `install_acp_agent` WS request handler. Mirrors the desktop
-/// `#[tauri::command] acp_install_agent` + HTTP `POST /acp/install` handlers.
-/// Degrade-mode (`acp_install: None`) returns `ACP_INSTALL_UNAVAILABLE`. All
+/// `install_acp_agent` WS request handler. Mirrors the HTTP `POST /acp/install`
+/// handler. Degrade-mode (`acp_install: None`) returns `ACP_INSTALL_UNAVAILABLE`. All
 /// errors carry SCREAMING_SNAKE_CASE codes byte-identical to the other
 /// transports via `WsReply::err_with_code` (the protocol-level `WsErrorCode`
 /// enum is snake_case, so the install codes use the raw-string constructor).
@@ -247,8 +246,7 @@ pub(super) async fn handle_install_acp_agent(
 /// Runs the ACP agent-advertised `authenticate` method (e.g.
 /// `pi_terminal_login`) on the host where the agent process runs. Distinct
 /// from the WS connection `authenticate` token gate — this is the agent
-/// method, not the relay handshake. Mirrors the desktop `acp_authenticate`
-/// Tauri command (both call `AcpManager::authenticate`). The provider owns
+/// method, not the relay handshake. Calls `AcpManager::authenticate`. The provider owns
 /// the login UX (often opens its own browser); Termul never invents a
 /// redirect URL or stores credentials.
 #[derive(Debug, Deserialize)]
@@ -310,8 +308,7 @@ pub(super) async fn handle_authenticate_agent(
 /// redirect URL from the user's own browser and delivers it here. The manager
 /// validates it is http(s) AND loopback-only (SSRF guard — a non-loopback URL
 /// is rejected before any outbound request), then GETs it so the agent's own
-/// callback listener completes the flow. Mirrors the desktop
-/// `acp_auth_deliver_redirect` Tauri command (both call
+/// callback listener completes the flow (via
 /// `AcpManager::deliver_auth_redirect`). Success payload `{status}` is the
 /// listener's HTTP status code.
 #[derive(Debug, Deserialize)]

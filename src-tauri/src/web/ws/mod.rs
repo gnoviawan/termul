@@ -8,8 +8,8 @@
 //!
 //! The **envelope** fields (`sid`, `seq`, `type`, `payload`) are snake_case.
 //! The **payload** is the existing camelCase-serialized ACP event struct
-//! `Value` (byte-identical to what `TauriEventSink` emits today — `fan_out`
-//! serializes ONCE, fans out N). This module does NOT re-case payloads.
+//! `Value` (`fan_out` serializes ONCE, fans out N). This module does NOT
+//! re-case payloads.
 //!
 //! # OS vs human cap boundary (AC8)
 //!
@@ -583,17 +583,16 @@ pub struct AppState {
     /// desktop could not open `AcpCatalogService` at startup (degraded mode —
     /// routes return `ACP_CATALOG_UNAVAILABLE`). The web/remote client reads
     /// the resolved catalog through `GET /acp/catalog` + WS
-    /// `list_acp_catalog`; the desktop renderer uses the `acp_list_catalog` +
-    /// `acp_set_catalog_opt_in` Tauri commands (same `IpcResult<T>` shape
-    /// byte-for-byte).
+    /// `list_acp_catalog`; the desktop renderer sends the same WS requests over
+    /// its channel carrier.
     pub acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     /// Host-owned verified-atomic ACP install service (CAP-6 / Story 9). `None`
     /// when the desktop could not open `AcpInstallService` at startup (degraded
     /// mode — the `install_acp_agent` handler returns
     /// `ACP_INSTALL_UNAVAILABLE`). The web/remote client installs a catalog
     /// agent through `POST /acp/install` (catalog_api sibling) + WS
-    /// `install_acp_agent`; the desktop renderer uses the `acp_install_agent`
-    /// Tauri command (same `IpcResult<T>` shape byte-for-byte).
+    /// `install_acp_agent`; the desktop renderer sends the same WS request over
+    /// its channel carrier.
     pub acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     /// Issue #613: server-side generic key-value store for web-client state
     /// (terminal layout, settings, editor state, command history, snapshots,

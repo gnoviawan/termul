@@ -1,5 +1,5 @@
-//! The shared admission helper: `/ws` dispatch and the Tauri `acp_*` commands
-//! both run a ledgered command through [`run_command`], so one place decides
+//! The shared admission helper: `/ws` dispatch (every carrier) runs a
+//! ledgered command through [`run_command`], so one place decides
 //! record-before-execute, replay, wait-for-in-flight and `Unknown`.
 
 use std::future::Future;

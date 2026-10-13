@@ -154,8 +154,7 @@ pub(super) struct RespondPermissionPayload {
 /// capability is enforced before dispatch (`forbidden_reply`).
 ///
 /// Requires a server-side rendezvous attached to the relay (`relay.rendezvous()`).
-/// On the desktop path (no rendezvous) the browser never reaches this handler
-/// — the desktop uses the `acp_respond_permission` Tauri command directly.
+/// Without a rendezvous the request is refused (`not_implemented`).
 pub(super) async fn handle_respond_permission(
     id: String,
     payload: &Value,
@@ -166,7 +165,7 @@ pub(super) async fn handle_respond_permission(
         return WsReply::err(
             id,
             WsErrorCode::NotImplemented,
-            "permission rendezvous is not attached (desktop path uses the Tauri command)",
+            "permission rendezvous is not attached",
         );
     };
 
@@ -261,9 +260,8 @@ pub(super) struct AnswerQuestionPayload {
 /// `already_resolved` for a later answer).
 ///
 /// Requires a server-side question rendezvous attached to the relay
-/// (`relay.question_rendezvous()`). On the desktop path (no rendezvous) the
-/// browser never reaches this handler — the desktop uses the `acp_answer_question`
-/// Tauri command directly.
+/// (`relay.question_rendezvous()`). Without a rendezvous the request is refused
+/// (`not_implemented`).
 pub(super) async fn handle_answer_question(
     id: String,
     payload: &Value,
@@ -274,7 +272,7 @@ pub(super) async fn handle_answer_question(
         return WsReply::err(
             id,
             WsErrorCode::NotImplemented,
-            "question rendezvous is not attached (desktop path uses the Tauri command)",
+            "question rendezvous is not attached",
         );
     };
 

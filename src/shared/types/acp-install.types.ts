@@ -4,9 +4,9 @@
  * Mirrors the Rust serde shapes in `src-tauri/src/acp/install.rs` byte-for-byte
  * (camelCase). The host downloads + verifies (sha256) + extracts + atomically
  * activates ACP agent archives resolved from the catalog, records an
- * installed-agents manifest, and serves `install_agent(agentId)` across all
- * three transports (Tauri command `acp_install_agent`, HTTP `POST /acp/install`,
- * WS `install_acp_agent`).
+ * installed-agents manifest, and serves `install_agent(agentId)` over HTTP
+ * `POST /acp/install` and the WS request `install_acp_agent` (the desktop sends
+ * it over its channel carrier).
  *
  * The request is `{ agentId }` ONLY; the host resolves everything (archive URL,
  * cmd, args, env, sha256) from the trusted catalog — never accepts
@@ -15,7 +15,7 @@
 
 import type { IpcResult } from './ipc.types'
 
-/** `POST /acp/install` + WS `install_acp_agent` + Tauri `acp_install_agent` body. */
+/** `POST /acp/install` + WS `install_acp_agent` body. */
 export interface InstallRequest {
   agentId: string
 }
@@ -51,7 +51,7 @@ export type InstallErrorCode =
   | 'INSTALL_FAILED'
 
 /**
- * `acp_install_agent(agentId)` — host-owned verified-atomic ACP install.
+ * `install_acp_agent(agentId)` — host-owned verified-atomic ACP install.
  * Returns `{ command: absolute_path, args }` on success. Errors carry the
  * codes above. Mirrors `POST /acp/install` + WS `install_acp_agent`.
  */

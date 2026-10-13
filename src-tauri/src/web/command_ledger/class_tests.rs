@@ -151,30 +151,6 @@ fn credential_bearing_kinds_are_receipt_only() {
 }
 
 #[test]
-fn every_tauri_command_maps_onto_a_class_row() {
-    for command in [
-        "acp_spawn_agent",
-        "acp_new_session",
-        "acp_load_session",
-        "acp_resume_session",
-        "acp_close_session",
-        "acp_dispose_ephemeral_session",
-        "acp_promote_session",
-        "acp_register_discovered_session",
-        "acp_record_agent_switch",
-        "acp_authenticate",
-        "acp_logout",
-        "acp_auth_deliver_redirect",
-        "acp_respond_elicitation",
-        "acp_delete_agent_session",
-        "acp_install_agent",
-    ] {
-        let request_type = tauri_request_type(command).expect(command);
-        assert!(class_of(request_type).is_some(), "{command} -> {request_type}");
-    }
-}
-
-#[test]
 fn a_fingerprint_covers_identifying_fields_only() {
     let base = Fingerprint::of("create_session", &json!({"agentId": "x", "cwd": "/a"}));
     let reordered = Fingerprint::of("create_session", &json!({"cwd": "/a", "agentId": "x"}));

@@ -1,6 +1,6 @@
 //! The command receipt ledger (AD-5): an in-memory map from a client-minted
-//! `commandId` to what the host did with it, shared by `/ws` and the Tauri
-//! `acp_*` commands through [`crate::web::sink::WsRelaySink::ledger`].
+//! `commandId` to what the host did with it, shared by `/ws`, the HTTP routes
+//! and the Tauri domain commands through [`crate::web::sink::WsRelaySink::ledger`].
 //!
 //! * A command is recorded as in progress BEFORE it executes ([`CommandLedger::begin`]).
 //! * A same-id resend gets the original outcome class ([`Settled`]) and never
@@ -34,9 +34,7 @@ use crate::web::config::MAX_RECEIPT_RETENTION_SECS;
 pub use admission::{
     lookup_created, run_command, run_command_released, run_command_with, Command, CommandResult, Ran,
 };
-pub use class::{
-    class_of, tauri_request_type, ClassKind, CommandClass, Fingerprint, Replay, WS_COMMAND_CLASSES,
-};
+pub use class::{class_of, ClassKind, CommandClass, Fingerprint, Replay, WS_COMMAND_CLASSES};
 pub use http::{
     command_id_from_headers, domain_class, fingerprint_of, found_entity, no_entity, run_domain,
     run_domain_released, run_http, run_http_released, DomainRan, HttpRan,

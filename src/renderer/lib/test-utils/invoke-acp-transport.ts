@@ -1,15 +1,20 @@
 /**
  * Test double for the desktop ACP transport: maps every transport method to a
- * Tauri `invoke` of a per-domain command so store/hook suites can script the
- * carrier boundary with a single `invoke` mock instead of a `/ws` relay.
+ * Tauri `invoke` named after the matching operation, so store/hook suites can
+ * script the carrier boundary with a single `invoke` mock instead of a `/ws`
+ * relay.
  *
- * It is NOT production code: the shipped desktop transport is
- * `DesktopAcpTransport` (the `/ws` protocol over `ChannelSocket`), covered by
- * `acp-transport-carriers.test.ts`. `vitest.setup.ts` swaps it in for
+ * It is NOT production code, and the `acp_*` names it invokes are only this
+ * double's scripting vocabulary: the host registers no per-domain command for
+ * them. The shipped desktop transport is `DesktopAcpTransport` (the `/ws`
+ * protocol over `ChannelSocket`), covered by `acp-transport-carriers.test.ts`;
+ * only the host-local commands (probes, timeouts, registry snapshot/binary
+ * install) are real `invoke`s. `vitest.setup.ts` swaps the double in for
  * `DesktopAcpTransport`; suites that exercise the real class opt out with
  * `vi.unmock('@/lib/acp-transport/desktop-transport')`.
  */
 
+import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import type { PersistedSessionSummary, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
@@ -110,13 +115,11 @@ export function createInvokeAcpTransport(): AcpTransport {
   return {
     installRegistryBinary: (request) =>
       invoke<InstallAcpRegistryBinaryOutcome>('acp_install_registry_binary', { request }),
-    // CAP-6 / Story 9: the host-owned verified-atomic install. The Tauri
-    // adapter invokes the new `acp_install_agent` command (the host resolves
-    // the agent by id from the catalog — no browser-supplied URLs/args). The
-    // command returns `IpcResult<InstallOutcome>`; this adapter unwraps the
-    // envelope so the launcher's `installedBinaryConfig(installed, ...)` gets
-    // the bare `{ command, args }` (mirrors the web/WS transport). A failure
-    // throws `AcpTransportError` carrying the install error code.
+    // The host-owned verified-atomic install. The scripted `invoke` returns
+    // `IpcResult<InstallOutcome>`; this adapter unwraps the envelope so the
+    // launcher's `installedBinaryConfig(installed, ...)` gets the bare
+    // `{ command, args }` (as the real transport does). A failure throws
+    // `AcpTransportError` carrying the install error code.
     installAcpAgent: async (agentId, options) => {
       const result = await invokeCommand<IpcResult<InstallAcpRegistryBinaryOutcome>>(
         'acp_install_agent',
@@ -127,6 +130,17 @@ export function createInvokeAcpTransport(): AcpTransport {
         return result.data
       }
       throw new AcpTransportError(result.code, result.error)
+    },
+    listCatalog: async (refresh) => {
+      const result = await invoke<IpcResult<AcpCatalog>>('acp_list_catalog', {
+        refresh: refresh ?? false
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    setCatalogOptIn: async (enabled) => {
+      const result = await invoke<IpcResult<void>>('acp_set_catalog_opt_in', { enabled })
+      if (!result.success) throw new AcpTransportError(result.code, result.error)
     },
     probeRuntime: () => invoke<AcpRuntimeAvailability>('acp_probe_runtime'),
     setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),

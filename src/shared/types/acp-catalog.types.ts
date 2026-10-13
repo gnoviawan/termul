@@ -3,10 +3,10 @@
  *
  * Mirrors the Rust serde shapes in `src-tauri/src/acp/catalog.rs` byte-for-byte
  * (camelCase). The host resolves the catalog (OS/arch/runtime + per-agent
- * `SupportedAcpAgentStatus`) and serves it across all three transports (Tauri
- * command `acp_list_catalog`, HTTP `GET /acp/catalog`, WS `list_acp_catalog`).
- * The renderer facade (`acp-catalog-api.ts`) resolves Tauri vs HTTP at runtime;
- * the WS transport implements the real `listCatalog()` request.
+ * `SupportedAcpAgentStatus`) and serves it over HTTP `GET /acp/catalog` and the
+ * WS request `list_acp_catalog` (the desktop sends it over its channel carrier).
+ * The renderer facade (`acp-catalog-api.ts`) resolves desktop vs HTTP at
+ * runtime; the WS transport implements the real `listCatalog()` request.
  *
  * The catalog is credential-free, path-free, read-only host introspection —
  * never carries `AgentConfig.env` (API keys) or resolved absolute executable
@@ -97,24 +97,25 @@ export interface SetCatalogOptInRequest {
 }
 
 /**
- * `acp_list_catalog(refresh?: boolean)` — resolve the host-owned ACP catalog.
+ * `list_acp_catalog(refresh?: boolean)` — resolve the host-owned ACP catalog.
  * Returns the host's OS/arch/runtime availability + per-agent resolved
  * `SupportedAcpAgentStatus`. Mirrors `GET /acp/catalog` + WS `list_acp_catalog`.
  */
 export type AcpCatalogListChannel = (refresh?: boolean) => Promise<IpcResult<AcpCatalog>>
 
 /**
- * `acp_set_catalog_opt_in(enabled: boolean)` — persist the host opt-in flag
+ * `set_catalog_opt_in(enabled: boolean)` — persist the host opt-in flag
  * that gates the CDN registry augmentation. Mirrors `POST /acp/catalog/opt-in`
  * + WS `set_catalog_opt_in`.
  */
 export type AcpCatalogSetOptInChannel = (enabled: boolean) => Promise<IpcResult<void>>
 
 /**
- * The renderer-facing ACP catalog facade. Resolves to the Tauri command impl
- * when running inside a Tauri webview, the HTTP fetch impl when running as a
- * web/remote client. Both impls return the same `IpcResult<...>` shape
- * byte-for-byte (the parity-checklist test pins this).
+ * The renderer-facing ACP catalog facade. Resolves to the desktop impl (the
+ * `/ws` request over the Tauri channel carrier) when running inside a Tauri
+ * webview, the HTTP fetch impl when running as a web/remote client. Both
+ * impls return the same `IpcResult<...>` shape byte-for-byte (the
+ * parity-checklist test pins this).
  */
 export interface AcpCatalogApi {
   listCatalog: AcpCatalogListChannel

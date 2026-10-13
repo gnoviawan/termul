@@ -34,9 +34,6 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::acp::commands::{
-    COMMAND_ACCEPTED, COMMAND_CONFLICT, COMMAND_IN_PROGRESS, INVALID_COMMAND_ID, OUTCOME_UNKNOWN,
-};
 use crate::web::fs_api::IpcBody;
 
 use super::{
@@ -61,6 +58,22 @@ pub const IN_PROGRESS_RECEIPT: &str = "in_progress";
 
 /// Error-text prefix (Tauri) of a stale precondition.
 pub const PRECONDITION_FAILED_PREFIX: &str = "precondition_failed";
+
+// Error-text prefixes (Tauri) of the verdicts that are not an outcome: a
+// `Result<T, String>` command cannot carry a code, so the text starts with one.
+
+/// Error-text prefix for a malformed `commandId`.
+const INVALID_COMMAND_ID: &str = "invalid_command_id";
+/// Error-text prefix for a `commandId` reused for a different request.
+const COMMAND_CONFLICT: &str = "command_conflict";
+/// Error-text prefix for a resend whose outcome is no longer known.
+const OUTCOME_UNKNOWN: &str = "outcome_unknown";
+/// Error-text prefix for a resend while the first run is still going.
+const COMMAND_IN_PROGRESS: &str = "command_in_progress";
+/// Error-text prefix for a resend of a command that succeeded but whose reply
+/// is not retained (receipt-only kinds, or a reply over the storage cap). The
+/// command ran; only its result is gone.
+const COMMAND_ACCEPTED: &str = "command_accepted";
 
 /// A create whose reply and rejection text are never stored (its request
 /// carries content).

@@ -85,8 +85,8 @@ impl HostPlanServer {
     /// the dedicated accept-loop thread. Blocks until the port is known (so
     /// `register_session` callers see a valid port immediately).
     ///
-    /// The sinks are the AcpManager's event sinks (`TauriEventSink` on desktop,
-    /// `WsRelaySink` on standalone). `fan_out` over zero sinks is a no-op, so a
+    /// The sinks are the AcpManager's event sinks (the `WsRelaySink` on desktop and on
+    /// standalone). `fan_out` over zero sinks is a no-op, so a
     /// unit-test `HostPlanServer` with `vec![]` is legal (just emits nothing).
     #[must_use]
     pub fn start(

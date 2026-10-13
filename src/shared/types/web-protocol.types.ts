@@ -9,7 +9,7 @@
  *
  * The **envelope** fields (`sid`, `seq`, `type`, `payload`) are snake_case.
  * The **payload** is the existing camelCase-serialized ACP event struct
- * `Value` (byte-identical to what `TauriEventSink` emits today). The relay
+ * `Value`. The relay
  * serializes the payload ONCE via `fan_out` and forwards the `Value`
  * verbatim — this file does NOT re-case payload fields. `acp-api.ts` becomes
  * a no-op case boundary for payload fields; only the envelope is mapped.
@@ -115,21 +115,20 @@ export const WS_EVENT_TYPES = [
 export type WsEventType = (typeof WS_EVENT_TYPES)[number]
 
 // ============================================================================
-// Request `type` names (13) — acp_* command names prefix-dropped (AC2)
+// Request `type` names — `acp_*` operation names prefix-dropped (AC2)
 // ============================================================================
 
 /**
- * The 17 WS request `type` names. Mirror the existing `acp_*` Tauri command
- * names with the `acp_` prefix dropped, snake_case. `create_session` maps to
- * the Tauri command `acp_new_session` (NOT `acp_create_session`); the WS
- * request `type` is `create_session` per architecture naming.
+ * The 17 WS request `type` names: the `acp_*` operation names with the `acp_`
+ * prefix dropped, snake_case (`create_session` is the session-creation
+ * request). Every carrier (the WebSocket and the desktop's Tauri channel)
+ * sends these.
  *
- * Agent lifecycle (`spawn_agent` / `kill_agent` / `list_agents`) mirrors
- * `acp_spawn_agent` / `acp_kill_agent` for web desktop parity; since CAP-11 the
- * identity-rich WS `list_agents` reply pairs with `acp_list_agent_details`
- * (desktop `acp_list_agents` keeps returning bare ids).
+ * Agent lifecycle (`spawn_agent` / `kill_agent` / `list_agents`); since CAP-11
+ * the identity-rich `list_agents` reply carries `WsAgentSummary` entries and
+ * `WsAcpTransport.listAgents` maps them to bare ids.
  *
- * `subscribe` (Story 1.6) is relay-level (not an `acp_*` command): binds a
+ * `subscribe` (Story 1.6) is relay-level (not an agent operation): binds a
  * connection to a session event log with an optional `lastSeq` cursor.
  * `ping` is a relay-level heartbeat: a client-emitted request that round-trips
  * an ok reply so the server's keepalive watchdog (`last_activity`) stays fresh
@@ -236,7 +235,7 @@ export const WS_REQUEST_TYPES = [
   'update_project',
   'remove_project',
   // CAP-2 (spec-in-chat-agent-switch): host-authored durable agent-switch
-  // marker. Mirrors the `acp_record_agent_switch` Tauri command: the host
+  // marker: the host
   // numbers ONE `agent_switch` record, appends it durably and delivers the
   // `acp:agent_switch` event to live clients under the same seq. Reply `{}`;
   // unknown session → `not_found`; live-only mode → `unsupported`.
@@ -357,8 +356,7 @@ export interface DeleteSessionPayload {
 
 /**
  * `record_agent_switch` request payload (CAP-2, spec-in-chat-agent-switch).
- * Host-authored durable agent-switch marker — mirrors the
- * `acp_record_agent_switch` Tauri command args; the durable record's payload
+ * Host-authored durable agent-switch marker; the durable record's payload
  * is the `agent_switch` event built from them (these fields plus the
  * runtime `agentId`). Reply: `{}` on success; `not_found` for an unknown
  * session; `unsupported` in live-only mode or on a storage failure.
@@ -405,7 +403,6 @@ export interface AgentCapabilities {
  * the bare id-string array. `configId`/`namespace` are omitted when absent
  * (server-side `skip_serializing_if`). `WsAcpTransport.listAgents` maps
  * these to bare ids; `listAgentDetails` returns the full summaries.
- * Desktop parity: the `acp_list_agent_details` Tauri command.
  */
 export interface WsAgentSummary {
   id: string
@@ -887,8 +884,7 @@ export function isHumanRelayedCap(cap: string): boolean {
  * A WS event envelope pushed server→client.
  *
  * Envelope fields are snake_case (`sid`, `seq`, `type`, `payload`); the
- * `payload` is the existing camelCase ACP event struct value (byte-identical
- * to `TauriEventSink`'s emission). `sid` is `null` for agent-level events
+ * `payload` is the existing camelCase ACP event struct value. `sid` is `null` for agent-level events
  * (`agent_spawned`, `agent_disconnected`, `agent_error` without a session,
  * `auth_required`); `seq` is `0` for agent-level + relay-level events.
  */

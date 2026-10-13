@@ -7,6 +7,7 @@ use crate::acp::session_persistence::{
     SESSION_SCHEMA_VERSION,
 };
 use serde::Serialize;
+use serde_json::json;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -192,18 +193,15 @@ async fn ws_relay_sink_delivers_events_in_order() {
     assert_eq!(drained[0].payload["sessionId"], "sess-1");
 }
 
-/// AC: `WsRelaySink` + `TauriEventSink` in the same fan-out both receive
-/// the SAME payload (Story 1.1 byte-identity invariant). We can't
-/// construct a real `AppHandle` in a unit test, so a custom sink records
-/// the `AcpEvent` the way `TauriEventSink` would emit it; we then assert
-/// the WS relay delivered an identical `Value` to a subscribed client.
+/// AC: `WsRelaySink` + a second sink in the same fan-out both receive
+/// the SAME payload (byte-identity invariant). A custom sink records the
+/// `AcpEvent` it is handed; we then assert the WS relay delivered an
+/// identical `Value` to a subscribed client.
 /// The relay strips the `acp:` prefix from `type_` (AC2) but passes the
 /// `payload` `Value` through verbatim (AC3 — byte-identity invariant).
 #[tokio::test]
 async fn fan_out_delivers_identical_payload_to_every_sink() {
-    /// A second recorder used as a stand-in for `TauriEventSink`'s view of
-    /// the event (we can't build a real `AppHandle` here). It captures the
-    /// exact `AcpEvent` handed to `emit`.
+    /// A second recorder that captures the exact `AcpEvent` handed to `emit`.
     struct CapturingSink {
         seen: Mutex<Vec<AcpEvent>>,
     }
@@ -214,10 +212,10 @@ async fn fan_out_delivers_identical_payload_to_every_sink() {
     }
 
     let ws = Arc::new(WsRelaySink::new());
-    let tauri_stand_in = Arc::new(CapturingSink {
+    let second_sink = Arc::new(CapturingSink {
         seen: Mutex::new(Vec::new()),
     });
-    let sinks: Vec<Arc<dyn EventSink>> = vec![tauri_stand_in.clone(), ws.clone()];
+    let sinks: Vec<Arc<dyn EventSink>> = vec![second_sink.clone(), ws.clone()];
 
     // Subscribe BEFORE emitting so the WS client receives the event live.
     ws.seed_session_for_test("sess-7");
@@ -230,17 +228,17 @@ async fn fan_out_delivers_identical_payload_to_every_sink() {
         &TestPayload::new("a2", "sess-7", "hello"),
     );
 
-    let tauri_view = tauri_stand_in.seen.lock().drain(..).collect::<Vec<_>>();
+    let second_view = second_sink.seen.lock().drain(..).collect::<Vec<_>>();
     let ws_view = drain_rx(&mut rx);
 
-    assert_eq!(tauri_view.len(), 1);
+    assert_eq!(second_view.len(), 1);
     assert_eq!(ws_view.len(), 1);
     // The relay strips the `acp:` prefix from the WS event type (AC2).
-    assert_eq!(tauri_view[0].type_, "acp:tool_call");
+    assert_eq!(second_view[0].type_, "acp:tool_call");
     assert_eq!(ws_view[0].type_, "tool_call");
-    assert_eq!(ws_view[0].sid.as_deref(), tauri_view[0].sid.as_deref());
+    assert_eq!(ws_view[0].sid.as_deref(), second_view[0].sid.as_deref());
     assert_eq!(
-        ws_view[0].payload, tauri_view[0].payload,
+        ws_view[0].payload, second_view[0].payload,
         "both sinks must see the SAME serialized Value (serialize-once-fan-out-N)"
     );
     assert_eq!(ws_view[0].payload["message"], "hello");

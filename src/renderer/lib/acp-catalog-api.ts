@@ -1,8 +1,9 @@
 /**
  * ACP catalog API singleton (CAP-6 / Story 8).
  *
- * Resolves to the Tauri IPC impl when running inside a Tauri webview; the
- * fetch-backed HTTP impl when running as a web/remote client. Both impls
+ * Resolves to the desktop impl (the `/ws` request over the Tauri IPC channel
+ * carrier) when running inside a Tauri webview; the fetch-backed HTTP impl
+ * when running as a web/remote client. Both impls
  * return the same `IpcResult<...>` shape byte-for-byte (the
  * `parity-checklist.test.ts` pins this).
  *
@@ -12,19 +13,19 @@
  */
 
 import type { AcpCatalogApi } from '@shared/types/acp-catalog.types'
-import { createTauriAcpCatalogApi } from './tauri-acp-catalog-api'
+import { createDesktopAcpCatalogApi } from './desktop-acp-catalog-api'
 import { isTauriContext } from './tauri-runtime'
 import { webAcpCatalogApi } from './web-acp-catalog-api'
 
 /**
  * Singleton `AcpCatalogApi` instance.
  *
- * Uses the Tauri IPC implementation when running in a Tauri webview.
+ * Uses the desktop implementation when running in a Tauri webview.
  * Uses the fetch-backed HTTP implementation when running in a browser.
  */
 export const acpCatalogApi: AcpCatalogApi = isTauriContext()
-  ? createTauriAcpCatalogApi()
+  ? createDesktopAcpCatalogApi()
   : webAcpCatalogApi
 
-export { createTauriAcpCatalogApi } from './tauri-acp-catalog-api'
+export { createDesktopAcpCatalogApi } from './desktop-acp-catalog-api'
 export { webAcpCatalogApi } from './web-acp-catalog-api'
