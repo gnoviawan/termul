@@ -117,8 +117,11 @@ impl Host {
             .channel
             .get_or_init(|| {
                 let scratch = tempfile::tempdir().expect("scratch store dir");
-                let store = crate::web::store::WebStore::open(scratch.path().join("store.json"))
-                    .expect("open the scratch store");
+                let store = crate::web::store::WebStore::open(
+                    scratch.path().join("store.json"),
+                    crate::web::store::StorePolicy::default(),
+                )
+                .expect("open the scratch store");
                 let state = AppState::desktop_local(crate::web::router::DesktopLocalParts {
                     acp: Arc::clone(&self.state.acp),
                     pty: Arc::clone(&self.state.pty),
