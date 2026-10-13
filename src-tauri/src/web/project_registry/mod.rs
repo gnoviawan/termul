@@ -103,8 +103,8 @@ pub struct ProjectSummary {
     /// `true` when the project is archived (rendered greyed, not clickable).
     pub is_archived: bool,
     /// `true` when this is the host's default project (set by the host based on
-    /// `default_project_id`). Distinct from a client's per-connection active
-    /// project — the host cannot know which project a specific client is on.
+    /// `default_project_id`). Distinct from each client's own active project,
+    /// which is a per-device setting that the host does not derive from this flag.
     pub is_default: bool,
 }
 
@@ -287,18 +287,6 @@ impl ProjectRegistry {
             .projects
             .iter()
             .any(|p| p.id == project_id)
-    }
-
-    /// Resolve a project id → its cwd (`path`), or `None` when the project is
-    /// not in the registry or has no cwd.
-    #[must_use]
-    pub fn find_path(&self, project_id: &str) -> Option<String> {
-        let g = self.inner.lock();
-        g.projects
-            .iter()
-            .find(|p| p.id == project_id)
-            .and_then(|p| p.path.clone())
-            .filter(|p| !p.trim().is_empty())
     }
 
     /// Resolve a cwd (`path`) → its project id, or `None` when no registered

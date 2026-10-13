@@ -105,23 +105,6 @@ fn upsert_recomputes_default_and_clears_archived_default() {
 }
 
 #[test]
-fn find_path_resolves_known_with_cwd() {
-    let reg = ProjectRegistry::new();
-    reg.set(
-        vec![sample("p-1", Some("/a"), false), sample("p-2", None, false)],
-        Some("p-1".to_string()),
-    );
-    assert_eq!(reg.find_path("p-1").as_deref(), Some("/a"));
-    // No cwd → None (cannot switch).
-    assert_eq!(reg.find_path("p-2"), None);
-    // Unknown id → None.
-    assert_eq!(reg.find_path("missing"), None);
-    // Whitespace-only path → None.
-    reg.set(vec![sample("p-x", Some("   "), false)], None);
-    assert_eq!(reg.find_path("p-x"), None);
-}
-
-#[test]
 fn replacing_with_an_empty_list_empties_the_registry() {
     let reg = ProjectRegistry::new();
     reg.set(
@@ -186,7 +169,7 @@ fn vfs_root_maps_to_project_summary_redacting_env() {
         "ProjectSummary must not carry env-var values"
     );
 
-    // An empty-path VfsRoot surfaces path: None (mirrors find_path's skip).
+    // An empty-path VfsRoot surfaces path: None (an empty cwd is not usable).
     let empty_root = VfsRoot {
         id: "p-empty".to_string(),
         name: "Empty".to_string(),

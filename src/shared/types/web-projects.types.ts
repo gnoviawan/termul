@@ -33,8 +33,8 @@ export interface ProjectSummary {
   isArchived: boolean
   /**
    * `true` when this is the host's default project (set by the host based on
-   * `default_project_id`). Distinct from a client's per-connection active
-   * project — the host cannot know which project a specific client is on.
+   * `default_project_id`). Distinct from each client's own active project,
+   * which is a per-device setting that the host does not derive from this flag.
    * The renderer's `Project.isActive` stays (set locally by `selectProject`).
    */
   isDefault: boolean
