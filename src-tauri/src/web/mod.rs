@@ -53,7 +53,6 @@ pub mod skills_api;
 pub mod store;
 pub mod terminal_ws;
 pub mod watch;
-pub mod workspace_api;
 pub mod worktree_api;
 pub mod worktree_rename_api;
 pub mod ws;
@@ -108,13 +107,6 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// default); the desktop host builds its own once at setup and calls
 /// [`serve_router`] directly (it never reaches this `serve` wrapper).
 ///
-/// `workspace_manifest` is the host-owned [`WorkspaceManifestService`] for
-/// CAP-5 / Story 5 — atomically persists one versioned workspace manifest per
-/// project. The standalone binary opens it under
-/// `<service_account_state_dir>/workspace-manifests`; the desktop host opens
-/// its own under `<app_data_dir>/workspace-manifests` (never shared across
-/// processes — `Never`-clause). `None` degrades to fresh-only mode.
-///
 /// `acp_catalog` is the host-owned [`AcpCatalogService`] for CAP-6 / Story 8 —
 /// resolves the trusted ACP catalog (OS/arch/runtime + per-agent status). The
 /// standalone binary opens it under `<service_account_state_dir>/acp-catalog`;
@@ -146,7 +138,6 @@ pub async fn serve(
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
     cfg: ServerConfig,
-    workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     store: Arc<WebStore>,
@@ -183,7 +174,6 @@ pub async fn serve(
         registry,
         cfg,
         shutdown_signal_future(),
-        workspace_manifest,
         acp_catalog,
         acp_install,
         store,
@@ -284,7 +274,6 @@ pub async fn serve_router(
     registry: Arc<crate::web::project_registry::ProjectRegistry>,
     cfg: ServerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
-    workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     store: Arc<WebStore>,
@@ -357,7 +346,6 @@ pub async fn serve_router(
         Arc::clone(&ws_relay),
         Arc::clone(&registry),
         history_mode,
-        workspace_manifest,
         acp_catalog,
         acp_install,
         Some(store),

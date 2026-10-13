@@ -99,7 +99,6 @@ fn test_state_with_root(root: &Path) -> AppState {
             std::collections::HashMap::new(),
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,

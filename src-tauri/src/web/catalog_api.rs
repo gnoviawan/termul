@@ -117,7 +117,6 @@ pub async fn list(
 /// Manual body deserialization so a `deny_unknown_fields` rejection surfaces
 /// as 200 + `IpcBody::err(VALIDATION_ERROR)` — NOT a 4xx JsonRejection (which
 /// the renderer would map to `NETWORK_ERROR`, masking the validation failure).
-/// Mirrors the `workspace_api::write` handler pattern.
 pub async fn set_opt_in(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,

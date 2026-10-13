@@ -24,7 +24,7 @@ use crate::web::acp_api;
 use crate::web::auth::WebAuth;
 
 use crate::acp::{
-    AcpCatalogService, AcpInstallService, AcpManager, WorkspaceManifestService,
+    AcpCatalogService, AcpInstallService, AcpManager,
 };
 use crate::canvas::pool::CanvasDaemonPool;
 use crate::pty::PtyManager;
@@ -49,7 +49,6 @@ use crate::web::sink::WsRelaySink;
 use crate::web::skills_api;
 use crate::web::store::WebStore;
 use crate::web::terminal_ws::terminal_ws_upgrade;
-use crate::web::workspace_api;
 use crate::web::worktree_api;
 use crate::web::worktree_rename_api;
 use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
@@ -63,7 +62,6 @@ pub struct DesktopLocalParts {
     pub pty: Arc<PtyManager>,
     pub relay: Arc<WsRelaySink>,
     pub registry: Arc<ProjectRegistry>,
-    pub workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     pub acp_catalog: Option<Arc<AcpCatalogService>>,
     pub acp_install: Option<Arc<AcpInstallService>>,
     pub store: Arc<WebStore>,
@@ -96,7 +94,6 @@ impl AppState {
             relay: parts.relay,
             registry: parts.registry,
             history_mode,
-            workspace_manifest: parts.workspace_manifest,
             acp_catalog: parts.acp_catalog,
             acp_install: parts.acp_install,
             store: Some(parts.store),
@@ -162,7 +159,6 @@ pub fn router(
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
     history_mode: HistoryMode,
-    workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
     acp_install: Option<Arc<AcpInstallService>>,
     store: Option<Arc<WebStore>>,
@@ -277,14 +273,6 @@ pub fn router(
         // Loopback-only (enforced inside the handler).
         .route("/log/frontend-error", post(log_api::frontend_error))
         .route("/shells", get(fs_api::shells))
-        // Workspace manifest web routes (CAP-5: Web & Mobile 1:1 Parity).
-        // Each mirrors a desktop `#[tauri::command] workspace_manifest_*`
-        // handler; see `web/workspace_api.rs`. Registered AHEAD of the static
-        // fallback so the SPA mount cannot shadow them. Write + delete are
-        // loopback-guarded inside the handler.
-        .route("/workspace/{projectId}", get(workspace_api::get))
-        .route("/workspace/{projectId}/write", post(workspace_api::write))
-        .route("/workspace/{projectId}/delete", post(workspace_api::delete))
         // ACP catalog web routes (CAP-6: Web & Mobile 1:1 Parity). Each
         // mirrors a desktop `#[tauri::command] acp_*_catalog` handler; see
         // `web/catalog_api.rs`. Registered AHEAD of the static fallback so
@@ -386,7 +374,6 @@ pub fn router(
         relay: ws_relay,
         registry,
         history_mode,
-        workspace_manifest,
         acp_catalog,
         acp_install,
         store,
@@ -439,7 +426,6 @@ const GATED_PREFIXES: &[&str] = &[
     "/skills",
     "/log/",
     "/shells",
-    "/workspace/",
     "/acp/",
     "/worktree/",
     // OpenPencil canvas mode: the /canvas/open|close|save API routes
@@ -528,17 +514,6 @@ async fn web_auth_gate(State(auth): State<Arc<WebAuth>>, request: Request, next:
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
-///
-/// Patch 9: this variant ALWAYS sets `workspace_manifest: None` so the
-/// `/workspace/*` routes run in degraded fresh-only mode (get → `Ok(None)`;
-/// write → `WORKSPACE_MANIFEST_UNAVAILABLE`; delete → `Ok(())`). It is
-/// intended for tests/dev only — production callers must use [`router`]
-/// (which threads the real `WorkspaceManifestService`) so the web/remote
-/// client gets a live manifest store. Adding a `workspace_manifest`
-/// parameter here would break every test call site for no real benefit
-/// (the tests do not exercise the manifest routes); the doc comment
-/// surfaces the degraded behavior loudly enough that a production caller
-/// won't silently pick this variant.
 #[allow(clippy::too_many_arguments)]
 pub fn router_with_static(
     acp: Arc<AcpManager>,
@@ -603,9 +578,6 @@ pub fn router_with_static(
         .route("/skills/{name}", get(skills_api::read))
         .route("/log/frontend-error", post(log_api::frontend_error))
         .route("/shells", get(fs_api::shells))
-        .route("/workspace/{projectId}", get(workspace_api::get))
-        .route("/workspace/{projectId}/write", post(workspace_api::write))
-        .route("/workspace/{projectId}/delete", post(workspace_api::delete))
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         .route("/acp/install", post(install_api::install))
@@ -668,7 +640,6 @@ pub fn router_with_static(
             relay: ws_relay,
             registry,
             history_mode: HistoryMode::LiveOnly,
-            workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,
             store: None,

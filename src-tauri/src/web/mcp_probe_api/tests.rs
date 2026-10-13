@@ -38,7 +38,6 @@ fn test_app_with(allow_remote_writes: bool, shared_live_writes_denied: bool) -> 
             std::collections::HashMap::new(),
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,

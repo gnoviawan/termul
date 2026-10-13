@@ -1970,7 +1970,6 @@ pub(super) fn ws_test_app_state() -> AppState {
             &std::env::temp_dir(),
         ),
         history_mode: HistoryMode::LiveOnly,
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,

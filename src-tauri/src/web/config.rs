@@ -411,14 +411,6 @@ pub struct ServerConfig {
     /// was passed → the platform state dir (issue #839 / #879). Desktop
     /// shared-live uses `None` and does not consult this resolver.
     pub sessions_dir: Option<PathBuf>,
-    /// CAP-5 / Story 5: workspace-manifests root override. `None` means
-    /// "use `<service_account_state_dir>/workspace-manifests`" — the
-    /// standalone binary resolves this in `server_main.rs` so the
-    /// `ServerConfig` struct itself stays free of the service-account-state
-    /// path resolution (the desktop shared-live path never reads this field;
-    /// it constructs its own `WorkspaceManifestService` under
-    /// `<app_data_dir>/workspace-manifests`).
-    pub workspace_manifests_dir: Option<PathBuf>,
     /// CAP-6 / Story 8: acp-catalog root override. `None` means "use
     /// `<service_account_state_dir>/acp-catalog`" — the standalone binary
     /// resolves this in `server_main.rs`. The desktop shared-live path never
@@ -434,9 +426,9 @@ pub struct ServerConfig {
     pub store_file: Option<PathBuf>,
     /// Operator opt-in: admit non-loopback peers on the loopback-guarded
     /// write routes (`/fs/*` writes, `/git/*` writes, `/worktree/*` writes,
-    /// `/workspace/*` write+delete, `/log/frontend-error`,
-    /// `/projects/default`, `/acp/install`). Default `false` keeps the
-    /// CWE-306 loopback guard on for any `0.0.0.0` bind. Only the standalone
+    /// `/log/frontend-error`, `/projects/default`, `/acp/install`). Default
+    /// `false` keeps the CWE-306 loopback guard on for any `0.0.0.0` bind.
+    /// Only the standalone
     /// `termul-server` honors `--allow-remote-writes` /
     /// `TERMUL_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
     /// always sets this `false` (LAN clients remain view-only for
@@ -489,17 +481,16 @@ impl ServerConfig {
     }
 
     /// The platform service-account state directory. Used by the standalone
-    /// `termul-server` binary to resolve a default workspace-manifests root
-    /// (`<state dir>/workspace-manifests`) when `--workspace-manifests-dir` is
-    /// absent. Mirrors the per-platform branches of
+    /// `termul-server` binary to resolve the default roots of its durable
+    /// stores (`<state dir>/acp-catalog`, `<state dir>/store.json`, …).
+    /// Mirrors the per-platform branches of
     /// [`default_sessions_dir`]'s parent dir so the two durable stores live
     /// side-by-side under the same service-account state tree.
     ///
     /// Falls back to `std::env::temp_dir()` when no platform state dir is
     /// discoverable — the standalone binary then surfaces a startup warning
-    /// (the workspace manifests would land in the OS temp dir, which survives
-    /// the process but not a reboot). Used as the default base for
-    /// `WorkspaceManifestService::open` in `server_main.rs`.
+    /// (the stores would land in the OS temp dir, which survives
+    /// the process but not a reboot).
     ///
     /// Patch 15: empty env var values (`XDG_STATE_HOME=""`, `HOME=""`,
     /// `LOCALAPPDATA=""`) are filtered out so the manifests do not land in a
@@ -576,14 +567,8 @@ impl ServerConfig {
         // the HOME/XDG platform default (`default_projects_file`).
         let mut projects_file: Option<PathBuf> = None;
         let mut sessions_dir: Option<PathBuf> = None;
-        // CAP-5 / Story 5: workspace-manifests root override. `None` means
-        // "resolve <state dir>/workspace-manifests at startup" in
-        // `server_main.rs`. Parsed but NOT validated against the filesystem
-        // here (the service creates the directory if missing; a present
-        // non-directory fails loudly at `WorkspaceManifestService::open`).
-        let mut workspace_manifests_dir: Option<PathBuf> = None;
-        // CAP-6 / Story 8: acp-catalog root override. Same pattern as
-        // `workspace_manifests_dir` — `None` means resolve at startup.
+        // CAP-6 / Story 8: acp-catalog root override. `None` means resolve
+        // `<state dir>/acp-catalog` at startup.
         let mut acp_catalog_dir: Option<PathBuf> = None;
         // Issue #613: server-side generic key-value store file override.
         // `None` means resolve `<service_account_state_dir>/store.json` at
@@ -592,7 +577,7 @@ impl ServerConfig {
         // Explicit service-account state dir override (`--state-dir`); `None`
         // keeps the env-based resolution in `service_account_state_dir`.
         let mut state_dir: Option<PathBuf> = None;
-        // Operator opt-in for non-loopback fs/git/workspace write peers
+        // Operator opt-in for non-loopback fs/git write peers
         // (CWE-306 guard relaxation). CLI flag wins over env; an
         // unset/invalid env var stays `false` (lenient — no fatal startup).
         let mut allow_remote_writes = false;
@@ -695,7 +680,9 @@ impl ServerConfig {
                 // non-numeric or missing value must not abort startup. One
                 // warning each is queued for `server_main` to emit once
                 // tracing is initialised.
-                "--permission-timeout" | "--permission-reconnect-grace" => {
+                "--permission-timeout"
+                | "--permission-reconnect-grace"
+                | "--workspace-manifests-dir" => {
                     let value = take_removed_flag_value(&mut iter);
                     deprecation_warnings.push(removed_flag_warning(arg, value.as_deref()));
                 }
@@ -734,18 +721,6 @@ impl ServerConfig {
                         ));
                     }
                     sessions_dir = Some(PathBuf::from(trimmed));
-                }
-                "--workspace-manifests-dir" => {
-                    let value = iter.next().ok_or_else(|| {
-                        ParseCliError::Message("missing value for --workspace-manifests-dir".into())
-                    })?;
-                    let trimmed = value.as_ref().trim();
-                    if trimmed.is_empty() {
-                        return Err(ParseCliError::Message(
-                            "invalid --workspace-manifests-dir '': must be a non-empty path".into(),
-                        ));
-                    }
-                    workspace_manifests_dir = Some(PathBuf::from(trimmed));
                 }
                 "--acp-catalog-dir" => {
                     let value = iter.next().ok_or_else(|| {
@@ -976,7 +951,6 @@ impl ServerConfig {
             seed_project_root,
             projects_file,
             sessions_dir: Some(sessions_dir),
-            workspace_manifests_dir,
             acp_catalog_dir,
             store_file,
             state_dir,

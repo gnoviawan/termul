@@ -552,7 +552,6 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/skills/x",
         "/log/frontend-error",
         "/shells",
-        "/workspace/p-1",
         "/acp/catalog",
         "/acp/install",
         "/worktree/list",

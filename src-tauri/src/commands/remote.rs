@@ -1,4 +1,4 @@
-use super::{HostAcpCatalogStore, HostAcpInstallStore, HostWorkspaceManifestStore, IpcResult};
+use super::{HostAcpCatalogStore, HostAcpInstallStore, IpcResult};
 use crate::pty::PtyManager;
 use crate::remote;
 use std::sync::Arc;
@@ -28,7 +28,6 @@ pub async fn remote_server_start(
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
     remote_state: State<'_, Arc<remote::RemoteServerState>>,
     project_registry: State<'_, Arc<crate::web::ProjectRegistry>>,
-    workspace_manifest_store: State<'_, HostWorkspaceManifestStore>,
     acp_catalog_store: State<'_, HostAcpCatalogStore>,
     acp_install_store: State<'_, HostAcpInstallStore>,
     shared_live_data: State<'_, remote::SharedLiveData>,
@@ -43,12 +42,6 @@ pub async fn remote_server_start(
         Some(s) => remote::RemoteBindMode::parse(s)
             .ok_or_else(|| format!("invalid bind mode '{s}': use 'localhost' or 'all'",))?,
     };
-    // CAP-5: thread the desktop's `WorkspaceManifestService` (opened under
-    // `<app_data_dir>/workspace-manifests` in `lib.rs`) through to
-    // `serve_router` so the web/remote client can read/write a project's
-    // manifest through the three `/workspace/*` routes. `None` degrades to
-    // fresh-only mode (no host store attached).
-    let workspace_manifest = workspace_manifest_store.store().map(Arc::clone);
     // CAP-6 / Story 8: thread the desktop's `AcpCatalogService` (opened under
     // `<app_data_dir>/acp-catalog` in `lib.rs`) through to `serve_router` so
     // the web/remote client can resolve the catalog through `GET /acp/catalog`
@@ -71,7 +64,6 @@ pub async fn remote_server_start(
             // host must be token-gated from the first request.
             true,
             shared_live_data.inner(),
-            workspace_manifest,
             acp_catalog,
             acp_install,
         )

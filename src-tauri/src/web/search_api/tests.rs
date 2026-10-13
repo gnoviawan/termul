@@ -66,7 +66,6 @@ fn test_state() -> AppState {
                 .unwrap_or_else(|_| std::env::temp_dir()),
         ),
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,

@@ -10,8 +10,8 @@
 //! on Windows `LockFileEx` is mandatory so locking a data file would break the
 //! stores' own reads/renames. Sidecars are:
 //!
-//! - directory store (`state dir`, `sessions`, `workspace-manifests`,
-//!   `acp-catalog`, …): `<dir>/.termul.lock`;
+//! - directory store (`state dir`, `sessions`, `acp-catalog`, …):
+//!   `<dir>/.termul.lock`;
 //! - single-file store (`store.json`, `projects.json`): `<file>.lock` next to
 //!   the file.
 //!
@@ -298,7 +298,6 @@ pub struct StandalonePaths {
     pub state_dir: PathBuf,
     pub sessions_dir: Option<PathBuf>,
     pub projects_file: Option<PathBuf>,
-    pub workspace_manifests_dir: PathBuf,
     pub acp_catalog_dir: PathBuf,
     pub store_file: PathBuf,
 }
@@ -310,10 +309,6 @@ impl StandalonePaths {
         Self {
             sessions_dir: cfg.sessions_dir.clone(),
             projects_file: cfg.projects_file.clone(),
-            workspace_manifests_dir: cfg
-                .workspace_manifests_dir
-                .clone()
-                .unwrap_or_else(|| state_dir.join("workspace-manifests")),
             acp_catalog_dir: cfg
                 .acp_catalog_dir
                 .clone()
@@ -337,7 +332,6 @@ impl StandalonePaths {
         if let Some(projects) = &self.projects_file {
             locks.lock_file(projects)?;
         }
-        locks.lock_dir(&self.workspace_manifests_dir)?;
         locks.lock_dir(&self.acp_catalog_dir)?;
         locks.lock_dir(&self.state_dir.join(ACP_INSTALL_DIR_NAME))?;
         locks.lock_file(&self.store_file)?;
@@ -347,14 +341,13 @@ impl StandalonePaths {
 
 /// Lock everything the desktop host keeps under `app_data_dir`: the directory
 /// itself plus the stores a standalone server could be pointed at by override
-/// (`acp-sessions`, `workspace-manifests`, `acp-catalog`, `acp-registry-binaries`,
+/// (`acp-sessions`, `acp-catalog`, `acp-registry-binaries`,
 /// `store.json`, `projects.json`), so an
 /// override into the desktop's data dir is detected too.
 pub fn lock_desktop_data(app_data_dir: &Path) -> Result<DataLocks, DataLockError> {
     let mut locks = DataLocks::new();
     locks.lock_dir(app_data_dir)?;
     locks.lock_dir(&app_data_dir.join("acp-sessions"))?;
-    locks.lock_dir(&app_data_dir.join("workspace-manifests"))?;
     locks.lock_dir(&app_data_dir.join("acp-catalog"))?;
     locks.lock_dir(&app_data_dir.join(ACP_INSTALL_DIR_NAME))?;
     locks.lock_file(&desktop_store_file(app_data_dir))?;

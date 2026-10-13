@@ -167,7 +167,6 @@ async fn remote_server_state_start_then_stop_lifecycle() {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("start on localhost binds an OS-assigned port");
@@ -202,7 +201,6 @@ async fn remote_server_state_start_then_stop_lifecycle() {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("restart after stop succeeds");
@@ -229,7 +227,6 @@ async fn remote_server_state_double_start_is_rejected() {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("first start succeeds");
@@ -243,7 +240,6 @@ async fn remote_server_state_double_start_is_rejected() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -278,7 +274,6 @@ async fn remote_server_state_start_stop_does_not_kill_agents() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -331,7 +326,6 @@ async fn the_durable_registry_survives_a_shared_live_stop_and_restart() {
                 &data,
                 None,
                 None,
-                None,
             )
             .await
             .expect("start succeeds");
@@ -362,7 +356,6 @@ async fn status_clears_tunnel_url_when_cloudflared_child_exits() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -529,7 +522,6 @@ async fn shared_live_with_a_tunnel_requires_the_token_and_shares_it_in_the_url()
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("start with a planned tunnel");
@@ -589,7 +581,6 @@ async fn shared_live_on_loopback_without_a_tunnel_is_ungated_and_writes_no_token
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("start");
@@ -619,7 +610,6 @@ async fn shared_live_requested_beyond_loopback_requires_the_token_even_without_a
             RemoteBindMode::All,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -680,7 +670,6 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
                 &data,
                 None,
                 None,
-                None,
             )
             .await
             .unwrap_or_else(|e| panic!("start round {round} must not lock again: {e}"));
@@ -707,7 +696,6 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
                 || n == crate::web::auth::WEB_AUTH_TOKEN_FILE
                 || n.contains("lock")
                 || n == "acp-sessions"
-                || n == "workspace-manifests"
                 || n == "acp-catalog"
                 || n == "acp-registry-binaries"
         }),
@@ -738,7 +726,6 @@ async fn shared_live_start_never_seeds_a_project() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -931,7 +918,6 @@ async fn shared_live_boundary_is_any_registered_cross_drive_project() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )

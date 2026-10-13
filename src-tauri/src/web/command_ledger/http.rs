@@ -5,9 +5,8 @@
 //!
 //! * Ledgered (`Command`/`Create`): fs write/rename/copy, git commit,
 //!   discard, stash save/apply/pop/drop, stage/unstage hunk, create-branch,
-//!   worktree create/rename-branch, workspace write (a resend after the first
-//!   run answers its `updated` outcome, not a `conflict` against itself), plus
-//!   the `install_acp_agent` row of the `/ws` table. Kinds whose request
+//!   worktree create/rename-branch, plus the `install_acp_agent` row of the
+//!   `/ws` table. Kinds whose request
 //!   carries content (fs write, discard, commit, stash save, hunk patches) are
 //!   receipt-only: a recorded rejection keeps its code but not its text, which
 //!   could echo that content.
@@ -15,8 +14,8 @@
 //!   fs mkdir/delete (deleting an absent path is ok), git
 //!   init/stage/unstage/push/checkout/branch-switch, worktree
 //!   remove/copy-include-files, projects, MCP servers, catalog opt-in,
-//!   factory-key (a secret body, never stored), workspace delete, search
-//!   cancel, canvas open/close/save, oauth disconnect.
+//!   factory-key (a secret body, never stored), search cancel, canvas
+//!   open/close/save, oauth disconnect.
 //! * Never admitted: log frontend-error, oauth start (secret), probes, reads.
 //!
 //! A ledgered request without a `commandId` is refused with
@@ -103,7 +102,6 @@ const DOMAIN_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     // existence" (which could turn an original rejection into success).
     ("git_create_branch", CommandClass::command(Replay::Payload)),
     ("worktree_create", CommandClass::command(Replay::Payload)),
-    ("workspace_write", CommandClass::command(Replay::Payload)),
     (
         "worktree_rename_branch",
         CommandClass::command(Replay::Payload),

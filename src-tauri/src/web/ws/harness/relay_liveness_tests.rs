@@ -212,7 +212,6 @@ async fn start_host() -> StartedHost {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("host starts on an OS-assigned port");

@@ -177,32 +177,6 @@ async fn a_rejected_hunk_replays_its_code_but_none_of_the_patch_text() {
 }
 
 #[tokio::test]
-async fn workspace_write_resend_answers_updated_not_a_conflict_with_itself() {
-    let dir = TempDir::new("workspace");
-    let mut state = host(dir.path());
-    state.workspace_manifest = Some(
-        crate::acp::WorkspaceManifestService::open(dir.path().join("manifests"))
-            .await
-            .expect("open manifest store"),
-    );
-    let ledger = Arc::clone(state.relay.ledger());
-    let app = app(state);
-    let body = json!({
-        "basedRevision": null,
-        "manifest": { "projectId": "p1", "revision": 0, "updatedAt": 0 },
-    });
-
-    let first = send(&app, "POST", "/workspace/p1/write", body.clone(), Some("ws-1")).await;
-    assert_eq!(first.json()["data"]["status"], "updated", "{}", first.text);
-    let resend = send(&app, "POST", "/workspace/p1/write", body.clone(), Some("ws-1")).await;
-    assert_eq!(resend.json()["data"], first.json()["data"]);
-    recorded_once(&ledger);
-    // Without the id the same stale write is the conflict it always was.
-    let bare = send(&app, "POST", "/workspace/p1/write", body, None).await;
-    assert_eq!(bare.json()["data"]["status"], "conflict", "{}", bare.text);
-}
-
-#[tokio::test]
 async fn worktree_rename_branch_resend_does_not_rename_again() {
     let dir = TempDir::new("rename-branch");
     let repo = repo(&dir);

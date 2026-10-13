@@ -103,7 +103,6 @@ fn server_config_bind_addr() {
         seed_project_root: None,
         projects_file: None,
         sessions_dir: None,
-        workspace_manifests_dir: None,
         acp_catalog_dir: None,
         store_file: None,
         allow_remote_writes: false,
@@ -130,7 +129,6 @@ fn server_config_bind_addr() {
         seed_project_root: None,
         projects_file: None,
         sessions_dir: None,
-        workspace_manifests_dir: None,
         acp_catalog_dir: None,
         store_file: None,
         allow_remote_writes: false,
@@ -454,36 +452,29 @@ fn from_args_unknown_option() {
     ));
 }
 
-// Patch 17: `--workspace-manifests-dir` CLI flag accept / missing /
-// empty-value tests (mirrors the `--event-log-capacity` test pattern).
-
+// `--workspace-manifests-dir` was removed with the workspace manifest: it is
+// parsed and ignored like the removed permission flags.
 #[test]
-fn from_args_accepts_workspace_manifests_dir() {
+fn from_args_removed_workspace_manifests_dir_parses_and_warns_once() {
     let cfg = ServerConfig::from_args(["--workspace-manifests-dir", "/var/lib/termul/manifests"])
-        .expect("parse");
-    assert_eq!(
-        cfg.workspace_manifests_dir,
-        Some(PathBuf::from("/var/lib/termul/manifests"))
-    );
-    // Other defaults stay intact.
-    assert_eq!(cfg.host, "127.0.0.1");
-    assert_eq!(cfg.port, 8080);
-}
-
-#[test]
-fn from_args_missing_workspace_manifests_dir_value() {
-    assert!(matches!(
-        ServerConfig::from_args(["--workspace-manifests-dir"]),
-        Err(ParseCliError::Message(_))
-    ));
-}
-
-#[test]
-fn from_args_rejects_empty_workspace_manifests_dir() {
-    assert!(matches!(
-        ServerConfig::from_args(["--workspace-manifests-dir", ""]),
-        Err(ParseCliError::Message(_))
-    ));
+        .expect("the removed flag still parses");
+    let warnings: Vec<_> = cfg
+        .deprecation_warnings
+        .iter()
+        .filter(|warning| warning.contains("--workspace-manifests-dir"))
+        .collect();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("'/var/lib/termul/manifests'"));
+    // A missing or empty value never aborts startup, and the next flag keeps its own value.
+    for args in [
+        vec!["--workspace-manifests-dir"],
+        vec!["--workspace-manifests-dir", ""],
+        vec!["--workspace-manifests-dir", "--port", "9091"],
+    ] {
+        ServerConfig::from_args(args).expect("a removed flag must not abort startup");
+    }
+    let cfg = ServerConfig::from_args(["--workspace-manifests-dir", "--port", "9091"]).unwrap();
+    assert_eq!(cfg.port, 9091);
 }
 
 #[test]
@@ -597,7 +588,6 @@ fn service_account_state_dir_falls_through_empty_env_var() {
         seed_project_root: None,
         projects_file: None,
         sessions_dir: None,
-        workspace_manifests_dir: None,
         acp_catalog_dir: None,
         store_file: None,
         allow_remote_writes: false,

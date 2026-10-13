@@ -157,7 +157,7 @@ impl OnboardAnswers {
             prompt_yesno(
                 stdin,
                 stdout,
-                "Allow non-loopback write peers (fs/git/workspace mutations)?",
+                "Allow non-loopback write peers (fs/git mutations)?",
                 false,
             )
         } else {
@@ -236,7 +236,6 @@ impl OnboardAnswers {
             seed_project_root: None,
             projects_file: Some(self.projects_file.clone()),
             sessions_dir: Some(self.sessions_dir.clone()),
-            workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: self.allow_remote_writes && expose,

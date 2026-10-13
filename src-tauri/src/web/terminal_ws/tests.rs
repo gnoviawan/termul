@@ -131,7 +131,6 @@ pub(super) fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
         pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,

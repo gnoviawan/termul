@@ -33,7 +33,6 @@ use termul_manager_lib::web::store::{StorePolicy, WebStore};
 use termul_manager_lib::{
     AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
     GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
-    WorkspaceManifestService,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -212,7 +211,7 @@ fn main() -> ExitCode {
             "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
              on {} gain: fs mkdir/write/delete/rename/copy CONFINED to the registered project roots; \
              git + worktree operations confined to the registered project roots; AND host-state mutation via \
-             /projects/default, /acp/install, /log/frontend-error, /workspace/*. Loopback callers \
+             /projects/default, /acp/install, /log/frontend-error. Loopback callers \
              keep ADR-007 breadth (any path). {auth_tail}",
             host,
             auth_tail = auth_tail,
@@ -282,20 +281,6 @@ fn main() -> ExitCode {
             Err(error) => {
                 error!("termul-server: failed to open sessions store: {error}");
                 eprintln!("termul-server: failed to open sessions store: {error}");
-                return ExitCode::from(1);
-            }
-        };
-        // CAP-5 / Story 5: open the host-owned workspace-manifests root. The
-        // standalone binary owns its own root — NEVER shared with a desktop
-        // host on the same machine (two processes on one JSONL store would
-        // corrupt both). Defaults to `<state dir>/workspace-manifests`; the
-        // explicit `--workspace-manifests-dir` flag overrides.
-        let workspace_manifests_dir = data_paths.workspace_manifests_dir.clone();
-        let workspace_manifest = match WorkspaceManifestService::open(workspace_manifests_dir).await
-        {
-            Ok(service) => Some(service),
-            Err(error) => {
-                eprintln!("termul-server: failed to open workspace-manifests store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -433,7 +418,6 @@ fn main() -> ExitCode {
             ws_relay,
             registry,
             cfg,
-            workspace_manifest,
             acp_catalog,
             acp_install,
             store,
@@ -711,9 +695,6 @@ OPTIONS:
                                   <--state-dir>/projects.json when
                                   --state-dir is set, else the platform
                                   state dir]
-    --workspace-manifests-dir <PATH>
-                                  Workspace manifests root.
-                                  [default: <state dir>/workspace-manifests]
     --acp-catalog-dir <PATH>      ACP catalog root.
                                   [default: <state dir>/acp-catalog]
     --store-file <PATH>           Server-side key-value store for the web client
@@ -775,7 +756,8 @@ OPTIONS:
                                   (STORE_PARTITION_FULL). Positive integer.
                                   [env: TERMUL_PARTITION_BYTE_BUDGET]
                                   [default: 16777216]
-    --permission-timeout <SECS>, --permission-reconnect-grace <SECS>
+    --permission-timeout <SECS>, --permission-reconnect-grace <SECS>,
+    --workspace-manifests-dir <PATH>
                                   Removed. Still accepted so existing launch
                                   commands keep starting, but ignored (a
                                   warning is logged at startup).
@@ -786,8 +768,8 @@ OPTIONS:
                                   (ADR-007 breadth, any path); /git/* and
                                   /worktree/* writes confined to registered projects;
                                   AND host-state writes (/projects/default,
-                                  /acp/install, /log/frontend-error,
-                                  /workspace/*). Loopback callers keep ADR-007
+                                  /acp/install, /log/frontend-error).
+                                  Loopback callers keep ADR-007
                                   breadth (any path). No-op when bound to
                                   127.0.0.1. The web auth token gate still
                                   applies (see --web-auth-token). Only enable

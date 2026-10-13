@@ -46,7 +46,7 @@ use tokio::process::Child;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, WorkspaceManifestService};
+use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager};
 use crate::pty::PtyManager;
 use crate::web::auth::{self, WebAuth, WebAuthOrigin, WebAuthResolution};
 use crate::web::sink::WsRelaySink;
@@ -271,12 +271,6 @@ impl RemoteServerState {
     /// start wins the slot race, the loser signals its spawned task to drain
     /// before returning `Err` (no orphaned second server).
     ///
-    /// `workspace_manifest` is the desktop's own `WorkspaceManifestService`
-    /// (opened under `<app_data_dir>/workspace-manifests` in `lib.rs`).
-    /// Threaded through to `serve_router` so the web/remote client can
-    /// read/write a project's manifest through `/workspace/*`. `None`
-    /// degrades to fresh-only mode.
-    ///
     /// `acp_catalog` is the desktop's own `AcpCatalogService` (opened under
     /// `<app_data_dir>/acp-catalog` in `lib.rs`). Threaded through to
     /// `serve_router` so the web/remote client can resolve the catalog through
@@ -307,7 +301,6 @@ impl RemoteServerState {
         requested_bind_mode: RemoteBindMode,
         tunnel_planned: bool,
         data: &SharedLiveData,
-        workspace_manifest: Option<Arc<WorkspaceManifestService>>,
         acp_catalog: Option<Arc<AcpCatalogService>>,
         acp_install: Option<Arc<AcpInstallService>>,
     ) -> Result<RemoteStatus, String> {
@@ -374,12 +367,6 @@ impl RemoteServerState {
             // is standalone-only.
             projects_file: None,
             sessions_dir: None,
-            // CAP-5 / Story 5: this path-override field is standalone-only.
-            // The desktop shared-live host passes its already-opened
-            // `WorkspaceManifestService` directly to `serve_router` (see the
-            // `workspace_manifest` argument below), so no path is resolved
-            // from the config here — `None` degrades nothing on this path.
-            workspace_manifests_dir: None,
             acp_catalog_dir: None,
             // The shared-live store is the desktop's single instance, passed to
             // `serve_router` below; this path override is never consulted.
@@ -418,7 +405,6 @@ impl RemoteServerState {
             registry,
             cfg,
             shutdown,
-            workspace_manifest,
             acp_catalog,
             acp_install,
             Arc::clone(&data.store),
