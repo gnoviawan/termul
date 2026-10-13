@@ -591,6 +591,13 @@ export interface PersistenceErrorEvent {
 
 export type PersistenceErrorListener = (event: PersistenceErrorEvent) => void
 
+// What a store key holds, as a watch reports it (the stored envelope is unwrapped).
+export interface PersistenceKeyChange<T = unknown> {
+  // `false` when the key is absent (never written, or deleted).
+  exists: boolean
+  data?: T
+}
+
 // Persistence API for renderer
 export interface PersistenceApi {
   read: <T>(key: string) => Promise<IpcResult<T>>
@@ -602,6 +609,10 @@ export interface PersistenceApi {
   // Subscribe to failed writes (any caller, debounced or not). Returns the
   // unsubscribe function. The desktop plugin-store never emits.
   onPersistenceError: (listener: PersistenceErrorListener) => () => void
+  // Web only: report each change another device or tab makes to a key (by
+  // logical key), once this page has read it. Echoes of this page's own writes
+  // are not reported. Returns the unsubscribe function. Absent on the desktop.
+  watchShared?: (key: string, listener: (change: PersistenceKeyChange) => void) => () => void
 }
 
 // System API for renderer

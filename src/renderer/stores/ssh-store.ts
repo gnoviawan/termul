@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import type {
   ActivePortForward,
   PortForwardConfig,
@@ -9,6 +10,7 @@ import type {
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { sshApi } from '@/lib/api'
+import { syncSharedKey } from '@/lib/shared-key-sync'
 
 export interface SSHState {
   // State
@@ -64,6 +66,18 @@ export interface SSHState {
   clearCompletedTransfers: () => void
 }
 
+let profileSyncStarted = false
+
+/** Show profiles another device or tab saved (web client); started once, after the first load. */
+function startProfileSync(setProfiles: (profiles: SSHProfile[]) => void): void {
+  if (profileSyncStarted) return
+  profileSyncStarted = true
+  syncSharedKey<SSHProfile[]>(PersistenceKeys.sshProfiles, (change) => {
+    if (!change.exists) setProfiles([])
+    else if (Array.isArray(change.data)) setProfiles(change.data)
+  })
+}
+
 export const useSSHStore = create<SSHState>((set, _get) => ({
   profiles: [],
   connections: [],
@@ -84,6 +98,7 @@ export const useSSHStore = create<SSHState>((set, _get) => ({
     } catch {
       set({ isLoaded: true })
     }
+    startProfileSync((profiles) => set({ profiles }))
   },
 
   saveProfile: async (profile: SSHProfile) => {

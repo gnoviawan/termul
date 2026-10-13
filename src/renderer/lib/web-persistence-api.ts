@@ -19,6 +19,7 @@ import {
   type PersistenceApi,
   type PersistenceErrorCode,
   type PersistenceErrorListener,
+  type PersistenceKeyChange,
   type PersistenceWriteOpts,
   type StampedValue
 } from '@shared/types/ipc.types'
@@ -36,6 +37,7 @@ import { HANDSHAKE_TIMEOUT_MS } from './acp-transport/ws-transport-timing'
 import { findUnresolvedCommand, openCommand, resolveCommand } from './command-journal'
 import { logFrontendError } from './log-api'
 import { STORE_VALUE_MAX_BYTES, STORED_VALUE_VERSION, storedValueBytes } from './persistence-trim'
+import { deepEqual, isRecord, SharedWatchTracker } from './shared-key-watch'
 import { getWebAuthToken } from './web-auth-token'
 import { buildAuthenticatePayload, getDeviceId } from './web-client-identity'
 import { clearProtocolMismatchLatch, handleProtocolVersionMismatch } from './web-protocol-reload'
@@ -326,24 +328,7 @@ export interface WebPersistenceApi extends PersistenceApi {
    * from the value written. Returns the unsubscribe function.
    */
   onSharedChange: (key: string, listener: SharedChangeListener) => () => void
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]))
-  }
-  if (isRecord(a) && isRecord(b)) {
-    const keys = Object.keys(a)
-    return (
-      keys.length === Object.keys(b).length && keys.every((k) => k in b && deepEqual(a[k], b[k]))
-    )
-  }
-  return false
+  watchShared: (key: string, listener: (change: PersistenceKeyChange) => void) => () => void
 }
 
 function unwrap<T>(raw: unknown): T {
@@ -384,6 +369,7 @@ export function createWebPersistenceApi(opts?: {
   const casValues = new Map<string, unknown>()
   const listeners = new Map<string, Set<SharedChangeListener>>()
   const errorListeners = new Set<PersistenceErrorListener>()
+  const watchTracker = new SharedWatchTracker()
   /** Per host key operation chain: replies must land in request order. */
   const chains = new Map<string, Promise<unknown>>()
 
@@ -475,6 +461,7 @@ export function createWebPersistenceApi(opts?: {
       )
       if (!result.success) {
         unhydrated.add(hostKey)
+        watchTracker.readFailed(hostKey)
         return result
       }
       const reply = result.data
@@ -483,6 +470,10 @@ export function createWebPersistenceApi(opts?: {
       unhydrated.delete(hostKey)
       revisions.set(hostKey, raw === null ? 0 : revision)
       if (scopeOf(logicalKey) === 'sharedCas') casValues.set(hostKey, raw)
+      watchTracker.read(
+        hostKey,
+        raw === null ? { exists: false } : { exists: true, data: unwrap(raw) }
+      )
       if (raw === null) {
         return failure('KEY_NOT_FOUND', `Key not found: ${logicalKey}`)
       }
@@ -580,10 +571,18 @@ export function createWebPersistenceApi(opts?: {
         payload.expected = expected
         payload.commandId = casCommandId(kind, intent, writeOpts?.commandId)
       }
+      watchTracker.sendStarted(hostKey, { exists: true, data })
       const result = await toResult(() => socket.request<StoreWriteReply>('store_write', payload))
       if (kind) settleCas(kind, intent, result)
-      if (!result.success) return result
+      if (!result.success) {
+        watchTracker.sendSettled(hostKey, null)
+        return result
+      }
       const reply = result.data
+      watchTracker.sendSettled(hostKey, {
+        exists: true,
+        data: scope === 'device' || reply?.value === undefined ? data : unwrap(reply.value)
+      })
       if (typeof reply?.revision === 'number') revisions.set(hostKey, reply.revision)
       if (scope === 'sharedCas') casValues.set(hostKey, reply?.value ?? wrapped)
       if (scope === 'sharedLww' && reply?.value !== undefined) {
@@ -617,8 +616,10 @@ export function createWebPersistenceApi(opts?: {
         payload.expected = expected
         payload.commandId = casCommandId(kind, intent, undefined)
       }
+      watchTracker.sendStarted(hostKey, { exists: false })
       const result = await toResult(() => socket.request('store_delete', payload))
       if (kind) settleCas(kind, intent, result)
+      watchTracker.sendSettled(hostKey, result.success ? { exists: false } : null)
       if (!result.success) return result
       if (scope !== 'device') revisions.set(hostKey, 0)
       if (scope === 'sharedCas') casValues.set(hostKey, null)
@@ -722,6 +723,10 @@ export function createWebPersistenceApi(opts?: {
       }
     },
 
+    watchShared(key: string, listener: (change: PersistenceKeyChange) => void): () => void {
+      return watchTracker.watch(scopedKey(key, deviceId()), watchStoreKey, listener)
+    },
+
     onSharedChange(key: string, listener: SharedChangeListener): () => void {
       const set = listeners.get(key) ?? new Set<SharedChangeListener>()
       set.add(listener)
@@ -735,11 +740,7 @@ export function createWebPersistenceApi(opts?: {
 }
 
 /** What a store key holds, as a watch reports it (the stored envelope is unwrapped). */
-export interface StoreKeyChange<T = unknown> {
-  /** `false` when the key is absent (never written, or deleted). */
-  exists: boolean
-  data?: T
-}
+export type StoreKeyChange<T = unknown> = PersistenceKeyChange<T>
 
 function changeOf<T>(state: StoreWatchState | null | undefined): StoreKeyChange<T> {
   if (!state?.exists) return { exists: false }

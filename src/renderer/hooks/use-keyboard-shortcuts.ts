@@ -1,6 +1,7 @@
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { useSharedKeySync } from '@/lib/shared-key-sync'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
 import { getDefaultKeyboardShortcuts } from '@/types/settings'
@@ -23,6 +24,11 @@ function mergeWithDefaults(loaded: Partial<KeyboardShortcutsConfig>): KeyboardSh
 
 export function useKeyboardShortcutsLoader(): void {
   const setShortcuts = useKeyboardShortcutsStore((state) => state.setShortcuts)
+
+  // A change another device or tab saved: show it without a reload.
+  useSharedKeySync<KeyboardShortcutsConfig>(PersistenceKeys.keyboardShortcuts, (change) => {
+    if (change.exists && change.data) setShortcuts(mergeWithDefaults(change.data))
+  })
 
   useEffect(() => {
     async function load(): Promise<void> {

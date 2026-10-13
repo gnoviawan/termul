@@ -1,9 +1,17 @@
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { useSharedKeySync } from '@/lib/shared-key-sync'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import type { ContextBarSettings } from '@/types/settings'
 import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
+
+// Merge with defaults to handle any new settings added in future versions.
+// A saved blob predating `showProjectName` keeps today's always-on project
+// name; blobs written since carry the key and win.
+function mergeWithDefaults(saved: Partial<ContextBarSettings>): ContextBarSettings {
+  return { ...DEFAULT_CONTEXT_BAR_SETTINGS, showProjectName: true, ...saved }
+}
 
 /**
  * Hook to load and persist context bar settings
@@ -13,6 +21,11 @@ export function useContextBarSettings(): void {
   const setSettings = useContextBarSettingsStore((state) => state.setSettings)
   const setLoaded = useContextBarSettingsStore((state) => state.setLoaded)
 
+  // A change another device or tab saved: show it without a reload.
+  useSharedKeySync<Partial<ContextBarSettings>>(PersistenceKeys.contextBarSettings, (change) => {
+    if (change.exists && change.data) setSettings(mergeWithDefaults(change.data))
+  })
+
   useEffect(() => {
     async function loadSettings(): Promise<void> {
       try {
@@ -21,15 +34,7 @@ export function useContextBarSettings(): void {
         )
 
         if (result.success && result.data) {
-          // Merge with defaults to handle any new settings added in future versions.
-          // A saved blob predating `showProjectName` keeps today's always-on
-          // project name; blobs written since carry the key and win.
-          const mergedSettings: ContextBarSettings = {
-            ...DEFAULT_CONTEXT_BAR_SETTINGS,
-            showProjectName: true,
-            ...result.data
-          }
-          setSettings(mergedSettings)
+          setSettings(mergeWithDefaults(result.data))
         }
         // If no settings exist yet, defaults are already in store
       } catch {

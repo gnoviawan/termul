@@ -17,23 +17,27 @@ import { persistenceApi } from '@/lib/api'
 /** `configId` → `methodId` of the last successful `authenticate`. */
 export type AuthMethodMemory = Record<string, string>
 
+/**
+ * Sanitize a stored value: a corrupt/non-map payload must never crash startup —
+ * drop anything that is not a non-empty-string → non-empty-string entry rather
+ * than trusting the persisted JSON shape.
+ */
+export function normalizeAuthMethodMemory(data: unknown): AuthMethodMemory {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return {}
+  const clean: AuthMethodMemory = {}
+  for (const [key, value] of Object.entries(data)) {
+    const configId = key.trim()
+    if (configId.length === 0) continue
+    if (typeof value !== 'string' || value.trim().length === 0) continue
+    clean[configId] = value.trim()
+  }
+  return clean
+}
+
 /** Load persisted auth-method memory (empty map when none stored). */
 export async function loadAuthMethodMemory(): Promise<AuthMethodMemory> {
   const res = await persistenceApi.read<unknown>(PersistenceKeys.acpAuthMethods)
-  if (res.success) {
-    // Sanitize on read: a corrupt/non-map payload must never crash startup —
-    // drop anything that is not a non-empty-string → non-empty-string entry
-    // rather than trusting the persisted JSON shape.
-    if (res.data === null || typeof res.data !== 'object' || Array.isArray(res.data)) return {}
-    const clean: AuthMethodMemory = {}
-    for (const [key, value] of Object.entries(res.data)) {
-      const configId = key.trim()
-      if (configId.length === 0) continue
-      if (typeof value !== 'string' || value.trim().length === 0) continue
-      clean[configId] = value.trim()
-    }
-    return clean
-  }
+  if (res.success) return normalizeAuthMethodMemory(res.data)
   // A missing key is the normal empty state; any other failure is a real
   // storage/backend error and must not be silently collapsed to {}.
   if (res.code === 'KEY_NOT_FOUND') return {}
