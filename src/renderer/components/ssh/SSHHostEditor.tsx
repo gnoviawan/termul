@@ -132,6 +132,8 @@ export function SSHHostEditor({
   const [errors, setErrors] = useState<HostFormErrors>({})
   const [submitted, setSubmitted] = useState(false)
   const [saving, setSaving] = useState(false)
+  // A port typed by hand wins over one pasted with the address.
+  const [portEdited, setPortEdited] = useState(false)
   const [localKeys, setLocalKeys] = useState<SSHKeyFileInfo[]>([])
   const [keyInfo, setKeyInfo] = useState<SSHKeyFileInfo | null>(null)
   const fieldRefs = useRef<Partial<Record<HostFormField, HTMLElement | null>>>({})
@@ -148,6 +150,7 @@ export function SSHHostEditor({
     setErrors({})
     setSubmitted(false)
     setKeyInfo(null)
+    setPortEdited(false)
   }, [open, profile])
 
   // Offer keys found in ~/.ssh.
@@ -203,7 +206,7 @@ export function SSHHostEditor({
   }
 
   const save = async (connect: boolean) => {
-    const normalized = splitAddress(values)
+    const normalized = splitAddress(values, portEdited)
     setValues(normalized)
     setSubmitted(true)
     const nextErrors = validateHostForm(normalized)
@@ -275,7 +278,7 @@ export function SSHHostEditor({
                 }}
                 value={values.host}
                 onChange={(e) => update('host', e.target.value)}
-                onBlur={() => setValues((prev) => splitAddress(prev))}
+                onBlur={() => setValues((prev) => splitAddress(prev, portEdited))}
                 placeholder="example.com or 192.168.1.10"
                 autoComplete="off"
                 spellCheck={false}
@@ -296,7 +299,10 @@ export function SSHHostEditor({
                   fieldRefs.current.port = el
                 }}
                 value={values.port}
-                onChange={(e) => update('port', e.target.value)}
+                onChange={(e) => {
+                  setPortEdited(true)
+                  update('port', e.target.value)
+                }}
                 inputMode="numeric"
                 autoComplete="off"
                 aria-invalid={Boolean(errors.port)}

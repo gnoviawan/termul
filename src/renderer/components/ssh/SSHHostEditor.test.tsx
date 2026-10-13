@@ -93,6 +93,16 @@ describe('new host', () => {
     })
   })
 
+  it('keeps a port typed by hand when an address with a port is pasted', () => {
+    renderEditor()
+    fireEvent.change(screen.getByLabelText('Port'), { target: { value: '2200' } })
+    const address = screen.getByLabelText('Address')
+    fireEvent.change(address, { target: { value: 'admin@db.internal:22' } })
+    fireEvent.blur(address)
+    expect(screen.getByLabelText('Address')).toHaveValue('db.internal')
+    expect(screen.getByLabelText('Port')).toHaveValue('2200')
+  })
+
   it('"Save" adds the host without connecting', async () => {
     const { onSaved } = renderEditor()
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: 'h.example' } })

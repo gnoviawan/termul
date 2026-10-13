@@ -25,7 +25,7 @@ interface RemoteCodeViewProps {
   name: string
   content: string
   onChange: (content: string) => void
-  onSave: () => void
+  onSave: (content: string) => void
   flushRef: MutableRefObject<(() => void) | null>
 }
 
@@ -78,31 +78,35 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
 
   const isDirty = editingFile !== null && editingContent !== editingFile.originalContent
 
-  const handleSave = useCallback(async () => {
-    if (!editingFile || !connectionId) return
-    // The code view reports edits after a short debounce; take the latest text.
-    flushRef.current?.()
-    const content = useSSHStore.getState().editingContent
-    setIsSaving(true)
-    setSaveAnimating(true)
-    try {
-      const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, content)
-      if (result.success) {
-        setStoreFile({ ...editingFile, originalContent: content })
-        setConfirmClose(false)
-        toast.success(`Saved: ${editingFile.name}`)
-        setTimeout(() => setSaveAnimating(false), 600)
-      } else {
-        toast.error(`Save failed: ${result.error}`)
+  /** `latest` is the editor text (Mod-s); without it, flush the debounced edit. */
+  const handleSave = useCallback(
+    async (latest?: string) => {
+      if (!editingFile || !connectionId) return
+      if (latest === undefined) flushRef.current?.()
+      else setStoreContent(latest)
+      const content = latest ?? useSSHStore.getState().editingContent
+      setIsSaving(true)
+      setSaveAnimating(true)
+      try {
+        const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, content)
+        if (result.success) {
+          setStoreFile({ ...editingFile, originalContent: content })
+          setConfirmClose(false)
+          toast.success(`Saved: ${editingFile.name}`)
+          setTimeout(() => setSaveAnimating(false), 600)
+        } else {
+          toast.error(`Save failed: ${result.error}`)
+          setSaveAnimating(false)
+        }
+      } catch (error) {
+        toast.error(`Save failed: ${error instanceof Error ? error.message : String(error)}`)
         setSaveAnimating(false)
+      } finally {
+        setIsSaving(false)
       }
-    } catch (error) {
-      toast.error(`Save failed: ${error instanceof Error ? error.message : String(error)}`)
-      setSaveAnimating(false)
-    } finally {
-      setIsSaving(false)
-    }
-  }, [editingFile, connectionId, setStoreFile])
+    },
+    [editingFile, connectionId, setStoreFile, setStoreContent]
+  )
 
   const handleClose = useCallback(() => {
     if (isDirty) setConfirmClose(true)
@@ -133,7 +137,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={handleSave}
+              onClick={() => void handleSave()}
               disabled={isSaving}
               aria-label={
                 isDirty ? `Save ${editingFile.name} (unsaved changes)` : `Save ${editingFile.name}`
@@ -167,7 +171,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
           name={editingFile.name}
           content={editingContent}
           onChange={setStoreContent}
-          onSave={() => void handleSave()}
+          onSave={(content) => void handleSave(content)}
           flushRef={flushRef}
         />
       </div>
@@ -188,7 +192,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
               >
                 Continue Editing
               </Button>
-              <Button type="button" size="sm" onClick={handleSave} disabled={isSaving}>
+              <Button type="button" size="sm" onClick={() => void handleSave()} disabled={isSaving}>
                 Save
               </Button>
               <Button
