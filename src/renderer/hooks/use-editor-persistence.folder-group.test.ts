@@ -192,8 +192,8 @@ describe('#903 folder-group chat tab isolation', () => {
 
     // Let any debounced persist fire, then check nothing leaked across.
     await new Promise((resolve) => setTimeout(resolve, 650))
-    expect(writtenChatIds('editor-state/p2')).toEqual([])
-    expect(writtenChatIds('editor-state/p1').sort()).toEqual(expect.arrayContaining(P1_CHATS))
+    expect(writtenChatIds('workspace/p2')).toEqual([])
+    expect(writtenChatIds('workspace/p1').sort()).toEqual(expect.arrayContaining(P1_CHATS))
     hook.unmount()
   })
 

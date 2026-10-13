@@ -6,16 +6,10 @@
 use serde::Deserializer;
 
 use super::*;
-use crate::web::store::{unix_ms, Precondition, StoreError, WriteOutcome};
+use crate::web::store::{unix_ms, Precondition, StoreError, WriteOutcome, STORE_VALUE_MAX_BYTES};
 use crate::web::watch::publish_store;
 
 // --- Issue #613: server-side generic key-value store -------------------------
-
-/// Per-value serialized size cap for `store_write` (CAP-11). The whole-file
-/// 10 MiB cap inside `WebStore::write` still applies; this bound rejects a
-/// single oversized value BEFORE it reaches the store so the on-disk file
-/// stays untouched.
-pub(super) const STORE_VALUE_MAX_BYTES: usize = 256 * 1024;
 
 /// Shared `store_*` key validation (CAP-11): an empty or whitespace-only key
 /// is a `VALIDATION_ERROR`; the connection stays open and the store is never

@@ -390,7 +390,7 @@ describe('useEditorPersistence', () => {
 
     expect(mockPersistenceWriteDebounced).toHaveBeenCalledTimes(1)
     expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-      'editor-state/project-a',
+      'workspace/project-a',
       expect.objectContaining({
         activePaneId: 'pane-left',
         paneLayout: expect.objectContaining({
@@ -641,7 +641,7 @@ describe('useEditorPersistence', () => {
   it('ignores stale restore results after switching projects', async () => {
     let resolveProjectARead: ((value: unknown) => void) | undefined
     mockPersistenceRead.mockImplementation((key: string) => {
-      if (key === 'editor-state/project-a') {
+      if (key === 'workspace/project-a') {
         return new Promise((resolve) => {
           resolveProjectARead = resolve
         })
@@ -780,7 +780,7 @@ describe('useEditorPersistence', () => {
     expect(tree?.root.id).not.toBe('split-old')
     // The project left is persisted before the swap.
     expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-      'editor-state/project-a',
+      'workspace/project-a',
       expect.anything()
     )
   })

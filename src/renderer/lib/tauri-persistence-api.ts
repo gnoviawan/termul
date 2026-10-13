@@ -32,9 +32,41 @@ function resolvePendingResolvers(resolvers: PendingWriteResolver[], result: IpcR
   })
 }
 
+/**
+ * A project's workspace record used to be stored as `editor-state/<projectId>`;
+ * it is `workspace/<projectId>` now (the same record the web client keeps).
+ */
+const LEGACY_WORKSPACE_PREFIX = 'editor-state/'
+const WORKSPACE_PREFIX = 'workspace/'
+
+/**
+ * Move the legacy `editor-state/*` keys to `workspace/*` once, when the store
+ * file is first loaded. A `workspace/*` key that already exists wins and the
+ * legacy duplicate is dropped. A failure leaves the legacy keys in place and
+ * the next launch tries again.
+ */
+async function renameLegacyWorkspaceKeys(store: Store): Promise<void> {
+  try {
+    const legacyKeys = (await store.keys()).filter((key) => key.startsWith(LEGACY_WORKSPACE_PREFIX))
+    if (legacyKeys.length === 0) return
+    for (const key of legacyKeys) {
+      const target = `${WORKSPACE_PREFIX}${key.slice(LEGACY_WORKSPACE_PREFIX.length)}`
+      if (!(await store.has(target))) {
+        await store.set(target, await store.get(key))
+      }
+      await store.delete(key)
+    }
+    await store.save()
+  } catch (err) {
+    console.warn('[persistence] could not rename the legacy editor-state keys:', err)
+  }
+}
+
 async function getStore(): Promise<Store> {
   if (!storeInstance) {
-    storeInstance = await Store.load(STORE_FILE, { autoSave: false, defaults: {} })
+    const store = await Store.load(STORE_FILE, { autoSave: false, defaults: {} })
+    await renameLegacyWorkspaceKeys(store)
+    storeInstance = store
   }
   return storeInstance
 }

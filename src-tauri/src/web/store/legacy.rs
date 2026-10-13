@@ -6,8 +6,11 @@
 //! TS `KEY_SCOPES` block in `persistence.types.ts` by `legacy_tests`); every
 //! other key was per-device state of an unknown device and is parked in
 //! `host.legacy` until the first authenticated device that issues a store
-//! request adopts it into its own `device/<id>/` partition.
+//! request adopts it into its own `device/<id>/` partition. Adoption also
+//! carries the retired workspace manifests ([`super::manifest_import`]) into
+//! that partition, in the same write.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -34,6 +37,20 @@ pub const SHARED_LWW_KEYS: &[&str] = &[
 
 /// Logical keys that were shared across devices and are compare-and-set.
 pub const SHARED_CAS_KEYS: &[&str] = &["ssh/profiles"];
+
+/// Parked device-key families whose logical key changed: `(old prefix, new
+/// prefix)`. The renderer reads a project's editor state from `workspace/<id>`
+/// since the workspace manifest was retired; it used to be `editor-state/<id>`.
+pub const DEVICE_KEY_RENAMES: &[(&str, &str)] = &[("editor-state/", "workspace/")];
+
+/// The logical key a parked device key is adopted under.
+#[must_use]
+pub fn adopted_key(flat_key: &str) -> String {
+    DEVICE_KEY_RENAMES
+        .iter()
+        .find_map(|(old, new)| flat_key.strip_prefix(old).map(|rest| format!("{new}{rest}")))
+        .unwrap_or_else(|| flat_key.to_string())
+}
 
 pub(super) fn listed(table: &[&str], key: &str) -> bool {
     table.iter().any(|entry| match entry.strip_suffix('*') {
@@ -86,28 +103,49 @@ fn imported(value: Value) -> Record {
     }
 }
 
-/// Move the parked keys into `device_id`'s partition and mark them adopted.
-/// Returns `false` (and changes nothing) when there is nothing to adopt or the
-/// device has no namespace. A key the partition already holds is kept.
+/// What one adoption moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Adoption {
+    /// Parked pre-v2 keys moved into the partition.
+    pub parked: usize,
+    /// Retired workspace manifests written as `workspace/<projectId>`.
+    pub workspaces: usize,
+}
+
+/// Move the parked keys, then the converted workspace manifests
+/// (`(projectId, value)`), into `device_id`'s partition and mark them adopted.
+/// Returns `None` (and changes nothing) when there is nothing to adopt or the
+/// device has no namespace. A key the partition already holds is kept, so a
+/// manifest never replaces a parked `editor-state/<projectId>`.
 pub fn adopt(
     data: &mut BTreeMap<String, Record>,
     host: &mut HostMeta,
     device_id: &str,
     now_ms: u64,
-) -> bool {
-    let Some(prefix) = device_prefix(device_id) else {
-        return false;
-    };
-    if host.legacy.is_empty() {
-        return false;
+    workspaces: Vec<(String, Value)>,
+) -> Option<Adoption> {
+    let prefix = device_prefix(device_id)?;
+    if host.legacy.is_empty() && workspaces.is_empty() {
+        return None;
     }
+    let parked = host.legacy.len();
     for (key, value) in std::mem::take(&mut host.legacy) {
-        data.entry(format!("{prefix}{key}"))
+        data.entry(format!("{prefix}{}", adopted_key(&key)))
             .or_insert_with(|| imported(value));
+    }
+    let mut written = 0;
+    for (project_id, value) in workspaces {
+        if let Entry::Vacant(slot) = data.entry(format!("{prefix}workspace/{project_id}")) {
+            slot.insert(imported(value));
+            written += 1;
+        }
     }
     host.adopted = Some(Adopted {
         device_id: device_id.to_string(),
         at_ms: now_ms,
     });
-    true
+    Some(Adoption {
+        parked,
+        workspaces: written,
+    })
 }

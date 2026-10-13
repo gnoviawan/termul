@@ -8,7 +8,7 @@ import { editorStateKey, type PersistedEditorFile, type PersistedEditorState } f
 
 /**
  * Persist the VISIBLE project's editor/explorer/pane state under
- * `editor-state/<projectId>`. Refuses for any project whose tree is not the
+ * `workspace/<projectId>`. Refuses for any project whose tree is not the
  * committed one: the editor, explorer and flat pane fields always describe
  * the committed project, so writing them under another id would corrupt that
  * project's persisted state (a pending switch's target, a stale timer).

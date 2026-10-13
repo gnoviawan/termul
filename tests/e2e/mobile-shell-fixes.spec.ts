@@ -117,7 +117,7 @@ async function createProject(
 /**
  * Seed a split workspace in the phone's own device partition: two leaves, one
  * editor each, `leaf-b` active. The client restores its pane tree from its
- * `editor-state/<projectId>` record.
+ * `workspace/<projectId>` record.
  */
 async function seedSplitWorkspace(
   project: Project,
@@ -159,7 +159,7 @@ async function seedSplitWorkspace(
     E2E_BASE_URL,
     'store_write',
     {
-      key: `device/${E2E_DEVICE_ID}/editor-state/${project.id}`,
+      key: `device/${E2E_DEVICE_ID}/workspace/${project.id}`,
       value: { _version: 1, data: workspace }
     },
     undefined,

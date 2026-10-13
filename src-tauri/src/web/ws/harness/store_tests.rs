@@ -271,6 +271,50 @@ async fn a_v1_store_is_migrated_and_adopted_by_the_first_device_to_connect() {
 }
 
 #[tokio::test]
+async fn the_first_device_to_connect_adopts_the_retired_workspace_manifests() {
+    let fx = Fixture::new("manifests");
+    let manifests = fx.dir.join("workspace-manifests");
+    std::fs::create_dir_all(&manifests).unwrap();
+    std::fs::write(
+        manifests.join("p1.json"),
+        serde_json::to_vec(&json!({ "schemaVersion": 1, "manifest": {
+            "projectId": "p1", "revision": 3, "updatedAt": 77,
+            "topology": { "type": "leaf", "id": "pane", "terminalIds": [],
+                "editorIds": ["edit-/w/a.ts"], "activeTabId": "edit-/w/a.ts" },
+            "activePaneId": "pane",
+            "terminals": [],
+            "editors": [{ "editorId": "edit-/w/a.ts", "filePath": "/w/a.ts" }]
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    let store = Arc::new(
+        WebStore::open(fx.file.clone(), StorePolicy::default())
+            .expect("open store")
+            .with_legacy_manifests(manifests.clone()),
+    );
+    let host = Host::new(|_, _| {}).with_store(store);
+
+    let mut first = connect_as(&host, "first", "tab").await;
+    let mut second = connect_as(&host, "second", "tab").await;
+    let adopted = read(&mut first, "device/first/workspace/p1").await;
+    assert_eq!(adopted["ok"], true, "{adopted}");
+    let data = &adopted["payload"]["value"]["data"];
+    assert_eq!(data["activePaneId"], json!("pane"));
+    assert_eq!(data["openFiles"][0]["filePath"], json!("/w/a.ts"));
+    assert_eq!(
+        data["paneLayout"]["tabs"],
+        json!([{ "type": "editor", "filePath": "/w/a.ts" }])
+    );
+    // The second device finds nothing under its own partition.
+    let other = read(&mut second, "device/second/workspace/p1").await;
+    assert_eq!(other["payload"]["revision"], json!(0));
+    assert_eq!(other["payload"]["value"], Value::Null);
+    // The directory moved aside once the adoption was written.
+    assert!(!manifests.exists());
+}
+
+#[tokio::test]
 async fn a_newer_schema_refuses_to_open() {
     let fx = Fixture::new("newer");
     std::fs::write(&fx.file, br#"{"schemaVersion":9,"data":{}}"#).unwrap();

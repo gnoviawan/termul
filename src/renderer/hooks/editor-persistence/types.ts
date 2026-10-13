@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { PersistedWorkspaceTabKind } from '@/lib/workspace-tab-kinds'
 import type { PaneDirection } from '@/types/workspace.types'
 
@@ -109,7 +110,7 @@ export interface PersistedEditorState {
 }
 
 export function editorStateKey(projectId: string): string {
-  return `editor-state/${projectId}`
+  return PersistenceKeys.workspace(projectId)
 }
 
 function normalizePath(path: string): string {

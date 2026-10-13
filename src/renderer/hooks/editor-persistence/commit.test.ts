@@ -46,7 +46,7 @@ describe('commitStagedProject', () => {
 
     expect(mockWriteDebounced).toHaveBeenCalledTimes(1)
     const [key, data] = mockWriteDebounced.mock.calls[0]
-    expect(key).toBe('editor-state/old')
+    expect(key).toBe('workspace/old')
     expect(data.openFiles).toEqual([
       expect.objectContaining({
         filePath: '/old/a.ts',

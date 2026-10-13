@@ -26,6 +26,8 @@ vi.mock('@tauri-apps/plugin-store', () => {
             delete: vi.fn(async (key: string) => {
               mockData.delete(key)
             }),
+            has: vi.fn(async (key: string) => mockData.has(key)),
+            keys: vi.fn(async () => [...mockData.keys()]),
             save: vi.fn(async () => {
               // Mock save
             })
@@ -47,6 +49,8 @@ type MockStore = {
   get: ReturnType<typeof vi.fn>
   set: ReturnType<typeof vi.fn>
   delete: ReturnType<typeof vi.fn>
+  has: ReturnType<typeof vi.fn>
+  keys: ReturnType<typeof vi.fn>
   save: ReturnType<typeof vi.fn>
 }
 
@@ -73,6 +77,8 @@ describe('tauriPersistenceApi', () => {
       delete: vi.fn(async (key: string) => {
         mockData.delete(key)
       }),
+      has: vi.fn(async (key: string) => mockData.has(key)),
+      keys: vi.fn(async () => [...mockData.keys()]),
       save: vi.fn(async () => {})
     }
 
@@ -82,6 +88,47 @@ describe('tauriPersistenceApi', () => {
   afterEach(() => {
     vi.runOnlyPendingTimers()
     vi.useRealTimers()
+  })
+
+  describe('legacy workspace keys', () => {
+    it('renames editor-state/* keys to workspace/* once when the store loads', async () => {
+      mockData.set('editor-state/p1', { _version: 1, data: { openFiles: ['a'] } })
+      mockData.set('editor-state/p2', { _version: 1, data: { openFiles: ['b'] } })
+      mockData.set('shell-layout', { _version: 1, data: {} })
+
+      const result = await tauriPersistenceApi.read('workspace/p1')
+
+      expect(result).toEqual({ success: true, data: { openFiles: ['a'] } })
+      expect([...mockData.keys()].sort()).toEqual(['shell-layout', 'workspace/p1', 'workspace/p2'])
+      expect(currentMockStore.save).toHaveBeenCalledTimes(1)
+
+      // The store is loaded once per session: later calls do not scan again.
+      await tauriPersistenceApi.read('workspace/p2')
+      expect(currentMockStore.keys).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps an existing workspace/* record and drops the legacy duplicate', async () => {
+      mockData.set('editor-state/p1', { _version: 1, data: { openFiles: ['old'] } })
+      mockData.set('workspace/p1', { _version: 1, data: { openFiles: ['new'] } })
+
+      const result = await tauriPersistenceApi.read('workspace/p1')
+
+      expect(result).toEqual({ success: true, data: { openFiles: ['new'] } })
+      expect(mockData.has('editor-state/p1')).toBe(false)
+    })
+
+    it('leaves the legacy keys in place when the rename fails', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      mockData.set('editor-state/p1', { _version: 1, data: { openFiles: ['a'] } })
+      currentMockStore.keys.mockRejectedValueOnce(new Error('keys failed'))
+
+      const result = await tauriPersistenceApi.read('editor-state/p1')
+
+      expect(result.success).toBe(true)
+      expect(mockData.has('editor-state/p1')).toBe(true)
+      expect(warn).toHaveBeenCalled()
+      warn.mockRestore()
+    })
   })
 
   describe('read', () => {

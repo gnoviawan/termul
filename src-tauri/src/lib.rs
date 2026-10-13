@@ -1151,6 +1151,11 @@ pub fn run() {
                 web::store::StorePolicy::default(),
             ) {
                 Ok(store) => {
+                    // The retired workspace manifests move into the first
+                    // device that adopts the store (renamed afterwards).
+                    let store = store.with_legacy_manifests(web::store::legacy_manifests_dir(
+                        &app_data_dir,
+                    ));
                     app.manage(remote::SharedLiveData {
                         store: Arc::new(store),
                         data_dir: app_data_dir.clone(),

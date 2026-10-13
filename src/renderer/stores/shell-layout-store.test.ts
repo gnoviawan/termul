@@ -396,7 +396,7 @@ describe('shell-layout-store', () => {
 
       expect(state().lastColumnTabByProject).toEqual({ p2: 'explorer' })
       expect(state().worktreePickByProject).toEqual({ p2: 'c:/b' })
-      expect(mockDelete).toHaveBeenCalledWith('editor-state/p1')
+      expect(mockDelete).toHaveBeenCalledWith('workspace/p1')
       const lifetime = useAgentChatLifetimeStore.getState()
       expect(lifetime.retainedByProject).toEqual({ p2: ['s2'] })
       expect(lifetime.activeSessionByProject).toEqual({ p2: 's2' })
@@ -404,7 +404,7 @@ describe('shell-layout-store', () => {
       expect(mockWriteDebounced).toHaveBeenCalledTimes(1)
     })
 
-    it('continues when the editor-state delete fails, and logs it', async () => {
+    it('continues when the workspace record delete fails, and logs it', async () => {
       await hydrateWithRecord({ worktreePickByProject: { p1: 'c:/a' } })
       useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })
       mockDelete.mockResolvedValueOnce({ success: false, code: 'DELETE_ERROR', error: 'x' })
@@ -414,7 +414,9 @@ describe('shell-layout-store', () => {
       expect(state().worktreePickByProject).toEqual({})
       expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({})
       expect(mockLog).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining('editor-state cleanup failed') })
+        expect.objectContaining({
+          message: expect.stringContaining('workspace record cleanup failed')
+        })
       )
     })
 
@@ -424,7 +426,7 @@ describe('shell-layout-store', () => {
       const pending = state().hydrate()
 
       await state().removeProject('p1')
-      expect(mockDelete).toHaveBeenCalledWith('editor-state/p1')
+      expect(mockDelete).toHaveBeenCalledWith('workspace/p1')
 
       release({
         success: true,
@@ -490,7 +492,7 @@ describe('shell-layout-store', () => {
 
       await state().removeProject('p1')
 
-      expect(mockDelete).toHaveBeenCalledWith('editor-state/p1')
+      expect(mockDelete).toHaveBeenCalledWith('workspace/p1')
       expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({})
       expect(mockWriteDebounced).not.toHaveBeenCalled()
     })

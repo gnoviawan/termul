@@ -49,6 +49,29 @@ fn table_entries_match_exactly_and_prefix_entries_match_a_family() {
     assert_eq!(shared_key("shell-layout"), None);
 }
 
+#[test]
+fn a_parked_editor_state_key_is_adopted_as_the_workspace_key() {
+    use super::legacy::adopted_key;
+    assert_eq!(adopted_key("editor-state/p1"), "workspace/p1");
+    assert_eq!(adopted_key("editor-state/"), "workspace/", "the prefix alone renames too");
+    assert_eq!(adopted_key("shell-layout"), "shell-layout", "other keys keep their name");
+    assert_eq!(adopted_key("terminals/editor-state/p1"), "terminals/editor-state/p1");
+
+    let dir = tempdir_like("adopt-rename");
+    let file = dir.join("store.json");
+    std::fs::write(
+        &file,
+        br#"{"schemaVersion":1,"data":{"editor-state/p1":{"_version":1,"data":{"openFiles":[]}}}}"#,
+    )
+    .unwrap();
+    let store = open(&file);
+    let phone = who("phone", "t");
+    let adopted = store.read("device/phone/workspace/p1", &phone, 1).unwrap();
+    assert_eq!(adopted.value, Some(json!({ "_version": 1, "data": { "openFiles": [] } })));
+    assert!(store.read("device/phone/editor-state/p1", &phone, 2).unwrap().value.is_none());
+    cleanup(&dir);
+}
+
 fn flat_v1() -> &'static [u8] {
     br#"{"schemaVersion":1,"data":{
         "settings/app":{"_version":1,"data":{"theme":"dark"}},

@@ -50,7 +50,7 @@ describe('scopeOf', () => {
       PersistenceKeys.lastComposerOptions('c1'),
       PersistenceKeys.agentModelCatalog('c1'),
       PersistenceKeys.mobileFileExplorerFolder('p1'),
-      'editor-state/p1',
+      'project-prefs/p1',
       'last-launch-draft/p1',
       'chat-draft/p1/s1',
       'settings/recent-commands',

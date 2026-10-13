@@ -29,7 +29,7 @@ use termul_manager_lib::web::{
     WsRelaySink,
 };
 use termul_manager_lib::web::project_registry::RootCheck;
-use termul_manager_lib::web::store::{StorePolicy, WebStore};
+use termul_manager_lib::web::store::{legacy_manifests_dir, StorePolicy, WebStore};
 use termul_manager_lib::{
     AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
     GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
@@ -269,7 +269,9 @@ fn main() -> ExitCode {
         // up before migration) refuses startup visibly instead of degrading;
         // the file is left untouched.
         let store = match WebStore::open(data_paths.store_file.clone(), StorePolicy::from_config(&cfg)) {
-            Ok(store) => Arc::new(store),
+            // The retired workspace manifests move into the first device that
+            // adopts the store (renamed afterwards).
+            Ok(store) => Arc::new(store.with_legacy_manifests(legacy_manifests_dir(&data_paths.state_dir))),
             Err(error) => {
                 error!("termul-server: refusing to start: {error}");
                 eprintln!("termul-server: {error}");
