@@ -40,7 +40,6 @@ const DECLARED_SCOPES: Record<keyof typeof PersistenceKeys, KeyScope> = {
   agentModelCatalog: 'device',
   mobileFileExplorerFolder: 'device',
   activeProject: 'device',
-  projectPrefs: 'device',
   workspace: 'device',
   shellLayout: 'device'
 }
