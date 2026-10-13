@@ -28,7 +28,7 @@ test.beforeEach(async ({ page }) => {
   await openWorkspace(page)
 })
 
-test('closing a chat mid-turn defers to "Closing": the agent keeps working visibly until the turn ends', async ({
+test('closing a chat mid-turn only detaches it: the host keeps the turn and a reopen shows what streamed meanwhile', async ({
   page
 }) => {
   await launchChat(page, PROMPT_A)
@@ -39,32 +39,27 @@ test('closing a chat mid-turn defers to "Closing": the agent keeps working visib
     .toContain('chunk-2 ')
   expect(await chatTab(page, PROMPT_A).getAttribute('aria-label')).toContain('Working')
 
-  // Close the chat tab mid-turn. The product contract (agent-idle-shutdown):
-  // a busy turn does NOT close now — the tab flips to "Closing" and the
-  // running turn stays visible (the user can keep watching the agent work).
+  // Close the chat tab mid-turn. The renderer decides no agent lifetime: the
+  // tab goes away at once and the host keeps running the turn.
   await chatTab(page, PROMPT_A).hover()
   await page.locator('[aria-label="Close tab"]').first().click()
-  await expect(chatTab(page, PROMPT_A)).toBeVisible()
-  await expect(chatTab(page, PROMPT_A)).toHaveAttribute('aria-label', /Closing/)
+  await expect(chatTab(page, PROMPT_A)).toBeHidden()
 
-  // Streaming continues while the tab is in Closing state.
-  await expect
-    .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('t=3')
-
-  // Reopen from the project's history index (the session is still recorded
-  // server-side) — the chat reattaches with its full transcript.
+  // Let the host stream a few chunks while no tab shows the chat, then reopen
+  // it from the project's history index (the session is still recorded
+  // server-side). Use the Side panel's Chats card — body-first matching could
+  // hit the tab bar's title span instead of the history card.
+  await page.waitForTimeout(5_000)
   await selectColumnTab(page, 'Chats')
-  // Use the Side panel's Chats card — body-first matching could hit the tab
-  // bar's title span instead of the history card.
   await chatCard(page, PROMPT_A).click()
   await expect(chatTab(page, PROMPT_A)).toBeVisible()
 
-  // The transcript includes the chunks that streamed while closed
-  // (durable history replay, not a blank chat).
+  // The transcript includes the chunks that streamed while closed (durable
+  // history replay, not a blank chat), and the turn is still running.
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-1 ')
+    .toContain('chunk-7 ')
+  await expect(chatTab(page, PROMPT_A)).toHaveAttribute('aria-label', /Working/)
 })
 
 test('tab switching mid-run: another chat tab in the pane; switching tabs keeps both runs alive', async ({

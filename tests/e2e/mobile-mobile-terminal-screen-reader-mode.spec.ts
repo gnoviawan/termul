@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, storeRead, storeWrite, wsRequest } from './helpers'
 
 /**
  * Terminal screen reader mode E2E (spec-mobile-terminal-screen-reader-mode,
@@ -49,17 +49,9 @@ const PREFERENCES_NAME = 'Application Preferences'
 /** The line of terminal output the tests feed in and then look for. */
 const OUTPUT_MARKER = 'srm-e2e-marker'
 
-interface StoredBlob {
-  _version?: number
-  data?: Record<string, unknown>
-}
-
 /** The persisted app-settings object as the web client wrote it (or null). */
 async function readStoredSettings(): Promise<Record<string, unknown> | null> {
-  const reply = await wsRequest<{ value: StoredBlob | null }>(E2E_BASE_URL, 'store_read', {
-    key: SETTINGS_KEY
-  })
-  return reply.value?.data ?? null
+  return (await storeRead<Record<string, unknown>>(SETTINGS_KEY)).data
 }
 
 /**
@@ -69,10 +61,7 @@ async function readStoredSettings(): Promise<Record<string, unknown> | null> {
  */
 async function seedScreenReaderMode(enabled: boolean): Promise<void> {
   const current = (await readStoredSettings()) ?? {}
-  await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: SETTINGS_KEY,
-    value: { _version: 1, data: { ...current, terminalScreenReaderMode: enabled } }
-  })
+  await storeWrite(SETTINGS_KEY, { ...current, terminalScreenReaderMode: enabled })
 }
 
 /**
@@ -108,7 +97,7 @@ async function registerActiveProject(): Promise<string> {
     await api.dispose()
   }
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: id }
   })
   return name

@@ -1613,8 +1613,8 @@ async fn fs_containment_boundary_relationship() {
     assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
 }
 
-/// CAP-2: a web client that switched to a non-default registered project
-/// (per-connection `switch_project`) can still run git/skills operations.
+/// CAP-2: a web client working in a non-default registered project can still
+/// run git/skills operations.
 /// The containment boundary follows ANY registered project root, not just
 /// the host default. An unregistered path is still rejected.
 #[tokio::test]

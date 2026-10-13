@@ -99,55 +99,6 @@ fn restart_round_trips_and_delete_does_not_resurrect() {
 }
 
 #[test]
-fn find_most_recent_filters_and_breaks_ties() {
-    let store = ChatHistoryStore::new();
-    let root = store.root().to_path_buf();
-    for value in [
-        payload_with("old", Some("one"), "p", "/a", 1),
-        payload_with("new", Some("one"), "p", "/a", 5),
-        payload_with("other-agent", Some("two"), "p", "/a", 9),
-        payload_with("other-project", Some("one"), "x", "/a", 10),
-        payload_with("other-cwd", Some("one"), "p", "/b", 11),
-    ] {
-        let id = value["metadata"]["id"].as_str().unwrap().to_string();
-        store.save(&id, value).unwrap();
-    }
-    assert_eq!(
-        store
-            .find_most_recent_for_project("p", "/a", Some("config:one"))
-            .unwrap()
-            .id,
-        "new"
-    );
-    assert_eq!(
-        store
-            .find_most_recent_for_project("p", "/a", None)
-            .unwrap()
-            .id,
-        "other-agent"
-    );
-    assert!(store
-        .find_most_recent_for_project("missing", "/a", None)
-        .is_none());
-
-    let mut a = payload_with("a", Some("one"), "tie", "/a", 7);
-    let mut b = payload_with("b", Some("one"), "tie", "/a", 7);
-    a["metadata"]["createdAt"] = json!(3);
-    b["metadata"]["createdAt"] = json!(3);
-    store.save("a", a).unwrap();
-    store.save("b", b).unwrap();
-    assert_eq!(
-        store
-            .find_most_recent_for_project("tie", "/a", None)
-            .unwrap()
-            .id,
-        "b"
-    );
-    drop(store);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
 fn future_schema_is_rejected_without_rewrite() {
     let root = temp_dir("future");
     let index = root.join(INDEX_FILE);

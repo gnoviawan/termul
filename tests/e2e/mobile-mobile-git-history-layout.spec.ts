@@ -4,7 +4,7 @@ import { cp, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile Git History layout E2E (spec-mobile-git-history-layout): a phone-sized
@@ -184,7 +184,7 @@ async function registerActiveProject(options: { withHistory: boolean }): Promise
     await api.dispose()
   }
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: id }
   })
   return { name, path }

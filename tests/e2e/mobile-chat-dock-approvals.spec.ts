@@ -4,7 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile chat dock and approvals E2E (spec-mobile-chat-dock-approvals): a
@@ -217,7 +217,7 @@ async function launchChat(page: Page, prompt: string, opts: LaunchOptions = {}):
   const press = (target: Locator): Promise<void> => (opts.mouse ? target.click() : target.tap())
   await installPageProbes(page)
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: project.id }
   })
   await page.goto(`${E2E_BASE_URL}/#token=${E2E_TOKEN}`)
@@ -233,7 +233,7 @@ async function launchChat(page: Page, prompt: string, opts: LaunchOptions = {}):
   const launcher = page.getByRole('textbox', { name: 'Agent prompt' })
   const start = page.getByRole('button', { name: 'Start agent chat' })
   if (opts.worktree) {
-    await press(page.getByRole('combobox', { name: 'Isolation mode' }))
+    await press(page.getByRole('combobox', { name: 'Workspace' }))
     await press(page.getByRole('option', { name: 'New worktree' }))
     await expect(page.getByRole('combobox', { name: 'Base branch' })).toContainText('main')
   }

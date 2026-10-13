@@ -4,7 +4,14 @@ import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, type WsIdentity, wsRequest } from './helpers'
+import {
+  E2E_BASE_URL,
+  E2E_TOKEN,
+  storeKey,
+  storeWrite,
+  type WsIdentity,
+  wsRequest
+} from './helpers'
 import { openWorkspace } from './ui'
 
 /**
@@ -322,7 +329,7 @@ async function closeTerminal(page: Page): Promise<void> {
  */
 async function seedPaletteLists(commandIds: string[]): Promise<void> {
   for (const key of ['settings/pinned-commands', 'settings/recent-commands']) {
-    await wsRequest(E2E_BASE_URL, 'store_write', { key, value: { _version: 1, data: commandIds } })
+    await storeWrite(key, commandIds, E2E_DEVICE)
   }
 }
 
@@ -674,7 +681,13 @@ test('the Files header path is tappable below the root: segments, back slide, pe
     .poll(
       async () =>
         JSON.stringify(
-          await wsRequest(E2E_BASE_URL, 'store_read', { key: `mobile-file-explorer/${project.id}` })
+          await wsRequest(
+            E2E_BASE_URL,
+            'store_read',
+            { key: storeKey(`mobile-file-explorer/${project.id}`, E2E_DEVICE) },
+            undefined,
+            E2E_DEVICE
+          )
         ),
       { message: 'persisted Files folder' }
     )

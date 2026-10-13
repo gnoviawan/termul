@@ -1627,65 +1627,6 @@ async fn delete_session_works_for_finalized_and_unknown_ids() {
 }
 
 #[tokio::test]
-async fn find_most_recent_for_project_filters_and_orders() {
-    let root = temp_dir("find-project");
-    let cwd = root.join("cwd");
-    fs::create_dir_all(&cwd).unwrap();
-    let persistence = open_with_authority(&root.join("store")).await;
-    for (session_id, project, namespace) in [
-        ("a", Some("project-1"), Some("config:one")),
-        ("b", Some("project-1"), Some("config:two")),
-        ("c", Some("project-2"), Some("config:one")),
-        // No stable namespace but a runtime agent id — still an identity.
-        ("d", Some("project-1"), None),
-    ] {
-        persistence
-            .register_session(SessionRegistration {
-                session_id: session_id.to_string(),
-                stable_agent_namespace: namespace.map(str::to_string),
-                runtime_agent_id: Some(format!("runtime-{session_id}")),
-                project_id: project.map(str::to_string),
-                cwd: cwd.clone(),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-    }
-    // Deterministic activity ordering via explicit recorded_at.
-    let bump = |session_id: &str, recorded_at: u64| PersistedEventRecord {
-        schema_version: SESSION_SCHEMA_VERSION,
-        session_id: session_id.to_string(),
-        seq: 1,
-        type_: "message_chunk".to_string(),
-        recorded_at,
-        payload: json!({"sessionId": session_id, "role": "agent", "content": [{"type": "text", "text": "hi"}]}),
-    };
-    persistence.enqueue_event(bump("a", 1_000)).unwrap();
-    persistence.enqueue_event(bump("b", 3_000)).unwrap();
-    persistence.enqueue_event(bump("d", 5_000)).unwrap();
-    for session_id in ["a", "b", "d"] {
-        persistence.flush_session(session_id).await.unwrap();
-    }
-
-    let cwd_str = persistence.metadata("a").unwrap().cwd;
-    let hit = persistence
-        .find_most_recent_for_project("project-1", &cwd_str, None)
-        .unwrap();
-    assert_eq!(hit.session_id, "d", "most recent activity wins");
-    let narrowed = persistence
-        .find_most_recent_for_project("project-1", &cwd_str, Some("config:one"))
-        .unwrap();
-    assert_eq!(narrowed.session_id, "a");
-    assert!(persistence
-        .find_most_recent_for_project("project-1", &cwd_str, Some("config:missing"))
-        .is_none());
-    assert!(persistence
-        .find_most_recent_for_project("project-9", &cwd_str, None)
-        .is_none());
-    let _ = fs::remove_dir_all(root);
-}
-
-#[tokio::test]
 async fn unclean_exit_still_downgrades_active_on_restart() {
     let root = temp_dir("restart-crash");
     let (persistence, _) = registered(&root).await;

@@ -965,8 +965,8 @@ impl AcpManager {
     /// Resolve the stable agent namespace (config id or safe fallback) for a
     /// live agent. Returns `Ok(Some(namespace))` when the agent has a stable
     /// namespace, `Ok(None)` when it has none, or `Err` when the agent is
-    /// unknown. Used by the switch-back reopen filter so only sessions owned
-    /// by the same agent namespace are candidates (patch #4).
+    /// unknown. A discovered session registered for this agent records the
+    /// namespace so a later resume finds the same agent identity.
     pub fn stable_agent_namespace(&self, agent_id: &AgentId) -> Result<Option<String>, String> {
         self.agents
             .lock()

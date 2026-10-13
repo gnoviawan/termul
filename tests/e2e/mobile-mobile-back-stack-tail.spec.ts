@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page, WebSocket, WebSocketRoute } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 import { launchChat, openRailNewProjectModal, openWorkspace } from './ui'
 
 /**
@@ -106,13 +106,13 @@ async function registerActiveProject(options: ProjectOptions = {}): Promise<Regi
     await api.dispose()
   }
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: id }
   })
   if (options.snapshots && options.snapshots.length > 0) {
     const createdAt = new Date().toISOString()
     await wsRequest(E2E_BASE_URL, 'store_write', {
-      key: `snapshots/${id}`,
+      key: storeKey(`snapshots/${id}`),
       value: {
         _version: 1,
         data: {
@@ -335,7 +335,7 @@ function isSnapshotStoreFrame(frame: RelayFrame, type: 'store_read' | 'store_wri
   return (
     frame.type === type &&
     typeof frame.payload?.key === 'string' &&
-    frame.payload.key.startsWith('snapshots/')
+    frame.payload.key.startsWith(storeKey('snapshots/'))
   )
 }
 

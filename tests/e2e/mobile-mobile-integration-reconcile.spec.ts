@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile integration reconcile E2E (spec-mobile-integration-reconcile): a
@@ -164,7 +164,7 @@ function watchAgentWarmup(page: Page): Promise<void> {
 async function openApp(page: Page, project: Project): Promise<void> {
   const warmedUp = watchAgentWarmup(page)
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: project.id }
   })
   await page.goto(`${E2E_BASE_URL}/#token=${E2E_TOKEN}`)
@@ -192,10 +192,13 @@ async function bootShell(page: Page, project: Project): Promise<void> {
  * agent on the server (the next launcher starts with it), so a test that depends
  * on the mode chooses it instead of trusting the default.
  */
-async function chooseIsolation(page: Page, mode: 'Local' | 'New worktree'): Promise<void> {
-  await page.getByRole('combobox', { name: 'Isolation mode' }).tap()
+async function chooseIsolation(
+  page: Page,
+  mode: 'Current checkout' | 'New worktree'
+): Promise<void> {
+  await page.getByRole('combobox', { name: 'Workspace' }).tap()
   await page.getByRole('option', { name: mode }).tap()
-  await expect(page.getByRole('combobox', { name: 'Isolation mode' })).toContainText(mode)
+  await expect(page.getByRole('combobox', { name: 'Workspace' })).toContainText(mode)
 }
 
 /**
@@ -303,7 +306,7 @@ test.describe('Git sheet focus return', () => {
     page
   }) => {
     await bootShell(page, await registerProject({ git: true }))
-    await chooseIsolation(page, 'Local')
+    await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git action`)
     const git = page.getByRole('button', { name: 'Open Git changes', exact: true })
     const sheet = page.getByRole('dialog', { name: 'Git changes' })
@@ -344,7 +347,7 @@ test.describe('Git sheet focus return', () => {
     page
   }) => {
     await bootShell(page, await registerProject({ git: true }))
-    await chooseIsolation(page, 'Local')
+    await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git entries`)
     const git = page.getByRole('button', { name: 'Open Git changes', exact: true })
     const more = moreButton(page)
@@ -572,7 +575,7 @@ test.describe('shell sheets focus return', () => {
     page
   }) => {
     await bootShell(page, await registerProject({ git: true }))
-    await chooseIsolation(page, 'Local')
+    await chooseIsolation(page, 'Current checkout')
     await startChat(page, `${LONG} project sheet`)
     const subtitle = subtitleButton(page)
     const sheet = page.getByRole('dialog', { name: 'Projects' })
@@ -701,7 +704,7 @@ test.describe('drawer project row', () => {
 
   test('names the project branch and Local for a chat in the project folder', async ({ page }) => {
     await bootShell(page, await registerProject({ git: true }))
-    await chooseIsolation(page, 'Local')
+    await chooseIsolation(page, 'Current checkout')
     await startChat(page, `${LONG} local row`)
     const drawer = await openDrawer(page)
     await expect(drawer.getByRole('button', { name: /^proj-reconcile-/ })).toContainText(

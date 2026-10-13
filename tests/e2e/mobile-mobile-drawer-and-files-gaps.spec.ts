@@ -4,7 +4,7 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Locator, Page, WebSocketRoute } from 'playwright/test'
 import { chromium, expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 import { openWorkspace } from './ui'
 
 /**
@@ -73,7 +73,7 @@ const AUTH_HEADERS = {
 const CONNECTED_TEXT = `Connected · ${new URL(E2E_BASE_URL).host}`
 
 /** Server store key holding the web client's last selected project. */
-const ACTIVE_PROJECT_KEY = 'web-active-project'
+const ACTIVE_PROJECT_KEY = storeKey('active-project')
 
 /**
  * Every test pins the selected project, and the store outlives this file: put

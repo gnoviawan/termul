@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile toast dock clearance E2E (spec-mobile-toast-dock-clearance): a
@@ -134,7 +134,7 @@ async function registerProject(files: Record<string, string> = {}): Promise<Proj
     await api.dispose()
   }
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: id }
   })
   return { id, name, path }

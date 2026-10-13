@@ -4,7 +4,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page, WebSocketRoute } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile drawer E2E (spec-mobile-drawer-home, restyled by
@@ -89,7 +89,7 @@ async function registerProject(
 /** Make the web client boot straight into this project. */
 async function setActiveProject(project: RegisteredProject): Promise<void> {
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: project.id }
   })
 }

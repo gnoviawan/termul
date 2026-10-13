@@ -13,8 +13,8 @@ import { chatCard, chatTab, launchChat, openWorkspace, selectColumnTab, selectPr
  * user bubble, exactly what a real mid-turn crash leaves behind.
  * `[DURATION:n]` bounds the fake's turn length: the host re-sends the
  * persisted open turn to the replacement agent on reopen (resume), and a
- * bounded resumed turn lets the tab close promptly instead of parking in
- * Closing for the default 300s.
+ * bounded resumed turn ends promptly instead of running for the default
+ * 300s.
  *
  * All chats live in proj-x: chats in the same project share one agent
  * process, so crash prompts must never reuse an agent another suite's

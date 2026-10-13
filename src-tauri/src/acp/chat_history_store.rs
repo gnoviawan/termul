@@ -245,37 +245,6 @@ impl ChatHistoryStore {
         }
     }
 
-    #[must_use]
-    pub fn find_most_recent_for_project(
-        &self,
-        project_id: &str,
-        cwd: &str,
-        agent_namespace: Option<&str>,
-    ) -> Option<ChatHistoryIndexEntry> {
-        self.state
-            .lock()
-            .sessions
-            .iter()
-            .filter(|entry| {
-                entry.project_id == project_id
-                    && entry.cwd == cwd
-                    && (!entry.agent_id.is_empty() || entry.agent_config_id.is_some())
-                    && agent_namespace.is_none_or(|namespace| {
-                        entry
-                            .agent_config_id
-                            .as_ref()
-                            .is_some_and(|id| namespace == format!("config:{id}"))
-                    })
-            })
-            .max_by(|left, right| {
-                left.last_activity_at
-                    .cmp(&right.last_activity_at)
-                    .then(left.created_at.cmp(&right.created_at))
-                    .then(left.id.cmp(&right.id))
-            })
-            .cloned()
-    }
-
     pub fn save(&self, session_id: &str, payload: Value) -> Result<()> {
         validate_session_id(session_id)?;
         let (mut entry, message_count) = validate_payload(&payload, Some(session_id))?;

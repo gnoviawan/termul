@@ -1204,35 +1204,6 @@ impl SessionPersistence {
         Ok(())
     }
 
-    /// Most-recent session for a `(project_id, cwd)` pair with some agent
-    /// identity, optionally narrowed to a stable agent namespace. Mirrors the
-    /// legacy `ChatHistoryStore::find_most_recent_for_project` used by the
-    /// project switch-back reopen.
-    #[must_use]
-    pub fn find_most_recent_for_project(
-        &self,
-        project_id: &str,
-        cwd: &str,
-        stable_agent_namespace: Option<&str>,
-    ) -> Option<SessionIndexEntry> {
-        self.list_sessions()
-            .into_iter()
-            .filter(|entry| {
-                entry.project_id.as_deref() == Some(project_id)
-                    && entry.cwd == cwd
-                    && (entry.stable_agent_namespace.is_some() || entry.runtime_agent_id.is_some())
-                    && stable_agent_namespace.is_none_or(|namespace| {
-                        entry.stable_agent_namespace.as_deref() == Some(namespace)
-                    })
-            })
-            .max_by(|left, right| {
-                left.last_activity_at
-                    .cmp(&right.last_activity_at)
-                    .then(left.created_at.cmp(&right.created_at))
-                    .then(left.session_id.cmp(&right.session_id))
-            })
-    }
-
     /// Shared seq-intruder salvage for the durable reads: on
     /// `CorruptSession`, run one bounded salvage pass and retry the load
     /// once — a healed file (`Ok(true)`) succeeds on retry, and `Ok(false)`

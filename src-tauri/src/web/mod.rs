@@ -101,7 +101,7 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// (stdin-EOF → kill) in the serve cleanup, after Axum drains.
 ///
 /// `registry` is the host's durable [`ProjectRegistry`] the router reads for
-/// `GET /projects` + `switch_project` cwd resolution and writes through the
+/// `GET /projects` + project-root containment checks and writes through the
 /// project command service. The standalone binary opens it at startup from its
 /// projects file (`--projects-file` / `$TERMUL_PROJECTS_FILE` / the state-dir
 /// default); the desktop host builds its own once at setup and calls
