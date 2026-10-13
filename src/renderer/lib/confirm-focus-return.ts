@@ -1,8 +1,9 @@
 /**
  * Focus return after a `ConfirmDialog` that a mobile drawer row raised.
  *
- * `ConfirmDialog` is shared with desktop and never takes or returns focus, so
- * when it unmounts (Cancel, Close or Esc) focus falls to `<body>`. The drawer
+ * `ConfirmDialog` returns focus only to an opener that is still in the DOM,
+ * so when it unmounts (Cancel, Close or Esc) after a drawer row raised it,
+ * focus falls to `<body>` (the row is gone with the drawer). The drawer
  * closes before the confirm shows (a hand-off, so the confirm is not covered by
  * the drawer's overlay) and wants focus back on its opener afterwards.
  *

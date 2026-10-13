@@ -185,3 +185,80 @@ describe('ConfirmDialog overlay back stack', () => {
     })
   })
 })
+
+describe('ConfirmDialog focus (modal)', () => {
+  const props = {
+    title: 'Delete host',
+    message: 'This cannot be undone.',
+    confirmLabel: 'Delete',
+    onConfirm: vi.fn(),
+    onCancel: vi.fn()
+  }
+
+  function Harness({ variant }: { variant?: 'default' | 'danger' }) {
+    const [open, setOpen] = useState(false)
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          opener
+        </button>
+        <ConfirmDialog
+          {...props}
+          variant={variant}
+          isOpen={open}
+          onConfirm={() => {
+            props.onConfirm()
+            setOpen(false)
+          }}
+          onCancel={() => setOpen(false)}
+        />
+      </>
+    )
+  }
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('is a labelled alertdialog', () => {
+    render(<ConfirmDialog {...props} isOpen />)
+    expect(screen.getByRole('alertdialog', { name: 'Delete host' })).toHaveAccessibleDescription(
+      'This cannot be undone.'
+    )
+  })
+
+  it('focuses Cancel for a danger confirm and the action otherwise', async () => {
+    const { unmount } = render(<ConfirmDialog {...props} isOpen variant="danger" />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
+    unmount()
+    render(<ConfirmDialog {...props} isOpen />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toHaveFocus())
+  })
+
+  it('keeps Tab inside and lets Enter on Cancel cancel', async () => {
+    render(<Harness variant="danger" />)
+    const opener = screen.getByRole('button', { name: 'opener' })
+    opener.focus()
+    fireEvent.click(opener)
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    const confirm = screen.getByRole('button', { name: 'Delete' })
+    confirm.focus()
+    fireEvent.keyDown(confirm, { key: 'Tab' })
+    expect(cancel).toHaveFocus()
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true })
+    expect(confirm).toHaveFocus()
+
+    cancel.focus()
+    fireEvent.keyDown(cancel, { key: 'Enter' })
+    expect(props.onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('returns focus to the opener when it closes', async () => {
+    render(<Harness />)
+    const opener = screen.getByRole('button', { name: 'opener' })
+    opener.focus()
+    fireEvent.click(opener)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete' })).toHaveFocus())
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(opener).toHaveFocus())
+  })
+})
