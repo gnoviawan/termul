@@ -243,13 +243,26 @@ describe('SSHPanel context menu', () => {
 })
 
 describe('SSHPanel delete', () => {
+  it('counts every session it will close, not only connected ones', () => {
+    useSSHStore.setState({
+      sessions: [
+        liveSession(),
+        liveSession({ id: 'tab-2', attemptId: 'attempt-2', status: 'connecting', ptyId: null })
+      ]
+    })
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.getByText(/Its 2 sessions will be closed/)).toBeInTheDocument()
+  })
+
   it('asks first, then closes the host sessions and deletes it', async () => {
     useSSHStore.setState({ sessions: [liveSession()] })
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
-    expect(screen.getByText(/Its open session will be closed/)).toBeInTheDocument()
+    expect(screen.getByText(/Its session will be closed/)).toBeInTheDocument()
     expect(sshApi.deleteProfile).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 

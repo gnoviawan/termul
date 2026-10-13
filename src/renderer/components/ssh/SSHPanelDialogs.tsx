@@ -80,15 +80,14 @@ export function useSSHPanelDialogs(): SSHPanelDialogsController {
 }
 
 function deleteMessage(profile: SSHProfile): string {
-  const open = useSSHStore
-    .getState()
-    .sessions.filter((s) => s.profileId === profile.id && s.status === 'connected').length
+  // Every tab of the host closes (connecting and failed ones too).
+  const open = useSSHStore.getState().sessions.filter((s) => s.profileId === profile.id).length
   const sessions =
     open === 0
       ? ''
       : open === 1
-        ? ' Its open session will be closed.'
-        : ` Its ${open} open sessions will be closed.`
+        ? ' Its session will be closed.'
+        : ` Its ${open} sessions will be closed.`
   return `Delete “${profile.name}”?${sessions} Saved credentials are removed from your system keychain. This can't be undone.`
 }
 

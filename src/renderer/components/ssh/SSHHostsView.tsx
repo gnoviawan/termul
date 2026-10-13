@@ -98,8 +98,11 @@ export function SSHHostsView({
       if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
       const target = e.target instanceof Element ? e.target : null
       if (target?.closest('input, textarea, select, [contenteditable="true"], .xterm')) return
+      // The view stays mounted under a hidden tab panel; leave "/" alone then.
+      const search = searchRef.current
+      if (!search || search.closest('[hidden]')) return
       e.preventDefault()
-      searchRef.current?.focus()
+      search.focus()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)

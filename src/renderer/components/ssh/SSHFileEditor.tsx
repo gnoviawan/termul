@@ -90,7 +90,16 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
       try {
         const result = await sshApi.sftpWriteFile(connectionId, editingFile.path, content)
         if (result.success) {
-          setStoreFile({ ...editingFile, originalContent: content })
+          // Another file may have been opened while the write was in flight;
+          // only the file that was written becomes "saved".
+          const current = useSSHStore.getState().editingFile
+          if (
+            current &&
+            current.path === editingFile.path &&
+            current.connectionId === editingFile.connectionId
+          ) {
+            setStoreFile({ ...current, originalContent: content })
+          }
           setConfirmClose(false)
           toast.success(`Saved: ${editingFile.name}`)
           setTimeout(() => setSaveAnimating(false), 600)

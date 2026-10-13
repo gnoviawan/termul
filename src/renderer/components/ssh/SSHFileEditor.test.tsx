@@ -74,6 +74,32 @@ describe('SSHFileEditor code view', () => {
     expect(useSSHStore.getState().editingContent).toBe('other')
   })
 
+  it('does not mark a file opened during a save as saved', async () => {
+    seedFile(true)
+    let finishWrite: (value: unknown) => void = () => {}
+    sshApi.sftpWriteFile.mockImplementationOnce(
+      () => new Promise((resolve) => (finishWrite = resolve))
+    )
+    render(<SSHFileEditor connectionId="conn-1" />)
+    fireEvent.click(screen.getByRole('button', { name: /^Save notes\.txt/ }))
+    act(() => {
+      useSSHStore.setState({
+        editingFile: {
+          connectionId: 'conn-1',
+          path: '/srv/app/other.txt',
+          name: 'other.txt',
+          content: 'other',
+          originalContent: 'other'
+        },
+        editingContent: 'other, edited'
+      })
+    })
+    await act(async () => finishWrite({ success: true }))
+    const { editingFile } = useSSHStore.getState()
+    expect(editingFile?.path).toBe('/srv/app/other.txt')
+    expect(editingFile?.originalContent).toBe('other')
+  })
+
   it('saves the latest text to the remote file on Ctrl+S', async () => {
     seedFile(false)
     const { container } = render(<SSHFileEditor connectionId="conn-1" />)

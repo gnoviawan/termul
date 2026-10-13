@@ -103,6 +103,9 @@ async function settle() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // clearAllMocks keeps resolved values; a restore list from one test must
+  // not be re-adopted by the next test's startSSHSessionEvents.
+  sshApi.listSessions.mockResolvedValue({ success: true, data: [] })
   resetTerminalStore()
   useSSHStore.setState({
     profiles: [profile],
@@ -392,6 +395,47 @@ describe('restore after reload', () => {
       ptyId: 'term-9',
       claim: 'fresh'
     })
+  })
+})
+
+describe('restore when the terminal list is full', () => {
+  it('closes a session it cannot show and still restores the rest', async () => {
+    const store = useTerminalStore.getState()
+    const original = store.addTerminal
+    const addTerminal = vi
+      .spyOn(store, 'addTerminal')
+      .mockImplementationOnce(() => {
+        throw new Error('Maximum terminals allowed')
+      })
+      .mockImplementation(original)
+    try {
+      sshApi.listSessions.mockResolvedValue({
+        success: true,
+        data: [
+          {
+            sessionId: 'backend-1',
+            profileId: 'p1',
+            terminalId: 'term-1',
+            connectedAt: '2026-10-12T00:00:00Z',
+            claim: 'c1'
+          },
+          {
+            sessionId: 'backend-2',
+            profileId: 'p1',
+            terminalId: 'term-2',
+            connectedAt: '2026-10-12T00:00:00Z',
+            claim: 'c2'
+          }
+        ]
+      } as never)
+      startSSHSessionEvents()
+      await vi.waitFor(() => expect(useSSHStore.getState().sessions).toHaveLength(1))
+      expect(useSSHStore.getState().sessions[0].attemptId).toBe('backend-2')
+      expect(sshApi.closeSession).toHaveBeenCalledWith('backend-1')
+      expect(terminalApi.kill).toHaveBeenCalledWith('term-1')
+    } finally {
+      addTerminal.mockRestore()
+    }
   })
 })
 

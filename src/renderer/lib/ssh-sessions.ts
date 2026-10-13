@@ -335,12 +335,27 @@ async function restoreSessions(): Promise<void> {
     const profile = profileOf(live.profileId)
     const terminals = useTerminalStore.getState()
     if (!terminals.findTerminalByPtyId(live.terminalId)) {
-      const record = terminals.addTerminal(
-        `SSH: ${profile?.name ?? 'host'}`,
-        sshTerminalProjectId(live.profileId),
-        'ssh'
-      )
-      terminals.setTerminalPtyId(record.id, live.terminalId)
+      try {
+        const record = terminals.addTerminal(
+          `SSH: ${profile?.name ?? 'host'}`,
+          sshTerminalProjectId(live.profileId),
+          'ssh'
+        )
+        terminals.setTerminalPtyId(record.id, live.terminalId)
+      } catch (error) {
+        // Terminal limit reached: this shell cannot be shown, so close it and
+        // keep restoring the others (as a new session does in this case).
+        void logFrontendError({
+          level: 'warn',
+          source: 'ssh-sessions.restore',
+          message: `SSH session for profile ${live.profileId} not restored: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        })
+        void sshApi.closeSession(live.sessionId)
+        void terminalApi.kill(live.terminalId)
+        continue
+      }
     }
     terminals.setTerminalClaim(live.terminalId, live.claim)
     store.addSession({

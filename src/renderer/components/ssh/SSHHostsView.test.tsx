@@ -103,6 +103,27 @@ describe('SSHHostsView', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(4)
   })
 
+  it('leaves "/" alone while the Hosts tab is hidden', () => {
+    const props = {
+      profiles,
+      sessions: [] as SSHSession[],
+      selectedProfileId: null,
+      actions: actions(),
+      onNewHost: vi.fn(),
+      onImport: vi.fn()
+    }
+    render(
+      <div hidden>
+        <SSHHostsView {...props} />
+      </div>
+    )
+    const notPrevented = fireEvent.keyDown(document.body, { key: '/' })
+    expect(notPrevented).toBe(true)
+    expect(document.activeElement).not.toBe(
+      screen.getByRole('searchbox', { name: 'Search hosts', hidden: true })
+    )
+  })
+
   it('"/" focuses the search box and Esc clears it', () => {
     renderView()
     fireEvent.keyDown(document.body, { key: '/' })
