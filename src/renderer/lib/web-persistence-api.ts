@@ -1,16 +1,13 @@
 /**
- * Web persistence API (issue #613).
+ * Persistence facade over the host store (issue #613, scoped in #1073).
  *
- * Persists web-client app state (settings, terminal layout, editor state,
- * command history, snapshots, SSH profiles) to the termul-server's
- * server-side JSON store over the authenticated `/ws` protocol instead of
- * per-browser localStorage, so state survives browser switches, refreshes,
- * and device changes.
- *
- * Implements the same `PersistenceApi` interface as the desktop
- * `tauriPersistenceApi` (plugin-store). Values are stored versioned
- * (`{ _version, data }`) exactly like the desktop store so a store file
- * stays readable by either implementation.
+ * Persists app state (settings, terminal layout, editor state, command
+ * history, snapshots, SSH profiles) to the host's server-side JSON store over
+ * the authenticated `/ws` store requests, so state survives browser switches,
+ * refreshes and device changes. It is the one `PersistenceApi` of every
+ * surface: browsers and phones reach the host over a WebSocket, the desktop
+ * over the Tauri Channel carrier (the `WebSocketImpl` option, see
+ * `persistence-api.ts`). Values are stored versioned (`{ _version, data }`).
  */
 
 import {
@@ -89,9 +86,20 @@ export class WebStoreSocket {
   private readonly wsUrl: string
   private readonly wsCtor: typeof WebSocket
   private readonly deviceId: string | undefined
+  private readonly authToken: () => string | null
+  private readonly keepAliveMs: number
+  private keepAliveTimer: ReturnType<typeof setInterval> | null = null
 
-  constructor(opts?: { url?: string; WebSocketImpl?: typeof WebSocket; deviceId?: string }) {
+  constructor(opts?: {
+    url?: string
+    WebSocketImpl?: typeof WebSocket
+    deviceId?: string
+    authToken?: () => string | null
+    keepAliveMs?: number
+  }) {
     this.deviceId = opts?.deviceId
+    this.authToken = opts?.authToken ?? (() => getWebAuthToken() ?? 'dev')
+    this.keepAliveMs = opts?.keepAliveMs ?? 0
     this.wsUrl =
       opts?.url ?? (typeof window !== 'undefined' ? resolveWsUrl() : 'ws://127.0.0.1:8080/ws')
     this.wsCtor = opts?.WebSocketImpl ?? WebSocket
@@ -165,6 +173,7 @@ export class WebStoreSocket {
         void this.authenticate().then(() => {
           this.authed = true
           clearProtocolMismatchLatch()
+          this.startKeepAlive()
           settleOk()
         }, settleErr)
       }
@@ -203,6 +212,7 @@ export class WebStoreSocket {
       }
 
       ws.onclose = (ev?: { code?: number }) => {
+        this.stopKeepAlive()
         this.socket = null
         this.authed = false
         if (ev?.code === HOST_GOING_AWAY_CLOSE_CODE) this.hostOffline = true
@@ -251,10 +261,12 @@ export class WebStoreSocket {
       // CAP-1 interim gate: present the resolved web auth token (URL #token=
       // fragment → localStorage), falling back to the legacy 'dev' placeholder that
       // ungated servers accept. Mirrors WsAcpTransport's auth_required handling.
+      // A carrier that is its own auth boundary (the desktop Channel) passes
+      // `authToken: () => null` and presents none.
       const frame: WsRequest = {
         id,
         type: 'authenticate',
-        payload: buildAuthenticatePayload(getWebAuthToken() ?? 'dev', this.deviceId)
+        payload: buildAuthenticatePayload(this.authToken(), this.deviceId)
       }
       this.pending.set(id, {
         resolve: () => resolve(),
@@ -272,7 +284,27 @@ export class WebStoreSocket {
     })
   }
 
+  /**
+   * A carrier with no transport-level pong (the desktop Channel) has the host
+   * close a connection that sends no frame for a while. A `ping` request every
+   * `keepAliveMs` keeps the idle connection open, so a later write does not race
+   * the host closing it.
+   */
+  private startKeepAlive(): void {
+    this.stopKeepAlive()
+    if (this.keepAliveMs <= 0) return
+    this.keepAliveTimer = setInterval(() => {
+      if (this.authed) void this.request('ping', {}).catch(() => undefined)
+    }, this.keepAliveMs)
+  }
+
+  private stopKeepAlive(): void {
+    if (this.keepAliveTimer) clearInterval(this.keepAliveTimer)
+    this.keepAliveTimer = null
+  }
+
   private haltHandshake(err: StoreError): void {
+    this.stopKeepAlive()
     this.halted = err
     try {
       this.socket?.close()
@@ -358,6 +390,10 @@ export function createWebPersistenceApi(opts?: {
   WebSocketImpl?: typeof WebSocket
   /** Test seam: the device partition to use instead of the page's stored id. */
   deviceId?: string
+  /** The `authenticate` token; default the page's web token (`null` presents none). */
+  authToken?: () => string | null
+  /** Send an app-level `ping` this often while connected (default: never). */
+  keepAliveMs?: number
 }): WebPersistenceApi {
   const socket = new WebStoreSocket(opts)
   const pendingDebounce = new Map<string, PendingDebounceEntry>()
@@ -755,8 +791,8 @@ function changeOf<T>(state: StoreWatchState | null | undefined): StoreKeyChange<
  * is up, and again after a reconnect or a lost delta) and after every write or
  * delete. `key` is a full scoped key: `shared/...` (changes from any device) or
  * `device/<own deviceId>/...`. The host refuses any other key
- * (`STORE_KEY_SCOPE`). Returns the unsubscribe. A no-op on the desktop, which
- * has no host watch.
+ * (`STORE_KEY_SCOPE`). Returns the unsubscribe. The desktop's transport watches
+ * over the same Channel carrier as every other surface's over its socket.
  */
 export function watchStoreKey<T = unknown>(
   key: string,

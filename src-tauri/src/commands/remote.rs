@@ -223,8 +223,8 @@ pub async fn remote_sync_chat_history(
 /// Mirror the desktop app-store MCP registry to the named project's
 /// `.termul/mcp-servers.json` (CAP-7 — registry sync gap).
 ///
-/// Desktop MCP servers live in `termul-data.json["acp/mcp-servers"]`
-/// (tauri-plugin-store, app-data dir), while the web `GET /mcp-servers?projectId=`
+/// Desktop MCP servers live in the host store key `shared/lww/acp/mcp-servers`
+/// (the desktop renderer's channel connection), while the web `GET /mcp-servers?projectId=`
 /// route reads `{project_root}/.termul/mcp-servers.json`. Without this bridge the web
 /// route never sees desktop-configured servers, so `McpBadge` stays hidden on
 /// web/mobile. Called best-effort after every desktop MCP save and when the

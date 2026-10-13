@@ -564,7 +564,7 @@ export interface PersistenceWriteOpts {
 // A read that also reports the host's per-key revision stamp.
 export interface StampedValue<T> {
   value: T
-  // 0 = key absent (desktop plugin-store has no revisions and always reports 0).
+  // 0 = key absent.
   revision: number
   clientInstanceId: string | null
 }
@@ -607,11 +607,12 @@ export interface PersistenceApi {
   flushPendingWrites: () => Promise<IpcResult<void>>
   delete: (key: string) => Promise<IpcResult<void>>
   // Subscribe to failed writes (any caller, debounced or not). Returns the
-  // unsubscribe function. The desktop plugin-store never emits.
+  // unsubscribe function.
   onPersistenceError: (listener: PersistenceErrorListener) => () => void
-  // Web only: report each change another device or tab makes to a key (by
-  // logical key), once this page has read it. Echoes of this page's own writes
-  // are not reported. Returns the unsubscribe function. Absent on the desktop.
+  // Report each change another device or tab makes to a key (by logical key),
+  // once this page has read it. Echoes of this page's own writes are not
+  // reported. Returns the unsubscribe function. Every real surface has it;
+  // it is optional so a partial test double need not carry it.
   watchShared?: (key: string, listener: (change: PersistenceKeyChange) => void) => () => void
 }
 

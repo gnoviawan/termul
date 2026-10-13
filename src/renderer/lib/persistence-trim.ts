@@ -7,9 +7,8 @@
  * goes first. A writer whose value is text the user typed (a draft, an editor
  * buffer) never trims: the facade reports the refusal to the user instead.
  *
- * The cap only exists where the host store holds the value (the web client).
- * The desktop plugin-store has none, so `storeValueCapBytes` is unbounded there
- * and every trimmer returns its input untouched.
+ * The cap is the same on every surface: the desktop reaches the host store
+ * over the Channel carrier, exactly like a browser does over a WebSocket.
  */
 
 import type { SessionData, TerminalSession } from '@shared/types/ipc.types'
@@ -19,18 +18,12 @@ import type {
   PersistedTerminal,
   PersistedTerminalLayout
 } from '@shared/types/persistence.types'
-import { isTauriContext } from './tauri-runtime'
 
 /** Largest serialized value the host accepts (mirrors `STORE_VALUE_MAX_BYTES`). */
 export const STORE_VALUE_MAX_BYTES = 256 * 1024
 
 /** Version the facades stamp around every stored value (`{ _version, data }`). */
 export const STORED_VALUE_VERSION = 1
-
-/** The cap that applies to values written on this surface. */
-export function storeValueCapBytes(): number {
-  return isTauriContext() ? Number.POSITIVE_INFINITY : STORE_VALUE_MAX_BYTES
-}
 
 /** UTF-8 length of `text` without allocating the encoded copy. */
 function utf8Length(text: string): number {
@@ -90,7 +83,7 @@ export function trimListToCap<T>(
   items: readonly T[],
   build: (kept: readonly T[]) => unknown,
   keep: 'head' | 'tail',
-  cap: number = storeValueCapBytes()
+  cap: number = STORE_VALUE_MAX_BYTES
 ): TrimmedList<T> {
   if (storedValueBytes(build(items)) <= cap) return { items, dropped: 0 }
   const pick = (n: number): readonly T[] =>
@@ -146,7 +139,7 @@ function shrinkTerminal(terminal: PersistedTerminal, step: number): PersistedTer
  */
 export function trimTerminalLayout(
   layout: PersistedTerminalLayout,
-  cap: number = storeValueCapBytes()
+  cap: number = STORE_VALUE_MAX_BYTES
 ): PersistedTerminalLayout {
   if (storedValueBytes(layout) <= cap) return layout
   const withStep = (step: number): PersistedTerminalLayout => ({
@@ -180,7 +173,7 @@ function withTerminalOutput(snapshot: PersistedSnapshot, step: number): Persiste
  */
 export function trimSnapshotList(
   list: PersistedSnapshotList,
-  cap: number = storeValueCapBytes()
+  cap: number = STORE_VALUE_MAX_BYTES
 ): TrimmedSnapshotList {
   if (storedValueBytes(list) <= cap) return { list, shrunk: 0, droppedIds: [] }
 
@@ -238,7 +231,7 @@ function shrinkSessionTerminal(terminal: TerminalSession, step: number): Termina
  */
 export function trimSessionData(
   session: SessionData,
-  cap: number = storeValueCapBytes()
+  cap: number = STORE_VALUE_MAX_BYTES
 ): SessionData {
   if (storedValueBytes(session) <= cap) return session
   const withStep = (step: number): SessionData => ({

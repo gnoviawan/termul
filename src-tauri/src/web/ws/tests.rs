@@ -1079,6 +1079,7 @@ pub(super) fn test_env(
         acp_install: None,
         store: None,
         identity: Arc::new(std::sync::OnceLock::new()),
+        carrier: Carrier::Ws,
         web_auth: None,
         out_tx: out_tx.clone(),
         subscriptions: Arc::clone(subscriptions),

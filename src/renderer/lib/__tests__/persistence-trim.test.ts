@@ -13,20 +13,17 @@ import {
   jsonBytes,
   STORE_VALUE_MAX_BYTES,
   storedValueBytes,
-  storeValueCapBytes,
   trimListToCap,
   trimSessionData,
   trimSnapshotList,
   trimTerminalLayout
 } from '../persistence-trim'
 
-const { mockWrite, mockIsTauriContext } = vi.hoisted(() => ({
-  mockWrite: vi.fn(async () => ({ success: true as const, data: undefined })),
-  mockIsTauriContext: vi.fn(() => false)
+const { mockWrite } = vi.hoisted(() => ({
+  mockWrite: vi.fn(async () => ({ success: true as const, data: undefined }))
 }))
 
 vi.mock('@/lib/api', () => ({ persistenceApi: { write: mockWrite } }))
-vi.mock('../tauri-runtime', () => ({ isTauriContext: mockIsTauriContext }))
 
 function terminal(id: string, lines: number, transcriptLines: number): PersistedTerminal {
   return {
@@ -73,7 +70,6 @@ const outputChars = (t: PersistedTerminal): number =>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockIsTauriContext.mockReturnValue(false)
 })
 
 describe('storedValueBytes', () => {
@@ -85,23 +81,16 @@ describe('storedValueBytes', () => {
   })
 })
 
-describe('storeValueCapBytes', () => {
-  it('is the host cap on the web and unbounded on the desktop plugin-store', () => {
-    expect(storeValueCapBytes()).toBe(STORE_VALUE_MAX_BYTES)
-    mockIsTauriContext.mockReturnValue(true)
-    expect(storeValueCapBytes()).toBe(Number.POSITIVE_INFINITY)
-  })
-
-  it('leaves every value untouched on the desktop', () => {
-    mockIsTauriContext.mockReturnValue(true)
+describe('the cap on every surface', () => {
+  it('trims a value over the host cap, desktop included', () => {
     const huge = layout([terminal('a', 4000, 4000)])
     expect(storedValueBytes(huge)).toBeGreaterThan(STORE_VALUE_MAX_BYTES)
 
-    expect(trimTerminalLayout(huge)).toBe(huge)
-    const list = snapshotList([snapshot('s1', huge.terminals)])
-    expect(trimSnapshotList(list).list).toBe(list)
+    const trimmed = trimTerminalLayout(huge)
+    expect(trimmed).not.toBe(huge)
+    expect(storedValueBytes(trimmed)).toBeLessThanOrEqual(STORE_VALUE_MAX_BYTES)
     const items = ['x'.repeat(STORE_VALUE_MAX_BYTES + 1)]
-    expect(trimListToCap(items, (kept) => kept, 'head').items).toBe(items)
+    expect(trimListToCap(items, (kept) => kept, 'head').items).not.toBe(items)
   })
 })
 

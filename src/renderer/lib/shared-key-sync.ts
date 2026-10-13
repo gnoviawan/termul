@@ -7,7 +7,6 @@
  * does not report the echo of this page's own writes, so an applied value
  * cannot ping-pong between devices. Nothing is reported before the key was
  * read once, and the host sends the full state again after a reconnect.
- * Without a host watch (desktop) nothing happens.
  */
 
 import type { PersistenceKeyChange } from '@shared/types/ipc.types'

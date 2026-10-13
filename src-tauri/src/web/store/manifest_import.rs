@@ -79,20 +79,27 @@ pub fn read_workspaces(dir: &Path) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// `<name>.imported-<unix-secs>` beside `path` (with a `-<n>` suffix when that
+/// name is taken): where an imported source is kept as a backup.
+pub(super) fn retired_target(path: &Path, now_ms: u64) -> Option<PathBuf> {
+    let name = path.file_name()?;
+    let base = format!("{}.imported-{}", name.to_string_lossy(), now_ms / 1000);
+    let mut target = path.with_file_name(&base);
+    let mut attempt = 1;
+    while target.exists() {
+        target = path.with_file_name(format!("{base}-{attempt}"));
+        attempt += 1;
+    }
+    Some(target)
+}
+
 /// Rename `dir` to `<dir>.imported-<unix-secs>` (with a `-<n>` suffix when that
 /// name is taken). A failure only warns: the import is not repeated because the
 /// store marks the adoption done.
 pub fn retire_dir(dir: &Path, now_ms: u64) {
-    let Some(name) = dir.file_name() else {
+    let Some(target) = retired_target(dir, now_ms) else {
         return;
     };
-    let base = format!("{}.imported-{}", name.to_string_lossy(), now_ms / 1000);
-    let mut target = dir.with_file_name(&base);
-    let mut attempt = 1;
-    while target.exists() {
-        target = dir.with_file_name(format!("{base}-{attempt}"));
-        attempt += 1;
-    }
     match fs::rename(dir, &target) {
         Ok(()) => info!(
             target: "termul::web::store",

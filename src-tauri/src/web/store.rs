@@ -44,6 +44,12 @@
 //! first device that adopts the store ([`manifest_import`]); a parked
 //! `editor-state/<projectId>` key is adopted as `workspace/<projectId>`.
 //!
+//! The desktop's retired plugin-store file `termul-data.json` is imported once,
+//! into the first device that reaches the store over the desktop carrier
+//! ([`desktop_import`]); its own marker (`host.desktopImported`) keeps it
+//! apart from the adoption above, which a shared-live client may have done long
+//! before.
+//!
 //! Exposed to browsers as the `store_read` / `store_write` / `store_delete`
 //! WS requests (see `ws/store.rs`). The client debounces high-frequency
 //! writes, so write volume here is low.
@@ -52,19 +58,22 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde_json::Value;
 use tracing::{info, warn};
 
-use crate::acp::atomic_file::{self, NewerSchema};
+use crate::acp::atomic_file;
 use crate::web::command_ledger::is_valid_command_id;
 use crate::web::config::{
     ServerConfig, DEFAULT_PARTITION_BYTE_BUDGET, DEFAULT_PARTITION_GC_AGE_SECS,
 };
 use crate::web::ws::ClientIdentity;
 
+mod desktop_import;
+mod errors;
 mod gc;
 mod legacy;
 mod lww;
@@ -72,95 +81,13 @@ mod manifest_import;
 mod records;
 mod scope;
 
+pub use desktop_import::{desktop_legacy_file, DESKTOP_LEGACY_FILE};
+pub use errors::{StoreError, WebStoreError};
 pub use gc::spawn_gc_task;
 pub use records::{Record, STORE_SCHEMA_VERSION};
 pub use scope::{classify, KeyScope};
 use records::{decode, encode, envelope_overhead, DecodeFailure, ExtraKeys, HostMeta};
 use scope::{device_prefix, partition_of};
-
-/// Why [`WebStore::open`] refused to open the store file. Both variants are
-/// startup-fatal for the host that hit them.
-#[derive(Debug)]
-pub enum WebStoreError {
-    /// The file was written by a newer host (`schemaVersion` above
-    /// [`STORE_SCHEMA_VERSION`]); it was not modified.
-    NewerSchema(NewerSchema),
-    /// An older (or unversioned) file could not be backed up before
-    /// migration, so the migration was not attempted and the file was not
-    /// modified.
-    MigrationBackup { path: PathBuf, source: io::Error },
-}
-
-impl std::fmt::Display for WebStoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NewerSchema(error) => write!(f, "web store {error}"),
-            Self::MigrationBackup { path, source } => write!(
-                f,
-                "web store '{}' is an older schema and could not be backed up \
-                 before migration: {source}; refusing to open it, the file was left untouched",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for WebStoreError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::NewerSchema(error) => Some(error),
-            Self::MigrationBackup { source, .. } => Some(source),
-        }
-    }
-}
-
-/// Why a store operation was refused or failed.
-#[derive(Debug)]
-pub enum StoreError {
-    /// The store could not be read at startup; nothing is served from it.
-    Unavailable,
-    /// The key is outside the three scopes or in another device's partition.
-    Scope(String),
-    /// A shared/lww key exists and the write named no `baseRevision`.
-    BaseRequired,
-    /// The shared key's current value is not the `expected` one (or, for a
-    /// shared/lww delete, changed since `baseRevision`).
-    CasFailed(String),
-    /// The write would push the device partition past its byte budget.
-    PartitionFull { used: usize, budget: u64 },
-    /// A precondition the scope requires is missing or malformed.
-    Invalid(String),
-    /// The file could not be written (including the 10 MiB file cap).
-    Io(io::Error),
-}
-
-impl std::fmt::Display for StoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unavailable => write!(f, "server store is unavailable"),
-            Self::Scope(message) | Self::CasFailed(message) | Self::Invalid(message) => {
-                write!(f, "{message}")
-            }
-            Self::BaseRequired => write!(
-                f,
-                "this shared key already exists: read it first and send its revision as baseRevision"
-            ),
-            Self::PartitionFull { used, budget } => write!(
-                f,
-                "device partition would use {used} bytes (budget {budget}); delete something first"
-            ),
-            Self::Io(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for StoreError {}
-
-impl From<io::Error> for StoreError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
 
 /// Partition limits, from [`ServerConfig`] (one default each, in
 /// `web/config.rs`).
@@ -267,6 +194,9 @@ struct State {
     /// The retired workspace-manifest directory, while its one-shot import
     /// into the first adopting device is still pending.
     import_dir: Option<PathBuf>,
+    /// The desktop plugin-store file, read at startup, while its one-shot
+    /// import into the first desktop-carrier device is still pending.
+    desktop_import: Option<Arc<desktop_import::DesktopImport>>,
 }
 
 /// Most deleted-key revision floors kept in the host metadata.
@@ -345,6 +275,7 @@ impl WebStore {
                         last_seen_dirty: false,
                         last_flush_ms: now_ms,
                         import_dir: None,
+                        desktop_import: None,
                     };
                     if loaded.migrated {
                         Self::migrate(&path, &bytes, &extra, &mut state, now_ms)?;
@@ -410,6 +341,7 @@ impl WebStore {
             last_seen_dirty: false,
             last_flush_ms: now_ms,
             import_dir: None,
+            desktop_import: None,
         }
     }
 
@@ -810,6 +742,8 @@ fn check_expected(current: Option<&Record>, expected: &Value) -> Result<(), Stor
     }
 }
 
+#[cfg(test)]
+mod desktop_import_tests;
 #[cfg(test)]
 mod gc_tests;
 #[cfg(test)]

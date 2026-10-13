@@ -2,13 +2,12 @@
  * API Bridge - Unified entry point for Tauri IPC APIs
  *
  * Usage:
- *   import { persistenceApi, systemApi } from '@/lib/api-bridge'
+ *   import { systemApi, windowApi } from '@/lib/api-bridge'
  */
 
 import { tauriClipboardApi } from './tauri-clipboard-api'
 import { tauriDialogApi } from './tauri-dialog-api'
 import { tauriFilesystemApi } from './tauri-filesystem-api'
-import { tauriPersistenceApi } from './tauri-persistence-api'
 import { tauriSystemApi } from './tauri-system-api'
 import { tauriWindowApi } from './tauri-window-api'
 
@@ -17,11 +16,6 @@ import { tauriWindowApi } from './tauri-window-api'
  */
 export const isTauri = (): boolean =>
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-
-/**
- * Persistence API
- */
-export const persistenceApi = tauriPersistenceApi
 
 /**
  * Filesystem API
@@ -55,11 +49,4 @@ export type { IpcResult } from '@shared/types/ipc.types'
 /**
  * Re-export all APIs for convenience
  */
-export {
-  tauriClipboardApi,
-  tauriDialogApi,
-  tauriFilesystemApi,
-  tauriPersistenceApi,
-  tauriSystemApi,
-  tauriWindowApi
-}
+export { tauriClipboardApi, tauriDialogApi, tauriFilesystemApi, tauriSystemApi, tauriWindowApi }

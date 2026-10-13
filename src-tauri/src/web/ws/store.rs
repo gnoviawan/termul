@@ -123,6 +123,22 @@ fn store_error_reply(id: String, error: StoreError, io_code: &str) -> WsReply {
     WsReply::err_with_code(id, code, error.to_string())
 }
 
+/// A request that arrived over the desktop carrier first lets its device take
+/// over the pending plugin-store import, so it never sees a store that lacks
+/// the keys about to be imported. Other carriers never claim it.
+fn claim_for_desktop(
+    store: &WebStore,
+    identity: &ClientIdentity,
+    carrier: Carrier,
+    now_ms: u64,
+) -> Result<(), StoreError> {
+    if carrier == Carrier::Ipc {
+        store.claim_desktop_import(identity, now_ms)
+    } else {
+        Ok(())
+    }
+}
+
 fn task_failed(id: String, code: &str, error: tokio::task::JoinError) -> WsReply {
     tracing::warn!("store task failed: {error}");
     WsReply::err_with_code(id, code, format!("store task failed: {error}"))
@@ -136,6 +152,7 @@ pub(super) async fn handle_store_read(
     payload: &Value,
     store: Option<&Arc<WebStore>>,
     identity: Option<&ClientIdentity>,
+    carrier: Carrier,
 ) -> WsReply {
     let parsed: StoreReadPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -148,8 +165,12 @@ pub(super) async fn handle_store_read(
     if let Some(reply) = validate_store_key(&id, &parsed.key) {
         return reply;
     }
-    let result =
-        tokio::task::spawn_blocking(move || store.read(&parsed.key, &identity, unix_ms())).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let now_ms = unix_ms();
+        claim_for_desktop(&store, &identity, carrier, now_ms)?;
+        store.read(&parsed.key, &identity, now_ms)
+    })
+    .await;
     match result {
         Ok(Ok(stamped)) => WsReply::ok(
             id,
@@ -171,6 +192,7 @@ pub(super) async fn handle_store_write(
     payload: &Value,
     store: Option<&Arc<WebStore>>,
     identity: Option<&ClientIdentity>,
+    carrier: Carrier,
     relay: &Arc<WsRelaySink>,
 ) -> WsReply {
     let parsed: StoreWritePayload = match serde_json::from_value(payload.clone()) {
@@ -210,7 +232,9 @@ pub(super) async fn handle_store_write(
     };
     let watched = (store.clone(), parsed.key.clone(), identity.clone());
     let result = tokio::task::spawn_blocking(move || {
-        store.write(&parsed.key, parsed.value, precondition, &identity, unix_ms())
+        let now_ms = unix_ms();
+        claim_for_desktop(&store, &identity, carrier, now_ms)?;
+        store.write(&parsed.key, parsed.value, precondition, &identity, now_ms)
     })
     .await;
     match result {
@@ -240,6 +264,7 @@ pub(super) async fn handle_store_delete(
     payload: &Value,
     store: Option<&Arc<WebStore>>,
     identity: Option<&ClientIdentity>,
+    carrier: Carrier,
     relay: &Arc<WsRelaySink>,
 ) -> WsReply {
     let parsed: StoreDeletePayload = match serde_json::from_value(payload.clone()) {
@@ -260,7 +285,9 @@ pub(super) async fn handle_store_delete(
     };
     let watched = (store.clone(), parsed.key.clone(), identity.clone());
     let result = tokio::task::spawn_blocking(move || {
-        store.delete(&parsed.key, precondition, &identity, unix_ms())
+        let now_ms = unix_ms();
+        claim_for_desktop(&store, &identity, carrier, now_ms)?;
+        store.delete(&parsed.key, precondition, &identity, now_ms)
     })
     .await;
     match result {

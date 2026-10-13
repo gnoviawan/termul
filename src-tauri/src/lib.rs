@@ -1156,6 +1156,11 @@ pub fn run() {
                     let store = store.with_legacy_manifests(web::store::legacy_manifests_dir(
                         &app_data_dir,
                     ));
+                    // The retired plugin-store file `termul-data.json` moves
+                    // into the first device that reaches the store over the
+                    // desktop carrier (renamed afterwards).
+                    let store = store
+                        .with_desktop_legacy(web::store::desktop_legacy_file(&app_data_dir));
                     app.manage(remote::SharedLiveData {
                         store: Arc::new(store),
                         data_dir: app_data_dir.clone(),

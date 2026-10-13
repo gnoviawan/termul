@@ -1,6 +1,6 @@
 /**
  * One-shot desktop migration of the renderer's old `projects` record (the
- * plugin-store key that used to own the project list) to the host registry.
+ * store key that used to own the project list) to the host registry.
  *
  * On the first desktop launch after the upgrade the old record is split in two:
  * the list (id, name, colour, path, archived, default) goes to the host through
@@ -31,7 +31,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { projectRegistryImport } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 
-/** The plugin-store key the old project record lived under. */
+/** The store key the old project record lived under. */
 export const LEGACY_PROJECTS_KEY = 'projects'
 
 /** One project of the old record (private: nothing else reads this shape). */

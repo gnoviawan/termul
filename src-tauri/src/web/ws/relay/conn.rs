@@ -137,6 +137,9 @@ pub(in crate::web::ws) struct HandlerEnv {
     /// The connection's authenticated identity; empty until `authenticate`
     /// succeeds (request tasks only run after it).
     pub(in crate::web::ws) identity: Arc<OnceLock<ClientIdentity>>,
+    /// The carrier the connection arrived on (the desktop's `store_*` requests
+    /// claim the pending plugin-store import).
+    pub(in crate::web::ws) carrier: Carrier,
     pub(in crate::web::ws) web_auth: Option<Arc<WebAuth>>,
     /// This connection's outbound queue.
     pub(in crate::web::ws) out_tx: OutboundSender,
@@ -161,6 +164,7 @@ impl HandlerEnv {
             acp_install: state.acp_install.clone(),
             store: state.store.clone(),
             identity: Arc::clone(&conn.identity),
+            carrier: conn.access.carrier(),
             web_auth: state.web_auth.clone(),
             out_tx,
             subscriptions: Arc::clone(&conn.subscriptions),

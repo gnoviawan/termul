@@ -45,7 +45,7 @@ describe('shared key sync', () => {
     expect(apply).toHaveBeenCalledTimes(2)
   })
 
-  it('does nothing without a host watch (desktop)', () => {
+  it('does nothing when the facade has no watch', () => {
     const watch = sharedFake.api.watchShared
     ;(sharedFake.api as { watchShared?: unknown }).watchShared = undefined
     try {

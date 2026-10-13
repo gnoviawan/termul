@@ -93,7 +93,8 @@ pub fn from_flat(flat: BTreeMap<String, Value>, extra: ExtraKeys) -> Loaded {
     }
 }
 
-fn imported(value: Value) -> Record {
+/// A record stamped as imported by a migration (revision 1, writer `legacy`).
+pub(super) fn imported(value: Value) -> Record {
     Record {
         v: value,
         rev: 1,

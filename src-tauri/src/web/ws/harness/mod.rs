@@ -33,6 +33,8 @@ mod relay_prompt_tests;
 mod watch_hub_tests;
 mod store_tests;
 #[cfg(test)]
+mod store_desktop_import_tests;
+#[cfg(test)]
 mod watch_scoped_tests;
 #[cfg(test)]
 mod watch_tests;
@@ -109,18 +111,23 @@ impl Host {
     }
 
     /// The desktop's Channel host (`AppState::desktop_local`) sharing this
-    /// host's ACP manager, relay, registry and PTYs. Its own connection
-    /// runtime is what `WsChannelHost::drain` stops.
+    /// host's ACP manager, relay, registry, PTYs and store (a scratch store
+    /// when none is attached; attach it with [`Host::with_store`] first). Its
+    /// own connection runtime is what `WsChannelHost::drain` stops.
     pub(crate) fn channel_host(&self) -> &crate::web::ws::channel::WsChannelHost {
         &self
             .channel
             .get_or_init(|| {
                 let scratch = tempfile::tempdir().expect("scratch store dir");
-                let store = crate::web::store::WebStore::open(
-                    scratch.path().join("store.json"),
-                    crate::web::store::StorePolicy::default(),
-                )
-                .expect("open the scratch store");
+                let store = self.state.store.clone().unwrap_or_else(|| {
+                    Arc::new(
+                        crate::web::store::WebStore::open(
+                            scratch.path().join("store.json"),
+                            crate::web::store::StorePolicy::default(),
+                        )
+                        .expect("open the scratch store"),
+                    )
+                });
                 let state = AppState::desktop_local(crate::web::router::DesktopLocalParts {
                     acp: Arc::clone(&self.state.acp),
                     pty: Arc::clone(&self.state.pty),
@@ -128,7 +135,7 @@ impl Host {
                     registry: Arc::clone(&self.state.registry),
                     acp_catalog: None,
                     acp_install: None,
-                    store: Arc::new(store),
+                    store,
                 });
                 (crate::web::ws::channel::WsChannelHost::new(state), scratch)
             })

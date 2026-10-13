@@ -56,6 +56,10 @@ pub struct HostMeta {
     /// Set once the parked keys were adopted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adopted: Option<Adopted>,
+    /// Set once the desktop's retired plugin-store file was imported, by the
+    /// first device that reached the store over the desktop carrier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_imported: Option<Adopted>,
     /// Last revision of each deleted shared key. A key written again starts
     /// above this floor, so a stale writer cannot overwrite the new value.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
