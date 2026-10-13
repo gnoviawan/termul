@@ -321,6 +321,35 @@ describe('WebTerminalClient host-offline (Close 1001)', () => {
     client.dispose()
   })
 
+  it('probes the host at once when the network returns while it is offline', async () => {
+    vi.useFakeTimers()
+    let healthy = false
+    const fetchMock = vi.fn(async () => ({ ok: healthy }) as Response)
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const oldSocket = internals.socket
+
+    closeWith(client, 1001)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    healthy = true
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(internals.socket).not.toBe(oldSocket)
+
+    client.dispose()
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('with no live terminal stays idle and connects lazily', async () => {
     const client = new WebTerminalClient(
       'ws://test/terminal/ws',

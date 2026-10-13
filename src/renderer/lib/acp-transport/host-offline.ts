@@ -10,6 +10,8 @@
  * reconnects once the host answers.
  */
 
+import { authHeader } from '../web-auth-token'
+
 /** WebSocket close code the host sends when it stops (`CLOSE_GOING_AWAY`). */
 export const HOST_GOING_AWAY_CLOSE_CODE = 1001
 
@@ -27,6 +29,7 @@ export async function probeHostHealth(): Promise<boolean> {
   try {
     const res = await fetch(`${window.location.origin}/health`, {
       method: 'GET',
+      headers: authHeader(),
       cache: 'no-store',
       signal: controller.signal
     })

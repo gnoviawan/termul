@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearWebAuthToken, setWebAuthToken } from '../web-auth-token'
 import { HOST_OFFLINE_PROBE_INTERVAL_MS, HostOfflineMonitor, probeHostHealth } from './host-offline'
 
 function stubHealth(answers: Array<boolean | 'throw'>): ReturnType<typeof vi.fn> {
@@ -21,6 +22,18 @@ afterEach(() => {
 })
 
 describe('probeHostHealth', () => {
+  it('sends the bearer token so a gated host answers the probe', async () => {
+    const fetchMock = stubHealth([true])
+    setWebAuthToken('secret-token')
+    try {
+      expect(await probeHostHealth()).toBe(true)
+      const init = fetchMock.mock.calls[0][1] as RequestInit
+      expect(init.headers).toEqual({ Authorization: 'Bearer secret-token' })
+    } finally {
+      clearWebAuthToken()
+    }
+  })
+
   it('is true for a 2xx answer and false for an error status or a network failure', async () => {
     stubHealth([true])
     expect(await probeHostHealth()).toBe(true)

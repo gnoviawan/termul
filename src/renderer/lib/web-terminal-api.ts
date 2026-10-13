@@ -148,6 +148,7 @@ export class WebTerminalClient {
   /** Bound DOM-listener refs so `dispose()` can detach them. */
   private visibilityHandler: (() => void) | null = null
   private focusHandler: (() => void) | null = null
+  private onlineHandler: (() => void) | null = null
   private readonly pending = new Map<string, Pending>()
   private readonly trackers = new Map<string, TerminalTracker>()
   private readonly dataCallbacks = new Set<TerminalDataCallback>()
@@ -1260,11 +1261,18 @@ export class WebTerminalClient {
       // acts when a hide was previously recorded so normal use is a no-op.
       this.maybeReconnectOnReturn()
     }
+    // A returning network ends the host-offline wait at once instead of at the
+    // next slow probe.
+    const onOnline = (): void => {
+      if (this.hostOffline) this.hostProbe.probeNow()
+    }
     this.visibilityHandler = onVisibility
     this.focusHandler = onFocus
+    this.onlineHandler = onOnline
     document.addEventListener('visibilitychange', onVisibility)
     // `focus` is a window-level event that does NOT bubble — attach to `window`.
     window.addEventListener('focus', onFocus)
+    window.addEventListener('online', onOnline)
   }
 
   /** Detach the visibility/focus listeners (called from `dispose`). */
@@ -1276,6 +1284,10 @@ export class WebTerminalClient {
     if (this.focusHandler && typeof window !== 'undefined') {
       window.removeEventListener('focus', this.focusHandler)
       this.focusHandler = null
+    }
+    if (this.onlineHandler && typeof window !== 'undefined') {
+      window.removeEventListener('online', this.onlineHandler)
+      this.onlineHandler = null
     }
   }
 
