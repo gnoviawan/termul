@@ -2,14 +2,12 @@ use super::*;
 
 // Constants matching Electron implementation
 pub(super) const GLOBAL_TERMINAL_LIMIT: usize = 30;
-pub(super) const ORPHAN_TIMEOUT_MS: u64 = 300_000; // 5 minutes
-pub(super) const ORPHAN_CHECK_INTERVAL_MS: u64 = 30_000; // 30 seconds
-/// #851b: conservative default web-listed reap window (5 minutes). A
-/// web-spawned terminal that no client has listed for this long — and that
-/// has neither a live web attachment nor a renderer ref — is swept by the
-/// orphan reaper. Matches the ordinary orphan timeout so web and desktop
-/// terminals share one retention budget.
-pub(super) const WEB_LISTED_REAP_AFTER_MS: u64 = 300_000;
+/// How long an exited PTY stays tracked, so a client that reattaches soon
+/// after the process ends still replays its output. A live PTY is never
+/// removed by time. Atomic so tests can shrink it.
+pub(super) const EXITED_TERMINAL_TTL_MS: u64 = 600_000; // 10 minutes
+/// How often the sweeper looks for exited PTYs past their TTL.
+pub(super) const EXITED_SWEEP_INTERVAL_MS: u64 = 30_000; // 30 seconds
 
 // ADR-002.3: Flusher thread constants
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(4);

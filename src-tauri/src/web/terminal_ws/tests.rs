@@ -93,10 +93,6 @@ fn connection_gate_refuses_every_pre_auth_op() {
         "get_git_branch",
         "get_git_status",
         "get_exit_code",
-        "add_renderer_ref",
-        "remove_renderer_ref",
-        "set_protected",
-        "update_orphan_detection",
         "unknown-future-op",
     ] {
         assert_eq!(
@@ -594,47 +590,6 @@ async fn resize_requires_authorization_and_collapses_with_unknown_terminal() {
         &mut owner,
     )
     .await;
-}
-
-/// QA round 2, spec story 5: `update_orphan_detection` is accepted on an
-/// AUTHED connection with ZERO attached terminals (the settings loader
-/// pushes it at boot, pre-attach), while an un-authed connection gets the
-/// single generic UNAUTHORIZED via the connection gate — identical for a
-/// gated connection before `authenticate`.
-#[tokio::test]
-async fn update_orphan_detection_accepted_on_authed_connection_with_zero_terminals() {
-    let state = gate_test_state(Some("s3cret"));
-    let (tx, _rx) = mpsc::channel(8);
-
-    // Authed connection, no authorized terminals at all.
-    let mut authed = gate_test_ctx(true);
-    assert!(authed.authorized.read().is_empty());
-    let accepted = handle(
-        gate_request(
-            "od-1",
-            "update_orphan_detection",
-            json!({"enabled": true, "timeout": 15}),
-        ),
-        &state,
-        &tx,
-        &mut authed,
-    )
-    .await;
-    assert_eq!(accepted, Ok(Value::Null));
-
-    // Un-authed (gated, pre-authenticate) connection: the connection gate
-    // refuses before the arm — the single generic UNAUTHORIZED, no state
-    // change, and the connection stays un-authed.
-    let mut unauthed = gate_test_ctx(false);
-    let refused = handle(
-        gate_request("od-2", "update_orphan_detection", json!({"enabled": false})),
-        &state,
-        &tx,
-        &mut unauthed,
-    )
-    .await;
-    assert_eq!(refused, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
-    assert!(!unauthed.authed);
 }
 
 /// Story 5: `list_preserved {projectId}` on an AUTHED connection returns
@@ -1385,10 +1340,6 @@ async fn view_only_terminal_connection_is_refused_every_mutation() {
         "kill",
         "rotate_claim",
         "revoke_claim",
-        "set_protected",
-        "update_orphan_detection",
-        "add_renderer_ref",
-        "remove_renderer_ref",
         // Re-issues (replaces) the claim of every unattached terminal.
         "list_preserved",
     ] {
@@ -1454,15 +1405,49 @@ async fn write_capable_terminal_connection_passes_the_capability_gate() {
     let state = gate_test_state(None);
     let (tx, _rx) = mpsc::channel(8);
     let mut ctx = gate_test_ctx(true);
-    // `update_orphan_detection` needs no terminal and no PTY: it must run.
+    // `list_preserved` needs no terminal and no PTY: it must run.
     let outcome = handle(
-        gate_request("o", "update_orphan_detection", json!({ "enabled": true })),
+        gate_request("o", "list_preserved", json!({ "projectId": "p" })),
         &state,
         &tx,
         &mut ctx,
     )
     .await;
     assert!(outcome.is_ok(), "{outcome:?}");
+}
+
+/// A PTY lives until it is killed or exits, so the requests that once drove
+/// renderer-ref reaping are gone: an authed, write-capable connection gets the
+/// unknown-request answer for each.
+#[tokio::test]
+async fn retired_reaper_requests_are_unknown() {
+    let state = gate_test_state(None);
+    let (tx, _rx) = mpsc::channel(8);
+    let mut ctx = gate_test_ctx(true);
+    ctx.authorize("t1");
+    for retired in [
+        "add_renderer_ref",
+        "remove_renderer_ref",
+        "set_protected",
+        "update_orphan_detection",
+    ] {
+        let outcome = handle(
+            gate_request(
+                "r",
+                retired,
+                json!({ "terminalId": "t1", "rendererId": "r", "protected": false }),
+            ),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string())),
+            "{retired}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

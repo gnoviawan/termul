@@ -46,10 +46,6 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-vi.mock('@/lib/terminal-api', () => ({
-  setTerminalProtected: vi.fn().mockResolvedValue(undefined)
-}))
-
 import type { WorkspaceManifest } from '@shared/types/workspace-manifest.types'
 import { resetTerminalStore, seedTerminalStore } from '@/lib/test-utils/store'
 import { mockTerminal, mockTerminalDescriptor } from '@/lib/test-utils/terminal'

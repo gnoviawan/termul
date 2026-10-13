@@ -63,11 +63,7 @@ const IPC_COMMANDS = {
   GET_CWD: 'terminal_get_cwd',
   GET_GIT_BRANCH: 'terminal_get_git_branch',
   GET_GIT_STATUS: 'terminal_get_git_status',
-  GET_EXIT_CODE: 'terminal_get_exit_code',
-  UPDATE_ORPHAN_DETECTION: 'terminal_update_orphan_detection',
-  ADD_RENDERER_REF: 'terminal_add_renderer_ref',
-  REMOVE_RENDERER_REF: 'terminal_remove_renderer_ref',
-  SET_PROTECTED: 'terminal_set_protected'
+  GET_EXIT_CODE: 'terminal_get_exit_code'
 } as const
 
 /**
@@ -629,65 +625,8 @@ export function createTauriTerminalApi(): TerminalApi {
      */
     async getExitCode(terminalId: string): Promise<IpcResult<number | null>> {
       return invokeIpc<number | null>(IPC_COMMANDS.GET_EXIT_CODE, { terminalId })
-    },
-
-    /**
-     * Update orphan detection settings
-     */
-    async updateOrphanDetection(
-      enabled: boolean,
-      timeout: number | null
-    ): Promise<IpcResult<void>> {
-      // Rust expects argument `settings: OrphanDetectionSettings`
-      const settings = {
-        enabled,
-        timeoutMinutes: timeout ? Math.floor(timeout / 60000) : null
-      }
-      return invokeIpc<void>(IPC_COMMANDS.UPDATE_ORPHAN_DETECTION, { settings })
     }
   }
-}
-
-/**
- * Internal method to add renderer ref (not part of TerminalApi interface)
- * Called when a terminal component mounts to register with the Rust backend
- */
-export async function addRendererRef(ptyId: string, rendererId: string): Promise<IpcResult<void>> {
-  // Rust expects argument `request: RendererRefRequest { terminal_id, renderer_id }`
-  const request = { terminalId: ptyId, rendererId }
-  return invokeIpc<void>(IPC_COMMANDS.ADD_RENDERER_REF, { request })
-}
-
-/**
- * Internal method to remove renderer ref (not part of TerminalApi interface)
- * Called when a terminal component unmounts to unregister from the Rust backend
- */
-export async function removeRendererRef(
-  ptyId: string,
-  rendererId: string
-): Promise<IpcResult<void>> {
-  // Rust expects argument `request: RendererRefRequest { terminal_id, renderer_id }`
-  const request = { terminalId: ptyId, rendererId }
-  return invokeIpc<void>(IPC_COMMANDS.REMOVE_RENDERER_REF, { request })
-}
-
-/**
- * Internal method to set a terminal's orphan-reaping protection (not part of
- * the TerminalApi interface).
- *
- * Protection is enabled automatically at spawn. Call with `protected = false`
- * ONLY when a terminal is genuinely released — its project is closed or its tab
- * is closed. Do NOT call this on a project switch or component unmount: a
- * backgrounded project's terminals must stay protected so orphan detection does
- * not kill them mid-task (the "Terminal not found"/hang bug).
- */
-export async function setTerminalProtected(
-  ptyId: string,
-  protectedState: boolean
-): Promise<IpcResult<void>> {
-  // Rust expects argument `request: SetTerminalProtectedRequest { terminal_id, protected }`
-  const request = { terminalId: ptyId, protected: protectedState }
-  return invokeIpc<void>(IPC_COMMANDS.SET_PROTECTED, { request })
 }
 
 /**

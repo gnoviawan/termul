@@ -398,7 +398,7 @@ async fn handle(
     let gate = connection_gate(ctx.authed, request.type_.as_str());
     // Required-capability check before any handler arm: a view-only
     // connection may attach/read but never mutate (spawn, write, resize,
-    // kill, claims, renderer refs, protection, orphan detection).
+    // kill, claims).
     if gate == ConnectionGate::Allow
         && !ctx.capabilities.write
         && !terminal_request_is_view(request.type_.as_str())
@@ -537,7 +537,6 @@ async fn handle(
                 if let Some(previous) = ctx.attachments.remove(&terminal_id) {
                     previous.end(&state.pty, &terminal_id);
                 }
-                instance.mark_web_listed();
                 // Sequenced replay: only unseen chunks, with gap detection; a cursor
                 // from another epoch or ahead of the head replays from the start
                 // with `reset`.
@@ -699,68 +698,6 @@ async fn handle(
                 }
                 Ok(json!(state.exit_code_tracker.get_exit_code(terminal_id)))
             }
-            "add_renderer_ref" => {
-                let terminal_id = string_field(&request.payload, "terminalId")?;
-                if !ctx.is_authorized(terminal_id) {
-                    return Err((
-                        "UNAUTHORIZED",
-                        format!("Not authorized for terminal {terminal_id}"),
-                    ));
-                }
-                state
-                    .pty
-                    .add_renderer_ref(terminal_id, string_field(&request.payload, "rendererId")?)
-                    .map(|_| Value::Null)
-                    .map_err(|e| ("TERMINAL_NOT_FOUND", e))
-            }
-            "remove_renderer_ref" => {
-                let terminal_id = string_field(&request.payload, "terminalId")?;
-                if !ctx.is_authorized(terminal_id) {
-                    return Err((
-                        "UNAUTHORIZED",
-                        format!("Not authorized for terminal {terminal_id}"),
-                    ));
-                }
-                state
-                    .pty
-                    .remove_renderer_ref(terminal_id, string_field(&request.payload, "rendererId")?)
-                    .map(|_| Value::Null)
-                    .map_err(|e| ("TERMINAL_NOT_FOUND", e))
-            }
-            "set_protected" => {
-                let terminal_id = string_field(&request.payload, "terminalId")?;
-                if !ctx.is_authorized(terminal_id) {
-                    return Err((
-                        "UNAUTHORIZED",
-                        format!("Not authorized for terminal {terminal_id}"),
-                    ));
-                }
-                let protected = request.payload["protected"].as_bool().unwrap_or(true);
-                state.pty.set_protected(terminal_id, protected);
-                Ok(Value::Null)
-            }
-            "update_orphan_detection" => {
-                // Global lifecycle setting. Accepted on any AUTHED connection —
-                // including one with zero attached terminals — because the web
-                // auth token (the connection gate) is the trust boundary for the
-                // deployment posture this op exists in: the settings loader
-                // pushes it at boot, before the first terminal attaches (QA
-                // round 2: the push was previously refused until ≥1 authorized
-                // terminal existed, so orphan-detection settings never applied).
-                // Pre-auth connections are already refused with the single
-                // generic UNAUTHORIZED by `connection_gate` before this arm.
-                let enabled = request.payload["enabled"].as_bool().unwrap_or(true);
-                let timeout = request.payload["timeout"].as_u64();
-                state
-                    .pty
-                    .update_orphan_detection_settings(enabled, timeout)
-                    .await;
-                info!(
-                    "[terminal-ws] orphan detection updated enabled={enabled} timeout_ms={:?}",
-                    timeout
-                );
-                Ok(Value::Null)
-            }
             "list_preserved" => {
                 // Cross-reload reattach (QA round 2, spec story 5): an AUTHED
                 // connection asks which PTYs the host still preserves for a
@@ -783,12 +720,6 @@ async fn handle(
                 let entries: Vec<Value> = preserved
                     .into_iter()
                     .map(|entry| {
-                        // #851b: a listing IS a web listing — stamp every
-                        // returned terminal so the web-listed reaper window
-                        // restarts while ANY client still sees it.
-                        if let Some(instance) = state.pty.get(&entry.info.id) {
-                            instance.mark_web_listed();
-                        }
                         // #851a: every entry now carries ownership info —
                         // `hasLiveAttachment` tells the renderer another
                         // device already holds a live attachment, and the

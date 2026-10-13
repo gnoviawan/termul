@@ -24,8 +24,3 @@ import { createWebTerminalApi } from './web-terminal-api'
 export const terminalApi: TerminalApi = isTauriContext()
   ? createTauriTerminalApi()
   : createWebTerminalApi()
-
-// Re-export internal renderer ref methods for ConnectedTerminal component.
-// These come from tauri-terminal-api (they no-op outside Tauri, which is fine
-// because the web adapter handles renderer refs via webTerminalInternals).
-export { addRendererRef, removeRendererRef, setTerminalProtected } from './tauri-terminal-api'

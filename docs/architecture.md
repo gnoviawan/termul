@@ -192,9 +192,8 @@ Responsibilities:
 - process spawn/kill/resize/write
 - terminal lifecycle tracking
 - Windows-specific ConPTY handling
-- renderer attachment bookkeeping
 - transcript / output event streaming
-- orphan detection policies
+- exited-terminal expiry (a live terminal ends only by kill, exit or shutdown)
 
 ### 4. Tracker Subsystem
 

@@ -15,17 +15,6 @@ pub struct TerminalInstance {
     pub shell: String,
     pub cwd: String,
     pub pid: u32,
-    pub last_activity: Arc<RwLock<Instant>>,
-    pub orphan_since: Arc<RwLock<Option<Instant>>>,
-    pub renderer_refs: Arc<RwLock<HashSet<String>>>,
-    /// When true, this terminal is still owned by an open project/tab and must
-    /// NOT be reaped by orphan detection — even if it currently has zero
-    /// renderer refs (e.g. its project is switched to the background, so the
-    /// `ConnectedTerminal` component unmounted). It is set true at spawn and
-    /// cleared only when the terminal is explicitly released (project closed or
-    /// terminal tab closed). This prevents busy background-project terminals
-    /// from being killed mid-task — the cause of the "Terminal not found"/hang.
-    pub protected: Arc<AtomicBool>,
     pub cols: Arc<RwLock<u16>>,
     pub rows: Arc<RwLock<u16>>,
     /// Broadcast channel for fan-out of raw PTY output to remote WebSocket clients.
@@ -46,14 +35,6 @@ pub struct TerminalInstance {
     /// reattachment skips terminals with a live attachment so a second
     /// browser connection cannot invalidate the first one's claim
     pub web_attachments: Arc<AtomicUsize>,
-    /// Last time a web client listed/subscribed to this terminal
-    /// (`list_preserved` / `attach` / web `spawn`), or `None` when the
-    /// terminal has never been seen by the web surface. Drives the
-    /// web-listed reaper window (#851): a web terminal no client has
-    /// listed for `WEB_LISTED_REAP_AFTER` gets swept by the orphan
-    /// reaper even though it stays `protected` (web terminals never
-    /// collect renderer refs, so the ordinary orphan path never fires).
-    pub last_web_listed: Arc<RwLock<Option<Instant>>>,
     /// Connection id of the web client that last wrote input or resized
     /// (#851 "single size owner" — last-writer-wins; logged on change so
     /// resize conflicts between devices are observable). `None` until a
@@ -65,6 +46,9 @@ pub struct TerminalInstance {
     /// Set once the PTY's process has exited. An exited PTY that is still
     /// tracked holds no process, so it counts toward no terminal cap.
     pub exited: AtomicBool,
+    /// When the process exited; `None` while it is alive. The exit sweeper
+    /// removes the instance once this is older than the exit TTL.
+    pub exited_at: parking_lot::Mutex<Option<Instant>>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
@@ -73,6 +57,23 @@ impl TerminalInstance {
     /// Whether the PTY's process has exited.
     pub fn has_exited(&self) -> bool {
         self.exited.load(Ordering::Acquire)
+    }
+
+    /// Record that the PTY's process exited. The first call wins, so the TTL
+    /// counts from the moment of exit.
+    pub fn mark_exited(&self) {
+        {
+            let mut exited_at = self.exited_at.lock();
+            if exited_at.is_none() {
+                *exited_at = Some(Instant::now());
+            }
+        }
+        self.exited.store(true, Ordering::Release);
+    }
+
+    /// How long ago the process exited, or `None` while it is alive.
+    pub fn exited_for(&self) -> Option<Duration> {
+        self.exited_at.lock().map(|at| at.elapsed())
     }
 
     /// Whether any web WS connection currently holds a live attachment for
@@ -86,21 +87,9 @@ impl TerminalInstance {
         self.web_attachments.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Release a web attachment (connection teardown / detach).
-    ///
-    /// Releasing also re-stamps `last_web_listed`: a terminal that was
-    /// observable until this instant gets a fresh web-listed window from the
-    /// moment of detach. Without the re-stamp the stamp still carried the
-    /// attach time, so a PTY attached for longer than the window was reaped
-    /// on the very next sweep after its last viewer closed the tab.
-    ///
-    /// The stamp is written BEFORE the decrement: a concurrent sweep that
-    /// observes the count reach zero (Acquire, paired with the AcqRel
-    /// decrement) is then guaranteed to also observe the fresh stamp. Stamping
-    /// after the decrement left a window where the sweep saw zero attachments
-    /// together with the stale, possibly already expired, stamp.
+    /// Release a web attachment (connection teardown / detach). Only the
+    /// attachment count drops: the PTY keeps running.
     pub fn remove_web_attachment(&self) {
-        self.mark_web_listed();
         // fetch_update always returns Ok (closure never fails); the result
         // value carries the previous count, which is not needed here.
         // Deprecated in Rust 1.99 for `try_update`, but try_update requires
@@ -112,21 +101,6 @@ impl TerminalInstance {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
                 Some(v.saturating_sub(1))
             });
-    }
-
-    /// #851: stamp that a web client just listed/subscribed to this
-    /// terminal (`list_preserved`, `attach`, or a web `spawn`). Keeps the
-    /// web-listed reaper window rolling for as long as ANY client still
-    /// knows about the terminal.
-    pub fn mark_web_listed(&self) {
-        *self.last_web_listed.write() = Some(Instant::now());
-    }
-
-    /// #851: elapsed since the last web listing, or `None` when the web
-    /// surface has never seen this terminal (desktop-only spawn — the
-    /// web-listed reaper never applies to those).
-    pub fn since_web_listed(&self) -> Option<Duration> {
-        self.last_web_listed.read().map(|at| at.elapsed())
     }
 
     /// #851 "single size owner": record that connection `client_id` just
@@ -146,92 +120,6 @@ impl TerminalInstance {
         }
         *owner = Some(client_id.to_string());
         previous
-    }
-}
-
-impl TerminalInstance {
-    /// Update the last activity timestamp
-    pub fn update_activity(&self) {
-        *self.last_activity.write() = Instant::now();
-    }
-
-    /// Get elapsed time since last activity
-    pub fn inactive_duration(&self) -> Duration {
-        self.last_activity.read().elapsed()
-    }
-
-    /// Add a renderer reference
-    pub fn add_renderer_ref(&self, renderer_id: String) {
-        self.renderer_refs.write().insert(renderer_id);
-        *self.orphan_since.write() = None;
-    }
-
-    /// Remove a renderer reference
-    pub fn remove_renderer_ref(&self, renderer_id: &str) {
-        let mut refs = self.renderer_refs.write();
-        let removed = refs.remove(renderer_id);
-        if removed && refs.is_empty() {
-            *self.orphan_since.write() = Some(Instant::now());
-        }
-    }
-
-    /// Get count of renderer references
-    pub fn renderer_ref_count(&self) -> usize {
-        self.renderer_refs.read().len()
-    }
-
-    /// Check if terminal has no renderer references
-    pub fn is_orphan(&self) -> bool {
-        self.renderer_refs.read().is_empty()
-    }
-
-    /// Whether this terminal is eligible for orphan reaping right now.
-    ///
-    /// A terminal is reapable only when it is NOT protected (its project/tab is
-    /// genuinely closed), has no renderer refs, and has exceeded the timeout —
-    /// measured from when it became orphaned, or by inactivity if it never had
-    /// a renderer ref. Protected terminals (e.g. a backgrounded project's live
-    /// terminals) are never reaped, even with zero renderer refs.
-    pub fn is_orphan_reapable(&self, timeout: Duration) -> bool {
-        should_reap_orphan(
-            self.is_protected(),
-            self.is_orphan(),
-            self.orphan_since().map(|since| since.elapsed()),
-            self.inactive_duration(),
-            timeout,
-        )
-    }
-
-    /// #851b: whether this terminal is eligible for the WEB-listed reap
-    /// right now (see [`should_reap_web_listed`]). Consulted by the orphan
-    /// sweep IN ADDITION to [`is_orphan_reapable`] — a web terminal that
-    /// stays `protected` (and so survives the ordinary rule) still gets
-    /// swept once no client has listed it for the window.
-    pub fn is_web_listed_reapable(&self, timeout: Duration) -> bool {
-        should_reap_web_listed(
-            self.since_web_listed(),
-            self.has_web_attachment(),
-            self.renderer_ref_count(),
-            timeout,
-        )
-    }
-
-    /// Returns when the terminal became orphaned, if ever.
-    pub fn orphan_since(&self) -> Option<Instant> {
-        *self.orphan_since.read()
-    }
-
-    /// Whether this terminal is protected from orphan reaping (still owned by an
-    /// open project/tab). See the `protected` field docs.
-    pub fn is_protected(&self) -> bool {
-        self.protected.load(Ordering::Relaxed)
-    }
-
-    /// Update the protection flag. Set false only when the terminal is genuinely
-    /// released (project closed / terminal tab closed), making it eligible for
-    /// orphan reaping once it also has no renderer refs.
-    pub fn set_protected(&self, protected: bool) {
-        self.protected.store(protected, Ordering::Relaxed);
     }
 
     pub fn project_matches(&self, project_id: &str) -> bool {
@@ -277,64 +165,6 @@ impl TerminalInstance {
             log_epoch: self.log_epoch.clone(),
             receiver,
         }
-    }
-}
-
-/// Pure decision for whether an orphaned terminal should be reaped.
-///
-/// Kept free-standing (no PTY handles) so it can be unit-tested in isolation.
-///
-/// * `protected` — terminal is still owned by an open project/tab; never reap.
-/// * `is_orphan` — terminal currently has zero renderer refs.
-/// * `orphaned_for` — elapsed time since it became orphaned, if it ever was.
-/// * `inactive_for` — elapsed time since last PTY activity.
-/// * `timeout` — configured orphan timeout.
-pub(super) fn should_reap_orphan(
-    protected: bool,
-    is_orphan: bool,
-    orphaned_for: Option<Duration>,
-    inactive_for: Duration,
-    timeout: Duration,
-) -> bool {
-    if protected || !is_orphan {
-        return false;
-    }
-    match orphaned_for {
-        Some(elapsed) => elapsed > timeout,
-        None => inactive_for > timeout,
-    }
-}
-
-/// Pure decision for whether a WEB-spawned terminal should be reaped by the
-/// web-listed window (#851b).
-///
-/// Web terminals are `protected = true` at spawn (they never collect
-/// renderer refs, so the ordinary orphan path never fires — that is why
-/// they leaked to the 30-terminal global cap). The web-listed window
-/// instead reaps on CLIENT OBSERVABILITY: a terminal the web surface has
-/// seen (last_web_listed is `Some`) that NO client has listed for longer
-/// than `timeout`, has no live web attachment, and holds no renderer refs.
-///
-/// * `since_web_listed` — `Some(elapsed)` since the last web listing, or
-///   `None` for a desktop-only terminal (never reaped by this rule).
-/// * `has_live_web_attachment` — a forwarder task is still streaming to
-///   some connection; while one exists the terminal is observable, so it
-///   is never reaped.
-/// * `renderer_ref_count` — a desktop renderer still holds the terminal.
-/// * `timeout` — the conservative web-listed reap window.
-pub(super) fn should_reap_web_listed(
-    since_web_listed: Option<Duration>,
-    has_live_web_attachment: bool,
-    renderer_ref_count: usize,
-    timeout: Duration,
-) -> bool {
-    match since_web_listed {
-        Some(unlisted_for) => {
-            unlisted_for > timeout && !has_live_web_attachment && renderer_ref_count == 0
-        }
-        // Never seen by the web surface: a desktop-only terminal — the
-        // web-listed window never applies.
-        None => false,
     }
 }
 

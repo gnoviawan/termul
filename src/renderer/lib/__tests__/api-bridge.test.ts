@@ -5,14 +5,12 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  addRendererRef,
   clipboardApi,
   dataMigrationApi,
   dialogApi,
   filesystemApi,
   keyboardApi,
   persistenceApi,
-  removeRendererRef,
   sessionApi,
   shellApi,
   systemApi,
@@ -84,22 +82,6 @@ describe('API Bridge (api.ts)', () => {
   })
 
   describe('exports availability', () => {
-    it('should call renderer ref APIs with rendererId', async () => {
-      const invoke = vi.mocked(await import('@tauri-apps/api/core')).invoke
-      invoke.mockResolvedValue({ success: true, data: undefined })
-
-      const addResult = await addRendererRef('pty-1', 'conn-abcd123')
-      const removeResult = await removeRendererRef('pty-1', 'conn-abcd123')
-
-      expect(addResult.success).toBe(true)
-      expect(removeResult.success).toBe(true)
-      expect(invoke).toHaveBeenCalledWith('terminal_add_renderer_ref', {
-        request: { terminalId: 'pty-1', rendererId: 'conn-abcd123' }
-      })
-      expect(invoke).toHaveBeenCalledWith('terminal_remove_renderer_ref', {
-        request: { terminalId: 'pty-1', rendererId: 'conn-abcd123' }
-      })
-    })
     it('should export terminalApi', () => {
       expect(terminalApi).toBeDefined()
       expect(typeof terminalApi.spawn).toBe('function')
@@ -197,11 +179,6 @@ describe('API Bridge (api.ts)', () => {
       if ('getVersionInfo' in dataMigrationApi) {
         expect(typeof dataMigrationApi.getVersionInfo).toBe('function')
       }
-    })
-
-    it('should export renderer ref functions', () => {
-      expect(typeof addRendererRef).toBe('function')
-      expect(typeof removeRendererRef).toBe('function')
     })
   })
 

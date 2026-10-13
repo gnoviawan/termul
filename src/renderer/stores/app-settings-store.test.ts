@@ -133,8 +133,6 @@ describe('app-settings-store', () => {
         terminalBufferSize: 10000,
         terminalRenderer: 'auto' as const,
         defaultProjectColor: 'blue',
-        orphanDetectionEnabled: true,
-        orphanDetectionTimeout: 600000,
         confirmTerminalClose: true,
         terminalUrlOpenMode: 'termul' as const,
         remoteBindMode: 'localhost' as const,
@@ -163,8 +161,6 @@ describe('app-settings-store', () => {
           terminalBufferSize: 5000,
           terminalRenderer: 'dom' as const,
           defaultProjectColor: 'red',
-          orphanDetectionEnabled: false,
-          orphanDetectionTimeout: 300000,
           confirmTerminalClose: false,
           terminalUrlOpenMode: 'termul',
           remoteBindMode: 'all' as const,
@@ -226,35 +222,6 @@ describe('app-settings-store', () => {
 
       useAppSettingsStore.getState().resetToDefaults()
       expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
-    })
-  })
-
-  describe('orphan detection settings', () => {
-    it('should have correct default values', () => {
-      const { settings } = useAppSettingsStore.getState()
-      expect(settings.orphanDetectionEnabled).toBe(true)
-      expect(settings.orphanDetectionTimeout).toBe(600000)
-    })
-
-    it('should update orphanDetectionEnabled', () => {
-      const { updateSetting } = useAppSettingsStore.getState()
-      updateSetting('orphanDetectionEnabled', false)
-      const { settings } = useAppSettingsStore.getState()
-      expect(settings.orphanDetectionEnabled).toBe(false)
-    })
-
-    it('should update orphanDetectionTimeout', () => {
-      const { updateSetting } = useAppSettingsStore.getState()
-      updateSetting('orphanDetectionTimeout', 300000)
-      const { settings } = useAppSettingsStore.getState()
-      expect(settings.orphanDetectionTimeout).toBe(300000)
-    })
-
-    it('should update orphanDetectionTimeout to null', () => {
-      const { updateSetting } = useAppSettingsStore.getState()
-      updateSetting('orphanDetectionTimeout', null)
-      const { settings } = useAppSettingsStore.getState()
-      expect(settings.orphanDetectionTimeout).toBe(null)
     })
   })
 

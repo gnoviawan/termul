@@ -21,10 +21,6 @@ export type WebTerminalRequestType =
   | 'get_git_branch'
   | 'get_git_status'
   | 'get_exit_code'
-  | 'add_renderer_ref'
-  | 'remove_renderer_ref'
-  | 'set_protected'
-  | 'update_orphan_detection'
   | 'list_preserved'
 
 /**

@@ -10,8 +10,6 @@ impl PtyManager {
             .ok_or_else(|| format!("Terminal not found: {}", id))?
             .clone();
 
-        instance.update_activity();
-
         let mut writer_guard = instance.writer.lock().await;
 
         let writer = writer_guard
@@ -41,7 +39,6 @@ impl PtyManager {
             resizer(cols, rows)?;
             *instance.cols.write() = cols;
             *instance.rows.write() = rows;
-            instance.update_activity();
             return Ok(());
         }
 
@@ -57,9 +54,7 @@ impl PtyManager {
 
                 *instance.cols.write() = cols;
                 *instance.rows.write() = rows;
-                instance.update_activity();
-
-                return Ok(());
+                        return Ok(());
             }
         }
 
@@ -82,8 +77,6 @@ impl PtyManager {
 
         *instance.cols.write() = cols;
         *instance.rows.write() = rows;
-        instance.update_activity();
-
         Ok(())
     }
 
@@ -155,38 +148,6 @@ impl PtyManager {
         self.claims.remove(id);
 
         Ok(())
-    }
-
-    /// Add a renderer reference to a terminal
-    pub fn add_renderer_ref(&self, id: &str, renderer_id: &str) -> Result<(), String> {
-        self.terminals
-            .read()
-            .get(id)
-            .ok_or_else(|| format!("Terminal not found: {}", id))
-            .map(|instance| instance.add_renderer_ref(renderer_id.to_string()))
-    }
-
-    /// Remove a renderer reference from a terminal
-    pub fn remove_renderer_ref(&self, id: &str, renderer_id: &str) -> Result<(), String> {
-        self.terminals
-            .read()
-            .get(id)
-            .ok_or_else(|| format!("Terminal not found: {}", id))
-            .map(|instance| instance.remove_renderer_ref(renderer_id))
-    }
-
-    /// Update a terminal's orphan-reaping protection.
-    ///
-    /// Protection is enabled at spawn and should be disabled only when the
-    /// terminal is genuinely released by the renderer (its project is closed or
-    /// the terminal tab is closed). Once unprotected AND lacking renderer refs,
-    /// the terminal becomes eligible for orphan reaping again. This is a no-op
-    /// (rather than an error) when the terminal is already gone, so callers can
-    /// release idempotently.
-    pub fn set_protected(&self, id: &str, protected: bool) {
-        if let Some(instance) = self.terminals.read().get(id) {
-            instance.set_protected(protected);
-        }
     }
 
     pub fn terminal_events(&self) -> TerminalEventHub {
@@ -329,30 +290,6 @@ impl PtyManager {
         }
     }
 
-    /// Update orphan detection settings (timeout in milliseconds)
-    pub fn update_orphan_detection(&self, enabled: bool, timeout_ms: Option<u64>) {
-        self.orphan_detection_enabled
-            .store(enabled, Ordering::Relaxed);
-        if let Some(timeout) = timeout_ms {
-            self.orphan_timeout_ms.store(timeout, Ordering::Relaxed);
-        }
-    }
-
-    /// Update orphan detection settings (timeout in minutes, for async API compatibility)
-    pub async fn update_orphan_detection_settings(
-        &self,
-        enabled: bool,
-        timeout_minutes: Option<u64>,
-    ) {
-        self.orphan_detection_enabled
-            .store(enabled, Ordering::Relaxed);
-        if let Some(timeout) = timeout_minutes {
-            self.orphan_timeout_ms
-                .store(timeout * 60 * 1000, Ordering::Relaxed);
-        }
-    }
-
-
     /// The live terminal whose spawn carried `command_id` (AD-5 entity
     /// lookup: a spawn resend whose ledger outcome is gone finds its PTY by the
     /// id stamped at construction). `None` when it was never spawned, was
@@ -476,15 +413,15 @@ impl PtyManager {
     }
 
     /// Set the app window hidden state.
-    /// When hidden=true, orphan detection will not kill orphaned terminals
-    /// and kill() operations are deferred. Prevents ConPTY lifecycle issues
+    /// When hidden=true, kill() operations and the exited-PTY sweep are
+    /// deferred. Prevents ConPTY lifecycle issues
     /// on Windows where window minimize can cause PTY processes to die.
     pub fn set_hidden(&self, hidden: bool) {
         self.is_hidden.store(hidden, Ordering::Relaxed);
         if hidden {
-            log::info!("[PtyManager] App window hidden — killing and orphan cleanup deferred");
+            log::info!("[PtyManager] App window hidden — killing and exited-terminal cleanup deferred");
         } else {
-            log::info!("[PtyManager] App window visible — killing and orphan cleanup resumed");
+            log::info!("[PtyManager] App window visible — killing and exited-terminal cleanup resumed");
         }
     }
 

@@ -1452,8 +1452,6 @@ export function createWebTerminalApi(): TerminalApi {
       client.request<GitStatus | null>('get_git_status', { terminalId }),
     onExitCodeChanged: (callback) => client.onExitCode(callback),
     getExitCode: (terminalId) => client.request('get_exit_code', { terminalId }),
-    updateOrphanDetection: (enabled, timeout) =>
-      client.request('update_orphan_detection', { enabled, timeout }),
     // Story 5 (preserved-PTY reattach): enumerate the server-preserved
     // terminals of a project on an AUTHED connection and adopt the freshly
     // issued claims, so a reloaded page can reattach instead of spawning.
@@ -1538,18 +1536,4 @@ export function isWebTerminalBufferable(terminalId: string): boolean {
  */
 export function onWebTerminalSessionLost(listener: TerminalSessionLostCallback): () => void {
   return client.onSessionLost(listener)
-}
-
-export const webTerminalInternals = {
-  async addRendererRef(terminalId: string, rendererId: string): Promise<IpcResult<void>> {
-    const attached = await client.attach(terminalId)
-    if (!attached.success) return attached
-    return client.request<void>('add_renderer_ref', { terminalId, rendererId })
-  },
-  removeRendererRef: (terminalId: string, rendererId: string) => {
-    client.detach(terminalId)
-    return client.request<void>('remove_renderer_ref', { terminalId, rendererId })
-  },
-  setProtected: (terminalId: string, protectedState: boolean) =>
-    client.request<void>('set_protected', { terminalId, protected: protectedState })
 }

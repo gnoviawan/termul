@@ -9,7 +9,7 @@ import {
   useResetShortcut,
   useUpdateShortcut
 } from '@/hooks/use-keyboard-shortcuts'
-import { acpApi, shellApi, terminalApi } from '@/lib/api'
+import { acpApi, shellApi } from '@/lib/api'
 import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
 import { logFrontendError } from '@/lib/log-api'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
@@ -26,8 +26,6 @@ import {
   useNotifyOnAgentChatNeedsYou,
   useNotifyOnAgentChatTurnFinished,
   useNotifyOnTerminalIdle,
-  useOrphanDetectionEnabled,
-  useOrphanDetectionTimeout,
   useTerminalBufferSize,
   useTerminalFontFamily,
   useTerminalFontSize,
@@ -69,8 +67,6 @@ export function AppPreferencesModal(): React.JSX.Element {
   const terminalScreenReaderMode = useTerminalScreenReaderMode()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
-  const orphanDetectionEnabled = useOrphanDetectionEnabled()
-  const orphanDetectionTimeout = useOrphanDetectionTimeout()
   const _confirmTerminalClose = useConfirmTerminalClose()
   const terminalUrlOpenMode = useTerminalUrlOpenMode()
   const acpTurnTimeoutSecs = useAcpTurnTimeout()
@@ -183,26 +179,6 @@ export function AppPreferencesModal(): React.JSX.Element {
 
   const _handleConfirmTerminalCloseToggle = async (enabled: boolean) => {
     await updateSetting('confirmTerminalClose', enabled)
-  }
-
-  const handleOrphanDetectionToggle = async (enabled: boolean) => {
-    await updateSetting('orphanDetectionEnabled', enabled)
-    // Apply to PtyManager immediately
-    try {
-      await terminalApi.updateOrphanDetection(enabled, orphanDetectionTimeout)
-    } catch (error) {
-      console.error('Failed to update orphan detection:', error)
-    }
-  }
-
-  const handleOrphanTimeoutChange = async (value: number | null) => {
-    await updateSetting('orphanDetectionTimeout', value)
-    // Apply to PtyManager immediately
-    try {
-      await terminalApi.updateOrphanDetection(orphanDetectionEnabled, value)
-    } catch (error) {
-      console.error('Failed to update orphan detection timeout:', error)
-    }
   }
 
   const handleAcpTurnTimeoutChange = async (value: number | null) => {
@@ -319,16 +295,12 @@ export function AppPreferencesModal(): React.JSX.Element {
           {/* Terminal Behavior Section */}
           <BehaviorSection
             terminalUrlOpenMode={terminalUrlOpenMode}
-            orphanDetectionEnabled={orphanDetectionEnabled}
-            orphanDetectionTimeout={orphanDetectionTimeout}
             editorAutoSave={editorAutoSave}
             editorAutoSaveDelayMs={editorAutoSaveDelayMs}
             notifyOnTerminalIdle={notifyOnTerminalIdle}
             notifyOnAgentChatTurnFinished={notifyOnAgentChatTurnFinished}
             notifyOnAgentChatNeedsYou={notifyOnAgentChatNeedsYou}
             handleTerminalUrlOpenModeChange={handleTerminalUrlOpenModeChange}
-            handleOrphanDetectionToggle={handleOrphanDetectionToggle}
-            handleOrphanTimeoutChange={handleOrphanTimeoutChange}
             handleEditorAutoSaveToggle={handleEditorAutoSaveToggle}
             handleEditorAutoSaveDelayChange={handleEditorAutoSaveDelayChange}
             handleNotifyOnTerminalIdleToggle={handleNotifyOnTerminalIdleToggle}

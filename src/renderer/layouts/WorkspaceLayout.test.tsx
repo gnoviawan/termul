@@ -387,8 +387,6 @@ const { mockApi } = vi.hoisted(() => ({
       runMigration: vi.fn(),
       rollback: vi.fn()
     },
-    addRendererRef: vi.fn(),
-    removeRendererRef: vi.fn(),
     hasActiveTerminalSessions: vi.fn()
   }
 }))
@@ -406,8 +404,6 @@ vi.mock('@/lib/api', () => ({
   visibilityApi: mockApi.visibility,
   sessionApi: mockApi.session,
   dataMigrationApi: mockApi.dataMigration,
-  addRendererRef: mockApi.addRendererRef,
-  removeRendererRef: mockApi.removeRendererRef,
   hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
   sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
   gitApi: { getCommitContext: vi.fn().mockResolvedValue({ branch: null }) },

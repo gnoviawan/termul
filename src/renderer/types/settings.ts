@@ -54,8 +54,6 @@ export interface AppSettings {
   terminalScreenReaderMode: boolean // xterm screenReaderMode for new terminals (off by default)
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
-  orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
-  orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
   confirmTerminalClose: boolean // Show a confirmation dialog before closing a terminal
   terminalUrlOpenMode: TerminalUrlOpenMode // Controls how Ctrl/Cmd+Click terminal URLs are opened
   /** Remote server bind: localhost (127.0.0.1) or all interfaces (0.0.0.0). */
@@ -122,15 +120,6 @@ export const FONT_FAMILY_OPTIONS = [
   { value: '"Source Code Pro", Menlo, monospace', label: 'Source Code Pro' },
   { value: '"JetBrains Mono", Menlo, monospace', label: 'JetBrains Mono' },
   { value: '"Fira Code", Menlo, monospace', label: 'Fira Code' }
-]
-
-// Orphan detection timeout options
-export const ORPHAN_TIMEOUT_OPTIONS = [
-  { value: 60000, label: '1 minute' },
-  { value: 300000, label: '5 minutes' },
-  { value: 600000, label: '10 minutes' },
-  { value: 1800000, label: '30 minutes' },
-  { value: 3600000, label: '1 hour' }
 ]
 
 // Editor auto-save delay options (GH-539)
@@ -244,8 +233,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalScreenReaderMode: false,
   defaultShell: '',
   defaultProjectColor: 'blue',
-  orphanDetectionEnabled: true,
-  orphanDetectionTimeout: 600000, // 10 minutes
   confirmTerminalClose: true,
   terminalUrlOpenMode: 'system',
   remoteBindMode: 'localhost',

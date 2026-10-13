@@ -54,9 +54,6 @@ vi.mock('@/stores/workspace-manifest-sync-store', () => ({
 vi.mock('@/lib/workspace-manifest-api', () => ({
   workspaceManifestApi: { deleteManifest: vi.fn(async () => ({ success: true })) }
 }))
-vi.mock('@/lib/terminal-api', () => ({
-  setTerminalProtected: vi.fn(async () => ({ success: true }))
-}))
 vi.mock('@/lib/acp-transport', () => ({
   getAcpTransport: () => ({ onEvent: () => () => {} })
 }))

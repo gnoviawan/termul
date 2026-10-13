@@ -1720,10 +1720,6 @@ pub fn run() {
             commands::terminal_get_git_branch,
             commands::terminal_get_git_status,
             commands::terminal_get_exit_code,
-            commands::terminal_update_orphan_detection,
-            commands::terminal_add_renderer_ref,
-            commands::terminal_remove_renderer_ref,
-            commands::terminal_set_protected,
             commands::terminal_set_visibility,
             // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)
             commands::agent_registry_fetch,

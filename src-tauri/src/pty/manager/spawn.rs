@@ -14,8 +14,8 @@ impl PtyManager {
         options: SpawnOptions,
         on_data: Option<Channel<Response>>,
     ) -> Result<SpawnedTerminal, SpawnError> {
-        // Start orphan detection on first spawn (lazy initialization)
-        self.start_orphan_detection();
+        // Start the exited-PTY sweeper on first spawn (lazy initialization)
+        self.start_exit_sweeper();
 
         let id = self.generate_id();
 
@@ -156,10 +156,6 @@ impl PtyManager {
                 shell: shell_path.clone(),
                 cwd: cwd.clone(),
                 pid,
-                last_activity: Arc::new(RwLock::new(Instant::now())),
-                orphan_since: Arc::new(RwLock::new(None)),
-                renderer_refs: Arc::new(RwLock::new(HashSet::new())),
-                protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -168,10 +164,10 @@ impl PtyManager {
                 next_output_seq: Arc::new(AtomicU64::new(0)),
                 log_epoch: uuid::Uuid::new_v4().to_string(),
                 web_attachments: Arc::new(AtomicUsize::new(0)),
-                last_web_listed: Arc::new(RwLock::new(None)),
                 web_size_owner: Arc::new(RwLock::new(None)),
                 resizer: None,
                 exited: AtomicBool::new(false),
+                exited_at: parking_lot::Mutex::new(None),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -317,10 +313,6 @@ impl PtyManager {
                 shell: shell_path.clone(),
                 cwd: cwd.clone(),
                 pid,
-                last_activity: Arc::new(RwLock::new(Instant::now())),
-                orphan_since: Arc::new(RwLock::new(None)),
-                renderer_refs: Arc::new(RwLock::new(HashSet::new())),
-                protected: Arc::new(AtomicBool::new(true)),
                 cols: Arc::new(RwLock::new(cols)),
                 rows: Arc::new(RwLock::new(rows)),
                 broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -329,10 +321,10 @@ impl PtyManager {
                 next_output_seq: Arc::new(AtomicU64::new(0)),
                 log_epoch: uuid::Uuid::new_v4().to_string(),
                 web_attachments: Arc::new(AtomicUsize::new(0)),
-                last_web_listed: Arc::new(RwLock::new(None)),
                 web_size_owner: Arc::new(RwLock::new(None)),
                 resizer: None,
                 exited: AtomicBool::new(false),
+                exited_at: parking_lot::Mutex::new(None),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -436,8 +428,6 @@ impl PtyManager {
                     break;
                 }
                 Ok(n) => {
-                    instance.update_activity();
-
                     // Parse exit codes from output
                     let data_str = String::from_utf8_lossy(&buffer[..n]);
                     exit_code_tracker.process_data(&id, &data_str);
@@ -484,7 +474,7 @@ impl PtyManager {
 
         // Signal flusher that reader is done
         done_flag.store(true, Ordering::Release);
-        instance.exited.store(true, Ordering::Release);
+        instance.mark_exited();
 
         // Get real child exit status where possible.
         let exit_code = match instance.child.try_lock() {

@@ -90,11 +90,6 @@ pub(super) async fn spawn(
         Done::InProgress => return Ok(in_progress_reply()),
         Done::Receipt => return Err(unknown("spawn")),
     };
-    // #851b: a web spawn IS a web listing — stamp it so the
-    // web-listed reaper window starts rolling for this terminal.
-    if let Some(instance) = state.pty.get(&spawned.info.id) {
-        instance.mark_web_listed();
-    }
     info!(
         "[terminal-ws] spawn success terminal_id={}",
         spawned.info.id

@@ -12,10 +12,9 @@
 //! | `terminal_rotate_claim` | command, receipt-only       | `OUTCOME_UNKNOWN` (see below)   |
 //! | `terminal_revoke_claim` | command, receipt-only       | ok                              |
 //!
-//! Every other terminal request (resize, detach, protection, renderer refs,
-//! orphan detection, visibility, reads) is naturally idempotent and never
-//! enters the ledger; `list_preserved` is a write in disguise (it re-issues
-//! claims) and is deliberately never replayed.
+//! Every other terminal request (resize, detach, visibility, reads) is
+//! naturally idempotent and never enters the ledger; `list_preserved` is a
+//! write in disguise (it re-issues claims) and is deliberately never replayed.
 //!
 //! Nothing here stores a credential: the ledger records only that the command
 //! succeeded or its rejection code, and a spawn replay builds its reply from

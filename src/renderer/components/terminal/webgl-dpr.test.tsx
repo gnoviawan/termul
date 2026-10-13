@@ -253,11 +253,6 @@ vi.mock('@/stores/terminal-store', () => ({
   )
 }))
 
-vi.mock('@/lib/tauri-terminal-api', () => ({
-  addRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),
-  removeRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined })
-}))
-
 const mockRecordTerminalContinuityEvent = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
   recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent,

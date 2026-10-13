@@ -25,7 +25,7 @@ impl PtyManager {
         &self,
         terminal: ExternalTerminal,
     ) -> Result<SpawnedTerminal, String> {
-        self.start_orphan_detection();
+        self.start_exit_sweeper();
         let id = self.generate_id();
         // Adopted terminals have no project, so only the global cap applies.
         let _slot_reservation = self
@@ -55,10 +55,6 @@ impl PtyManager {
             shell: shell.clone(),
             cwd: cwd.clone(),
             pid: 0,
-            last_activity: Arc::new(RwLock::new(Instant::now())),
-            orphan_since: Arc::new(RwLock::new(None)),
-            renderer_refs: Arc::new(RwLock::new(HashSet::new())),
-            protected: Arc::new(AtomicBool::new(true)),
             cols: Arc::new(RwLock::new(cols)),
             rows: Arc::new(RwLock::new(rows)),
             broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -67,10 +63,10 @@ impl PtyManager {
             next_output_seq: Arc::new(AtomicU64::new(0)),
             log_epoch: uuid::Uuid::new_v4().to_string(),
             web_attachments: Arc::new(AtomicUsize::new(0)),
-            last_web_listed: Arc::new(RwLock::new(None)),
             web_size_owner: Arc::new(RwLock::new(None)),
             resizer: Some(resizer),
             exited: AtomicBool::new(false),
+            exited_at: parking_lot::Mutex::new(None),
             #[cfg(target_os = "windows")]
             conpty_handles: None,
         });

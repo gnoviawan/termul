@@ -35,7 +35,6 @@ vi.mock('@/lib/api', () => ({
       data: { default: null, available: [] }
     })
   },
-  terminalApi: { updateOrphanDetection: vi.fn().mockResolvedValue({ success: true }) },
   persistenceApi: {
     read: vi.fn().mockResolvedValue({ success: true, data: null }),
     write: (...args: unknown[]) => mockWrite(...args),

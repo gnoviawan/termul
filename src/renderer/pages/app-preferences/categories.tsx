@@ -86,18 +86,6 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'behavior',
-    label: 'Orphan Detection',
-    description: 'Automatically clean up terminals that have been inactive.',
-    keywords: ['cleanup', 'inactive', 'timeout']
-  },
-  {
-    categoryId: 'behavior',
-    label: 'Timeout Before Cleanup',
-    description: 'Duration before inactive terminals are cleaned up.',
-    keywords: ['orphan', 'inactive']
-  },
-  {
-    categoryId: 'behavior',
     label: 'Auto Save',
     description: 'Automatically save editor files after you stop typing.',
     keywords: ['editor', 'autosave', 'auto save', 'save']

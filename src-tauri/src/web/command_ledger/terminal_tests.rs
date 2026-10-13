@@ -371,10 +371,6 @@ fn only_the_terminal_mutations_are_ledgered() {
     for request in [
         "resize",
         "detach",
-        "set_protected",
-        "add_renderer_ref",
-        "remove_renderer_ref",
-        "update_orphan_detection",
         "get_cwd",
         "list_preserved",
         "attach",

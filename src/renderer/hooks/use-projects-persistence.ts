@@ -9,7 +9,6 @@ import {
 } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { setTerminalProtected } from '@/lib/terminal-api'
 import { useWebAuthGateOk } from '@/lib/web-auth-gate'
 import { webServerProjects } from '@/lib/web-server-api'
 import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
@@ -889,10 +888,6 @@ export function useDeleteProjectWithCascade(): (id: string) => Promise<void> {
           const result = await terminalApi.kill(terminal.ptyId)
           if (!result.success) {
             console.warn('Failed to kill PTY during project delete:', result.error)
-            // Best-effort fallback: allow orphan cleanup if PTY still exists
-            await setTerminalProtected(terminal.ptyId, false).catch((error) => {
-              console.warn('Failed to clear PTY protection during project delete:', error)
-            })
           }
         } catch (error) {
           console.warn('Failed to kill PTY during project delete:', error)

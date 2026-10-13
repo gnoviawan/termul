@@ -27,7 +27,7 @@ export { remoteServerApi, syncChatHistory, syncProjects } from './tauri-remote-a
 export { hasActiveTerminalSessions } from './tauri-safe-update'
 export * as tauriUpdaterApi from './tauri-updater-api'
 export * as tauriVersionSkipService from './tauri-version-skip'
-export { addRendererRef, removeRendererRef, terminalApi } from './terminal-api'
+export { terminalApi } from './terminal-api'
 export { visibilityApi } from './visibility-api'
 export { windowApi } from './window-api'
 export { workspaceManifestApi } from './workspace-manifest-api'

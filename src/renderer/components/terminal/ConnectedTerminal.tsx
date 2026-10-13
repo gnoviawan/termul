@@ -30,7 +30,6 @@ import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-pat
 import { logFrontendError } from '@/lib/log-api'
 import { isMac } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import {
   getOrCreateProjectContinuityCorrelation,
   recordTerminalContinuityEvent
@@ -926,7 +925,6 @@ function ConnectedTerminalComponent({
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id
             useTerminalStore.getState().setRendererAttached(result.data.id, true)
-            void addRendererRef(result.data.id, instanceIdRef.current)
             // If tab was visible before PTY was ready, flush deferred fit+resize now
             if (needsResizeOnReadyRef.current) {
               needsResizeOnReadyRef.current = false
@@ -1071,10 +1069,7 @@ function ConnectedTerminalComponent({
         ptyIdRef.current = externalTerminalId
         // Renderer-attached tracking is handled by the externalTerminalId effect
         // above (with proper lifecycle cleanup). The effect also calls
-        // setRendererAttached, so we avoid duplicating it here. The backend ref
-        // (addRendererRef) is still registered here since it is async and not
-        // managed by the effect's lifecycle.
-        void addRendererRef(externalTerminalId, instanceIdRef.current)
+        // setRendererAttached, so we avoid duplicating it here.
         registerTerminal(externalTerminalId, terminal)
         const terminalStoreState = useTerminalStore.getState()
         const transcript = terminalStoreState.peekTranscript(externalTerminalId)
@@ -1203,7 +1198,6 @@ function ConnectedTerminalComponent({
       if (terminalId && terminalRef.current) {
         captureScrollPosition(terminalId)
         useTerminalStore.getState().setRendererAttached(terminalId, false)
-        void removeRendererRef(terminalId, instanceId)
       }
 
       // Unregister terminal from registry
@@ -1498,7 +1492,6 @@ function ConnectedTerminalComponent({
           if (result.success) {
             ptyIdRef.current = result.data.id
             useTerminalStore.getState().setRendererAttached(result.data.id, true)
-            void addRendererRef(result.data.id, instanceIdRef.current)
             registerTerminal(result.data.id, terminal)
             const transcript = useTerminalStore.getState().peekTranscript(result.data.id)
             if (transcript) {
@@ -1523,7 +1516,6 @@ function ConnectedTerminalComponent({
           spawnInFlightRef.current = false
         }
       } else {
-        void addRendererRef(externalTerminalId, instanceIdRef.current)
         registerTerminal(externalTerminalId, terminal)
         const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId)
         if (transcript) {
@@ -1542,7 +1534,6 @@ function ConnectedTerminalComponent({
       if (tId && terminalRef.current) {
         captureScrollPosition(tId)
         if (!externalTerminalId) useTerminalStore.getState().setRendererAttached(tId, false)
-        void removeRendererRef(tId, instanceId)
       }
       if (ptyIdRef.current) unregisterTerminal(ptyIdRef.current)
       else if (externalTerminalId) unregisterTerminal(externalTerminalId)
@@ -1608,7 +1599,6 @@ function ConnectedTerminalComponent({
       const newPtyId = result.data.id
       ptyIdRef.current = newPtyId
       registerTerminal(newPtyId, terminal)
-      void addRendererRef(newPtyId, instanceIdRef.current)
       useTerminalStore.getState().setRendererAttached(newPtyId, true)
       if (result.data.claim) {
         useTerminalStore.getState().setTerminalClaim(newPtyId, result.data.claim)

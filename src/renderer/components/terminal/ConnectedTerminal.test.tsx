@@ -261,7 +261,6 @@ Object.defineProperty(window, 'api', {
 
 import { clipboardApi, systemApi, terminalApi } from '@/lib/api'
 import { openFilePathFromTerminal } from '@/lib/file-path-links'
-import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { ConnectedTerminal } from './ConnectedTerminal'
 import { cacheTerminal, clearTerminalCache } from './terminal-cache'
@@ -354,11 +353,6 @@ vi.mock('@/stores/terminal-store', () => ({
     vi.fn((selector) => selector(mockTerminalStoreState)),
     { getState: () => mockTerminalStoreState }
   )
-}))
-
-vi.mock('@/lib/tauri-terminal-api', () => ({
-  addRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),
-  removeRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined })
 }))
 
 describe('ConnectedTerminal', () => {
@@ -555,23 +549,6 @@ describe('ConnectedTerminal', () => {
     })
   })
 
-  it('should register and unregister renderer refs for external terminalId', async () => {
-    const { unmount } = render(<ConnectedTerminal terminalId="external-123" />)
-
-    await vi.waitFor(() => {
-      expect(addRendererRef).toHaveBeenCalledWith('external-123', expect.stringMatching(/^conn-/))
-    })
-
-    unmount()
-
-    await vi.waitFor(() => {
-      expect(removeRendererRef).toHaveBeenCalledWith(
-        'external-123',
-        expect.stringMatching(/^conn-/)
-      )
-    })
-  })
-
   it.skip('should clean up terminal listeners on unmount without creating extra registrations', async () => {
     const { unmount } = render(<ConnectedTerminal />)
 
@@ -585,7 +562,6 @@ describe('ConnectedTerminal', () => {
     unmount()
 
     expect(mockTerminalInstance.dispose).toHaveBeenCalledTimes(1)
-    expect(removeRendererRef).toHaveBeenCalledWith('terminal-123', expect.stringMatching(/^conn-/))
     expect(vi.mocked(terminalApi).onData).toHaveBeenCalledTimes(1)
     expect(vi.mocked(terminalApi).onExit).toHaveBeenCalledTimes(1)
   })

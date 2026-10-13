@@ -406,7 +406,6 @@ export interface TerminalApi {
   getGitStatus: (terminalId: string) => Promise<IpcResult<GitStatus | null>>
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
-  updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
   /**
    * Story 5 (preserved-PTY reattach): enumerate the server-preserved
    * terminals of a project on an AUTHED connection, each with metadata and

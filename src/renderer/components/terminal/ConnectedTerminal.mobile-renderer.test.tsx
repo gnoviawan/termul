@@ -160,14 +160,6 @@ vi.mock('@/lib/tauri-runtime', async () => {
   return { ...actual, isTauriContext: () => tauriRef.current }
 })
 
-vi.mock('@/lib/tauri-terminal-api', async () => {
-  const { vi: v } = await import('vitest')
-  return {
-    addRendererRef: v.fn().mockResolvedValue({ success: true }),
-    removeRendererRef: v.fn().mockResolvedValue({ success: true })
-  }
-})
-
 vi.mock('@/lib/terminal-continuity-instrumentation', async () => {
   const { vi: v } = await import('vitest')
   return {

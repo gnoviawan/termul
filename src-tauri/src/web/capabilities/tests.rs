@@ -204,10 +204,6 @@ fn terminal_view_allow_list_excludes_every_mutation() {
         "kill",
         "rotate_claim",
         "revoke_claim",
-        "set_protected",
-        "update_orphan_detection",
-        "add_renderer_ref",
-        "remove_renderer_ref",
         // Re-issues the claim of every unattached terminal.
         "list_preserved",
     ] {

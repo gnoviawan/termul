@@ -263,7 +263,7 @@ pub fn ws_request_permitted(
 
 /// `/terminal/ws` request types a view-only connection may still send.
 /// Everything else mutates the host: spawn/write/resize/kill, claim rotation
-/// and revocation, renderer refs, protection, orphan detection — and
+/// and revocation — and
 /// `list_preserved`, which re-issues (replaces) the claim of every terminal
 /// without a live attachment, so a view-only peer could lock out its owner.
 /// A view-only connection therefore cannot obtain a claim to `attach` (claims
