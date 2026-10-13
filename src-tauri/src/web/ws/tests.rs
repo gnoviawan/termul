@@ -3869,7 +3869,7 @@ async fn handle_list_agents_reports_owned_sessions() {
     assert_eq!(entries[0]["ownsSession"], json!(["sess-1"]));
 }
 
-// ---- watch_project / unwatch_project ----
+// ---- watch / unwatch of a project's file changes (`fs`) ----
 
 fn watch_fixture(
     id: &str,
@@ -3899,54 +3899,77 @@ fn reply_code(reply: &WsReply) -> Option<String> {
         .map(str::to_string)
 }
 
-#[tokio::test]
-async fn watch_and_unwatch_project_manage_the_connections_subscription() {
-    let (relay, registry, dir, tx, _rx) = watch_fixture("ok");
-    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
-
-    let reply = handle_watch_project(
-        "w1".into(),
-        &json!({ "projectId": project }),
-        &relay,
-        &registry,
-        &tx,
-    );
-    assert!(reply.ok, "watch of a registered project succeeds");
-    assert_eq!(relay.fs_watches().subscriber_count(project), 1);
-
-    let reply = handle_unwatch_project("u1".into(), &json!({ "projectId": project }), &relay, &tx);
-    assert!(reply.ok);
-    assert_eq!(relay.fs_watches().watched_project_count(), 0);
-
-    // Idempotent for a registered project.
-    let again = handle_unwatch_project("u2".into(), &json!({ "projectId": project }), &relay, &tx);
-    assert!(again.ok);
-    let _ = std::fs::remove_dir_all(&dir);
+/// Route one `watch` / `unwatch` request over the given fixture.
+async fn watch_request(
+    fixture: &(Arc<WsRelaySink>, Arc<ProjectRegistry>, std::path::PathBuf, OutboundSender, OutboundReceiver),
+    type_: &str,
+    payload: Value,
+) -> WsReply {
+    let (relay, registry, _dir, tx, _rx) = fixture;
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let subs = Arc::new(Subscriptions::default());
+    let frame = json!({ "id": type_, "type": type_, "payload": payload });
+    route(&frame.to_string(), &test_env(&acp, relay, registry, tx, &subs)).await
 }
 
 #[tokio::test]
-async fn watch_refuses_unknown_archived_and_malformed_and_unwatch_is_idempotent() {
-    let (relay, registry, dir, tx, _rx) = watch_fixture("refuse");
+async fn fs_watch_and_unwatch_manage_the_connections_subscription() {
+    let fixture = watch_fixture("ok");
+    let relay = Arc::clone(&fixture.0);
+    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
+    let payload = json!({ "watch": "fs", "scope": project });
+
+    let reply = watch_request(&fixture, "watch", payload.clone()).await;
+    assert!(reply.ok, "watch of a registered project succeeds");
+    assert_eq!(relay.fs_watches().subscriber_count(project), 1);
+    assert_eq!(
+        relay.watches().subscriber_count(crate::web::watch::WatchKind::Fs, project),
+        1
+    );
+
+    let reply = watch_request(&fixture, "unwatch", payload.clone()).await;
+    assert!(reply.ok);
+    assert_eq!(relay.fs_watches().watched_project_count(), 0);
+    assert_eq!(
+        relay.watches().subscriber_count(crate::web::watch::WatchKind::Fs, project),
+        0
+    );
+
+    // Idempotent for a registered project.
+    assert!(watch_request(&fixture, "unwatch", payload).await.ok);
+    let _ = std::fs::remove_dir_all(&fixture.2);
+}
+
+#[tokio::test]
+async fn fs_watch_refuses_unknown_archived_and_malformed_and_unwatch_is_idempotent() {
+    let fixture = watch_fixture("refuse");
+    let relay = Arc::clone(&fixture.0);
+    let registry = Arc::clone(&fixture.1);
     let project = crate::web::project_registry::SEEDED_PROJECT_ID;
 
-    let unknown = json!({ "projectId": "nope" });
-    let w = handle_watch_project("w".into(), &unknown, &relay, &registry, &tx);
+    let unknown = json!({ "watch": "fs", "scope": "nope" });
+    let w = watch_request(&fixture, "watch", unknown.clone()).await;
     assert_eq!(reply_code(&w).as_deref(), Some("not_found"));
     // Unwatch is idempotent: an id the connection never watched is a success.
-    let u = handle_unwatch_project("u".into(), &unknown, &relay, &tx);
-    assert!(u.ok);
+    assert!(watch_request(&fixture, "unwatch", unknown).await.ok);
     assert!(registry.update(project, None, None, Some(true)));
-    let w = handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx);
+    let w = watch_request(&fixture, "watch", json!({ "watch": "fs", "scope": project })).await;
     assert_eq!(reply_code(&w).as_deref(), Some("not_found"), "archived project");
 
-    for payload in [json!({}), json!({ "projectId": "  " })] {
-        let w = handle_watch_project("w".into(), &payload, &relay, &registry, &tx);
-        assert_eq!(reply_code(&w).as_deref(), Some("unsupported"));
-        let u = handle_unwatch_project("u".into(), &payload, &relay, &tx);
+    // No scope, a blank scope, an unknown watch: refused as unsupported.
+    for payload in [
+        json!({ "watch": "fs" }),
+        json!({ "watch": "fs", "scope": "  " }),
+        json!({ "watch": "nope" }),
+        json!({}),
+    ] {
+        let w = watch_request(&fixture, "watch", payload.clone()).await;
+        assert_eq!(reply_code(&w).as_deref(), Some("unsupported"), "{payload}");
+        let u = watch_request(&fixture, "unwatch", payload).await;
         assert_eq!(reply_code(&u).as_deref(), Some("unsupported"));
     }
     assert_eq!(relay.fs_watches().watched_project_count(), 0);
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&fixture.2);
 }
 
 /// Connection close releases the connection's watch through the same cleanup
@@ -3954,12 +3977,15 @@ async fn watch_refuses_unknown_archived_and_malformed_and_unwatch_is_idempotent(
 /// without `run()`.
 #[tokio::test]
 async fn connection_cleanup_releases_fs_watch_subscriptions() {
-    let (relay, registry, dir, tx, _rx) = watch_fixture("cleanup");
+    let fixture = watch_fixture("cleanup");
+    let relay = Arc::clone(&fixture.0);
+    let tx = fixture.3.clone();
     let project = crate::web::project_registry::SEEDED_PROJECT_ID;
     let subscribed = Arc::new(Subscriptions::default());
 
     for use_run in [true, false] {
-        let reply = handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx);
+        let reply =
+            watch_request(&fixture, "watch", json!({ "watch": "fs", "scope": project })).await;
         assert!(reply.ok);
         assert_eq!(relay.fs_watches().subscriber_count(project), 1);
         let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed))
@@ -3971,19 +3997,26 @@ async fn connection_cleanup_releases_fs_watch_subscriptions() {
         }
         assert_eq!(relay.fs_watches().subscriber_count(project), 0);
         assert_eq!(relay.fs_watches().watched_project_count(), 0);
+        assert_eq!(
+            relay.watches().subscriber_count(crate::web::watch::WatchKind::Fs, project),
+            0
+        );
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&fixture.2);
 }
 
 /// A client that unwatches after its project was archived/removed (which
-/// already dropped the subscription) still gets a success.
+/// already ended the watch) still gets a success.
 #[tokio::test]
 async fn unwatch_after_the_project_was_archived_succeeds() {
-    let (relay, registry, dir, tx, _rx) = watch_fixture("gone");
+    let fixture = watch_fixture("gone");
+    let relay = Arc::clone(&fixture.0);
+    let registry = Arc::clone(&fixture.1);
     let project = crate::web::project_registry::SEEDED_PROJECT_ID;
-    assert!(handle_watch_project("w".into(), &json!({ "projectId": project }), &relay, &registry, &tx).ok);
+    let payload = json!({ "watch": "fs", "scope": project });
+    assert!(watch_request(&fixture, "watch", payload.clone()).await.ok);
     // Archive only once the watcher is live, so a LIVE subscription is what
-    // gets dropped (not a task that finds the project gone on first lookup).
+    // gets ended (not a task that finds the project gone on first lookup).
     assert!(relay.fs_watches().wait_armed(project, Duration::from_secs(10)).await);
     assert!(registry.update(project, None, None, Some(true)));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
@@ -3991,28 +4024,15 @@ async fn unwatch_after_the_project_was_archived_succeeds() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert_eq!(relay.fs_watches().watched_project_count(), 0);
+    assert_eq!(
+        relay.watches().subscriber_count(crate::web::watch::WatchKind::Fs, project),
+        0,
+        "the host released the hub subscription with its notice"
+    );
 
-    let u = handle_unwatch_project("u".into(), &json!({ "projectId": project }), &relay, &tx);
+    let u = watch_request(&fixture, "unwatch", payload).await;
     assert!(u.ok, "unwatch after the project vanished must succeed");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The `watch_project` / `unwatch_project` request types reach their handlers
-/// through the real dispatch (`handle_request`), not just by direct call.
-#[tokio::test]
-async fn watch_requests_are_routed_by_handle_request() {
-    let (relay, registry, dir, tx, _rx) = watch_fixture("dispatch");
-    let acp = Arc::new(AcpManager::new(vec![]));
-    let project = crate::web::project_registry::SEEDED_PROJECT_ID;
-    let subs = Arc::new(Subscriptions::default());
-    for (type_, expect_subscribers) in [("watch_project", 1), ("unwatch_project", 0)] {
-        let frame = json!({ "id": type_, "type": type_, "payload": { "projectId": project } });
-        let reply = route(&frame.to_string(), &test_env(&acp, &relay, &registry, &tx, &subs))
-        .await;
-        assert!(reply.ok, "{type_} must be dispatched and succeed");
-        assert_eq!(relay.fs_watches().subscriber_count(project), expect_subscribers);
-    }
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&fixture.2);
 }
 
 /// The log epoch travels on the wire: `subscribe`, `recover_session_snapshot`

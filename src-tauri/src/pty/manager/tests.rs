@@ -936,3 +936,49 @@ async fn replayed_spawn_does_not_resurrect_a_revoked_claim() {
 
     manager.force_kill(&spawned.info.id).await.unwrap();
 }
+
+/// The observer hears every change of a project's terminal set, once per change:
+/// spawn, the first attachment, the last detachment, kill. The set it reads has
+/// no credential and includes detached terminals.
+#[tokio::test]
+async fn terminal_set_observer_hears_each_change_of_the_project_once() {
+    let manager = crate::web::test_pty_manager();
+    let heard = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&heard);
+    manager.set_terminal_set_observer(Arc::new(move |project| sink.lock().push(project.to_string())));
+
+    let spawned = manager
+        .spawn(
+            SpawnOptions {
+                project_id: Some("proj-x".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("spawn");
+    // A terminal without a project belongs to no scope.
+    let loose = manager.spawn(SpawnOptions::default(), None).await.expect("spawn loose");
+    let set = manager.terminal_set("proj-x");
+    assert_eq!(set.len(), 1);
+    assert_eq!(set[0].terminal_id, spawned.info.id);
+    assert!(!set[0].attached);
+    assert!(manager.terminal_set("other").is_empty());
+
+    let instance = manager.get(&spawned.info.id).expect("instance");
+    instance.add_web_attachment();
+    instance.add_web_attachment(); // a second viewer does not change the set
+    assert!(manager.terminal_set("proj-x")[0].attached);
+    instance.remove_web_attachment();
+    instance.remove_web_attachment();
+    assert!(!manager.terminal_set("proj-x")[0].attached);
+    manager.force_kill(&spawned.info.id).await.unwrap();
+    manager.force_kill(&loose.info.id).await.unwrap();
+
+    assert_eq!(
+        *heard.lock(),
+        vec!["proj-x"; 4],
+        "spawn, first attach, last detach, kill; nothing for the loose terminal or the second viewer"
+    );
+    assert!(manager.terminal_set("proj-x").is_empty());
+}

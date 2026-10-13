@@ -18,7 +18,9 @@ import { logFrontendError } from '@/lib/log-api'
 
 /** Bound on one `watch` request. */
 const WATCH_REQUEST_TIMEOUT_MS = 10_000
-/** Retry delays after a refused or failed `watch`, doubling up to the cap. */
+/** Error codes the host repeats on every retry: the watch is not asked for again. */
+const FINAL_REFUSAL_CODES = new Set(['unsupported', 'not_found'])
+/** Retry delays after a failed `watch`, doubling up to the cap. */
 const RETRY_BASE_MS = 1_000
 const RETRY_MAX_MS = 30_000
 
@@ -40,6 +42,12 @@ export interface WatchHandlers<State = unknown, Delta = unknown> {
   onState(state: State): void
   /** One delta that follows the state contiguously. */
   onDelta?(delta: Delta): void
+  /**
+   * The host refuses the watch for good (`unsupported`, or `not_found` for a
+   * scope that does not exist, like an archived project). The client stops
+   * asking; the handler decides whether to ask again later.
+   */
+  onRefused?(error: unknown): void
 }
 
 interface Revision {
@@ -259,13 +267,26 @@ export class WatchClient {
   }
 
   private scheduleRetry(entry: Entry, error: unknown): void {
-    // A refusal the host will repeat (unknown watch, no scope) is not retried.
-    if (errorCode(error) === 'unsupported') {
+    // A refusal the host will repeat (unknown watch, no scope, a scope that
+    // does not exist) is not retried; the handlers are told instead.
+    const code = errorCode(error)
+    if (code !== undefined && FINAL_REFUSAL_CODES.has(code)) {
       void logFrontendError({
         level: 'warn',
         source: 'WatchClient.subscribe',
         message: `the host refused the ${entry.watch} watch: ${String(error)}`
       })
+      for (const handlers of [...entry.handlers]) {
+        try {
+          handlers.onRefused?.(error)
+        } catch (handlerError) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'WatchClient.handler',
+            message: `a ${entry.watch} watch refusal handler threw: ${String(handlerError)}`
+          })
+        }
+      }
       return
     }
     if (!this.transport.isLive()) return // onConnected retries

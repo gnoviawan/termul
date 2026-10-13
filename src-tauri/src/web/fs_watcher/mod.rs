@@ -1,15 +1,20 @@
-//! Per-project filesystem watch hub for web clients (#856, per-`projectId`).
+//! Per-project filesystem watchers for web clients (#856, per-`projectId`).
 //!
 //! On the desktop the renderer uses `tauri-plugin-fs`'s `watchImmediate`
 //! (notify) and receives `FileChangeEvent`s over Tauri event listeners; on
 //! the web the browser cannot watch the host's filesystem. A connection asks
-//! the host to watch a registered project with the `watch_project` WS request
-//! and the host pushes an agent-level `fs_changed` event
-//! (`{projectId, root, paths[]}`) to exactly the subscribed connections. The
+//! the host to watch a registered project with the `watch` WS request
+//! (`watch: "fs"`, scope = the project id). The host sends the root as the
+//! full state and then one `fs` watch delta (`{root, paths[]}`) per debounced
+//! batch to exactly the subscribed connections, through the
+//! [`WatchHub`](crate::web::watch::WatchHub) (contiguous revisions, so a batch
+//! dropped for a full queue shows as a gap and the client resubscribes). The
 //! renderer's existing `useFileWatcher` chain then refreshes the explorer
 //! tree (debounced) exactly as it does on desktop.
 //!
-//! The hub is refcounted per `projectId`: the first subscriber arms one
+//! This module owns only the notify watchers; the subscriptions live in the
+//! watch hub, and the subscriber lists here decide when a watcher is armed
+//! and dropped. The watcher is refcounted per `projectId`: the first subscriber arms one
 //! `notify` watcher over the project's canonical root, later subscribers share
 //! it, and the watcher is dropped on the last unsubscribe, on connection
 //! close (`unsubscribe_all`), when a delivery finds every subscriber gone, or
@@ -32,10 +37,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::web::project_registry::ProjectRegistry;
-use crate::web::ws::{EnqueueOutcome, Outbound, OutboundSender, SequencedEvent};
+use crate::web::watch::{WatchHub, WatchKind};
+use crate::web::ws::OutboundSender;
 
-/// How long to batch raw notify events before broadcasting one
-/// `fs_changed` frame. A save, a build, and a git checkout each fan dozens
+/// How long to batch raw notify events before publishing one `fs` delta. A save, a build, and a git checkout each fan dozens
 /// of events within a few hundred milliseconds; one debounced frame keeps
 /// the WS quiet while staying well under the explorer's own refresh
 /// debounce (300 ms in `useFileWatcher`).
@@ -108,12 +113,11 @@ fn normalize_path(path: &std::path::Path) -> Option<String> {
     }
 }
 
-/// Wire payload of the `fs_changed` agent-level event: the watched project,
-/// its canonical root, and the changed paths (forward-slash normalized).
+/// Wire delta of the `fs` watch: the watched project's canonical root and the
+/// changed paths (forward-slash normalized).
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FsChangedPayload {
-    pub project_id: String,
+pub struct FsDelta {
     pub root: String,
     pub paths: Vec<String>,
 }
@@ -156,6 +160,7 @@ impl FsWatchHub {
     pub(crate) fn subscribe(
         &self,
         registry: &Arc<ProjectRegistry>,
+        hub: &Arc<WatchHub>,
         project_id: &str,
         conn: &OutboundSender,
     ) -> Result<(), WatchError> {
@@ -199,6 +204,7 @@ impl FsWatchHub {
             project_id.to_string(),
             generation,
             Arc::clone(registry),
+            Arc::clone(hub),
             Arc::clone(&self.watches),
             cancel,
             armed_tx,
@@ -297,54 +303,43 @@ impl FsWatchHub {
     }
 }
 
-/// Deliver one `fs_changed` batch to `project_id`'s subscribers. Subscribers
-/// whose channel is closed are pruned; when none remain the watcher is dropped.
-/// Returns `false` when this generation no longer owns the project's watch.
+/// Publish one batch of changes to `project_id`'s subscribers through the
+/// watch hub. Returns `false` when this generation no longer owns the
+/// project's watch, or when no subscriber is left (the watcher is dropped then;
+/// the hub itself prunes connections that are closing).
 fn deliver(
     watches: &WatchMap,
+    hub: &WatchHub,
     project_id: &str,
     generation: u64,
-    payload: &FsChangedPayload,
+    delta: &FsDelta,
 ) -> bool {
-    let Ok(payload) = serde_json::to_value(payload) else {
-        warn!(
-            project_id,
-            "[fs-watch] failed to serialize fs_changed payload"
-        );
+    let Ok(delta) = serde_json::to_value(delta) else {
+        warn!(project_id, "[fs-watch] failed to serialize the fs delta");
         return true;
     };
-    let mut guard = watches.lock();
-    let Some(watch) = guard
-        .get_mut(project_id)
-        .filter(|w| w.generation == generation)
-    else {
-        return false;
-    };
-    // Bounded delivery: a subscriber whose queue is full misses this batch
-    // (the explorer refreshes on the next change) and counts toward its
-    // overflow tolerance; one that is closing is pruned.
-    watch.subscribers.retain(|subscriber| {
-        let outcome = subscriber.try_enqueue(Outbound::Event(SequencedEvent::new(
-            None,
-            0,
-            "fs_changed",
-            payload.clone(),
-        )));
-        if outcome == EnqueueOutcome::Full {
-            warn!(project_id, "[fs-watch] subscriber queue full; fs_changed batch dropped");
+    {
+        let mut guard = watches.lock();
+        let Some(watch) = guard
+            .get(project_id)
+            .filter(|w| w.generation == generation)
+        else {
+            return false;
+        };
+        if watch.subscribers.is_empty() {
+            if let Some(watch) = guard.remove(project_id) {
+                watch.cancel.cancel();
+                info!(
+                    project_id,
+                    "[fs-watch] all subscribers gone; watcher dropped"
+                );
+            }
+            return false;
         }
-        outcome != EnqueueOutcome::Closed
-    });
-    if watch.subscribers.is_empty() {
-        if let Some(watch) = guard.remove(project_id) {
-            watch.cancel.cancel();
-            info!(
-                project_id,
-                "[fs-watch] all subscribers gone; watcher dropped"
-            );
-        }
-        return false;
     }
+    // A subscriber whose queue is full misses this batch as a hole in its
+    // revisions; it resubscribes and rebuilds from fresh state.
+    hub.publish(WatchKind::Fs, project_id, || delta);
     true
 }
 
@@ -367,6 +362,7 @@ async fn run_project_watch(
     project_id: String,
     generation: u64,
     registry: Arc<ProjectRegistry>,
+    hub: Arc<WatchHub>,
     watches: WatchMap,
     cancel: CancellationToken,
     armed: tokio::sync::watch::Sender<bool>,
@@ -378,6 +374,7 @@ async fn run_project_watch(
             generation,
             root.clone(),
             &registry,
+            &hub,
             &watches,
             &cancel,
             &armed,
@@ -414,8 +411,9 @@ async fn run_project_watch(
         .get(&project_id)
         .is_some_and(|w| w.generation == generation)
     {
-        if let Some(watch) = guard.remove(&project_id) {
-            notify_watch_ended(&project_id, &watch.subscribers);
+        if guard.remove(&project_id).is_some() {
+            drop(guard);
+            notify_watch_ended(&hub, &project_id);
         }
         warn!(project_id = %project_id, "[fs-watch] project archived/removed; watcher and subscriptions dropped");
     }
@@ -423,32 +421,14 @@ async fn run_project_watch(
 
 /// Tell every subscriber that its watch of `project_id` ended because the
 /// project is no longer watchable (archived, removed, root gone), so the client
-/// can re-request the watch instead of waiting for events that never come.
-fn notify_watch_ended(project_id: &str, subscribers: &[OutboundSender]) {
-    let payload = serde_json::json!({
-        "projectId": project_id,
-        "reason": "project_unavailable",
-    });
-    let ended = || {
-        Outbound::Event(SequencedEvent::new(
-            None,
-            0,
-            "fs_watch_ended",
-            payload.clone(),
-        ))
-    };
-    for subscriber in subscribers {
-        // The client re-requests its watch only on this one-shot notice, so a
-        // full queue must delay it, not lose it: wait for room (the
-        // connection closes if the peer never drains).
-        if subscriber.try_enqueue(ended()) == EnqueueOutcome::Full {
-            let subscriber = subscriber.clone();
-            let frame = ended();
-            tokio::spawn(async move {
-                subscriber.enqueue(frame).await;
-            });
-        }
-    }
+/// can ask for the watch again instead of waiting for deltas that never come.
+/// The hub releases the subscriptions after the notice.
+fn notify_watch_ended(hub: &WatchHub, project_id: &str) {
+    hub.end(
+        WatchKind::Fs,
+        project_id,
+        &serde_json::json!({ "ended": true, "reason": "project_unavailable" }),
+    );
 }
 
 /// Why a retry backoff ended.
@@ -494,12 +474,14 @@ async fn backoff(
 }
 
 /// Watch `root` until cancelled, the project goes away or moves, or the
-/// watcher errors. Events are debounced into targeted `fs_changed` frames.
+/// watcher errors. Events are debounced into one `fs` delta per batch.
+#[allow(clippy::too_many_arguments)]
 async fn watch_root(
     project_id: &str,
     generation: u64,
     root: PathBuf,
     registry: &Arc<ProjectRegistry>,
+    hub: &WatchHub,
     watches: &WatchMap,
     cancel: &CancellationToken,
     armed: &tokio::sync::watch::Sender<bool>,
@@ -587,12 +569,11 @@ async fn watch_root(
                 paths.sort();
                 paths.dedup();
                 if !paths.is_empty() {
-                    let payload = FsChangedPayload {
-                        project_id: project_id.to_string(),
+                    let delta = FsDelta {
                         root: root_display.clone(),
                         paths,
                     };
-                    if !deliver(watches, project_id, generation, &payload) {
+                    if !deliver(watches, hub, project_id, generation, &delta) {
                         return WatchOutcome::Stopped;
                     }
                 }

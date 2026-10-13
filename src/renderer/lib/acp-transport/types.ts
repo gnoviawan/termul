@@ -336,16 +336,9 @@ export interface AcpTransport {
    */
   deliverAuthRedirect(agentId: AgentId, url: string, options?: CommandCallOptions): Promise<number>
   /**
-   * Web/remote only: subscribe THIS connection to a registered project's
-   * `fs_changed` events (`watch_project`). Unknown/archived project rejects
-   * with `not_found`. The transport re-sends it after a reconnect.
-   */
-  watchProject?(projectId: string): Promise<void>
-  /** Web/remote only: drop this connection's `watch_project` subscription. */
-  unwatchProject?(projectId: string): Promise<void>
-  /**
-   * Web/remote only: the state watches (projects, chat-history index, agent
-   * roster). Absent on Tauri IPC (desktop), where those stores are local.
+   * Web/remote only: the watches (projects, chat-history index, agent roster,
+   * project file changes, store keys, terminal sets). Absent on Tauri IPC
+   * (desktop), where those stores are local.
    */
   readonly watches?: WatchClient
   historyMode?(): HistoryMode | 'tauri_store'

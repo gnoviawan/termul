@@ -351,6 +351,8 @@ pub async fn serve_router(
     ws_relay.watches().renew_epoch();
     info!(target: "termul::web::watch", "watch hub host epoch renewed for this serve start");
     let store_for_gc = Arc::clone(&store);
+    // Every change of a project's terminal set reaches its `terminals` watchers.
+    crate::web::watch::attach_terminal_set_observer(&pty, &ws_relay);
     let socket_shutdown = connections.shutdown.clone();
     let app = router::router(
         Arc::clone(&acp),

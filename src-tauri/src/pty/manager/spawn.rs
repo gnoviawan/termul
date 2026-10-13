@@ -168,6 +168,7 @@ impl PtyManager {
                 resizer: None,
                 exited: AtomicBool::new(false),
                 exited_at: parking_lot::Mutex::new(None),
+                set_observer: self.set_observer.clone(),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -226,6 +227,7 @@ impl PtyManager {
 
             // Store the terminal
             self.terminals.write().insert(id.clone(), instance.clone());
+            self.set_observer.notify(instance.project_id.as_deref());
 
             // Initialize tracking
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
@@ -325,6 +327,7 @@ impl PtyManager {
                 resizer: None,
                 exited: AtomicBool::new(false),
                 exited_at: parking_lot::Mutex::new(None),
+                set_observer: self.set_observer.clone(),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -379,6 +382,7 @@ impl PtyManager {
             *instance.flusher_handle.lock().await = Some(flusher_task);
 
             self.terminals.write().insert(id.clone(), instance.clone());
+            self.set_observer.notify(instance.project_id.as_deref());
 
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);

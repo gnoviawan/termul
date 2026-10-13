@@ -317,13 +317,13 @@ pub struct WsRelaySink {
     replay_gates: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Single-flight gate per session for [`Self::ensure_turns_restored`].
     restore_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    /// Per-`projectId` filesystem watch subscriptions (`watch_project` /
-    /// `unwatch_project`). `fs_changed` events go only to subscribed
-    /// connections, not through the client registry above.
+    /// Per-`projectId` notify watchers, armed while a connection watches the
+    /// project (`watch` with `watch: "fs"`). Their deltas go through `watches`.
     fs_watches: crate::web::fs_watcher::FsWatchHub,
-    /// Watch subscriptions for the project list, the chat-history index and
-    /// the agent roster (`watch` / `unwatch`): state that is not a session log.
-    watches: crate::web::watch::WatchHub,
+    /// Watch subscriptions (`watch` / `unwatch`) for state that is not a
+    /// session log: projects, chat-history index, agent roster, file changes,
+    /// store keys and the terminal set.
+    watches: Arc<crate::web::watch::WatchHub>,
     /// The command receipt ledger, shared by `/ws` dispatch and the Tauri
     /// `acp_*` commands (one ledger per host).
     ledger: Arc<crate::web::command_ledger::CommandLedger>,
@@ -394,7 +394,7 @@ impl WsRelaySink {
             replay_gates: tokio::sync::Mutex::new(HashMap::new()),
             restore_gates: Mutex::new(HashMap::new()),
             fs_watches: crate::web::fs_watcher::FsWatchHub::default(),
-            watches: crate::web::watch::WatchHub::new(),
+            watches: Arc::new(crate::web::watch::WatchHub::new()),
             ledger: Arc::new(crate::web::command_ledger::CommandLedger::new(
                 std::time::Duration::from_secs(
                     crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
@@ -418,15 +418,15 @@ impl WsRelaySink {
         self
     }
 
-    /// The per-project filesystem watch manager.
+    /// The per-project filesystem watcher manager.
     #[must_use]
     pub fn fs_watches(&self) -> &crate::web::fs_watcher::FsWatchHub {
         &self.fs_watches
     }
 
-    /// The watch hub: projects, chat-history index and agent roster.
+    /// The watch hub.
     #[must_use]
-    pub fn watches(&self) -> &crate::web::watch::WatchHub {
+    pub fn watches(&self) -> &Arc<crate::web::watch::WatchHub> {
         &self.watches
     }
 

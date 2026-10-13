@@ -4,7 +4,8 @@
 //! events.
 
 use super::*;
-use crate::web::ws::{outbound_channel, OutboundReceiver, OUTBOUND_QUEUE_CAPACITY};
+use crate::web::watch::fs_state;
+use crate::web::ws::{outbound_channel, Outbound, OutboundReceiver, OUTBOUND_QUEUE_CAPACITY};
 use serde_json::json;
 
 #[test]
@@ -84,19 +85,18 @@ fn normalize_converts_backslashes_and_skips_empty() {
     assert_eq!(normalize_path(std::path::Path::new("")), None);
 }
 
-/// `fs_changed` payload shape: camelCase `{projectId, root, paths}` — pinned
-/// against the shared `FsChangedPayload` so the renderer contract cannot drift.
+/// `fs` delta shape: camelCase `{root, paths}` — pinned against the shared
+/// `FsDelta` so the renderer contract cannot drift.
 #[test]
-fn fs_changed_payload_serializes_camelcase_project_root_and_paths() {
-    let payload = FsChangedPayload {
-        project_id: "p-1".to_string(),
+fn fs_delta_serializes_root_and_paths() {
+    let delta = FsDelta {
         root: "/root/proj".to_string(),
         paths: vec!["/root/proj/src/main.rs".to_string()],
     };
-    let value = serde_json::to_value(&payload).expect("serializes");
-    assert_eq!(value["projectId"], json!("p-1"));
+    let value = serde_json::to_value(&delta).expect("serializes");
     assert_eq!(value["root"], json!("/root/proj"));
     assert_eq!(value["paths"], json!(["/root/proj/src/main.rs"]));
+    assert!(value.get("projectId").is_none(), "the scope names the project");
 }
 
 // ---- Hub: refcount, targeted delivery, lifecycle ----
@@ -145,18 +145,38 @@ fn registry_with(projects: &[(&str, &PathBuf)]) -> Arc<ProjectRegistry> {
     registry
 }
 
-/// Wait up to `wait` for one `fs_changed` event on `rx`.
-async fn next_fs_changed(
+/// Subscribe `conn` to the `fs` watch of `project_id`: the notify watcher and
+/// the hub subscription with its state frame, as the `watch` handler does.
+fn subscribe_fs(
+    hub: &FsWatchHub,
+    watches: &Arc<WatchHub>,
+    registry: &Arc<ProjectRegistry>,
+    project_id: &str,
+    conn: &OutboundSender,
+) -> Result<(), WatchError> {
+    hub.subscribe(registry, watches, project_id, conn)?;
+    let root = registry.canonical_root(project_id).expect("root of a watched project");
+    watches
+        .subscribe(WatchKind::Fs, project_id, conn, || fs_state(&root))
+        .expect("hub subscription");
+    Ok(())
+}
+
+/// Wait up to `wait` for one `fs` delta that carries `key` on `rx`; returns the
+/// delta and the frame's revision `n`.
+async fn next_fs_delta_with(
     rx: &mut OutboundReceiver,
     wait: Duration,
-) -> Option<serde_json::Value> {
+    key: &str,
+) -> Option<(serde_json::Value, u64)> {
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         match tokio::time::timeout(remaining, rx.recv()).await {
-            Ok(Some(Outbound::Event(event))) if event.type_ == "fs_changed" => {
-                assert!(event.sid.is_none() && event.seq == 0, "agent-level event");
-                return Some(event.payload);
+            Ok(Some(Outbound::Watch(frame))) => {
+                if let Some(delta) = frame.delta_value().filter(|delta| delta.get(key).is_some()) {
+                    return Some((delta.clone(), frame.revision().n));
+                }
             }
             Ok(Some(_)) => continue,
             Ok(None) | Err(_) => return None,
@@ -164,20 +184,29 @@ async fn next_fs_changed(
     }
 }
 
+/// Wait up to `wait` for one batch of changed paths on `rx`.
+async fn next_fs_changed(
+    rx: &mut OutboundReceiver,
+    wait: Duration,
+) -> Option<serde_json::Value> {
+    next_fs_delta_with(rx, wait, "paths").await.map(|(delta, _)| delta)
+}
+
 #[tokio::test]
 async fn subscribe_rejects_unknown_and_archived_projects() {
     let dir = temp_project_dir("reject");
     let registry = registry_with(&[("p-1", &dir)]);
     let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
     let (tx, _rx) = conn();
 
     assert_eq!(
-        hub.subscribe(&registry, "nope", &tx),
+        subscribe_fs(&hub, &watches, &registry, "nope", &tx),
         Err(WatchError::NotFound)
     );
     assert!(registry.update("p-1", None, None, Some(true)));
     assert_eq!(
-        hub.subscribe(&registry, "p-1", &tx),
+        subscribe_fs(&hub, &watches, &registry, "p-1", &tx),
         Err(WatchError::NotFound)
     );
     assert_eq!(hub.watched_project_count(), 0);
@@ -189,13 +218,14 @@ async fn watcher_is_refcounted_and_dropped_on_last_unsubscribe() {
     let dir = temp_project_dir("refcount");
     let registry = registry_with(&[("p-1", &dir)]);
     let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
     let (a, _ra) = conn();
     let (b, _rb) = conn();
 
-    hub.subscribe(&registry, "p-1", &a).expect("a subscribes");
-    hub.subscribe(&registry, "p-1", &a)
+    subscribe_fs(&hub, &watches, &registry, "p-1", &a).expect("a subscribes");
+    subscribe_fs(&hub, &watches, &registry, "p-1", &a)
         .expect("re-subscribe is idempotent");
-    hub.subscribe(&registry, "p-1", &b).expect("b subscribes");
+    subscribe_fs(&hub, &watches, &registry, "p-1", &b).expect("b subscribes");
     assert_eq!(hub.subscriber_count("p-1"), 2);
     assert_eq!(hub.watched_project_count(), 1, "one watcher shared by both");
 
@@ -216,11 +246,12 @@ async fn connection_cleanup_drops_every_watch_of_that_connection() {
     let (d1, d2) = (temp_project_dir("c1"), temp_project_dir("c2"));
     let registry = registry_with(&[("p-1", &d1), ("p-2", &d2)]);
     let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
     let (gone, _rg) = conn();
     let (stay, _rs) = conn();
-    hub.subscribe(&registry, "p-1", &gone).unwrap();
-    hub.subscribe(&registry, "p-2", &gone).unwrap();
-    hub.subscribe(&registry, "p-2", &stay).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-1", &gone).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-2", &gone).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-2", &stay).unwrap();
 
     hub.unsubscribe_all(&gone);
 
@@ -237,15 +268,16 @@ async fn connection_cleanup_drops_every_watch_of_that_connection() {
 }
 
 #[tokio::test]
-async fn fs_changed_reaches_only_connections_subscribed_to_that_project() {
+async fn fs_deltas_reach_only_connections_subscribed_to_that_project() {
     let (d1, d2) = (temp_project_dir("t1"), temp_project_dir("t2"));
     let registry = registry_with(&[("p-1", &d1), ("p-2", &d2)]);
     let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
     let (watching_p1, mut rx1) = conn();
     let (watching_p2, mut rx2) = conn();
     let (unsubscribed, mut rx3) = conn();
-    hub.subscribe(&registry, "p-1", &watching_p1).unwrap();
-    hub.subscribe(&registry, "p-2", &watching_p2).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-1", &watching_p1).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-2", &watching_p2).unwrap();
     assert!(hub.wait_armed("p-1", ARM_WAIT).await, "p-1 watcher armed");
     assert!(hub.wait_armed("p-2", ARM_WAIT).await, "p-2 watcher armed");
 
@@ -253,8 +285,7 @@ async fn fs_changed_reaches_only_connections_subscribed_to_that_project() {
 
     let payload = next_fs_changed(&mut rx1, Duration::from_secs(10))
         .await
-        .expect("subscriber of p-1 gets fs_changed");
-    assert_eq!(payload["projectId"], json!("p-1"));
+        .expect("subscriber of p-1 gets an fs delta");
     assert_eq!(payload["root"], json!(d1.display().to_string()));
     assert!(payload["paths"]
         .as_array()
@@ -280,37 +311,14 @@ async fn fs_changed_reaches_only_connections_subscribed_to_that_project() {
 }
 
 #[tokio::test]
-async fn closed_subscriber_is_pruned_and_watcher_dropped_on_next_change() {
-    let dir = temp_project_dir("prune");
-    let registry = registry_with(&[("p-1", &dir)]);
-    let hub = FsWatchHub::default();
-    let (tx, rx) = conn();
-    hub.subscribe(&registry, "p-1", &tx).unwrap();
-    assert!(hub.wait_armed("p-1", ARM_WAIT).await, "watcher armed");
-    drop(rx); // the connection's write half is gone
-
-    std::fs::write(dir.join("a.txt"), "x").expect("write file");
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while hub.watched_project_count() != 0 && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(
-        hub.watched_project_count(),
-        0,
-        "delivery to a closed channel drops the watch"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[tokio::test]
 async fn archiving_or_removing_the_project_drops_its_watch() {
     let (d1, d2) = (temp_project_dir("arch"), temp_project_dir("rem"));
     let registry = registry_with(&[("p-1", &d1), ("p-2", &d2)]);
     let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
     let (tx, _rx) = conn();
-    hub.subscribe(&registry, "p-1", &tx).unwrap();
-    hub.subscribe(&registry, "p-2", &tx).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-1", &tx).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-2", &tx).unwrap();
     assert_eq!(hub.watched_project_count(), 2);
     // Archive/remove only counts once both watchers are live (otherwise the
     // tasks would just see the project gone on their first lookup).
@@ -366,34 +374,27 @@ async fn backoff_ends_promptly_when_the_project_is_removed_or_moved() {
 }
 
 /// Subscribers are told when their watch ends because the project went away,
-/// so the client can re-request it instead of waiting for events that never
-/// come.
+/// so the client can ask for the watch again instead of waiting for deltas that
+/// never come; the hub releases their subscriptions after the notice.
 #[tokio::test]
-async fn subscribers_get_fs_watch_ended_when_the_project_is_archived() {
+async fn subscribers_get_an_ended_delta_when_the_project_is_archived() {
     let dir = temp_project_dir("ended");
     let registry = registry_with(&[("p-1", &dir)]);
     let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
     let (tx, mut rx) = conn();
-    hub.subscribe(&registry, "p-1", &tx).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-1", &tx).unwrap();
     assert!(hub.wait_armed("p-1", ARM_WAIT).await, "watcher armed");
 
     assert!(registry.update("p-1", None, None, Some(true)));
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    let ended = loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        match tokio::time::timeout(remaining, rx.recv()).await {
-            Ok(Some(Outbound::Event(event))) if event.type_ == "fs_watch_ended" => {
-                break Some(event.payload)
-            }
-            Ok(Some(_)) => continue,
-            Ok(None) | Err(_) => break None,
-        }
-    };
-    let payload = ended.expect("subscriber is told the watch ended");
-    assert_eq!(payload["projectId"], json!("p-1"));
+    let (payload, _) = next_fs_delta_with(&mut rx, Duration::from_secs(8), "ended")
+        .await
+        .expect("subscriber is told the watch ended");
+    assert_eq!(payload["ended"], json!(true));
     assert_eq!(payload["reason"], json!("project_unavailable"));
     assert_eq!(hub.watched_project_count(), 0);
+    assert_eq!(watches.subscriber_count(WatchKind::Fs, "p-1"), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -405,8 +406,9 @@ async fn a_moved_project_root_re_arms_the_live_watch() {
     let (old, new) = (temp_project_dir("mv-old"), temp_project_dir("mv-new"));
     let registry = registry_with(&[("p-1", &old)]);
     let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
     let (tx, mut rx) = conn();
-    hub.subscribe(&registry, "p-1", &tx).unwrap();
+    subscribe_fs(&hub, &watches, &registry, "p-1", &tx).unwrap();
     assert!(hub.wait_armed("p-1", ARM_WAIT).await, "watcher armed");
 
     registry.upsert(ProjectSummary {
@@ -435,15 +437,16 @@ async fn a_moved_project_root_re_arms_the_live_watch() {
     }
 }
 
-/// `fs_changed` goes through the subscriber's bounded queue: a full queue
-/// misses the batch (never grows past its bound) and, once the overflow
-/// tolerance is reached, the subscriber is closed and pruned (dropping the
-/// watcher with its last subscriber).
-#[tokio::test(start_paused = true)]
-async fn deliver_uses_the_bounded_queue_and_prunes_a_peer_that_stays_full() {
-    let (tx, mut rx) = outbound_channel(1, 3);
-    let watches: WatchMap = Arc::new(Mutex::new(HashMap::new()));
-    watches.lock().insert(
+/// A batch goes through the subscriber's bounded queue without waiting: a full
+/// queue misses it, which leaves a hole in the revisions plus a resync marker
+/// under the next `n`, so the client resubscribes for fresh state. The queue
+/// never grows past its bound.
+#[tokio::test]
+async fn a_batch_dropped_for_a_full_queue_leaves_a_revision_gap_and_a_resync_marker() {
+    let (tx, mut rx) = outbound_channel(1, 100);
+    let watches = Arc::new(WatchHub::new());
+    let fs_watches: WatchMap = Arc::new(Mutex::new(HashMap::new()));
+    fs_watches.lock().insert(
         "p-full".to_string(),
         ProjectWatch {
             generation: 1,
@@ -452,48 +455,45 @@ async fn deliver_uses_the_bounded_queue_and_prunes_a_peer_that_stays_full() {
             armed: tokio::sync::watch::channel(false).1,
         },
     );
-    let payload = FsChangedPayload {
-        project_id: "p-full".to_string(),
+    // The state frame (n = 1) fills the one-slot queue.
+    watches
+        .subscribe(WatchKind::Fs, "p-full", &tx, || fs_state(std::path::Path::new("/root")))
+        .expect("subscribe");
+    let delta = FsDelta {
         root: "/root".to_string(),
         paths: vec!["/root/a".to_string()],
     };
 
-    assert!(deliver(&watches, "p-full", 1, &payload), "first batch queued");
-    assert!(deliver(&watches, "p-full", 1, &payload), "full: batch missed, peer kept");
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert!(deliver(&watches, "p-full", 1, &payload), "full again, within tolerance");
-    assert!(!tx.closing().is_cancelled());
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert!(
-        !deliver(&watches, "p-full", 1, &payload),
-        "third consecutive full window reaches the tolerance: subscriber pruned, watch dropped"
-    );
-    assert!(tx.closing().is_cancelled(), "the overflowing peer's connection is closed");
-    assert!(watches.lock().is_empty());
-    assert!(rx.try_recv().is_ok(), "exactly the first batch was queued");
+    assert!(deliver(&fs_watches, &watches, "p-full", 1, &delta), "the batch is handed to the hub");
+
+    let state = rx.recv().await.expect("state frame");
+    assert!(matches!(&state, Outbound::Watch(frame) if frame.revision().n == 1));
+    let (marker, n) = next_fs_delta_with(&mut rx, Duration::from_secs(5), "resync")
+        .await
+        .expect("resync marker follows once there is room");
+    assert_eq!(marker["resync"], json!(true));
+    assert_eq!(n, 3, "n = 2 went to the dropped batch");
     assert!(rx.try_recv().is_err(), "the queue never grew past its bound");
 }
 
-/// `fs_watch_ended` is the client's only cue to re-request its watch, so a full
-/// queue delays it instead of losing it.
+/// The ended notice is the client's only cue to ask for its watch again, so a
+/// full queue delays it instead of losing it.
 #[tokio::test]
-async fn watch_ended_is_delivered_once_a_full_queue_has_room() {
+async fn the_ended_notice_is_delivered_once_a_full_queue_has_room() {
     let (tx, mut rx) = outbound_channel(1, 100);
-    let filler = Outbound::Event(SequencedEvent::new(None, 0, "filler", json!({})));
-    assert_eq!(tx.try_enqueue(filler), EnqueueOutcome::Enqueued);
+    let watches = Arc::new(WatchHub::new());
+    watches
+        .subscribe(WatchKind::Fs, "p-gone", &tx, || fs_state(std::path::Path::new("/root")))
+        .expect("subscribe");
 
-    notify_watch_ended("p-gone", std::slice::from_ref(&tx));
+    notify_watch_ended(&watches, "p-gone");
     assert!(
-        matches!(rx.recv().await, Some(Outbound::Event(event)) if event.type_ == "filler"),
-        "the queued frame is delivered first"
+        matches!(rx.recv().await, Some(Outbound::Watch(frame)) if frame.state_value().is_some()),
+        "the queued state frame is delivered first"
     );
-    let ended = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+    let (payload, _) = next_fs_delta_with(&mut rx, Duration::from_secs(5), "ended")
         .await
-        .expect("fs_watch_ended was lost on a full queue")
-        .expect("queue open");
-    assert!(
-        matches!(ended, Outbound::Event(event) if event.type_ == "fs_watch_ended"
-            && event.payload["projectId"] == "p-gone"),
-        "the watch-ended notice follows once there is room"
-    );
+        .expect("the ended notice was lost on a full queue");
+    assert_eq!(payload["ended"], json!(true));
+    assert_eq!(watches.subscriber_count(WatchKind::Fs, "p-gone"), 0);
 }

@@ -35,6 +35,9 @@ pub struct TerminalInstance {
     /// reattachment skips terminals with a live attachment so a second
     /// browser connection cannot invalidate the first one's claim
     pub web_attachments: Arc<AtomicUsize>,
+    /// Told when this terminal gains its first or loses its last web
+    /// attachment (the `attached` flag of the `terminals` watch).
+    pub set_observer: TerminalSetObserver,
     /// Connection id of the web client that last wrote input or resized
     /// (#851 "single size owner" — last-writer-wins; logged on change so
     /// resize conflicts between devices are observable). `None` until a
@@ -84,7 +87,9 @@ impl TerminalInstance {
 
     /// Record a live web attachment (attach handler).
     pub fn add_web_attachment(&self) {
-        self.web_attachments.fetch_add(1, Ordering::AcqRel);
+        if self.web_attachments.fetch_add(1, Ordering::AcqRel) == 0 {
+            self.set_observer.notify(self.project_id.as_deref());
+        }
     }
 
     /// Release a web attachment (connection teardown / detach). Only the
@@ -96,11 +101,14 @@ impl TerminalInstance {
         // Rust 1.95 while our MSRV is 1.88 — keep fetch_update + allow until
         // the MSRV catches up.
         #[allow(deprecated)]
-        let _ = self
+        let previous = self
             .web_attachments
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
                 Some(v.saturating_sub(1))
             });
+        if previous == Ok(1) {
+            self.set_observer.notify(self.project_id.as_deref());
+        }
     }
 
     /// #851 "single size owner": record that connection `client_id` just

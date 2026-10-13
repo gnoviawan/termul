@@ -40,8 +40,11 @@
 
 /**
  * The `acp:*` event names from `src-tauri/src/acp/events.rs` with the `acp:`
- * prefix dropped (18, including `browser_open_request`), plus the relay-level
- * `auth_required` event and the top-level delivery frames (`gap`, `heartbeat`).
+ * prefix dropped that the relay sends as session log events, plus the
+ * relay-level `auth_required` event and the top-level delivery frames (`gap`,
+ * `heartbeat`). Events that belong to no session (`browser_open_request`,
+ * `worktree_branch_renamed`, `fs_changed`, ...) are watch deltas, not events:
+ * the relay sends no `seq = 0` event except `auth_required`.
  * The `watch` frame has the same name as the `watch` request, so its type
  * lives in {@link WS_WATCH_FRAME_TYPE}, outside this registry.
  */
@@ -71,10 +74,6 @@ export const WS_EVENT_TYPES = [
   'auth_required',
   // Server-authored authoritative user input (durable/replayable).
   'user_prompt',
-  // Headless ACP auth (spec-acp-terminal-auth): the host's browser-open shim
-  // captured the agent's auth URL. Agent-level event (sid null, seq 0);
-  // payload `{ agentId, url }` — the renderer shows the BrowserAuthDialog.
-  'browser_open_request',
   // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker (Reliable
   // tier). The host numbers it once; the durable record and this live event
   // share one seq.
@@ -84,23 +83,6 @@ export const WS_EVENT_TYPES = [
   // contiguous; the title itself reaches the UI through the
   // `session_info_update` that follows it, so clients have no handler for it.
   'local_title_generated',
-  // #856 (web explorer live refresh): server-side FS watcher batch. Agent-
-  // level event (sid null, seq 0), delivered only to connections that sent
-  // `watch_project`; payload `{ projectId, root, paths: string[] }` —
-  // the renderer's filesystem facade dispatches the paths through its
-  // onFileChanged/onFileCreated/onFileDeleted chain (web parity with the
-  // desktop notify watcher).
-  'fs_changed',
-  // The host ended this connection's watch of a project because it is no
-  // longer watchable (archived/removed/root gone). Agent-level event (sid
-  // null, seq 0); payload `{ projectId, reason }` — the client forgets the
-  // watch so the next `watchDirectory` re-requests it.
-  'fs_watch_ended',
-  // Shell revamp story 16 (CAP-5): the host renamed a worktree's git branch
-  // and rewrote every session on it. Agent-level event (sid null, seq 0);
-  // payload `{ worktreePath, oldBranch, newBranch }` — the renderer reconciles
-  // worktrees and refreshes the session index.
-  'worktree_branch_renamed',
   // Top-level frame `{ type: 'gap', sid }` (no `seq`): LOSSY events of `sid`
   // were dropped for this connection because it could not keep up. The client
   // installs an atomic snapshot of the session.
@@ -241,18 +223,14 @@ export const WS_REQUEST_TYPES = [
   // `acp:agent_switch` event to live clients under the same seq. Reply `{}`;
   // unknown session → `not_found`; live-only mode → `unsupported`.
   'record_agent_switch',
-  // Per-project fs watch: `{ projectId }` subscribes/unsubscribes THIS
-  // connection to the host watcher of a registered project; `fs_changed`
-  // events then reach only subscribed connections. `watch_project` of an
-  // unknown/archived project → `not_found`; `unwatch_project` is idempotent
-  // (always ok for a well-formed request).
-  'watch_project',
-  'unwatch_project',
-  // State watches `{ watch, scope? }` (`projects`, `chat_history`, `agents`):
-  // `watch` queues the full-state frame, then replies `{ watch, scope,
-  // revision }`; later changes arrive as deltas under `n + 1`. A second
-  // `watch` of the same (watch, scope) replaces the subscription and sends
-  // fresh state. `unwatch` is idempotent. Unknown watch or scope → `unsupported`.
+  // Watches `{ watch, scope? }` (`projects`, `chat_history`, `agents`; `fs`
+  // and `terminals` scoped to a project id; `store` scoped to a key): `watch`
+  // queues the full-state frame, then replies `{ watch, scope, revision }`;
+  // later changes arrive as deltas under `n + 1`. A second `watch` of the same
+  // (watch, scope) replaces the subscription and sends fresh state. `unwatch`
+  // is idempotent. Unknown watch or scope → `unsupported`; an `fs` watch of an
+  // unknown/archived project → `not_found`; a `store` watch on a host without
+  // a store → `STORE_UNAVAILABLE`.
   'watch',
   'unwatch',
   // Explicit host-default project change (updates `default_project_id`,
@@ -329,8 +307,6 @@ export const WS_COMMAND_CLASSES: Readonly<
   remove_project: ['idempotent', null],
   set_default_project: ['idempotent', null],
   record_agent_switch: ['command', 'payload'],
-  watch_project: ['read', null],
-  unwatch_project: ['read', null],
   watch: ['read', null],
   unwatch: ['read', null]
 }
@@ -676,21 +652,10 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   permission_request: WS_RELAY_TIERS.RELIABLE,
   auth_required: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
-  browser_open_request: WS_RELAY_TIERS.RELIABLE,
   // CAP-2: switch markers are one-shot durable-backed events — reliable.
   agent_switch: WS_RELAY_TIERS.RELIABLE,
   // Durable host record that owns a seq — reliable so no seq goes missing.
   local_title_generated: WS_RELAY_TIERS.RELIABLE,
-  // #856: fs_changed batches are debounced snapshots — a lost one is
-  // recovered by the next batch or a manual refresh, but reliable keeps
-  // the tree consistent without polling.
-  fs_changed: WS_RELAY_TIERS.RELIABLE,
-  // One-shot host fact that a watch ended — dropping it would leave the
-  // client believing it still watches, so reliable.
-  fs_watch_ended: WS_RELAY_TIERS.RELIABLE,
-  // Story 16: a one-shot host fact (every session on the worktree changed) —
-  // dropping it would leave stale branch labels, so reliable.
-  worktree_branch_renamed: WS_RELAY_TIERS.RELIABLE,
   // Frames about delivery itself: a gap must reach the client in order, and a
   // heartbeat is never queued, so neither may be a lossy event.
   gap: WS_RELAY_TIERS.RELIABLE,
@@ -923,8 +888,19 @@ export interface WsHeartbeatFrame {
  */
 export const WS_WATCH_FRAME_TYPE = 'watch'
 
-/** The state watches a connection can hold. All three have the empty scope. */
-export const WS_WATCH_NAMES = ['projects', 'chat_history', 'agents'] as const
+/**
+ * The watches a connection can hold. `projects`, `chat_history` and `agents`
+ * have the empty scope; `fs` and `terminals` are scoped to a project id, `store`
+ * to a store key.
+ */
+export const WS_WATCH_NAMES = [
+  'projects',
+  'chat_history',
+  'agents',
+  'fs',
+  'store',
+  'terminals'
+] as const
 
 /** One of {@link WS_WATCH_NAMES}. */
 export type WsWatchName = (typeof WS_WATCH_NAMES)[number]
@@ -977,6 +953,12 @@ export interface WsWatchReply {
  */
 export interface ChatHistoryWatchDelta {
   changed: string[]
+  /**
+   * A host fact that rewrote the index and belongs to no session log: a
+   * worktree branch rename, with the rename as `payload`.
+   */
+  event?: 'worktree_branch_renamed'
+  payload?: unknown
 }
 
 /**
@@ -984,8 +966,58 @@ export interface ChatHistoryWatchDelta {
  * as an event.
  */
 export interface AgentsWatchDelta {
-  event: 'agent_spawned' | 'agent_crashed' | 'agent_error' | 'agent_disconnected'
+  event:
+    | 'agent_spawned'
+    | 'agent_crashed'
+    | 'agent_error'
+    | 'agent_disconnected'
+    // The host's browser-open shim captured an agent's auth URL; the payload is
+    // `{ agentId, url }`. Not part of the roster state: a missed delta is lost.
+    | 'browser_open_request'
   payload: unknown
+}
+
+/** `fs` watch state: the canonical root being watched. A new state means: refresh the trees. */
+export interface FsWatchState {
+  root: string
+}
+
+/** An `fs` delta: one debounced batch of changed paths under the project root. */
+export interface FsWatchChangeDelta {
+  root: string
+  paths: string[]
+}
+
+/** The last `fs` delta: the project is no longer watchable; the host released the watch. */
+export interface FsWatchEndedDelta {
+  ended: true
+  reason: string
+}
+
+/** An `fs` delta. */
+export type FsWatchDelta = FsWatchChangeDelta | FsWatchEndedDelta
+
+/**
+ * `store` watch state and delta: whether the key holds a value, and the value
+ * it holds after the write or delete that produced the frame.
+ */
+export interface StoreWatchState {
+  exists: boolean
+  value?: unknown
+}
+
+/** One terminal in the `terminals` watch (no claim credential). */
+export interface WsTerminalSetEntry {
+  terminalId: string
+  projectId: string
+  cwd: string
+  /** A web connection holds a live attachment. */
+  attached: boolean
+}
+
+/** `terminals` watch state and delta: the project's terminals as they are now. */
+export interface TerminalsWatchState {
+  terminals: WsTerminalSetEntry[]
 }
 
 /** A delta the host sends when it could not queue the one before it. */

@@ -129,13 +129,11 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "register_discovered_session" => {
             handle_register_discovered_session(id, &req.payload, acp, relay).await
         }
-        // Per-project fs watch (`fs_changed` goes only to subscribed
-        // connections): refcounted in `relay.fs_watches()`, released on
-        // `unwatch_project`, connection close, or project archive/remove.
-        "watch_project" => handle_watch_project(id, &req.payload, relay, registry, out_tx),
-        "unwatch_project" => handle_unwatch_project(id, &req.payload, relay, out_tx),
-        // State watches (projects, chat-history index, agent roster): the
-        // full state now, deltas under a contiguous revision after.
+        // Watches (projects, chat-history index, agent roster, project file
+        // changes, store keys, project terminal set): the full state now,
+        // deltas under a contiguous revision after. A project's file watcher
+        // is refcounted in `relay.fs_watches()`, released on `unwatch`,
+        // connection close, or project archive/remove.
         "watch" => handle_watch(id, &req.payload, env),
         "unwatch" => handle_unwatch(id, &req.payload, env),
         // Project registry commands — one command service shared with the
@@ -177,8 +175,8 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // localStorage stub) so settings / layout / command history / SSH
         // profiles survive browser switches + server restarts.
         "store_read" => handle_store_read(id, &req.payload, store, identity).await,
-        "store_write" => handle_store_write(id, &req.payload, store, identity).await,
-        "store_delete" => handle_store_delete(id, &req.payload, store, identity).await,
+        "store_write" => handle_store_write(id, &req.payload, store, identity, relay).await,
+        "store_delete" => handle_store_delete(id, &req.payload, store, identity, relay).await,
         "kill_agent" => handle_kill_agent(id, &req.payload, acp).await,
         "list_agents" => handle_list_agents(id, acp).await,
         // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.

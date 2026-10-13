@@ -220,12 +220,9 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         "authenticate"
         | "ping"
         | "subscribe"
-        // A per-project fs watch is a subscription like `subscribe`: it only
-        // routes `fs_changed` events to this connection.
-        | "watch_project"
-        | "unwatch_project"
-        // The state watches (projects, chat history, agents) only route frames
-        // to this connection, like `subscribe`.
+        // The watches (projects, chat history, agents, file changes, store
+        // keys, terminals) only route frames to this connection, like
+        // `subscribe`.
         | "watch"
         | "unwatch"
         | "list_persisted_sessions"

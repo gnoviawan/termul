@@ -33,6 +33,8 @@ mod relay_prompt_tests;
 mod watch_hub_tests;
 mod store_tests;
 #[cfg(test)]
+mod watch_scoped_tests;
+#[cfg(test)]
 mod watch_tests;
 
 use std::collections::HashSet;

@@ -165,8 +165,6 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
         "record_agent_switch",
         CommandClass::command(Replay::Payload),
     ),
-    ("watch_project", CommandClass::read()),
-    ("unwatch_project", CommandClass::read()),
     ("watch", CommandClass::read()),
     ("unwatch", CommandClass::read()),
 ];

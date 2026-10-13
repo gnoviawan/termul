@@ -35,6 +35,7 @@ mod instance;
 mod lifecycle;
 mod limits;
 mod resolve;
+mod set_watch;
 mod spawn;
 mod types;
 #[cfg(target_os = "windows")]
@@ -61,6 +62,7 @@ use types::{
 pub use external::ExternalTerminal;
 pub use instance::TerminalInstance;
 pub use limits::{SpawnError, TERMINAL_LIMIT_CODE};
+pub use set_watch::TerminalSetObserver;
 pub(crate) use resolve::{resolve_spawn_program, ResolvedProgram};
 pub use types::{
     ExternalResizer, PreservedTerminal, SpawnOptions, SpawnedTerminal, TerminalAttachResult,
@@ -91,6 +93,8 @@ pub struct PtyManager {
     /// Set when the app window is minimized/hidden to prevent
     /// ConPTY lifecycle issues on Windows.
     is_hidden: Arc<AtomicBool>,
+    /// Told when a project's terminal set changes (the `terminals` watch).
+    set_observer: TerminalSetObserver,
 }
 
 impl PtyManager {
@@ -116,6 +120,7 @@ impl PtyManager {
             git_tracker,
             exit_code_tracker,
             claims: Arc::new(crate::pty::claims::TerminalClaimRegistry::new()),
+            set_observer: TerminalSetObserver::default(),
         }
     }
 
@@ -231,6 +236,7 @@ impl PtyManager {
             exit_code_tracker: self.exit_code_tracker.clone(),
             terminal_events: self.terminal_events.clone(),
             claims: self.claims.clone(),
+            set_observer: self.set_observer.clone(),
         }
     }
 
@@ -254,6 +260,7 @@ struct ExitSweep {
     exit_code_tracker: Arc<ExitCodeTracker>,
     terminal_events: TerminalEventHub,
     claims: Arc<crate::pty::claims::TerminalClaimRegistry>,
+    set_observer: TerminalSetObserver,
 }
 
 impl ExitSweep {
@@ -290,6 +297,7 @@ impl ExitSweep {
             self.exit_code_tracker.remove_terminal(&id);
             self.terminal_events.remove(&id);
             self.claims.remove(&id);
+            self.set_observer.notify(instance.project_id.as_deref());
             removed.push(id);
         }
         removed

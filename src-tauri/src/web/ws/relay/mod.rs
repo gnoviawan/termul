@@ -234,8 +234,8 @@ pub(super) async fn run_relay<S>(
 pub(super) struct ConnectionCleanup {
     relay: Arc<WsRelaySink>,
     subscriptions: Arc<Subscriptions>,
-    /// This connection's outbound channel, the identity its `watch_project`
-    /// and `watch` subscriptions are keyed by; released with the rest of the
+    /// This connection's outbound channel, the identity its `watch`
+    /// subscriptions are keyed by; released with the rest of the
     /// cleanup.
     watch_conn: Option<OutboundSender>,
     state: Arc<std::sync::atomic::AtomicU8>,

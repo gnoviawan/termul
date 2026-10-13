@@ -67,6 +67,7 @@ impl PtyManager {
             resizer: Some(resizer),
             exited: AtomicBool::new(false),
             exited_at: parking_lot::Mutex::new(None),
+            set_observer: self.set_observer.clone(),
             #[cfg(target_os = "windows")]
             conpty_handles: None,
         });

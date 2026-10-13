@@ -1,7 +1,7 @@
 /**
  * The agent roster on web: the host's `agents` watch replaces the sid-less
- * `agent_spawned` / `agent_crashed` / `agent_error` / `agent_disconnected`
- * events the relay used to broadcast with `seq = 0`.
+ * `agent_spawned` / `agent_crashed` / `agent_error` / `agent_disconnected` and
+ * `browser_open_request` events the relay used to broadcast with `seq = 0`.
  *
  * A delta carries one of those events with its original payload and goes to
  * the same store reducers a desktop event does. A kill or an idle reap arrives
@@ -17,7 +17,8 @@ import type {
   AgentCrashedEvent,
   AgentDisconnectedEvent,
   AgentErrorEvent,
-  AgentSpawnedEvent
+  AgentSpawnedEvent,
+  BrowserOpenRequestEvent
 } from '@/lib/acp-api'
 import type { WatchClient } from '@/lib/acp-transport/watch-client'
 import { logFrontendError } from '@/lib/log-api'
@@ -76,6 +77,10 @@ function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
     }
     case 'agent_disconnected':
       state._onAgentDisconnected(delta.payload as AgentDisconnectedEvent)
+      return
+    case 'browser_open_request':
+      // Not roster state: the host's browser-open shim captured an auth URL.
+      state._onBrowserOpenRequest(delta.payload as BrowserOpenRequestEvent)
       return
     default:
       void logFrontendError({

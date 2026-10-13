@@ -19,7 +19,9 @@ const { mocks, acpState, projectState } = vi.hoisted(() => {
       reconcile: vi.fn().mockResolvedValue('updated'),
       logFrontendError: vi.fn().mockResolvedValue(undefined),
       unsubscribe: vi.fn(),
-      onEvent: vi.fn()
+      onEvent: vi.fn(),
+      watchSubscribe: vi.fn(),
+      transport: { watchesEnabled: false }
     }
   }
 })
@@ -37,7 +39,13 @@ vi.mock('@/stores/acp-store', () => ({
 
 vi.mock('@/lib/acp-transport', async () => {
   const actual = await vi.importActual<typeof import('@/lib/acp-transport')>('@/lib/acp-transport')
-  return { ...actual, getAcpTransport: () => ({ onEvent: mocks.onEvent }) }
+  return {
+    ...actual,
+    getAcpTransport: () => ({
+      onEvent: mocks.onEvent,
+      ...(mocks.transport.watchesEnabled ? { watches: { subscribe: mocks.watchSubscribe } } : {})
+    })
+  }
 })
 
 vi.mock('@/stores/project-store', () => ({
@@ -84,6 +92,7 @@ const WT = 'E:/proj-a/.termul/worktrees/ab12cd34'
 describe('useWorktreeBranchRenamed', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.transport.watchesEnabled = false
     acpState.sessions = {}
     projectState.projects = []
     mocks.onEvent.mockReturnValue(mocks.unsubscribe)
@@ -94,6 +103,33 @@ describe('useWorktreeBranchRenamed', () => {
   it('subscribes to acp:worktree_branch_renamed and unsubscribes on unmount', () => {
     const { unmount } = renderHook(() => useWorktreeBranchRenamed())
     expect(mocks.onEvent).toHaveBeenCalledWith('acp:worktree_branch_renamed', expect.any(Function))
+    unmount()
+    expect(mocks.unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('on web the rename is a chat_history watch delta: the hook watches, not onEvent', () => {
+    mocks.transport.watchesEnabled = true
+    mocks.watchSubscribe.mockReturnValue(mocks.unsubscribe)
+    acpState.sessions = {
+      a: { agentId: 'x', worktreePath: WT, worktreeBranch: 'chat/ab12cd34' }
+    }
+    const { unmount } = renderHook(() => useWorktreeBranchRenamed())
+    expect(mocks.onEvent).not.toHaveBeenCalled()
+    expect(mocks.watchSubscribe).toHaveBeenCalledWith('chat_history', expect.any(Object))
+    const handlers = mocks.watchSubscribe.mock.calls[0][1] as {
+      onDelta: (delta: unknown) => void
+    }
+
+    // A plain index delta is not a rename.
+    handlers.onDelta({ changed: ['s-1'] })
+    expect(acpState.sessions.a.worktreeBranch).toBe('chat/ab12cd34')
+
+    handlers.onDelta({
+      changed: [],
+      event: 'worktree_branch_renamed',
+      payload: { worktreePath: WT, oldBranch: 'chat/ab12cd34', newBranch: 'chat/fix-login' }
+    })
+    expect(acpState.sessions.a.worktreeBranch).toBe('chat/fix-login')
     unmount()
     expect(mocks.unsubscribe).toHaveBeenCalledTimes(1)
   })

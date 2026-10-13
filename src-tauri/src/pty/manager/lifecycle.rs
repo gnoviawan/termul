@@ -105,6 +105,8 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
+        let project_id = instance.project_id.clone();
+
         // Wrap blocking cleanup in spawn_blocking to avoid panic
         let instance_clone = instance.clone();
         tokio::task::spawn_blocking(move || {
@@ -119,6 +121,7 @@ impl PtyManager {
         self.exit_code_tracker.remove_terminal(id);
         self.terminal_events.remove(id);
         self.claims.remove(id);
+        self.set_observer.notify(project_id.as_deref());
 
         Ok(())
     }
@@ -134,6 +137,8 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
+        let project_id = instance.project_id.clone();
+
         let instance_clone = instance.clone();
         tokio::task::spawn_blocking(move || {
             Self::cleanup_terminal_resources_sync(instance_clone, true);
@@ -146,6 +151,7 @@ impl PtyManager {
         self.exit_code_tracker.remove_terminal(id);
         self.terminal_events.remove(id);
         self.claims.remove(id);
+        self.set_observer.notify(project_id.as_deref());
 
         Ok(())
     }
@@ -285,6 +291,8 @@ impl PtyManager {
                 None => continue,
             };
 
+                let project_id = instance.project_id.clone();
+
             // Wrap blocking cleanup in spawn_blocking to avoid panic
             let instance_clone = instance.clone();
             let id_clone = id.clone();
@@ -302,6 +310,7 @@ impl PtyManager {
             exit_code_tracker.remove_terminal(&id);
             self.terminal_events.remove(&id);
             self.claims.remove(&id);
+            self.set_observer.notify(project_id.as_deref());
         }
     }
 

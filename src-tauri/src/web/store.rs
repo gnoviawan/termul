@@ -69,9 +69,9 @@ mod scope;
 
 pub use gc::spawn_gc_task;
 pub use records::{Record, STORE_SCHEMA_VERSION};
-pub use scope::KeyScope;
+pub use scope::{classify, KeyScope};
 use records::{decode, encode, envelope_overhead, DecodeFailure, ExtraKeys, HostMeta};
-use scope::{classify, device_prefix, partition_of};
+use scope::{device_prefix, partition_of};
 
 /// Why [`WebStore::open`] refused to open the store file. Both variants are
 /// startup-fatal for the host that hit them.

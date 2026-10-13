@@ -7,6 +7,7 @@ use serde::Deserializer;
 
 use super::*;
 use crate::web::store::{unix_ms, Precondition, StoreError, WriteOutcome};
+use crate::web::watch::publish_store;
 
 // --- Issue #613: server-side generic key-value store -------------------------
 
@@ -176,6 +177,7 @@ pub(super) async fn handle_store_write(
     payload: &Value,
     store: Option<&Arc<WebStore>>,
     identity: Option<&ClientIdentity>,
+    relay: &Arc<WsRelaySink>,
 ) -> WsReply {
     let parsed: StoreWritePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -212,22 +214,27 @@ pub(super) async fn handle_store_write(
         expected: parsed.expected,
         command_id: parsed.command_id,
     };
+    let watched = (store.clone(), parsed.key.clone(), identity.clone());
     let result = tokio::task::spawn_blocking(move || {
         store.write(&parsed.key, parsed.value, precondition, &identity, unix_ms())
     })
     .await;
     match result {
         Ok(Ok(WriteOutcome::Device { revision })) => {
+            publish_store(relay, &watched.0, &watched.1, &watched.2);
             WsReply::ok(id, Some(json!({ "revision": revision })))
         }
         Ok(Ok(WriteOutcome::Shared {
             value,
             revision,
             merged,
-        })) => WsReply::ok(
-            id,
-            Some(json!({ "value": value, "revision": revision, "merged": merged })),
-        ),
+        })) => {
+            publish_store(relay, &watched.0, &watched.1, &watched.2);
+            WsReply::ok(
+                id,
+                Some(json!({ "value": value, "revision": revision, "merged": merged })),
+            )
+        }
         Ok(Err(error)) => store_error_reply(id, error, "STORE_WRITE_FAILED"),
         Err(join_err) => task_failed(id, "STORE_WRITE_FAILED", join_err),
     }
@@ -239,6 +246,7 @@ pub(super) async fn handle_store_delete(
     payload: &Value,
     store: Option<&Arc<WebStore>>,
     identity: Option<&ClientIdentity>,
+    relay: &Arc<WsRelaySink>,
 ) -> WsReply {
     let parsed: StoreDeletePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
@@ -256,12 +264,18 @@ pub(super) async fn handle_store_delete(
         expected: parsed.expected,
         command_id: parsed.command_id,
     };
+    let watched = (store.clone(), parsed.key.clone(), identity.clone());
     let result = tokio::task::spawn_blocking(move || {
         store.delete(&parsed.key, precondition, &identity, unix_ms())
     })
     .await;
     match result {
-        Ok(Ok(existed)) => WsReply::ok(id, Some(json!({ "existed": existed }))),
+        Ok(Ok(existed)) => {
+            if existed {
+                publish_store(relay, &watched.0, &watched.1, &watched.2);
+            }
+            WsReply::ok(id, Some(json!({ "existed": existed })))
+        }
         Ok(Err(error)) => store_error_reply(id, error, "STORE_DELETE_FAILED"),
         Err(join_err) => task_failed(id, "STORE_DELETE_FAILED", join_err),
     }

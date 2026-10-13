@@ -1965,49 +1965,49 @@ describe('Parity Checklist Automation', () => {
   })
 })
 
-// #856 (web explorer live refresh): the FS-change event must land on BOTH
-// surfaces — the server-side notify watcher broadcasting `fs_changed` over
-// the control WS (Rust: web/fs_watcher + web/sink) and the shared protocol
-// registry (web-protocol.types.ts) + the renderer filesystem facade's web
-// bridge that dispatches through the SAME onFileChanged chain the desktop
-// tauri-plugin-fs watcher feeds. This block pins all four pieces.
+// #856 (web explorer live refresh): the FS-change push must land on BOTH
+// surfaces — the server-side notify watcher publishing `fs` watch deltas over
+// the control WS (Rust: web/fs_watcher + web/watch) and the shared protocol
+// registry (web-protocol.types.ts) + the renderer filesystem facade's watch
+// that dispatches through the SAME onFileChanged chain the desktop
+// tauri-plugin-fs watcher feeds. This block pins the pieces.
 describe('Web FS watcher parity (#856)', () => {
   const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
   const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
 
-  it('web/fs_watcher is a refcounted per-projectId notify watch hub', () => {
+  it('web/fs_watcher is a refcounted per-projectId notify watch hub that publishes through the watch hub', () => {
     const watcher = join(root, 'web', 'fs_watcher')
     expect(existsSync(watcher), 'web/fs_watcher module should exist').toBe(true)
     const content = readRustModule(watcher)
     expect(content).toMatch(/recommended_watcher/)
     expect(content).toMatch(/RecursiveMode::Recursive/)
     expect(content).toMatch(/pub struct FsWatchHub/)
-    expect(content).toMatch(/FsChangedPayload/)
-    expect(content).toMatch(/"fs_changed"/)
+    expect(content).toMatch(/WatchKind::Fs/)
+    expect(content).not.toMatch(/"fs_changed"|"fs_watch_ended"/)
   })
 
-  it('ws/watch.rs handles watch_project / unwatch_project and dispatch routes them', () => {
+  it('ws/watch.rs serves the fs watch through watch / unwatch; the per-project requests are gone', () => {
     const handlers = readFileSync(join(root, 'web', 'ws', 'watch.rs'), 'utf-8')
-    expect(handlers).toMatch(/fn handle_watch_project/)
-    expect(handlers).toMatch(/fn handle_unwatch_project/)
+    expect(handlers).toMatch(/WatchKind::Fs =>/)
+    expect(handlers).not.toMatch(/handle_watch_project|handle_unwatch_project/)
     const dispatch = readFileSync(join(root, 'web', 'ws', 'dispatch.rs'), 'utf-8')
-    expect(dispatch).toMatch(/"watch_project"/)
-    expect(dispatch).toMatch(/"unwatch_project"/)
+    expect(dispatch).not.toMatch(/"watch_project"|"unwatch_project"/)
   })
 
-  it('web-protocol.types.ts registers fs_changed (event type + reliable tier)', () => {
+  it('web-protocol.types.ts names the fs watch and no longer registers fs_changed or watch_project', () => {
     expect(existsSync(ProtoTypes), 'web-protocol.types.ts should exist').toBe(true)
     const content = readFileSync(ProtoTypes, 'utf-8')
-    expect(content).toMatch(/'fs_changed'/)
-    expect(content).toMatch(/fs_changed: WS_RELAY_TIERS\.RELIABLE/)
+    expect(content).toMatch(/'fs',/)
+    expect(content).not.toMatch(/'fs_changed'|'fs_watch_ended'|'watch_project'|'unwatch_project'/)
   })
 
-  it('the filesystem facade bridges fs_changed into the shared callback chain on web', () => {
+  it('the filesystem facade watches the fs scope and feeds the shared callback chain on web', () => {
     expect(existsSync(FsFacade), 'tauri-filesystem-api.ts should exist').toBe(true)
     const content = readFileSync(FsFacade, 'utf-8')
-    expect(content).toMatch(/wireWebFsChangedBridge/)
-    expect(content).toMatch(/'acp:fs_changed'/)
+    expect(content).toMatch(/startProjectFsWatch/)
+    expect(content).toMatch(/watches\.subscribe<FsWatchState, FsWatchDelta>/)
+    expect(content).not.toMatch(/acp:fs_changed|wireWebFsChangedBridge/)
   })
 })
 
@@ -2130,11 +2130,13 @@ describe('Worktree branch rename parity (shell revamp story 16)', () => {
     expect(readFileSync(LibRust, 'utf-8')).toMatch(/commands::worktree_rename_branch,/)
   })
 
-  it('the worktree_branch_renamed event is in the protocol registry and the history refetch list', () => {
+  it('the worktree_branch_renamed rename is a chat_history watch delta, not a registered event', () => {
     const protocol = readFileSync(ProtocolTypes, 'utf-8')
-    expect(protocol).toMatch(/'worktree_branch_renamed'/)
-    expect(protocol).toMatch(/worktree_branch_renamed: WS_RELAY_TIERS\.RELIABLE/)
-    expect(readFileSync(SinkRust, 'utf-8')).toMatch(/"worktree_branch_renamed"/)
+    expect(protocol).not.toMatch(/worktree_branch_renamed: WS_RELAY_TIERS/)
+    expect(protocol).toMatch(/event\?: 'worktree_branch_renamed'/)
+    const bridge = readFileSync(SinkRust, 'utf-8')
+    expect(bridge).toMatch(/"worktree_branch_renamed"/)
+    expect(bridge).toMatch(/publish_worktree_branch_renamed/)
   })
 
   it('both renderer roots mount useWorktreeBranchRenamed next to useAcpHistory', () => {

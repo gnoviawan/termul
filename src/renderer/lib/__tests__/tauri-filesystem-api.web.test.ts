@@ -9,8 +9,8 @@
  * `copyFile`) to `webServerFilesystem` — i.e. the fetch client that hits
  * `/fs/*`. The filename-search stream methods route through the one-shot
  * `GET /search/file-names` request + in-module batch/done emitters (issue
- * #848); `watchDirectory` maps the path to a registered project and sends
- * `watch_project` (see the fs_changed bridge block); the content-search stream
+ * #848); `watchDirectory` maps the path to a registered project and watches
+ * it through the host `fs` watch (see the fs watch block); the content-search stream
  * start/cancel still return an explicit `WEB_UNSUPPORTED` result.
  */
 
@@ -446,37 +446,55 @@ describe('tauriFilesystemApi (web branch)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// #856: web FS-change bridge — the control-WS `fs_changed` event dispatches
-// through the shared onFileChanged/onFileCreated/onFileDeleted chain so the
-// explorer tree refreshes (debounced, by useFileWatcher) exactly as it does
-// on desktop.
+// #856: web FS-change watch — the host's `fs` watch deltas dispatch through the
+// shared onFileChanged/onFileCreated/onFileDeleted chain so the explorer tree
+// refreshes (debounced, by useFileWatcher) exactly as it does on desktop.
 // ---------------------------------------------------------------------------
 
-describe('tauriFilesystemApi fs_changed bridge (web)', () => {
-  // The bridge subscribes through the ACP transport; mock it to capture.
-  const { mockAcpTransport } = vi.hoisted(() => {
-    const listeners = new Map<string, (payload: unknown, seq?: number) => void>()
+interface FsHandlers {
+  onState: (state: unknown) => void
+  onDelta?: (delta: unknown) => void
+  onRefused?: (error: unknown) => void
+}
+
+describe('tauriFilesystemApi fs watch (web)', () => {
+  // The facade subscribes through the transport's watch client; mock it to capture.
+  const { mockAcpTransport, subscriptions } = vi.hoisted(() => {
+    const subscriptions: Array<{
+      watch: string
+      scope: string
+      handlers: FsHandlers
+      released: boolean
+    }> = []
     const transport = {
-      watchProject: vi.fn(async (_projectId: string) => undefined),
-      unwatchProject: vi.fn(async (_projectId: string) => undefined),
-      onEvent: vi.fn((eventName: string, callback: (payload: unknown, seq?: number) => void) => {
-        listeners.set(eventName, callback)
-        return () => listeners.delete(eventName)
-      }),
-      emit: (eventName: string, payload: unknown) => {
-        listeners.get(eventName)?.(payload, 0)
-      },
-      listenerCount: () => listeners.size
+      watches: {
+        subscribe: vi.fn((watch: string, handlers: FsHandlers, scope = '') => {
+          const entry = { watch, scope, handlers, released: false }
+          subscriptions.push(entry)
+          return () => {
+            entry.released = true
+          }
+        })
+      }
     }
-    return { mockAcpTransport: transport }
+    return { mockAcpTransport: transport, subscriptions }
   })
 
   vi.mock('../acp-transport', () => ({
     getAcpTransport: () => mockAcpTransport
   }))
 
+  const live = (projectId: string) =>
+    subscriptions.filter((entry) => entry.scope === projectId && !entry.released)
+  const handlersOf = (projectId: string): FsHandlers => {
+    const entry = subscriptions.filter((candidate) => candidate.scope === projectId).at(-1)
+    if (!entry) throw new Error(`no fs watch for ${projectId}`)
+    return entry.handlers
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
+    subscriptions.length = 0
     _resetFilesystemStateForTesting()
     mockIsTauriContext.mockReturnValue(false)
     useProjectStore.setState({
@@ -488,143 +506,38 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
     })
   })
 
-  it('watchDirectory asks the host to watch the containing project (refcounted per project)', async () => {
+  it('watchDirectory watches the containing project once (refcounted per project)', async () => {
     const first = await tauriFilesystemApi.watchDirectory('/web/proj')
     const second = await tauriFilesystemApi.watchDirectory('/web/proj/src/')
 
     expect(first.success).toBe(true)
     expect(second.success).toBe(true)
     // Two directories of one project share ONE host watch.
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledWith('proj-1')
+    expect(mockAcpTransport.watches.subscribe).toHaveBeenCalledTimes(1)
+    expect(mockAcpTransport.watches.subscribe).toHaveBeenCalledWith(
+      'fs',
+      expect.any(Object),
+      'proj-1'
+    )
     expect(mockFetch).not.toHaveBeenCalled()
 
     await tauriFilesystemApi.unwatchDirectory('/web/proj')
-    expect(mockAcpTransport.unwatchProject).not.toHaveBeenCalled()
+    expect(live('proj-1')).toHaveLength(1)
     await tauriFilesystemApi.unwatchDirectory('/web/proj/src')
-    expect(mockAcpTransport.unwatchProject).toHaveBeenCalledTimes(1)
-    expect(mockAcpTransport.unwatchProject).toHaveBeenCalledWith('proj-1')
+    expect(live('proj-1')).toHaveLength(0)
   })
 
   it('maps a nested path to the most specific project and ignores archived/unregistered paths', async () => {
     await tauriFilesystemApi.watchDirectory('/web/proj/nested/deep')
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledWith('proj-nested')
+    expect(live('proj-nested')).toHaveLength(1)
 
-    mockAcpTransport.watchProject.mockClear()
+    mockAcpTransport.watches.subscribe.mockClear()
     for (const dir of ['/web/gone', '/elsewhere']) {
       const result = await tauriFilesystemApi.watchDirectory(dir)
       // No registered project contains it: nothing to watch, not an error.
       expect(result.success).toBe(true)
     }
-    expect(mockAcpTransport.watchProject).not.toHaveBeenCalled()
-  })
-
-  it('treats a failed host watch as non-fatal: success, logged, and nothing tracked', async () => {
-    mockAcpTransport.watchProject.mockRejectedValueOnce(new Error('project not found'))
-
-    const result = await tauriFilesystemApi.watchDirectory('/web/proj')
-
-    // Live refresh is best-effort: the explorer root must still load.
-    expect(result.success).toBe(true)
-    expect(mockLogFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: 'warn',
-        source: expect.stringContaining('watchWebDirectory')
-      })
-    )
-    // The failed claim was rolled back: unwatch sends nothing, and a retry re-requests.
-    await tauriFilesystemApi.unwatchDirectory('/web/proj')
-    expect(mockAcpTransport.unwatchProject).not.toHaveBeenCalled()
-    await tauriFilesystemApi.watchDirectory('/web/proj')
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(2)
-  })
-
-  it('retries an initially failed host watch with backoff, without a second loop', async () => {
-    vi.useFakeTimers()
-    try {
-      mockAcpTransport.watchProject.mockRejectedValueOnce(new Error('socket blip'))
-      mockAcpTransport.watchProject.mockRejectedValueOnce(new Error('still down'))
-
-      await tauriFilesystemApi.watchDirectory('/web/proj')
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-
-      // First retry (2 s) fails too; the second (10 s) succeeds; then it stops.
-      await vi.advanceTimersByTimeAsync(2_000)
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(2)
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
-      await vi.advanceTimersByTimeAsync(60_000)
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('overlapping watches of one directory send a single host watch and one unwatch', async () => {
-    let release: () => void = () => {}
-    mockAcpTransport.watchProject.mockImplementationOnce(
-      () => new Promise<undefined>((resolve) => (release = () => resolve(undefined)))
-    )
-
-    const first = tauriFilesystemApi.watchDirectory('/web/proj')
-    const second = tauriFilesystemApi.watchDirectory('/web/proj')
-    await vi.waitFor(() => expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1))
-    release()
-    await Promise.all([first, second])
-
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-    await tauriFilesystemApi.unwatchDirectory('/web/proj')
-    expect(mockAcpTransport.unwatchProject).toHaveBeenCalledTimes(1)
-  })
-
-  it('an unwatch issued while the watch is in flight is sent after it, never lost', async () => {
-    const order: string[] = []
-    let release: () => void = () => {}
-    mockAcpTransport.watchProject.mockImplementationOnce(
-      () =>
-        new Promise<undefined>((resolve) => {
-          release = () => {
-            order.push('watch-done')
-            resolve(undefined)
-          }
-        })
-    )
-    mockAcpTransport.unwatchProject.mockImplementationOnce(async () => {
-      order.push('unwatch')
-      return undefined
-    })
-
-    const watching = tauriFilesystemApi.watchDirectory('/web/proj')
-    const unwatching = tauriFilesystemApi.unwatchDirectory('/web/proj')
-    await vi.waitFor(() => expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1))
-    release()
-    await Promise.all([watching, unwatching])
-
-    expect(order).toEqual(['watch-done', 'unwatch'])
-  })
-
-  it('does not drop an fs_changed that arrives before the watch reply resolves', async () => {
-    const received: string[] = []
-    const unsubscribe = tauriFilesystemApi.onFileChanged((event) => {
-      received.push(event.path)
-    })
-    let release: () => void = () => {}
-    mockAcpTransport.watchProject.mockImplementationOnce(
-      () => new Promise<undefined>((resolve) => (release = () => resolve(undefined)))
-    )
-
-    const watching = tauriFilesystemApi.watchDirectory('/web/proj')
-    mockAcpTransport.emit('acp:fs_changed', {
-      projectId: 'proj-1',
-      root: '/web/proj',
-      paths: ['/web/proj/early.ts']
-    })
-    await vi.waitFor(() => expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1))
-    release()
-    await watching
-
-    expect(received).toEqual(['/web/proj/early.ts'])
-    unsubscribe()
+    expect(mockAcpTransport.watches.subscribe).not.toHaveBeenCalled()
   })
 
   it('maps nested directories of a project rooted at / (or a drive root)', async () => {
@@ -636,24 +549,20 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
     })
 
     await tauriFilesystemApi.watchDirectory('/home/user/src')
-    expect(mockAcpTransport.watchProject).toHaveBeenLastCalledWith('root-proj')
+    expect(live('root-proj')).toHaveLength(1)
     await tauriFilesystemApi.watchDirectory('C:\\work\\app')
-    expect(mockAcpTransport.watchProject).toHaveBeenLastCalledWith('drive-proj')
+    expect(live('drive-proj')).toHaveLength(1)
   })
 
-  it('subscribes on the first onFileChanged call (web) and dispatches fs_changed paths', async () => {
+  it('dispatches the paths of a delta through the change callbacks', async () => {
     await tauriFilesystemApi.watchDirectory('/web/proj')
     const received: Array<{ type: string; path: string }> = []
     const unsubscribe = tauriFilesystemApi.onFileChanged((event) => {
       received.push({ type: event.type, path: event.path })
     })
+    handlersOf('proj-1').onState({ root: '/web/proj' })
 
-    // The bridge wired the control-WS subscription.
-    expect(mockAcpTransport.onEvent).toHaveBeenCalledWith('acp:fs_changed', expect.any(Function))
-
-    // A server batch arrives: paths under the watched root dispatch.
-    mockAcpTransport.emit('acp:fs_changed', {
-      projectId: 'proj-1',
+    handlersOf('proj-1').onDelta?.({
       root: '/web/proj',
       paths: ['/web/proj/src/new.ts', '/web/proj/README.md']
     })
@@ -662,127 +571,32 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
       { type: 'change', path: '/web/proj/src/new.ts' },
       { type: 'change', path: '/web/proj/README.md' }
     ])
-
     unsubscribe()
   })
 
-  it('re-requests a watch the host ended (fs_watch_ended), and ignores the event for other projects', async () => {
-    const unsubscribe = tauriFilesystemApi.onFileChanged(() => {})
-    await tauriFilesystemApi.watchDirectory('/web/proj')
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-
-    // Another project's end does not disturb this watch.
-    mockAcpTransport.emit('acp:fs_watch_ended', {
-      projectId: 'proj-nested',
-      reason: 'project_unavailable'
-    })
-    await tauriFilesystemApi.watchDirectory('/web/proj')
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-
-    mockAcpTransport.emit('acp:fs_watch_ended', {
-      projectId: 'proj-1',
-      reason: 'project_unavailable'
-    })
-    await tauriFilesystemApi.watchDirectory('/web/proj')
-    expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(2)
-    unsubscribe()
-  })
-
-  it('re-arms a still-wanted directory with backoff after the host ended its watch', async () => {
-    vi.useFakeTimers()
-    try {
-      const unsubscribe = tauriFilesystemApi.onFileChanged(() => {})
-      await tauriFilesystemApi.watchDirectory('/web/proj')
-      await tauriFilesystemApi.watchDirectory('/web/proj/src')
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-
-      mockAcpTransport.emit('acp:fs_watch_ended', {
-        projectId: 'proj-1',
-        reason: 'project_unavailable'
-      })
-      // First retry fails (project still unavailable), the second succeeds.
-      mockAcpTransport.watchProject.mockRejectedValueOnce(new Error('not found'))
-      await tauriFilesystemApi.unwatchDirectory('/web/proj/src') // no longer wanted
-      await vi.advanceTimersByTimeAsync(2_000)
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(2)
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
-      // Re-armed: nothing further is scheduled.
-      await vi.advanceTimersByTimeAsync(60_000)
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(3)
-      unsubscribe()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('watching another directory before the re-arm keeps the lost directories claimed', async () => {
-    vi.useFakeTimers()
-    try {
-      const unsubscribe = tauriFilesystemApi.onFileChanged(() => {})
-      await tauriFilesystemApi.watchDirectory('/web/proj')
-      await tauriFilesystemApi.watchDirectory('/web/proj/src')
-      mockAcpTransport.emit('acp:fs_watch_ended', {
-        projectId: 'proj-1',
-        reason: 'project_unavailable'
-      })
-      mockAcpTransport.watchProject.mockClear()
-
-      // A new directory of the same project is watched before the retry fires.
-      await tauriFilesystemApi.watchDirectory('/web/proj/lib')
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-
-      // Unwatching it must NOT release the project: the two lost directories
-      // are still mounted and were adopted into the active bookkeeping.
-      await tauriFilesystemApi.unwatchDirectory('/web/proj/lib')
-      expect(mockAcpTransport.unwatchProject).not.toHaveBeenCalled()
-
-      // No retry is left to fire, and releasing the rest sends one unwatch.
-      await vi.advanceTimersByTimeAsync(60_000)
-      expect(mockAcpTransport.watchProject).toHaveBeenCalledTimes(1)
-      await tauriFilesystemApi.unwatchDirectory('/web/proj')
-      await tauriFilesystemApi.unwatchDirectory('/web/proj/src')
-      expect(mockAcpTransport.unwatchProject).toHaveBeenCalledTimes(1)
-      unsubscribe()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('drops fs_changed for a project this client is not watching', async () => {
+  it('does not dispatch a delta that arrives after the last unwatch', async () => {
     await tauriFilesystemApi.watchDirectory('/web/proj')
     const received: string[] = []
     const unsubscribe = tauriFilesystemApi.onFileChanged((event) => {
       received.push(event.path)
     })
-
-    mockAcpTransport.emit('acp:fs_changed', {
-      projectId: 'proj-nested',
-      root: '/web/proj/nested',
-      paths: ['/web/proj/nested/a.ts']
-    })
-    expect(received).toEqual([])
+    const handlers = handlersOf('proj-1')
 
     await tauriFilesystemApi.unwatchDirectory('/web/proj')
-    mockAcpTransport.emit('acp:fs_changed', {
-      projectId: 'proj-1',
-      root: '/web/proj',
-      paths: ['/web/proj/late.ts']
-    })
-    expect(received).toEqual([])
+    handlers.onDelta?.({ root: '/web/proj', paths: ['/web/proj/late.ts'] })
 
+    expect(received).toEqual([])
     unsubscribe()
   })
 
-  it('filters paths outside the event root', async () => {
+  it('filters paths outside the delta root', async () => {
     await tauriFilesystemApi.watchDirectory('/web/proj')
     const received: string[] = []
     const unsubscribe = tauriFilesystemApi.onFileChanged((event) => {
       received.push(event.path)
     })
 
-    mockAcpTransport.emit('acp:fs_changed', {
-      projectId: 'proj-1',
+    handlersOf('proj-1').onDelta?.({
       root: '/web/proj',
       paths: ['/other/proj/file.ts', '/web/proj/src/a.ts']
     })
@@ -790,7 +604,6 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
     // Only the in-root path dispatched (the tree refreshes the project's
     // own directories; foreign paths are not its concern).
     expect(received).toEqual(['/web/proj/src/a.ts'])
-
     unsubscribe()
   })
 
@@ -804,52 +617,136 @@ describe('tauriFilesystemApi fs_changed bridge (web)', () => {
       received.push(event.path)
     })
 
-    mockAcpTransport.emit('acp:fs_changed', {
-      projectId: 'win',
+    handlersOf('win').onDelta?.({
       root: 'C:\\proj\\app',
       paths: ['C:/proj/app/src/main.rs']
     })
 
     expect(received).toEqual(['C:/proj/app/src/main.rs'])
-
     unsubscribe()
   })
 
-  it('ignores malformed payloads (no crash, no dispatch)', async () => {
+  it('ignores malformed deltas (no crash, no dispatch)', async () => {
     await tauriFilesystemApi.watchDirectory('/web/proj')
     const received: string[] = []
     const unsubscribe = tauriFilesystemApi.onFileDeleted((event) => {
       received.push(event.path)
     })
 
-    mockAcpTransport.emit('acp:fs_changed', { projectId: 'proj-1', root: '/web/proj' })
-    mockAcpTransport.emit('acp:fs_changed', null)
-    mockAcpTransport.emit('acp:fs_changed', {
-      projectId: 'proj-1',
-      root: '/web/proj',
-      paths: 'not-an-array'
-    })
+    handlersOf('proj-1').onDelta?.({ root: '/web/proj' })
+    handlersOf('proj-1').onDelta?.(null)
+    handlersOf('proj-1').onDelta?.({ root: '/web/proj', paths: 'not-an-array' })
 
     expect(received).toEqual([])
-
     unsubscribe()
   })
 
-  it('does not subscribe on Tauri (desktop uses the native watcher)', () => {
-    mockIsTauriContext.mockReturnValue(true)
-    // Reset the call log so ONLY this test's subscription is observed.
-    mockAcpTransport.onEvent.mockClear()
+  it('refreshes every watched directory when a later state replaces the stream', async () => {
+    await tauriFilesystemApi.watchDirectory('/web/proj')
+    await tauriFilesystemApi.watchDirectory('/web/proj/src')
+    const received: string[] = []
+    const unsubscribe = tauriFilesystemApi.onFileChanged((event) => {
+      received.push(event.path)
+    })
 
-    const unsubscribe = tauriFilesystemApi.onFileChanged(() => {})
+    // The first state only confirms the watch.
+    handlersOf('proj-1').onState({ root: '/web/proj' })
+    expect(received).toEqual([])
 
-    // The desktop posture must not register the WS bridge — the native
-    // tauri-plugin-fs watcher owns change events there.
-    expect(
-      (mockAcpTransport.onEvent.mock.calls ?? []).some(
-        (call: unknown[]) => call[0] === 'acp:fs_changed'
-      )
-    ).toBe(false)
-
+    // A second one (reconnect, lost delta, host restart): changes may be missed.
+    handlersOf('proj-1').onState({ root: '/web/proj' })
+    expect(received.sort()).toEqual(['/web/proj/.', '/web/proj/src/.'])
     unsubscribe()
+  })
+
+  it('re-arms a still-wanted directory with backoff after the host ended its watch', async () => {
+    vi.useFakeTimers()
+    try {
+      await tauriFilesystemApi.watchDirectory('/web/proj')
+      await tauriFilesystemApi.watchDirectory('/web/proj/src')
+      handlersOf('proj-1').onState({ root: '/web/proj' })
+      expect(subscriptions).toHaveLength(1)
+
+      handlersOf('proj-1').onDelta?.({ ended: true, reason: 'project_unavailable' })
+      expect(live('proj-1')).toHaveLength(0)
+      await tauriFilesystemApi.unwatchDirectory('/web/proj/src') // no longer wanted
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(subscriptions).toHaveLength(2)
+      expect(live('proj-1')).toHaveLength(1)
+
+      // Re-armed and confirmed: nothing further is scheduled.
+      handlersOf('proj-1').onState({ root: '/web/proj' })
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(subscriptions).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries a refused watch with growing delays and gives up after three tries', async () => {
+    vi.useFakeTimers()
+    try {
+      await tauriFilesystemApi.watchDirectory('/web/proj')
+      const refuse = (): void => handlersOf('proj-1').onRefused?.({ code: 'not_found' })
+
+      refuse()
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(subscriptions).toHaveLength(2)
+      refuse()
+      await vi.advanceTimersByTimeAsync(9_000)
+      expect(subscriptions).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(subscriptions).toHaveLength(3)
+      refuse()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(subscriptions).toHaveLength(4)
+      refuse()
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(subscriptions).toHaveLength(4)
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          source: expect.stringContaining('startProjectFsWatch')
+        })
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('watching another directory before the re-arm keeps the lost directories claimed', async () => {
+    vi.useFakeTimers()
+    try {
+      await tauriFilesystemApi.watchDirectory('/web/proj')
+      await tauriFilesystemApi.watchDirectory('/web/proj/src')
+      handlersOf('proj-1').onDelta?.({ ended: true, reason: 'project_unavailable' })
+      expect(subscriptions).toHaveLength(1)
+
+      // A new directory of the same project is watched before the retry fires.
+      await tauriFilesystemApi.watchDirectory('/web/proj/lib')
+      expect(subscriptions).toHaveLength(2)
+
+      // Unwatching it must NOT release the project: the two lost directories
+      // are still mounted and were adopted into the active bookkeeping.
+      await tauriFilesystemApi.unwatchDirectory('/web/proj/lib')
+      expect(live('proj-1')).toHaveLength(1)
+
+      // No retry is left to fire, and releasing the rest drops the watch.
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(subscriptions).toHaveLength(2)
+      await tauriFilesystemApi.unwatchDirectory('/web/proj')
+      await tauriFilesystemApi.unwatchDirectory('/web/proj/src')
+      expect(live('proj-1')).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not watch on Tauri (desktop uses the native watcher)', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+
+    await tauriFilesystemApi.watchDirectory('/web/proj')
+
+    expect(mockAcpTransport.watches.subscribe).not.toHaveBeenCalled()
   })
 })

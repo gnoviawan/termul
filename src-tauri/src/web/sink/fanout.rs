@@ -231,20 +231,9 @@ impl WsRelaySink {
         }
     }
 
-    /// Push an event to one client according to its tier. A full channel
-    /// drops a LOSSY event (a `gap` frame follows) and closes the connection
-    /// for any other tier; a gone peer unregisters the client from fan-out.
-    pub(super) fn enqueue(&self, client_id: ClientId, se: SequencedEvent, tier: ReliabilityTier) {
-        let dead_sids = {
-            let mut clients = self.clients.lock();
-            self.push_in(&mut clients, client_id, se, tier)
-        };
-        if let Some(sids) = dead_sids {
-            self.remove_client_from_session_subs(client_id, &sids);
-        }
-    }
-
-    /// [`Self::enqueue`] against an already-locked client map. Returns the
+    /// Push an event to one client according to its tier, against the locked
+    /// client map: a full channel drops a LOSSY event (a `gap` frame follows) and
+    /// closes the connection for any other tier. Returns the
     /// removed client's sessions when the peer is gone or overflowed (the
     /// caller then clears the reverse index, after releasing `clients`).
     fn push_in(
@@ -433,17 +422,12 @@ impl EventSink for WsRelaySink {
                         self.release_agent_tickets(&crate::acp::AgentId(agent_id.to_string()));
                     }
                 }
-                // Agent roster events go to the `agents` watch. The rest of
-                // the agent-level events (`browser_open_request`,
-                // `worktree_branch_renamed`) are still seq=0, sid=null events
-                // outside every session log, delivered to ALL connected
-                // clients with ≥1 session.
+                // Agent-level events (no session) go to a watch; nothing leaves
+                // the relay as a `seq = 0` event.
                 if !self.route_agent_event(type_, &event.payload) {
-                    let se = SequencedEvent::new(None, 0, type_, event.payload.clone());
-                    let targets: Vec<ClientId> = self.clients.lock().keys().copied().collect();
-                    for client_id in targets {
-                        self.enqueue(client_id, se.clone(), tier);
-                    }
+                    warn!(
+                        "[relay] dropped agent-level event `{type_}`: no watch carries it and the relay sends no seq = 0 event"
+                    );
                 }
             }
         }

@@ -22,7 +22,8 @@ function setup(held: { agents?: string[]; connected?: string[] } = {}) {
     _onAgentSpawned: vi.fn(),
     _onAgentCrashed: vi.fn(),
     _onAgentError: vi.fn(),
-    _onAgentDisconnected: vi.fn()
+    _onAgentDisconnected: vi.fn(),
+    _onBrowserOpenRequest: vi.fn()
   }
   let handlers: WatchHandlers<WsAgentSummary[], AgentsWatchDelta> | null = null
   const watches = {
@@ -57,6 +58,21 @@ describe('attachAgentRosterWatch', () => {
     expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'a1', reason: 'killed' })
     expect(toastError).toHaveBeenCalledWith('died')
     expect(toastError).toHaveBeenCalledWith('oops')
+  })
+
+  it('routes a browser_open_request delta to the dialog reducer, not the roster', () => {
+    const { state, handlers } = setup()
+    handlers().onDelta?.({
+      event: 'browser_open_request',
+      payload: { agentId: 'a1', url: 'https://auth.example/x' }
+    })
+
+    expect(state._onBrowserOpenRequest).toHaveBeenCalledWith({
+      agentId: 'a1',
+      url: 'https://auth.example/x'
+    })
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
+    expect(state._onAgentDisconnected).not.toHaveBeenCalled()
   })
 
   it('reconciles the full state: spawns the unknown, disconnects the connected agent the host dropped', () => {

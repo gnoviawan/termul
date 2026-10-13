@@ -1,11 +1,14 @@
 //! Where the relay hands non-log state to the watch hub: index changes the
 //! relay itself sees (session lifecycle, titles, switches) and agent
-//! lifecycle events. The history nudge and the roster events are not sent as
-//! `seq = 0` events any more (`worktree_branch_renamed` itself still is).
+//! lifecycle events. None of them is sent as a `seq = 0` event: the relay sends
+//! no such event except the `auth_required` handshake frame.
 
 use serde_json::Value;
 
-use crate::web::watch::{publish_agent_event, publish_chat_history, AGENT_ROSTER_EVENTS};
+use crate::web::watch::{
+    publish_agent_event, publish_chat_history, publish_worktree_branch_renamed,
+    AGENT_ROSTER_EVENTS, AGENT_TRANSIENT_EVENTS,
+};
 
 use super::WsRelaySink;
 
@@ -29,9 +32,6 @@ impl WsRelaySink {
                     // marker mutates last_seq/last_activity_at, so it changes
                     // the index like a title does.
                     | "agent_switch"
-                    // Story 16 (CAP-5): a worktree branch rename rewrites
-                    // `worktree_branch` on every session of that worktree.
-                    | "worktree_branch_renamed"
             )
         {
             let changed: Vec<&str> = sid.into_iter().collect();
@@ -39,15 +39,21 @@ impl WsRelaySink {
         }
     }
 
-    /// Agent-level lifecycle events (`agent_spawned`, `agent_crashed`,
-    /// `agent_error`, `agent_disconnected`, no session) go to the `agents`
-    /// watch. Returns `true` when the event was one of them and has been
-    /// handed to the hub (the caller must not also fan it out as `seq = 0`).
+    /// Agent-level events (no session) go to a watch, never out as `seq = 0`:
+    /// lifecycle events (`agent_spawned`, `agent_crashed`, `agent_error`,
+    /// `agent_disconnected`) and `browser_open_request` to the `agents` watch,
+    /// `worktree_branch_renamed` to the `chat_history` watch (it rewrites
+    /// `worktree_branch` on the sessions of that worktree). Returns `true` when
+    /// the event was one of them and has been handed to the hub.
     pub(super) fn route_agent_event(&self, type_: &str, payload: &Value) -> bool {
-        if !AGENT_ROSTER_EVENTS.contains(&type_) {
-            return false;
+        if AGENT_ROSTER_EVENTS.contains(&type_) || AGENT_TRANSIENT_EVENTS.contains(&type_) {
+            publish_agent_event(self, type_, payload);
+            return true;
         }
-        publish_agent_event(self, type_, payload);
-        true
+        if type_ == "worktree_branch_renamed" {
+            publish_worktree_branch_renamed(self, payload);
+            return true;
+        }
+        false
     }
 }

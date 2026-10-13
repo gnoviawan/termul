@@ -163,30 +163,16 @@ async fn ws_relay_sink_delivers_events_in_order() {
         "acp:message_chunk",
         &TestPayload::new("a1", "sess-1", "second"),
     );
-    fan_out(
-        &sinks,
-        None,
-        "acp:browser_open_request",
-        &TestPayload::new("a1", "sess-1", "third"),
-    );
 
-    // Lossy and reliable events share the channel in emission order;
-    // reliable browser_open_request is last.
     let drained = drain_rx(&mut rx);
-    assert_eq!(drained.len(), 3, "exactly three events were delivered");
-    // Session-scoped events get monotonic seq; agent-level gets seq=0.
+    assert_eq!(drained.len(), 2, "exactly two events were delivered");
+    // Session-scoped events get a monotonic seq.
     assert_eq!(drained[0].type_, "message_chunk");
     assert_eq!(drained[0].sid.as_deref(), Some("sess-1"));
     assert_eq!(drained[0].seq, 1);
     assert_eq!(drained[0].payload["message"], "first");
     assert_eq!(drained[1].seq, 2);
     assert_eq!(drained[1].payload["message"], "second");
-    assert_eq!(drained[2].type_, "browser_open_request");
-    assert_eq!(drained[2].seq, 0);
-    assert!(
-        drained[2].sid.is_none(),
-        "agent-level event must carry no sid"
-    );
     // camelCase wire shape is preserved end-to-end (AC3).
     assert_eq!(drained[0].payload["agentId"], "a1");
     assert_eq!(drained[0].payload["sessionId"], "sess-1");
@@ -770,10 +756,9 @@ async fn agent_roster_watch_needs_no_session_subscription() {
     assert_eq!(watch_deltas(&mut watch_rx).len(), 1);
 }
 
-/// The other agent-level events keep their `seq = 0` delivery until they get a
-/// watch of their own, and never reach the `agents` watch.
+/// A browser-open request is an `agents` delta, never a session event.
 #[tokio::test]
-async fn other_agent_level_events_still_fan_out_as_seq_zero() {
+async fn browser_open_request_reaches_the_agents_watch_only() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
     let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
@@ -783,11 +768,11 @@ async fn other_agent_level_events_still_fan_out_as_seq_zero() {
         type_: "acp:browser_open_request",
         payload: json!({"agentId": "a-1"}),
     });
-    let drained = drain_rx(&mut rx);
-    assert_eq!(drained.len(), 1);
-    assert_eq!(drained[0].type_, "browser_open_request");
-    assert_eq!(drained[0].seq, 0);
-    assert!(watch_deltas(&mut watch_rx).is_empty(), "not a roster event");
+    assert!(drain_rx(&mut rx).is_empty(), "no session event leaves the relay");
+    let deltas = watch_deltas(&mut watch_rx);
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0]["event"], "browser_open_request");
+    assert_eq!(deltas[0]["payload"]["agentId"], "a-1");
 }
 
 /// CAP-2: with host persistence attached, session lifecycle events publish a

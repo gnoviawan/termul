@@ -21,12 +21,13 @@ import type {
 } from '@shared/types/ipc.types'
 import { scopedKey, scopeOf } from '@shared/types/persistence.types'
 import {
+  type StoreWatchState,
   WS_ERROR_CODES,
   type WsRequest,
   type WsRequestType
 } from '@shared/types/web-protocol.types'
 import { randomUUID } from '@/lib/uuid'
-import { resolveWsUrl } from './acp-transport'
+import { getAcpTransport, resolveWsUrl } from './acp-transport'
 import { HANDSHAKE_TIMEOUT_MS } from './acp-transport/ws-transport-timing'
 import { findUnresolvedCommand, openCommand, resolveCommand } from './command-journal'
 import { logFrontendError } from './log-api'
@@ -665,4 +666,43 @@ export function createWebPersistenceApi(opts?: {
       }
     }
   }
+}
+
+/** What a store key holds, as a watch reports it (the stored envelope is unwrapped). */
+export interface StoreKeyChange<T = unknown> {
+  /** `false` when the key is absent (never written, or deleted). */
+  exists: boolean
+  data?: T
+}
+
+function changeOf<T>(state: StoreWatchState | null | undefined): StoreKeyChange<T> {
+  if (!state?.exists) return { exists: false }
+  const stored = state.value as { _version?: unknown; data?: T } | null
+  return stored && typeof stored === 'object' && 'data' in stored
+    ? { exists: true, data: stored.data }
+    : { exists: true, data: state.value as T }
+}
+
+/**
+ * Watch one store key: `onChange` gets what the key holds now (once the socket
+ * is up, and again after a reconnect or a lost delta) and after every write or
+ * delete. `key` is a full scoped key: `shared/...` (changes from any device) or
+ * `device/<own deviceId>/...`. The host refuses any other key
+ * (`STORE_KEY_SCOPE`). Returns the unsubscribe. A no-op on the desktop, which
+ * has no host watch.
+ */
+export function watchStoreKey<T = unknown>(
+  key: string,
+  onChange: (change: StoreKeyChange<T>) => void
+): () => void {
+  const watches = getAcpTransport().watches
+  if (!watches) return () => undefined
+  return watches.subscribe<StoreWatchState, StoreWatchState>(
+    'store',
+    {
+      onState: (state) => onChange(changeOf<T>(state)),
+      onDelta: (delta) => onChange(changeOf<T>(delta))
+    },
+    key
+  )
 }
