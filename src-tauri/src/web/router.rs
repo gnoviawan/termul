@@ -95,8 +95,6 @@ impl AppState {
             pty: parts.pty,
             relay: parts.relay,
             registry: parts.registry,
-            registry_persistence: None,
-            projects_file: None,
             history_mode,
             workspace_manifest: parts.workspace_manifest,
             acp_catalog: parts.acp_catalog,
