@@ -45,7 +45,12 @@ const { sshApi, terminalApi, handlers } = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/lib/api', () => ({ sshApi, terminalApi }))
+// loadProfiles starts the cross-device profile sync, which watches the store.
+vi.mock('@/lib/api', () => ({
+  sshApi,
+  terminalApi,
+  persistenceApi: { watchShared: vi.fn(() => () => {}) }
+}))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),

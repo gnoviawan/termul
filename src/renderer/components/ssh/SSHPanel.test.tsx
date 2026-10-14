@@ -18,7 +18,12 @@ const { sshApi, terminalApi, tauriRef, toastMock } = vi.hoisted(() => ({
   toastMock: { success: vi.fn(), info: vi.fn(), error: vi.fn() }
 }))
 
-vi.mock('@/lib/api', () => ({ sshApi, terminalApi }))
+// loadProfiles starts the cross-device profile sync, which watches the store.
+vi.mock('@/lib/api', () => ({
+  sshApi,
+  terminalApi,
+  persistenceApi: { watchShared: vi.fn(() => () => {}) }
+}))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 // Mutable: defaults to desktop; web tests flip it.
 vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
