@@ -74,7 +74,7 @@ export function ExplorerColumn({
                   <div
                     className={cn(
                       'h-full bg-background rounded-xl overflow-hidden flex flex-col border border-border',
-                      !showFileColumn && 'w-64',
+                      !showFileColumn && 'w-80',
                       // Revamped frame: no gap before the main card, so keep the gutter here.
                       sidePanel && !showFileColumn && 'mr-2'
                     )}

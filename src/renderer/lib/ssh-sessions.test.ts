@@ -1,4 +1,5 @@
 import type {
+  SFTPTransferProgress,
   SSHHostKeyPrompt,
   SSHProfile,
   SSHSessionEndedEvent,
@@ -15,6 +16,7 @@ const { sshApi, terminalApi, handlers } = vi.hoisted(() => {
     progress?: (e: SSHSessionProgressEvent) => void
     hostKey?: (p: SSHHostKeyPrompt) => void
     ended?: (e: SSHSessionEndedEvent) => void
+    transfer?: (p: SFTPTransferProgress) => void
   } = {}
   return {
     handlers,
@@ -35,6 +37,10 @@ const { sshApi, terminalApi, handlers } = vi.hoisted(() => {
       }),
       onSessionEnded: vi.fn((cb) => {
         handlers.ended = cb
+        return () => {}
+      }),
+      onTransferProgress: vi.fn((cb) => {
+        handlers.transfer = cb
         return () => {}
       })
     },
@@ -118,7 +124,8 @@ beforeEach(() => {
     workspaceOpen: false,
     activeTab: SSH_HOSTS_TAB,
     selectedProfileId: null,
-    pendingClose: null
+    pendingClose: null,
+    transfers: []
   })
   startSSHSessionEvents()
 })
@@ -216,6 +223,23 @@ describe('openSSHSession', () => {
 })
 
 describe('backend events', () => {
+  it('records SFTP transfer progress for the Transfers tray', () => {
+    const progress: SFTPTransferProgress = {
+      connectionId: 'c1',
+      remotePath: '/home/u/a.txt',
+      localPath: '/tmp/a.txt',
+      bytesTransferred: 512,
+      totalBytes: 2048,
+      direction: 'upload',
+      status: 'in-progress'
+    }
+    handlers.transfer?.(progress)
+    handlers.transfer?.({ ...progress, bytesTransferred: 2048, status: 'completed' })
+    expect(useSSHStore.getState().transfers).toEqual([
+      { ...progress, bytesTransferred: 2048, status: 'completed' }
+    ])
+  })
+
   it('tracks progress only while connecting', async () => {
     sshApi.openSession.mockReturnValue(new Promise(() => {}))
     const tabId = openSSHSession('p1')

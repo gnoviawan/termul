@@ -7,11 +7,13 @@ import {
   Eye,
   EyeOff,
   Pencil,
+  Pin,
   Plus,
   Server,
   Terminal,
   Trash2
 } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -130,6 +132,9 @@ export function SSHPanel({
         <div className="flex items-center gap-1">
           {headerLead}
           <span className="label-panel">SSH</span>
+          {profiles.length > 0 && (
+            <span className="text-2xs tabular-nums text-muted-foreground">{profiles.length}</span>
+          )}
           {/* Shows/hides user@host:port on each row (privacy). */}
           <button
             type="button"
@@ -177,25 +182,33 @@ export function SSHPanel({
 
       <div className="flex-1 overflow-y-auto px-2 pb-1">
         {profiles.length === 0 ? (
-          <div className="flex flex-col gap-2 px-2 pb-2" data-testid="ssh-empty-state">
-            <p className="text-xs text-secondary-foreground">No SSH hosts yet.</p>
+          <div className="flex flex-col gap-2.5 px-2 pb-2 pt-1" data-testid="ssh-empty-state">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-foreground">No SSH hosts yet.</p>
+              <p className="text-xs text-muted-foreground text-pretty">
+                Add a server to open a terminal on it.
+              </p>
+            </div>
             <div className="flex flex-wrap items-center gap-1">
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="xs"
                 onClick={() => dialogs.openForm(null)}
-                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-popover px-2.5 text-xs font-medium text-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                <Plus size={12} aria-hidden="true" />
+                <Plus aria-hidden="true" />
                 Add host
-              </button>
+              </Button>
               {desktop && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
                   onClick={() => void handleImport()}
-                  className="inline-flex h-7 items-center rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   Import ~/.ssh/config
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -210,8 +223,11 @@ export function SSHPanel({
                   <ContextMenuTrigger asChild>
                     <div
                       className={cn(
-                        'group relative flex h-10 cursor-pointer items-center gap-2.5 rounded-md px-2 transition-colors duration-150 ease-out',
-                        isSelected ? 'keycap text-foreground' : 'hover:bg-foreground/[0.03]',
+                        'group relative flex cursor-pointer items-center gap-2.5 rounded-md px-2 transition-colors duration-150 ease-out',
+                        showAddresses ? 'h-10' : 'h-8',
+                        isSelected
+                          ? 'keycap text-foreground'
+                          : 'hover:bg-foreground/[0.03] active:bg-foreground/[0.06]',
                         focusableRows && FOCUS_RING_CLASS
                       )}
                       data-selected={isSelected ? 'true' : undefined}
@@ -226,8 +242,17 @@ export function SSHPanel({
                     >
                       <SSHHostLamp state={hostState} />
                       <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-xs font-medium text-foreground">
-                          {profile.name}
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-xs font-medium text-foreground">
+                            {profile.name}
+                          </span>
+                          {profile.favorite && (
+                            <Pin
+                              size={10}
+                              className="shrink-0 text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                          )}
                         </span>
                         {showAddresses && (
                           <span className="truncate font-mono text-2xs text-muted-foreground">
@@ -239,6 +264,7 @@ export function SSHPanel({
                           the name keeps the row's width (no layout shift). */}
                       <SSHHostStateWord
                         state={hostState}
+                        sessionCount={hostSessions.length}
                         className="shrink-0 pointer-fine:group-hover:invisible group-focus-within:invisible"
                       />
                       <div className="absolute right-2 flex items-center gap-0.5 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Download, Eye, EyeOff, Plus, Search, Server, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
 import {
   BAND_FOCUS_CLASS,
   INNER_FIELD_FOCUS_CLASS,
@@ -152,122 +153,127 @@ export function SSHHostsView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <div
-          className={cn(
-            'flex h-9 min-w-48 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-3',
-            BAND_FOCUS_CLASS
-          )}
-        >
-          <Search size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-          <input
-            ref={searchRef}
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape' && query) {
-                e.preventDefault()
-                setQuery('')
-              } else if (e.key === 'ArrowDown') {
-                e.preventDefault()
-                listRef.current?.querySelector<HTMLElement>('[data-ssh-host-button]')?.focus()
-              }
-            }}
-            placeholder="Search by name, address, group or tag"
-            aria-label="Search hosts"
+      <div className="border-b border-border px-6 py-3">
+        <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-2">
+          <div
             className={cn(
-              'h-full min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground pointer-coarse:text-base',
-              INNER_FIELD_FOCUS_CLASS
+              'flex h-9 min-w-48 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-3',
+              BAND_FOCUS_CLASS
             )}
-          />
-          {query && (
-            <button
-              type="button"
-              className={cn(QUIET_ICON_BUTTON_CLASS, 'size-6')}
-              onClick={() => {
-                setQuery('')
-                searchRef.current?.focus()
+          >
+            <Search size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && query) {
+                  e.preventDefault()
+                  setQuery('')
+                } else if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  listRef.current?.querySelector<HTMLElement>('[data-ssh-host-button]')?.focus()
+                }
               }}
-              aria-label="Clear search"
-            >
-              <X size={12} />
-            </button>
-          )}
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="w-9 px-0"
-          onClick={toggleShowAddresses}
-          aria-label="Show addresses"
-          aria-pressed={showAddresses}
-          title={showAddresses ? 'Hide usernames and addresses' : 'Show usernames and addresses'}
-        >
-          {showAddresses ? <Eye /> : <EyeOff />}
-        </Button>
-        {desktop && (
-          <Button type="button" size="sm" variant="outline" onClick={onImport}>
-            <Download />
-            Import
+              placeholder="Search by name, address, group or tag"
+              aria-label="Search hosts"
+              className={cn(
+                'h-full min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground pointer-coarse:text-base',
+                INNER_FIELD_FOCUS_CLASS
+              )}
+            />
+            {query ? (
+              <button
+                type="button"
+                className={cn(QUIET_ICON_BUTTON_CLASS, 'size-6')}
+                onClick={() => {
+                  setQuery('')
+                  searchRef.current?.focus()
+                }}
+                aria-label="Clear search"
+              >
+                <X size={12} />
+              </button>
+            ) : (
+              <span aria-hidden="true" title="Press / to search">
+                <Kbd className="px-1.5 py-px font-mono">/</Kbd>
+              </span>
+            )}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="w-9 px-0"
+            onClick={toggleShowAddresses}
+            aria-label="Show addresses"
+            aria-pressed={showAddresses}
+            title={showAddresses ? 'Hide usernames and addresses' : 'Show usernames and addresses'}
+          >
+            {showAddresses ? <Eye /> : <EyeOff />}
           </Button>
-        )}
-        <Button type="button" size="sm" onClick={onNewHost}>
-          <Plus />
-          New host
-        </Button>
+          {desktop && (
+            <Button type="button" size="sm" variant="outline" onClick={onImport}>
+              <Download />
+              Import
+            </Button>
+          )}
+          <Button type="button" size="sm" onClick={onNewHost}>
+            <Plus />
+            New host
+          </Button>
+        </div>
       </div>
 
       {!desktop && (
-        <p className="border-b border-border bg-card px-4 py-2 text-xs text-muted-foreground">
+        <p className="border-b border-border bg-card px-6 py-2 text-center text-xs text-muted-foreground">
           You can manage hosts here. Connecting to them works in the Termul desktop app.
         </p>
       )}
 
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {sections.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-12 text-center" role="status">
-            <p className="text-sm text-foreground">No hosts match “{query.trim()}”.</p>
-            <Button type="button" size="xs" variant="ghost" onClick={() => setQuery('')}>
-              Show all hosts
-            </Button>
-          </div>
-        ) : (
-          sections.map((section) => (
-            <section
-              key={section.key}
-              aria-labelledby={`ssh-section-${section.key}`}
-              className="pb-2"
-            >
-              <h3
-                id={`ssh-section-${section.key}`}
-                className="px-2.5 pb-1 pt-2 text-2xs font-semibold uppercase tracking-wider text-muted-foreground"
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+          {sections.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-12 text-center" role="status">
+              <p className="text-sm text-foreground">No hosts match “{query.trim()}”.</p>
+              <Button type="button" size="xs" variant="ghost" onClick={() => setQuery('')}>
+                Show all hosts
+              </Button>
+            </div>
+          ) : (
+            sections.map((section) => (
+              <section
+                key={section.key}
+                aria-labelledby={`ssh-section-${section.key}`}
+                className="flex flex-col gap-2"
               >
-                {section.title}{' '}
-                <span className="ml-1 font-normal tabular-nums">{section.hosts.length}</span>
-              </h3>
-              <ul className="flex flex-col gap-0.5">
-                {section.hosts.map((profile) => {
-                  const hostSessions = sessionsFor(profile.id)
-                  return (
-                    <SSHHostRow
-                      key={profile.id}
-                      profile={profile}
-                      state={resolveSSHHostState(hostSessions)}
-                      sessionCount={hostSessions.length}
-                      selected={selectedProfileId === profile.id}
-                      canConnect={desktop}
-                      showAddress={showAddresses}
-                      actions={actions}
-                      onArrow={moveFocus}
-                    />
-                  )
-                })}
-              </ul>
-            </section>
-          ))
-        )}
+                <h3 id={`ssh-section-${section.key}`} className="label-panel px-2.5">
+                  {section.title}{' '}
+                  <span className="ml-1 font-normal tabular-nums">{section.hosts.length}</span>
+                </h3>
+                <ul className="flex flex-col gap-0.5">
+                  {section.hosts.map((profile) => {
+                    const hostSessions = sessionsFor(profile.id)
+                    return (
+                      <SSHHostRow
+                        key={profile.id}
+                        profile={profile}
+                        state={resolveSSHHostState(hostSessions)}
+                        sessionCount={hostSessions.length}
+                        selected={selectedProfileId === profile.id}
+                        canConnect={desktop}
+                        showAddress={showAddresses}
+                        actions={actions}
+                        onArrow={moveFocus}
+                      />
+                    )
+                  })}
+                </ul>
+              </section>
+            ))
+          )}
+        </div>
       </div>
     </div>
   )

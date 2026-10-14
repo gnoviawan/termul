@@ -42,7 +42,7 @@ describe('ExplorerColumn', () => {
     render(<ExplorerColumn activeProject={project} ssh={makeSsh('session')} sidePanel={slot} />)
     const ssh = await screen.findByTestId('ssh-explorer')
     expect(screen.queryByTestId('side-panel-slot')).toBeNull()
-    expect(ssh.parentElement).toHaveClass('w-64')
+    expect(ssh.parentElement).toHaveClass('w-80')
   })
 
   it('shows neither column on the Hosts tab', () => {

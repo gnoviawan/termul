@@ -139,7 +139,7 @@ describe('SSHFileEditor unsaved-changes confirm and the overlay back stack', () 
   })
 
   describe('mobile shell', () => {
-    it('registers only the confirm: system back takes Continue Editing once, the file stays dirty and open', async () => {
+    it('registers only the confirm: system back takes Keep editing once, the file stays dirty and open', async () => {
       seedFile(true)
       render(<SSHFileEditor connectionId="conn-1" />)
 
@@ -149,14 +149,14 @@ describe('SSHFileEditor unsaved-changes confirm and the overlay back stack', () 
       expect(readOverlaySentinelDepth(history.state)).toBe(0)
 
       pressClose()
-      expect(screen.getByText('Unsaved Changes')).toBeInTheDocument()
+      expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
       expect(stackIds()).toHaveLength(1)
       expect(stackIds()[0]).toMatch(/^ssh-unsaved-changes-confirm:/)
       await waitForSentinelDepth(1)
 
       await pressSystemBack()
 
-      await waitFor(() => expect(screen.queryByText('Unsaved Changes')).not.toBeInTheDocument())
+      await waitFor(() => expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument())
       // Nothing was saved or discarded.
       const { editingFile, editingContent } = useSSHStore.getState()
       expect(editingFile?.name).toBe('notes.txt')
@@ -168,13 +168,13 @@ describe('SSHFileEditor unsaved-changes confirm and the overlay back stack', () 
       expect(readOverlaySentinelDepth(history.state)).toBe(0)
     })
 
-    it('a close by Continue Editing consumes the sentinel', async () => {
+    it('a close by Keep editing consumes the sentinel', async () => {
       seedFile(true)
       render(<SSHFileEditor connectionId="conn-1" />)
       pressClose()
       await waitForSentinelDepth(1)
 
-      fireEvent.click(screen.getByRole('button', { name: 'Continue Editing' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
 
       await waitForSentinelDepth(0)
       expect(stackIds()).toEqual([])
@@ -239,8 +239,8 @@ describe('SSHFileEditor unsaved-changes confirm and the overlay back stack', () 
       render(<SSHFileEditor connectionId="conn-1" />)
 
       pressClose()
-      expect(screen.getByText('Unsaved Changes')).toBeInTheDocument()
-      fireEvent.click(screen.getByRole('button', { name: 'Continue Editing' }))
+      expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
       await settleOverlayBackStack()
 
       expect(stackIds()).toEqual([])

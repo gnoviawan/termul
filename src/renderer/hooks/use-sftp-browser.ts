@@ -128,6 +128,18 @@ export function useSftpBrowser(connectionId: string | null) {
     else void openHome()
   }, [currentPath, loadDirectory, openHome])
 
+  /** Re-list an expanded folder in place (after an upload into it), keeping the tree open. */
+  const reloadChildren = useCallback(
+    async (path: string) => {
+      if (!connectionId) return
+      const rootAtStart = rootRequest.current
+      const result = await sshApi.sftpListDir(connectionId, path)
+      if (session !== activeSession.current || rootAtStart !== rootRequest.current) return
+      if (result.success) setChildEntries((prev) => new Map(prev).set(path, result.data))
+    },
+    [connectionId, session]
+  )
+
   return {
     connectionId,
     currentPath,
@@ -140,7 +152,8 @@ export function useSftpBrowser(connectionId: string | null) {
     loadDirectory,
     openHome,
     toggleDirectory,
-    refresh
+    refresh,
+    reloadChildren
   }
 }
 

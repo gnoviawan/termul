@@ -1,4 +1,5 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { RefreshCw, WifiOff } from '@/components/icons'
 import { ConnectedTerminal } from '@/components/terminal/ConnectedTerminal'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,9 @@ interface SSHSessionViewProps {
   active: boolean
   onEditHost: (profile: SSHProfile) => void
 }
+
+const BANNER_ENTER = { duration: 0.2, ease: [0.23, 1, 0.32, 1] as const }
+const BANNER_EXIT = { duration: 0.15, ease: [0.23, 1, 0.32, 1] as const }
 
 /** Shown above the kept output once the shell has ended. */
 function EndedBanner({ session, profile }: { session: SSHSession; profile: SSHProfile }) {
@@ -70,13 +74,28 @@ export function SSHSessionView({
   const editing = active && editingFile !== null && editingFile.connectionId === session.attemptId
   const ptyId = session.ptyId
 
+  const reducedMotion = useReducedMotion() ?? false
+
   if (!ptyId) {
     return <SSHConnectionPanel session={session} profile={profile} onEditHost={onEditHost} />
   }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <EndedBanner session={session} profile={profile} />
+      {/* A tab that mounts already ended shows the banner without motion. */}
+      <AnimatePresence initial={false}>
+        {session.ended && (
+          <motion.div
+            key="ended"
+            initial={reducedMotion ? { opacity: 0 } : { opacity: 0, transform: 'translateY(-4px)' }}
+            animate={{ opacity: 1, transform: 'translateY(0px)' }}
+            exit={{ opacity: 0, transition: BANNER_EXIT }}
+            transition={BANNER_ENTER}
+          >
+            <EndedBanner session={session} profile={profile} />
+          </motion.div>
+        )}
+      </AnimatePresence>
       {editing && (
         <div className="min-h-0 flex-1">
           <SSHFileEditor connectionId={session.attemptId} />

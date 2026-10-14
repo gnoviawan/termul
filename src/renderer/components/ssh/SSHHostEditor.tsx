@@ -1,7 +1,7 @@
 import type { SSHAuthMethod, SSHKeyFileInfo, SSHProfile } from '@shared/types/ssh.types'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Eye, EyeOff, FolderOpen } from '@/components/icons'
+import { Eye, EyeOff, FolderOpen, Terminal } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -28,10 +28,12 @@ import {
   type HostFormField,
   type HostFormValues,
   initialHostFormValues,
+  parsePort,
   splitAddress,
   toProfile,
   validateHostForm
 } from '@/lib/ssh-host-form'
+import { addressLabel } from '@/lib/ssh-messages'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHProfiles } from '@/stores/ssh-store'
@@ -63,6 +65,22 @@ function keyProblem(info: SSHKeyFileInfo): string | null {
         ? 'This is the public key. Choose the matching file without .pub.'
         : 'This file is not a private key.'
   }
+}
+
+/** A titled block of fields (Connection, Sign-in, Organize). */
+function FieldGroup({
+  title,
+  children
+}: {
+  title: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <fieldset className="min-w-0 space-y-3.5">
+      <legend className="label-panel">{title}</legend>
+      {children}
+    </fieldset>
+  )
 }
 
 function FieldError({ id, message }: { id: string; message?: string }): React.JSX.Element | null {
@@ -235,6 +253,15 @@ export function SSHHostEditor({
   const keyIssue = keyInfo ? keyProblem(keyInfo) : null
   const keyNeedsPassphrase = keyInfo?.status === 'ok' && keyInfo.encrypted
   const knownKey = localKeys.some((k) => k.path === values.privateKeyPath)
+  // Where the session will sign in, as the user types (a pasted user@host:port is split too).
+  const target = splitAddress(values, portEdited)
+  const preview = target.host.trim()
+    ? addressLabel({
+        host: target.host.trim(),
+        port: parsePort(target.port) ?? 22,
+        username: target.username.trim() || 'user'
+      })
+    : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -255,226 +282,242 @@ export function SSHHostEditor({
               ? 'Changes apply to new sessions. Open sessions keep running.'
               : 'Only the address and username are required.'}
           </DialogDescription>
+          <p
+            className="flex min-w-0 items-center gap-1.5 pt-1 font-mono text-xs text-secondary-foreground"
+            aria-live="polite"
+            data-testid="ssh-host-editor-preview"
+          >
+            <Terminal size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+            {preview ? (
+              <span className="truncate">{preview}</span>
+            ) : (
+              <span className="text-muted-foreground">user@host</span>
+            )}
+          </p>
         </DialogHeader>
 
         <form
           id={formId}
           noValidate
-          className="flex-1 space-y-5 overflow-y-auto px-6 py-5"
+          className="flex-1 space-y-7 overflow-y-auto px-6 pb-6 pt-5"
           onSubmit={(e) => {
             e.preventDefault()
             void save(!profile && desktop)
           }}
         >
-          <div className="grid grid-cols-[1fr_6rem] gap-3">
+          <FieldGroup title="Connection">
+            <div className="grid grid-cols-[1fr_6rem] gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor={fieldId('host')} className="text-xs">
+                  Address
+                </Label>
+                <Input
+                  id={fieldId('host')}
+                  ref={(el) => {
+                    fieldRefs.current.host = el
+                  }}
+                  value={values.host}
+                  onChange={(e) => update('host', e.target.value)}
+                  onBlur={() => setValues((prev) => splitAddress(prev, portEdited))}
+                  placeholder="example.com or 192.168.1.10"
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoFocus
+                  aria-invalid={Boolean(errors.host)}
+                  aria-describedby={describe('host')}
+                  className="h-9 font-mono"
+                />
+                <FieldError id={fieldId('host-error')} message={errors.host} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor={fieldId('port')} className="text-xs">
+                  Port
+                </Label>
+                <Input
+                  id={fieldId('port')}
+                  ref={(el) => {
+                    fieldRefs.current.port = el
+                  }}
+                  value={values.port}
+                  onChange={(e) => {
+                    setPortEdited(true)
+                    update('port', e.target.value)
+                  }}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  aria-invalid={Boolean(errors.port)}
+                  aria-describedby={describe('port')}
+                  className="h-9 font-mono tabular-nums"
+                />
+                <FieldError id={fieldId('port-error')} message={errors.port} />
+              </div>
+            </div>
+
             <div className="space-y-1.5">
-              <Label htmlFor={fieldId('host')} className="text-xs">
-                Address
+              <Label htmlFor={fieldId('username')} className="text-xs">
+                Username
               </Label>
               <Input
-                id={fieldId('host')}
+                id={fieldId('username')}
                 ref={(el) => {
-                  fieldRefs.current.host = el
+                  fieldRefs.current.username = el
                 }}
-                value={values.host}
-                onChange={(e) => update('host', e.target.value)}
-                onBlur={() => setValues((prev) => splitAddress(prev, portEdited))}
-                placeholder="example.com or 192.168.1.10"
+                value={values.username}
+                onChange={(e) => update('username', e.target.value)}
+                placeholder="root"
                 autoComplete="off"
                 spellCheck={false}
-                autoFocus
-                aria-invalid={Boolean(errors.host)}
-                aria-describedby={describe('host')}
+                aria-invalid={Boolean(errors.username)}
+                aria-describedby={describe('username')}
                 className="h-9 font-mono"
               />
-              <FieldError id={fieldId('host-error')} message={errors.host} />
+              <FieldError id={fieldId('username-error')} message={errors.username} />
             </div>
+          </FieldGroup>
+
+          <FieldGroup title="Sign-in">
             <div className="space-y-1.5">
-              <Label htmlFor={fieldId('port')} className="text-xs">
-                Port
+              <Label htmlFor={fieldId('auth')} className="text-xs">
+                Authentication
               </Label>
-              <Input
-                id={fieldId('port')}
-                ref={(el) => {
-                  fieldRefs.current.port = el
-                }}
-                value={values.port}
-                onChange={(e) => {
-                  setPortEdited(true)
-                  update('port', e.target.value)
-                }}
-                inputMode="numeric"
-                autoComplete="off"
-                aria-invalid={Boolean(errors.port)}
-                aria-describedby={describe('port')}
-                className="h-9 font-mono tabular-nums"
-              />
-              <FieldError id={fieldId('port-error')} message={errors.port} />
+              <Select
+                value={values.authMethod}
+                onValueChange={(v) => update('authMethod', v as SSHAuthMethod)}
+              >
+                <SelectTrigger id={fieldId('auth')} className="h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="password">Password</SelectItem>
+                  <SelectItem value="key">Private key</SelectItem>
+                  <SelectItem value="agent">SSH agent</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor={fieldId('username')} className="text-xs">
-              Username
-            </Label>
-            <Input
-              id={fieldId('username')}
-              ref={(el) => {
-                fieldRefs.current.username = el
-              }}
-              value={values.username}
-              onChange={(e) => update('username', e.target.value)}
-              placeholder="root"
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={Boolean(errors.username)}
-              aria-describedby={describe('username')}
-              className="h-9 font-mono"
-            />
-            <FieldError id={fieldId('username-error')} message={errors.username} />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor={fieldId('auth')} className="text-xs">
-              Authentication
-            </Label>
-            <Select
-              value={values.authMethod}
-              onValueChange={(v) => update('authMethod', v as SSHAuthMethod)}
-            >
-              <SelectTrigger id={fieldId('auth')} className="h-9">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="password">Password</SelectItem>
-                <SelectItem value="key">Private key</SelectItem>
-                <SelectItem value="agent">SSH agent</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {values.authMethod === 'password' && (
-            <div className="space-y-1.5">
-              <Label htmlFor={fieldId('password')} className="text-xs">
-                Password
-              </Label>
-              <SecretInput
-                id={fieldId('password')}
-                value={values.password}
-                onChange={(v) => update('password', v)}
-                placeholder={profile?.hasStoredPassword ? 'Saved — type to replace' : 'Optional'}
-                describedBy={fieldId('password-help')}
-              />
-              <p id={fieldId('password-help')} className="text-xs text-muted-foreground">
-                {profile?.hasStoredPassword
-                  ? 'Saved in your system keychain. Leave empty to keep it.'
-                  : 'Saved in your system keychain. Leave empty to be asked when you connect.'}
-              </p>
-            </div>
-          )}
-
-          {values.authMethod === 'key' && (
-            <>
+            {values.authMethod === 'password' && (
               <div className="space-y-1.5">
-                <Label htmlFor={fieldId('key')} className="text-xs">
-                  Private key
+                <Label htmlFor={fieldId('password')} className="text-xs">
+                  Password
                 </Label>
-                {localKeys.length > 0 && (
-                  <Select
-                    value={knownKey ? values.privateKeyPath : ''}
-                    onValueChange={(v) => update('privateKeyPath', v)}
-                  >
-                    <SelectTrigger className="h-9" aria-label="Keys found in ~/.ssh">
-                      <SelectValue placeholder="Choose a key from ~/.ssh" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {localKeys.map((key) => (
-                        <SelectItem key={key.path} value={key.path}>
-                          {key.path.split(/[\\/]/).pop()}
-                          {key.keyType ? ` · ${key.keyType}` : ''}
-                          {key.encrypted ? ' · passphrase' : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-                <div className="flex gap-2">
-                  <Input
-                    id={fieldId('key')}
-                    ref={(el) => {
-                      fieldRefs.current.privateKeyPath = el
-                    }}
-                    value={values.privateKeyPath}
-                    onChange={(e) => update('privateKeyPath', e.target.value)}
-                    placeholder="~/.ssh/id_ed25519"
-                    autoComplete="off"
-                    spellCheck={false}
-                    aria-invalid={Boolean(errors.privateKeyPath || keyIssue)}
-                    aria-describedby={fieldId('key-help')}
-                    className="h-9 flex-1 font-mono text-xs md:text-xs"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-9"
-                    onClick={() => void handleBrowseKey()}
-                    disabled={!desktop}
-                  >
-                    <FolderOpen />
-                    Browse
-                  </Button>
-                </div>
-                <div id={fieldId('key-help')}>
-                  {errors.privateKeyPath ? (
-                    <p className="text-xs text-destructive">{errors.privateKeyPath}</p>
-                  ) : keyIssue ? (
-                    <p className="text-xs text-destructive">{keyIssue}</p>
-                  ) : keyInfo?.status === 'ok' ? (
-                    <p className="text-xs text-muted-foreground">
-                      {keyInfo.keyType ?? 'Private key'}
-                      {keyInfo.encrypted ? ', protected by a passphrase.' : ', no passphrase.'}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      OpenSSH or PEM format. The key stays where it is.
-                    </p>
-                  )}
-                </div>
+                <SecretInput
+                  id={fieldId('password')}
+                  value={values.password}
+                  onChange={(v) => update('password', v)}
+                  placeholder={profile?.hasStoredPassword ? 'Saved — type to replace' : 'Optional'}
+                  describedBy={fieldId('password-help')}
+                />
+                <p id={fieldId('password-help')} className="text-xs text-muted-foreground">
+                  {profile?.hasStoredPassword
+                    ? 'Saved in your system keychain. Leave empty to keep it.'
+                    : 'Saved in your system keychain. Leave empty to be asked when you connect.'}
+                </p>
               </div>
+            )}
 
-              {(keyNeedsPassphrase || profile?.hasStoredPassphrase) && (
+            {values.authMethod === 'key' && (
+              <>
                 <div className="space-y-1.5">
-                  <Label htmlFor={fieldId('passphrase')} className="text-xs">
-                    Key passphrase
+                  <Label htmlFor={fieldId('key')} className="text-xs">
+                    Private key
                   </Label>
-                  <SecretInput
-                    id={fieldId('passphrase')}
-                    value={values.passphrase}
-                    onChange={(v) => update('passphrase', v)}
-                    placeholder={
-                      profile?.hasStoredPassphrase ? 'Saved — type to replace' : 'Optional'
-                    }
-                    describedBy={fieldId('passphrase-help')}
-                  />
-                  <p id={fieldId('passphrase-help')} className="text-xs text-muted-foreground">
-                    {profile?.hasStoredPassphrase
-                      ? 'Saved in your system keychain. Leave empty to keep it.'
-                      : 'Saved in your system keychain. Leave empty to be asked when you connect.'}
-                  </p>
+                  {localKeys.length > 0 && (
+                    <Select
+                      value={knownKey ? values.privateKeyPath : ''}
+                      onValueChange={(v) => update('privateKeyPath', v)}
+                    >
+                      <SelectTrigger className="h-9" aria-label="Keys found in ~/.ssh">
+                        <SelectValue placeholder="Choose a key from ~/.ssh" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {localKeys.map((key) => (
+                          <SelectItem key={key.path} value={key.path}>
+                            {key.path.split(/[\\/]/).pop()}
+                            {key.keyType ? ` · ${key.keyType}` : ''}
+                            {key.encrypted ? ' · passphrase' : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <div className="flex gap-2">
+                    <Input
+                      id={fieldId('key')}
+                      ref={(el) => {
+                        fieldRefs.current.privateKeyPath = el
+                      }}
+                      value={values.privateKeyPath}
+                      onChange={(e) => update('privateKeyPath', e.target.value)}
+                      placeholder="~/.ssh/id_ed25519"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-invalid={Boolean(errors.privateKeyPath || keyIssue)}
+                      aria-describedby={fieldId('key-help')}
+                      className="h-9 flex-1 font-mono text-xs md:text-xs"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9"
+                      onClick={() => void handleBrowseKey()}
+                      disabled={!desktop}
+                    >
+                      <FolderOpen />
+                      Browse
+                    </Button>
+                  </div>
+                  <div id={fieldId('key-help')}>
+                    {errors.privateKeyPath ? (
+                      <p className="text-xs text-destructive">{errors.privateKeyPath}</p>
+                    ) : keyIssue ? (
+                      <p className="text-xs text-destructive">{keyIssue}</p>
+                    ) : keyInfo?.status === 'ok' ? (
+                      <p className="text-xs text-muted-foreground">
+                        {keyInfo.keyType ?? 'Private key'}
+                        {keyInfo.encrypted ? ', protected by a passphrase.' : ', no passphrase.'}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        OpenSSH or PEM format. The key stays where it is.
+                      </p>
+                    )}
+                  </div>
                 </div>
-              )}
-            </>
-          )}
 
-          {values.authMethod === 'agent' && (
-            <p className="text-xs text-muted-foreground">
-              Uses the keys loaded in your SSH agent (ssh-agent, Pageant or the Windows OpenSSH
-              agent). Nothing secret is stored by Termul.
-            </p>
-          )}
+                {(keyNeedsPassphrase || profile?.hasStoredPassphrase) && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor={fieldId('passphrase')} className="text-xs">
+                      Key passphrase
+                    </Label>
+                    <SecretInput
+                      id={fieldId('passphrase')}
+                      value={values.passphrase}
+                      onChange={(v) => update('passphrase', v)}
+                      placeholder={
+                        profile?.hasStoredPassphrase ? 'Saved — type to replace' : 'Optional'
+                      }
+                      describedBy={fieldId('passphrase-help')}
+                    />
+                    <p id={fieldId('passphrase-help')} className="text-xs text-muted-foreground">
+                      {profile?.hasStoredPassphrase
+                        ? 'Saved in your system keychain. Leave empty to keep it.'
+                        : 'Saved in your system keychain. Leave empty to be asked when you connect.'}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
 
-          <div className="space-y-4 border-t border-border pt-5">
+            {values.authMethod === 'agent' && (
+              <p className="text-xs text-muted-foreground">
+                Uses the keys loaded in your SSH agent (ssh-agent, Pageant or the Windows OpenSSH
+                agent). Nothing secret is stored by Termul.
+              </p>
+            )}
+          </FieldGroup>
+
+          <FieldGroup title="Organize">
             <div className="space-y-1.5">
               <Label htmlFor={fieldId('name')} className="text-xs">
                 Label
@@ -530,7 +573,7 @@ export function SSHHostEditor({
                 </p>
               </div>
             </div>
-          </div>
+          </FieldGroup>
         </form>
 
         <DialogFooter className="gap-2 border-t border-border px-6 py-3 sm:space-x-0">

@@ -10,9 +10,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockIsTauriContext, mockOpen, mockRegister } = vi.hoisted(() => ({
+const { mockIsTauriContext, mockOpen, mockSave, mockRegister } = vi.hoisted(() => ({
   mockIsTauriContext: vi.fn(),
   mockOpen: vi.fn(),
+  mockSave: vi.fn(),
   // Captures the opener registered by the (real) dialog-api module so we can
   // assert selectDirectory delegates to it in web mode. We do NOT mock
   // dialog-api itself — we exercise the real module and just spy on its
@@ -26,6 +27,7 @@ vi.mock('../tauri-runtime', () => ({
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: mockOpen,
+  save: mockSave,
   confirm: vi.fn()
 }))
 
@@ -118,3 +120,45 @@ describe('dialogApi.selectDirectory (web vs desktop branch)', () => {
 // Silence the unused-import warning for mockRegister while keeping the spy
 // available for future assertions on the registration call itself.
 void mockRegister
+
+describe('dialogApi.selectFiles / saveFile', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('cancels on web without touching the native dialog', async () => {
+    mockIsTauriContext.mockReturnValue(false)
+    expect(await dialogApi.selectFiles()).toMatchObject({ success: false, code: 'CANCELLED' })
+    expect(await dialogApi.saveFile()).toMatchObject({ success: false, code: 'CANCELLED' })
+    expect(mockOpen).not.toHaveBeenCalled()
+    expect(mockSave).not.toHaveBeenCalled()
+  })
+
+  it('returns every picked path on desktop', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockOpen.mockResolvedValue(['/tmp/a.txt', '/tmp/b.txt'])
+    expect(await dialogApi.selectFiles({ title: 'Upload' })).toEqual({
+      success: true,
+      data: ['/tmp/a.txt', '/tmp/b.txt']
+    })
+    expect(mockOpen).toHaveBeenCalledWith({ multiple: true, title: 'Upload' })
+  })
+
+  it('treats a dismissed picker as cancelled', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockOpen.mockResolvedValue(null)
+    mockSave.mockResolvedValue(null)
+    expect(await dialogApi.selectFiles()).toMatchObject({ code: 'CANCELLED' })
+    expect(await dialogApi.saveFile()).toMatchObject({ code: 'CANCELLED' })
+  })
+
+  it('passes the suggested name to the save dialog', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockSave.mockResolvedValue('C:/Users/me/app.conf')
+    expect(await dialogApi.saveFile({ title: 'Download', defaultPath: 'app.conf' })).toEqual({
+      success: true,
+      data: 'C:/Users/me/app.conf'
+    })
+    expect(mockSave).toHaveBeenCalledWith({ title: 'Download', defaultPath: 'app.conf' })
+  })
+})

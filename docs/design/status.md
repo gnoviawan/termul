@@ -12,7 +12,7 @@ Status colour is a role, not a hue. Pair it with a label or icon — never colou
 
 `diff-modified` marks changed files in git lists. Do not use `warning` for “this file changed”. Diff line additions use `diff-added`; deletions use `destructive`.
 
-SSH (`SSHStatusBadge.tsx`): disconnected → muted; connecting **and** reconnecting → `warning`; connected → `success`; failed → `destructive`. Do not split reconnecting onto `project-orange`.
+SSH (`components/ssh/ssh-host-status.tsx`, the one source for the lamp and the state word): idle and disconnected → muted lamp; connecting → `warning` spinner; needs input → `warning`; connected → `success`; failed → `destructive`. An idle host shows no word. Do not split reconnecting onto `project-orange`.
 
 StatusBar is quiet: `h-7 border-t border-border bg-card text-2xs text-muted-foreground`. Do not use `bg-status-bar*`, `bg-project-*` or `text-primary-foreground` on the bar. The project colour is in the 14px project glyph only.
 

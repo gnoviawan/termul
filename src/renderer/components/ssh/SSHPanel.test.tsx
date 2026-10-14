@@ -164,6 +164,19 @@ describe('SSHPanel rows', () => {
     expect(row).toHaveTextContent('Connected')
   })
 
+  it('counts several open sessions in place of the state word', () => {
+    useSSHStore.setState({
+      sessions: [liveSession(), liveSession({ id: 'tab-2', attemptId: 'attempt-2' })]
+    })
+    render(<SSHPanel />)
+    expect(screen.getByTestId('ssh-host-row-p1')).toHaveTextContent('2 sessions')
+  })
+
+  it('shows no state word for an idle host', () => {
+    render(<SSHPanel />)
+    expect(screen.getByTestId('ssh-host-row-p1')).not.toHaveTextContent('Idle')
+  })
+
   it('marks a host waiting for input', () => {
     useSSHStore.setState({ sessions: [liveSession({ status: 'awaitingInput', ptyId: null })] })
     render(<SSHPanel />)

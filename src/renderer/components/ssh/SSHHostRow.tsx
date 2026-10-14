@@ -108,7 +108,9 @@ export function SSHHostRow({
         <li
           className={cn(
             'group flex items-center gap-1 rounded-lg pr-1.5 transition-colors duration-150 ease-out',
-            selected ? 'bg-foreground/[0.06]' : 'hover:bg-foreground/[0.03]'
+            selected
+              ? 'keycap'
+              : 'hover:bg-foreground/[0.03] has-[[data-ssh-host-button]:active]:bg-foreground/[0.06]'
           )}
           data-testid={`ssh-host-${profile.id}`}
         >
@@ -126,10 +128,12 @@ export function SSHHostRow({
               }
             }}
             data-ssh-host-button=""
+            // A full-width row shrinking on press reads as the layout jumping.
+            data-press-feedback="off"
             aria-label={`${canConnect ? 'Connect to' : 'Edit'} ${profile.name}, ${showAddress ? `${addressLabel(profile)}, ` : ''}${authMethodLabel(profile.authMethod)}${status ? `, ${status}` : ''}`}
           >
             <span
-              className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.06] font-mono text-xs font-semibold text-muted-foreground"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground/[0.06] font-mono text-xs font-semibold text-muted-foreground"
               aria-hidden="true"
             >
               {initials(profile.name)}
@@ -155,7 +159,7 @@ export function SSHHostRow({
                   {profile.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded bg-foreground/[0.06] px-1.5 py-px text-3xs text-muted-foreground"
+                      className="whitespace-nowrap rounded bg-foreground/[0.06] px-1.5 py-px text-3xs text-muted-foreground"
                     >
                       {tag}
                     </span>
@@ -168,7 +172,7 @@ export function SSHHostRow({
                 <SSHHostLamp state={state} />
                 <span
                   className={cn(
-                    'text-3xs',
+                    'text-3xs tabular-nums',
                     state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
                   )}
                 >

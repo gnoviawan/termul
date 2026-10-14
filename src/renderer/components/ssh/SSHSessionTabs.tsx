@@ -100,7 +100,7 @@ export function SSHSessionTabs({
           TAB_CLASS,
           FOCUS_RING_CLASS,
           activeTab === SSH_HOSTS_TAB
-            ? 'bg-foreground/[0.06] text-foreground'
+            ? 'keycap text-foreground'
             : 'text-muted-foreground hover:bg-foreground/[0.03] hover:text-foreground'
         )}
       >
@@ -119,7 +119,7 @@ export function SSHSessionTabs({
               TAB_CLASS,
               'max-w-56 pr-1',
               selected
-                ? 'bg-foreground/[0.06] text-foreground'
+                ? 'keycap text-foreground'
                 : 'text-muted-foreground hover:bg-foreground/[0.03] hover:text-foreground'
             )}
           >

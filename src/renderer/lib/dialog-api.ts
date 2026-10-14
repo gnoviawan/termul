@@ -10,7 +10,7 @@
  */
 
 import type { DialogApi, IpcResult } from '@shared/types/ipc.types'
-import { confirm, open } from '@tauri-apps/plugin-dialog'
+import { confirm, open, save } from '@tauri-apps/plugin-dialog'
 import { isTauriContext } from './tauri-runtime'
 
 /**
@@ -81,6 +81,37 @@ function createTauriDialogApi(): DialogApi {
           return { success: false, error: 'No file selected', code: 'CANCELLED' }
         }
         return { success: true, data: selected as string }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'DIALOG_ERROR' }
+      }
+    },
+
+    async selectFiles(options?: { title?: string }): Promise<IpcResult<string[]>> {
+      if (!isTauriContext()) {
+        return { success: false, error: 'No file selected', code: 'CANCELLED' }
+      }
+      try {
+        const selected = await open({ multiple: true, title: options?.title || 'Select Files' })
+        const paths = selected == null ? [] : Array.isArray(selected) ? selected : [selected]
+        if (paths.length === 0) {
+          return { success: false, error: 'No file selected', code: 'CANCELLED' }
+        }
+        return { success: true, data: paths }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'DIALOG_ERROR' }
+      }
+    },
+
+    async saveFile(options?: { title?: string; defaultPath?: string }): Promise<IpcResult<string>> {
+      if (!isTauriContext()) {
+        return { success: false, error: 'No location selected', code: 'CANCELLED' }
+      }
+      try {
+        const selected = await save({ title: options?.title, defaultPath: options?.defaultPath })
+        if (!selected) {
+          return { success: false, error: 'No location selected', code: 'CANCELLED' }
+        }
+        return { success: true, data: selected }
       } catch (err) {
         return { success: false, error: String(err), code: 'DIALOG_ERROR' }
       }

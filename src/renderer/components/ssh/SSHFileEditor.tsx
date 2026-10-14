@@ -1,7 +1,9 @@
 import { type MutableRefObject, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { FileEdit, Save, X } from '@/components/icons'
+import { Check, FileEdit, Save, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { IconSwap } from '@/components/ui/icon-swap'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { useCodeMirror } from '@/hooks/use-codemirror'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -101,7 +103,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
             setStoreFile({ ...current, originalContent: content })
           }
           setConfirmClose(false)
-          toast.success(`Saved: ${editingFile.name}`)
+          toast.success(`Saved ${editingFile.name}`)
           setTimeout(() => setSaveAnimating(false), 600)
         } else {
           toast.error(`Save failed: ${result.error}`)
@@ -123,7 +125,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
   }, [isDirty, setStoreFile])
 
   // Only the unsaved-changes confirm is an overlay (the editor body is not).
-  // Mobile web shell: system back takes the safe choice, "Continue Editing",
+  // Mobile web shell: system back takes the safe choice, "Keep editing",
   // so nothing is saved or discarded (inert on desktop).
   const confirmOverlayId = `ssh-unsaved-changes-confirm:${useId()}`
   useOverlayRegistration(
@@ -138,7 +140,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
   return (
     <>
       <div className="flex h-full flex-1 flex-col">
-        <div className="h-8 flex items-center justify-between px-3 border-b border-border bg-muted/30">
+        <div className="flex h-8 items-center justify-between border-b border-border bg-card pl-3 pr-1.5">
           <div className="flex items-center gap-2">
             <FileEdit className="h-3 w-3 text-muted-foreground" />
             <span className="text-2xs font-mono text-muted-foreground">{editingFile.name}</span>
@@ -152,21 +154,27 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
                 isDirty ? `Save ${editingFile.name} (unsaved changes)` : `Save ${editingFile.name}`
               }
               className={cn(
-                'p-1 rounded transition-all duration-300',
+                'flex size-6 items-center justify-center rounded-md transition-colors duration-150 ease-out',
+                FOCUS_RING_CLASS,
                 saveAnimating
-                  ? 'bg-success/20 text-success scale-110'
+                  ? 'bg-success/10 text-success'
                   : isDirty
-                    ? 'bg-warning/20 text-warning'
-                    : 'hover:bg-accent text-muted-foreground'
+                    ? 'bg-warning/10 text-warning'
+                    : 'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground'
               )}
               title="Save"
             >
-              <Save className={cn('h-3 w-3', saveAnimating && 'animate-pulse')} />
+              <IconSwap iconKey={saveAnimating ? 'saved' : 'save'} className="size-3">
+                {saveAnimating ? <Check className="h-3 w-3" /> : <Save className="h-3 w-3" />}
+              </IconSwap>
             </button>
             <button
               type="button"
               onClick={handleClose}
-              className="p-1 rounded hover:bg-accent text-muted-foreground"
+              className={cn(
+                'flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.06] hover:text-foreground',
+                FOCUS_RING_CLASS
+              )}
               title="Close"
               aria-label={`Close ${editingFile.name}`}
             >
@@ -188,7 +196,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
       {confirmClose && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/40">
           <div className="bg-background border border-border rounded-lg shadow-lg w-[340px] p-4">
-            <h3 className="text-sm font-semibold mb-2">Unsaved Changes</h3>
+            <h3 className="text-sm font-semibold mb-2">Unsaved changes</h3>
             <p className="text-xs text-muted-foreground mb-4">
               &ldquo;{editingFile.name}&rdquo; has unsaved changes.
             </p>
@@ -199,7 +207,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
                 size="sm"
                 onClick={() => setConfirmClose(false)}
               >
-                Continue Editing
+                Keep editing
               </Button>
               <Button type="button" size="sm" onClick={() => void handleSave()} disabled={isSaving}>
                 Save

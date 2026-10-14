@@ -392,7 +392,9 @@ export function startSSHSessionEvents(): () => void {
   const unsubscribers = [
     sshApi.onSessionProgress(onProgress),
     sshApi.onSessionHostKey(onHostKey),
-    sshApi.onSessionEnded(onEnded)
+    sshApi.onSessionEnded(onEnded),
+    // SFTP upload/download progress feeds the Transfers tray.
+    sshApi.onTransferProgress((progress) => useSSHStore.getState().updateTransferProgress(progress))
   ]
   void restoreSessions()
   return () => {

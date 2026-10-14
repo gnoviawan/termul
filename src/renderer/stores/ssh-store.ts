@@ -122,7 +122,8 @@ export interface SSHState {
 
   // Transfers
   updateTransferProgress: (progress: SFTPTransferProgress) => void
-  clearCompletedTransfers: () => void
+  /** Drop finished transfers; only those of `connectionId` when given. */
+  clearCompletedTransfers: (connectionId?: string) => void
 }
 
 /** Renderer state never holds secrets. */
@@ -305,8 +306,14 @@ export const useSSHStore = create<SSHState>((set, get) => ({
     })
   },
 
-  clearCompletedTransfers: () => {
-    set((state) => ({ transfers: state.transfers.filter((t) => t.status === 'in-progress') }))
+  clearCompletedTransfers: (connectionId) => {
+    set((state) => ({
+      transfers: state.transfers.filter(
+        (t) =>
+          t.status === 'in-progress' ||
+          (connectionId !== undefined && t.connectionId !== connectionId)
+      )
+    }))
   }
 }))
 

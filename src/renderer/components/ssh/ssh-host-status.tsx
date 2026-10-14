@@ -79,13 +79,21 @@ export function SSHHostLamp({ state }: { state: SSHHostState }): React.JSX.Eleme
   )
 }
 
+/**
+ * The state word for a host row. An idle host shows nothing (the lamp says
+ * enough); a connected host with several tabs shows their count instead.
+ */
 export function SSHHostStateWord({
   state,
+  sessionCount = 0,
   className
 }: {
   state: SSHHostState
+  sessionCount?: number
   className?: string
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  if (state === 'idle') return null
   const { word, wordClass } = HOST_STATE[state]
-  return <span className={cn('text-2xs', wordClass, className)}>{word}</span>
+  const label = state === 'connected' && sessionCount > 1 ? `${sessionCount} sessions` : word
+  return <span className={cn('text-2xs tabular-nums', wordClass, className)}>{label}</span>
 }

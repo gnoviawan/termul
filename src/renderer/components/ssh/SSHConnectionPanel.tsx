@@ -12,6 +12,7 @@ import {
   ShieldCheck
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { IconSwap } from '@/components/ui/icon-swap'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { FOCUS_RING_CLASS, QUIET_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
@@ -56,26 +57,49 @@ function Progress({ session, profile }: SSHConnectionPanelProps): React.JSX.Elem
   const current = session.stage ? SSH_STAGES.indexOf(session.stage) : 0
   return (
     <>
-      <ol className="space-y-2.5" aria-label="Connection progress">
+      <ol aria-label="Connection progress">
         {SSH_STAGES.map((stage, index) => {
           const done = index < current
           const active = index === current
+          const last = index === SSH_STAGES.length - 1
           return (
             <li
               key={stage}
-              className="flex items-center gap-2.5 text-sm"
+              className="flex gap-3 text-sm"
               aria-current={active ? 'step' : undefined}
             >
-              <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-                {done ? (
-                  <Check size={14} className="text-success" />
-                ) : active ? (
-                  <Spinner size={13} decorative className="text-warning" />
-                ) : (
-                  <span className="size-1.5 rounded-full bg-muted-foreground/40" />
+              {/* Mark plus the line down to the next step. */}
+              <span className="flex w-4 shrink-0 flex-col items-center" aria-hidden="true">
+                <span className="flex h-5 items-center">
+                  <IconSwap
+                    iconKey={done ? 'done' : active ? 'active' : 'waiting'}
+                    className="size-4"
+                  >
+                    {done ? (
+                      <Check size={14} className="text-success" />
+                    ) : active ? (
+                      <Spinner size={13} decorative className="text-warning" />
+                    ) : (
+                      <span className="size-1.5 rounded-full bg-muted-foreground/40" />
+                    )}
+                  </IconSwap>
+                </span>
+                {!last && (
+                  <span
+                    className={cn(
+                      'min-h-2 w-px flex-1 transition-colors duration-200 ease-out',
+                      done ? 'bg-success/50' : 'bg-border'
+                    )}
+                  />
                 )}
               </span>
-              <span className={cn(done || active ? 'text-foreground' : 'text-muted-foreground')}>
+              <span
+                className={cn(
+                  'leading-5',
+                  !last && 'pb-3',
+                  done || active ? 'text-foreground' : 'text-muted-foreground'
+                )}
+              >
                 {stageLabel(stage, profile)}
               </span>
               <span className="sr-only">
@@ -128,7 +152,9 @@ function Fingerprint({ value }: { value: string }): React.JSX.Element {
         aria-label={copied ? 'Fingerprint copied' : 'Copy fingerprint'}
         title="Copy fingerprint"
       >
-        {copied ? <Check size={12} /> : <Copy size={12} />}
+        <IconSwap iconKey={copied} className="size-3">
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </IconSwap>
       </button>
     </div>
   )
