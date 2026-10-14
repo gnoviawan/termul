@@ -73,18 +73,24 @@ export function SSHFileExplorer({
   // Only the latest open may land in the editor (a slow read can finish last).
   const openRequest = useRef(0)
 
+  /** Unsaved edits in the open file block replacing it (asked again after the read). */
+  const blockedByUnsavedEdits = (entry: SFTPEntry): boolean => {
+    const { editingFile, editingContent } = useSSHStore.getState()
+    if (!editingFile || editingContent === editingFile.originalContent) return false
+    if (editingFile.path !== entry.path) {
+      toast.error(`Save or discard your changes to ${editingFile.name} first.`)
+    }
+    return true
+  }
+
   const openFile = async (entry: SFTPEntry) => {
     // Never drop unsaved edits by opening another file over them.
-    const { editingFile, editingContent } = useSSHStore.getState()
-    if (editingFile && editingContent !== editingFile.originalContent) {
-      if (editingFile.path !== entry.path) {
-        toast.error(`Save or discard your changes to ${editingFile.name} first.`)
-      }
-      return
-    }
+    if (blockedByUnsavedEdits(entry)) return
     const request = ++openRequest.current
     const result = await sshApi.sftpReadFile(connectionId, entry.path)
     if (request !== openRequest.current) return
+    // Edits may have started while the file loaded.
+    if (blockedByUnsavedEdits(entry)) return
     if (!result.success) {
       toast.error(`Couldn't open ${entry.name}: ${result.error}`)
       return

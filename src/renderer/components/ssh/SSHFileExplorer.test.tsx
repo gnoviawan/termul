@@ -94,6 +94,30 @@ describe('SSHFileExplorer', () => {
     expect(useSSHStore.getState().editingContent).toBe('second')
   })
 
+  it('does not apply a read when edits started while it was loading', async () => {
+    let finishRead: (value: unknown) => void = () => {}
+    sshApi.sftpReadFile.mockImplementationOnce(
+      () => new Promise((resolve) => (finishRead = resolve))
+    )
+    await renderExplorer()
+    fireEvent.click(screen.getByTitle('Open app.conf'))
+    // While app.conf loads, the user edits the file already open.
+    useSSHStore.setState({
+      editingFile: {
+        connectionId: 's1',
+        path: '/home/u/notes.txt',
+        name: 'notes.txt',
+        content: 'a',
+        originalContent: 'a'
+      },
+      editingContent: 'a, edited'
+    })
+    finishRead(ok('listen 80;'))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(useSSHStore.getState().editingFile?.path).toBe('/home/u/notes.txt')
+    expect(useSSHStore.getState().editingContent).toBe('a, edited')
+  })
+
   it('does not replace a file that has unsaved edits', async () => {
     useSSHStore.setState({
       editingFile: {
