@@ -251,7 +251,7 @@ async function openRowActions(page: Page, row: Locator, title: string): Promise<
 async function expectNoHorizontalScroll(root: Locator, label: string): Promise<void> {
   const offenders = await root.evaluate((el) => {
     const bounds = el.getBoundingClientRect()
-    const describe = (node: HTMLElement): string =>
+    const describe = (node: Element): string =>
       `${node.tagName.toLowerCase()}${node.getAttribute('aria-label') ? `[${node.getAttribute('aria-label')}]` : ''} "${(node.textContent ?? '').trim().slice(0, 30)}"`
     const found: string[] = []
     for (const node of [el, ...Array.from(el.querySelectorAll<HTMLElement>('*'))]) {
@@ -631,10 +631,9 @@ test('New activity survives a project switch and back', async ({ page }) => {
   await expect(chatRow(drawer, background)).toHaveAccessibleName(`${background}, New activity`)
 })
 
-test('closing a chat mid-turn from its long-press sheet reads Closing (never Working) until the turn ends, then the row stays as history', async ({
+test('closing a chat mid-turn from its long-press sheet closes it at once, and the turn keeps running in the host', async ({
   page
 }) => {
-  const turns = trackTurnEnds(page)
   await bootFreshProject(page)
   const prompt = 'echo review [DURATION:15]'
   await launchChat(page, prompt)
@@ -647,17 +646,19 @@ test('closing a chat mid-turn from its long-press sheet reads Closing (never Wor
   await sheet.getByRole('button', { name: 'Close chat', exact: true }).tap()
   await expect(sheet).toBeHidden()
 
-  // The running turn stays on screen: "Closing" wins the slot over "Working".
+  // The tab goes at once, mid-turn: the row is history (no status, not the
+  // current chat) and is listed once.
   const row = chatRow(drawer, prompt)
-  await expect(row).toHaveAccessibleName(`${prompt}, Closing`)
-  await expect(row.locator('[title="Working"]')).toHaveCount(0)
-
-  // When the turn ends the chat closes (no unread is banked for a closing
-  // chat); the persisted chat stays in Recents, once, without status.
-  await expect.poll(() => turns.count(), { timeout: 45_000 }).toBeGreaterThan(0)
   await expect(row).toHaveAccessibleName(prompt)
   await expect(row).toHaveCount(1)
   await expect(row).not.toHaveAttribute('aria-current', 'page')
+
+  // Closing the tab did not stop the agent: the reopened chat shows the turn
+  // run to its end.
+  await row.tap()
+  const main = page.locator('main')
+  await expect(main).toContainText('[DONE after', { timeout: 45_000 })
+  await expect(main).not.toContainText('[CANCELLED after')
 })
 
 test('search filters the merged Recents list, never takes focus, and starts fresh on each visit', async ({

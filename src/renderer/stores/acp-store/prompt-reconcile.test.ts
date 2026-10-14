@@ -96,6 +96,7 @@ import { __detachedCommandCountForTesting, COMMAND_RESEND_DELAYS_MS } from '@/li
 import { listUnresolvedCommands } from '@/lib/command-journal'
 import { logFrontendError } from '@/lib/log-api'
 import {
+  _flushCoalescedForTesting,
   _installTransportRecoveryForTesting,
   _resetAcpAuthForTesting,
   _resetCoalesceForTesting,
@@ -555,6 +556,70 @@ describe('prompt pending-reconcile (AD-6)', () => {
     expect(useAcpStore.getState().sessions.s1.activeTurn).toBe(false)
     expect(echoedWirePromptTurns.has('s1')).toBe(false)
     vi.useRealTimers()
+  })
+
+  it('echo seen, socket dies mid-stream: the resubscribe replay renders every chunk once, in order', async () => {
+    seedSession('s1', 'agent-1', false)
+    const reply = Promise.withResolvers<unknown>()
+    const send = vi.fn(
+      (_agentId: string, _sessionId: string, _text: string, _turnId?: string) => reply.promise
+    )
+    // The web client: the host owns the history, events carry host seqs.
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      sendPrompt: send,
+      sendPromptBlocks: send,
+      cancelPrompt: vi.fn(async () => {}),
+      dispose: () => {}
+    } as unknown as AcpTransport)
+    const chunk = (n: number, seq: number): void =>
+      useAcpStore.getState()._onMessageChunk(
+        {
+          agentId: 'agent-1',
+          sessionId: 's1',
+          role: 'agent',
+          content: { type: 'text', text: `chunk-${n} ` }
+        },
+        seq
+      )
+    const running = useAcpStore.getState().sendPrompt('s1', 'long stream')
+    await flushTurnEnd()
+    const turnId = sentTurnIds(send)[0]
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's1',
+        turnId,
+        content: [{ type: 'text', text: 'long stream' }]
+      },
+      1
+    )
+    // Live chunks up to seq 4, then the socket dies with the reply outstanding.
+    for (let n = 1; n <= 3; n++) chunk(n, n + 1)
+    _flushCoalescedForTesting()
+    reply.reject(drop())
+    await running
+    expect(useAcpStore.getState().promptCommandStates.s1).toBeUndefined()
+    // Back on a new socket: nothing is resent, and the resubscribe replays the
+    // missed range (seq 5..10) before the turn's durable end.
+    resendPendingPrompts()
+    for (let n = 4; n <= 9; n++) chunk(n, n + 1)
+    _flushCoalescedForTesting()
+    useAcpStore
+      .getState()
+      ._onPromptComplete(
+        { agentId: 'agent-1', sessionId: 's1', stopReason: 'end_turn', turnId },
+        11
+      )
+    await flushTurnEnd()
+    const state = useAcpStore.getState()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(state.sessions.s1.activeTurn).toBe(false)
+    const agent = state.messages.s1.filter((m) => m.role === 'agent')
+    expect(agent).toHaveLength(1)
+    expect(agent[0].blocks).toEqual([
+      { type: 'text', text: Array.from({ length: 9 }, (_, i) => `chunk-${i + 1} `).join('') }
+    ])
   })
 
   it('a history-covered echo still proves acceptance for a lost reply', async () => {

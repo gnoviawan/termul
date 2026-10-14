@@ -616,7 +616,24 @@ function tick(): void {
   }
 }
 
-setInterval(tick, Math.max(100, Math.floor(1000 / RATE)))
+// The chunk clock. `setInterval` re-arms from the moment each tick actually
+// ran, so event-loop lag on a busy host adds up: a 360 s turn emitted only
+// 354 chunks under load, and a spec that expects about one chunk per second
+// failed. Re-arm against the fixed schedule instead: a late tick makes the
+// next wait shorter, so an n-second turn emits n × RATE chunks under load too.
+const TICK_MS = Math.max(100, Math.floor(1000 / RATE))
+let nextTickAt = Date.now() + TICK_MS
+function scheduleTick(): void {
+  setTimeout(
+    () => {
+      tick()
+      nextTickAt += TICK_MS
+      scheduleTick()
+    },
+    Math.max(0, nextTickAt - Date.now())
+  )
+}
+scheduleTick()
 
 function handle(msg: JsonRpcMessage): void {
   const { id, method, params } = msg
