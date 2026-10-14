@@ -287,7 +287,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { DEFAULT_TERMINAL_OPTIONS } from './terminal-config'
-import { type RendererPreference, shouldUseWebglRenderer } from './terminal-factory'
+import { shouldUseWebglRenderer } from './use-webgl-recovery'
 
 const { render, cleanup } = await import('@testing-library/react')
 const React = await import('react')
@@ -312,7 +312,7 @@ afterEach(() => {
 // Pure resolution-unit tests (no React render)
 // ---------------------------------------------------------------------------
 
-describe('shouldUseWebglRenderer (unified factory helper, story 2)', () => {
+describe('shouldUseWebglRenderer (story 2)', () => {
   it.each([
     ['auto', false, true],
     ['auto', true, false],
@@ -321,7 +321,7 @@ describe('shouldUseWebglRenderer (unified factory helper, story 2)', () => {
     ['dom', false, false],
     ['dom', true, false]
   ] as Array<
-    [RendererPreference, boolean, boolean]
+    ['auto' | 'webgl' | 'dom', boolean, boolean]
   >)('preference %s on mobile shell=%s → WebGL used: %s', (preference, isMobileWebShell, expectWebgl) => {
     expect(shouldUseWebglRenderer(preference, isMobileWebShell)).toBe(expectWebgl)
   })

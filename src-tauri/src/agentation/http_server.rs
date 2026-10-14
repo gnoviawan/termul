@@ -6,8 +6,7 @@
 //!   GET /annotations/:id, DELETE /annotations/:id,
 //!   GET /sessions/:id/pending, GET /pending,
 //!   POST /sessions/:id/action, POST /annotations/:id/thread,
-//!   GET /sessions/:id/events (SSE), GET /events (global SSE),
-//!   POST /mcp (HTTP MCP transport — stubbed, rmcp stdio is primary).
+//!   GET /sessions/:id/events (SSE), GET /events (global SSE).
 //!
 //! Runs on `127.0.0.1:0` (dynamic port) with `tower-http::cors` strict
 //! origin allowlist and `CancellationToken` shutdown.

@@ -60,10 +60,10 @@ export const resyncWebglDimensions = (terminal: Terminal): void => {
   terminal.refresh(0, terminal.rows - 1)
 }
 
-// Renderer resolution (story 2 mobile stopgap): unified with the
-// terminal-factory helper — 'auto' (the shipped default) resolves to WebGL
-// on desktop and to the DOM renderer on the mobile web shell, where WebGL
-// paints zero pixels at DPR >= 3. Explicit 'webgl'/'dom' is always honored.
+// Renderer resolution (story 2 mobile stopgap): 'auto' (the shipped default)
+// resolves to WebGL on desktop and to the DOM renderer on the mobile web
+// shell, where WebGL paints zero pixels at DPR >= 3. Explicit 'webgl'/'dom'
+// is always honored.
 export const shouldUseWebglRenderer = (
   rendererPreference: 'auto' | 'webgl' | 'dom',
   isMobileWebShell: boolean

@@ -592,13 +592,6 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
 // ============================================================================
 
 /**
- * Selector: Check if an update is available
- */
-export function useUpdateAvailable(): boolean {
-  return useUpdaterStore((state) => state.updateAvailable)
-}
-
-/**
  * Selector: Get the available version
  */
 export function useUpdateVersion(): string | null {
@@ -620,52 +613,10 @@ export function useDownloadProgress(): number {
 }
 
 /**
- * Selector: Check if currently checking for updates
- */
-export function useIsChecking(): boolean {
-  return useUpdaterStore((state) => state.isChecking)
-}
-
-/**
  * Selector: Check if currently downloading update
  */
 export function useIsDownloading(): boolean {
   return useUpdaterStore((state) => state.isDownloading)
-}
-
-/**
- * Selector: Get updater error message
- */
-export function useUpdaterError(): string | null {
-  return useUpdaterStore((state) => state.error)
-}
-
-/**
- * Selector: Get last checked timestamp
- */
-export function useLastChecked(): Date | null {
-  return useUpdaterStore((state) => state.lastChecked)
-}
-
-/**
- * Selector: Check if auto-update is enabled
- */
-export function useAutoUpdateEnabled(): boolean {
-  return useUpdaterStore((state) => state.autoUpdateEnabled)
-}
-
-/**
- * Selector: Get the active release channel
- */
-export function useUpdateChannel(): UpdateChannel {
-  return useUpdaterStore((state) => state.updateChannel)
-}
-
-/**
- * Selector: Get skipped version
- */
-export function useSkippedVersion(): string | null {
-  return useUpdaterStore((state) => state.skippedVersion)
 }
 
 /**
@@ -709,22 +660,6 @@ export function useUpdaterActions() {
       schedulePeriodicChecks: state.schedulePeriodicChecks,
       stopPeriodicChecks: state.stopPeriodicChecks,
       runCheckWithRetry: state.runCheckWithRetry
-    }))
-  )
-}
-
-/**
- * Selector: Get internal actions (for IPC event setup)
- * These should only be used in a component that sets up IPC listeners
- */
-export function useUpdaterInternalActions() {
-  return useUpdaterStore(
-    useShallow((state) => ({
-      _setUpdateAvailable: state._setUpdateAvailable,
-      _setUpdateDownloaded: state._setUpdateDownloaded,
-      _setDownloadProgress: state._setDownloadProgress,
-      _setUpdaterError: state._setUpdaterError,
-      _initializeState: state._initializeState
     }))
   )
 }

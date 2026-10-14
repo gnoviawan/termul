@@ -9,7 +9,6 @@ import {
   dataMigrationApi,
   dialogApi,
   filesystemApi,
-  keyboardApi,
   persistenceApi,
   sessionApi,
   shellApi,
@@ -116,11 +115,6 @@ describe('API Bridge (api.ts)', () => {
       expect(typeof windowApi.minimize).toBe('function')
       expect(typeof windowApi.toggleMaximize).toBe('function')
       expect(typeof windowApi.close).toBe('function')
-    })
-
-    it('should export keyboardApi', () => {
-      expect(keyboardApi).toBeDefined()
-      expect(typeof keyboardApi.onShortcut).toBe('function')
     })
 
     it('should export visibilityApi', () => {

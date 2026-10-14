@@ -6,9 +6,9 @@ import { retainVisibleAgentChats } from '@/hooks/editor-persistence/chat-restore
 import { commitStagedProject } from '@/hooks/editor-persistence/commit'
 import { hydrateProject } from '@/hooks/editor-persistence/hydrate'
 import { persistState } from '@/hooks/editor-persistence/persist'
+import { flushPendingAutoSaves } from '@/lib/editor-auto-save'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import { flushEditorWork } from './editor-flush'
 import { useProjectSwitchStatus } from './status-store'
 import type { SwitchDeps } from './types'
 
@@ -19,7 +19,9 @@ export function createProjectSwitchDeps(): SwitchDeps {
     getFocusedPaneId: () => useWorkspaceStore.getState().activePaneId,
     hasTree: (projectId) => useWorkspaceStore.getState().hasProjectTree(projectId),
     leave: async (fromProjectId) => {
-      await flushEditorWork()
+      // Best effort: a failing file stays unsaved and its draft is persisted. Awaited
+      // so no debounced save is still in flight when the leaving project's files clear.
+      await flushPendingAutoSaves()
       // A newer request may have committed while the flush was pending: the
       // stores then describe another project and must not be saved as this one.
       if (useWorkspaceStore.getState().activeProjectId !== fromProjectId) return

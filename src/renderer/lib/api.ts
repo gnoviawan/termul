@@ -14,14 +14,11 @@ export { acpInstallApi } from './acp-install-api'
 export { canvasApi } from './canvas-api'
 export { clipboardApi } from './clipboard-api'
 export { dialogApi } from './dialog-api'
-export { filesystemApi } from './filesystem-api'
 export { gitApi } from './git-api'
-export { keyboardApi } from './keyboard-api'
 export * as logApi from './log-api'
 export { persistenceApi } from './persistence-api'
 export { shellApi } from './shell-api'
 export { sshApi } from './ssh-api'
-export { systemApi } from './system-api'
 export { openerApi } from './tauri-opener-api'
 export { remoteServerApi, syncChatHistory } from './tauri-remote-api'
 export { hasActiveTerminalSessions } from './tauri-safe-update'
@@ -29,13 +26,19 @@ export * as tauriUpdaterApi from './tauri-updater-api'
 export * as tauriVersionSkipService from './tauri-version-skip'
 export { terminalApi } from './terminal-api'
 export { visibilityApi } from './visibility-api'
-export { windowApi } from './window-api'
 export { worktreeApi } from './worktree-api'
 
+import type { FilesystemApi, SystemApi, WindowApi } from '@shared/types/ipc.types'
 import { createTauriDataMigrationApi } from './tauri-data-migration-api'
+import { createTauriFilesystemApi } from './tauri-filesystem-api'
 import { tauriSecureStorageApi } from './tauri-secure-storage-api'
 import { tauriSessionApi } from './tauri-session-api'
+import { createTauriSystemApi } from './tauri-system-api'
+import { createTauriWindowApi } from './tauri-window-api'
 
+export const filesystemApi: FilesystemApi = createTauriFilesystemApi()
+export const systemApi: SystemApi = createTauriSystemApi()
+export const windowApi: WindowApi = createTauriWindowApi()
 export const sessionApi = tauriSessionApi
 export const dataMigrationApi = createTauriDataMigrationApi()
 export const secureStorageApi = tauriSecureStorageApi

@@ -77,7 +77,7 @@ Termul treats workspaces as first-class citizens, allowing you to organize termi
 | Domain            | Key Components                                                                     | Zustand Store                                      |
 | ----------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------- |
 | **Workspace**     | `WorkspaceLayout`, `PaneRenderer`, `PaneContent`, `WorkspaceTabBar`                | `workspace-store`                                  |
-| **Terminal**      | `ConnectedTerminal`, `XTerminal`, `TerminalSearchBar`, `ActivityIndicator`         | `terminal-store`                                   |
+| **Terminal**      | `ConnectedTerminal`, `TerminalSearchBar`                                           | `terminal-store`                                   |
 | **Editor**        | `EditorPanel`, `CodeEditor`, `MarkdownEditor`, `EditorToolbar`, `MermaidBlock`     | `editor-store`                                     |
 | **Browser**       | `BrowserPanel`, `BrowserControls`, `AnnotationPanel`, `AnnotationExportModal`      | `browser-session-store`, `annotation-store`        |
 | **File Explorer** | `FileExplorer`, `FileTreeNode`, `FileTreeContextMenu`                              | —                                                  |

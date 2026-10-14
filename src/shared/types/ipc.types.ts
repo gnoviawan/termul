@@ -622,23 +622,6 @@ export interface SystemApi {
   onPowerResume: (callback: () => void) => () => void
 }
 
-// Keyboard shortcut callback for main -> renderer communication
-export type KeyboardShortcutCallback = (
-  shortcut:
-    | 'nextTerminal'
-    | 'prevTerminal'
-    | 'zoomIn'
-    | 'zoomOut'
-    | 'zoomReset'
-    | 'sidebarToggle'
-    | 'colorThemePicker'
-) => void
-
-// Keyboard API for renderer
-export interface KeyboardApi {
-  onShortcut: (callback: KeyboardShortcutCallback) => () => void
-}
-
 // Window maximize state callback for main -> renderer communication
 export type WindowMaximizeChangedCallback = (isMaximized: boolean) => void
 

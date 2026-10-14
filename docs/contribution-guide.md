@@ -129,7 +129,6 @@ Do not re-define these in adapters or test files; import the canonical helper. T
 
 - `src-tauri/src/lib.rs` 1,522 — deferred pending feature merges, spec plans exist (`layouts/WorkspaceLayout.tsx` was split in #1030 / issue #994)
 - `browser_automation/mod.rs` inline test tail (141 lines) — extract per convention
-- `terminal-factory.ts` duplicates `shouldUseWebglRenderer` from `use-webgl-recovery.ts`
 
 ### Exclusions from size accounting
 

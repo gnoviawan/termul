@@ -2,7 +2,6 @@ import { useCallback, useEffect } from 'react'
 import { toast } from 'sonner'
 import { useUpdateAppSetting, useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { getShortcutTargetContext } from '@/layouts/workspace-layout/shortcut-target'
-import { keyboardApi } from '@/lib/api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { cycleSSHTab, requestCloseSSHSession } from '@/lib/ssh-sessions'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -57,8 +56,7 @@ export function useWorkspaceKeyboard({
   const updateAppSetting = useUpdateAppSetting()
   const updatePanelVisibility = useUpdatePanelVisibility()
 
-  // Shared whole-UI zoom action used by both the DOM keydown path and the
-  // keyboardApi.onShortcut callback so behavior stays identical.
+  // Whole-UI zoom action shared by the zoom keydown branches.
   const applyZoomAction = useCallback(
     (action: 'zoomIn' | 'zoomOut' | 'zoomReset'): void => {
       const next =
@@ -363,37 +361,4 @@ export function useWorkspaceKeyboard({
     closeActiveTab,
     isAgentLauncherOpen
   ])
-
-  // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
-  useEffect(() => {
-    return keyboardApi.onShortcut((shortcut) => {
-      switch (shortcut) {
-        case 'nextTerminal':
-          cycleTab('next')
-          break
-        case 'prevTerminal':
-          cycleTab('prev')
-          break
-        case 'zoomIn':
-          applyZoomAction('zoomIn')
-          break
-        case 'zoomOut':
-          applyZoomAction('zoomOut')
-          break
-        case 'zoomReset':
-          applyZoomAction('zoomReset')
-          break
-        case 'sidebarToggle':
-          void updatePanelVisibility('sidebarVisible', !isSidebarVisible).catch((error) => {
-            toast.error(
-              error instanceof Error ? error.message : 'Failed to update sidebar visibility'
-            )
-          })
-          break
-        case 'colorThemePicker':
-          handleOpenThemePicker()
-          break
-      }
-    })
-  }, [cycleTab, applyZoomAction, handleOpenThemePicker, updatePanelVisibility, isSidebarVisible])
 }

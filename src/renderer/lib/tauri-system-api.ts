@@ -93,43 +93,6 @@ export function createTauriSystemApi(): SystemApi {
 }
 
 /**
- * Direct export singleton for convenience (matches api-bridge pattern)
- *
- * FALLBACK MODE for power resume detection - see documentation above.
- *
- * NOTE: getPlatform was removed - the corresponding Rust command does not exist.
- * Use tauri-plugin-os's platform() directly if needed.
- */
-export const tauriSystemApi = {
-  async getHomeDirectory(): Promise<IpcResult<string>> {
-    return invokeIpcWrapped<string>(IPC_COMMANDS.GET_HOME_DIRECTORY)
-  },
-
-  onPowerResume(callback: () => void): () => void {
-    // Heartbeat-based power resume detection (chosen approach)
-    // See: docs/decisions/keyboard-system-event-mode-final.md
-    heartbeatTimer = setInterval(() => {
-      const now = Date.now()
-      const elapsed = now - lastHeartbeat
-
-      if (elapsed > HEARTBEAT_INTERVAL_MS * 2) {
-        // System likely resumed from sleep
-        // More than 2 intervals have passed without the timer running
-        callback()
-      }
-      lastHeartbeat = now
-    }, HEARTBEAT_INTERVAL_MS)
-
-    return () => {
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer)
-        heartbeatTimer = null
-      }
-    }
-  }
-}
-
-/**
  * @internal Testing only - reset heartbeat state between tests
  */
 export function _resetSystemHeartbeatForTesting(): void {

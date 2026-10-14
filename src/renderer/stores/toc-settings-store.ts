@@ -121,17 +121,7 @@ export const useTocSettingsStore = create<TocSettingsState>((set) => ({
 export const useTocIsVisible = (): boolean =>
   useTocSettingsStore((state) => state.settings.isVisible)
 
-export const useTocMaxHeadingLevel = (): number =>
-  useTocSettingsStore((state) => state.settings.maxHeadingLevel)
-
-export const useTocWidth = (): number => useTocSettingsStore((state) => state.settings.width)
-
 export const useTocSettings = (): TocSettings => useTocSettingsStore((state) => state.settings)
-
-export const useTocSettingsLoaded = (): boolean => useTocSettingsStore((state) => state.isLoaded)
-
-export const useTocSettingsHydrated = (): boolean =>
-  useTocSettingsStore((state) => state.isLoaded || state.loadFailed)
 
 /** Collapsed outline keys for one file. Returns a stable empty array when none. */
 export const useTocCollapsedKeys = (filePath: string): readonly string[] =>

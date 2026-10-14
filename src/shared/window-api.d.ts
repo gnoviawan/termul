@@ -2,7 +2,6 @@ import type {
   ClipboardApi,
   DialogApi,
   FilesystemApi,
-  KeyboardApi,
   PersistenceApi,
   SessionApi,
   ShellApi,
@@ -21,7 +20,6 @@ declare global {
       persistence: PersistenceApi
       dialog: DialogApi
       system: SystemApi
-      keyboard: KeyboardApi
       updater: UpdaterApi
       clipboard: ClipboardApi
       filesystem: FilesystemApi

@@ -1,22 +1,18 @@
 //! Agentation annotation service — MCP-native annotation backend.
 //!
-//! Reimplements agentation's HTTP + MCP protocol surface in Rust using
-//! `rmcp` (MCP SDK) + `axum` (HTTP/SSE) + `rusqlite` (persistence).
+//! Reimplements agentation's HTTP protocol surface in Rust using `axum`
+//! (HTTP/SSE) + `rusqlite` (persistence).
 //! Single Tauri binary, no Node sidecar, no `better-sqlite3`.
 //!
 //! Architecture (issue #451, Epic 1, Path C):
 //! - `types` — wire-protocol types (Annotation, Session, AFSEvent, etc.)
 //! - `store` — `SqliteStore` implementing `AnnotationStore` trait + `EventBus`
 //! - `http_server` — axum HTTP/SSE server (14 routes) on dynamic port
-//! - `mcp_server` — rmcp MCP server (9 tools) over stdio
 //!
 //! The HTTP server serves the injected toolbar's direct HTTP calls.
-//! The MCP server serves agent-facing tool calls over stdio.
 
 #[allow(dead_code)]
 pub mod http_server;
-#[allow(dead_code)]
-pub mod mcp_server;
 #[allow(dead_code)]
 pub mod store;
 #[allow(dead_code)]
@@ -79,14 +75,6 @@ impl AgentationService {
 /// Uses `app_data_dir/annotations.db` (Tauri's per-app data directory).
 pub fn db_path(app_data_dir: &std::path::Path) -> std::path::PathBuf {
     app_data_dir.join("annotations.db")
-}
-
-/// Run the MCP server on stdio (called from a subcommand entry point).
-#[allow(dead_code)]
-pub async fn run_mcp_stdio(app_data_dir: &std::path::Path) -> Result<(), String> {
-    let path = db_path(app_data_dir);
-    let store = Arc::new(SqliteStore::open(&path)?);
-    mcp_server::serve_stdio(store).await
 }
 
 // ---------------------------------------------------------------------------

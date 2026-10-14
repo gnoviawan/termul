@@ -18,7 +18,6 @@ const {
   mockFlushPendingWrites,
   mockWatchDirectory,
   mockUnwatchDirectory,
-  mockKeyboardOnShortcut,
   mockUpdatePanelVisibility,
   mockWaitForPendingSessionIndexWrite,
   mockFlushSessionHistory,
@@ -86,7 +85,6 @@ const {
   mockFlushPendingWrites: vi.fn(async () => ({ success: true, data: undefined })),
   mockWatchDirectory: vi.fn(async () => ({ success: true })),
   mockUnwatchDirectory: vi.fn(async () => ({ success: true })),
-  mockKeyboardOnShortcut: vi.fn(() => vi.fn()),
   mockUpdatePanelVisibility: vi.fn(async () => undefined),
   mockWaitForPendingSessionIndexWrite: vi.fn(async () => undefined),
   mockFlushSessionHistory: vi.fn(async () => undefined),
@@ -346,9 +344,6 @@ vi.mock('@/lib/api', () => ({
   windowApi: {
     onCloseRequested: mockCloseRequested,
     respondToClose: mockRespondToClose
-  },
-  keyboardApi: {
-    onShortcut: mockKeyboardOnShortcut
   },
   terminalApi: {
     spawn: vi.fn(),

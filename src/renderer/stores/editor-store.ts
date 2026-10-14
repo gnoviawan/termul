@@ -1,7 +1,6 @@
 import { COMMAND_RESULT_CODES } from '@shared/types/ipc.types'
 import { toast } from 'sonner'
 import { create } from 'zustand'
-import { useShallow } from 'zustand/shallow'
 import { filesystemApi } from '@/lib/api'
 import {
   cancelAllAutoSaves,
@@ -684,73 +683,5 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     return Array.from(get().openFiles.keys())
   }
 }))
-
-// Selector hooks
-export function useOpenFiles(): Map<string, EditorFileState> {
-  return useEditorStore((state) => state.openFiles)
-}
-
-export function useOpenFilePaths(): string[] {
-  return useEditorStore(useShallow((state) => Array.from(state.openFiles.keys())))
-}
-
-export function useOpenFile(filePath: string): EditorFileState | undefined {
-  return useEditorStore((state) => state.openFiles.get(filePath))
-}
-
-export function useActiveFile(): EditorFileState | undefined {
-  return useEditorStore((state) => {
-    if (!state.activeFilePath) return undefined
-    return state.openFiles.get(state.activeFilePath)
-  })
-}
-
-export function useActiveFilePath(): string | null {
-  return useEditorStore((state) => state.activeFilePath)
-}
-
-export function useEditorActions(): Pick<
-  EditorState,
-  | 'openFile'
-  | 'closeFile'
-  | 'updateContent'
-  | 'saveFile'
-  | 'saveAllDirty'
-  | 'setViewMode'
-  | 'updateCursorPosition'
-  | 'updateScrollTop'
-  | 'reloadFile'
-  | 'setActiveFilePath'
-  | 'clearAllFiles'
-> {
-  return useEditorStore(
-    useShallow((state) => ({
-      openFile: state.openFile,
-      closeFile: state.closeFile,
-      closeFileIfIdle: state.closeFileIfIdle,
-      updateContent: state.updateContent,
-      saveFile: state.saveFile,
-      saveAllDirty: state.saveAllDirty,
-      setViewMode: state.setViewMode,
-      updateCursorPosition: state.updateCursorPosition,
-      updateScrollTop: state.updateScrollTop,
-      reloadFile: state.reloadFile,
-      setActiveFilePath: state.setActiveFilePath,
-      clearAllFiles: state.clearAllFiles
-    }))
-  )
-}
-
-export function useDirtyFiles(): string[] {
-  return useEditorStore(
-    useShallow((state) => {
-      const dirty: string[] = []
-      state.openFiles.forEach((file, path) => {
-        if (fileNeedsAttention(file)) dirty.push(path)
-      })
-      return dirty
-    })
-  )
-}
 
 export { detectLanguage, getDefaultViewMode }

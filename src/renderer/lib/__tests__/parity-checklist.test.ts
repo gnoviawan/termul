@@ -208,15 +208,6 @@ const P1_DOMAINS: DomainCheck[] = [
     methods: ['getHomeDirectory', 'onPowerResume'], // getTempDirectory not implemented
     apiBridgeExport: 'systemApi',
     testFile: 'tauri-system-api.test.ts' // May not exist yet
-  },
-  {
-    domain: 'Keyboard',
-    priority: 'P1',
-    tauriAdapterFile: 'tauri-keyboard-api.ts',
-    adapterExportName: 'createTauriKeyboardApi',
-    methods: ['onShortcut'],
-    apiBridgeExport: 'keyboardApi',
-    testFile: 'tauri-keyboard-api.test.ts' // May not exist yet
   }
 ]
 

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { isTauri } from './api-bridge'
+import { isTauriContext } from './tauri-runtime'
 
 /**
  * Native menu accelerators (e.g. ⌘W, ⌘R, ⌘C on macOS, Ctrl+W on Windows) are
@@ -35,13 +35,13 @@ function enqueueMenuIpc(command: 'suspend_app_menu' | 'restore_app_menu'): Promi
 
 export async function beginShortcutCapture(): Promise<void> {
   activeCaptures += 1
-  if (activeCaptures > 1 || !isTauri()) return
+  if (activeCaptures > 1 || !isTauriContext()) return
   await enqueueMenuIpc('suspend_app_menu')
 }
 
 export async function endShortcutCapture(): Promise<void> {
   if (activeCaptures === 0) return
   activeCaptures -= 1
-  if (activeCaptures > 0 || !isTauri()) return
+  if (activeCaptures > 0 || !isTauriContext()) return
   await enqueueMenuIpc('restore_app_menu')
 }

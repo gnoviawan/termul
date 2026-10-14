@@ -10,36 +10,12 @@ import { usePaneTree } from './pane-context'
 import { findPaneById, getAllLeafPanes } from './tree'
 import type { WorkspaceState, WorkspaceTab } from './types'
 
-// Selector hooks
-export function useWorkspaceTabs(): WorkspaceTab[] {
-  // Returns tabs of the active pane
-  return useWorkspaceStore(
-    useShallow((state) => {
-      const pane = findPaneById(state.root, state.activePaneId)
-      if (pane?.type !== 'leaf') return []
-      return pane.tabs
-    })
-  )
-}
-
 export function useActiveTab(): WorkspaceTab | undefined {
   return useWorkspaceStore((state) => {
     const pane = findPaneById(state.root, state.activePaneId)
     if (pane?.type !== 'leaf') return undefined
     return pane.tabs.find((t) => t.id === pane.activeTabId)
   })
-}
-
-export function useActiveTabId(): string | null {
-  return useWorkspaceStore((state) => {
-    const pane = findPaneById(state.root, state.activePaneId)
-    if (pane?.type !== 'leaf') return null
-    return pane.activeTabId
-  })
-}
-
-export function useActivePaneId(): string {
-  return usePaneTree((tree) => tree.activePaneId)
 }
 
 export function useFullscreenPaneId(): string | null {

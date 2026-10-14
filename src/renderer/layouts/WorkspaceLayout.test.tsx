@@ -299,9 +299,6 @@ vi.mock('@/components/shell/SidePanelColumn', () => ({
 // Mock the active Tauri API seam used by WorkspaceLayout and nested components.
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
-    keyboard: {
-      onShortcut: vi.fn((_callback: (shortcut: string) => void) => vi.fn())
-    },
     shell: {
       getAvailableShells: vi
         .fn()
@@ -383,7 +380,6 @@ const { mockApi } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/api', () => ({
-  keyboardApi: mockApi.keyboard,
   shellApi: mockApi.shell,
   terminalApi: mockApi.terminal,
   filesystemApi: mockApi.filesystem,
@@ -466,8 +462,6 @@ beforeEach(() => {
   mockApi.filesystem.watchDirectory.mockReset()
   mockApi.filesystem.unwatchDirectory.mockReset()
   mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
-  mockApi.keyboard.onShortcut.mockReset()
-  mockApi.keyboard.onShortcut.mockImplementation((_callback: (shortcut: string) => void) => vi.fn())
   mockApi.persistence.flushPendingWrites.mockReset()
   mockApi.persistence.flushPendingWrites.mockResolvedValue({ success: true, data: undefined })
   mockApi.window.onCloseRequested.mockReset()
@@ -952,33 +946,6 @@ describe('WorkspaceLayout - Empty States', () => {
 
       document.body.removeChild(terminalRoot)
     })
-
-    // Skipped: flaky under full-suite load (waits time out); passes alone.
-    it.skip('opens the color theme picker from backend shortcut callbacks', async () => {
-      let backendShortcut: ((shortcut: string) => void) | undefined
-      // Prefer mockImplementation over Once: Strict Mode remounts / sibling
-      // subscribers can consume a one-shot mock before the layout effect runs.
-      mockApi.keyboard.onShortcut.mockImplementation((callback: (shortcut: string) => void) => {
-        backendShortcut = callback
-        return vi.fn()
-      })
-
-      renderWithRouter()
-
-      // The onShortcut subscription registers in a layout effect; under
-      // full-suite contention (2-vCPU CI runners run the whole suite with
-      // two workers) the effect can take tens of seconds to flush — the
-      // timeout has been raised twice already (1s → 10s → 30s) for this.
-      await waitFor(() => expect(backendShortcut).toBeDefined(), { timeout: 30000 })
-      act(() => backendShortcut?.('colorThemePicker'))
-      // ThemePicker is React.lazy — allow extra time for the chunk to resolve
-      // under full-suite resource contention (passes instantly in isolation).
-      expect(
-        await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 20000 })
-      ).toBeInTheDocument()
-      // The two sequential waits above can exceed the 15s global
-      // testTimeout, which would kill the test before the second one resolves.
-    }, 90000)
   })
 
   describe('Settings shortcut', () => {

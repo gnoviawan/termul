@@ -30,6 +30,7 @@
  * `./types` the `AcpState` contract; `./helpers` the pure helpers.
  */
 
+import type { SessionSnapshotEvent } from '@shared/types/web-protocol.types'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
@@ -69,7 +70,6 @@ import {
   type UsageUpdateEvent,
   type UserPromptEvent
 } from '@/lib/acp-api'
-import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
@@ -180,7 +180,7 @@ let teardown: Array<() => void> = []
  * listeners.
  */
 async function installTransportRecovery(
-  recovery: AcpRecovery,
+  recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
   reopenGeneration?: number
 ): Promise<void> {
   // Round-2 review: the WS transport captures the session's reopen generation
@@ -461,36 +461,35 @@ export function initAcpEventListeners(): () => void {
     if (historyRetryTimer) return
     run()
   }
-  const connection = new AcpConnectionCoordinator(transport, {
-    installRecovery: installTransportRecovery,
-    // The transport captures this before the snapshot round-trip so a late
-    // recovery for a torn-down/replaced session is rejected at install.
-    recoveryGeneration: (sessionId) => sessionReopenGenerations.get(sessionId) ?? 0,
-    pendingPermissionSessions: () => [
-      ...new Set(
-        Object.values(useAcpStore.getState().pendingPermissions).map(
-          (permission) => permission.sessionId
-        )
-      )
-    ],
-    setReconnecting: (reconnecting, recovered) => {
-      useAcpStore.setState({ transportReconnecting: reconnecting })
-      if (!reconnecting) {
-        if (historyRetryTimer) {
-          clearTimeout(historyRetryTimer)
-          historyRetryTimer = null
-        }
-        historyRetryAttempt = 0
-        refetchHistoryAfterReconnect()
-        // AD-6: the socket is back — resend every prompt command that lost its
-        // reply, with the same turn id (the host answers with a receipt). Only
-        // on a REAL recovery: the token-halt path also ends the reconnect
-        // cycle (`recovered === false`) but the host is unreachable then.
-        if (recovered === true) resendPendingPrompts()
+  transport.setReconnectListener?.((reconnecting, recovered) => {
+    useAcpStore.setState({ transportReconnecting: reconnecting })
+    if (!reconnecting) {
+      if (historyRetryTimer) {
+        clearTimeout(historyRetryTimer)
+        historyRetryTimer = null
       }
+      historyRetryAttempt = 0
+      refetchHistoryAfterReconnect()
+      // AD-6: the socket is back — resend every prompt command that lost its
+      // reply, with the same turn id (the host answers with a receipt). Only
+      // on a REAL recovery: the token-halt path also ends the reconnect
+      // cycle (`recovered === false`) but the host is unreachable then.
+      if (recovered === true) resendPendingPrompts()
     }
   })
-  connection.attach()
+  transport.setReconnectPriorityProvider?.(() => [
+    ...new Set(
+      Object.values(useAcpStore.getState().pendingPermissions).map(
+        (permission) => permission.sessionId
+      )
+    )
+  ])
+  transport.setRecoveryHandler?.(installTransportRecovery)
+  // The transport captures this before the snapshot round-trip so a late
+  // recovery for a torn-down/replaced session is rejected at install.
+  transport.setRecoveryGenerationProvider?.(
+    (sessionId) => sessionReopenGenerations.get(sessionId) ?? 0
+  )
   teardown = [
     // Web only: the agent roster arrives through the `agents` watch (the
     // desktop listens to the Tauri `acp:agent_*` events below).
