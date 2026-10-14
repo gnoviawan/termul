@@ -439,6 +439,20 @@ describe('SSHFileExplorer drag and drop (desktop)', () => {
     )
   })
 
+  it('refuses a drop holding two different files with the same name', async () => {
+    await renderExplorer()
+    const first = droppedFile('report.csv')
+    const second = droppedFile('report.csv', { size: 99 })
+    fireEvent.drop(screen.getByTestId('sftp-drop-zone'), osDrag([first, second]))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        'Two of the files are named “report.csv”. Rename one, then upload them again.'
+      )
+    )
+    expect(tempFiles.writeBytesToTempFile).not.toHaveBeenCalled()
+    expect(sshApi.sftpUpload).not.toHaveBeenCalled()
+  })
+
   it('asks before a dropped file replaces one in the folder', async () => {
     await renderExplorer()
     fireEvent.drop(screen.getByTestId('sftp-drop-zone'), osDrag([droppedFile('app.conf')]))

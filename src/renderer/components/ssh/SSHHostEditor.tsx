@@ -255,13 +255,17 @@ export function SSHHostEditor({
   const knownKey = localKeys.some((k) => k.path === values.privateKeyPath)
   // Where the session will sign in, as the user types (a pasted user@host:port is split too).
   const target = splitAddress(values, portEdited)
-  const preview = target.host.trim()
-    ? addressLabel({
-        host: target.host.trim(),
-        port: parsePort(target.port) ?? 22,
-        username: target.username.trim() || 'user'
-      })
-    : null
+  const targetHost = target.host.trim()
+  const targetUser = target.username.trim() || 'user'
+  const portText = target.port.trim()
+  const port = parsePort(portText)
+  // An invalid port is shown as typed, never as the default 22, so the
+  // preview cannot look valid while the form will reject it.
+  const preview = !targetHost
+    ? null
+    : port === null && portText
+      ? `${targetUser}@${targetHost}:${portText}`
+      : addressLabel({ host: targetHost, port: port ?? 22, username: targetUser })
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -191,8 +191,24 @@ export function useSftpTransfers(
   /** Upload now, or ask first when some names already exist in `dir`. */
   const queueUploads = useCallback(
     async (dir: string, entries: SFTPEntry[], sources: UploadSource[]) => {
+      const names = sources.map(sourceName)
+      // Two different files with one name (dropped from search results, say)
+      // would land on the same remote path, the second silently replacing
+      // the first: refuse the batch instead.
+      const duplicate = names.find((name, i) => names.indexOf(name) !== i)
+      if (duplicate !== undefined) {
+        toast.error(
+          `Two of the files are named “${duplicate}”. Rename one, then upload them again.`
+        )
+        void logFrontendError({
+          level: 'info',
+          source: 'sftp.transfer',
+          message: `SFTP upload refused: duplicate name in batch: ${duplicate}`
+        })
+        return
+      }
       const existing = new Set(entries.map((e) => e.name))
-      const conflicts = sources.map(sourceName).filter((name) => existing.has(name))
+      const conflicts = names.filter((name) => existing.has(name))
       if (conflicts.length > 0) {
         setPendingReplace({ dir, sources, conflicts })
         return
