@@ -1,5 +1,5 @@
 import type { SFTPEntry } from '@shared/types/ssh.types'
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
@@ -31,7 +31,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { joinPath, parentPath, useSftpBrowser } from '@/hooks/use-sftp-browser'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { useSSHActions } from '@/stores/ssh-store'
+import { useSSHActions, useSSHStore } from '@/stores/ssh-store'
 
 interface SSHFileExplorerProps {
   /** Backend id of the connected session whose files are shown */
@@ -70,9 +70,21 @@ export function SSHFileExplorer({
   const [busy, setBusy] = useState(false)
   const [deleteEntry, setDeleteEntry] = useState<SFTPEntry | null>(null)
   const nameId = useId()
+  // Only the latest open may land in the editor (a slow read can finish last).
+  const openRequest = useRef(0)
 
   const openFile = async (entry: SFTPEntry) => {
+    // Never drop unsaved edits by opening another file over them.
+    const { editingFile, editingContent } = useSSHStore.getState()
+    if (editingFile && editingContent !== editingFile.originalContent) {
+      if (editingFile.path !== entry.path) {
+        toast.error(`Save or discard your changes to ${editingFile.name} first.`)
+      }
+      return
+    }
+    const request = ++openRequest.current
     const result = await sshApi.sftpReadFile(connectionId, entry.path)
+    if (request !== openRequest.current) return
     if (!result.success) {
       toast.error(`Couldn't open ${entry.name}: ${result.error}`)
       return

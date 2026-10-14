@@ -1,5 +1,6 @@
 import type { SFTPEntry } from '@shared/types/ssh.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSSHStore } from '@/stores/ssh-store'
 import { SSHFileExplorer } from './SSHFileExplorer'
@@ -74,6 +75,43 @@ describe('SSHFileExplorer', () => {
         content: 'listen 80;'
       })
     )
+  })
+
+  it('keeps the file opened last when an earlier read returns late', async () => {
+    const other: SFTPEntry = { ...entries[1], name: 'b.conf', path: '/home/u/b.conf' }
+    sshApi.sftpListDir.mockResolvedValue(ok([...entries, other]))
+    let finishFirst: (value: unknown) => void = () => {}
+    sshApi.sftpReadFile
+      .mockImplementationOnce(() => new Promise((resolve) => (finishFirst = resolve)))
+      .mockResolvedValueOnce(ok('second'))
+    await renderExplorer()
+    fireEvent.click(screen.getByTitle('Open app.conf'))
+    fireEvent.click(screen.getByTitle('Open b.conf'))
+    await waitFor(() => expect(useSSHStore.getState().editingFile?.path).toBe('/home/u/b.conf'))
+    finishFirst(ok('first, late'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(useSSHStore.getState().editingFile?.path).toBe('/home/u/b.conf')
+    expect(useSSHStore.getState().editingContent).toBe('second')
+  })
+
+  it('does not replace a file that has unsaved edits', async () => {
+    useSSHStore.setState({
+      editingFile: {
+        connectionId: 's1',
+        path: '/home/u/notes.txt',
+        name: 'notes.txt',
+        content: 'a',
+        originalContent: 'a'
+      },
+      editingContent: 'a, edited'
+    })
+    sshApi.sftpReadFile.mockResolvedValue(ok('listen 80;'))
+    await renderExplorer()
+    fireEvent.click(screen.getByTitle('Open app.conf'))
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(sshApi.sftpReadFile).not.toHaveBeenCalled()
+    expect(useSSHStore.getState().editingFile?.path).toBe('/home/u/notes.txt')
+    expect(useSSHStore.getState().editingContent).toBe('a, edited')
   })
 
   it('creates a folder through a named dialog and refreshes', async () => {

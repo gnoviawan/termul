@@ -39,15 +39,16 @@ export function useSSHPanelDialogs(): SSHPanelDialogsController {
     if (deletingId !== null) return
     setDeletingId(profile.id)
     try {
-      // Close the host's sessions first so nothing keeps running for a
-      // host that no longer exists.
-      const sessions = useSSHStore.getState().sessions.filter((s) => s.profileId === profile.id)
-      await Promise.all(sessions.map((s) => closeSSHSession(s.id)))
       const success = await deleteProfile(profile.id)
       if (!success) {
+        // The host still exists, so its live sessions stay open.
         toast.error(`Could not delete “${profile.name}”. Try again.`)
         return
       }
+      // Then close its sessions, so nothing keeps running for a host that
+      // no longer exists.
+      const sessions = useSSHStore.getState().sessions.filter((s) => s.profileId === profile.id)
+      await Promise.all(sessions.map((s) => closeSSHSession(s.id)))
       toast.success(`Deleted “${profile.name}”`)
     } catch (error) {
       toast.error(

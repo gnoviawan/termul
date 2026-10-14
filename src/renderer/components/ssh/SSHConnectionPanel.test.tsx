@@ -1,6 +1,7 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { copyText } from '@/lib/copy-text'
 import type { SSHSession } from '@/stores/ssh-store'
 import { SSHConnectionPanel } from './SSHConnectionPanel'
 
@@ -84,6 +85,17 @@ describe('host key', () => {
     expect(screen.getByText('ssh-ed25519 key fingerprint')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Trust and connect' }))
     expect(sessions.respondSSHHostKey).toHaveBeenCalledWith('tab', true)
+  })
+
+  it('only confirms a copy of the fingerprint that worked', async () => {
+    vi.mocked(copyText).mockResolvedValueOnce(false)
+    renderPanel({ status: 'awaitingInput', hostKeyPrompt: { ...prompt, status: 'unknown' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Copy fingerprint' }))
+    await act(async () => {})
+    expect(screen.getByRole('button', { name: 'Copy fingerprint' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy fingerprint' }))
+    expect(await screen.findByRole('button', { name: 'Fingerprint copied' })).toBeInTheDocument()
   })
 
   it('warns about a changed key, focuses Cancel and uses a destructive confirm', () => {

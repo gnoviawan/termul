@@ -1,5 +1,5 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -101,6 +101,13 @@ function Progress({ session, profile }: SSHConnectionPanelProps): React.JSX.Elem
 
 function Fingerprint({ value }: { value: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (resetTimer.current) clearTimeout(resetTimer.current)
+    },
+    []
+  )
   return (
     <div className="flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2">
       <code className="min-w-0 flex-1 select-all break-all font-mono text-xs text-foreground">
@@ -110,9 +117,12 @@ function Fingerprint({ value }: { value: string }): React.JSX.Element {
         type="button"
         className={cn(QUIET_ICON_BUTTON_CLASS, 'size-6 shrink-0')}
         onClick={() => {
-          void copyText(value).then(() => {
+          void copyText(value).then((ok) => {
+            // Only a copy that worked says "copied".
+            if (!ok) return
+            if (resetTimer.current) clearTimeout(resetTimer.current)
             setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
+            resetTimer.current = setTimeout(() => setCopied(false), 1500)
           })
         }}
         aria-label={copied ? 'Fingerprint copied' : 'Copy fingerprint'}

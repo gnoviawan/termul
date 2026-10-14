@@ -286,6 +286,18 @@ describe('SSHPanel delete', () => {
     expect(useSSHStore.getState().profiles).toHaveLength(1)
   })
 
+  it('keeps the host sessions when the delete fails', async () => {
+    sshApi.deleteProfile.mockResolvedValue({ success: false, error: 'locked', code: 'X' })
+    useSSHStore.setState({ sessions: [liveSession()] })
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled())
+    expect(sshApi.closeSession).not.toHaveBeenCalled()
+    expect(useSSHStore.getState().sessions).toHaveLength(1)
+  })
+
   it('reports a failed delete', async () => {
     sshApi.deleteProfile.mockResolvedValue({ success: false, error: 'locked', code: 'X' })
     render(<SSHPanel />)
