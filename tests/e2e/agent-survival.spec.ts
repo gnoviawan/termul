@@ -1,4 +1,4 @@
-import { expect, test } from 'playwright/test'
+import { expect, type Page, test } from 'playwright/test'
 import {
   chatCard,
   chatTab,
@@ -24,6 +24,23 @@ const PROMPT_A = 'alpha survey of things'
 const PROMPT_B = 'beta survey of things'
 const PROMPT_C = 'gamma survey of things'
 
+/** How long the closed chat stays detached; the agent streams 1 chunk/s. */
+const DETACHED_MS = 10_000
+/** Chunks past the pre-close one that must have streamed while detached. */
+const DETACHED_CHUNKS = 8
+/** Upper bound for the reopen to replay them (< DETACHED_CHUNKS seconds). */
+const REPLAY_MS = 5_000
+
+/** Highest `chunk-N` index in the page text, or -1 when none shows. */
+async function latestChunkIndex(page: Page): Promise<number> {
+  const text = await page.locator('body').innerText()
+  let latest = -1
+  for (const match of text.matchAll(/\bchunk-(\d+)\b/g)) {
+    latest = Math.max(latest, Number(match[1]))
+  }
+  return latest
+}
+
 test.beforeEach(async ({ page }) => {
   await openWorkspace(page)
 })
@@ -40,25 +57,31 @@ test('closing a chat mid-turn only detaches it: the host keeps the turn and a re
   expect(await chatTab(page, PROMPT_A).getAttribute('aria-label')).toContain('Working')
 
   // Close the chat tab mid-turn. The renderer decides no agent lifetime: the
-  // tab goes away at once and the host keeps running the turn.
+  // tab goes away at once and the host keeps running the turn. Note the last
+  // chunk the tab showed: the fake agent streams one chunk per second.
+  const lastChunkBeforeClose = await latestChunkIndex(page)
   await chatTab(page, PROMPT_A).hover()
   await page.locator('[aria-label="Close tab"]').first().click()
   await expect(chatTab(page, PROMPT_A)).toBeHidden()
 
-  // Let the host stream a few chunks while no tab shows the chat, then reopen
-  // it from the project's history index (the session is still recorded
+  // Let the host stream for DETACHED_MS while no tab shows the chat, then
+  // reopen it from the project's history index (the session is still recorded
   // server-side). Use the Side panel's Chats card — body-first matching could
   // hit the tab bar's title span instead of the history card.
-  await page.waitForTimeout(5_000)
+  await page.waitForTimeout(DETACHED_MS)
   await selectColumnTab(page, 'Chats')
   await chatCard(page, PROMPT_A).click()
   await expect(chatTab(page, PROMPT_A)).toBeVisible()
 
-  // The transcript includes the chunks that streamed while closed (durable
-  // history replay, not a blank chat), and the turn is still running.
+  // The reopened transcript shows chunks that streamed while the chat was
+  // closed (durable history replay, not a blank chat). The target chunk is
+  // DETACHED_CHUNKS past the last one seen before the close, and it must show
+  // within REPLAY_MS of the reopen. A stream that stopped at the close and
+  // resumed on the reopen needs DETACHED_CHUNKS seconds (> REPLAY_MS) to
+  // reach it, so only streaming during the detached window passes.
   await expect
-    .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-7 ')
+    .poll(async () => page.locator('body').innerText(), { timeout: REPLAY_MS })
+    .toContain(`chunk-${lastChunkBeforeClose + DETACHED_CHUNKS} `)
   await expect(chatTab(page, PROMPT_A)).toHaveAttribute('aria-label', /Working/)
 })
 
@@ -204,9 +227,11 @@ test('three projects run concurrently with isolated transcripts', async ({ page 
   await selectProject(page, 'proj-a')
   await expect(chatTab(page, ISO_A)).toBeVisible()
 
-  // No foreign chat tabs in any project's pane (the pane tree is shared
-  // across projects, so a leaked tab would render another project's chat).
-  const tabsTitled = (title: string) => page.locator(`[draggable="true"][aria-label^="${title}"]`)
+  // No foreign chat tabs in the visible pane tree. Each visited project keeps
+  // its own pane tree mounted but hidden, so count only visible tabs: a leaked
+  // tab would render another project's chat in the active project.
+  const tabsTitled = (title: string) =>
+    page.locator(`[draggable="true"][aria-label^="${title}"]`).filter({ visible: true })
   await expect(tabsTitled(ISO_B)).toHaveCount(0)
   await selectProject(page, 'proj-b')
   await expect(chatTab(page, ISO_B)).toBeVisible()
