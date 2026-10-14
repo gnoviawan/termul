@@ -10,6 +10,7 @@ import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { sshApi } from '@/lib/api'
 import { syncSharedKey } from '@/lib/shared-key-sync'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
 /** The Hosts tab of the SSH workspace; every other tab is a session id. */
 export const SSH_HOSTS_TAB = 'hosts'
@@ -171,15 +172,20 @@ export const useSSHStore = create<SSHState>((set, get) => ({
   saveProfile: async (profile: SSHProfile) => {
     const result = await sshApi.saveProfile(profile)
     if (!result.success) return false
+    // Mirror the backend flags so the editor shows "saved in keychain"
+    // without a reload. Only the desktop has a keychain: the web client
+    // stores profiles without secrets, so it never reports one as saved.
+    const keychain = isTauriContext()
     const sanitized = withoutSecrets({
       ...profile,
-      // Mirror the backend flags so the editor shows "saved in keychain"
-      // without a reload.
       hasStoredPassword:
+        keychain &&
         profile.authMethod === 'password' &&
-        (Boolean(profile.password) || profile.hasStoredPassword),
+        (Boolean(profile.password) || Boolean(profile.hasStoredPassword)),
       hasStoredPassphrase:
-        profile.authMethod === 'key' && (Boolean(profile.passphrase) || profile.hasStoredPassphrase)
+        keychain &&
+        profile.authMethod === 'key' &&
+        (Boolean(profile.passphrase) || Boolean(profile.hasStoredPassphrase))
     })
     set((state) => {
       const exists = state.profiles.some((p) => p.id === profile.id)
