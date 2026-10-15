@@ -5,7 +5,12 @@ import { readActiveProject } from '@/lib/active-project'
 import { filesystemApi } from '@/lib/api'
 import { importLegacyProjects } from '@/lib/legacy-project-import'
 import { logFrontendError } from '@/lib/log-api'
-import { getProjectPrefs, loadProjectPrefs, persistProjectPrefs } from '@/lib/project-prefs'
+import {
+  getProjectLayout,
+  getProjectPrefs,
+  loadProjectPrefs,
+  persistProjectPrefs
+} from '@/lib/project-prefs'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useWebAuthGateOk } from '@/lib/web-auth-gate'
 import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
@@ -21,6 +26,66 @@ function logFailure(source: string, message: string, error: unknown): void {
     source: `use-project-registry.${source}`,
     message: `${message}: ${error instanceof Error ? error.message : String(error)}`
   })
+}
+
+/**
+ * Waits between boot-time reads of the project prefs. The host store can still
+ * be starting, and one failed read must not turn saving off for the session.
+ */
+const PREFS_READ_RETRY_MS = [300, 1000, 3000]
+
+/**
+ * Read the prefs before the first state is applied, retrying a failed read a
+ * few times. A record that stays unreadable returns `false`: the list still
+ * comes from the host, but nothing is saved over the record.
+ */
+async function loadProjectPrefsWithRetry(isCancelled: () => boolean): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    const readable = await loadProjectPrefs().catch((error: unknown) => {
+      logFailure('loadProjectPrefs', 'reading the project prefs failed', error)
+      return false
+    })
+    if (readable || isCancelled()) return readable
+    if (attempt >= PREFS_READ_RETRY_MS.length) {
+      logFailure(
+        'loadProjectPrefs',
+        'project prefs stayed unreadable, saves are off for this session',
+        'retries exhausted'
+      )
+      return false
+    }
+    await new Promise((resolve) => setTimeout(resolve, PREFS_READ_RETRY_MS[attempt]))
+  }
+}
+
+/** How often a prefs record that could not be read is read again. */
+const PREFS_RECOVERY_MS = 5000
+
+/**
+ * Read the prefs again until the record reads, then resolve `true`. Resolves
+ * `false` once the hook is gone.
+ */
+async function recoverProjectPrefs(isCancelled: () => boolean): Promise<boolean> {
+  while (!isCancelled()) {
+    await new Promise((resolve) => setTimeout(resolve, PREFS_RECOVERY_MS))
+    if (isCancelled()) return false
+    const readable = await loadProjectPrefs().catch(() => false)
+    if (readable) return true
+  }
+  return false
+}
+
+/**
+ * Add the saved groups the store does not have yet (they were unreadable when
+ * the list loaded). Groups the store already has keep their current state.
+ */
+function mergeRecoveredGroups(): void {
+  const { groups: saved } = getProjectLayout()
+  const current = useProjectStore.getState().groups
+  const known = new Set(current.map((group) => group.id))
+  const missing = saved.filter((group) => !known.has(group.id))
+  if (missing.length === 0) return
+  useProjectStore.setState({ groups: [...current, ...missing] })
 }
 
 /**
@@ -80,10 +145,7 @@ export function useProjectRegistry(): void {
           (error: unknown) => logFailure('import', 'the project import threw', error)
         )
       }
-      const prefsReadable = await loadProjectPrefs().catch((error: unknown) => {
-        logFailure('loadProjectPrefs', 'reading the project prefs failed', error)
-        return false
-      })
+      const prefsReadable = await loadProjectPrefsWithRetry(() => cancelled)
       const savedActiveProjectId = await readActiveProject().catch(() => null)
       if (cancelled) return
 
@@ -150,7 +212,7 @@ export function useProjectRegistry(): void {
         })
       }
 
-      if (prefsReadable) {
+      const installSaves = (): void => {
         unsubscribeStore = useProjectStore.subscribe((state, prevState) => {
           if (!state.isLoaded) return
           if (state.projects === prevState.projects && state.groups === prevState.groups) return
@@ -158,6 +220,24 @@ export function useProjectRegistry(): void {
             (error: unknown) =>
               logFailure('persistProjectPrefs', 'saving the project prefs failed', error)
           )
+        })
+      }
+      if (prefsReadable) {
+        installSaves()
+      } else {
+        // Keep trying in the background: a store that was slow at boot must not
+        // leave every group of this session unsaved. Once the record reads, the
+        // groups it holds join the store and the current state is saved.
+        void recoverProjectPrefs(() => cancelled).then((recovered) => {
+          if (!recovered || cancelled) return
+          mergeRecoveredGroups()
+          installSaves()
+          const state = useProjectStore.getState()
+          if (state.isLoaded) {
+            persistProjectPrefs(state.projects, state.groups, []).catch((error: unknown) =>
+              logFailure('persistProjectPrefs', 'saving the recovered project prefs failed', error)
+            )
+          }
         })
       }
     }
