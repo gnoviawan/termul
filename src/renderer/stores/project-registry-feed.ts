@@ -102,7 +102,16 @@ export function applyRegistryList(
       ? savedActiveProjectId
       : null
   const activeProjectId = pickActiveProjectId(projects, preferred, list.defaultProjectId)
-  state.setProjects(projects, activeProjectId, state.isLoaded ? state.groups : layout.groups)
+  // Groups created before the first list landed stay; the saved ones fill in the rest.
+  const groups = state.isLoaded
+    ? state.groups
+    : [
+        ...layout.groups.filter(
+          (layoutGroup) => !state.groups.some((group) => group.id === layoutGroup.id)
+        ),
+        ...state.groups
+      ]
+  state.setProjects(projects, activeProjectId, groups)
   // The project this device was on is gone: leave its chat route.
   if (state.isLoaded && activeProjectId !== state.activeProjectId) clearChatRoute()
   return activeProjectId

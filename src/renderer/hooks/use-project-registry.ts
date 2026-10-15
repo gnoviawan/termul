@@ -19,6 +19,7 @@ import { applyRegistryList } from '@/stores/project-registry-feed'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatusStore } from '@/stores/remote-status-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
+import type { Project } from '@/types/project'
 
 function logFailure(source: string, message: string, error: unknown): void {
   void logFrontendError({
@@ -76,16 +77,26 @@ async function recoverProjectPrefs(isCancelled: () => boolean): Promise<boolean>
 }
 
 /**
- * Add the saved groups the store does not have yet (they were unreadable when
- * the list loaded). Groups the store already has keep their current state.
+ * Bring the saved layout and client-only fields into the store once the prefs
+ * read again. Groups the store already has keep their state, and a project
+ * field the store already set (changed while unreadable) wins over the saved one.
  */
-function mergeRecoveredGroups(): void {
+function mergeRecoveredPrefs(): void {
   const { groups: saved } = getProjectLayout()
-  const current = useProjectStore.getState().groups
-  const known = new Set(current.map((group) => group.id))
-  const missing = saved.filter((group) => !known.has(group.id))
-  if (missing.length === 0) return
-  useProjectStore.setState({ groups: [...current, ...missing] })
+  const state = useProjectStore.getState()
+  const knownGroups = new Set(state.groups.map((group) => group.id))
+  const missingGroups = saved.filter((group) => !knownGroups.has(group.id))
+  const projects = state.projects.map((project) => {
+    const savedFields = getProjectPrefs(project.id)
+    if (!savedFields) return project
+    const fill = Object.fromEntries(
+      Object.entries(savedFields).filter(
+        ([key, value]) => value !== undefined && project[key as keyof Project] === undefined
+      )
+    )
+    return { ...project, ...fill }
+  })
+  useProjectStore.setState({ groups: [...state.groups, ...missingGroups], projects })
 }
 
 /**
@@ -230,7 +241,7 @@ export function useProjectRegistry(): void {
         // groups it holds join the store and the current state is saved.
         void recoverProjectPrefs(() => cancelled).then((recovered) => {
           if (!recovered || cancelled) return
-          mergeRecoveredGroups()
+          mergeRecoveredPrefs()
           installSaves()
           const state = useProjectStore.getState()
           if (state.isLoaded) {

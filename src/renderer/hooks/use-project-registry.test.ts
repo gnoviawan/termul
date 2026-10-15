@@ -258,6 +258,43 @@ describe('useProjectRegistry', () => {
         'Old group'
       ])
     }, 15000)
+
+    it('keeps a listed project saved prefs after the read recovers', async () => {
+      h.store.set('project-prefs', {
+        projects: { a: { defaultShell: '/bin/zsh', gitBranch: 'feature' } },
+        groups: [],
+        order: [],
+        updatedAt: 't'
+      } satisfies ProjectPrefsRecord)
+      for (let i = 0; i < 1 + 3; i++) {
+        vi.mocked(persistenceApi.read).mockImplementationOnce(async () => ({
+          success: false,
+          code: 'TIMEOUT',
+          error: 'store socket did not answer'
+        }))
+      }
+
+      mount()
+      await waitFor(() => expect(h.subscribe).toHaveBeenCalled(), { timeout: 8000 })
+      act(() => watchHandlers().onState(list([summary('a')])))
+      await waitFor(() => expect(useProjectStore.getState().isLoaded).toBe(true))
+      act(() => useProjectStore.getState().addGroup('Triggers a save'))
+
+      // The group only reaches the record once the read has recovered and saving is on.
+      await waitFor(
+        () => {
+          const saved = h.store.get('project-prefs') as ProjectPrefsRecord | undefined
+          expect(saved?.groups.map((g) => g.name)).toEqual(['Triggers a save'])
+        },
+        { timeout: 9000 }
+      )
+      const saved = h.store.get('project-prefs') as ProjectPrefsRecord
+      expect(saved.projects.a).toMatchObject({ defaultShell: '/bin/zsh', gitBranch: 'feature' })
+      expect(useProjectStore.getState().projects[0]).toMatchObject({
+        defaultShell: '/bin/zsh',
+        gitBranch: 'feature'
+      })
+    }, 15000)
   })
 
   describe('active project', () => {
