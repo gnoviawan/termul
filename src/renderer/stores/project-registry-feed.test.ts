@@ -186,6 +186,23 @@ describe('applyRegistryList', () => {
       applyRegistryList(list([summary('a'), summary('b')]), null)
       expect(useProjectStore.getState().groups.map((g) => g.name)).toEqual(['Renamed'])
     })
+
+    it('keeps a group created before the first state, next to the saved ones', async () => {
+      persisted.record = prefsRecord({
+        groups: [{ id: 'g', name: 'Saved', projectIds: ['a'] }]
+      })
+      await loadProjectPrefs()
+      useProjectStore.setState({
+        groups: [{ id: 'new', name: 'Created early', projectIds: [] }]
+      })
+
+      applyRegistryList(list([summary('a')]), null)
+
+      expect(useProjectStore.getState().groups.map((g) => g.name)).toEqual([
+        'Saved',
+        'Created early'
+      ])
+    })
   })
 
   describe('active project', () => {
