@@ -56,6 +56,8 @@ async function loadProjectPrefsWithRetry(isCancelled: () => boolean): Promise<bo
       return false
     }
     await new Promise((resolve) => setTimeout(resolve, PREFS_READ_RETRY_MS[attempt]))
+    // A hook unmounted during the delay must not reload the shared prefs.
+    if (isCancelled()) return false
   }
 }
 

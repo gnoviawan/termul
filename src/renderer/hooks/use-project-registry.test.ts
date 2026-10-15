@@ -295,6 +295,24 @@ describe('useProjectRegistry', () => {
         gitBranch: 'feature'
       })
     }, 15000)
+
+    it('stops retrying the prefs read once the hook is unmounted', async () => {
+      vi.mocked(persistenceApi.read).mockImplementationOnce(async () => ({
+        success: false,
+        code: 'TIMEOUT',
+        error: 'store socket did not answer'
+      }))
+      const prefsReads = () =>
+        vi.mocked(persistenceApi.read).mock.calls.filter(([key]) => key === 'project-prefs').length
+
+      const { unmount } = mount()
+      await waitFor(() => expect(prefsReads()).toBe(1))
+      unmount()
+
+      // Longer than the first retry delay: a live hook would read the prefs again by now.
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      expect(prefsReads()).toBe(1)
+    })
   })
 
   describe('active project', () => {
