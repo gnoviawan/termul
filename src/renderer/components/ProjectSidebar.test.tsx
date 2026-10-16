@@ -7,11 +7,15 @@ import type { Project } from '@/types/project'
 import { ProjectSidebar } from './ProjectSidebar'
 
 const {
+  mockSelectDirectory,
+  toastMock,
   mockGetAvailableShells,
   mockUseProjectsWithActivity,
   mockUseProjectsWithErrors,
   mockUseProjectsWithActiveAgentChat
 } = vi.hoisted(() => ({
+  mockSelectDirectory: vi.fn(),
+  toastMock: Object.assign(vi.fn(), { error: vi.fn() }),
   mockGetAvailableShells: vi.fn(),
   mockUseProjectsWithActivity: vi.fn(),
   mockUseProjectsWithErrors: vi.fn(),
@@ -19,6 +23,9 @@ const {
 }))
 
 vi.mock('@/lib/api', () => ({
+  dialogApi: {
+    selectDirectory: mockSelectDirectory
+  },
   shellApi: {
     getAvailableShells: mockGetAvailableShells
   },
@@ -35,6 +42,8 @@ vi.mock('@/lib/api', () => ({
     writeText: vi.fn().mockResolvedValue({ success: true })
   }
 }))
+
+vi.mock('sonner', () => ({ toast: toastMock }))
 
 vi.mock('@/stores/terminal-store', async () => {
   const actual = await vi.importActual('@/stores/terminal-store')
@@ -58,183 +67,7 @@ vi.mock('@/lib/utils', async () => {
   return { ...actual }
 })
 
-// Stub the Radix context-menu primitives. The real primitives render via a
-// portal + Radix positioning + pointer-based `onSelect` that is hard to drive
-// from jsdom; this stub models the open/submenu/radio state in plain DOM so
-// the existing menu tests (open on right-click, click wiring, submenu hover,
-// Escape close, capability-gated items) assert the gating logic without the
-// Radix portal/pointer plumbing. Mirrors the FileTreeContextMenu /
-// GlobalContextMenu stub patterns.
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
-    open: false,
-    setOpen: () => {}
-  })
-  const SubCtx = React.createContext<{ subOpen: boolean; setSubOpen: (o: boolean) => void }>({
-    subOpen: false,
-    setSubOpen: () => {}
-  })
-  const RadioCtx = React.createContext<{ value: string; onValueChange: (v: string) => void }>({
-    value: '',
-    onValueChange: () => {}
-  })
-
-  const ContextMenu = ({ children }: { children: React.ReactNode }) => {
-    const [open, setOpen] = React.useState(false)
-    React.useEffect(() => {
-      if (!open) return
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') setOpen(false)
-      }
-      document.addEventListener('keydown', onKey)
-      return () => document.removeEventListener('keydown', onKey)
-    }, [open])
-    return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
-  }
-  const ContextMenuTrigger = ({
-    children,
-    asChild
-  }: {
-    children: React.ReactNode
-    asChild?: boolean
-  }) => {
-    const { setOpen } = React.useContext(MenuCtx)
-    const merged = (e: React.MouseEvent) => {
-      // F2: mirror Radix's composeEventHandlers({ checkForDefaultPrevented: true }) —
-      // the child's onContextMenu runs first; if it called preventDefault, do NOT
-      // open. This makes the stub catch F1-type regressions (a handler that
-      // re-introduces preventDefault would suppress the menu open).
-      if (e.defaultPrevented) return
-      e.preventDefault()
-      setOpen(true)
-    }
-    if (asChild && React.isValidElement(children)) {
-      const child = children as React.ReactElement<{
-        onContextMenu?: (e: React.MouseEvent) => void
-      }>
-      return React.cloneElement(child, {
-        onContextMenu: (e: React.MouseEvent) => {
-          child.props.onContextMenu?.(e)
-          merged(e)
-        }
-      })
-    }
-    return <div onContextMenu={merged}>{children}</div>
-  }
-  const ContextMenuContent = ({ children }: { children: React.ReactNode }) => {
-    const { open } = React.useContext(MenuCtx)
-    if (!open) return null
-    return <div role="menu">{children}</div>
-  }
-  const ContextMenuItem = ({
-    children,
-    disabled,
-    onSelect,
-    variant
-  }: {
-    children: React.ReactNode
-    disabled?: boolean
-    onSelect?: () => void
-    variant?: 'default' | 'destructive'
-  }) => (
-    <div
-      role="menuitem"
-      data-disabled={disabled ? '' : undefined}
-      data-variant={variant}
-      onClick={() => {
-        if (!disabled) onSelect?.()
-      }}
-    >
-      {children}
-    </div>
-  )
-  const ContextMenuSeparator = () => <hr />
-  const ContextMenuSub = ({ children }: { children: React.ReactNode }) => {
-    const [subOpen, setSubOpen] = React.useState(false)
-    return <SubCtx.Provider value={{ subOpen, setSubOpen }}>{children}</SubCtx.Provider>
-  }
-  const ContextMenuSubTrigger = ({ children }: { children: React.ReactNode }) => {
-    const { setSubOpen } = React.useContext(SubCtx)
-    return (
-      <div role="menuitem" onMouseEnter={() => setSubOpen(true)}>
-        {children}
-      </div>
-    )
-  }
-  const ContextMenuSubContent = ({
-    children,
-    className,
-    style,
-    'data-testid': testId
-  }: {
-    children: React.ReactNode
-    className?: string
-    style?: React.CSSProperties
-    'data-testid'?: string
-  }) => {
-    const { subOpen } = React.useContext(SubCtx)
-    if (!subOpen) return null
-    return (
-      <div className={className} style={style} data-testid={testId}>
-        {children}
-      </div>
-    )
-  }
-  const ContextMenuRadioGroup = ({
-    children,
-    value,
-    onValueChange
-  }: {
-    children: React.ReactNode
-    value: string
-    onValueChange: (v: string) => void
-  }) => <RadioCtx.Provider value={{ value, onValueChange }}>{children}</RadioCtx.Provider>
-  const ContextMenuRadioItem = ({
-    children,
-    value
-  }: {
-    children: React.ReactNode
-    value: string
-  }) => {
-    const { onValueChange } = React.useContext(RadioCtx)
-    return (
-      <div role="menuitemradio" onClick={() => onValueChange(value)}>
-        {children}
-      </div>
-    )
-  }
-  const ContextMenuCheckboxItem = ({
-    children,
-    checked,
-    onSelect
-  }: {
-    children: React.ReactNode
-    checked?: boolean
-    onSelect?: () => void
-  }) => (
-    <div
-      role="menuitemcheckbox"
-      data-checked={checked ? '' : undefined}
-      onClick={() => onSelect?.()}
-    >
-      {children}
-    </div>
-  )
-  return {
-    ContextMenu,
-    ContextMenuTrigger,
-    ContextMenuContent,
-    ContextMenuItem,
-    ContextMenuSeparator,
-    ContextMenuSub,
-    ContextMenuSubTrigger,
-    ContextMenuSubContent,
-    ContextMenuRadioGroup,
-    ContextMenuRadioItem,
-    ContextMenuCheckboxItem
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 // Setup mock data
 beforeEach(() => {
@@ -1238,6 +1071,42 @@ describe('ProjectSidebar: Mono-style alignment and groups', () => {
     fireEvent.contextMenu(screen.getByText('My Folder'))
 
     expect(screen.getByText('Rename Group')).toBeInTheDocument()
+  })
+
+  function importProjectIntoGroup(): void {
+    fireEvent.contextMenu(screen.getByText('My Folder'))
+    fireEvent.mouseEnter(screen.getByText('Add Project'))
+    fireEvent.click(screen.getByText('Import Project...'))
+  }
+
+  it('confirms an imported project with a sonner toast', async () => {
+    mockSelectDirectory.mockResolvedValue({ success: true, data: '/repo/imported' })
+    const addProject = vi.fn().mockResolvedValue({ id: 'imported' })
+    useProjectStore.setState({ groups: [group(true)], addProject })
+    renderWithRouter({ projects: railProjects.slice(0, 3) })
+
+    importProjectIntoGroup()
+
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith('Project created', {
+        description: 'Created project "imported" and added to group.'
+      })
+    )
+    expect(addProject).toHaveBeenCalledWith('imported', 'blue', '/repo/imported')
+  })
+
+  it('reports a failed project import with a sonner error toast', async () => {
+    mockSelectDirectory.mockRejectedValue(new Error('dialog failed'))
+    useProjectStore.setState({ groups: [group(true)] })
+    renderWithRouter({ projects: railProjects.slice(0, 3) })
+
+    importProjectIntoGroup()
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith('Error', {
+        description: 'Failed to create project from folder: dialog failed'
+      })
+    )
   })
 
   it('renames a group inline from the menu', () => {

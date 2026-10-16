@@ -39,6 +39,7 @@ function slashItemToComposer(item: SlashItem): ComposerMenuItem {
   return {
     key: itemKey(item),
     label,
+    hint: item.kind === 'command' ? item.hint : null,
     description: item.description,
     icon: Icon,
     // Skill rows share the accent `Sparkles` treatment with `SkillChip`

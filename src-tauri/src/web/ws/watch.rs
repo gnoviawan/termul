@@ -1,13 +1,14 @@
 //! `watch` / `unwatch` handlers: subscriptions to the watches of
 //! [`crate::web::watch::WatchHub`] (projects, chat-history index, agent
-//! roster, project file changes, store keys, project terminal set). The
-//! notify watchers behind the `fs` watch live in
+//! roster, project file changes, store keys, project terminal set, chat
+//! last-read markers). The notify watchers behind the `fs` watch live in
 //! [`crate::web::fs_watcher::FsWatchHub`]; connection close releases every
 //! subscription through `ConnectionCleanup`.
 
 use super::*;
 use crate::web::watch::{
-    agents_state, chat_history_state, fs_state, projects_state, store_state, terminals_state,
+    agents_state, chat_history_state, chat_reads_state, fs_state, projects_state, store_state,
+    terminals_state,
     SubscribeError, WatchKind,
 };
 
@@ -44,10 +45,11 @@ pub(super) fn handle_watch(id: String, payload: &Value, env: &HandlerEnv) -> WsR
     let relay = &env.relay;
     let hub = relay.watches();
     let subscribed = match kind {
-        WatchKind::Projects | WatchKind::ChatHistory | WatchKind::Agents => {
+        WatchKind::Projects | WatchKind::ChatHistory | WatchKind::Agents | WatchKind::ChatReads => {
             hub.subscribe(kind, &scope, &env.out_tx, || match kind {
                 WatchKind::Projects => projects_state(&env.registry),
                 WatchKind::ChatHistory => chat_history_state(relay, env.history_mode),
+                WatchKind::ChatReads => chat_reads_state(relay),
                 _ => agents_state(&env.acp),
             })
         }

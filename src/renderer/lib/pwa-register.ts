@@ -11,15 +11,6 @@
  * - No `navigator.serviceWorker`: skip.
  * - Registration failure: `warn` — never thrown, never blocking app boot.
  *
- * Logging note: the backend `POST /log/frontend-error` endpoint is
- * loopback-gated, so it only accepts reports where the skip branches can
- * never fire (an insecure context is definitionally a non-loopback
- * `http://` origin — the POST would be refused). The two capability skips
- * therefore log locally via `console.info` (the diagnostic that is actually
- * visible where the skip happens); the `warn` registration-failure path
- * reports through `logFrontendError` (it lands on loopback-https deploys)
- * AND `console.warn` so it stays visible off-loopback too.
- *
  * Registration is deferred to `window load` (or run immediately when the
  * document is already complete) so the `/sw.js` fetch never competes with
  * first paint.
@@ -72,8 +63,7 @@ export function registerServiceWorker(): void {
   }
   // Secure context is a hard browser rule for SW + install (https:// or
   // localhost). A plain http:// LAN visit stays a normal tab — log locally
-  // so the skip is diagnosable, not silent (see the module doc for why this
-  // is console.info rather than the loopback-gated backend log).
+  // so the skip is diagnosable, not silent.
   if (!window.isSecureContext) {
     console.info(
       `[${LOG_SOURCE}] service worker skipped: insecure context (install requires HTTPS or localhost)`

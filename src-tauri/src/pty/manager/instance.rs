@@ -30,11 +30,7 @@ pub struct TerminalInstance {
     /// spawn, so a cursor `lastSeq` is only meaningful with the epoch it was
     /// issued under.
     pub log_epoch: String,
-    /// Count of live web WS attachments (terminal_ws attach handlers
-    /// increment; connection teardown decrements). `list_preserved`
-    /// reattachment skips terminals with a live attachment so a second
-    /// browser connection cannot invalidate the first one's claim
-    pub web_attachments: Arc<AtomicUsize>,
+    pub live_attachments: Arc<AtomicUsize>,
     /// Told when this terminal gains its first or loses its last web
     /// attachment (the `attached` flag of the `terminals` watch).
     pub set_observer: TerminalSetObserver,
@@ -79,22 +75,22 @@ impl TerminalInstance {
         self.exited_at.lock().map(|at| at.elapsed())
     }
 
-    /// Whether any web WS connection currently holds a live attachment for
-    /// this terminal (forwarder task active).
-    pub fn has_web_attachment(&self) -> bool {
-        self.web_attachments.load(Ordering::Acquire) > 0
+    /// Whether a web WS connection or a desktop `terminal_attach` forwarder
+    /// currently streams this terminal's output.
+    pub fn has_live_attachment(&self) -> bool {
+        self.live_attachments.load(Ordering::Acquire) > 0
     }
 
-    /// Record a live web attachment (attach handler).
-    pub fn add_web_attachment(&self) {
-        if self.web_attachments.fetch_add(1, Ordering::AcqRel) == 0 {
+    /// Record a live attachment (web attach handler or desktop forwarder).
+    pub fn add_live_attachment(&self) {
+        if self.live_attachments.fetch_add(1, Ordering::AcqRel) == 0 {
             self.set_observer.notify(self.project_id.as_deref());
         }
     }
 
-    /// Release a web attachment (connection teardown / detach). Only the
+    /// Release a live attachment (teardown / detach). Only the
     /// attachment count drops: the PTY keeps running.
-    pub fn remove_web_attachment(&self) {
+    pub fn remove_live_attachment(&self) {
         // fetch_update always returns Ok (closure never fails); the result
         // value carries the previous count, which is not needed here.
         // Deprecated in Rust 1.99 for `try_update`, but try_update requires
@@ -102,7 +98,7 @@ impl TerminalInstance {
         // the MSRV catches up.
         #[allow(deprecated)]
         let previous = self
-            .web_attachments
+            .live_attachments
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
                 Some(v.saturating_sub(1))
             });

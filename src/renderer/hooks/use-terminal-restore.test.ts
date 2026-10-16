@@ -1154,6 +1154,110 @@ describe('useTerminalRestore', () => {
     expect(ptyIds).toEqual(['terminal-100-1', 'terminal-999-9'])
   })
 
+  describe('cancelled restore with live preserved PTYs', () => {
+    const settleRestore = () => new Promise((resolve) => setTimeout(resolve, 50))
+
+    const renderSwitchableHook = () =>
+      renderHook(
+        ({ projectId }) => {
+          mockProjectState.activeProjectId = projectId
+          useTerminalRestore()
+        },
+        { initialProps: { projectId: 'project-a' } }
+      )
+
+    it('kills only the PTY it spawned when cancelled after reattaching a live PTY', async () => {
+      mockLoadPersistedTerminals.mockImplementation(async (projectId: string) =>
+        projectId === 'project-a'
+          ? {
+              activeTerminalId: 'persisted-a',
+              terminals: [
+                mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a' }),
+                mockPersistedTerminal({ id: 'persisted-b', name: 'B', cwd: '/projects/a' })
+              ],
+              updatedAt: '2026-03-09T00:00:00.000Z'
+            }
+          : null
+      )
+      mockListPreserved.mockResolvedValue({
+        success: true,
+        data: [
+          mockPreservedPty({
+            id: 'terminal-live-1',
+            shell: '/bin/bash',
+            cwd: '/projects/a',
+            claim: 'claim-live-1'
+          })
+        ]
+      })
+      let resolveSpawn: (value: unknown) => void = () => {}
+      mockTerminalSpawn.mockImplementation(() => new Promise((resolve) => (resolveSpawn = resolve)))
+
+      const { rerender } = renderSwitchableHook()
+      await waitFor(() => expect(mockTerminalSpawn).toHaveBeenCalledTimes(1))
+      expect(mockTerminalAttach).toHaveBeenCalledWith('terminal-live-1', 'claim-live-1', 0)
+
+      rerender({ projectId: 'project-b' })
+      resolveSpawn({ success: true, data: mockSpawnedTerminal({ id: 'pty-new-b' }) })
+      await waitFor(() => expect(mockTerminalKill).toHaveBeenCalled())
+      await settleRestore()
+
+      expect(mockTerminalKill.mock.calls).toEqual([['pty-new-b']])
+    })
+
+    it('kills only the PTY it spawned when cancelled while attaching a leftover live PTY', async () => {
+      mockLoadPersistedTerminals.mockImplementation(async (projectId: string) =>
+        projectId === 'project-a'
+          ? {
+              activeTerminalId: 'persisted-a',
+              terminals: [
+                mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a' })
+              ],
+              updatedAt: '2026-03-09T00:00:00.000Z'
+            }
+          : null
+      )
+      mockListPreserved.mockResolvedValue({
+        success: true,
+        data: [
+          mockPreservedPty({
+            id: 'terminal-leftover-1',
+            shell: '/bin/bash',
+            cwd: '/elsewhere',
+            claim: 'claim-leftover-1'
+          })
+        ]
+      })
+      mockTerminalSpawn.mockResolvedValue({
+        success: true,
+        data: mockSpawnedTerminal({ id: 'pty-new-a' })
+      })
+      let resolveAttach: (value: unknown) => void = () => {}
+      mockTerminalAttach.mockImplementation(
+        () => new Promise((resolve) => (resolveAttach = resolve))
+      )
+
+      const { rerender } = renderSwitchableHook()
+      await waitFor(() =>
+        expect(mockTerminalAttach).toHaveBeenCalledWith(
+          'terminal-leftover-1',
+          'claim-leftover-1',
+          0
+        )
+      )
+
+      rerender({ projectId: 'project-b' })
+      resolveAttach({
+        success: true,
+        data: mockAttachResult({ id: 'terminal-leftover-1', cwd: '/elsewhere', latestSeq: 5 })
+      })
+      await waitFor(() => expect(mockTerminalKill).toHaveBeenCalled())
+      await settleRestore()
+
+      expect(mockTerminalKill.mock.calls).toEqual([['pty-new-a']])
+    })
+  })
+
   it('accumulates no leaked PTYs across three reload cycles (preserved count stable)', async () => {
     // Three sequential "reloads": each cycle re-lists the SAME two preserved
     // PTYs, reattaches them, and never spawns. The terminal store starts

@@ -389,7 +389,7 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     // The host's single-owner guard rejection trumps the liveness gate: the
     // turn provably lives, so the catch attaches unconditionally.
     expect(transport.loadSession).toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-bandproof', 10, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-bandproof', 0, true)
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)
     // The degrade cleared the optimistic id; attachLiveTurn's fallback wins.
@@ -407,7 +407,9 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     const session = useAcpStore.getState().sessions['s-live']
     expect(transport.spawnAgent).not.toHaveBeenCalled()
     expect(transport.loadSession).not.toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-live', 10, true)
+    // The replay starts just before the open turn's prompt (seq 1), not at
+    // the watermark (10), so the turn's tool cards come back in full.
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-live', 0, true)
     expect(session?.agentId).toBe('agent-owner')
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)
@@ -441,7 +443,7 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     const session = useAcpStore.getState().sessions['s-desk']
     expect(transport.spawnAgent).not.toHaveBeenCalled()
     expect(transport.loadSession).not.toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-desk', 10, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-desk', 0, true)
     expect(session?.agentId).toBe('agent-desktop-owner')
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)
@@ -573,7 +575,7 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
 
     const session = useAcpStore.getState().sessions['s-rlive']
     expect(transport.resumeSession).not.toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-rlive', 10, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-rlive', 0, true)
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)
   })
@@ -591,7 +593,7 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     await useAcpStore.getState().resumeLiveSession('s-rflag', 'agent-r', '/w')
 
     const session = useAcpStore.getState().sessions['s-rflag']
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-rflag', 10, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-rflag', 0, true)
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)
   })
@@ -633,7 +635,7 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
 
     const session = useAcpStore.getState().sessions['s-rband']
     expect(transport.resumeSession).toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-rband', 10, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-rband', 0, true)
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)
   })
@@ -701,7 +703,7 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
     await useAcpStore.getState().openHistorySession('s-unlist')
 
     const session = useAcpStore.getState().sessions['s-unlist']
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-unlist', 10, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-unlist', 0, true)
     expect(session?.agentId).toBe(PERSISTED_AGENT)
     expect(session?.activeTurn).toBe(true)
   })
@@ -729,7 +731,7 @@ describe('acp-store: dead-turn reopen detach (reopen-liveness)', () => {
 
     const session = useAcpStore.getState().sessions['s-owned']
     expect(transport.loadSession).toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-owned', 10, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-owned', 0, true)
     expect(session?.agentId).toBe('agent-owner')
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)

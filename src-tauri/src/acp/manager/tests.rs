@@ -2180,6 +2180,7 @@ async fn resume_session_rejected_when_other_agent_owns_session_mid_turn() {
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect_err("resume must be rejected for a mid-turn owner");
@@ -2218,6 +2219,7 @@ async fn resume_session_same_agent_owner_is_not_blocked_by_cross_agent_guard() {
             SessionId("sess-own".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect_err("fixture rejects session/resume deliberately");
@@ -2282,6 +2284,7 @@ async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect_err("load must be rejected for a mid-turn owner");
@@ -2312,6 +2315,7 @@ async fn resume_session_passes_when_owner_is_idle() {
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect("idle owner must not block the resume");

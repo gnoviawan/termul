@@ -54,8 +54,8 @@ vi.mock('@/stores/canvas-store', () => ({
 // MaterialFileIcon pulls in the app-settings store + an SVG resolver; stub it
 // with the inputs it resolves from.
 vi.mock('@/components/file-explorer/MaterialFileIcon', () => ({
-  MaterialFileIcon: ({ name, extension }: { name: string; extension: string | null }) => (
-    <span data-testid="file-icon" data-name={name} data-extension={extension ?? ''} />
+  MaterialFileIcon: ({ name }: { name: string }) => (
+    <span data-testid="file-icon" data-name={name} />
   )
 }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
@@ -328,12 +328,10 @@ describe('MobileDrawerSectionList editors', () => {
     const icon = (name: string) =>
       within(screen.getByRole('button', { name })).getByTestId('file-icon')
     expect(icon('a.ts')).toHaveAttribute('data-name', 'a.ts')
-    expect(icon('a.ts')).toHaveAttribute('data-extension', 'ts')
-    expect(icon('Makefile')).toHaveAttribute('data-extension', '')
-    expect(icon('.env')).toHaveAttribute('data-extension', '')
-    expect(icon('types.d.ts')).toHaveAttribute('data-extension', 'ts')
+    expect(icon('Makefile')).toHaveAttribute('data-name', 'Makefile')
+    expect(icon('.env')).toHaveAttribute('data-name', '.env')
+    expect(icon('types.d.ts')).toHaveAttribute('data-name', 'types.d.ts')
     expect(icon('Main.CS')).toHaveAttribute('data-name', 'Main.CS')
-    expect(icon('Main.CS')).toHaveAttribute('data-extension', 'CS')
     expect(
       screen.getByRole('group', { name: 'Editors' }).querySelector('svg[data-termul-icon="Pencil"]')
     ).not.toBeInTheDocument()

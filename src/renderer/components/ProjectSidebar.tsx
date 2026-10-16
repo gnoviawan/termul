@@ -1,7 +1,7 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { PANEL_HEADER_CLASS, PANEL_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
-import { toast } from '@/hooks/use-toast'
 import { dialogApi, shellApi } from '@/lib/api'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import type { Project, ProjectColor, ProjectGroup } from '@/types/project'
@@ -157,17 +157,14 @@ export function ProjectSidebar({
           const folderName = projectPath.split(/[\\/]/).pop() || 'New Project'
           const newProject = await addProject(folderName, 'blue', projectPath)
           moveProjectToGroup(newProject.id, groupId)
-          toast({
-            title: 'Project created',
+          toast('Project created', {
             description: `Created project "${folderName}" and added to group.`
           })
         }
       } catch (err) {
         console.error('Failed to create project:', err)
-        toast({
-          title: 'Error',
-          description: `Failed to create project from folder: ${err instanceof Error ? err.message : String(err)}`,
-          variant: 'destructive'
+        toast.error('Error', {
+          description: `Failed to create project from folder: ${err instanceof Error ? err.message : String(err)}`
         })
       }
     },

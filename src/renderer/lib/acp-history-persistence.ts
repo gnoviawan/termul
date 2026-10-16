@@ -2,7 +2,7 @@
 
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
-import type { ToolCall } from '@/lib/acp-api'
+import type { AvailableCommand, ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
@@ -110,6 +110,11 @@ export interface SessionPayload {
    * field existed (pre-feature chats → no separators, rendering unchanged).
    */
   switches?: AgentSwitchRecord[]
+  /**
+   * The session's last known slash-command list. Absent when the host knows
+   * of none, and on older hosts.
+   */
+  commands?: AvailableCommand[]
 }
 
 /**

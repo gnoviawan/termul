@@ -23,6 +23,8 @@ export type TimelineItem =
    * Never persisted, but kept rendering for the session's lifetime.
    */
   | { kind: 'worktree'; key: string; progressId: string }
+  /** In-memory divider after Reload this chat. Not persisted. */
+  | { kind: 'reload'; key: string }
 
 export interface TurnActivityItem {
   kind: 'activity'
@@ -208,7 +210,7 @@ function itemTimestamp(item: TimelineItem | undefined): number | null {
   return null
 }
 
-function activityNeedsAttention(items: TimelineItem[]): boolean {
+export function activityNeedsAttention(items: TimelineItem[]): boolean {
   return items.some(
     (item) =>
       item.kind === 'tool' &&
@@ -337,7 +339,7 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
     if (item.kind === 'message' && item.message.role === 'user') {
       if (user || turn.length > 0) flush(false)
       user = item
-    } else if (item.kind === 'switch' || item.kind === 'worktree') {
+    } else if (item.kind === 'switch' || item.kind === 'worktree' || item.kind === 'reload') {
       // CAP-2 / worktree progress: TOP-LEVEL timeline rows — they flush the
       // open turn (like a user message) so the following activity groups into
       // a fresh turn, and NEVER land inside the turn bucket.
@@ -419,6 +421,8 @@ function samePayload(a: TimelineItem, b: TimelineItem): boolean {
       return a.switch === (b as Extract<TimelineItem, { kind: 'switch' }>).switch
     case 'worktree':
       return a.progressId === (b as Extract<TimelineItem, { kind: 'worktree' }>).progressId
+    case 'reload':
+      return a.key === (b as Extract<TimelineItem, { kind: 'reload' }>).key
   }
 }
 

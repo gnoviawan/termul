@@ -1011,12 +1011,12 @@ fn live_attachments(state: &crate::web::ws::AppState, terminal_id: &str) -> usiz
         .pty
         .get(terminal_id)
         .expect("terminal exists")
-        .web_attachments
+        .live_attachments
         .load(Ordering::Acquire)
 }
 
 /// PTY-F1: attaching the same terminal twice on ONE connection used to leak a
-/// `web_attachments` count (the replaced forwarder was aborted without its
+/// `live_attachments` count (the replaced forwarder was aborted without its
 /// release), so the terminal reported a live attachment forever after the
 /// socket closed and was never auto-reaped.
 #[tokio::test]
@@ -1046,7 +1046,7 @@ async fn audit_f1_reattach_same_connection_leaks_attachment_count() {
     // Socket closes: cleanup releases the single live attachment.
     conn.release_all(&state);
     assert_eq!(live_attachments(&state, &id), 0);
-    assert!(!state.pty.get(&id).unwrap().has_web_attachment());
+    assert!(!state.pty.get(&id).unwrap().has_live_attachment());
     let _ = state.pty.force_kill(&id).await;
 }
 
@@ -1083,7 +1083,7 @@ async fn reattach_swap_never_exposes_a_zero_attachment_count() {
             let (mut samples, mut zero_seen, mut max_count) = (0u64, false, 0usize);
             polling.store(true, Ordering::Release);
             while !stop.load(Ordering::Acquire) {
-                let count = instance.web_attachments.load(Ordering::Acquire);
+                let count = instance.live_attachments.load(Ordering::Acquire);
                 samples += 1;
                 zero_seen |= count == 0;
                 max_count = max_count.max(count);

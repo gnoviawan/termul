@@ -858,4 +858,84 @@ describe('failed session lifecycle (story 5)', () => {
     expect(addAgentChatTabSpy).not.toHaveBeenCalledWith('s-p2')
     expect(takeAllDroppedLaunchPlaceholders()).toEqual([{ projectId: 'p2', count: 1 }])
   })
+
+  describe('sends during a launch', () => {
+    type SentPrompt = { agentId: string; sessionId: string }
+
+    async function startGatedLaunch(initialText?: string): Promise<{
+      placeholderId: string
+      sent: SentPrompt[]
+      release: () => void
+      launch: Promise<unknown>
+    }> {
+      await useAcpStore
+        .getState()
+        .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+      const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+        cwd: '/work',
+        projectId: 'p1',
+        initialUserBlocks: initialText ? [{ type: 'text', text: initialText }] : undefined
+      })
+      let releaseCreate!: (value: { sessionId: string }) => void
+      const createGate = new Promise<{ sessionId: string }>((resolve) => {
+        releaseCreate = resolve
+      })
+      const sent: SentPrompt[] = []
+      ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+        async (command: string, args?: SentPrompt) => {
+          if (command === 'acp_spawn_agent')
+            return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+          if (command === 'acp_new_session') return createGate
+          if (command === 'acp_send_prompt' && args) {
+            sent.push({ agentId: args.agentId, sessionId: args.sessionId })
+            return 'end_turn'
+          }
+          return undefined
+        }
+      )
+      const launch = useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialText
+      })
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+      )
+      return {
+        placeholderId,
+        sent,
+        release: () => releaseCreate({ sessionId: 'sess-real' }),
+        launch
+      }
+    }
+
+    it('queues a send made before the agent binds and delivers it to the real session', async () => {
+      const { placeholderId, sent, release, launch } = await startGatedLaunch()
+      await useAcpStore.getState().sendPrompt(placeholderId, 'early message')
+      expect(sent).toEqual([])
+      expect(useAcpStore.getState().promptQueues[placeholderId]?.map((q) => q.blocks)).toEqual([
+        [{ type: 'text', text: 'early message' }]
+      ])
+
+      release()
+      await launch
+      await vi.waitFor(() => expect(sent).toEqual([{ agentId: 'agent-1', sessionId: 'sess-real' }]))
+      expect(useAcpStore.getState().promptQueues[placeholderId]).toBeUndefined()
+    })
+
+    it('carries a send queued behind the first prompt onto the real session', async () => {
+      const { placeholderId, sent, release, launch } = await startGatedLaunch('first message')
+      await useAcpStore.getState().sendPrompt(placeholderId, 'second message')
+
+      release()
+      await launch
+      expect(sent).toEqual([{ agentId: 'agent-1', sessionId: 'sess-real' }])
+      expect(useAcpStore.getState().promptQueues['sess-real']?.map((q) => q.blocks)).toEqual([
+        [{ type: 'text', text: 'second message' }]
+      ])
+      expect(useAcpStore.getState().promptQueues[placeholderId]).toBeUndefined()
+    })
+  })
 })

@@ -14,12 +14,12 @@
 //! process starts is in the job and dies with it — including a browser or
 //! editor an agent (or a terminal command) opens when that app was not
 //! already running, and Node `detached: true` spawns, which do not leave the
-//! job. This matches the unix process-group kill. ACP agent jobs set
-//! `JOB_OBJECT_LIMIT_BREAKAWAY_OK`, so a descendant that explicitly creates its
-//! child with `CREATE_BREAKAWAY_FROM_JOB` escapes (without that limit such a
-//! `CreateProcess` call fails with `ACCESS_DENIED`). ConPTY terminal jobs do
-//! not allow breakaway, so nothing launched from a terminal can outlive it
-//! (#281).
+//! job. This matches the unix process-group kill. Jobs created with
+//! `allow_breakaway` set `JOB_OBJECT_LIMIT_BREAKAWAY_OK`, so a descendant that
+//! explicitly creates its child with `CREATE_BREAKAWAY_FROM_JOB` escapes
+//! (without that limit such a `CreateProcess` call fails with
+//! `ACCESS_DENIED`). ConPTY terminal jobs do not allow breakaway, so nothing
+//! launched from a terminal can outlive it (#281).
 
 /// Windows `CREATE_NO_WINDOW` process creation flag.
 #[cfg(windows)]
@@ -77,10 +77,32 @@ mod job {
     use winapi::um::jobapi2::{
         AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, TerminateJobObject,
     };
+    use winapi::um::processthreadsapi::OpenProcess;
     use winapi::um::winnt::{
         JobObjectExtendedLimitInformation, HANDLE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, PROCESS_SET_QUOTA,
+        PROCESS_TERMINATE,
     };
+
+    fn set_limit_flags(job: HANDLE, flags: u32) -> std::io::Result<()> {
+        // SAFETY: `info` outlives the call and `job` is a live job handle owned
+        // by the caller.
+        let ok = unsafe {
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = flags;
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of_mut!(info).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) != 0
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
 
     /// An owned kill-on-close Job Object with one process assigned to it.
     ///
@@ -120,8 +142,7 @@ mod job {
             // SAFETY: plain Win32 calls on handles we own (`job`) or that the
             // caller guarantees refer to a live process (`process`). An invalid
             // process handle makes `AssignProcessToJobObject` fail, which is
-            // handled below; no memory is shared with the OS beyond `info`,
-            // which outlives the call.
+            // handled below.
             unsafe {
                 let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
                 if job.is_null() {
@@ -134,22 +155,14 @@ mod job {
                 // Own the handle immediately so every early return closes it.
                 let job = Self { handle: job };
 
-                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = if allow_breakaway {
+                let flags = if allow_breakaway {
                     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
                 } else {
                     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                 };
-                if SetInformationJobObject(
-                    job.handle,
-                    JobObjectExtendedLimitInformation,
-                    std::ptr::addr_of_mut!(info).cast(),
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                ) == 0
-                {
+                if let Err(error) = set_limit_flags(job.handle, flags) {
                     log::warn!(
-                        "[{label}] SetInformationJobObject failed, process tree-kill disabled: {}",
-                        std::io::Error::last_os_error()
+                        "[{label}] SetInformationJobObject failed, process tree-kill disabled: {error}"
                     );
                     return None;
                 }
@@ -163,6 +176,41 @@ mod job {
                 }
 
                 Some(job)
+            }
+        }
+
+        /// The caller must still own the unreaped child, so the PID cannot
+        /// have been reused.
+        pub(crate) fn new_assigned_pid(
+            pid: u32,
+            label: &str,
+            allow_breakaway: bool,
+        ) -> Option<Self> {
+            // SAFETY: `OpenProcess` returns an owned handle or null; a non-null
+            // handle is closed below once the job holds the process.
+            let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+            if process.is_null() {
+                log::warn!(
+                    "[{label}] OpenProcess({pid}) failed, process tree-kill disabled: {}",
+                    std::io::Error::last_os_error()
+                );
+                return None;
+            }
+            let job = Self::new_assigned(process.cast(), label, allow_breakaway);
+            // SAFETY: we own `process` and close it exactly once.
+            unsafe {
+                CloseHandle(process);
+            }
+            job
+        }
+
+        /// Leaks the handle when kill-on-close cannot be cleared.
+        pub(crate) fn close_without_killing(self) {
+            if let Err(error) = set_limit_flags(self.handle, 0) {
+                log::warn!(
+                    "[process_util] clearing kill-on-close failed, leaking the job handle: {error}"
+                );
+                std::mem::forget(self);
             }
         }
 
@@ -195,5 +243,7 @@ mod job {
     }
 }
 
+#[cfg(all(test, windows))]
+pub(crate) mod test_support;
 #[cfg(all(test, windows))]
 mod tests;

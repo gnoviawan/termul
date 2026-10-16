@@ -10,6 +10,7 @@ import {
   withSessionModelOnIndex
 } from '@/components/chat/chat-input-bar-config'
 import {
+  type AgentId,
   acpApi,
   type ContentBlock,
   type ElicitationField,
@@ -41,6 +42,7 @@ import {
   dropQuestionsForSession,
   dropRecordKey,
   finalizeStreaming,
+  isAuthRetriableSessionError,
   lastErrorAfterStop,
   mergeAgentConfigOptions,
   newId,
@@ -66,6 +68,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpSession, AcpState, ChatMessage, TurnEndSetter } from '../types'
+import { reauthenticateOnDemand, withAuthRetry } from './agent'
 import {
   abandonPendingPrompt,
   beginPromptReconcile,
@@ -270,7 +273,9 @@ export async function runPromptTurn(
     // repoints `agentId` at the resolved live agent, dispatching would hit the
     // old (possibly dead) agent with `unknown agent`. Queue here; the open's
     // finally flushes once agentId is repointed and the transcript installed.
-    if ((sessionTurnBusy(current) || s.openingHistoryIds[sessionId]) && !skipUserAppend) {
+    const isUnboundLaunchPlaceholder = !current.agentId
+    const awaitingAgent = s.openingHistoryIds[sessionId] || isUnboundLaunchPlaceholder
+    if ((sessionTurnBusy(current) || awaitingAgent) && !skipUserAppend) {
       enqueued = true
       if (queuedOrigin) {
         return {
@@ -327,7 +332,13 @@ export async function runPromptTurn(
           return {
             sessions: {
               ...s.sessions,
-              [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+              [sessionId]: {
+                ...current,
+                activeTurn: true,
+                openTurnId,
+                latestPromptTurnId: turnId,
+                lastError: null
+              }
             }
           }
         }
@@ -350,7 +361,13 @@ export async function runPromptTurn(
           },
           sessions: {
             ...s.sessions,
-            [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+            [sessionId]: {
+              ...current,
+              activeTurn: true,
+              openTurnId,
+              latestPromptTurnId: turnId,
+              lastError: null
+            }
           }
         }
       }
@@ -363,7 +380,13 @@ export async function runPromptTurn(
         },
         sessions: {
           ...s.sessions,
-          [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+          [sessionId]: {
+            ...current,
+            activeTurn: true,
+            openTurnId,
+            latestPromptTurnId: turnId,
+            lastError: null
+          }
         }
       }
     }
@@ -383,7 +406,13 @@ export async function runPromptTurn(
       },
       sessions: {
         ...s.sessions,
-        [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+        [sessionId]: {
+          ...current,
+          activeTurn: true,
+          openTurnId,
+          latestPromptTurnId: turnId,
+          lastError: null
+        }
       }
     }
   })
@@ -448,6 +477,7 @@ export async function runPromptTurn(
   }
 
   persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+  let dispatchedAgentId: AgentId | null = null
   try {
     // The command reply resolves the COMMAND only (`settleDispatch`); the turn
     // ends from the durable `prompt_complete` via `_onPromptComplete`.
@@ -488,6 +518,7 @@ export async function runPromptTurn(
       await pendingPromotion
       if (promoteSlowTimer) clearTimeout(promoteSlowTimer)
     }
+    dispatchedAgentId = liveSession.agentId
     settleDispatch(await dispatch(liveSession, turnId))
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
@@ -564,8 +595,55 @@ export async function runPromptTurn(
       return
     }
     failTurn(err)
+    // The agent may have run part of the turn before its token expired, so a
+    // resend could repeat its tool calls.
+    if (dispatchedAgentId && isAuthRetriableSessionError(err)) {
+      await reauthenticateWithoutResendingPrompt(set, get, sessionId, dispatchedAgentId, turnId)
+    }
     throw err
   }
+}
+
+const PROMPT_REAUTHENTICATED_MESSAGE =
+  'Signed in to the agent again. Select Retry to send your message.'
+
+async function reauthenticateWithoutResendingPrompt(
+  set: TurnEndSetter,
+  get: () => AcpState,
+  sessionId: SessionId,
+  agentId: AgentId,
+  failedTurnId: string
+): Promise<void> {
+  let signedIn = false
+  let lastError: string
+  try {
+    signedIn = await reauthenticateOnDemand(get, agentId, 'session/prompt', 'text')
+    if (!signedIn) return
+    lastError = PROMPT_REAUTHENTICATED_MESSAGE
+  } catch (authErr) {
+    lastError = authErr instanceof Error ? authErr.message : String(authErr)
+  }
+  set((s) => {
+    const current = s.sessions[sessionId]
+    // A newer turn opened since the failed one: this result is stale.
+    if (
+      current?.agentId !== agentId ||
+      current.activeTurn ||
+      current.latestPromptTurnId !== failedTurnId
+    )
+      return {}
+    const revive = signedIn && current.status === 'error'
+    return {
+      agentStatus:
+        signedIn && s.agentStatus[agentId] === 'error'
+          ? { ...s.agentStatus, [agentId]: 'connected' }
+          : s.agentStatus,
+      sessions: {
+        ...s.sessions,
+        [sessionId]: { ...current, lastError, ...(revive ? { status: 'active' } : {}) }
+      }
+    }
+  })
 }
 
 type PromptSliceState = Pick<
@@ -757,7 +835,13 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   setConfigOption: async (sessionId, configId, valueId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
+    const response = await withAuthRetry(
+      get,
+      session.agentId,
+      'session/set_config_option',
+      'text',
+      () => acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
+    )
     // Factory Droid acknowledges successful changes with `{}` (no snapshot).
     // Preserve the known option list and update only the selected value.
     // The response snapshot can also re-assert creation defaults for OTHER
@@ -822,7 +906,9 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   setMode: async (sessionId, modeId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    await acpApi.setMode(session.agentId, sessionId, modeId)
+    await withAuthRetry(get, session.agentId, 'session/set_mode', 'text', () =>
+      acpApi.setMode(session.agentId, sessionId, modeId)
+    )
     set((s) => {
       const current = s.sessions[sessionId]
       if (!current?.modes) return {}
@@ -846,7 +932,9 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   setModel: async (sessionId, modelId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    await acpApi.setModel(session.agentId, sessionId, modelId)
+    await withAuthRetry(get, session.agentId, 'session/set_model', 'text', () =>
+      acpApi.setModel(session.agentId, sessionId, modelId)
+    )
     set((s) => {
       const current = s.sessions[sessionId]
       if (!current) return {}

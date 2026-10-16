@@ -64,6 +64,10 @@ vi.mock('@/components/browser/BrowserControls', () => ({
 }))
 
 import { BrowserConsentCard } from '@/components/chat/BrowserConsentCard'
+import {
+  NativeWebviewOccluder,
+  resetNativeWebviewOcclusionForTests
+} from '@/hooks/use-native-webview-occlusion'
 import { useConsentStripHost } from '@/stores/browser-consent-strip-store'
 import { BrowserConsentStrip } from './BrowserConsentStrip'
 import { BrowserPanel } from './BrowserPanel'
@@ -94,7 +98,7 @@ beforeEach(() => {
   workspaceState.activeTab = undefined
   runtimeState.tauri = true
   useBrowserSessionStore.setState({ tabs: new Map() })
-  useConsentStripHost.setState({ mountedBrowserTabIds: new Set() })
+  useConsentStripHost.setState({ mountedBrowserTabIds: new Set(), announcedRequestIds: new Set() })
 })
 
 afterEach(() => cleanup())
@@ -178,6 +182,68 @@ describe('BrowserConsentStrip', () => {
         /wants to drive this app's browser for this session — it wants to navigate "Search button"\./
       )
     ).toBeInTheDocument()
+  })
+})
+
+describe('BrowserConsentStrip announcement', () => {
+  it('announces a request once, so remounting the strip for it stays quiet', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    workspaceState.activeTab = browserTab()
+    const first = render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('Allow browser automation?')
+    first.unmount()
+
+    render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Allow browser automation?' })).toBeInTheDocument()
+  })
+
+  it('stays quiet for a request restored after a later one was announced', () => {
+    workspaceState.activeTab = browserTab()
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    const { rerender } = render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    acpState.pendingBrowserConsents = { 'req-2': consentEvent({ requestId: 'req-2' }) }
+    rerender(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    rerender(<BrowserConsentStrip browserTabId={TAB_ID} />)
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Allow browser automation?' })).toBeInTheDocument()
+  })
+
+  it('announces a re-prompt, which carries a new requestId', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    workspaceState.activeTab = browserTab()
+    const { rerender } = render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+
+    acpState.pendingBrowserConsents = { 'req-2': consentEvent({ requestId: 'req-2' }) }
+    rerender(<BrowserConsentStrip browserTabId={TAB_ID} />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Allow browser automation?')
+  })
+})
+
+describe('consent while an overlay covers the interface', () => {
+  afterEach(() => resetNativeWebviewOcclusionForTests())
+
+  it('hides the strip so it never sits unreachable under the overlay', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    workspaceState.activeTab = browserTab()
+    const Page = ({ overlay }: { overlay: boolean }): React.JSX.Element => (
+      <>
+        <BrowserConsentStrip browserTabId={TAB_ID} />
+        {overlay && <NativeWebviewOccluder />}
+      </>
+    )
+    const { rerender } = render(<Page overlay />)
+    expect(screen.queryByRole('button', { name: 'Allow for this session' })).not.toBeInTheDocument()
+
+    rerender(<Page overlay={false} />)
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeInTheDocument()
   })
 })
 

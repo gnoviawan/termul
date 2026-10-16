@@ -1,6 +1,6 @@
 import type { ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
 import { Spinner } from '@/components/ui/spinner'
-import { formatRelativeTimeFromMs } from '@/lib/git-time'
+import { formatRelativeTimeFromMs } from '@/lib/relative-time'
 
 export type ProjectChatEntry = ChatHistorySidebarEntry
 

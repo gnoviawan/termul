@@ -300,7 +300,9 @@ jobs:
     name: Rust Windows Smoke Check
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: windows-latest
-    timeout-minutes: 20
+    # A cold-cache run builds for up to about 18 min, and the post-job cache
+    # save adds up to about 6 min. The budget covers both.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

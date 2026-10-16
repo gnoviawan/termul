@@ -1,3 +1,4 @@
+import type { BaseBranchInfo } from '@shared/types/worktree.types'
 import type { Dispatch, SetStateAction } from 'react'
 import { Folder, FolderGit2, GitBranch } from '@/components/icons'
 import {
@@ -11,7 +12,6 @@ import { WriteGate } from '@/components/ui/write-gate'
 import { OUTSIDE_PROJECT_ROOT_REASON } from '@/lib/active-worktree'
 import { cn } from '@/lib/utils'
 import { worktreeLabel } from '@/lib/workspace-rows'
-import type { BaseBranchInfo } from '@/lib/worktree-api'
 import type { Worktree } from '@/types/project'
 import { STRIP_MENU_ITEM_CLASS, STRIP_TRIGGER_CLASS } from './launcher-classes'
 import type { LaunchWorkspace } from './use-launch-workspace'

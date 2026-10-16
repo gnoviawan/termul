@@ -21,6 +21,7 @@ export interface SlashCommandItem {
   kind: 'command'
   name: string
   description: string | null
+  hint: string | null
 }
 
 export interface SlashConfigItem {
@@ -151,7 +152,12 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
       const promoted = promotedSkillName(c.name)
       return promoted === null || !injectedSkillNames.has(promoted)
     })
-    .map((c) => ({ kind: 'command', name: c.name, description: c.description ?? null }))
+    .map((c) => ({
+      kind: 'command',
+      name: c.name,
+      description: c.description ?? null,
+      hint: c.input?.hint?.trim() || null
+    }))
   if (commandItems.length > 0) {
     sections.push({ id: 'commands', heading: 'Commands', items: commandItems })
   }

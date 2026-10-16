@@ -32,6 +32,7 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn(() => Promise.resolve())
 }))
 
+import { logFrontendError } from '@/lib/log-api'
 import { ChatMarkdownCode } from './chat-markdown-code'
 
 function withTooltip(ui: React.JSX.Element): React.JSX.Element {
@@ -41,6 +42,7 @@ function withTooltip(ui: React.JSX.Element): React.JSX.Element {
 describe('ChatMarkdownCode', () => {
   afterEach(() => {
     useIsCodeFenceIncompleteMock.mockReturnValue(false)
+    vi.mocked(logFrontendError).mockClear()
   })
 
   it('preserves and visually separates multi-line fenced code via the node value', () => {
@@ -122,21 +124,22 @@ describe('ChatMarkdownCode', () => {
     expect(queryByTestId('code-block')).toBeNull()
   })
 
-  it('shows a fallback card for a malformed termul-plan fence', () => {
-    const { getByText, queryByTestId } = render(
-      withTooltip(
-        <ChatMarkdownCode className="language-termul-plan" data-block node={{ value: '{bad' }}>
-          {'{bad'}
-        </ChatMarkdownCode>
-      )
+  it('shows a fallback card for a malformed termul-plan fence and logs it once', () => {
+    const malformed = (
+      <ChatMarkdownCode className="language-termul-plan" data-block node={{ value: '{bad' }}>
+        {'{bad'}
+      </ChatMarkdownCode>
     )
+    const { getByText, queryByTestId, rerender } = render(withTooltip(malformed))
+    rerender(withTooltip(malformed))
 
     expect(getByText('Plan snapshot unavailable')).toBeInTheDocument()
     expect(queryByTestId('code-block')).toBeNull()
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a fallback card for an empty plan fence', () => {
-    const { getByText, queryByTestId } = render(
+  it('renders nothing for an empty plan fence', () => {
+    const { container } = render(
       withTooltip(
         <ChatMarkdownCode className="language-termul-plan" data-block node={{ value: '[]' }}>
           {'[]'}
@@ -144,8 +147,8 @@ describe('ChatMarkdownCode', () => {
       )
     )
 
-    expect(getByText('Plan snapshot unavailable')).toBeInTheDocument()
-    expect(queryByTestId('code-block')).toBeNull()
+    expect(container).toBeEmptyDOMElement()
+    expect(logFrontendError).not.toHaveBeenCalled()
   })
 
   it('shows a streaming placeholder when the fence is incomplete', () => {

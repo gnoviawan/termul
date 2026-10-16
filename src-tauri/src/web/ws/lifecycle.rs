@@ -47,6 +47,7 @@ pub(super) async fn handle_resume_session(
             parsed.session_id,
             parsed.cwd,
             parsed.additional_directories,
+            parsed.mcp_servers,
         )
         .await
     {

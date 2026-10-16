@@ -8,8 +8,7 @@ import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Toaster as Sonner } from '@/components/ui/sonner'
-import { Toaster } from '@/components/ui/toaster'
+import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAcpUpdateChecks } from './hooks/use-acp-update-checks'
@@ -264,7 +263,6 @@ const App = () => {
           <ErrorBoundary context="App Root">
             <AppEffects />
             <Toaster />
-            <Sonner />
             {/* Web/remote mode only: in-app directory picker registered with
                 dialogApi so NewProjectModal's Browse button works without a native
                 dialog.open (Story: Web/remote project creation). Desktop never

@@ -381,7 +381,7 @@ impl PtyManager {
     /// attachment task alive at re-issue time is stale by definition, so
     /// `old != 0` still severs it.
     ///
-    /// #851 (second device): terminals with a LIVE web attachment on another
+    /// #851 (second device): terminals with a LIVE attachment on another
     /// connection now get a SHARED claim (`issue_shared` appends a digest
     /// WITHOUT invalidating the existing holder, generation unchanged) plus
     /// `live_attachment: true` ownership info — so a second device's
@@ -402,22 +402,23 @@ impl PtyManager {
             .map(|instance| {
                 let cols = *instance.cols.read();
                 let rows = *instance.rows.read();
-                let live_attachment = instance.has_web_attachment();
+                let live_attachment = instance.has_live_attachment();
                 let claim = if live_attachment {
                     // #851: another connection holds a live forwarder —
                     // APPEND a shared credential rather than replacing the
                     // record. The existing holder's lease keeps verifying
                     // and its forwarder stays attached (no generation bump);
                     // the listing connection may now attach read/write too.
-                    // A shared issuance failure (revoked/unknown) collapses
-                    // to the same empty-string contract as before — no
-                    // claim offered, caller falls back to spawn.
+                    // A shared issuance failure (revoked/unknown) offers no
+                    // claim: the caller falls back to spawn.
                     self.claims
                         .issue_shared(&instance.id, instance.project_id.as_deref())
-                        .unwrap_or_default()
+                        .ok()
                 } else {
-                    self.claims
-                        .issue(&instance.id, instance.project_id.as_deref())
+                    Some(
+                        self.claims
+                            .issue(&instance.id, instance.project_id.as_deref()),
+                    )
                 };
                 let info = TerminalInfo {
                     id: instance.id.clone(),

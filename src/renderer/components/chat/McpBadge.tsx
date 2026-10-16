@@ -36,6 +36,10 @@ interface McpBadgeProps {
   tools?: Record<string, McpToolInfo[]>
   /** Auto-probe on first expand of a server's tool list. */
   onLoadTools?: (id: string) => void
+  onReloadChat?: () => void
+  reloadDisabled?: boolean
+  reloadDisabledReason?: string | null
+  reloading?: boolean
 }
 
 function McpIcon({ className }: { className?: string }): React.JSX.Element {
@@ -98,7 +102,11 @@ export function McpBadge({
   probeStatus,
   probeError,
   tools,
-  onLoadTools
+  onLoadTools,
+  onReloadChat,
+  reloadDisabled,
+  reloadDisabledReason,
+  reloading
 }: McpBadgeProps): React.JSX.Element | null {
   const hasServerList = servers != null && servers.length > 0
   if (count <= 0 && !hasServerList) return null
@@ -130,6 +138,10 @@ export function McpBadge({
       probeError={probeError}
       tools={tools}
       onLoadTools={onLoadTools}
+      onReloadChat={onReloadChat}
+      reloadDisabled={reloadDisabled}
+      reloadDisabledReason={reloadDisabledReason}
+      reloading={reloading}
       className={className}
     />
   )
@@ -143,6 +155,10 @@ interface PopoverProps {
   probeError?: Record<string, string | undefined>
   tools?: Record<string, McpToolInfo[]>
   onLoadTools?: (id: string) => void
+  onReloadChat?: () => void
+  reloadDisabled?: boolean
+  reloadDisabledReason?: string | null
+  reloading?: boolean
   className?: string
 }
 
@@ -154,6 +170,10 @@ function McpPopover({
   probeError,
   tools,
   onLoadTools,
+  onReloadChat,
+  reloadDisabled,
+  reloadDisabledReason,
+  reloading,
   className
 }: PopoverProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -183,6 +203,10 @@ function McpPopover({
           probeError={probeError}
           tools={tools}
           onLoadTools={onLoadTools}
+          onReloadChat={onReloadChat}
+          reloadDisabled={reloadDisabled}
+          reloadDisabledReason={reloadDisabledReason}
+          reloading={reloading}
         />
       </PopoverContent>
     </Popover>
@@ -197,6 +221,15 @@ export interface McpServerListProps {
   probeError?: Record<string, string | undefined>
   tools?: Record<string, McpToolInfo[]>
   onLoadTools?: (id: string) => void
+  /**
+   * Reload this chat so the current MCP list and a new agent process apply.
+   * Absent in surfaces that only display the list.
+   */
+  onReloadChat?: () => void
+  reloadDisabled?: boolean
+  /** Title while `reloadDisabled` is set. */
+  reloadDisabledReason?: string | null
+  reloading?: boolean
   /**
    * Merged onto the rows `<ul>` after its default `max-h-[300px] overflow-y-auto pr-2`
    * scroller classes, so a host that scrolls itself (the + sheet) can lift the cap.
@@ -217,6 +250,10 @@ export function McpServerList({
   probeError,
   tools,
   onLoadTools,
+  onReloadChat,
+  reloadDisabled = false,
+  reloadDisabledReason,
+  reloading = false,
   listClassName
 }: McpServerListProps): React.JSX.Element {
   return (
@@ -239,9 +276,29 @@ export function McpServerList({
               />
             ))}
           </ul>
-          <p className="mt-3 text-2xs text-muted-foreground">Takes effect on the next chat.</p>
+          {onReloadChat ? null : (
+            <p className="mt-3 text-2xs text-muted-foreground">Takes effect on the next chat.</p>
+          )}
         </>
       )}
+      {onReloadChat ? (
+        <div className="mt-3 flex items-center gap-2">
+          <p className="min-w-0 flex-1 text-2xs text-muted-foreground">
+            {servers.length > 0
+              ? 'This chat still uses the previous servers.'
+              : 'Reload this chat to use new agent settings.'}
+          </p>
+          <button
+            type="button"
+            onClick={onReloadChat}
+            disabled={reloadDisabled || reloading}
+            title={reloadDisabled ? (reloadDisabledReason ?? undefined) : undefined}
+            className="inline-flex shrink-0 items-center rounded-md border border-connection/40 px-2 py-0.5 text-2xs font-medium transition-colors hover:bg-connection/15 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {reloading ? 'Reloading…' : 'Reload this chat'}
+          </button>
+        </div>
+      ) : null}
     </>
   )
 }

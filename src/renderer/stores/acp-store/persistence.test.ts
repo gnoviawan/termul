@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
 
 const { toastError, toastWarning } = vi.hoisted(() => ({
@@ -195,6 +195,12 @@ describe('acp-store', () => {
     _resetHistorySeqWatermarksForTesting()
     _resetLiveSwitchSourcesForTesting()
     useAcpStore.setState(FRESH)
+  })
+
+  afterEach(async () => {
+    await vi.waitFor(() => {
+      expect(Object.values(useAcpStore.getState().mcpProbing).some(Boolean)).toBe(false)
+    })
   })
 
   it('spawnAgent populates capabilities + authMethods synchronously from the response', async () => {

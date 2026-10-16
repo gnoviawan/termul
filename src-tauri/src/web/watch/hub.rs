@@ -60,6 +60,8 @@ pub enum WatchKind {
     Store,
     /// The terminals of one project (scope = project id).
     Terminals,
+    /// The shared last-read marker of every agent chat.
+    ChatReads,
 }
 
 impl WatchKind {
@@ -73,6 +75,7 @@ impl WatchKind {
             Self::Fs => "fs",
             Self::Store => "store",
             Self::Terminals => "terminals",
+            Self::ChatReads => "chat_reads",
         }
     }
 
@@ -86,6 +89,7 @@ impl WatchKind {
             "fs" => Some(Self::Fs),
             "store" => Some(Self::Store),
             "terminals" => Some(Self::Terminals),
+            "chat_reads" => Some(Self::ChatReads),
             _ => None,
         }
     }
@@ -96,7 +100,7 @@ impl WatchKind {
     #[must_use]
     pub fn accepts_scope(self, scope: &str) -> bool {
         match self {
-            Self::Projects | Self::ChatHistory | Self::Agents => scope.is_empty(),
+            Self::Projects | Self::ChatHistory | Self::Agents | Self::ChatReads => scope.is_empty(),
             Self::Fs | Self::Store | Self::Terminals => {
                 !scope.trim().is_empty() && scope.len() <= MAX_SCOPE_BYTES
             }

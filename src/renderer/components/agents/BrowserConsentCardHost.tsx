@@ -19,49 +19,34 @@
  * prompt; the host auto-denies on timeout.
  */
 
-import { useEffect, useRef } from 'react'
 import { BrowserConsentCard } from '@/components/chat/BrowserConsentCard'
-import { browserTabHide, browserTabShow } from '@/lib/browser-api'
+import {
+  useInterfaceOverlayOpen,
+  useNativeWebviewOcclusion
+} from '@/hooks/use-native-webview-occlusion'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
-import { useActiveTab } from '@/stores/workspace-store'
 
 export function BrowserConsentCardHost(): React.JSX.Element | null {
   const pending = useAcpStore((s) => s.pendingBrowserConsents)
   const hosted = useConsentCardHost((s) => s.hostedSessionIds)
   const stripHosting = useIsConsentStripHosting()
-  const activeTab = useActiveTab()
-  const hiddenBrowserTabRef = useRef<string | null>(null)
+  const overlayOpen = useInterfaceOverlayOpen()
 
   const unhosted =
     isTauriContext() && !stripHosting
-      ? Object.values(pending ?? {}).filter((c) => !hosted.has(c.sessionId))
+      ? Object.values(pending ?? {}).filter((c) => overlayOpen || !hosted.has(c.sessionId))
       : []
 
-  // Native child webviews paint above DOM — while a fallback card is on
-  // screen and the focused pane's active tab is a browser tab, hide that
-  // webview so the card stays clickable (the same workaround the removed
-  // consent modal used, scoped to the root-fallback case only).
-  useEffect(() => {
-    if (unhosted.length > 0 && activeTab?.type === 'browser') {
-      hiddenBrowserTabRef.current = activeTab.browserTabId
-      browserTabHide(activeTab.browserTabId).catch(console.error)
-      return
-    }
-    const hiddenBrowserTabId = hiddenBrowserTabRef.current
-    if (hiddenBrowserTabId) {
-      browserTabShow(hiddenBrowserTabId).catch(console.error)
-      hiddenBrowserTabRef.current = null
-    }
-  }, [unhosted.length, activeTab])
+  useNativeWebviewOcclusion(unhosted.length > 0, 'docked')
 
   if (unhosted.length === 0) return null
 
   return (
     <div
-      className="fixed right-4 bottom-4 z-40 flex w-full max-w-sm flex-col gap-2"
+      className="pointer-events-auto fixed right-4 bottom-4 z-[60] flex w-full max-w-sm flex-col gap-2"
       data-testid="browser-consent-card-host"
     >
       {unhosted.map((consent) => (

@@ -26,6 +26,7 @@
 //! body, content, token or secret (fingerprints hash entity names).
 
 use std::future::{ready, Future, Ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
@@ -216,6 +217,27 @@ fn body_of<T: DeserializeOwned>(kind: &str, result: CommandResult) -> IpcBody<T>
     }
 }
 
+tokio::task_local! {
+    static ADMISSION: Arc<AtomicBool>;
+}
+
+/// Whether a request run under [`AdmissionWatch::watch`] entered the ledger,
+/// readable after its future is dropped. A route that merely tolerates
+/// `X-Command-Id` (or runs an idempotent kind through [`run_http`]) never sets it.
+#[derive(Default)]
+pub struct AdmissionWatch(Arc<AtomicBool>);
+
+impl AdmissionWatch {
+    pub fn watch<F: Future>(&self, future: F) -> impl Future<Output = F::Output> {
+        ADMISSION.scope(Arc::clone(&self.0), future)
+    }
+
+    #[must_use]
+    pub fn admitted(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
 /// How an HTTP effect ended, for [`run_http_released`].
 pub enum HttpRan<T> {
     /// Record the reply and replay it to resends.
@@ -295,7 +317,10 @@ where
     };
     async move {
         let (command_id, kind, class, fingerprint) = match admission {
-            Ok(admitted) => admitted,
+            Ok(admitted) => {
+                let _ = ADMISSION.try_with(|flag| flag.store(true, Ordering::Release));
+                admitted
+            }
             Err(None) => {
                 return match execute.await {
                     HttpRan::Settled(body) | HttpRan::Released(body) => body,

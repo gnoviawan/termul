@@ -32,22 +32,7 @@ vi.mock('@/lib/platform', () => ({
   isSecondaryModifier: (e: KeyboardEvent) => (isMacRef.current ? e.ctrlKey : e.metaKey)
 }))
 
-// Inline (always-visible) context-menu stub so the shortcut text is queryable
-// without opening the menu (F4 is about the shortcut TEXT, not open behavior).
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const wrap = (props: { children?: React.ReactNode }) =>
-    React.createElement('div', null, props.children)
-  return {
-    ContextMenu: wrap,
-    ContextMenuTrigger: wrap,
-    ContextMenuContent: wrap,
-    ContextMenuItem: wrap,
-    ContextMenuSeparator: () => null,
-    ContextMenuShortcut: (props: { children?: React.ReactNode }) =>
-      React.createElement('span', null, props.children)
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 // --- Stable dep mocks (re-evaluated after vi.resetModules()) ---
 
@@ -254,11 +239,12 @@ describe('ConnectedTerminal context menu shortcuts (F4)', () => {
     isMacRef.current = true
     vi.resetModules()
     const React = await import('react')
-    const { render, screen, cleanup } = await import('@testing-library/react')
+    const { fireEvent, render, screen, cleanup } = await import('@testing-library/react')
     cleanupFn = cleanup
     const { ConnectedTerminal } = await import('./ConnectedTerminal')
 
-    render(React.createElement(ConnectedTerminal))
+    const { container } = render(React.createElement(ConnectedTerminal))
+    fireEvent.contextMenu(container.firstElementChild as Element)
 
     expect(screen.getByText('⌘+C')).toBeInTheDocument()
     expect(screen.getByText('⌘+V')).toBeInTheDocument()
@@ -269,11 +255,12 @@ describe('ConnectedTerminal context menu shortcuts (F4)', () => {
     isMacRef.current = false
     vi.resetModules()
     const React = await import('react')
-    const { render, screen, cleanup } = await import('@testing-library/react')
+    const { fireEvent, render, screen, cleanup } = await import('@testing-library/react')
     cleanupFn = cleanup
     const { ConnectedTerminal } = await import('./ConnectedTerminal')
 
-    render(React.createElement(ConnectedTerminal))
+    const { container } = render(React.createElement(ConnectedTerminal))
+    fireEvent.contextMenu(container.firstElementChild as Element)
 
     expect(screen.getByText('Ctrl+C')).toBeInTheDocument()
     expect(screen.getByText('Ctrl+V')).toBeInTheDocument()

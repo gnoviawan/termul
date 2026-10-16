@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { __resetCommandEngineForTesting, AWAITED_RESEND_DELAYS_MS } from '@/lib/command-engine'
 import { __clearCommandJournalForTesting } from '@/lib/command-journal'
-import { mockSpawnedTerminal } from '@/lib/test-utils/terminal'
+import { mockPreservedPty, mockSpawnedTerminal } from '@/lib/test-utils/terminal'
 
 const { mockInvoke, mockListen } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockListen: vi.fn() }))
 
@@ -328,6 +328,66 @@ describe('tauri-terminal-api', () => {
         commandId: expect.stringMatching(/^[A-Za-z0-9_-]{1,128}$/)
       })
       expect(result).toEqual({ success: true, data: undefined })
+    })
+
+    it('a reloaded renderer lists the live PTY and reattaches to it with the fresh claim, spawning nothing', async () => {
+      const { api } = await loadApi()
+      const preserved = mockPreservedPty({
+        id: 'terminal-1752-1',
+        shell: 'pwsh',
+        cwd: 'C:/dev/project',
+        claim: 'reissued-claim-64-hex',
+        hasLiveAttachment: false
+      })
+      mockInvoke.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+        if (command === 'terminal_list_preserved') return { success: true, data: [preserved] }
+        if (command === 'terminal_attach') {
+          ;(args.onData as unknown as ChannelLike).onmessage?.(new Uint8Array([111, 107]).buffer)
+          return { success: true, data: ATTACHED }
+        }
+        throw new Error(`unexpected command ${command}`)
+      })
+      const received: Array<{ terminalId: string; bytes: number[] }> = []
+      const off = api.onData((terminalId, bytes) =>
+        received.push({ terminalId, bytes: Array.from(bytes) })
+      )
+
+      const listed = await api.listPreserved('project-a')
+      if (!listed.success) throw new Error(listed.error)
+      const attached = await api.attach(listed.data[0].id, listed.data[0].claim ?? '', 0)
+
+      expect(listed.data).toEqual([preserved])
+      expect(mockInvoke.mock.calls.map(([command]) => command)).toEqual([
+        'terminal_list_preserved',
+        'terminal_attach'
+      ])
+      expect(mockInvoke.mock.calls[0][1]).toEqual({ projectId: 'project-a' })
+      expect(mockInvoke.mock.calls[1][1]).toMatchObject({
+        terminalId: 'terminal-1752-1',
+        claim: 'reissued-claim-64-hex',
+        lastSeq: 0
+      })
+      expect(attached).toEqual({ success: true, data: ATTACHED })
+      expect(received).toEqual([{ terminalId: 'terminal-1752-1', bytes: [111, 107] }])
+
+      off()
+    })
+
+    it('listPreserved surfaces a host refusal as a failed result', async () => {
+      const { api } = await loadApi()
+      mockInvoke.mockResolvedValue({
+        success: false,
+        error: 'missing projectId',
+        code: 'VALIDATION_ERROR'
+      })
+
+      const result = await api.listPreserved('')
+
+      expect(result).toEqual({
+        success: false,
+        error: 'missing projectId',
+        code: 'VALIDATION_ERROR'
+      })
     })
 
     it('outcome_unknown from a spawn resend surfaces as a failure and is never resent', async () => {

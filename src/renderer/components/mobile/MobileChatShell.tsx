@@ -8,6 +8,7 @@ import {
 import { useMobileAttentionCount } from '@/hooks/use-mobile-attention-count'
 import { sectionForTab } from '@/hooks/use-mobile-section'
 import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
+import { useReloadChat } from '@/hooks/use-reload-chat'
 import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
 import { closeAgentChat } from '@/lib/agent-chat-close'
 import { returnFocusAfterConfirm } from '@/lib/confirm-focus-return'
@@ -345,6 +346,7 @@ export function MobileChatShell({
   }
 
   // Header ⋯ "Close chat": the same teardown the drawer's Recents rows use.
+  const chatReload = useReloadChat(activeTab?.type === 'agent-chat' ? activeTab.sessionId : null)
   const closeActiveChat = (): void => {
     if (activeTab?.type !== 'agent-chat') return
     const tabId = activeTab.id
@@ -480,6 +482,9 @@ export function MobileChatShell({
         onNewTerminal={newTerminal}
         onOpenProjectSettings={openProjectSettings}
         onCloseChat={activeTab?.type === 'agent-chat' ? closeActiveChat : undefined}
+        onReloadChat={activeTab?.type === 'agent-chat' ? chatReload.reload : undefined}
+        reloadChatDisabled={chatReload.disabled}
+        reloadChatReason={chatReload.reason}
         onCloseTab={closeActiveOtherTab}
       />
 

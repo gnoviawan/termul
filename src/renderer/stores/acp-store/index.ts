@@ -71,6 +71,7 @@ import {
 } from '@/lib/acp-api'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
+import { noteTurnEndSeq } from '@/lib/chat-read-sync'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { getAgentChatSessionIdsInAllTrees, useWorkspaceStore } from '@/stores/workspace-store'
@@ -82,6 +83,7 @@ import {
   dropRecordKey,
   normalizeUserMessages,
   partitionTranscriptTurns,
+  SWITCH_SPLICE_ID_PREFIX,
   selectAgentIdentity,
   selectConfigWarmState,
   trimLiveToolCalls
@@ -264,6 +266,7 @@ async function installTransportRecovery(
   // records — installed alongside the bubbles so reconnect recovery preserves
   // cards instead of blanking the session's tool-call list.
   const recoveredToolCalls: ToolCall[] = []
+  let recoveredCommands: CommandsUpdateEvent['availableCommands'] | null = null
   let openRole: 'agent' | 'thought' | 'user' | null = null
   for (const event of recovery.events) {
     const payload = event.payload as Record<string, unknown>
@@ -387,6 +390,9 @@ async function installTransportRecovery(
     } else if (event.type === 'prompt_complete') {
       // Split boundary: the following chunk run opens a fresh bubble.
       openRole = null
+    } else if (event.type === 'commands_update') {
+      const { availableCommands } = payload as Partial<CommandsUpdateEvent>
+      if (Array.isArray(availableCommands)) recoveredCommands = availableCommands
     }
   }
   // Single wire→display pass over the folded user bubbles (chip rendering on
@@ -414,18 +420,31 @@ async function installTransportRecovery(
     if (!recoveryIsCurrent()) return {}
     const session = current.sessions[recovery.sessionId]
     const replacing = normalizedMessages.length > 0
+    const splicedMessages = (current.messages[recovery.sessionId] ?? []).filter((m) =>
+      m.id.startsWith(SWITCH_SPLICE_ID_PREFIX)
+    )
+    const splicedToolCalls = (current.toolCalls[recovery.sessionId] ?? []).filter((t) =>
+      t.toolCallId.startsWith(SWITCH_SPLICE_ID_PREFIX)
+    )
     return {
       messages: replacing
-        ? { ...current.messages, [recovery.sessionId]: installedMessages }
+        ? {
+            ...current.messages,
+            [recovery.sessionId]: [...splicedMessages, ...installedMessages]
+          }
         : current.messages,
       toolCalls: replacing
         ? {
             ...current.toolCalls,
-            [recovery.sessionId]: trimLiveToolCalls(
-              dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
-            )
+            [recovery.sessionId]: trimLiveToolCalls([
+              ...splicedToolCalls,
+              ...dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
+            ])
           }
         : current.toolCalls,
+      commands: recoveredCommands
+        ? { ...current.commands, [recovery.sessionId]: recoveredCommands }
+        : current.commands,
       degradedRecoverySessions: dropRecordKey(current.degradedRecoverySessions, recovery.sessionId),
       sessions: session
         ? {
@@ -435,6 +454,9 @@ async function installTransportRecovery(
         : current.sessions
     }
   })
+  for (const event of recovery.events) {
+    if (event.type === 'prompt_complete') noteTurnEndSeq(recovery.sessionId, event.seq)
+  }
   // AD-6: a prompt that lost its reply resolves from the recovered log.
   reconcilePromptAfterRecovery(recovery.sessionId, recovery.events)
 }
@@ -573,9 +595,10 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<ElicitationRequestEvent>(ACP_EVENTS.elicitationRequest, (e, eventSeq) =>
       useAcpStore.getState()._onElicitationRequest(e, eventSeq)
     ),
-    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) =>
+    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) => {
+      noteTurnEndSeq(e.sessionId, eventSeq)
       useAcpStore.getState()._onPromptComplete(e, eventSeq)
-    ),
+    }),
     acpApi.onEvent<AgentCrashedEvent>(ACP_EVENTS.agentCrashed, (e) => {
       useAcpStore.getState()._onAgentCrashed(e)
       toast.error(e.message || 'Agent crashed')

@@ -20,6 +20,7 @@ import { useTapSelect } from './use-tap-select'
 export interface ComposerMenuItem {
   key: string
   label: string
+  hint?: string | null
   description?: string | null
   icon?: TermulIcon
   /** Override the default muted icon color (e.g. skill rows use `text-primary`
@@ -212,6 +213,9 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                   >
                     {item.label}
                   </span>
+                  {item.hint && (
+                    <span className="min-w-0 truncate text-muted-foreground">{item.hint}</span>
+                  )}
                   {item.description && (
                     <span
                       className={cn(

@@ -1,13 +1,14 @@
-import type { BranchInfo } from '@shared/types/ipc.types'
+import type { BranchInfo } from '@shared/types/worktree.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { WorktreeCreationCard } from '@/components/chat/WorktreeCreationCard'
 import { AlertTriangle, GitBranch, Link2, Search, Terminal, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Spinner } from '@/components/ui/spinner'
-import { toast } from '@/hooks/use-toast'
 import { worktreeApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
@@ -263,33 +264,28 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               const skipped = symlinkResult.data.filter((r) => r.status === 'skipped').length
               const failed = symlinkResult.data.filter((r) => r.status === 'failed').length
               if (failed > 0) {
-                toast({
-                  title: 'Worktree created with symlink warnings',
+                toast('Worktree created with symlink warnings', {
                   description: `${created} symlink(s) created, ${skipped} skipped, ${failed} failed.`
                 })
               } else {
-                toast({
-                  title: 'Worktree created',
+                toast('Worktree created', {
                   description: `"${result.data.name}" created on branch "${result.data.branch}" with ${created} symlink(s).`
                 })
               }
             } else {
               // Symlink creation failed but worktree was created successfully
-              toast({
-                title: 'Worktree created',
+              toast('Worktree created', {
                 description: `"${result.data.name}" created on branch "${result.data.branch}". Symlink setup had issues.`
               })
             }
           } catch {
             // Symlink failure is non-blocking
-            toast({
-              title: 'Worktree created',
+            toast('Worktree created', {
               description: `"${result.data.name}" created on branch "${result.data.branch}". Symlink setup skipped.`
             })
           }
         } else {
-          toast({
-            title: 'Worktree created',
+          toast('Worktree created', {
             description: `"${result.data.name}" created successfully on branch "${result.data.branch}".`
           })
         }
@@ -298,33 +294,37 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
         // Best-effort — a spawn failure must not block the (already successful) creation.
         const outcome = await openTerminalAtCwd(projectId, result.data.path)
         if (outcome.status === 'no-pane') {
-          toast({
-            title: 'Worktree ready — terminal not opened',
+          toast('Worktree ready — terminal not opened', {
             description: 'No active pane to open a terminal in. Switch to a workspace pane first.'
           })
         } else if (outcome.status === 'spawn-failed') {
-          toast({
-            title: 'Worktree ready — terminal not opened',
+          toast('Worktree ready — terminal not opened', {
             description: outcome.error || 'Could not open a terminal in the new worktree.'
           })
         }
 
         onClose()
       } else {
+        void logFrontendError({
+          level: 'warn',
+          source: 'newWorktreeModal.worktreeCreate',
+          message: `worktree create failed code=${result.success ? 'UNKNOWN' : result.code}`
+        })
         setValidationError(!result.success ? result.error : 'Failed to create worktree')
-        toast({
-          title: 'Failed to create worktree',
-          description: !result.success ? result.error : 'Unknown error',
-          variant: 'destructive'
+        toast.error('Failed to create worktree', {
+          description: !result.success ? result.error : 'Unknown error'
         })
       }
     } catch (err) {
       const msg = String(err)
+      void logFrontendError({
+        level: 'warn',
+        source: 'newWorktreeModal.worktreeCreate',
+        message: 'worktree create threw code=UNKNOWN'
+      })
       setValidationError(msg)
-      toast({
-        title: 'Error creating worktree',
-        description: msg,
-        variant: 'destructive'
+      toast.error('Error creating worktree', {
+        description: msg
       })
     } finally {
       setIsCreating(false)

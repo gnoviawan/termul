@@ -106,7 +106,11 @@ export async function prepareLaunchWorktree(
   let worktreeBranchResult: string = branchName
   if (!worktreePathResult) {
     const failCode = createResult.success ? 'UNKNOWN' : createResult.code
-    if (failCode === 'WORKTREE_EXISTS' || failCode === 'BRANCH_ALREADY_HAS_WORKTREE') {
+    if (
+      failCode === 'WORKTREE_EXISTS' ||
+      failCode === 'BRANCH_EXISTS' ||
+      failCode === 'BRANCH_ALREADY_HAS_WORKTREE'
+    ) {
       // Collision-retry: append `-2` suffix once (stale state from a
       // prior crashed run). Never deadlock — a second collision surfaces
       // an error.

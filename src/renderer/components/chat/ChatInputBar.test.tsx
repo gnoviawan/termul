@@ -1270,8 +1270,7 @@ describe('ChatInputBar command chip', () => {
     // Send
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    // Wire: `/compact hello` (byte-identical to the plain-prefix path).
-    // Display: the raw token text so the timeline renders the command chip.
+    // Wire: `/compact` stays where the token was. Display keeps the token.
     await waitFor(() => {
       expect(onSendBlocks).toHaveBeenCalledWith(
         [{ type: 'text', text: '/compact hello' }],
@@ -1366,27 +1365,37 @@ describe('ChatInputBar command chip', () => {
     expect(mockToastError).toHaveBeenCalledWith('This message already has a command.')
   })
 
-  it('places a command picked in the middle of a sentence at the front', async () => {
+  it('keeps a command picked in the middle of a sentence in that place', async () => {
+    const onSendBlocks = vi.fn()
     const commands = [{ name: 'compact', description: 'Compact the conversation' }]
-    renderInputBar({ commands })
+    renderInputBar({ commands, onSendBlocks })
 
     setComposerValue('buatkan design baru /compact')
 
     await selectSlashOption('/compact')
 
     await waitFor(() => {
-      expect(getComposerValue()).toBe(`${commandToken('compact')} buatkan design baru `)
+      expect(getComposerValue()).toBe(`buatkan design baru ${commandToken('compact')} `)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: 'buatkan design baru /compact' }],
+        [{ type: 'text', text: `buatkan design baru ${commandToken('compact')}` }]
+      )
     })
   })
 
-  it('moves a stored mid-sentence command to the front when the composer loads it', async () => {
+  it('keeps a stored mid-sentence command where the draft put it', async () => {
     const commands = [{ name: 'compact', description: 'Compact' }]
     renderInputBar({ commands })
 
     setComposerValue(`buatkan ${commandToken('compact')} design`)
 
     await waitFor(() => {
-      expect(getComposerValue()).toBe(`${commandToken('compact')} buatkan design`)
+      expect(getComposerValue()).toBe(`buatkan ${commandToken('compact')} design`)
     })
   })
 
@@ -1436,14 +1445,12 @@ describe('ChatInputBar command chip', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    // Wire: `/<name> ` prefix + the image block (byte-identical to the
-    // pre-token plain-prefix path). Display: raw token text + the image
-    // block so the timeline renders the command chip inline.
+    // Wire keeps `/compact` where the pill was. Display keeps the token.
     const imageBlock = { type: 'image', mimeType: 'image/png', data: 'c2NyZWVuc2hvdA==' }
     await waitFor(() => {
       expect(onSendBlocks).toHaveBeenCalledWith(
-        [{ type: 'text', text: '/compact ' }, imageBlock],
-        [{ type: 'text', text: commandToken('compact') }, imageBlock]
+        [{ type: 'text', text: '/compact' }, imageBlock],
+        [{ type: 'text', text: `${commandToken('compact')} ` }, imageBlock]
       )
     })
   })

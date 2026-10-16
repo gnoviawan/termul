@@ -96,6 +96,10 @@ vi.mock('@/stores/acp-store', () => {
   return { useAcpStore }
 })
 
+function prewarmedCwds(): string[] {
+  return mockPrewarmAgent.mock.calls.map(([, cwd]) => cwd as string)
+}
+
 function config(id: string): StoredAgentConfig {
   return { id, name: id, command: 'npx', args: [], env: {}, templateId: id }
 }
@@ -181,29 +185,28 @@ describe('useAcpAgents', () => {
     expect(mockPrewarmAgent).not.toHaveBeenCalled()
   })
 
-  it('re-warms when activeProjectId changes after mount', async () => {
-    projectRef.current.activeProjectId = 'proj-1'
-    mockLoadAgentConfigs.mockImplementation(async () => {
-      stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
-    })
-    mockPersistRead.mockResolvedValue({ success: true, data: undefined })
+  it('prewarms at once on boot and only the last project of a rapid switch burst', async () => {
+    vi.useFakeTimers()
+    try {
+      mockLoadAgentConfigs.mockImplementation(async () => {
+        stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
+      })
+      const { rerender } = renderHook(() => useAcpAgents())
+      await vi.advanceTimersByTimeAsync(0)
+      expect(prewarmedCwds()).toEqual(['/work/proj-1'])
 
-    const { rerender } = renderHook(() => useAcpAgents())
+      for (const projectId of ['proj-2', 'proj-3', 'proj-4']) {
+        projectRef.current.activeProjectId = projectId
+        rerender()
+        await vi.advanceTimersByTimeAsync(500)
+      }
+      expect(prewarmedCwds()).toEqual(['/work/proj-1'])
 
-    await waitFor(() => {
-      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-1')
-    })
-
-    const firstCallCount = mockPrewarmAgent.mock.calls.length
-
-    // Simulate project switch
-    projectRef.current.activeProjectId = 'proj-2'
-    rerender()
-
-    await waitFor(() => {
-      expect(mockPrewarmAgent).toHaveBeenCalledWith(expect.any(String), '/work/proj-2')
-    })
-    expect(mockPrewarmAgent.mock.calls.length).toBeGreaterThan(firstCallCount)
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(prewarmedCwds()).toEqual(['/work/proj-1', '/work/proj-4'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not prewarm on mount when activeProjectId is empty, then prewarms after it resolves', async () => {

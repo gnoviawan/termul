@@ -14,17 +14,10 @@ impl WorktreeManager {
     /// switched or mid-rebase), and `refs/heads/<new>` must not exist
     /// (`BRANCH_EXISTS`).
     pub fn rename_branch(worktree_path: &str, old: &str, new: &str) -> Result<(), WorktreeError> {
-        // A leading `-` would be parsed as an option by git; empty names are
-        // never valid.
-        if old.is_empty() || new.is_empty() || old.starts_with('-') || new.starts_with('-') {
+        if old.is_empty() || old.starts_with('-') {
             return Err(WorktreeError::InvalidBranchName);
         }
-
-        match run_git(&["check-ref-format", "--branch", new], Some(worktree_path)) {
-            Ok(_) => {}
-            Err(WorktreeError::GitError(_)) => return Err(WorktreeError::InvalidBranchName),
-            Err(other) => return Err(other),
-        }
+        ensure_valid_branch_name(new, worktree_path)?;
 
         // `-q` keeps a detached HEAD silent: exit 1 with no message, which
         // `run_git` surfaces as an empty `GitError`.

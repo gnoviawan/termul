@@ -144,6 +144,27 @@ describe('chat inline termul tags with real Streamdown', () => {
     expect(container.textContent).not.toContain('[Image blocked')
   })
 
+  it('renders reference-style data: images inline with no [Image blocked', async () => {
+    const { container } = renderChat(
+      '![tiny][Ref] and ![chart]\n\n[ref]: data:image/png;base64,QUJD\n[chart]: output/chart.png',
+      '/proj'
+    )
+
+    await waitFor(() => {
+      expect(screen.getByAltText('tiny')).toHaveAttribute('src', 'data:image/png;base64,QUJD')
+      expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
+    })
+    expect(container.textContent).not.toContain('[Image blocked')
+  })
+
+  it('keeps reference-style https images on the streamdown default image wrapper', async () => {
+    const { container } = renderChat('![logo][l]\n\n[l]: https://example.com/logo.png')
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-streamdown="image"]')).not.toBeNull()
+    })
+  })
+
   it('keeps https images on the streamdown default image wrapper', async () => {
     const { container } = renderChat('![logo](https://example.com/logo.png)')
 

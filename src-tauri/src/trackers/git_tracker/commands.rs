@@ -1,4 +1,4 @@
-use super::git_exec::{run_git_capture, StdoutCap, GIT_READ_TIMEOUT_MS};
+use super::git_exec::{run_git_capture, spawn_git, GitWaitError, StdoutCap, GIT_READ_TIMEOUT_MS};
 use super::*;
 
 pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> {
@@ -376,9 +376,7 @@ fn strip_first_path_component(s: &str) -> &str {
 
 /// Run `git apply` with a patch supplied on stdin. Used for per-hunk
 /// stage/unstage where the patch is a single-hunk fragment built by the
-/// renderer from the displayed diff. Follows the same deadline pattern as
-/// `GitTracker::spawn_and_wait` so a wedged `git apply` cannot hang the
-/// caller.
+/// renderer from the displayed diff.
 fn run_git_apply(cwd: &str, args: &[&str], patch: &str) -> Result<(), String> {
     use std::io::Write;
 
@@ -386,44 +384,29 @@ fn run_git_apply(cwd: &str, args: &[&str], patch: &str) -> Result<(), String> {
     let mut command = backend_command(git);
     command.current_dir(cwd).args(args.iter());
     command.stdin(Stdio::piped());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
 
-    let mut child = command
-        .spawn()
+    let mut child = spawn_git(&mut command, StdoutCap::Unbounded)
         .map_err(|e| format!("Failed to spawn git apply: {e}"))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
+    if let Some(mut stdin) = child.take_stdin() {
         // Ignore broken pipe: git may finish reading the patch and exit
         // before we finish writing (e.g. it rejects the patch early). The
         // exit status below is the source of truth.
         let _ = stdin.write_all(patch.as_bytes());
     }
 
-    let deadline = Instant::now() + Duration::from_millis(GIT_COMMAND_TIMEOUT_MS);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|e| format!("git apply wait failed: {e}"))?;
-                if output.status.success() {
-                    return Ok(());
-                }
-                return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    let output = child
+        .wait(GIT_COMMAND_TIMEOUT_MS)
+        .map_err(|error| match error {
+            GitWaitError::TimedOut => {
+                format!("git apply timed out after {GIT_COMMAND_TIMEOUT_MS}ms")
             }
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "git apply timed out after {GIT_COMMAND_TIMEOUT_MS}ms"
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => return Err(format!("git apply wait error: {e}")),
-        }
+            GitWaitError::Io(e) => format!("git apply wait error: {e}"),
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
 

@@ -211,6 +211,15 @@ function VirtualizedTimeline({
       )
     }
     // Worktree-creation progress row — a session-lifetime launch record.
+    if (item.kind === 'reload') {
+      return (
+        <div role="status" className="flex items-center gap-3 py-1 text-2xs text-muted-foreground">
+          <span aria-hidden="true" className="h-px flex-1 bg-border" />
+          <span>Agent reloaded</span>
+          <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        </div>
+      )
+    }
     if (item.kind === 'worktree') {
       return (
         <RowReveal animate={enter.animate(item.key)} staggerIndex={enter.staggerIndex(item.key)}>

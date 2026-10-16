@@ -58,7 +58,6 @@ export function useEditorTabClose() {
 
   return {
     dirtyCloseFilePath,
-    setDirtyCloseFilePath,
     handleCloseEditorTab,
     handleSaveThenClose,
     handleDiscardAndClose,

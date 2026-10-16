@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import { formatRelativeTime, formatRelativeTimeFromMs } from './git-time'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { formatRelativeTime, formatRelativeTimeFromMs } from './relative-time'
+
+const enUsDefaultLocale = Intl.DateTimeFormat().resolvedOptions().locale === 'en-US'
+
+const SECOND = 1_000
+const MINUTE = 60 * SECOND
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('formatRelativeTime', () => {
   const now = Date.parse('2026-05-30T12:00:00Z')
@@ -24,11 +35,14 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime('2026-05-30T12:05:00Z', now)).toBe('now')
   })
 
-  it('falls back to a date for old timestamps', () => {
-    // ~12 weeks earlier: beyond the 8-week relative window.
-    const result = formatRelativeTime('2026-03-01T12:00:00Z', now)
-    expect(result).not.toBe('')
-    expect(result).not.toMatch(/^\d+[mhdw]$/)
+  it.runIf(enUsDefaultLocale)('falls back to a short date for old timestamps', () => {
+    expect(formatRelativeTime('2026-03-01T12:00:00Z', now)).toBe('Mar 1, 2026')
+  })
+
+  it('reads the clock when now is omitted', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    expect(formatRelativeTime('2026-05-30T09:00:00Z')).toBe('3h')
   })
 })
 
@@ -55,5 +69,29 @@ describe('formatRelativeTimeFromMs', () => {
     expect(formatRelativeTimeFromMs(now - 3 * 3_600_000, now)).toBe('3h')
     expect(formatRelativeTimeFromMs(now - 2 * 86_400_000, now)).toBe('2d')
     expect(formatRelativeTimeFromMs(now - 14 * 86_400_000, now)).toBe('2w')
+  })
+
+  it.each([
+    [59 * SECOND, 'now'],
+    [MINUTE, '1m'],
+    [59 * MINUTE + 59 * SECOND, '59m'],
+    [HOUR, '1h'],
+    [23 * HOUR + 59 * MINUTE, '23h'],
+    [DAY, '1d'],
+    [6 * DAY + 23 * HOUR, '6d'],
+    [7 * DAY, '1w'],
+    [55 * DAY, '7w']
+  ])('formats an age of %ims as %s', (age, expected) => {
+    expect(formatRelativeTimeFromMs(now - age, now)).toBe(expected)
+  })
+
+  it.runIf(enUsDefaultLocale)('falls back to a short date at 8 weeks', () => {
+    expect(formatRelativeTimeFromMs(now - 56 * DAY, now)).toBe('Apr 4, 2026')
+  })
+
+  it('reads the clock when now is omitted', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    expect(formatRelativeTimeFromMs(now - MINUTE)).toBe('1m')
   })
 })

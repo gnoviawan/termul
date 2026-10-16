@@ -14,16 +14,16 @@ import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-s
 import { RECONNECT_GRACE_MS, useDelayedFlag } from '@/hooks/use-delayed-flag'
 import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useInterfaceOverlayOpen } from '@/hooks/use-native-webview-occlusion'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { logFrontendError } from '@/lib/log-api'
 import {
-  extractCommandNames,
   extractSkillNames,
-  replaceFileTokensInline,
-  stripAllCommandTokens
+  replaceCommandTokensInline,
+  replaceFileTokensInline
 } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getProjectRootPath } from '@/lib/worktree-context'
@@ -138,15 +138,40 @@ export function AgentChatPanel({
   // — not session.cwd which may be a worktree path with no .agents/skills/.
   const skillsProjectRoot = session ? getProjectRootPath(session.projectId) : undefined
   const { skills: availableSkills } = useAgentSkills(skillsProjectRoot)
-  const imageCapable = useAcpStore((s) =>
-    session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
+  const switching = session?.switching ?? null
+  const switchToConfigId = switching?.toConfigId ?? null
+  const switchPreparedSessionId = useAcpStore((s) =>
+    switchToConfigId && session
+      ? (s.preparedSessions[prepareChatKey(switchToConfigId, session.cwd, undefined)] ?? null)
+      : null
   )
-  const embedCapable = useAcpStore((s) =>
-    session
-      ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.embeddedContext)
+  const switchPreparedSession = useAcpStore(
+    useShallow((s) => {
+      const prepared = switchPreparedSessionId ? s.sessions[switchPreparedSessionId] : undefined
+      return {
+        agentId: prepared?.agentId ?? null,
+        models: prepared?.models,
+        modes: prepared?.modes,
+        configOptions: prepared?.configOptions,
+        mcpServerCount: prepared?.mcpServerCount
+      }
+    })
+  )
+  const promptAgentId = switching ? switchPreparedSession.agentId : (session?.agentId ?? null)
+  const promptSessionId = switching ? switchPreparedSessionId : sessionId
+  const imageCapable = useAcpStore((s) =>
+    promptAgentId
+      ? Boolean(s.agents[promptAgentId]?.capabilities?.promptCapabilities?.image)
       : false
   )
-  const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
+  const embedCapable = useAcpStore((s) =>
+    promptAgentId
+      ? Boolean(s.agents[promptAgentId]?.capabilities?.promptCapabilities?.embeddedContext)
+      : false
+  )
+  const commands = useAcpStore((s) =>
+    promptSessionId ? (s.commands[promptSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
+  )
   const hasFileChanges = useMemo(
     () => toolCalls.some((t) => t.kind === 'edit' || t.kind === 'delete' || t.kind === 'move'),
     [toolCalls]
@@ -182,6 +207,7 @@ export function AgentChatPanel({
   // CAP-5: the panel owns the fallback card while the strip is not hosting —
   // mirrored by the render gate below (`showBrowserConsentCard`).
   const stripHosting = useIsConsentStripHosting()
+  const overlayOpen = useInterfaceOverlayOpen()
   const registerConsentCard = useConsentCardHost((s) => s.register)
   const unregisterConsentCard = useConsentCardHost((s) => s.unregister)
   // A registered session means "a visible consent card is on screen in this
@@ -401,20 +427,6 @@ export function AgentChatPanel({
     })
   }, [cancelPrompt, sessionId])
 
-  // Armed-switch option scoping (spec-acp-composer-option-fidelity): while a
-  // switch is armed the composer is a launcher for the TARGET config — its
-  // chips render the target's advertised options (prepared session →
-  // `agentOptionsCache` → empty) with `switching.pendingOptions` overlaid, and
-  // picks route into `setSwitchPendingOption` instead of the live session's
-  // setters (the old session's wire + persisted cache stay untouched).
-  const switching = session?.switching ?? null
-  const switchToConfigId = switching?.toConfigId ?? null
-  const switchPreparedSessionId = useAcpStore((s) =>
-    switchToConfigId && session
-      ? (s.preparedSessions[prepareChatKey(switchToConfigId, session.cwd, undefined)] ?? null)
-      : null
-  )
-  const switchPreparedSession = useAcpSession(switchPreparedSessionId)
   const switchOptionsCache = useAcpStore((s) =>
     switchToConfigId ? (s.agentOptionsCache[switchToConfigId] ?? null) : null
   )
@@ -423,26 +435,25 @@ export function AgentChatPanel({
       switching == null
         ? null
         : overlayPendingLauncherOptions({
-            models: switchPreparedSession?.models ?? switchOptionsCache?.models ?? null,
-            modes: switchPreparedSession?.modes ?? switchOptionsCache?.modes ?? null,
+            models: switchPreparedSession.models ?? switchOptionsCache?.models ?? null,
+            modes: switchPreparedSession.modes ?? switchOptionsCache?.modes ?? null,
             configOptions:
-              switchPreparedSession?.configOptions ?? switchOptionsCache?.configOptions ?? [],
+              switchPreparedSession.configOptions ?? switchOptionsCache?.configOptions ?? [],
             pending: switching.pendingOptions ?? emptyPendingLauncherOptions()
           }),
     [switching, switchPreparedSession, switchOptionsCache]
   )
-  // ChatInputBar reads `session.models` / `session.modes` internally for the
-  // model and Agent chips — pass a memoized session carrying the TARGET's
-  // option state while armed.
+  const switchMcpServerCount = switchPreparedSession.mcpServerCount
   const composerSession = useMemo(() => {
     if (!session || !armedOptions) return session
     return {
       ...session,
       models: armedOptions.models,
       modes: armedOptions.modes,
-      configOptions: armedOptions.configOptions
+      configOptions: armedOptions.configOptions,
+      mcpServerCount: switchMcpServerCount
     }
-  }, [session, armedOptions])
+  }, [session, armedOptions, switchMcpServerCount])
 
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string | boolean) => {
@@ -566,14 +577,11 @@ export function AgentChatPanel({
     // The display (token) blocks are passed through unchanged so the timeline
     // keeps rendering inline chips. If a skill name no longer resolves to a
     // path (e.g. the skill was uninstalled), surface a clear error and abort.
-    // Mirrors `buildPromptParts` exactly: strip the command tokens before the
-    // skill/file framer, then prefix `/<name> ` back so a retried command turn
-    // stays byte-identical to a fresh send (no sentinel leaks to the agent).
+    // Mirrors `buildPromptParts`: command tokens become `/<name>` where the
+    // user typed them. They are not moved to the front of the prompt.
     const tokenText = lastUserText
-    const commandNames = extractCommandNames(tokenText)
-    const commandName = commandNames[0] ?? null
-    const valueDecommanded = commandNames.length > 0 ? stripAllCommandTokens(tokenText) : tokenText
-    const skillNames = extractSkillNames(valueDecommanded)
+    const valueWithCommandText = replaceCommandTokensInline(tokenText)
+    const skillNames = extractSkillNames(tokenText)
     const skills = skillNames.map((name) => ({
       name,
       path: availableSkills.find((s) => s.name === name)?.path ?? ''
@@ -585,10 +593,10 @@ export function AgentChatPanel({
     }
     // File tokens → `(display)` before the skill framer (buildPromptParts'
     // `valueDefiled`) so file-mention sentinels never leak to the wire either.
-    const valueDefiled = replaceFileTokensInline(valueDecommanded)
+    const valueDefiled = replaceFileTokensInline(valueWithCommandText)
     const wireText =
       skills.length > 0 ? buildPromptWithLoadedSkills(skills, valueDefiled) : valueDefiled
-    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
+    const wireWithCommand = wireText
     // Build wire blocks: replace the text payload with the re-framed wire text,
     // preserving non-text (image/resource) blocks from the original message.
     const wireBlocks: ContentBlock[] = []
@@ -633,6 +641,7 @@ export function AgentChatPanel({
     }),
     [session, projects]
   )
+  const reloadMark = useAcpStore((s) => s.agentReloadMarks?.[sessionId] ?? null)
   const timeline = useMemo(() => {
     const items = consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches))
     // The worktree-creation progress row is a first-class timeline item
@@ -652,8 +661,19 @@ export function AgentChatPanel({
         progressId
       })
     }
+    if (reloadMark) {
+      const anchor = reloadMark.afterMessageId
+        ? items.findIndex(
+            (item) => item.kind === 'message' && item.message.id === reloadMark.afterMessageId
+          )
+        : -1
+      items.splice(anchor >= 0 ? anchor + 1 : items.length, 0, {
+        kind: 'reload',
+        key: `reload:${sessionId}:${reloadMark.afterMessageId ?? 'start'}`
+      })
+    }
     return items
-  }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId])
+  }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId, reloadMark, sessionId])
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.
   const showRunningIndicator = Boolean(session?.activeTurn)
@@ -743,11 +763,8 @@ export function AgentChatPanel({
   }
 
   const isClosed = session.status === 'closed'
-  // CAP-5: gate the card (and its gutter wrapper) on every suppression term —
-  // closed sessions never show it, and remote (non-Tauri) or strip-hosted
-  // states render nothing instead of an empty padded gutter block.
   const showBrowserConsentCard =
-    pendingBrowserConsent != null && !isClosed && !stripHosting && isTauriContext()
+    pendingBrowserConsent != null && !isClosed && !stripHosting && !overlayOpen && isTauriContext()
   // Failed launches keep the Retry affordance even without a user prompt in
   // the transcript (the retry relaunches without re-sending).
   const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
@@ -803,7 +820,11 @@ export function AgentChatPanel({
     >
       <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
-        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground"
+        >
           <Spinner size={12} decorative />
           Resuming chat…
         </div>
@@ -848,13 +869,6 @@ export function AgentChatPanel({
           </div>
         )}
       {showTransportOverlay && (
-        // Story 5.3 (AC3, T5.3): transport-level reconnect overlay. This is
-        // DISTINCT from the session-level "Reconnecting to agent…" banner
-        // above (which fires when `openHistorySession` is in flight). Both can
-        // show simultaneously. The overlay is non-blocking (`pointer-events-none`
-        // on the container) so already-rendered messages remain interactive.
-        // Reuses `AgentConnectionLamp` (amber+pulse via the `reconnecting`
-        // prop) — no new indicator component (NFR9, AC3).
         <div
           className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
           role="status"

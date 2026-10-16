@@ -69,21 +69,7 @@ vi.mock('@/lib/api', async () => {
   }
 })
 
-// Minimal stub of the Radix context-menu primitives the tab wrappers use.
-vi.mock('@/components/ui/context-menu', () => {
-  const ContextMenu = ({ children }: { children: React.ReactNode }) => <>{children}</>
-  const ContextMenuTrigger = ({ children }: { children: React.ReactNode }) => <>{children}</>
-  const ContextMenuContent = () => null
-  const ContextMenuItem = () => null
-  const ContextMenuSeparator = () => null
-  return {
-    ContextMenu,
-    ContextMenuTrigger,
-    ContextMenuContent,
-    ContextMenuItem,
-    ContextMenuSeparator
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 const tabs: WorkspaceTab[] = [
   { type: 'terminal', id: 'tab-1', terminalId: 'term-1' },

@@ -232,7 +232,7 @@ async fn the_per_project_cap_counts_detached_terminals_and_the_listing_returns_t
 
     // Nothing is attached (a closed pane only detaches): both still count and
     // both are listed, while a refused spawn adds nothing to the listing.
-    assert!(!manager.get(&one.info.id).unwrap().has_web_attachment());
+    assert!(!manager.get(&one.info.id).unwrap().has_live_attachment());
     assert!(manager.spawn(options("a"), None).await.is_err());
     let mut listed: Vec<String> = manager
         .list_preserved("a")
