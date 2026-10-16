@@ -248,6 +248,48 @@ fn parse_auth_mode(value: &str) -> Result<ClaudeAuthMode, String> {
     }
 }
 
+/// Which setting chose the Claude config dir of a managed agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigDirSource {
+    /// The host's own Claude config dir.
+    Host,
+    /// The dir of the Project's linked Claude Account.
+    Linked,
+    /// An explicit `CLAUDE_CONFIG_DIR` in the agent env (the client spawns
+    /// with the project env underneath the agent config's own).
+    ProjectEnv,
+}
+
+impl ConfigDirSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Linked => "linked",
+            Self::ProjectEnv => "project env",
+        }
+    }
+}
+
+/// The `CLAUDE_CONFIG_DIR` a managed Claude agent runs with, and so the one
+/// its auth preflight must check: the agent env's own value over the linked
+/// Account dir. `None` is the host's own dir. A blank env value counts as
+/// unset.
+fn effective_config_dir(
+    env: &std::collections::HashMap<String, String>,
+    linked_dir: Option<&Path>,
+) -> (Option<PathBuf>, ConfigDirSource) {
+    if let Some(dir) = env
+        .get(CLAUDE_CONFIG_DIR_ENV)
+        .filter(|dir| !dir.trim().is_empty())
+    {
+        return (Some(PathBuf::from(dir)), ConfigDirSource::ProjectEnv);
+    }
+    match linked_dir {
+        Some(dir) => (Some(dir.to_path_buf()), ConfigDirSource::Linked),
+        None => (None, ConfigDirSource::Host),
+    }
+}
+
 /// Secret-store interface used by the Claude lifecycle module.
 trait ClaudeCredentialStore: Send + Sync {
     fn get(&self, account: &str) -> Result<Option<String>, String>;
@@ -654,23 +696,33 @@ impl ClaudeAgentService {
         match self.auth_mode() {
             Ok(ClaudeAuthMode::ClaudeCode) => {
                 let account = self.resolve_account(project_id);
+                let (config_dir, source) =
+                    effective_config_dir(&config.env, account.config_dir.as_deref());
+                if source == ConfigDirSource::ProjectEnv && account.config_dir.is_some() {
+                    log::info!(
+                        "[acp-claude] the project env CLAUDE_CONFIG_DIR overrides the project's linked Claude profile"
+                    );
+                }
                 match self
                     .runtime_probe
-                    .cli_authentication_status(account.config_dir.as_deref())
+                    .cli_authentication_status(config_dir.as_deref())
                     .await
                 {
                     Ok(Some(true)) => {}
                     Ok(status) => {
                         log::warn!(
-                            "[acp-claude] managed config rejected: profile is not signed in (status={status:?})"
+                            "[acp-claude] managed config rejected: {} profile is not signed in (status={status:?})",
+                            source.label()
                         );
-                        return Err(match account.config_dir {
-                            None => "Claude Code CLI is not signed in. Run `claude auth login`, then retry."
+                        return Err(match source {
+                            ConfigDirSource::Host => "Claude Code CLI is not signed in. Run `claude auth login`, then retry."
                                 .to_string(),
-                            Some(_) => format!(
+                            ConfigDirSource::Linked => format!(
                                 "The Claude account \"{}\" is not signed in. Sign in to it in Settings → Provider, then retry.",
                                 account.account_name
                             ),
+                            ConfigDirSource::ProjectEnv => "The Claude profile set by CLAUDE_CONFIG_DIR in the project environment is not signed in. Run `claude auth login` with that CLAUDE_CONFIG_DIR, then retry."
+                                .to_string(),
                         });
                     }
                     Err(error) => {
@@ -679,16 +731,24 @@ impl ClaudeAgentService {
                     }
                 }
                 config.env.remove(ANTHROPIC_API_KEY_ENV);
-                if let Some(dir) = &account.config_dir {
-                    let dir = dir.to_str().ok_or_else(|| {
-                        log::warn!("[acp-claude] account config dir is not valid Unicode");
-                        "The Claude account folder path is not supported".to_string()
-                    })?;
-                    config
-                        .env
-                        .insert(CLAUDE_CONFIG_DIR_ENV.to_string(), dir.to_string());
+                match &config_dir {
+                    Some(dir) => {
+                        let dir = dir.to_str().ok_or_else(|| {
+                            log::warn!("[acp-claude] account config dir is not valid Unicode");
+                            "The Claude account folder path is not supported".to_string()
+                        })?;
+                        config
+                            .env
+                            .insert(CLAUDE_CONFIG_DIR_ENV.to_string(), dir.to_string());
+                    }
+                    None => {
+                        config.env.remove(CLAUDE_CONFIG_DIR_ENV);
+                    }
                 }
-                log::info!("[acp-claude] managed config uses the project profile");
+                log::info!(
+                    "[acp-claude] managed config uses the {} Claude profile",
+                    source.label()
+                );
                 Ok(true)
             }
             Ok(ClaudeAuthMode::ApiKey) => match self.credentials.get(API_KEY_ACCOUNT) {

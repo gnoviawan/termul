@@ -147,11 +147,23 @@ signing in, renaming and removing an Account stay on the host.
 
 ## Per-project Claude profiles
 
-The agent process and the `claude auth status` preflight both run with the
-project's environment variables (Project Settings → Environment Variables)
-underneath the agent config's own env. Set `CLAUDE_CONFIG_DIR` on a project to
-pin its agent chats, like its terminal tabs, to one Claude Code login.
-Changing a project's env replaces its warm agent on the next chat.
+The agent process runs with the project's environment variables (Project
+Settings → Environment Variables) underneath the agent config's own env. Set
+`CLAUDE_CONFIG_DIR` on a project to pin its agent chats, like its terminal
+tabs, to one Claude Code login.
+
+The agent's `CLAUDE_CONFIG_DIR` is chosen once and used by both the
+`claude auth status` preflight and the agent process:
+
+1. `CLAUDE_CONFIG_DIR` in the agent env (the project env, or the agent config).
+2. Otherwise the config dir of the project's linked Claude Account.
+3. Otherwise the host's own Claude config dir.
+
+The host logs which of the three it used, and when a project env value
+overrides a linked Account, without logging the path.
+
+Changing a project's env gives the next chat a fresh agent. The previous agent
+keeps serving its open chats and running work until the idle reaper stops it.
 
 ## Startup failures
 
