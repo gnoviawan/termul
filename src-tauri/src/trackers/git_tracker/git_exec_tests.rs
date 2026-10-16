@@ -1,6 +1,7 @@
 use super::git_exec::{
     drain_capped, empty_tree_for, run_git_capture, GitRunError, StdoutCap, EMPTY_TREE,
 };
+use super::GitTracker;
 // ---- stdout cap while draining ----
 
 #[test]
@@ -84,7 +85,7 @@ fn git_run_error_display_is_stable() {
 }
 
 #[test]
-fn it_run_git_capture_reads_output_larger_than_the_pipe_buffer() {
+fn it_git_runners_read_output_larger_than_the_pipe_buffer() {
     let tmp = std::env::temp_dir().join(format!("termul-gitexec-big-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir");
     struct Cleanup(std::path::PathBuf);
@@ -115,6 +116,10 @@ fn it_run_git_capture_reads_output_larger_than_the_pipe_buffer() {
         .expect("cat-file");
     assert!(out.status.success());
     assert_eq!(out.stdout.len(), 300_000);
+    let polled = GitTracker::run_git_command_with_timeout(cwd, &["cat-file", "-p", &id], 10_000)
+        .expect("run_git_command must not stall on a full pipe");
+    assert!(polled.status.success());
+    assert_eq!(polled.stdout.len(), 300_000);
 
     let capped = run_git_capture(
         cwd,
@@ -125,4 +130,33 @@ fn it_run_git_capture_reads_output_larger_than_the_pipe_buffer() {
     .expect("capped cat-file");
     assert!(capped.status.success(), "the rest is drained, not killed");
     assert_eq!(capped.stdout.len(), 1000);
+}
+
+#[cfg(windows)]
+#[test]
+fn timeout_kills_the_process_the_git_launcher_started() {
+    use crate::process_util::test_support::{
+        grandchild_launcher_script, is_alive, powershell_args, read_pid_file, wait_for_exit,
+        KillOnFail, EXIT_TIMEOUT,
+    };
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let pid_file = dir.path().join("grandchild.pid");
+    let mut command = super::resolve::backend_command("powershell.exe");
+    command.args(powershell_args(&grandchild_launcher_script(&pid_file)));
+    let waiter = {
+        let cwd = dir.path().to_string_lossy().into_owned();
+        std::thread::spawn(move || {
+            GitTracker::spawn_and_wait(command, &["status"], &cwd, 5_000).is_none()
+        })
+    };
+    let grandchild = read_pid_file(&pid_file);
+    let _cleanup = KillOnFail(grandchild);
+    assert!(is_alive(grandchild), "grandchild runs until the timeout");
+
+    assert!(waiter.join().unwrap(), "the launcher outlived the timeout");
+    assert!(
+        wait_for_exit(grandchild, EXIT_TIMEOUT),
+        "grandchild {grandchild} survived the git timeout"
+    );
 }

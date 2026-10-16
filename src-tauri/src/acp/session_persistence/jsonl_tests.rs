@@ -104,3 +104,44 @@ fn backward_reader_stops_at_a_line_start_floor() {
     assert_eq!(read, 0);
     let _ = fs::remove_dir_all(dir);
 }
+
+fn record_line(session_id: &str) -> Vec<u8> {
+    let mut line = serde_json::to_vec(&PersistedEventRecord {
+        schema_version: SESSION_SCHEMA_VERSION,
+        session_id: session_id.to_string(),
+        seq: 1,
+        type_: "user_prompt".to_string(),
+        recorded_at: 1,
+        payload: serde_json::json!({}),
+    })
+    .unwrap();
+    line.push(b'\n');
+    line
+}
+
+#[test]
+fn first_record_probe_agrees_with_load_jsonl() {
+    let record = record_line("s");
+    let cases: [(&str, Vec<u8>, bool); 6] = [
+        ("empty-file", Vec::new(), true),
+        ("record", record.clone(), true),
+        (
+            "blank-then-record",
+            [b"\n".as_slice(), &record].concat(),
+            true,
+        ),
+        ("spaces", [b"   \n".as_slice(), &record].concat(), false),
+        (
+            "carriage-return",
+            [b"\r\n".as_slice(), &record].concat(),
+            false,
+        ),
+        ("blank-then-garbage", b"\nnot a record\n".to_vec(), false),
+    ];
+    for (label, bytes, valid) in cases {
+        let (dir, path) = temp_file(label, &bytes);
+        assert_eq!(jsonl_first_record_is_valid(&path, "s"), valid, "{label}");
+        assert_eq!(load_jsonl(&path, "s", false).is_ok(), valid, "{label}");
+        let _ = fs::remove_dir_all(dir);
+    }
+}

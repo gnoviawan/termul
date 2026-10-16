@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::{header, HeaderValue, StatusCode, Uri};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tower_http::services::{ServeDir, ServeFile};
@@ -192,20 +192,29 @@ pub struct Assets;
 ///   routes like `/v1.2/home` (last segment `home`, no `.`) as assets.
 /// - Anything else (a client-side route, no `.` in the last segment) →
 ///   `index.html` (the SPA boots + routes client-side).
-pub async fn serve_embedded(uri: Uri) -> Response {
+///
+/// Every embedded response carries a content-hash `ETag`; a GET or HEAD whose
+/// `If-None-Match` names it gets `304 Not Modified` with no body. Other
+/// methods ignore the validator.
+pub async fn serve_embedded(method: Method, uri: Uri, headers: HeaderMap) -> Response {
+    let validators = if matches!(method, Method::GET | Method::HEAD) {
+        headers
+    } else {
+        HeaderMap::new()
+    };
     let path = uri.path().trim_start_matches('/');
 
     if path.is_empty() || path == INDEX_HTML {
-        return embedded_index();
+        return embedded_index(&validators);
     }
 
     match Assets::get(path) {
-        Some(file) => embedded_response(file.metadata.mimetype(), file.data, path),
+        Some(file) => embedded_file(file, path, &validators),
         None => {
             if last_segment_has_extension(path) {
                 (StatusCode::NOT_FOUND, "404 Not Found").into_response()
             } else {
-                embedded_index()
+                embedded_index(&validators)
             }
         }
     }
@@ -226,9 +235,9 @@ fn last_segment_has_extension(path: &str) -> bool {
 /// chunks absent from a new embed → 404 after an upgrade). The path-aware
 /// policy in [`embedded_response`] already gives it `no-cache,
 /// must-revalidate` — only `assets/` paths are immutable.
-fn embedded_index() -> Response {
+fn embedded_index(request: &HeaderMap) -> Response {
     match Assets::get(INDEX_HTML) {
-        Some(file) => embedded_response(file.metadata.mimetype(), file.data, INDEX_HTML),
+        Some(file) => embedded_file(file, INDEX_HTML, request),
         None => (
             StatusCode::NOT_FOUND,
             "web bundle not embedded — run `bun run build:web` before building",
@@ -260,14 +269,63 @@ fn embedded_response(mime: &str, data: Cow<'static, [u8]>, path: &str) -> Respon
     let mime_val = HeaderValue::from_str(mime)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
     let mut resp = ([(header::CONTENT_TYPE, mime_val)], Body::from(data)).into_response();
-    let cache_control = if path.starts_with("assets/") {
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, cache_control(path));
+    resp
+}
+
+fn cache_control(path: &str) -> HeaderValue {
+    if path.starts_with("assets/") {
         HeaderValue::from_static("public, max-age=31536000, immutable")
     } else {
         HeaderValue::from_static("no-cache, must-revalidate")
+    }
+}
+
+/// The tag is weak because the compression layer can re-encode the body, and
+/// `If-None-Match` compares weakly anyway.
+fn embedded_file(file: rust_embed::EmbeddedFile, path: &str, request: &HeaderMap) -> Response {
+    let opaque: String = file
+        .metadata
+        .sha256_hash()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let opaque = format!("\"{opaque}\"");
+    let mut resp = if if_none_match_names(request, &opaque) {
+        let mut resp = StatusCode::NOT_MODIFIED.into_response();
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, cache_control(path));
+        resp
+    } else {
+        embedded_response(file.metadata.mimetype(), file.data, path)
     };
-    resp.headers_mut()
-        .insert(header::CACHE_CONTROL, cache_control);
+    let etag =
+        HeaderValue::from_str(&format!("W/{opaque}")).expect("a quoted hex tag is a valid header");
+    resp.headers_mut().insert(header::ETAG, etag);
     resp
+}
+
+fn if_none_match_names(request: &HeaderMap, opaque: &str) -> bool {
+    request
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.trim() == "*" || opaque_tags(value).any(|tag| tag == opaque))
+}
+
+/// RFC 9110 §13.1.2 entity-tag list. Commas inside a quoted tag belong to the
+/// tag, so the list is split on quotes, not commas.
+fn opaque_tags(list: &str) -> impl Iterator<Item = &str> {
+    let mut rest = list;
+    std::iter::from_fn(move || {
+        rest = rest.trim_start_matches([' ', '\t', ',']);
+        let tag = rest.strip_prefix("W/").unwrap_or(rest);
+        let end = tag.strip_prefix('"')?.find('"')? + 2;
+        let (opaque, tail) = tag.split_at(end);
+        rest = tail;
+        Some(opaque)
+    })
 }
 
 #[cfg(test)]

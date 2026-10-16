@@ -113,6 +113,16 @@ export interface ChatMessage {
   messageId?: string
 }
 
+/**
+ * Options for one history open. A reload passes the current MCP list and
+ * asks for a new agent process. A normal history open omits both.
+ */
+export interface OpenHistoryOptions {
+  mcpServers?: McpServer[]
+  /** Skip adopting the process that already owns this session. */
+  forceNewAgent?: boolean
+}
+
 export interface AcpSession {
   id: SessionId
   agentId: AgentId
@@ -141,6 +151,12 @@ export interface AcpSession {
    * are not dropped.
    */
   openTurnId: string | null
+  /**
+   * Wire turn id of the newest prompt turn this renderer opened. Unlike
+   * `openTurnId` it survives the turn's end, so a late result of an older turn
+   * can tell a newer one superseded it.
+   */
+  latestPromptTurnId?: string
   modes: SessionModeState | null
   models?: SessionModelState | null
   configOptions: SessionConfigOption[]
@@ -343,6 +359,16 @@ export interface AcpState {
    * `createSession` after spawn would otherwise hide Restart.
    */
   pendingRestartVersions: Record<string, string>
+  /**
+   * Chats with a reload in progress. The Reload control stays disabled and
+   * reads "Reloading…".
+   */
+  reloadingChatIds: Record<SessionId, true>
+  /**
+   * In-memory "Agent reloaded" mark. `afterMessageId` is the last message at
+   * the moment of reload, so later messages stay below the line. Not persisted.
+   */
+  agentReloadMarks: Record<SessionId, { afterMessageId: string | null }>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
@@ -678,7 +704,7 @@ export interface AcpState {
    * local projection, with the same stale-response guard as `loadSessionIndex`.
    */
   applySessionIndexSnapshot: (entries: SessionIndexEntry[]) => Promise<void>
-  openHistorySession: (id: string) => Promise<void>
+  openHistorySession: (id: string, options?: OpenHistoryOptions) => Promise<void>
   /** R1: Proactively reattach a still-running ACP session on refresh. Mirrors
    * `openHistorySessionInner`'s transcript-install + resume but skips
    * `ensureLiveAgent` (no cold-spawn): the caller passes the authoritative

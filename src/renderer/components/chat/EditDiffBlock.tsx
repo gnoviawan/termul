@@ -19,11 +19,6 @@ interface EditDiffBlockProps {
   onOpenFile?: (path: string, line: number) => void
 }
 
-function extensionOf(name: string): string | null {
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? name.slice(dot + 1) : null
-}
-
 /**
  * Inline edit result: a file header (click opens the file at the first
  * changed line) over a few diff rows that fade out; a click on the rows
@@ -62,14 +57,7 @@ export function EditDiffBlock({
 
   const header = (
     <>
-      <MaterialFileIcon
-        name={name}
-        extension={extensionOf(name)}
-        isDirectory={false}
-        isExpanded={false}
-        depth={0}
-        size={14}
-      />
+      <MaterialFileIcon name={name} isDirectory={false} isExpanded={false} depth={0} size={14} />
       <span
         className={cn('min-w-0 truncate', failed ? 'text-destructive' : 'text-foreground')}
         title={diff.path}

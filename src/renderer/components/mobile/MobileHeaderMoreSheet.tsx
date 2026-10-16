@@ -1,4 +1,4 @@
-import { X } from '@/components/icons'
+import { RefreshCw, X } from '@/components/icons'
 import {
   Sheet,
   SheetContent,
@@ -28,6 +28,10 @@ interface MobileHeaderMoreSheetProps extends ShellNavigationActions {
   onItemChosen: () => void
   /** Agent-chat tabs only. */
   onCloseChat?: () => void
+  /** Agent-chat tabs only. Reload this chat onto a new agent process. */
+  onReloadChat?: () => void
+  reloadChatDisabled?: boolean
+  reloadChatReason?: string | null
   /**
    * Other non-terminal tabs (Git History, editors, Git Changes, browser):
    * closes the active tab through its guarded close.
@@ -48,6 +52,9 @@ export function MobileHeaderMoreSheet({
   onCloseAutoFocus,
   onItemChosen,
   onCloseChat,
+  onReloadChat,
+  reloadChatDisabled = false,
+  reloadChatReason,
   onCloseTab,
   ...navigation
 }: MobileHeaderMoreSheetProps): React.JSX.Element {
@@ -85,6 +92,18 @@ export function MobileHeaderMoreSheet({
             {label}
           </button>
         ))}
+        {onReloadChat && (
+          <button
+            type="button"
+            className={`${SHEET_ROW_CLASS_NAME} hover:bg-accent disabled:opacity-70`}
+            onClick={choose(onReloadChat)}
+            disabled={reloadChatDisabled}
+            title={reloadChatDisabled ? (reloadChatReason ?? undefined) : undefined}
+          >
+            <RefreshCw size={16} />
+            Reload this chat
+          </button>
+        )}
         {onCloseChat && (
           <div
             className={visibleRows.length > 0 ? SHEET_DESTRUCTIVE_DIVIDER_CLASS_NAME : undefined}

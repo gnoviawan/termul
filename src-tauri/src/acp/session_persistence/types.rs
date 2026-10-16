@@ -83,10 +83,10 @@ pub struct SessionMetadata {
     /// incrementally by `append_record` under the SAME rules the payload
     /// materializer folds by, so `message_count` == the materialized
     /// messages length for live sessions.
-    /// Additive: old metadata deserializes with `None` and converges via the
-    /// lazy heal (recount on first append — `fold_state_needs_heal`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold_open_role: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fold_counted: bool,
     /// Agent-owned metadata mirror created from ACP `session/list`.
     #[serde(default)]
     pub discovered: bool,
@@ -142,6 +142,15 @@ pub struct SessionMetadata {
     /// loads with `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep_checkpoint: Option<SweepCheckpoint>,
+}
+
+impl SessionMetadata {
+    pub(super) fn adopt_fold_counts(&mut self, counts: FoldCounts) {
+        self.message_count = counts.message_count;
+        self.tool_count = counts.tool_count;
+        self.fold_open_role = counts.state.open_role.map(str::to_string);
+        self.fold_counted = true;
+    }
 }
 
 /// Asserts that `messages.jsonl[0..len)` folds to no open turn (the

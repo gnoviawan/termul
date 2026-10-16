@@ -12,6 +12,8 @@ export interface BrowserTabInfo {
   id: string
   url: string
   title: string
+  /** True when the host claimed this webview for a pending agent open. */
+  agentControlled: boolean
 }
 
 export interface BrowserTabNavigatedPayload {

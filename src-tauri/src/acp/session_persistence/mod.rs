@@ -50,6 +50,7 @@ const WRITER_CAPACITY: usize = 1024;
 /// hunting for a fold boundary. A single coalesced run longer than this is
 /// pathological; the caller falls back to a full replay beyond it.
 const TAIL_DEEPEN_MAX_LINES: usize = 16_384;
+const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 mod diff_stat;
 mod jsonl;
@@ -142,6 +143,14 @@ struct Inner {
     /// The writer never invents a seq: records it must author itself (the
     /// shutdown `interrupted` marker) take theirs from here.
     seq_authority: Mutex<Option<Arc<dyn SeqAuthority>>>,
+    unsalvageable_log_stamps: Mutex<HashMap<String, LogStamps>>,
+    /// Newest `availableCommands` per session (`None`: the log holds no list),
+    /// so a tail payload whose window starts after the session's
+    /// `commands_update` still carries it. Appends replace an entry in append
+    /// order; a tail payload seeds a missing one from the log. Only
+    /// `delete_session` removes one: a seed racing an append can then never
+    /// fill a hole with the older list.
+    last_commands: Mutex<HashMap<String, Option<Value>>>,
     /// Test gate: the writer awaits this before executing each command so a
     /// close can be queued behind appends that have not been written yet.
     #[cfg(test)]
@@ -328,6 +337,8 @@ impl SessionPersistence {
                 index_lock: tokio::sync::Mutex::new(()),
                 process_shutdown: AtomicBool::new(false),
                 seq_authority: Mutex::new(None),
+                unsalvageable_log_stamps: Mutex::new(HashMap::new()),
+                last_commands: Mutex::new(HashMap::new()),
                 #[cfg(test)]
                 writer_gate_hook: Mutex::new(None),
                 #[cfg(test)]
@@ -410,6 +421,7 @@ impl SessionPersistence {
             tool_count: 0,
             last_seq: 0,
             fold_open_role: None,
+            fold_counted: true,
             discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -519,6 +531,7 @@ impl SessionPersistence {
             tool_count: 0,
             last_seq: 0,
             fold_open_role: None,
+            fold_counted: true,
             discovered: true,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -592,6 +605,7 @@ impl SessionPersistence {
             tool_count: 0,
             last_seq: 0,
             fold_open_role: None,
+            fold_counted: true,
             discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -676,7 +690,14 @@ impl SessionPersistence {
         record.payload = normalize_durable_payload(&record.type_, &record.payload);
         let session_id = record.session_id.clone();
         let runtime = self.runtime(&session_id)?;
-        self.send_command(&runtime, &session_id, WriterCommand::Append(record))
+        let commands = (record.type_ == "commands_update")
+            .then(|| record.payload.get("availableCommands").cloned());
+        let _order = runtime.send_lock.lock();
+        Self::deliver(&runtime, &session_id, WriterCommand::Append(record))?;
+        if let Some(commands) = commands {
+            self.inner.last_commands.lock().insert(session_id, commands);
+        }
+        Ok(())
     }
 
     /// Hold this session's send lock across a critical section that both
@@ -1192,6 +1213,7 @@ impl SessionPersistence {
             }
         }
         self.inner.sessions.lock().remove(session_id);
+        self.inner.last_commands.lock().remove(session_id);
         let dir = self.session_dir(&metadata.storage_key)?;
         // Drop the catalog entry BEFORE touching the dir: a read-path
         // salvage serializes its rewrite on the catalog lock, so once the
@@ -1222,6 +1244,14 @@ impl SessionPersistence {
     ) -> Result<T> {
         match load(self) {
             Err(SessionPersistenceError::CorruptSession) => {
+                if self.logs_known_unsalvageable(session_id) {
+                    log::warn!(
+                        "[acp-history] {op} skipped salvage: logs unchanged since found \
+                         unsalvageable session_id={}",
+                        crate::logging::redact_session_id(session_id)
+                    );
+                    return Err(SessionPersistenceError::CorruptSession);
+                }
                 match self.salvage_seq_intruders(session_id) {
                     Ok(healed) => {
                         if !healed {
@@ -1525,8 +1555,19 @@ impl SessionPersistence {
         // stall every other session's catalog lookups.
         let metadata = self.metadata(session_id)?;
         let dir = self.session_dir(&metadata.storage_key)?;
-        if !has_seq_intruders(&dir, session_id)? {
-            return Ok(false);
+        let stamps = log_stamps(&dir).ok();
+        match probe_seq_intruders(&dir, session_id)? {
+            SalvageProbe::Clean => return Ok(false),
+            SalvageProbe::Unsalvageable => {
+                if let Some(stamps) = stamps {
+                    self.inner
+                        .unsalvageable_log_stamps
+                        .lock()
+                        .insert(session_id.to_string(), stamps);
+                }
+                return Ok(false);
+            }
+            SalvageProbe::Intruders => {}
         }
         // The locked rewrite phase — serialize the heal against every
         // writer-facing mutation. The catalog map lock blocks
@@ -1556,8 +1597,7 @@ impl SessionPersistence {
         // `append_record` was blocked on this entry lock for the whole
         // scan/backup/rewrite. `last_seq` still keeps a max() guard: a seq
         // gap is harmless, a reused seq is the corruption being healed.
-        current.message_count = counts.message_count;
-        current.tool_count = counts.tool_count;
+        current.adopt_fold_counts(counts.fold);
         current.last_seq = current.last_seq.max(counts.last_seq);
         // The rewrite removed lines from the prefix a sweep checkpoint vouches
         // for; the next host start rescans and restamps.
@@ -1568,11 +1608,29 @@ impl SessionPersistence {
              intruder_lines={} message_count={} tool_count={} last_seq={}",
             crate::logging::redact_session_id(session_id),
             counts.intruder_lines,
-            counts.message_count,
-            counts.tool_count,
+            counts.fold.message_count,
+            counts.fold.tool_count,
             counts.last_seq
         );
         Ok(true)
+    }
+
+    fn logs_known_unsalvageable(&self, session_id: &str) -> bool {
+        let Some(known) = self
+            .inner
+            .unsalvageable_log_stamps
+            .lock()
+            .get(session_id)
+            .copied()
+        else {
+            return false;
+        };
+        let current = self
+            .metadata(session_id)
+            .and_then(|metadata| self.session_dir(&metadata.storage_key))
+            .ok()
+            .and_then(|dir| log_stamps(&dir).ok());
+        current == Some(known)
     }
 
     /// Test seam: lets a test enqueue a writer command while the salvage
@@ -1641,6 +1699,7 @@ impl SessionPersistence {
         // The tail window drops tool records older than its oldest message;
         // summaries must still cover the whole session.
         payload.tool_calls = crate::acp::session_payload::fold_tool_call_summaries(&tool_records);
+        payload.commands = self.last_commands_async(session_id).await?;
         // If the tail fold produced fewer than `limit` messages AND the
         // session has more on disk (metadata.message_count > tail len), the
         // heuristic under-read (the 4× line ratio wasn't enough). Fall back
@@ -1697,6 +1756,28 @@ impl SessionPersistence {
         Ok(payload)
     }
 
+    /// The session's newest `availableCommands`. A miss (after a host restart,
+    /// or a session no append of this process touched) scans the log once on
+    /// the blocking pool and keeps the result, absent lists included.
+    async fn last_commands_async(self: &Arc<Self>, session_id: &str) -> Result<Option<Value>> {
+        if let Some(known) = self.inner.last_commands.lock().get(session_id) {
+            return Ok(known.clone());
+        }
+        let metadata = self.metadata(session_id)?;
+        let path = self.session_dir(&metadata.storage_key)?.join(MESSAGES_FILE);
+        let id = session_id.to_string();
+        let found = tokio::task::spawn_blocking(move || newest_command_list(&path, &id))
+            .await
+            .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))??;
+        Ok(self
+            .inner
+            .last_commands
+            .lock()
+            .entry(session_id.to_string())
+            .or_insert(found)
+            .clone())
+    }
+
     /// Completed client turn ids reconstructed from durable prompt-complete
     /// records. This survives restart without treating arbitrary browser input
     /// as authoritative transcript state.
@@ -1741,9 +1822,20 @@ impl SessionPersistence {
         let mut sweeps = sweep::SweepTotals::default();
         let mut recovered = HashMap::new();
         let mut logical_ids = HashSet::new();
+        let mut stale_temps_removed = 0usize;
         for entry in fs::read_dir(&self.inner.root)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
+                let path = entry.path();
+                if atomic_file::is_stale_temp(&path, INDEX_FILE, STALE_TEMP_AGE) {
+                    match fs::remove_file(&path) {
+                        Ok(()) => stale_temps_removed += 1,
+                        Err(error) => log::warn!(
+                            "[acp-history] recover() could not remove a stale index temp file \
+                             error={error}"
+                        ),
+                    }
+                }
                 continue;
             }
             let storage_key = entry.file_name().to_string_lossy().into_owned();
@@ -1829,6 +1921,7 @@ impl SessionPersistence {
                         metadata.last_seq
                     );
                     metadata.last_seq = tail_max;
+                    metadata.fold_counted = false;
                     dirty = true;
                 }
                 Some(tail_max) if tail_max < metadata.last_seq => {
@@ -1891,14 +1984,7 @@ impl SessionPersistence {
                     skipped += 1;
                     continue;
                 }
-                metadata.message_count = records
-                    .iter()
-                    .filter(|record| !is_tool_event(&record.type_) && record.type_ != "agent_switch")
-                    .count() as u64;
-                metadata.tool_count = records
-                    .iter()
-                    .filter(|record| is_tool_event(&record.type_))
-                    .count() as u64;
+                metadata.adopt_fold_counts(fold_counts(&mut records));
                 metadata.last_seq = records.last().map_or(0, |record| record.seq);
                 // The full load may have rewritten the log; the sweep below
                 // rescans it from the head and restamps.
@@ -2017,7 +2103,7 @@ impl SessionPersistence {
         log::info!(
             "[acp-history] recover() summary sessions={} skipped={skipped} checkpoint_hits={} \
              rescans={} bytes_scanned={} swept={} stamped={} index_written={index_written} \
-             elapsed_ms={}",
+             stale_temps_removed={stale_temps_removed} elapsed_ms={}",
             recovered.len(),
             sweeps.checkpoint_hits,
             sweeps.rescans,
@@ -2031,54 +2117,25 @@ impl SessionPersistence {
 
     fn install_runtime(&self, mut metadata: SessionMetadata) -> Result<()> {
         let session_id = metadata.session_id.clone();
-        // Issue #844c versioned write-back heal: pre-feature metadata carries
-        // an old-`rule message_count` (every non-tool record) and no
-        // `fold_open_role`. Recount BOTH from the durable JSONL under the new
-        // fold semantics the first time a writer is installed for the
-        // session, then persist the healed metadata so the index, the writer,
-        // and `get_session_payload` agree. New sessions (message_count 0,
-        // no records) skip the scan entirely.
         let dir = self.session_dir(&metadata.storage_key)?;
         // Transactional install: a writer-thread spawn failure unwinds the
         // on-disk artifacts this call created. The directory only counts as
         // "ours" when it did not exist on entry — `reopen_writer` installs a
         // runtime for a session whose finalized history must survive.
         let dir_preexisted = dir.is_dir();
-        if metadata.fold_open_role.is_none() && metadata.last_seq > 0 {
+        if !metadata.fold_counted && metadata.last_seq > 0 {
             let mut records = load_jsonl(&dir.join(MESSAGES_FILE), &session_id, false)?;
             records.extend(load_jsonl(&dir.join(TOOL_CALLS_FILE), &session_id, false)?);
-            records.sort_by_key(|record| record.seq);
-            let mut state = FoldState::default();
-            let mut message_count = 0u64;
-            let mut tool_count = 0u64;
-            for record in &records {
-                if is_tool_event(&record.type_) {
-                    tool_count += 1;
-                    // A tool call closes the open chunk run (fold boundary).
-                    if record.type_ == "tool_call" {
-                        state.open_role = None;
-                    }
-                    continue;
-                }
-                let (next, opens_message) = fold_step(state, &record.type_, &record.payload);
-                state = next;
-                if opens_message {
-                    message_count += 1;
-                }
-            }
-            if metadata.message_count != message_count || metadata.fold_open_role.is_none() {
-                log::info!(
-                    "[acp-history] message-count heal session_id={} old={} new={} \
-                     fold_open_role={:?}",
-                    crate::logging::redact_session_id(&session_id),
-                    metadata.message_count,
-                    message_count,
-                    state.open_role
-                );
-            }
-            metadata.message_count = message_count;
-            metadata.tool_count = metadata.tool_count.max(tool_count);
-            metadata.fold_open_role = state.open_role.map(str::to_string);
+            let counts = fold_counts(&mut records);
+            log::info!(
+                "[acp-history] message-count heal session_id={} old={} new={} \
+                 fold_open_role={:?}",
+                crate::logging::redact_session_id(&session_id),
+                metadata.message_count,
+                counts.message_count,
+                counts.state.open_role
+            );
+            metadata.adopt_fold_counts(counts);
             self.persist_metadata(&metadata)?;
         }
         let metadata = Arc::new(Mutex::new(metadata));
@@ -2137,6 +2194,10 @@ impl SessionPersistence {
 
     /// The single catalog remove: drops the session's `commandId` index entry.
     fn remove_catalog_entry(&self, session_id: &str) {
+        self.inner
+            .unsalvageable_log_stamps
+            .lock()
+            .remove(session_id);
         let removed = self.inner.catalog.lock().remove(session_id);
         if let Some(command_id) = removed.and_then(|metadata| metadata.lock().command_id.clone()) {
             let mut index = self.inner.command_index.lock();
@@ -2291,3 +2352,7 @@ mod worktree_branch_tests;
 mod sweep_tests;
 #[cfg(test)]
 mod jsonl_tests;
+#[cfg(test)]
+mod log_scan_tests;
+#[cfg(test)]
+mod store_hygiene_tests;

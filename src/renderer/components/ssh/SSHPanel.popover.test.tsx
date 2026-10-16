@@ -23,13 +23,7 @@ vi.mock('./SSHHostEditor', () => ({
   SSHHostEditor: ({ open }: { open: boolean }) =>
     open ? <div data-testid="ssh-profile-form" /> : null
 }))
-vi.mock('@/components/ui/context-menu', () => ({
-  ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuContent: () => null,
-  ContextMenuItem: () => null,
-  ContextMenuSeparator: () => null
-}))
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 function makeProfile(id: string): SSHProfile {
   return {

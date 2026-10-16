@@ -1,3 +1,4 @@
+use std::path::{Component, Path};
 use std::process::Command;
 
 /// Build a helper command that does not spawn a visible console window.
@@ -35,4 +36,21 @@ pub(super) fn is_excluded_dir(dir_name: &str) -> bool {
     SYMLINK_EXCLUSION_LIST.iter().any(|excluded| {
         dir_name == *excluded || dir_name.starts_with(&format!("{}{}", *excluded, "/"))
     })
+}
+
+/// Characters `cmd` treats as operators, expansions, or argument separators.
+/// The Windows junction fallback runs `mklink` through `cmd /C`, and Rust does
+/// not escape these for `cmd`.
+const CMD_METACHARACTERS: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"', '(', ')', ','];
+
+/// On Windows a drive-relative name (`C:x`) has no separator, yet `join`
+/// replaces the root with it.
+pub(super) fn is_single_safe_folder_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none()
+        && !name.contains(['/', '\\'])
+        && !name
+            .chars()
+            .any(|c| c.is_control() || CMD_METACHARACTERS.contains(&c))
 }

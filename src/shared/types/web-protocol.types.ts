@@ -222,6 +222,12 @@ export const WS_REQUEST_TYPES = [
   // `acp:agent_switch` event to live clients under the same seq. Reply `{}`;
   // unknown session → `not_found`; live-only mode → `unsupported`.
   'record_agent_switch',
+  // A surface read a chat: `{ sessionId, seq }` (the session-log seq of the
+  // newest turn end it showed) → `{ sessionId, seq }`, the host's shared
+  // last-read marker as it stands. Idempotent and monotonic: an older seq is a
+  // no-op. Every `chat_reads` watcher hears when the marker moves. Unknown
+  // session → `not_found`.
+  'mark_chat_read',
   // Watches `{ watch, scope? }` (`projects`, `chat_history`, `agents`; `fs`
   // and `terminals` scoped to a project id; `store` scoped to a key): `watch`
   // queues the full-state frame, then replies `{ watch, scope, revision }`;
@@ -319,6 +325,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   remove_project: ['idempotent', null],
   set_default_project: ['idempotent', null],
   record_agent_switch: ['command', 'payload'],
+  mark_chat_read: ['idempotent', null],
   watch: ['read', null],
   unwatch: ['read', null]
 }
@@ -901,9 +908,9 @@ export interface WsHeartbeatFrame {
 export const WS_WATCH_FRAME_TYPE = 'watch'
 
 /**
- * The watches a connection can hold. `projects`, `chat_history` and `agents`
- * have the empty scope; `fs` and `terminals` are scoped to a project id, `store`
- * to a store key.
+ * The watches a connection can hold. `projects`, `chat_history`, `agents` and
+ * `chat_reads` have the empty scope; `fs` and `terminals` are scoped to a
+ * project id, `store` to a store key.
  */
 export const WS_WATCH_NAMES = [
   'projects',
@@ -911,7 +918,8 @@ export const WS_WATCH_NAMES = [
   'agents',
   'fs',
   'store',
-  'terminals'
+  'terminals',
+  'chat_reads'
 ] as const
 
 /** One of {@link WS_WATCH_NAMES}. */
@@ -988,6 +996,20 @@ export interface AgentsWatchDelta {
     | 'browser_open_request'
   payload: unknown
 }
+
+/** `mark_chat_read` request payload and reply: a chat's shared last-read marker. */
+export interface ChatReadMark {
+  sessionId: string
+  seq: number
+}
+
+/** `chat_reads` watch state: the last-read marker of every chat a surface has read. */
+export interface ChatReadsWatchState {
+  marks: Record<string, number>
+}
+
+/** A `chat_reads` delta: one session's marker as it stands after it moved. */
+export type ChatReadsWatchDelta = ChatReadMark
 
 /** `fs` watch state: the canonical root being watched. A new state means: refresh the trees. */
 export interface FsWatchState {

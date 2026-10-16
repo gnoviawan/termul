@@ -86,6 +86,7 @@ fn view_only_may_read_but_not_mutate() {
         "list_claude_accounts",
         "list_claude_usage",
         "store_read",
+        "mark_chat_read",
     ] {
         assert!(
             ws_request_permitted(read, &json!({}), VIEW_ONLY, Some(&id)),

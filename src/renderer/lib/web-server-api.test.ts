@@ -13,6 +13,7 @@ import {
   webServerDialog,
   webServerFilesystem,
   webServerGit,
+  webServerLog,
   webServerShell
 } from './web-server-api'
 
@@ -136,6 +137,37 @@ describe('web-server-api (fetch client)', () => {
         expect(result.code).toBe('NETWORK_ERROR')
         expect(result.error).toContain('503')
       }
+    })
+  })
+
+  describe('webServerLog.frontendError', () => {
+    it('caps each field one char past the server limit so a 100 KB error still fits the 64 KiB body limit', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }))
+
+      await webServerLog.frontendError({
+        message: 'm'.repeat(100_000),
+        source: 'unhandledrejection',
+        stack: 's'.repeat(100_000)
+      })
+
+      const body = mockFetch.mock.calls[0][1].body as string
+      expect(body.length).toBeLessThan(64 * 1024)
+      expect(JSON.parse(body)).toEqual({
+        level: 'error',
+        message: 'm'.repeat(4097),
+        source: 'unhandledrejection',
+        stack: 's'.repeat(4097),
+        componentStack: null
+      })
+    })
+
+    it('cuts on code points so an astral char at the cap is not split into a lone surrogate', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true }))
+
+      await webServerLog.frontendError({ message: '\u{1F600}'.repeat(5000) })
+
+      const { message } = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+      expect(message).toBe('\u{1F600}'.repeat(4097))
     })
   })
 

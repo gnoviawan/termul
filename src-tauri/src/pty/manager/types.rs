@@ -82,18 +82,19 @@ pub struct TerminalAttachResult {
 /// record is atomically replaced — any prior credential stops verifying
 /// (revoke-and-reissue semantics; the only expected holder of the old
 /// credential, the reloaded page, is gone by construction).
-/// #851: terminals with a LIVE web attachment on another connection now
+/// #851: terminals with a LIVE attachment on another connection now
 /// carry a SHARED claim (`issue_shared` appends a digest without
 /// invalidating the existing holder) plus ownership info, so a second
 /// device can attach read/write to the same PTY instead of silently
-/// spawning its own shell. `live_attachment` marks those entries; the WS
-/// layer exposes it as `hasLiveAttachment` for renderer labeling.
-#[derive(Debug, Clone)]
+/// spawning its own shell.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreservedTerminal {
+    #[serde(flatten)]
     pub info: TerminalInfo,
-    pub claim: String,
-    /// Whether another web connection currently holds a live output
-    /// forwarder for this terminal (#851 ownership info).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim: Option<String>,
+    #[serde(rename = "hasLiveAttachment")]
     pub live_attachment: bool,
 }
 

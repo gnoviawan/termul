@@ -7,19 +7,25 @@
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import type {
-  AgentId,
-  ContentBlock,
-  McpServer,
-  PlanEntry,
-  SessionConfigOption,
-  SessionId,
-  SessionModelState,
-  SessionModeState,
-  StopReason,
-  ToolCall
+import {
+  type AgentId,
+  acpApi,
+  type ContentBlock,
+  type McpServer,
+  type PlanEntry,
+  type SessionConfigOption,
+  type SessionConfigOptionEntry,
+  type SessionId,
+  type SessionModelState,
+  type SessionModeState,
+  type StopReason,
+  type ToolCall
 } from '@/lib/acp-api'
-import type { AgentSwitchRecord, SessionIndexEntry } from '@/lib/acp-history-persistence'
+import {
+  type AgentSwitchRecord,
+  maxPayloadSeq,
+  type SessionIndexEntry
+} from '@/lib/acp-history-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { agentConfigIdentityKey } from '@/lib/agents/acp-config-identity'
 import { type AgentAuthPolicy, agentPolicyForConfigId } from '@/lib/agents/acp-registry'
@@ -268,9 +274,8 @@ export const SKILL_PAD_BLOCK_RE = new RegExp(
  * live-only padding blocks and edge whitespace on both sides while KEEPING
  * the skill/command sentinels: chip text must stay distinguishable from
  * literal `(name)` / `/cmd` text or backfill could discard a distinct
- * prompt. File tokens reduce to their `(display)` marker — the wire form —
- * because the chip never round-trips (the file rides a `resource_link`
- * block); the resulting `(display)` vs literal ambiguity is resolved by
+ * prompt. File tokens reduce to their `(display)` marker — the wire form;
+ * the resulting `(display)` vs literal ambiguity is resolved by
  * `twinFileEvidence`. `wireTextToDisplay` also runs on the persisted side
  * so a record that skipped display normalization still canonicalizes (it
  * is a passthrough for any text lacking the exact framing).
@@ -789,6 +794,14 @@ export function dropPreparedSlots(
   return next ?? prepared
 }
 
+export function isLivePreparedSession(
+  state: Pick<AcpState, 'sessions' | 'agentStatus'>,
+  sessionId: SessionId
+): boolean {
+  const session = state.sessions[sessionId]
+  return session?.status === 'active' && state.agentStatus[session.agentId] === 'connected'
+}
+
 /**
  * Maximum number of messages retained per session in the live React window.
  * Generous so normal single-session use never trims — only the multi-hour /
@@ -1170,6 +1183,93 @@ export function creationOptionDefaultsFrom(input: {
   }
 }
 
+function appendUnseen<T>(
+  current: T[],
+  incoming: T[],
+  key: (item: T) => string,
+  enrich?: (item: T, other: T) => T
+): T[] {
+  const incomingByKey = new Map(incoming.map((item) => [key(item), item]))
+  const enriched = enrich
+    ? current.map((item) => {
+        const other = incomingByKey.get(key(item))
+        return other ? enrich(item, other) : item
+      })
+    : current
+  const seen = new Set(current.map(key))
+  const added = incoming.filter((item) => !seen.has(key(item)))
+  const changed = enriched.some((item, index) => item !== current[index])
+  return changed || added.length > 0 ? [...enriched, ...added] : current
+}
+
+const configEntryKey = (entry: SessionConfigOptionEntry): string =>
+  Array.isArray(entry.options) ? `group:${entry.group ?? entry.name}` : `value:${entry.value}`
+
+function appendUnseenGroupValues(
+  entry: SessionConfigOptionEntry,
+  other: SessionConfigOptionEntry
+): SessionConfigOptionEntry {
+  if (!entry.options || !other.options) return entry
+  const options = appendUnseen(entry.options, other.options, (value) => value.value)
+  return options === entry.options ? entry : { ...entry, options }
+}
+
+function appendUnseenConfigValues(
+  option: SessionConfigOption,
+  other: SessionConfigOption
+): SessionConfigOption {
+  if (!option.options || !other.options) return option
+  const options = appendUnseen(
+    option.options,
+    other.options,
+    configEntryKey,
+    appendUnseenGroupValues
+  )
+  return options === option.options ? option : { ...option, options }
+}
+
+export function addAdvertisedOptionsKeepingCurrent(
+  current: Pick<AcpSession, 'modes' | 'models' | 'configOptions'>,
+  payload: {
+    modes?: SessionModeState | null
+    models?: SessionModelState | null
+    configOptions?: SessionConfigOption[] | null
+  }
+): Pick<AcpSession, 'modes' | 'models' | 'configOptions'> {
+  let modes = current.modes ?? payload.modes ?? null
+  if (current.modes && payload.modes) {
+    const availableModes = appendUnseen(
+      current.modes.availableModes,
+      payload.modes.availableModes,
+      (mode) => mode.id
+    )
+    if (availableModes !== current.modes.availableModes) {
+      modes = { ...current.modes, availableModes }
+    }
+  }
+  let models = current.models ?? payload.models ?? null
+  if (current.models && payload.models) {
+    const availableModels = appendUnseen(
+      current.models.availableModels,
+      payload.models.availableModels,
+      (model) => model.modelId
+    )
+    if (availableModels !== current.models.availableModels) {
+      models = { ...current.models, availableModels }
+    }
+  }
+  return {
+    modes,
+    models,
+    configOptions: appendUnseen(
+      current.configOptions,
+      payload.configOptions ?? [],
+      (option) => option.id,
+      appendUnseenConfigValues
+    )
+  }
+}
+
 /**
  * Merge an agent-provided config-option snapshot into the session state
  * without letting a backend-side desync clobber the user's model selection
@@ -1261,13 +1361,21 @@ export function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: S
   // createSession may have set activeSessionId as a side effect; that must not
   // block reaping a session that never became a published preparedSessions entry.
   set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
-  void get()
-    .closeSession(sessionId)
-    .catch(() => {
-      /* best-effort: backend may already be gone */
-    })
+  const agentId = get().sessions[sessionId]?.agentId
+  const disposed = agentId
+    ? acpApi.disposeEphemeralSession(agentId, sessionId).catch((error) => {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.reapOrphanPreparedSession',
+          message: `Failed to dispose warm session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`
+        })
+      })
+    : Promise.resolve()
+  void disposed
+    .then(() => get().deleteHistorySession(sessionId))
     .finally(() => {
-      void get().deleteHistorySession(sessionId)
+      ephemeralSessionIds.delete(sessionId)
+      set((s) => (s.sessions[sessionId] ? dropEphemeralSessionState(s, sessionId) : s))
     })
 }
 
@@ -1474,7 +1582,10 @@ export async function killSpawnedAgentIfUnused(
   get: () => AcpState,
   agentId: AgentId
 ): Promise<void> {
-  const hasOtherSession = Object.values(get().sessions).some((s) => s.agentId === agentId)
+  const { sessions, openingHistoryIds } = get()
+  const hasOtherSession = Object.values(sessions).some(
+    (s) => s.agentId === agentId && (s.status !== 'closed' || openingHistoryIds[s.id])
+  )
   if (hasOtherSession) return
   try {
     await get().killAgent(agentId)
@@ -1634,6 +1745,20 @@ export function spliceSwitchTranscript(
   return { messages, toolCalls, switches }
 }
 
+export type SwitchMarkerFacts = Omit<AgentSwitchRecord, 'id' | 'seq'>
+
+export function withSwitchMarker(
+  band: { messages: ChatMessage[]; toolCalls: ToolCall[]; switches: AgentSwitchRecord[] },
+  marker: SwitchMarkerFacts
+): { messages: ChatMessage[]; toolCalls: ToolCall[]; switches: AgentSwitchRecord[] } {
+  if (band.switches.some((sw) => sw.newSessionId === marker.newSessionId)) return band
+  const bandTop = maxPayloadSeq(band) + 1
+  return {
+    ...band,
+    switches: [...band.switches, { ...marker, id: `switch:fabricated:${bandTop}`, seq: bandTop }]
+  }
+}
+
 export function liveInlineKeyAuthPolicy(
   get: () => AcpState,
   agentId: AgentId
@@ -1744,6 +1869,23 @@ export function selectConfigWarmState(state: AcpState, configId: string): Config
     (key) => configIdFromReuseKey(key) === configId
   )
   return { connected, warming, sessionReady, warmingSession }
+}
+
+/**
+ * Server seq of the prompt that opened the trailing turn: the last user bubble
+ * when it is a real prompt (visible content, not a handoff boundary row) with
+ * a positive seq. `null` when the window cuts the turn off from its prompt or
+ * the trailing turn is a hidden one, whose cards never render.
+ */
+export function openTurnPromptSeq(messages: ChatMessage[]): number | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.role !== 'user') continue
+    const seq = message.seq
+    const prompt = message.handoffBoundary !== true && hasVisibleContent(message)
+    return prompt && typeof seq === 'number' && Number.isFinite(seq) && seq > 0 ? seq : null
+  }
+  return null
 }
 
 /**

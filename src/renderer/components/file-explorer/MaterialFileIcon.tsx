@@ -11,7 +11,6 @@ interface MaterialFileIconProps extends MaterialIconResolveInput {
 
 export function MaterialFileIcon({
   name,
-  extension,
   isDirectory,
   isExpanded,
   depth,
@@ -21,13 +20,10 @@ export function MaterialFileIcon({
   const appearanceMode = useAppSettingsStore((state) => state.settings.appearanceMode)
 
   const markup = useMemo(() => {
-    const svg = getMaterialIconSvg(
-      { name, extension, isDirectory, isExpanded, depth },
-      appearanceMode
-    )
+    const svg = getMaterialIconSvg({ name, isDirectory, isExpanded, depth }, appearanceMode)
     if (!svg) return null
     return formatMaterialIconSvg(svg, size)
-  }, [appearanceMode, depth, extension, isDirectory, isExpanded, name, size])
+  }, [appearanceMode, depth, isDirectory, isExpanded, name, size])
 
   const iconSrc = useMemo(() => {
     if (!markup) return null

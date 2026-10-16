@@ -54,6 +54,11 @@ vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
 vi.mock('@/components/workspace/DropZoneOverlay', () => ({
   DropZoneOverlay: () => null
 }))
+vi.mock('@/components/browser/BrowserPanel', () => ({
+  BrowserPanel: ({ isVisible }: { isVisible: boolean }) => (
+    <div data-testid="browser-panel" data-visible={String(isVisible)} />
+  )
+}))
 vi.mock('@/components/agents/AgentIcon', () => ({
   AgentIcon: () => <span data-testid="agent-icon-stub" />
 }))
@@ -166,5 +171,28 @@ describe('PaneContent AgentLauncher overlay: Esc', () => {
     // With the selector gone, the next Esc inside the launcher hides it.
     fireEvent.keyDown(screen.getByTestId('launcher-button'), { key: 'Escape' })
     expect(storeState.hideAgentLauncher).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('PaneContent AgentLauncher overlay: browser webview', () => {
+  const browserPane: LeafNode = {
+    type: 'leaf',
+    id: 'pane-1',
+    activeTabId: 'browser-1',
+    tabs: [{ type: 'browser', id: 'browser-1', browserTabId: 'bt-1' }]
+  }
+
+  it('hides the browser of the pane the launcher covers', async () => {
+    storeState.agentLauncherPaneId = 'pane-1'
+    render(<PaneContent pane={browserPane} />)
+
+    expect(await screen.findByTestId('browser-panel')).toHaveAttribute('data-visible', 'false')
+  })
+
+  it('leaves a browser visible while the launcher covers another pane', async () => {
+    storeState.agentLauncherPaneId = 'pane-2'
+    render(<PaneContent pane={browserPane} />)
+
+    expect(await screen.findByTestId('browser-panel')).toHaveAttribute('data-visible', 'true')
   })
 })

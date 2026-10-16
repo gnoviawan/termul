@@ -156,7 +156,6 @@ export function InlineCreateRow({
       <span className="mr-0.5 size-3.5 shrink-0" />
       <MaterialFileIcon
         name={inlineInput.type === 'folder' ? 'folder' : 'file'}
-        extension={null}
         isDirectory={inlineInput.type === 'folder'}
         isExpanded={false}
         depth={depth}

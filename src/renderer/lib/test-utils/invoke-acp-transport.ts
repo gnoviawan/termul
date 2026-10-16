@@ -214,7 +214,8 @@ export function createInvokeAcpTransport(): AcpTransport {
           agentId,
           sessionId,
           cwd,
-          ...(additionalDirectories?.length ? { additionalDirectories } : {})
+          ...(additionalDirectories?.length ? { additionalDirectories } : {}),
+          ...(options?.mcpServers ? { mcpServers: options.mcpServers } : {})
         },
         options
       ),
@@ -225,7 +226,8 @@ export function createInvokeAcpTransport(): AcpTransport {
           agentId,
           sessionId,
           cwd,
-          ...(additionalDirectories?.length ? { additionalDirectories } : {})
+          ...(additionalDirectories?.length ? { additionalDirectories } : {}),
+          ...(options?.mcpServers ? { mcpServers: options.mcpServers } : {})
         },
         options
       ),

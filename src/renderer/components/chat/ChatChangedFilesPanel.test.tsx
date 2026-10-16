@@ -37,8 +37,8 @@ vi.mock('@/lib/utils', () => ({
 }))
 
 vi.mock('@/components/file-explorer/MaterialFileIcon', () => ({
-  MaterialFileIcon: ({ name, extension }: { name: string; extension: string | null }) => (
-    <span data-testid="file-icon" data-name={name} data-extension={extension ?? ''} />
+  MaterialFileIcon: ({ name }: { name: string }) => (
+    <span data-testid="file-icon" data-name={name} />
   )
 }))
 
@@ -127,7 +127,7 @@ describe('ChatChangedFilesPanel', () => {
     expect(screen.getByText('bar.ts')).toBeInTheDocument()
   })
 
-  it('passes each row file name and last-dot extension to the file-type icon', async () => {
+  it('passes each row file name to the file-type icon', async () => {
     renderPanel([
       makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' }),
       makeToolCall({ toolCallId: 'e2', path: 'src-tauri/src/mod.RS' }),
@@ -138,17 +138,8 @@ describe('ChatChangedFilesPanel', () => {
     ])
     fireEvent.click(screen.getByRole('button', { name: /expand/i }))
     await screen.findByText('foo.ts')
-    const icons = screen
-      .getAllByTestId('file-icon')
-      .map((el) => [el.dataset.name, el.dataset.extension])
-    expect(icons).toEqual([
-      ['foo.ts', '.ts'],
-      ['mod.RS', '.RS'],
-      ['spec.test.md', '.md'],
-      ['Makefile', ''],
-      ['.gitignore', ''],
-      ['App.TSX', '.TSX']
-    ])
+    const icons = screen.getAllByTestId('file-icon').map((el) => el.dataset.name)
+    expect(icons).toEqual(['foo.ts', 'mod.RS', 'spec.test.md', 'Makefile', '.gitignore', 'App.TSX'])
   })
 
   it('opens the file in the editor when a row is clicked', async () => {

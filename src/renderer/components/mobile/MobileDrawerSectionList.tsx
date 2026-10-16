@@ -35,13 +35,6 @@ function basename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath
 }
 
-/** The file's extension without the dot, `null` for none or a dotfile. */
-function extension(filePath: string): string | null {
-  const name = basename(filePath)
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? name.slice(dot + 1) : null
-}
-
 /**
  * Where focus goes once the control the user pressed is gone (L-18). A closed
  * row takes its X with it, and a rename input takes itself, so without this
@@ -389,7 +382,6 @@ export function MobileDrawerSectionList({
                   {tab.type === 'editor' && (
                     <MaterialFileIcon
                       name={basename(tab.filePath)}
-                      extension={extension(tab.filePath)}
                       isDirectory={false}
                       isExpanded={false}
                       depth={0}

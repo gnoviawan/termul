@@ -14,6 +14,7 @@ pub mod canvas;
 // any store opens. Tauri-free so the desktop and `termul-server` share it.
 pub mod data_lock;
 mod commands;
+mod exit_cleanup;
 mod logging;
 mod migrations;
 mod path_validation;
@@ -1811,6 +1812,7 @@ pub fn run() {
             // Terminal commands
             commands::terminal_spawn,
             commands::terminal_attach,
+            commands::terminal_list_preserved,
             commands::terminal_rotate_claim,
             commands::terminal_revoke_claim,
             commands::terminal_write,
@@ -2069,60 +2071,25 @@ pub fn run() {
                 .try_state::<Arc<crate::canvas::pool::CanvasDaemonPool>>()
                 .map(|state| state.inner().clone());
 
-            if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
-                let pty_manager_clone = pty_manager.inner().clone();
-                let app_handle_clone = app_handle.clone();
-
-                // Spawn async cleanup task via tauri::async_runtime
-                // (not tokio::spawn directly — the run callback may fire on
-                // a thread without a Tokio reactor, e.g. macOS WKWebView events)
-                tauri::async_runtime::spawn(async move {
-                    if let Some(ssh_manager) = ssh_manager {
-                        ssh_manager.shutdown().await;
-                    }
-                    if let Some(remote_state) = remote_state {
-                        let _ = remote_state.stop().await;
-                    }
-                    if let Some(ws_channel_host) = &ws_channel_host {
-                        ws_channel_host.drain().await;
-                    }
-                    pty_manager_clone.kill_all().await;
-                    if let Some(canvas_pool) = canvas_pool {
-                        canvas_pool.shutdown_all().await;
-                    }
-                    if let Some(acp_manager) = acp_manager {
-                        // When persistence is available, kill_all stops agents
-                        // and leaves session writers installed. shutdown_persistence
-                        // drains them, appends the interrupted marker for an open
-                        // turn, and persists status closed. A single-agent kill
-                        // does not take this path.
-                        if let Some(agent_reaper) = &agent_reaper {
-                            agent_reaper.stop().await;
-                        }
-                        acp_manager.kill_all().await;
-                        if let Err(error) = acp_manager.shutdown_persistence().await {
-                            log::error!(
-                                "[acp-history] persistence shutdown failed at exit: {error}"
-                            );
-                        }
-                    }
-                    if let Some(browser_tab_manager) = browser_tab_manager {
-                        browser_tab_manager.destroy_all();
-                    }
-                    // Mark cleanup as done so the subsequent exit event isn't prevented
-                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
-                    // After cleanup completes, exit (or relaunch if requested)
-                    finish_exit(&app_handle_clone);
-                });
-            } else if let Some(acp_manager) = acp_manager {
-                let app_handle_clone = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Some(ws_channel_host) = &ws_channel_host {
-                        ws_channel_host.drain().await;
-                    }
-                    if let Some(canvas_pool) = canvas_pool {
-                        canvas_pool.shutdown_all().await;
-                    }
+            let pty_manager = app_handle
+                .try_state::<Arc<PtyManager>>()
+                .map(|state| state.inner().clone());
+            let preserve = async move {
+                if let Some(ssh_manager) = ssh_manager {
+                    ssh_manager.shutdown().await;
+                }
+                if let Some(remote_state) = remote_state {
+                    let _ = remote_state.stop().await;
+                }
+                if let Some(ws_channel_host) = &ws_channel_host {
+                    ws_channel_host.drain().await;
+                }
+                if let Some(acp_manager) = acp_manager {
+                    // When persistence is available, kill_all stops agents
+                    // and leaves session writers installed. shutdown_persistence
+                    // drains them, appends the interrupted marker for an open
+                    // turn, and persists status closed. A single-agent kill
+                    // does not take this path.
                     if let Some(agent_reaper) = &agent_reaper {
                         agent_reaper.stop().await;
                     }
@@ -2130,32 +2097,32 @@ pub fn run() {
                     if let Err(error) = acp_manager.shutdown_persistence().await {
                         log::error!("[acp-history] persistence shutdown failed at exit: {error}");
                     }
-                    if let Some(browser_tab_manager) = browser_tab_manager {
-                        browser_tab_manager.destroy_all();
-                    }
-                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
-                    finish_exit(&app_handle_clone);
-                });
-            } else {
-                let app_handle_clone = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Some(ssh_manager) = ssh_manager {
-                        ssh_manager.shutdown().await;
-                    }
-                    if let Some(remote_state) = remote_state {
-                        let _ = remote_state.stop().await;
-                    }
-                    if let Some(canvas_pool) = canvas_pool {
-                        canvas_pool.shutdown_all().await;
-                    }
-                    if let Some(browser_tab_manager) = browser_tab_manager {
-                        browser_tab_manager.destroy_all();
-                    }
-                    CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
-                    // No PTY or ACP manager, just exit (or relaunch)
-                    finish_exit(&app_handle_clone);
-                });
-            }
+                }
+            };
+            let teardown = async move {
+                if let Some(pty_manager) = pty_manager {
+                    pty_manager.kill_all().await;
+                }
+                if let Some(canvas_pool) = canvas_pool {
+                    canvas_pool.shutdown_all().await;
+                }
+                if let Some(browser_tab_manager) = browser_tab_manager {
+                    browser_tab_manager.destroy_all();
+                }
+            };
+            let app_handle_clone = app_handle.clone();
+            // tauri::async_runtime, not tokio::spawn: the run callback may fire
+            // on a thread without a Tokio reactor (e.g. macOS WKWebView events).
+            tauri::async_runtime::spawn(async move {
+                exit_cleanup::run_exit_cleanup(
+                    preserve,
+                    teardown,
+                    exit_cleanup::EXIT_CLEANUP_TIMEOUT,
+                )
+                .await;
+                CLEANUP_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+                finish_exit(&app_handle_clone);
+            });
         }
     });
 }

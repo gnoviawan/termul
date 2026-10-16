@@ -5,12 +5,10 @@ import { useShallow } from 'zustand/shallow'
 import { Maximize2, Minimize2 } from '@/components/icons'
 import { WindowControls } from '@/components/shell/TopRowChrome'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
-import { closeAgentChat } from '@/lib/agent-chat-close'
 import { clipboardApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { closeWorkspaceTab } from '@/lib/workspace-tab-close'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import { useCanvasStore } from '@/stores/canvas-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
@@ -128,27 +126,6 @@ export function WorkspaceTabBar({
     }
   }, [])
 
-  const handleCloseEditorTab = useCallback(
-    (filePath: string) => {
-      const operationStatus =
-        useEditorStore.getState().openFiles.get(filePath)?.operationStatus ?? 'idle'
-      if (operationStatus === 'saving' || operationStatus === 'reloading') {
-        return
-      }
-
-      if (onCloseEditorTab) {
-        onCloseEditorTab(filePath)
-      } else {
-        // Fallback: close from store directly
-        const didClose = useEditorStore.getState().closeFileIfIdle(filePath)
-        if (didClose) {
-          useWorkspaceStore.getState().removeTab(editorTabId(filePath))
-        }
-      }
-    },
-    [onCloseEditorTab]
-  )
-
   const handleTabDragStart = useCallback(
     (tabId: string, e: React.DragEvent) => {
       startTabDrag(tabId, paneId, e)
@@ -264,52 +241,31 @@ export function WorkspaceTabBar({
     [tabs, paneTerminals, closingTerminalIds, busyEditorPathSet]
   )
 
-  // Single-tab close dispatcher shared by the tab close button, middle-click,
-  // the menu's Close item, and the bulk fallback when `onCloseTabs` is not
-  // wired (tests). Every kind routes through its normal close primitive.
-  const closeWorkspaceTab = useCallback(
+  const closeTab = useCallback(
     (tab: WorkspaceTab): void => {
-      switch (tab.type) {
-        case 'terminal':
-          if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
-          break
-        case 'editor':
-          handleCloseEditorTab(tab.filePath)
-          break
-        case 'browser':
-          useBrowserSessionStore.getState().removeTab(tab.browserTabId)
-          useWorkspaceStore.getState().removeTab(tab.id)
-          break
-        case 'git':
-        case 'git-history':
-        case 'diff':
-        case 'commit-diff':
-          useWorkspaceStore.getState().removeTab(tab.id)
-          break
-        case 'agent-chat':
-          closeAgentChat(tab.sessionId, () => {
-            useWorkspaceStore.getState().removeTab(tab.id)
-          })
-          break
-        case 'canvas':
-          // Canvas disposal: the daemon is evicted (stdin EOF → kill) and the
-          // MCP entry stays persisted; daemon lifetime = canvas lifetime —
-          // this is the ONLY canvas teardown path (tab switches never kill).
-          void useCanvasStore.getState().closeCanvas(tab.projectId)
-          useWorkspaceStore.getState().removeTab(tab.id)
-          break
-        default: {
-          // Exhaustiveness guard: a new WorkspaceTab kind must be routed above.
-          const unknownTab: never = tab
-          void logFrontendError({
-            level: 'warn',
-            source: 'WorkspaceTabBar.closeWorkspaceTab',
-            message: `unhandled workspace tab kind ${JSON.stringify(unknownTab)}`
-          })
-        }
-      }
+      closeWorkspaceTab(
+        tab,
+        {
+          terminal: (terminalTab) => {
+            onCloseTerminal?.(terminalTab.terminalId, terminalTab.id)
+            return false
+          },
+          editor: ({ filePath }) => {
+            const operationStatus =
+              useEditorStore.getState().openFiles.get(filePath)?.operationStatus ?? 'idle'
+            if (operationStatus === 'saving' || operationStatus === 'reloading') return false
+            if (onCloseEditorTab) {
+              onCloseEditorTab(filePath)
+            } else if (useEditorStore.getState().closeFileIfIdle(filePath)) {
+              useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+            }
+            return false
+          }
+        },
+        'WorkspaceTabBar.closeWorkspaceTab'
+      )
     },
-    [handleCloseEditorTab, onCloseTerminal]
+    [onCloseEditorTab, onCloseTerminal]
   )
 
   // Bulk menu items delegate the exact target list to WorkspaceLayout, which
@@ -345,10 +301,10 @@ export function WorkspaceTabBar({
         message: `onCloseTabs not wired — per-tab close fallback for ${targets.length} tab(s) in pane ${paneId}`
       })
       for (const tab of targets) {
-        closeWorkspaceTab(tab)
+        closeTab(tab)
       }
     },
-    [onCloseTabs, closeWorkspaceTab, paneId]
+    [onCloseTabs, closeTab, paneId]
   )
 
   // Disabled flags are O(1) per tab from these counts; the target lists are
@@ -464,7 +420,7 @@ export function WorkspaceTabBar({
                                 setActiveTab(paneId, tab.id)
                                 setActivePane(paneId)
                               }}
-                              onClose={() => closeWorkspaceTab(tab)}
+                              onClose={() => closeTab(tab)}
                               onRename={(name) => {
                                 if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
                               }}
@@ -487,7 +443,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
@@ -506,7 +462,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}
@@ -524,7 +480,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}
@@ -542,7 +498,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}
@@ -560,7 +516,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}
@@ -578,7 +534,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}
@@ -603,7 +559,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}
@@ -621,7 +577,7 @@ export function WorkspaceTabBar({
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => closeWorkspaceTab(tab)}
+                          onClose={() => closeTab(tab)}
                           onDragStart={(e) => handleTabDragStart(tab.id, e)}
                           onDragOver={(e) => handleTabDragOver(tab.id, e)}
                           onDragLeave={handleTabDragLeave}

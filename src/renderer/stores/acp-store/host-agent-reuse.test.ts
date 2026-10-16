@@ -349,7 +349,7 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     await useAcpStore.getState().openHistorySession('s-epoch')
 
     expect(transport.seedSessionCursor).toHaveBeenCalledWith('s-epoch', {
-      lastSeq: 75,
+      lastSeq: 0,
       logEpoch: 'epoch-host-1'
     })
   })
@@ -380,9 +380,9 @@ describe('acp-store: host agent reuse on web (#837)', () => {
 
     const session = useAcpStore.getState().sessions['s-live']
     expect(transport.loadSession).not.toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-live', 75, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-live', 0, true)
     expect(transport.seedSessionCursor).toHaveBeenCalledWith('s-live', {
-      lastSeq: 75,
+      lastSeq: 0,
       logEpoch: null
     })
     expect(transport.spawnAgent).not.toHaveBeenCalled()
@@ -431,7 +431,7 @@ describe('acp-store: host agent reuse on web (#837)', () => {
 
     const session = useAcpStore.getState().sessions['s-reopen']
     expect(transport.loadSession).toHaveBeenCalled()
-    expect(transport.subscribeSession).toHaveBeenCalledWith('s-reopen', 75, true)
+    expect(transport.subscribeSession).toHaveBeenCalledWith('s-reopen', 0, true)
     expect(session?.status).toBe('active')
     expect(session?.activeTurn).toBe(true)
     expect(session?.openTurnId).toBe('turn:live')

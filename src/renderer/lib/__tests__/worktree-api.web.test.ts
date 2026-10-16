@@ -1,16 +1,5 @@
 /**
  * Web-branch tests for worktree-api.ts.
- *
- * CAP — Web worktree parity: the 7 launch-flow methods (list, create, remove,
- * branches, checkDirty, resolveBaseBranch, copyIncludeFiles) now branch to
- * `webServerWorktree` (HTTP routes in `web/worktree_api.rs`) when
- * `!isTauriContext()`. The 8 advanced ops (symlinks, parseGitignore, merge,
- * archive/restore, removeAllManaged) STAY `WEB_UNSUPPORTED` on web (deferred —
- * see deferred-work.md).
- *
- * Pins `isTauriContext()` to FALSE and asserts:
- * - The 7 launch-flow methods call `fetch` (HTTP), NOT `invoke`.
- * - The 8 advanced methods still return `WEB_UNSUPPORTED`.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -360,7 +349,74 @@ describe('worktreeApi.create (web branch) — NDJSON progress stream', () => {
   })
 })
 
-describe('worktreeApi (web branch) — 8 advanced ops stay WEB_UNSUPPORTED', () => {
+describe('worktreeApi (web branch) — symlink methods hit HTTP', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(false)
+    mockInvoke.mockReset()
+    mockFetch.mockReset()
+  })
+
+  function sentRequest(): { path: string; method?: string; body: unknown } {
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const [url, init] = mockFetch.mock.calls[0]!
+    return {
+      path: new URL(String(url), 'http://localhost').pathname,
+      method: (init as RequestInit).method,
+      body: JSON.parse((init as RequestInit).body as string)
+    }
+  }
+
+  it('parseGitignore posts projectPath to /worktree/parse-gitignore', async () => {
+    const dirs = [{ dirName: 'node_modules', exists: true }]
+    mockFetch.mockResolvedValue(okResponse({ success: true, data: dirs }))
+
+    await expect(worktreeApi.parseGitignore('/project')).resolves.toEqual({
+      success: true,
+      data: dirs
+    })
+    expect(sentRequest()).toEqual({
+      path: '/worktree/parse-gitignore',
+      method: 'POST',
+      body: { projectPath: '/project' }
+    })
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['createSymlinks', '/worktree/create-symlinks'],
+    ['ensureSymlinks', '/worktree/ensure-symlinks']
+  ] as const)('%s posts the dir names as an array to %s', async (method, path) => {
+    const results = [
+      { path: '/wt/node_modules', target: '/project/node_modules', status: 'created' }
+    ]
+    mockFetch.mockResolvedValue(okResponse({ success: true, data: results }))
+
+    await expect(worktreeApi[method]('/project', '/wt', ['node_modules'])).resolves.toEqual({
+      success: true,
+      data: results
+    })
+    expect(sentRequest()).toEqual({
+      path,
+      method: 'POST',
+      body: { projectPath: '/project', worktreePath: '/wt', symlinkDirs: ['node_modules'] }
+    })
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('passes a read-only server refusal through unchanged', async () => {
+    mockFetch.mockResolvedValue(
+      okResponse({ success: false, error: 'remote writes are disabled', code: 'FORBIDDEN' })
+    )
+    await expect(worktreeApi.ensureSymlinks('/project', '/wt', ['dist'])).resolves.toEqual({
+      success: false,
+      error: 'remote writes are disabled',
+      code: 'FORBIDDEN'
+    })
+  })
+})
+
+describe('worktreeApi (web branch) — desktop-only ops stay WEB_UNSUPPORTED', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsTauriContext.mockReturnValue(false)
@@ -375,33 +431,6 @@ describe('worktreeApi (web branch) — 8 advanced ops stay WEB_UNSUPPORTED', () 
       expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     expect(mockInvoke).not.toHaveBeenCalled()
-    expect(mockFetch).not.toHaveBeenCalled()
-  })
-
-  it('parseGitignore returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
-    const result = await worktreeApi.parseGitignore('/project')
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockFetch).not.toHaveBeenCalled()
-  })
-
-  it('createSymlinks returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
-    const result = await worktreeApi.createSymlinks('/project', '/wt', ['node_modules'])
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockFetch).not.toHaveBeenCalled()
-  })
-
-  it('ensureSymlinks returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
-    const result = await worktreeApi.ensureSymlinks('/project', '/wt', ['node_modules'])
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
     expect(mockFetch).not.toHaveBeenCalled()
   })
 

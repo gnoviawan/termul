@@ -19,12 +19,10 @@ import { CommandChip } from '../CommandChip'
  * with the caret immediately after the pill removes the whole atom node
  * (handled by the editor's keymap plugin, see `ChatComposerEditor`).
  *
- * Wire contract: at send, `useChatComposer.buildPromptParts` calls
- * `extractCommandName(value)` → if present, `wireWithCommand = \`/${name}
- * ${wireText}\`` — the SAME string the old `activeCommand` state produced. The
- * token is stripped from `wireText` (the skill wire framer receives the
- * de-commanded text). Single-command invariant: `insertCommandToken` rejects
- * a second command token if one already exists.
+ * Wire contract: at send, `buildPromptParts` replaces the token with `/name`
+ * in the sentence where the user typed it. The command is not moved to the
+ * front. Single-command invariant: `insertCommandToken` rejects a second
+ * command token if one already exists.
  */
 export const CommandPill = Node.create({
   name: 'commandPill',

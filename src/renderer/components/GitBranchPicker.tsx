@@ -1,4 +1,4 @@
-import type { BranchInfo } from '@shared/types/ipc.types'
+import type { BranchInfo } from '@shared/types/worktree.types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { STRIP_TRIGGER_CLASS } from '@/components/agents/launcher/launcher-classes'

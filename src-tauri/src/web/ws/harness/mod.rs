@@ -14,6 +14,8 @@ pub(crate) mod raw_client;
 pub(crate) mod wire;
 
 #[cfg(test)]
+mod chat_reads_tests;
+#[cfg(test)]
 mod relay_approval_tests;
 #[cfg(test)]
 mod relay_bounded_tests;

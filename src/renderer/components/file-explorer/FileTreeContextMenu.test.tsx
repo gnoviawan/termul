@@ -1,67 +1,15 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FileTreeContextMenuContent } from '@/components/file-explorer/FileTreeContextMenu'
+import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
 
 const mockIsTauriContext = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
 }))
-
-// Stub the Radix context-menu primitives so the test asserts the item labels
-// that `FileTreeContextMenuContent` builds declaratively. The real primitives
-// render via a portal + Radix positioning that is hard to assert in jsdom; the
-// flat stub renders `<ContextMenuContent>` children inline so `getByText` can
-// assert the capability-gated item set. The `ContextMenuTrigger` stub mirrors
-// Radix's checkForDefaultPrevented (F2) so F1-type regressions surface in any
-// trigger-based test that uses this mock. Mirrors the GlobalContextMenu stub.
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
-    open: false,
-    setOpen: () => {}
-  })
-  return {
-    ContextMenu: ({ children }: { children: React.ReactNode }) => {
-      const [open, setOpen] = React.useState(false)
-      return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
-    },
-    ContextMenuTrigger: ({
-      children,
-      asChild
-    }: {
-      children: React.ReactNode
-      asChild?: boolean
-    }) => {
-      const { setOpen } = React.useContext(MenuCtx)
-      const merged = (e: React.MouseEvent) => {
-        // F2: mirror Radix checkForDefaultPrevented — skip open if the child
-        // handler called preventDefault.
-        if (e.defaultPrevented) return
-        e.preventDefault()
-        setOpen(true)
-      }
-      if (asChild && React.isValidElement(children)) {
-        const child = children as React.ReactElement<{
-          onContextMenu?: (e: React.MouseEvent) => void
-        }>
-        return React.cloneElement(child, {
-          onContextMenu: (e: React.MouseEvent) => {
-            child.props.onContextMenu?.(e)
-            merged(e)
-          }
-        })
-      }
-      return <div onContextMenu={merged}>{children}</div>
-    },
-    ContextMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-    ContextMenuItem: ({ children }: { children: React.ReactNode }) => (
-      <div data-testid="menu-item">{children}</div>
-    ),
-    ContextMenuSeparator: () => <hr data-testid="menu-separator" />
-  }
-})
 
 const fileEntry: DirectoryEntry = {
   name: 'file.txt',
@@ -81,24 +29,34 @@ const dirEntry: DirectoryEntry = {
   modifiedAt: 0
 }
 
-function renderMenu(entry: DirectoryEntry): void {
+function renderMenu(entry: DirectoryEntry, hasClipboardContent = false): void {
+  useFileExplorerStore.setState({
+    selectedPaths: new Set([entry.path]),
+    clipboard: hasClipboardContent ? { type: 'copy', paths: ['/proj/other.txt'] } : null
+  })
   render(
-    <FileTreeContextMenuContent
-      entry={entry}
-      onNewFile={vi.fn()}
-      onNewFolder={vi.fn()}
-      onRename={vi.fn()}
-      onDelete={vi.fn()}
-      onCopyPath={vi.fn()}
-      onCopy={vi.fn()}
-      onCut={vi.fn()}
-      onPaste={vi.fn()}
-      onDuplicate={vi.fn()}
-      onOpenInTerminal={vi.fn()}
-      onOpenWithExternal={vi.fn()}
-      onShowInFileManager={vi.fn()}
-    />
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div>{entry.name}</div>
+      </ContextMenuTrigger>
+      <FileTreeContextMenuContent
+        entry={entry}
+        onNewFile={vi.fn()}
+        onNewFolder={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+        onCopyPath={vi.fn()}
+        onCopy={vi.fn()}
+        onCut={vi.fn()}
+        onPaste={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenInTerminal={vi.fn()}
+        onOpenWithExternal={vi.fn()}
+        onShowInFileManager={vi.fn()}
+      />
+    </ContextMenu>
   )
+  fireEvent.contextMenu(screen.getByText(entry.name))
 }
 
 describe('FileTreeContextMenu capability gating', () => {
@@ -135,26 +93,11 @@ describe('FileTreeContextMenu capability gating', () => {
 describe('FileTreeContextMenu grouping', () => {
   it('orders folder items as create | clipboard | rename | external | delete', () => {
     mockIsTauriContext.mockReturnValue(true)
-    const { container } = render(
-      <FileTreeContextMenuContent
-        entry={dirEntry}
-        onNewFile={vi.fn()}
-        onNewFolder={vi.fn()}
-        onRename={vi.fn()}
-        onDelete={vi.fn()}
-        onCopyPath={vi.fn()}
-        onCopy={vi.fn()}
-        onCut={vi.fn()}
-        onPaste={vi.fn()}
-        onDuplicate={vi.fn()}
-        onOpenInTerminal={vi.fn()}
-        onOpenWithExternal={vi.fn()}
-        onShowInFileManager={vi.fn()}
-        hasClipboardContent
-      />
-    )
-    const sequence = Array.from(container.querySelectorAll('[data-testid]')).map((node) =>
-      node.getAttribute('data-testid') === 'menu-separator' ? '|' : (node.textContent ?? '').trim()
+    renderMenu(dirEntry, true)
+    const sequence = Array.from(
+      screen.getByRole('menu').querySelectorAll('[role="menuitem"], [role="separator"]')
+    ).map((node) =>
+      node.getAttribute('role') === 'separator' ? '|' : (node.textContent ?? '').trim()
     )
     expect(sequence).toEqual([
       'New File',

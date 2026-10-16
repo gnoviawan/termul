@@ -1,7 +1,10 @@
+import { useEffect } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { useAgentChatUnreadTracker } from '@/hooks/use-agent-chat-unread-tracker'
+import { useChatReadMarker } from '@/hooks/use-chat-read-marker'
 import { resolveMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { startChatReadSync } from '@/lib/chat-read-sync'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import type { LeafNode, PaneNode } from '@/types/workspace.types'
 
@@ -34,13 +37,17 @@ export function activeChatSessionIds(
 }
 
 /**
- * The one `useAgentChatUnreadTracker` mount per renderer. Called from
- * `WorkspaceLayout`, which serves both `TauriApp.tsx` and `App.tsx`.
+ * The one `useAgentChatUnreadTracker` mount per renderer, with the host's
+ * shared last-read markers that clear a dot when the chat is read on another
+ * surface. Called from `WorkspaceLayout`, which serves both `TauriApp.tsx` and
+ * `App.tsx`.
  */
 export function useShellUnreadTracker(): void {
   const mobile = useMobileWebShell()
   const activeSessionIds = useWorkspaceStore(
     useShallow((state) => activeChatSessionIds(state.root, state.activePaneId, mobile))
   )
+  useEffect(() => startChatReadSync(), [])
   useAgentChatUnreadTracker(activeSessionIds)
+  useChatReadMarker(activeSessionIds)
 }

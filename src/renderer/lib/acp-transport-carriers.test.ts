@@ -132,6 +132,9 @@ class FakeHost {
       case 'list_agents':
         ok([])
         return
+      case 'mark_chat_read':
+        ok({ sessionId: frame.payload.sessionId, seq: 9 })
+        return
       default:
         ok()
     }
@@ -381,6 +384,38 @@ describe.each([webCarrier(), channelCarrier()])('/ws contract over $name', (carr
     expect(host.conns).toHaveLength(2)
     expect(host.authPayloads).toHaveLength(2)
     await expect(transport.listAgents()).resolves.toEqual([])
+  })
+
+  it('reports a chat read as mark_chat_read and resolves the host marker', async () => {
+    await transport.connect()
+
+    await expect(transport.markChatRead?.('s1', 4)).resolves.toEqual({ sessionId: 's1', seq: 9 })
+
+    expect(host.framesOf('mark_chat_read').map((frame) => frame.payload)).toEqual([
+      { sessionId: 's1', seq: 4 }
+    ])
+  })
+
+  it('delivers the chat_reads watch state and deltas', async () => {
+    const seen: unknown[] = []
+    await transport.connect()
+    transport.watches?.subscribe('chat_reads', {
+      onState: (state) => seen.push(['state', state]),
+      onDelta: (delta) => seen.push(['delta', delta])
+    })
+    await until(() => host.framesOf('watch').length === 1)
+    expect(host.framesOf('watch')[0].payload).toEqual({ watch: 'chat_reads', scope: '' })
+
+    const revision = (n: number) => ({ hostEpoch: 'h1', n })
+    const frame = { type: 'watch', watch: 'chat_reads', scope: '' }
+    host.conns[0].emit({ ...frame, revision: revision(1), reset: true, state: { marks: {} } })
+    host.conns[0].emit({ ...frame, revision: revision(2), delta: { sessionId: 's1', seq: 6 } })
+    await until(() => seen.length === 2)
+
+    expect(seen).toEqual([
+      ['state', { marks: {} }],
+      ['delta', { sessionId: 's1', seq: 6 }]
+    ])
   })
 
   it('releases its host connection when the transport is disposed', async () => {

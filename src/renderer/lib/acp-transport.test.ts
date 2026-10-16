@@ -2168,6 +2168,27 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('sends mcpServers on reopen only when the caller provides the list', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.loadSession('a1', 's-plain', '/work')
+    await transport.resumeSession('a1', 's-reload', '/work', undefined, { mcpServers: [] })
+
+    const frames = sock.sent.map(
+      (frame) => JSON.parse(frame) as { type: string; payload: Record<string, unknown> }
+    )
+    const load = frames.find((frame) => frame.type === 'load_session')
+    const resume = frames.find((frame) => frame.type === 'resume_session')
+    expect(load?.payload).not.toHaveProperty('mcpServers')
+    expect(resume?.payload.mcpServers).toEqual([])
+    transport.dispose()
+  })
+
   it('registerDiscoveredSession promotes metadata over the WS seam', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -4794,7 +4815,10 @@ describe('WsAcpTransport commands (AD-5)', () => {
     script.set('load_session', () => ({ ok: true, payload: {}, visible_at: 'soon' }))
     const transport = await connected()
     const onVisibleAt = vi.fn()
-    await transport.loadSession('a1', 's1', '/w', undefined, { commandId: 'c', onVisibleAt })
+    await transport.loadSession('a1', 's1', '/w', undefined, {
+      commandId: 'c',
+      onVisibleAt
+    })
     expect(onVisibleAt).not.toHaveBeenCalled()
     transport.dispose()
   })

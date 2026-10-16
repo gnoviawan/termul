@@ -30,6 +30,32 @@ describe('formatAcpSpawnError', () => {
       /"cursor-agent"/
     )
   })
+
+  it('keeps a resolver error that names a different binary verbatim', () => {
+    // Managed claude-acp spawns `node`, but a failed *pre-spawn* probe of the
+    // system claude.cmd names the shim — rewriting it against `node` would
+    // blame the wrong binary.
+    const raw =
+      'program not found or not executable: C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd'
+    expect(formatAcpSpawnError(raw, { command: 'node' })).toBe(raw)
+    const result = classifySetupError(raw, { command: 'node' })
+    expect(result.category).toBe('spawn')
+    expect(result.detail).toBe(raw)
+
+    // The bare-name variant — e.g. the claude CLI probe failing to find
+    // `claude` on PATH — names a different program than the spawned `node`.
+    const bare = 'program not found on PATH: claude'
+    expect(formatAcpSpawnError(bare, { command: 'node' })).toBe(bare)
+  })
+
+  it('still rewrites a resolver failure that names the command itself', () => {
+    expect(formatAcpSpawnError('program not found on PATH: node', { command: 'node' })).toBe(
+      'Could not start "node". Check that the binary exists and is on your PATH.'
+    )
+    expect(formatAcpSpawnError('spawn C:\\tools\\node.exe ENOENT', { command: 'node' })).toBe(
+      'Could not start "node". Check that the binary exists and is on your PATH.'
+    )
+  })
 })
 
 describe('AmbiguousAuthError', () => {

@@ -4,10 +4,8 @@ import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { useEffect, useRef } from 'react'
-import { mapCaretAfterCommandPrefix, normalizeCommandToPrefix } from '@/lib/command-prefix'
 import {
   CMD_PILL_NODE,
-  displayOffsetToDocOffset,
   docOffsetToDisplayOffset,
   docToDisplayText,
   FILE_PILL_NODE,
@@ -78,50 +76,6 @@ export interface ChatComposerEditorProps {
 }
 
 const KEYMAP_KEY = new PluginKey('chatComposerKeymap')
-const COMMAND_PREFIX_KEY = new PluginKey('commandPrefix')
-
-/**
- * Keep a command pill at the start of the draft. Typing in front of the pill
- * moves that text to after the pill, which is the shape `buildPromptParts`
- * sends. The meta flag stops the appended transaction from normalizing twice.
- */
-function createCommandPrefixExtension(): Extension {
-  return Extension.create({
-    name: 'commandPrefix',
-    addProseMirrorPlugins() {
-      return [
-        new Plugin({
-          key: COMMAND_PREFIX_KEY,
-          appendTransaction(trs, _old, state) {
-            if (!trs.some((tr) => tr.docChanged)) return null
-            if (trs.some((tr) => tr.getMeta('commandPrefixNormalize'))) return null
-            const text = docToDisplayText(state.doc)
-            const normalized = normalizeCommandToPrefix(text)
-            if (normalized === text) return null
-            try {
-              const nextDoc = state.schema.nodeFromJSON(draftFromTokens(normalized))
-              const caret = docOffsetToDisplayOffset(state.doc, state.selection.to)
-              const mapped = mapCaretAfterCommandPrefix(text, normalized, caret)
-              const tr = state.tr.replaceWith(0, state.doc.content.size, nextDoc.content)
-              tr.setMeta('commandPrefixNormalize', true)
-              const pos = displayOffsetToDocOffset(tr.doc, mapped)
-              const max = Math.max(1, tr.doc.content.size - 1)
-              const clamped = Math.max(1, Math.min(pos, max))
-              try {
-                tr.setSelection(TextSelection.create(tr.doc, clamped))
-              } catch {
-                // The mapped caret is outside the new doc. Leave ProseMirror's selection.
-              }
-              return tr
-            } catch {
-              return null
-            }
-          }
-        })
-      ]
-    }
-  })
-}
 
 /**
  * Factory: build a per-instance keymap extension that closes over a stable ref
@@ -304,7 +258,6 @@ export function ChatComposerEditor({
         CommandPill,
         FilePill,
         createComposerKeymap(beforeKeyDownRef),
-        createCommandPrefixExtension(),
         Placeholder.configure({
           placeholder: () => placeholderRef.current,
           // Both composer surfaces (chat + launcher) must show their hint when
@@ -487,15 +440,10 @@ export function ChatComposerEditor({
   // from `value`).
   useEffect(() => {
     if (!editor) return
-    // A stored draft can still carry a command token in the middle. Rewrite it
-    // to the prefix shape before the doc is built, and tell the host so send
-    // uses the same string the user sees.
-    const normalized = normalizeCommandToPrefix(value)
-    if (normalized !== value) onValueChangeRef.current(normalized)
-    if (normalized === lastEmittedRef.current) return
+    if (value === lastEmittedRef.current) return
     silentRef.current = true
     try {
-      editor.commands.setContent(draftFromTokens(normalized), { emitUpdate: false })
+      editor.commands.setContent(draftFromTokens(value), { emitUpdate: false })
     } catch (err) {
       // A malformed draft (corrupted persisted value) should never permanently
       // break the editor — log + fall back to an empty doc so the user can keep
@@ -515,7 +463,7 @@ export function ChatComposerEditor({
     } finally {
       silentRef.current = false
     }
-    lastEmittedRef.current = normalized
+    lastEmittedRef.current = value
     const caret = docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
     lastCaretRef.current = caret
   }, [value, editor])

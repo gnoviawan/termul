@@ -127,7 +127,7 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
     }
   }
   return (
-    <BubbleContent className="whitespace-pre-wrap break-words">
+    <BubbleContent className="whitespace-pre-wrap">
       {!hasPills && flat.length === 0
         ? text
         : flat.map((seg, i) =>

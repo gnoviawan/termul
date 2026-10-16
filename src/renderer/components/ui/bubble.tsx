@@ -68,17 +68,19 @@ function Bubble({
 }
 
 const bubbleContentVariants = cva(
-  'w-fit max-w-full shrink-0 overflow-hidden break-words text-sm leading-relaxed [&_button]:text-left [&_button]:transition-colors [&_a]:transition-colors',
+  'w-fit max-w-full shrink-0 overflow-hidden text-sm leading-relaxed [&_button]:text-left [&_button]:transition-colors [&_a]:transition-colors',
   {
     variants: {
       variant: {
-        default: 'rounded-2xl px-4 py-2.5 bg-primary-fill text-primary-foreground',
-        secondary: 'rounded-2xl px-4 py-2.5 bg-secondary text-secondary-foreground',
-        muted: 'rounded-2xl px-4 py-2.5 bg-muted text-foreground',
-        tinted: 'rounded-2xl bg-secondary px-4 py-2.5 text-foreground',
-        outline: 'rounded-2xl px-4 py-2.5 border border-border bg-background text-foreground',
-        ghost: 'w-full min-w-0 shrink bg-transparent text-foreground',
-        destructive: 'rounded-2xl px-4 py-2.5 bg-destructive-fill text-destructive-foreground'
+        default: 'rounded-2xl wrap-anywhere px-4 py-2.5 bg-primary-fill text-primary-foreground',
+        secondary: 'rounded-2xl wrap-anywhere px-4 py-2.5 bg-secondary text-secondary-foreground',
+        muted: 'rounded-2xl wrap-anywhere px-4 py-2.5 bg-muted text-foreground',
+        tinted: 'rounded-2xl wrap-anywhere bg-secondary px-4 py-2.5 text-foreground',
+        outline:
+          'rounded-2xl wrap-anywhere px-4 py-2.5 border border-border bg-background text-foreground',
+        ghost: 'w-full min-w-0 shrink break-words bg-transparent text-foreground',
+        destructive:
+          'rounded-2xl wrap-anywhere px-4 py-2.5 bg-destructive-fill text-destructive-foreground'
       }
     },
     defaultVariants: { variant: 'default' }

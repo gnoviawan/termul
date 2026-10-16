@@ -37,7 +37,7 @@ pub use admission::{
 pub use class::{class_of, ClassKind, CommandClass, Fingerprint, Replay, WS_COMMAND_CLASSES};
 pub use http::{
     command_id_from_headers, domain_class, fingerprint_of, found_entity, no_entity, run_domain,
-    run_domain_released, run_http, run_http_released, DomainRan, HttpRan,
+    run_domain_released, run_http, run_http_released, AdmissionWatch, DomainRan, HttpRan,
     COMMAND_CONFLICT_CODE, COMMAND_ID_HEADER, INVALID_COMMAND_ID_CODE, IN_PROGRESS_RECEIPT,
     OUTCOME_UNKNOWN_CODE, PRECONDITION_FAILED_CODE, PRECONDITION_FAILED_PREFIX,
 };

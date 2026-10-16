@@ -31,7 +31,7 @@ import {
   parseReuseKey
 } from '../acp-reuse-keys'
 import { ephemeralSessionIds } from './ephemeral-ids'
-import { isReusableStatus } from './helpers'
+import { isReusableStatus, SWITCH_SPLICE_ID_PREFIX, type SwitchMarkerFacts } from './helpers'
 import type { AcpSession, AcpState, ChatMessage, CommitMessageCollector } from './types'
 
 export { ephemeralSessionIds }
@@ -116,6 +116,36 @@ export function isHistoryCoveredEvent(sessionId: SessionId, eventSeq?: number): 
   return eventSeq <= (historySeqWatermarks.get(sessionId) ?? 0)
 }
 
+/**
+ * Per session, the subscribe cursor `attachLiveTurn` lowered to just before the
+ * open turn's prompt. The payload only summarizes that turn's tool calls, while
+ * the relay replays the turn in full: a covered tool_call/tool_call_update
+ * above the floor restores its card. Prompts and chunks stay covered.
+ */
+const liveTurnReplayFloors = new Map<SessionId, number>()
+
+export function noteLiveTurnReplayFloor(sessionId: SessionId, floor: number): void {
+  liveTurnReplayFloors.set(sessionId, floor)
+}
+
+export function forgetLiveTurnReplayFloor(sessionId: SessionId): void {
+  liveTurnReplayFloors.delete(sessionId)
+}
+
+/** The server seq of a covered tool event the attach replay re-delivers, else null. */
+export function liveTurnReplaySeq(sessionId: SessionId, eventSeq?: number): number | null {
+  const floor = liveTurnReplayFloors.get(sessionId)
+  if (floor === undefined || typeof eventSeq !== 'number' || eventSeq <= floor) return null
+  return isHistoryCoveredEvent(sessionId, eventSeq) ? eventSeq : null
+}
+
+/** A covered tool event, unless the attach replay re-delivers it in full. */
+export function isHistoryCoveredToolEvent(sessionId: SessionId, eventSeq?: number): boolean {
+  return (
+    isHistoryCoveredEvent(sessionId, eventSeq) && liveTurnReplaySeq(sessionId, eventSeq) === null
+  )
+}
+
 /** Record the authoritative history watermark for an installed payload. */
 export function noteHistoryWatermark(sessionId: SessionId, payload: SessionPayload): void {
   // `metadata.lastSeq` is the persisted-log cursor and can legitimately exceed
@@ -123,6 +153,7 @@ export function noteHistoryWatermark(sessionId: SessionId, payload: SessionPaylo
   // stale-low value must never under-cover the payload's own messages.
   const watermark = Math.max(payload.metadata.lastSeq ?? 0, maxPayloadSeq(payload))
   if (watermark > 0) historySeqWatermarks.set(sessionId, watermark)
+  liveTurnReplayFloors.delete(sessionId)
   // Keep the local seq counter above the server watermark (the recovery path
   // rebases the same way) so post-install live messages never receive local
   // stamps below the envelope seqs they arrived with.
@@ -132,6 +163,7 @@ export function noteHistoryWatermark(sessionId: SessionId, payload: SessionPaylo
 /** Test-only: clear per-session history watermarks between tests. */
 export function _resetHistorySeqWatermarksForTesting(): void {
   historySeqWatermarks.clear()
+  liveTurnReplayFloors.clear()
 }
 
 /**
@@ -163,6 +195,7 @@ export function persistSession(
   const liveMessages = (state.messages[sessionId] ?? []).map((m) =>
     m.streaming ? { ...m, streaming: false } : m
   )
+  const ownMessages = liveMessages.filter((m) => !m.id.startsWith(SWITCH_SPLICE_ID_PREFIX))
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
@@ -187,8 +220,8 @@ export function persistSession(
     projectId: session.projectId,
     createdAt: session.createdAt,
     lastActivityAt: Date.now(),
-    messageCount: liveMessages.length,
-    lastSeq: liveMessages.reduce(
+    messageCount: ownMessages.length,
+    lastSeq: ownMessages.reduce(
       (max, m) => Math.max(max, typeof m.seq === 'number' ? m.seq : 0),
       0
     ),
@@ -818,6 +851,8 @@ function asCallerView(
   })
 }
 
+export type LiveSwitchLink = { sourceId: SessionId; marker: SwitchMarkerFacts }
+
 /**
  * Live switch target → source session link (spec-agent-switch-live-merged-transcript).
  * `spliceLiveSwitchTranscript` records the pair so an in-session wholesale
@@ -827,7 +862,7 @@ function asCallerView(
  * otherwise collapse the merged view for the rest of the app session.
  * Entries clear in `dropSessionTranscriptState` (either endpoint dropped).
  */
-export const liveSwitchSources = new Map<SessionId, SessionId>()
+export const liveSwitchSources = new Map<SessionId, LiveSwitchLink>()
 
 /** Test-only: clear live-switch source links between tests. */
 export function _resetLiveSwitchSourcesForTesting(): void {

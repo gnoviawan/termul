@@ -3,13 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { flushDetachedOutputNow, useTerminalDetachedOutput } from './use-terminal-detached-output'
 
-const { mockOnData, mockAppendTranscript, mockFindTerminalByPtyId, mockLogFrontendError } =
-  vi.hoisted(() => ({
-    mockOnData: vi.fn(),
-    mockAppendTranscript: vi.fn(),
-    mockFindTerminalByPtyId: vi.fn(),
-    mockLogFrontendError: vi.fn()
-  }))
+const {
+  mockOnData,
+  mockOnExit,
+  mockAppendTranscript,
+  mockFindTerminalByPtyId,
+  mockLogFrontendError
+} = vi.hoisted(() => ({
+  mockOnData: vi.fn(),
+  mockOnExit: vi.fn(),
+  mockAppendTranscript: vi.fn(),
+  mockFindTerminalByPtyId: vi.fn(),
+  mockLogFrontendError: vi.fn()
+}))
 
 /** Convert a string to Uint8Array for binary channel test data */
 function toBytes(str: string): Uint8Array {
@@ -18,7 +24,8 @@ function toBytes(str: string): Uint8Array {
 
 vi.mock('@/lib/api', () => ({
   terminalApi: {
-    onData: mockOnData
+    onData: mockOnData,
+    onExit: mockOnExit
   }
 }))
 
@@ -88,19 +95,32 @@ describe('useTerminalDetachedOutput', () => {
   function mountHook(): {
     unmount: () => void
     emit: (ptyId: string, data: string) => void
+    emitBytes: (ptyId: string, bytes: number[]) => void
+    exit: (ptyId: string) => void
     unsubscribe: ReturnType<typeof vi.fn>
+    unsubscribeExit: ReturnType<typeof vi.fn>
   } {
     let capturedCallback: ((ptyId: string, data: Uint8Array) => void) | undefined
+    let capturedExit: ((ptyId: string, exitCode: number) => void) | undefined
     const unsubscribe = vi.fn()
+    const unsubscribeExit = vi.fn()
     mockOnData.mockImplementation((callback: (ptyId: string, data: Uint8Array) => void) => {
       capturedCallback = callback
       return unsubscribe
+    })
+    mockOnExit.mockImplementation((callback: (ptyId: string, exitCode: number) => void) => {
+      capturedExit = callback
+      return unsubscribeExit
     })
     const { unmount } = renderHook(() => useTerminalDetachedOutput())
     return {
       unmount,
       emit: (ptyId: string, data: string) => capturedCallback?.(ptyId, toBytes(data)),
-      unsubscribe
+      emitBytes: (ptyId: string, bytes: number[]) =>
+        capturedCallback?.(ptyId, Uint8Array.from(bytes)),
+      exit: (ptyId: string) => capturedExit?.(ptyId, 0),
+      unsubscribe,
+      unsubscribeExit
     }
   }
 
@@ -244,7 +264,7 @@ describe('useTerminalDetachedOutput', () => {
   })
 
   it('drains buffered chunks synchronously on unmount so no chunk is lost', () => {
-    const { unmount, emit, unsubscribe } = mountHook()
+    const { unmount, emit, unsubscribe, unsubscribeExit } = mountHook()
 
     emit('pty-a', 'tail-1 ')
     emit('pty-a', 'tail-2 ')
@@ -260,6 +280,7 @@ describe('useTerminalDetachedOutput', () => {
     expect(scheduled.size).toBe(0)
     // The subscription was detached — no PTY data flows after unmount.
     expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(unsubscribeExit).toHaveBeenCalledTimes(1)
 
     // Nothing further can fire, even if a stray frame callback were invoked.
     runScheduledFrames()
@@ -536,5 +557,169 @@ describe('useTerminalDetachedOutput', () => {
     expect(single.length).toBe(cap)
     expect(single).toBe('c'.repeat(cap))
     unmount()
+  })
+
+  const EURO = [0xe2, 0x82, 0xac]
+
+  it('renders a multi-byte character split across two chunks intact', () => {
+    const { unmount, emitBytes } = mountHook()
+
+    emitBytes('pty-a', EURO.slice(0, 1))
+    emitBytes('pty-a', EURO.slice(1))
+    runScheduledFrames()
+
+    expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', '€')
+
+    unmount()
+  })
+
+  it('keeps each terminal on its own decoder when split characters interleave', () => {
+    const { unmount, emitBytes, emit } = mountHook()
+
+    emitBytes('pty-a', EURO.slice(0, 2))
+    emit('pty-b', 'b')
+    emitBytes('pty-a', EURO.slice(2))
+    runScheduledFrames()
+
+    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', '€')
+    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-b', 'b')
+
+    unmount()
+  })
+
+  it('flushes a truncated character when the pty exits and starts the next stream clean', () => {
+    const { unmount, emitBytes, emit, exit } = mountHook()
+
+    emitBytes('pty-a', EURO.slice(0, 1))
+    exit('pty-a')
+    runScheduledFrames()
+    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', '\uFFFD')
+
+    mockAppendTranscript.mockClear()
+    emit('pty-a', 'x')
+    runScheduledFrames()
+    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', 'x')
+
+    unmount()
+  })
+
+  describe('buffers waiting for a terminal record', () => {
+    const RECORD = { rendererAttachmentCount: 0, isAppHidden: false }
+    const EXIT_GRACE_MS = 5 * 60_000
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      mockFindTerminalByPtyId.mockReturnValue(undefined)
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    function registerRecord(): void {
+      mockFindTerminalByPtyId.mockReturnValue(RECORD)
+      const storeListener = vi.mocked(useTerminalStore.subscribe).mock.calls[0]?.[0] as
+        | (() => void)
+        | undefined
+      storeListener?.()
+    }
+
+    it('delivers output to a running pty that restore registers after more than 30s', () => {
+      const { unmount, emit } = mountHook()
+
+      emit('pty-restored', 'REPLAYED SCROLLBACK')
+      vi.advanceTimersByTime(31_000)
+      registerRecord()
+
+      expect(mockAppendTranscript).toHaveBeenCalledWith('pty-restored', 'REPLAYED SCROLLBACK')
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
+      unmount()
+    })
+
+    it('delivers a preserved reattach replay whose snapshot exit lands before registration', () => {
+      const { unmount, emit, exit } = mountHook()
+
+      emit('pty-preserved', 'REPLAYED SCROLLBACK')
+      exit('pty-preserved')
+      vi.advanceTimersByTime(60_000)
+      registerRecord()
+
+      expect(mockAppendTranscript).toHaveBeenCalledWith('pty-preserved', 'REPLAYED SCROLLBACK')
+      unmount()
+    })
+
+    it('delivers agent-launch output that exits before its record is bound 31s later', () => {
+      const { unmount, emit, exit } = mountHook()
+
+      emit('pty-agent', 'agent: command not found\r\n')
+      exit('pty-agent')
+      emit('pty-agent', 'late final batch')
+      vi.advanceTimersByTime(31_000)
+      registerRecord()
+
+      expect(mockAppendTranscript).toHaveBeenCalledWith(
+        'pty-agent',
+        'agent: command not found\r\nlate final batch'
+      )
+      unmount()
+    })
+
+    it('keeps a streaming pty that never registers without ever warning', () => {
+      const { unmount, emit } = mountHook()
+
+      for (let minute = 0; minute < 20; minute++) {
+        emit('pty-unregistered', `m${minute} `)
+        vi.advanceTimersByTime(60_000)
+      }
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
+
+      registerRecord()
+      expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+      expect(mockAppendTranscript.mock.calls[0][1]).toMatch(/^m0 m1 .* m19 $/)
+      unmount()
+    })
+
+    it('drops an exited pty buffer silently once the grace passes with no record', () => {
+      const { unmount, emit, exit } = mountHook()
+
+      emit('pty-orphan', 'orphaned output')
+      exit('pty-orphan')
+      vi.advanceTimersByTime(EXIT_GRACE_MS)
+      registerRecord()
+
+      expect(mockAppendTranscript).not.toHaveBeenCalled()
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
+      unmount()
+    })
+
+    it('drops the final output of a closed terminal without a warning', () => {
+      mockFindTerminalByPtyId.mockReturnValue(RECORD)
+      const { unmount, emit, exit } = mountHook()
+
+      exit('pty-closed')
+      mockFindTerminalByPtyId.mockReturnValue(undefined)
+      emit('pty-closed', 'logout\r\n')
+      vi.advanceTimersByTime(EXIT_GRACE_MS)
+      registerRecord()
+
+      expect(mockAppendTranscript).not.toHaveBeenCalled()
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
+      unmount()
+    })
+
+    it('decodes each chunk that arrives after exit on its own', () => {
+      mockFindTerminalByPtyId.mockReturnValue(RECORD)
+      const { unmount, emitBytes, exit } = mountHook()
+
+      exit('pty-a')
+      emitBytes('pty-a', [...EURO, 0x21])
+      emitBytes('pty-a', EURO.slice(0, 1))
+      emitBytes('pty-a', EURO.slice(1))
+      runScheduledFrames()
+
+      expect(mockAppendTranscript).toHaveBeenCalledWith('pty-a', '€!\uFFFD\uFFFD\uFFFD')
+      unmount()
+    })
   })
 })

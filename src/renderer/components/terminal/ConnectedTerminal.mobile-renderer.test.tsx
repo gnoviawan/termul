@@ -249,20 +249,7 @@ vi.mock('@/lib/web-terminal-api', () => ({
   setWebTerminalConnectionStateListener: vi.fn(),
   onWebTerminalSessionLost: vi.fn(() => () => {})
 }))
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const wrap = (props: { children?: React.ReactNode }) =>
-    React.createElement('div', null, props.children)
-  return {
-    ContextMenu: wrap,
-    ContextMenuTrigger: wrap,
-    ContextMenuContent: wrap,
-    ContextMenuItem: wrap,
-    ContextMenuSeparator: () => null,
-    ContextMenuShortcut: (props: { children?: React.ReactNode }) =>
-      React.createElement('span', null, props.children)
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 vi.mock('../../utils/terminal-registry', () => ({
   buildRehydrateSequences: vi.fn(() => ''),

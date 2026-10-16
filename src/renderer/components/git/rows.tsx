@@ -32,16 +32,8 @@ export function splitGitPath(path: string): { fileName: string; dirName: string 
 
 /** 14px file-type icon for a file name in the Git panel. */
 export function GitFileIcon({ fileName }: { fileName: string }) {
-  const dot = fileName.lastIndexOf('.')
   return (
-    <MaterialFileIcon
-      name={fileName}
-      extension={dot > 0 ? fileName.slice(dot) : null}
-      isDirectory={false}
-      isExpanded={false}
-      depth={0}
-      size={14}
-    />
+    <MaterialFileIcon name={fileName} isDirectory={false} isExpanded={false} depth={0} size={14} />
   )
 }
 

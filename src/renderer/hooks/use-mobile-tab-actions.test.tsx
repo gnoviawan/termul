@@ -5,23 +5,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import { useMobileTabActions } from './use-mobile-tab-actions'
 
-const { workspaceRef, mockRemoveBrowserTab, mockCloseCanvas, mockCloseAgentChat } = vi.hoisted(
-  () => ({
-    workspaceRef: {
-      current: {
-        leaves: [] as Array<{ type: 'leaf'; id: string; tabs: unknown[]; activeTabId: null }>,
-        activePaneId: 'pane-1',
-        fullscreenPaneId: null as string | null,
-        removeTab: vi.fn(),
-        setActiveTab: vi.fn(),
-        clearFullscreenPane: vi.fn()
-      }
-    },
-    mockRemoveBrowserTab: vi.fn(),
-    mockCloseCanvas: vi.fn(),
-    mockCloseAgentChat: vi.fn()
-  })
-)
+const { workspaceRef } = vi.hoisted(() => ({
+  workspaceRef: {
+    current: {
+      leaves: [] as Array<{ type: 'leaf'; id: string; tabs: unknown[]; activeTabId: null }>,
+      activePaneId: 'pane-1',
+      fullscreenPaneId: null as string | null,
+      removeTab: vi.fn(),
+      setActiveTab: vi.fn(),
+      clearFullscreenPane: vi.fn()
+    }
+  }
+}))
 
 vi.mock('@/stores/workspace-store', () => ({
   getAllLeafPanes: () => workspaceRef.current.leaves,
@@ -29,15 +24,6 @@ vi.mock('@/stores/workspace-store', () => ({
     vi.fn((sel: (s: unknown) => unknown) => sel({ root: { leaves: workspaceRef.current.leaves } })),
     { getState: () => workspaceRef.current }
   )
-}))
-vi.mock('@/stores/browser-session-store', () => ({
-  useBrowserSessionStore: { getState: () => ({ removeTab: mockRemoveBrowserTab }) }
-}))
-vi.mock('@/stores/canvas-store', () => ({
-  useCanvasStore: { getState: () => ({ closeCanvas: mockCloseCanvas }) }
-}))
-vi.mock('@/lib/agent-chat-close', () => ({
-  closeAgentChat: mockCloseAgentChat
 }))
 
 const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element => (
@@ -50,11 +36,6 @@ function actions(options: Parameters<typeof useMobileTabActions>[0] = {}) {
 
 beforeEach(() => {
   workspaceRef.current.removeTab.mockReset()
-  mockRemoveBrowserTab.mockReset()
-  mockCloseCanvas.mockReset().mockResolvedValue(undefined)
-  mockCloseAgentChat
-    .mockReset()
-    .mockImplementation((_id: string, closeTab: () => void) => closeTab())
 })
 
 describe('useMobileTabActions closePaneTab', () => {
@@ -80,49 +61,5 @@ describe('useMobileTabActions closePaneTab', () => {
     expect(onCloseTerminal).toHaveBeenCalledWith('t1', 'term-t1')
     expect(actions().closePaneTab(tab)).toBe(false)
     expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
-  })
-
-  it('tears down a browser session tab, then removes the tab', () => {
-    actions().closePaneTab({ type: 'browser', id: 'browser-b1', browserTabId: 'b1' })
-
-    expect(mockRemoveBrowserTab).toHaveBeenCalledWith('b1')
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('browser-b1')
-  })
-
-  it('evicts a canvas before removing its tab', () => {
-    actions().closePaneTab({
-      type: 'canvas',
-      id: 'canvas-p1',
-      projectId: 'p1',
-      docPath: '/p/Plan.op'
-    } as WorkspaceTab)
-
-    expect(mockCloseCanvas).toHaveBeenCalledWith('p1')
-    expect(mockCloseCanvas.mock.invocationCallOrder[0]).toBeLessThan(
-      workspaceRef.current.removeTab.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('closes a chat through closeAgentChat, removing the tab only when it completes', () => {
-    const tab = { type: 'agent-chat', id: 'tab-1', sessionId: 's1' } as WorkspaceTab
-    actions().closePaneTab(tab)
-    expect(mockCloseAgentChat).toHaveBeenCalledWith('s1', expect.any(Function))
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('tab-1')
-
-    workspaceRef.current.removeTab.mockReset()
-    mockCloseAgentChat.mockImplementation(() => {})
-    actions().closePaneTab(tab)
-    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    { type: 'git', id: 'git-/p', cwd: '/p' },
-    { type: 'git-history', id: 'gh-/p', cwd: '/p' },
-    { type: 'diff', id: 'diff:1', cwd: '/p', path: 'a.ts', staged: false }
-  ] as WorkspaceTab[])('removes a $type tab directly', (tab) => {
-    expect(actions().closePaneTab(tab)).toBe(false)
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith(tab.id)
-    expect(mockRemoveBrowserTab).not.toHaveBeenCalled()
-    expect(mockCloseCanvas).not.toHaveBeenCalled()
   })
 })

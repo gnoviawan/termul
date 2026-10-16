@@ -1,5 +1,6 @@
 import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
+import type { BaseBranchInfo } from '@shared/types/worktree.types'
 import type { Editor } from '@tiptap/core'
 import { useIsPresent, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -98,7 +99,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
-import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
+import { worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import {
@@ -1518,8 +1519,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     // Build the wire text (skills framed by path under `# Agent Skills`, then
     // the user text with tokens replaced by `(name)`) and the display text (the
-    // raw token value, so the chat timeline re-renders inline chips), with the
-    // active command prefixed to both. Shared with `ChatInputBar.submit` via
+    // raw token value, so the chat timeline re-renders inline chips). A command
+    // token becomes `/name` where the user typed it. Shared with `ChatInputBar.submit` via
     // `useChatComposer.buildPromptParts` so the two surfaces cannot drift. A
     // skill surfaced without a path (web parity gap) blocks the launch —
     // `buildPromptParts` throws and the catch toasts + releases the in-flight

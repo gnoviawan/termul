@@ -1024,12 +1024,24 @@ export async function acpLoadSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string,
-  additionalDirectories?: string[]
+  additionalDirectories?: string[],
+  mcpServers?: McpServer[]
 ): Promise<SessionReopenOutcome> {
+  // A reload carries a different server list than a plain reopen. Digest it
+  // so an in-flight history open is not reused as the reload command.
+  const mcpKey = mcpServers ? keyDigest(JSON.stringify(mcpServers)) : ''
   const run = await ledgered(
     'load_session',
-    `${agentId}|${sessionId}|${cwd}`,
-    (call) => getAcpTransport().loadSession(agentId, sessionId, cwd, additionalDirectories, call),
+    `${agentId}|${sessionId}|${cwd}|${mcpKey}`,
+    (call) =>
+      getAcpTransport().loadSession(
+        agentId,
+        sessionId,
+        cwd,
+        additionalDirectories,
+        // Keep command options in the fifth slot. An empty list is still sent.
+        mcpServers === undefined ? call : { ...call, mcpServers }
+      ),
     { acceptedWithoutResult: () => ({}) }
   )
   await untilSessionVisible(sessionId, run.visibleAt)
@@ -1040,12 +1052,21 @@ export async function acpResumeSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string,
-  additionalDirectories?: string[]
+  additionalDirectories?: string[],
+  mcpServers?: McpServer[]
 ): Promise<SessionReopenOutcome> {
+  const mcpKey = mcpServers ? keyDigest(JSON.stringify(mcpServers)) : ''
   const run = await ledgered(
     'resume_session',
-    `${agentId}|${sessionId}|${cwd}`,
-    (call) => getAcpTransport().resumeSession(agentId, sessionId, cwd, additionalDirectories, call),
+    `${agentId}|${sessionId}|${cwd}|${mcpKey}`,
+    (call) =>
+      getAcpTransport().resumeSession(
+        agentId,
+        sessionId,
+        cwd,
+        additionalDirectories,
+        mcpServers === undefined ? call : { ...call, mcpServers }
+      ),
     { acceptedWithoutResult: () => ({}) }
   )
   await untilSessionVisible(sessionId, run.visibleAt)

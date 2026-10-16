@@ -76,6 +76,8 @@ struct AcpTerminal {
     child: Option<tokio::process::Child>,
     buffer: Arc<Mutex<TerminalBuffer>>,
     exit: Option<TerminalExitStatus>,
+    #[cfg(windows)]
+    job: Option<crate::process_util::KillOnCloseJob>,
 }
 
 /// Per-agent registry of terminals, keyed by ACP `TerminalId`. Owned by the
@@ -132,6 +134,10 @@ impl TerminalRegistry {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("failed to spawn terminal command: {e}"))?;
+        #[cfg(windows)]
+        let job = child.raw_handle().and_then(|handle| {
+            crate::process_util::KillOnCloseJob::new_assigned(handle, "ACP terminal", true)
+        });
 
         let buffer = Arc::new(Mutex::new(TerminalBuffer {
             limit: output_byte_limit.map(|l| l as usize),
@@ -175,6 +181,8 @@ impl TerminalRegistry {
                 child: Some(child),
                 buffer,
                 exit: None,
+                #[cfg(windows)]
+                job,
             },
         );
         Ok(terminal_id)
@@ -243,6 +251,14 @@ impl TerminalRegistry {
             .terminals
             .get_mut(id.0.as_ref())
             .ok_or_else(|| format!("unknown terminal: {}", id.0))?;
+        #[cfg(windows)]
+        if let Some(job) = &term.job {
+            if let Err(error) = job.terminate() {
+                log::warn!(
+                    "[acp] TerminateJobObject failed; terminal descendants may survive: {error}"
+                );
+            }
+        }
         if let Some(child) = term.child.as_mut() {
             let _ = child.start_kill();
             // Reap if it has already exited so we don't leave a zombie; the

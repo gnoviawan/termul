@@ -160,8 +160,8 @@ async fn the_terminal_set_watch_follows_spawn_attach_and_kill_of_one_project() {
         .expect("spawn");
     let id = spawned.info.id.clone();
     let instance = host.state.pty.get(&id).expect("instance");
-    instance.add_web_attachment();
-    instance.remove_web_attachment();
+    instance.add_live_attachment();
+    instance.remove_live_attachment();
     host.state.pty.force_kill(&id).await.expect("kill");
     watcher.peer.read_for(Duration::from_millis(100)).await;
 

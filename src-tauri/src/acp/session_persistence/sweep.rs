@@ -16,8 +16,7 @@
 //! once, and a closed verdict is memoized as the session's
 //! [`SweepCheckpoint`]: on the next launch an unchanged log costs only a
 //! re-read of the checkpoint's own line, and a grown one is read back only to
-//! the checkpoint. A log the gate finds possibly open is read again in full by
-//! the marker routine, as before.
+//! the checkpoint.
 
 use super::*;
 
@@ -102,18 +101,15 @@ fn read_gate(
         _ => 0,
     };
     let scan = scan_fold_tail(&mut file, len, floor, session_id)?;
-    let pending = scan.records.iter().rev().fold(None, |pending, record| {
-        open_turn_step(pending, &record.type_, record.payload.turn_id.as_ref())
-    });
-    let may_be_open = scan.unreadable || pending.is_some();
+    let may_be_open = scan.unreadable || scan.open_turn().is_some();
     Ok(Some(Gate {
         may_be_open,
         unreadable: scan.unreadable,
         bytes_read: scan.bytes_read,
         closed_at: scan
-            .last_seq
-            .filter(|_| !may_be_open)
-            .map(|seq| SweepCheckpoint { len, seq }),
+            .last_line
+            .filter(|line| line.terminated && !may_be_open)
+            .map(|line| SweepCheckpoint { len, seq: line.seq }),
         prior_stale: prior.is_some() && !valid_prior,
     }))
 }

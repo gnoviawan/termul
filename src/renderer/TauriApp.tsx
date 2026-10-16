@@ -7,8 +7,7 @@ import { CodexCliAuthSync } from '@/components/agents/CodexCliAuthSync'
 import { ChatRoute } from '@/components/ChatRoute'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
-import { Toaster as Sonner } from '@/components/ui/sonner'
-import { Toaster } from '@/components/ui/toaster'
+import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAcpUpdateChecks } from '@/hooks/use-acp-update-checks'
 import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
@@ -199,7 +198,6 @@ export default function TauriApp(): React.JSX.Element {
           <ErrorBoundary context="App Root">
             <AppEffects />
             <Toaster />
-            <Sonner />
             {/* Headless ACP auth: global host for the browser-open paste-back
                 dialog (spec-acp-terminal-auth) — auth can be triggered from a
                 chat panel or warm pool, not just the launcher. */}

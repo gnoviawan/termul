@@ -136,7 +136,7 @@ fn close_writer(
 /// Issue #842: append `prompt_complete { stopReason: "interrupted" }` when
 /// the last `user_prompt` has no matching completion. The seq comes from the
 /// session's [`SeqAuthority`] when one is installed (the relay is then the sole
-/// allocator), floored at the highest seq actually on disk so it cannot
+/// allocator), floored at the seq of the last line on disk so it cannot
 /// collide with a chunk that was still queued when shutdown began. With no
 /// authority (no relay, hence no second allocator) it is `last_seq + 1`. A
 /// marker failure is logged and skipped.
@@ -151,8 +151,20 @@ pub(super) fn append_interrupted_marker_if_open(
         (current.session_id.clone(), current.storage_key.clone())
     };
     let path = root.join(&storage_key).join(MESSAGES_FILE);
-    let records = match load_jsonl(&path, &session_id, false) {
-        Ok(records) => records,
+    let scan = fs::File::open(&path).and_then(|mut file| {
+        let len = file.metadata()?.len();
+        scan_fold_tail(&mut file, len, 0, &session_id)
+    });
+    let scan = match scan {
+        Ok(scan) if !scan.unreadable => scan,
+        Ok(_) => {
+            log::warn!(
+                "[acp-history] interrupted-marker scan found an unreadable turn record \
+                 for session {} (leaving history as-is)",
+                crate::logging::redact_session_id(&session_id)
+            );
+            return;
+        }
         Err(error) => {
             log::warn!(
                 "[acp-history] interrupted-marker scan failed for session {}: {error} \
@@ -162,16 +174,12 @@ pub(super) fn append_interrupted_marker_if_open(
             return;
         }
     };
-    let Some(turn_id) = last_unmatched_user_prompt(&records) else {
+    let Some(turn_id) = scan.open_turn() else {
         return;
     };
     let turn_id = turn_id.and_then(Value::as_str).map(str::to_owned);
-    // The scan sees every record on disk, including an intact-but-unterminated
-    // tail the writer's bookkeeping has not accounted for yet (a failed append
-    // whose record nevertheless reached the file): the marker must sequence
-    // after the highest seq actually present, never reuse one.
-    let on_disk_max = records.iter().map(|record| record.seq).max().unwrap_or(0);
-    let floor = metadata.lock().last_seq.max(on_disk_max);
+    let on_disk_last = scan.last_line.map_or(0, |line| line.seq);
+    let floor = metadata.lock().last_seq.max(on_disk_last);
     // With a relay installed it is the sole allocator; without one (no live
     // stream to disagree with) the durable frontier is the only authority.
     let seq = match authority {

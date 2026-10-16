@@ -2,7 +2,6 @@ import type { Manifest } from 'material-icon-theme'
 
 export interface MaterialIconResolveInput {
   name: string
-  extension: string | null
   isDirectory: boolean
   isExpanded: boolean
   /** 0 = direct child of the workspace root */
@@ -11,12 +10,6 @@ export interface MaterialIconResolveInput {
 
 function normalizeName(value: string): string {
   return value.toLowerCase()
-}
-
-function normalizeExtension(extension: string | null): string | null {
-  if (!extension) return null
-  const trimmed = extension.startsWith('.') ? extension.slice(1) : extension
-  return trimmed ? normalizeName(trimmed) : null
 }
 
 function resolveFolderIconKey(
@@ -57,17 +50,22 @@ function resolveFolderIconKey(
     : (manifest.folder ?? 'folder')
 }
 
-function resolveFileIconKey(manifest: Manifest, name: string, extension: string | null): string {
+function* dotSuffixesLongestFirst(fileName: string): Generator<string> {
+  for (let dot = fileName.indexOf('.'); dot !== -1; dot = fileName.indexOf('.', dot + 1)) {
+    yield fileName.slice(dot + 1)
+  }
+}
+
+function resolveFileIconKey(manifest: Manifest, name: string): string {
   const fileName = normalizeName(name)
-  const normalizedExtension = normalizeExtension(extension)
 
   const byName = manifest.fileNames?.[fileName]
   if (byName) {
     return byName
   }
 
-  if (normalizedExtension) {
-    const byExtension = manifest.fileExtensions?.[normalizedExtension]
+  for (const suffix of dotSuffixesLongestFirst(fileName)) {
+    const byExtension = manifest.fileExtensions?.[suffix]
     if (byExtension) {
       return byExtension
     }
@@ -85,7 +83,7 @@ export function resolveMaterialIconKey(
     return resolveFolderIconKey(manifest, input.name, input.isExpanded, input.depth === 0)
   }
 
-  return resolveFileIconKey(manifest, input.name, input.extension)
+  return resolveFileIconKey(manifest, input.name)
 }
 
 export function getIconDefinitionFileName(manifest: Manifest, iconKey: string): string | null {

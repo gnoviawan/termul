@@ -109,6 +109,9 @@ export function useBrowserWebview(browserTabId: string, paneVisible: boolean, ur
         }
         if (result.success) {
           createdRef.current = true
+          useBrowserSessionStore
+            .getState()
+            .setAgentControlled(browserTabId, result.data.agentControlled)
           // Resync bounds after creation. The container was measured once at
           // call time (before browserTabCreate above), but the pane layout can
           // still be mid-transition — pane wrappers use `transition-all

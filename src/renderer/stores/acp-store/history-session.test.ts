@@ -274,6 +274,47 @@ describe('acp-store', () => {
     expect(commands).not.toContain('acp_load_session')
   })
 
+  it('a forced reopen does not load the old agent when the new process fails to start', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Ghost', command: 'ghost', args: [], env: {} })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-force',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-1',
+        title: 'Reload chat',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-old': { id: 'agent-old', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-old': 'connected' }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('socket dropped'))
+
+    await expect(
+      useAcpStore.getState().openHistorySession('s-force', { forceNewAgent: true })
+    ).rejects.toThrow('Could not start a new agent for this chat.')
+    expect(useAcpStore.getState().sessions['s-force'].status).toBe('closed')
+    expect(useAcpStore.getState().sessions['s-force'].lastError).toContain(
+      'Could not start a new agent for this chat.'
+    )
+    const commands = (invoke as ReturnType<typeof vi.fn>).mock.calls.map(([cmd]) => cmd)
+    expect(commands).toContain('acp_spawn_agent')
+    expect(commands).not.toContain('acp_resume_session')
+    expect(commands).not.toContain('acp_load_session')
+  })
+
   it('a prompt queued behind an automatic resume survives a rejected open (idle-stopped chat)', async () => {
     await useAcpStore
       .getState()
@@ -695,6 +736,121 @@ describe('acp-store', () => {
     expect(session.modes).toBe(cachedModes)
     expect(session.models).toBe(cachedModels)
     expect(session.configOptions).toEqual([])
+  })
+
+  describe('agent updates after a reopen', () => {
+    const modes = (currentModeId: string) => ({
+      currentModeId,
+      availableModes: [
+        { id: 'default', name: 'Default' },
+        { id: 'acceptEdits', name: 'Accept edits' },
+        { id: 'plan', name: 'Plan' }
+      ]
+    })
+    const thinking = (currentValue: string) => [
+      {
+        id: 'thinking',
+        name: 'Thinking',
+        type: 'select',
+        currentValue,
+        options: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' }
+        ]
+      }
+    ]
+
+    async function reopen(id: string, outcome: Record<string, unknown>): Promise<void> {
+      useAcpStore.setState((s) => ({
+        agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+        agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+      }))
+      const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+      ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        metadata: {
+          id,
+          agentId: 'agent-1',
+          title: 'Reopened',
+          cwd: '/w',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 0,
+          status: 'closed'
+        },
+        messages: []
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_load_session') return outcome
+        if (command === 'acp_set_config_option') return thinking('high')
+        return undefined
+      })
+      await useAcpStore.getState().openHistorySession(id)
+    }
+
+    function agentModeUpdate(sessionId: string, currentModeId: string): void {
+      useAcpStore.getState()._onModeUpdate({
+        agentId: 'agent-1',
+        sessionId,
+        currentModeId,
+        availableModes: modes(currentModeId).availableModes
+      })
+    }
+
+    it('applies an agent change back to the reopen values after the user picked others', async () => {
+      await reopen('s-picked', { modes: modes('default'), configOptions: thinking('low') })
+      await useAcpStore.getState().setMode('s-picked', 'plan')
+      await useAcpStore.getState().setConfigOption('s-picked', 'thinking', 'high')
+
+      agentModeUpdate('s-picked', 'default')
+      useAcpStore.getState()._onConfigOptionsUpdate({
+        agentId: 'agent-1',
+        sessionId: 's-picked',
+        configOptions: thinking('low')
+      })
+
+      const session = useAcpStore.getState().sessions['s-picked']
+      expect(session.modes?.currentModeId).toBe('default')
+      expect(session.configOptions[0]?.currentValue).toBe('low')
+    })
+
+    it('applies an agent change that returns to the reopen mode', async () => {
+      await reopen('s-hops', { modes: modes('acceptEdits') })
+
+      agentModeUpdate('s-hops', 'plan')
+      agentModeUpdate('s-hops', 'acceptEdits')
+
+      expect(useAcpStore.getState().sessions['s-hops'].modes?.currentModeId).toBe('acceptEdits')
+    })
+
+    it('applies an agent change back to a cached session creation mode after the reopen', async () => {
+      useAcpStore.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          's-cached': {
+            id: 's-cached',
+            agentId: 'agent-1',
+            cwd: '/w',
+            projectId: 'p1',
+            status: 'closed',
+            title: 'Cached',
+            activeTurn: false,
+            openTurnId: null,
+            modes: modes('plan'),
+            models: null,
+            configOptions: [],
+            creationOptionDefaults: { modeId: 'default', configValues: {} },
+            lastError: null,
+            createdAt: 1
+          }
+        }
+      }))
+      await reopen('s-cached', {})
+
+      agentModeUpdate('s-cached', 'default')
+
+      expect(useAcpStore.getState().sessions['s-cached'].modes?.currentModeId).toBe('default')
+    })
   })
 
   it('openHistorySession load keeps in-flight live mode/config updates authoritative', async () => {
