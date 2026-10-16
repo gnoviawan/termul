@@ -408,6 +408,14 @@ impl EventSink for WsRelaySink {
                 if matches!(type_, "prompt_complete" | "session_closed") {
                     self.release_session_tickets(sid);
                 }
+                // Issue #784: one question withdrawn while its turn goes on.
+                if type_ == "question_cancelled" {
+                    if let Some(question_id) =
+                        event.payload.get("questionId").and_then(Value::as_str)
+                    {
+                        self.release_question_ticket(question_id);
+                    }
+                }
                 // Session-scoped: assign seq, persist, append and fan out in
                 // one critical section.
                 self.publish(sid, type_, event.payload.clone(), tier);

@@ -15,6 +15,7 @@
 //! desktop binary and the standalone `termul-server` (no `AppHandle`).
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -23,7 +24,7 @@ use tokio::net::TcpListener;
 use uuid::Uuid;
 
 use crate::acp::config::{AgentId, SessionId};
-use crate::acp::events::{self, AskUserQuestionEvent, QuestionOption};
+use crate::acp::events::{self, AskUserQuestionEvent, QuestionCancelledEvent, QuestionOption};
 use crate::acp::host_mcp::{
     emit_plan_update, map_todos_to_plan_entries, FrameKind, FrameReply, FrameRequest, PlanStore,
     TermulAskUserInput,
@@ -310,13 +311,15 @@ impl HostPlanServer {
     }
 
     /// Park an `ask_user` call: show the question panel and wait for the
-    /// answer or a cancel. The agent's tool call stays open for as long as the
-    /// user takes, so there is no timeout here.
+    /// answer, a cancel, or the child hanging up (`hung_up` resolves). The
+    /// agent's tool call stays open for as long as the user takes, so there is
+    /// no timeout here.
     async fn ask_user(
         &self,
         agent_id: &str,
         session_id: &str,
         input: TermulAskUserInput,
+        hung_up: impl Future<Output = ()>,
     ) -> FrameReply {
         if input.question.trim().is_empty() {
             return FrameReply::err("question must not be empty");
@@ -386,6 +389,7 @@ impl HostPlanServer {
             signal(session_id);
         }
         let mut waiting = waiting;
+        tokio::pin!(hung_up);
         let outcome = loop {
             tokio::select! {
                 answered = &mut waiting => {
@@ -394,6 +398,10 @@ impl HostPlanServer {
                         // The sender is gone only when the server itself is dropped.
                         Err(_) => AskOutcome::Cancelled,
                     };
+                }
+                () = &mut hung_up => {
+                    self.withdraw_ask(agent_id, session_id, &question_id);
+                    break AskOutcome::Cancelled;
                 }
                 () = tokio::time::sleep(heartbeat) => {
                     if let Some(signal) = &idle_signal {
@@ -413,6 +421,28 @@ impl HostPlanServer {
                 "cancelled": true,
             })),
         }
+    }
+
+    /// The agent's MCP client gave up on a parked `ask_user` call, so nobody
+    /// reads its answer: drop it and take its question off every client.
+    fn withdraw_ask(&self, agent_id: &str, session_id: &str, question_id: &str) {
+        if self.pending_asks.lock().remove(question_id).is_none() {
+            return;
+        }
+        log::info!(
+            "[host-mcp] ask_user caller hung up in session {}; question withdrawn",
+            crate::logging::redact_session_id(session_id)
+        );
+        events::fan_out(
+            &self.sinks,
+            Some(session_id),
+            events::EVENT_QUESTION_CANCELLED,
+            &QuestionCancelledEvent {
+                agent_id: AgentId(agent_id.to_string()),
+                session_id: SessionId(session_id.to_string()),
+                question_id: question_id.to_string(),
+            },
+        );
     }
 
     /// Route the user's answer to a parked `ask_user` call. Returns `false`
@@ -516,7 +546,15 @@ impl HostPlanServer {
         }
 
         let reply: FrameReply = match serde_json::from_str::<FrameRequest>(&line) {
-            Ok(req) => self.process_request(req).await,
+            Ok(req) => {
+                // The child sends one frame per connection, so the next read
+                // returns only when it hangs up.
+                let hung_up = async move {
+                    let mut read_half = reader.into_inner().into_inner();
+                    let _ = read_half.read_u8().await;
+                };
+                self.process_request(req, hung_up).await
+            }
             Err(e) => {
                 log::warn!("[host-mcp] malformed frame: {e}");
                 FrameReply::err("malformed request")
@@ -537,7 +575,12 @@ impl HostPlanServer {
     }
 
     /// Authenticate + dispatch a validated frame. Returns the reply (ok/err).
-    async fn process_request(&self, req: FrameRequest) -> FrameReply {
+    /// `hung_up` resolves when the child closes the connection.
+    async fn process_request(
+        &self,
+        req: FrameRequest,
+        hung_up: impl Future<Output = ()>,
+    ) -> FrameReply {
         // Look up the token. Unknown token = reject (don't disclose which
         // sessions exist — constant-time isn't necessary for localhost-only,
         // but we never echo the token back).
@@ -671,7 +714,8 @@ impl HostPlanServer {
                 let Some(input) = req.ask else {
                     return FrameReply::err("ask_user frame needs a question");
                 };
-                self.ask_user(&auth.agent_id, &real_session_id, input).await
+                self.ask_user(&auth.agent_id, &real_session_id, input, hung_up)
+                    .await
             }
             FrameKind::Plan => {
                 if req.title.is_some() {

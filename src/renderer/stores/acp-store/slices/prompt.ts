@@ -669,6 +669,7 @@ type PromptSliceState = Pick<
   | 'respondElicitation'
   | '_onPermissionRequest'
   | '_onQuestionRequest'
+  | '_onQuestionCancelled'
   | '_onElicitationRequest'
   | '_onPromptComplete'
 >
@@ -1140,6 +1141,15 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
           }
         }
       }
+    })
+  },
+
+  _onQuestionCancelled: (e) => {
+    set((s) => {
+      if (!s.pendingQuestions[e.questionId]) return {}
+      const pendingQuestions = { ...s.pendingQuestions }
+      delete pendingQuestions[e.questionId]
+      return { pendingQuestions }
     })
   },
 

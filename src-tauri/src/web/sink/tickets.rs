@@ -27,6 +27,15 @@ impl WsRelaySink {
         }
     }
 
+    /// Release one question its agent withdrew while the turn goes on (an
+    /// `ask_user` call whose caller hung up). A later answer reads
+    /// `already_resolved`.
+    pub fn release_question_ticket(&self, question_id: &str) {
+        if let Some(rendezvous) = self.question_rendezvous() {
+            rendezvous.settle(question_id);
+        }
+    }
+
     /// Release every pending permission and question of `agent_id`.
     pub fn release_agent_tickets(&self, agent_id: &AgentId) {
         let permissions = self

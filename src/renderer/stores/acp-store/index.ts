@@ -57,6 +57,7 @@ import {
   type PermissionRequestEvent,
   type PlanUpdateEvent,
   type PromptCompleteEvent,
+  type QuestionCancelledEvent,
   type SessionClosedEvent,
   type SessionCreatedEvent,
   type SessionId,
@@ -591,6 +592,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<AskUserQuestionEvent>(ACP_EVENTS.questionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onQuestionRequest(e, eventSeq)
+    ),
+    acpApi.onEvent<QuestionCancelledEvent>(ACP_EVENTS.questionCancelled, (e) =>
+      useAcpStore.getState()._onQuestionCancelled(e)
     ),
     acpApi.onEvent<ElicitationRequestEvent>(ACP_EVENTS.elicitationRequest, (e, eventSeq) =>
       useAcpStore.getState()._onElicitationRequest(e, eventSeq)

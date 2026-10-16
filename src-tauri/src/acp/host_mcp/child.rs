@@ -203,7 +203,11 @@ impl TermulPlanServer {
         name = "ask_user",
         description = "Ask the user a question and wait for the answer. Use this INSTEAD of asking in plain text whenever you need a decision, a preference or missing details: the question appears as a panel in Termul and this call returns the answer. Pass `options` (label and optional description) for choices, `multi_select` to allow several picks, and `allow_free_text` (default true) to let the user type their own answer. The result is JSON: {\"answers\": [...], \"free_text\": string or null, \"cancelled\": boolean}. When cancelled is true the user dismissed the question; do not ask again unless you need the answer to continue."
     )]
-    async fn ask_user(&self, Parameters(input): Parameters<TermulAskUserInput>) -> String {
+    async fn ask_user(
+        &self,
+        Parameters(input): Parameters<TermulAskUserInput>,
+        cancelled: tokio_util::sync::CancellationToken,
+    ) -> String {
         let request = FrameRequest {
             token: self.config.token.clone(),
             session_id: self.config.session_id.clone(),
@@ -218,7 +222,14 @@ impl TermulPlanServer {
         };
         // No client-side timeout: the user decides when to answer, and the
         // parent always resolves the call (answer, cancel, or session end).
-        match exchange_frame(&self.config, request).await {
+        // rmcp only signals a client cancel (a tool timeout, an abort) and
+        // keeps polling this future, so hang up on the parent ourselves: that
+        // is how it learns to take the question down.
+        let reply = tokio::select! {
+            reply = exchange_frame(&self.config, request) => reply,
+            () = cancelled.cancelled() => return "ask_user cancelled by the client".to_string(),
+        };
+        match reply {
             Ok(reply) if reply.ok => reply
                 .result
                 .map(|v| v.to_string())

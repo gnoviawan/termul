@@ -149,6 +149,10 @@ pub const EVENT_PERMISSION_REQUEST: &str = "acp:permission_request";
 /// answer flows back via the `answer_question` request, mirroring the
 /// permission machinery exactly-once.
 pub const EVENT_QUESTION_REQUEST: &str = "acp:question_request";
+/// Event name: a pending question can no longer be answered while its turn
+/// goes on (issue #784: the agent hung up its `ask_user` call). The relay
+/// releases its ticket and the renderer drops its panel.
+pub const EVENT_QUESTION_CANCELLED: &str = "acp:question_cancelled";
 /// Event name: the agent requested structured user input (elicitation).
 pub const EVENT_ELICITATION_REQUEST: &str = "acp:elicitation_request";
 /// Event name: a prompt turn finished with a stop reason.
@@ -379,6 +383,15 @@ pub struct AskUserQuestionEvent {
     /// Pick more than one option (issue #784). Absent means single choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_select: Option<bool>,
+}
+
+/// `acp:question_cancelled` (issue #784)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionCancelledEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub question_id: String,
 }
 
 /// `acp:elicitation_request`

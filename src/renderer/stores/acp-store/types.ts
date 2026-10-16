@@ -36,6 +36,7 @@ import type {
   PlanUpdateEvent,
   ProbeStatus,
   PromptCompleteEvent,
+  QuestionCancelledEvent,
   QuestionOption,
   SessionClosedEvent,
   SessionConfigOption,
@@ -923,6 +924,7 @@ export interface AcpState {
   _onUsageUpdate: (e: UsageUpdateEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent, eventSeq?: number) => void
   _onQuestionRequest: (e: AskUserQuestionEvent, eventSeq?: number) => void
+  _onQuestionCancelled: (e: QuestionCancelledEvent) => void
   _onElicitationRequest: (e: ElicitationRequestEvent, eventSeq?: number) => void
   _onPromptComplete: (e: PromptCompleteEvent, eventSeq?: number) => void
   _onAgentError: (e: AgentErrorEvent) => void

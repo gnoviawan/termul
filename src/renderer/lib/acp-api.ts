@@ -528,6 +528,17 @@ export interface AskUserQuestionEvent {
 }
 
 /**
+ * `acp:question_cancelled` payload (issue #784) — a pending question that can
+ * no longer be answered while its turn goes on (the agent hung up its
+ * `ask_user` call).
+ */
+export interface QuestionCancelledEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  questionId: string
+}
+
+/**
  * One selectable option of an elicitation form field (GH-935). `value`
  * round-trips verbatim in the answer `content`; `label`/`description` are
  * display-only (mirrors the Rust `ElicitationOption` wire shape).
@@ -724,6 +735,7 @@ export const ACP_EVENTS = {
   configOptionsUpdate: 'acp:config_options_update',
   permissionRequest: 'acp:permission_request',
   questionRequest: 'acp:question_request',
+  questionCancelled: 'acp:question_cancelled',
   elicitationRequest: 'acp:elicitation_request',
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
