@@ -24,6 +24,7 @@ import { projectForCwd, resolveAgentSpawnEnv } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useProjectStore } from '@/stores/project-store'
+import type { Project } from '@/types/project'
 import {
   agentReuseKey,
   configIdFromReuseKey,
@@ -275,12 +276,12 @@ const inFlightWarmOutcomes = new Map<string, Promise<AgentId | null>>()
 const definiteSpawnRejections = new Map<string, string>()
 
 /**
- * The launch signature each live agent in `configToLiveAgent` was spawned
- * with, by reuse key. A warm agent whose signature no longer matches the
- * current launch (an edited project env, for example) is replaced instead of
- * reused, so the chat runs with the env the project has now. In-memory only.
+ * The launch signature each agent this renderer spawned was started with, by
+ * agent id. A warm agent whose signature no longer matches the current launch
+ * (an edited project env, for example) is not reused, so the next chat runs
+ * with the env the project has now. In-memory only.
  */
-const liveAgentSignatures = new Map<string, string>()
+const liveAgentSignatures = new Map<AgentId, string>()
 
 /**
  * The effective launch of a config in a working directory: the agent config
@@ -616,7 +617,7 @@ export async function adoptHostOwnedAgent(
     source: 'acp-store.adoptHostOwnedAgent',
     message: `Reusing host agent ${match.id} that owns session ${sessionId} instead of spawning a duplicate`
   })
-  const projectId = (options?.projectId?.trim() || projectIdForCwd(trimmedCwd) || '').trim()
+  const projectId = resolveSpawnProject(trimmedCwd, options?.projectId)?.id ?? ''
   const reuseKey = agentReuseKey(configId, trimmedCwd, projectId || undefined)
   set((s) => ({
     agents: {
@@ -663,23 +664,19 @@ export type EnsureLiveAgentOptions = {
 }
 
 /**
- * The Project whose folder is `cwd` or holds it (longest match), so a spawn
- * with no explicit Project still uses that Project's Claude Account.
+ * The Project a spawn in `cwd` belongs to: `projectId` when given, else the
+ * Project whose worktree or root is `cwd`, else the one whose root holds it
+ * (longest match). The reuse key, the Claude Account and the project env of a
+ * spawn all come from this one resolution.
  */
-export function projectIdForCwd(cwd: string): string | null {
-  const normalize = (path: string): string => path.replace(/[\\/]+$/, '')
-  const target = normalize(cwd)
-  let best: { id: string; length: number } | null = null
-  for (const project of useProjectStore.getState().projects) {
-    if (!project.path) continue
-    const root = normalize(project.path)
-    const inside =
-      target === root || target.startsWith(`${root}/`) || target.startsWith(`${root}\\`)
-    if (inside && (!best || root.length > best.length)) {
-      best = { id: project.id, length: root.length }
-    }
-  }
-  return best?.id ?? null
+export function resolveSpawnProject(
+  cwd: string,
+  projectId?: string | null
+): Pick<Project, 'id' | 'envVars'> | null {
+  const { projects } = useProjectStore.getState()
+  const explicit = projectId?.trim()
+  if (explicit) return projects.find((p) => p.id === explicit) ?? { id: explicit }
+  return projectForCwd(projects, cwd) ?? null
 }
 
 type AgentConfigLaunchFields = Pick<
@@ -705,20 +702,32 @@ export function ensureLiveAgent(
   const config = get().agentConfigs.find((c) => c.id === configId)
   if (!config) return Promise.resolve(null)
 
-  const projectId = (options.projectId?.trim() || projectIdForCwd(trimmedCwd) || '').trim()
+  const project = resolveSpawnProject(trimmedCwd, options.projectId)
+  const projectId = project?.id ?? ''
   const reuseKey = agentReuseKey(configId, trimmedCwd, projectId || undefined)
+  // The project contributes its env underneath the agent config, exactly as a
+  // terminal tab in that project gets it (`spawnTerminalInPane`) and as a
+  // terminal-native agent does (`launchAgentInPane`).
+  const env = resolveAgentSpawnEnv(project?.envVars, config.env)
+  const signature = spawnSignature(config, env)
   const currentAgentId = get().configToLiveAgent[reuseKey]
+  const currentSignature = currentAgentId ? liveAgentSignatures.get(currentAgentId) : undefined
+  const staleLaunch = currentSignature !== undefined && currentSignature !== signature
   if (
     currentAgentId &&
-    Object.values(get().sessions).some(
-      (session) =>
-        session.agentId === currentAgentId &&
-        session.status !== 'closed' &&
-        !ephemeralSessionIds.has(session.id)
-    )
+    (staleLaunch ||
+      Object.values(get().sessions).some(
+        (session) =>
+          session.agentId === currentAgentId &&
+          session.status !== 'closed' &&
+          !ephemeralSessionIds.has(session.id)
+      ))
   ) {
-    // One Agent process per Agent chat. Keep this process for its live chat
-    // and reserve the canonical key for the next chat.
+    // One Agent process per Agent chat, and none started with an outdated
+    // launch. Keep this process for whatever it still serves (a chat, or an
+    // ephemeral session such as a commit message whose session/new may not be
+    // in `sessions` yet; the host's idle reaper stops it once quiet) and
+    // reserve the canonical key for the next chat.
     set((s) => {
       if (s.configToLiveAgent[reuseKey] !== currentAgentId) return {}
       const configToLiveAgent = { ...s.configToLiveAgent }
@@ -729,27 +738,15 @@ export function ensureLiveAgent(
     void logFrontendError({
       level: 'info',
       source: 'acp-store.ensureLiveAgent',
-      message: `Detached agent ${currentAgentId} so the next Agent chat gets its own process`
+      message: staleLaunch
+        ? `Detached agent ${currentAgentId}: its launch env no longer matches the project`
+        : `Detached agent ${currentAgentId} so the next Agent chat gets its own process`
     })
   }
-  // The project owning `cwd` contributes its env underneath the agent config,
-  // exactly as a terminal tab in that project gets it (`spawnTerminalInPane`)
-  // and as a terminal-native agent does (`launchAgentInPane`).
-  const project = projectForCwd(useProjectStore.getState().projects, trimmedCwd)
-  const env = resolveAgentSpawnEnv(project?.envVars, config.env)
-  const signature = spawnSignature(config, env)
 
   const existing = get().configToLiveAgent[reuseKey]
   if (existing && isReusableStatus(get().agentStatus[existing])) {
-    const liveSignature = liveAgentSignatures.get(reuseKey)
-    if (liveSignature === undefined || liveSignature === signature) {
-      return Promise.resolve(existing)
-    }
-    // Spawned under an older launch (the project env changed since): replace
-    // it so the chat does not run with a stale environment.
-    return replaceStaleAgent(get, set, reuseKey, existing).then(() =>
-      ensureLiveAgent(get, set, configId, cwd, options)
-    )
+    return Promise.resolve(existing)
   }
 
   const inFlight = inFlightWarms.get(reuseKey)
@@ -803,7 +800,7 @@ export function ensureLiveAgent(
       )
       definiteSpawnRejections.delete(reuseKey)
       if (get().agentConfigs.some((c) => c.id === configId)) {
-        liveAgentSignatures.set(reuseKey, signature)
+        liveAgentSignatures.set(agentId, signature)
         set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: agentId } }))
         return agentId
       }
@@ -855,36 +852,6 @@ function otherProjectHoldsAgent(
       parsed.projectId !== projectId
     )
   })
-}
-
-/**
- * Drop a warm, session-less agent whose launch no longer matches the current
- * one (stale project env) so the next `ensureLiveAgent` spawns a fresh process.
- * Best effort: a failed kill still clears the reuse slot.
- */
-async function replaceStaleAgent(
-  get: () => AcpState,
-  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void,
-  reuseKey: string,
-  agentId: AgentId
-): Promise<void> {
-  liveAgentSignatures.delete(reuseKey)
-  set((s) => {
-    if (s.configToLiveAgent[reuseKey] !== agentId) return {}
-    const configToLiveAgent = { ...s.configToLiveAgent }
-    delete configToLiveAgent[reuseKey]
-    return { configToLiveAgent }
-  })
-  void logFrontendError({
-    level: 'info',
-    source: 'acp-store.ensureLiveAgent',
-    message: `Replacing agent ${agentId}: its launch env no longer matches the project`
-  })
-  try {
-    await get().killAgent(agentId)
-  } catch {
-    /* best-effort cleanup */
-  }
 }
 
 /**
