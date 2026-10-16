@@ -181,6 +181,8 @@ fn metadata_maps_agent_config_prefix_and_fallbacks() {
             "messageCount": 0,
             "lastSeq": 0,
             "status": "active",
+            // Issue #1192: an empty log has no open turn, said explicitly.
+            "turnActive": false,
             "worktreePath": "/work/project/.termul/worktrees/chat/abc123",
             "worktreeBranch": "chat/abc123",
         })
@@ -627,7 +629,7 @@ fn superseded_unmatched_prompt_does_not_hold_turn_active() {
     ];
     assert_eq!(open_turn_from_records(&records), None);
     let payload = materialize_session_payload(&metadata(), &records);
-    assert!(!payload.metadata.turn_active);
+    assert_eq!(payload.metadata.turn_active, Some(false));
 }
 
 #[test]
@@ -640,7 +642,7 @@ fn latest_unmatched_prompt_is_the_open_turn() {
     ];
     assert_eq!(open_turn_from_records(&records).as_deref(), Some("turn-2"));
     let payload = materialize_session_payload(&metadata(), &records);
-    assert!(payload.metadata.turn_active);
+    assert_eq!(payload.metadata.turn_active, Some(true));
 }
 
 #[test]
@@ -692,7 +694,7 @@ fn host_terminators_close_the_open_turn_on_reopen() {
         ];
         assert_eq!(open_turn_from_records(&records), None, "{stop_reason}");
         let payload = materialize_session_payload(&metadata(), &records);
-        assert!(!payload.metadata.turn_active, "{stop_reason}");
+        assert_eq!(payload.metadata.turn_active, Some(false), "{stop_reason}");
         // Without the terminator the same log IS open (the pre-fix state).
         assert_eq!(
             open_turn_from_records(&records[..2]).as_deref(),
@@ -729,7 +731,7 @@ fn agent_switch_closes_abandoned_open_turn() {
     ];
     assert_eq!(open_turn_from_records(&records), None);
     let payload = materialize_session_payload(&metadata(), &records);
-    assert!(!payload.metadata.turn_active);
+    assert_eq!(payload.metadata.turn_active, Some(false));
 }
 
 #[test]
@@ -745,7 +747,7 @@ fn closed_status_never_reports_turn_active() {
     let mut meta = metadata();
     meta.status = PersistedSessionStatus::Closed;
     let payload = materialize_session_payload(&meta, &records);
-    assert!(!payload.metadata.turn_active);
+    assert_eq!(payload.metadata.turn_active, Some(false));
 }
 
 fn tool_record(seq: u64, type_: &str, tool: Value) -> PersistedEventRecord {
@@ -865,4 +867,66 @@ fn tool_call_summaries_skip_malformed_fields_and_always_serialize() {
     // both transports).
     let empty = serde_json::to_value(materialize_session_payload(&metadata(), &[])).unwrap();
     assert_eq!(empty["toolCalls"], json!([]));
+}
+
+// --- issue #1192: the payload says explicitly when no turn is running --------
+
+/// The wire value of `metadata.turnActive` for `records`, or `None` when the
+/// key is absent from the serialized payload.
+fn wire_turn_active(records: &[PersistedEventRecord]) -> Option<Value> {
+    let payload = materialize_session_payload(&metadata(), records);
+    let value = serde_json::to_value(&payload.metadata).expect("metadata serializes");
+    value.get("turnActive").cloned()
+}
+
+#[test]
+fn a_failed_turn_serializes_turn_active_false_not_an_absent_key() {
+    // The agent answered `session/prompt` with an error: the host wrote an
+    // `error` terminator and nothing else. The transcript ends on the user
+    // bubble, so a client that only sees an absent key reads it as a turn
+    // still running and shows "Working…" after a reload.
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "this will fail"),
+        record(
+            2,
+            "prompt_complete",
+            json!({"sessionId": "session-1", "turnId": "turn-1", "stopReason": "error"}),
+        ),
+    ];
+    assert_eq!(wire_turn_active(&records), Some(json!(false)));
+}
+
+#[test]
+fn a_completed_turn_and_an_empty_log_serialize_turn_active_false() {
+    let completed = vec![
+        user_prompt(1, Some("turn-1"), "hi"),
+        chunk(2, "agent", "hello"),
+        prompt_complete(3, "turn-1"),
+    ];
+    assert_eq!(wire_turn_active(&completed), Some(json!(false)));
+    assert_eq!(wire_turn_active(&[]), Some(json!(false)));
+}
+
+#[test]
+fn a_named_open_turn_serializes_turn_active_true() {
+    let records = vec![user_prompt(1, Some("turn-1"), "still going")];
+    assert_eq!(wire_turn_active(&records), Some(json!(true)));
+}
+
+#[test]
+fn an_open_prompt_without_a_turn_id_leaves_turn_active_absent() {
+    // Open but unnameable (pre-1.8 record): the client derives it from the
+    // transcript tail, so the host must not claim either answer.
+    let records = vec![user_prompt(1, None, "legacy tail")];
+    assert_eq!(wire_turn_active(&records), None);
+}
+
+#[test]
+fn a_non_active_session_serializes_turn_active_false() {
+    let mut closed = metadata();
+    closed.status = PersistedSessionStatus::Closed;
+    let records = vec![user_prompt(1, Some("turn-1"), "left open at close")];
+    let payload = materialize_session_payload(&closed, &records);
+    let value = serde_json::to_value(&payload.metadata).expect("metadata serializes");
+    assert_eq!(value.get("turnActive"), Some(&json!(false)));
 }

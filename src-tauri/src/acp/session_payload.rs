@@ -66,12 +66,19 @@ pub struct SessionPayloadMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_epoch: Option<String>,
     pub status: PersistedSessionStatus,
-    /// Issue #838: true while a prompt turn is in progress — the LAST
+    /// Issue #838: whether a prompt turn is in progress — the LAST
     /// `user_prompt` still unmatched by `prompt_complete` (later prompts
     /// supersede earlier ones) and the session status is `active`.
-    /// Serialized additively (absent when false) so older clients ignore it.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub turn_active: bool,
+    ///
+    /// Three states (issue #1192): `true` is a named open turn, `false` says
+    /// the turn ended (a completion or host terminator closed it, or the
+    /// session is not `active`), and absent means "open but unnameable" — a
+    /// prompt with no turn id — so the client derives it from the transcript
+    /// tail. Without an explicit `false`, a client cannot tell a finished turn
+    /// from no data, and reads a trailing user bubble as a turn still running.
+    /// Additive: older clients ignore the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_active: Option<bool>,
     /// Worktree the chat runs in (CAP-4/6). Carried through the materialized
     /// payload so history reopen + post-reload resume preserve the worktree
     /// binding the agent reattaches to.
@@ -224,8 +231,7 @@ pub fn materialize_session_payload(
         // `Closed`/`Error` session cannot have a live turn (user-close
         // persists no terminal record, so the prompt stays unmatched but
         // the turn is dead — reporting it active would be self-inconsistent).
-        turn_active: metadata.status == PersistedSessionStatus::Active
-            && open_turn_from_records(records).is_some(),
+        turn_active: payload_turn_active(&metadata.status, records),
         worktree_path: metadata.worktree_path.clone(),
         worktree_branch: metadata.worktree_branch.clone(),
         model_id: metadata.model_id.clone(),
@@ -376,6 +382,24 @@ fn open_turn_from_records(records: &[PersistedEventRecord]) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|turn_id| !turn_id.is_empty())
         .map(str::to_string)
+}
+
+/// The payload's `turn_active` (issue #838, #1192). `Some(false)` is explicit:
+/// the turn ended, so a client must not read the transcript tail as an open
+/// turn. `None` keeps the legacy hand-off for an open prompt without a turn id.
+fn payload_turn_active(
+    status: &PersistedSessionStatus,
+    records: &[PersistedEventRecord],
+) -> Option<bool> {
+    if *status != PersistedSessionStatus::Active {
+        return Some(false);
+    }
+    match last_unmatched_user_prompt(records) {
+        None => Some(false),
+        Some(_) if open_turn_from_records(records).is_some() => Some(true),
+        // Open but unnameable: the client derives it from the transcript tail.
+        Some(_) => None,
+    }
 }
 
 /// Outcome of stripping a handoff preamble from a `user_prompt` text block

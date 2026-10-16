@@ -1749,9 +1749,9 @@ export function selectConfigWarmState(state: AcpState, configId: string): Config
 /**
  * Issue #838: derive the open turn (a `user_prompt` with no matching
  * `prompt_complete`) from an installed transcript. The server's session
- * metadata may carry `turnActive` (authoritative, set when the host knows a
- * turn is running); the transcript derivation covers older hosts and any
- * window where metadata lagged. Returns the open turn id (`turn:<turnId>`)
+ * metadata may carry `turnActive` (authoritative: `true` when a turn runs,
+ * `false` when it ended); the transcript derivation covers older hosts and a
+ * prompt without a turn id, where the host leaves it absent. Returns the open turn id (`turn:<turnId>`)
  * or null. A turn id missing from the bubble (older records) yields
  * `turn:<lastUserSeq>` so the stop button + spinner have a stable handle.
  */
@@ -1764,6 +1764,12 @@ export function deriveOpenTurn(
   // assistant reply after it — a streaming turn may have zero agent output
   // yet, so absence of a reply is not proof of completion, but its presence
   // IS proof the turn finished).
+  // An explicit `false` is the host saying the turn ended (a completion or a
+  // host terminator closed it, or the session is not active). A transcript can
+  // still end on the user's bubble then — a failed turn has no agent reply — so
+  // it must not be read as a turn still running (issue #1192). `undefined` is an
+  // older host, or an open prompt without a turn id: derive it from the tail.
+  if (metadataTurnActive === false) return null
   if (metadataTurnActive) {
     // Metadata says a turn runs; recover the id from the last user bubble.
     for (let i = messages.length - 1; i >= 0; i--) {
