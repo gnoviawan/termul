@@ -1,7 +1,9 @@
+import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { type TrimmedSnapshotList, trimSnapshotList } from '@/lib/persistence-trim'
 import type { Snapshot } from '@/types/project'
 import type {
   PersistedSnapshot,
@@ -103,6 +105,43 @@ function logSnapshotBoundary(
   })
 }
 
+/**
+ * Tells the user (and the log) that a snapshot list had to be cut to fit the
+ * host's value cap: the output of older snapshots goes first, whole snapshots
+ * only when nothing else helps.
+ */
+function reportSnapshotTrim(projectId: string, trimmed: TrimmedSnapshotList): void {
+  const dropped = trimmed.droppedIds.length
+  void logFrontendError({
+    level: 'warn',
+    source: 'snapshot-store.trimSnapshots',
+    message: `snapshot list over the store value cap project=${projectId} shrunk=${trimmed.shrunk} dropped=${dropped}`
+  })
+  toast.warning(
+    dropped > 0
+      ? `Snapshot storage is full: ${dropped} oldest snapshot(s) were removed to save this change.`
+      : `Snapshot storage is full: ${trimmed.shrunk} snapshot(s) lost older terminal output to save this change.`
+  )
+}
+
+/**
+ * Writes a project's snapshot list within the host's value cap. Returns the ids
+ * of snapshots that had to be removed, so the caller can drop them from memory.
+ */
+async function writeSnapshotList(
+  projectId: string,
+  list: PersistedSnapshotList,
+  failureMessage: string
+): Promise<string[]> {
+  const trimmed = trimSnapshotList(list)
+  const writeResult = await persistenceApi.write(PersistenceKeys.snapshots(projectId), trimmed.list)
+  if (!writeResult.success) {
+    throw new Error(`${failureMessage}: ${writeResult.error}`)
+  }
+  if (trimmed.shrunk > 0 || trimmed.droppedIds.length > 0) reportSnapshotTrim(projectId, trimmed)
+  return trimmed.droppedIds
+}
+
 export const useSnapshotStore = create<SnapshotState>((set, get) => ({
   snapshots: [],
   isLoading: false,
@@ -131,8 +170,9 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
 
     // Persist to storage — serialized per project (CodeRabbit: overlapping
     // list mutations must not interleave) with a durable boundary log.
+    let droppedIds: string[] = []
     try {
-      await enqueueSnapshotMutation(projectId, async () => {
+      droppedIds = await enqueueSnapshotMutation(projectId, async () => {
         const key = PersistenceKeys.snapshots(projectId)
         const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
@@ -164,11 +204,15 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
           updatedAt: new Date().toISOString()
         }
 
-        const writeResult = await persistenceApi.write(key, updatedList)
-        if (!writeResult.success) {
-          throw new Error(`Failed to persist snapshot: ${writeResult.error}`)
-        }
+        // Over the host's value cap, older output (then older snapshots) goes
+        // first; the snapshot just created is never removed.
+        const removed = await writeSnapshotList(
+          projectId,
+          updatedList,
+          'Failed to persist snapshot'
+        )
         logSnapshotBoundary('create', projectId, 'ok')
+        return removed
       })
     } catch (error) {
       // Rollback optimistic update on failure (incl. a rejected read).
@@ -182,6 +226,9 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
         error instanceof Error ? error.message : String(error)
       )
       throw error
+    }
+    if (droppedIds.length > 0) {
+      set((state) => ({ snapshots: state.snapshots.filter((s) => !droppedIds.includes(s.id)) }))
     }
 
     return newSnapshot
@@ -217,8 +264,9 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
       snapshots: state.snapshots.map((s) => (s.id === id ? { ...s, name } : s))
     }))
 
+    let droppedIds: string[] = []
     try {
-      await enqueueSnapshotMutation(projectId, async () => {
+      droppedIds = await enqueueSnapshotMutation(projectId, async () => {
         const key = PersistenceKeys.snapshots(projectId)
         const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
@@ -238,11 +286,13 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
           snapshots: existingResult.data.snapshots.map((s) => (s.id === id ? { ...s, name } : s)),
           updatedAt: new Date().toISOString()
         }
-        const writeResult = await persistenceApi.write(key, updatedList)
-        if (!writeResult.success) {
-          throw new Error(`Failed to persist snapshot rename: ${writeResult.error}`)
-        }
+        const removed = await writeSnapshotList(
+          projectId,
+          updatedList,
+          'Failed to persist snapshot rename'
+        )
         logSnapshotBoundary('rename', projectId, 'ok')
+        return removed
       })
     } catch (error) {
       // Rollback optimistic update on any failure
@@ -258,6 +308,9 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
         error instanceof Error ? error.message : String(error)
       )
       throw error
+    }
+    if (droppedIds.length > 0) {
+      set((state) => ({ snapshots: state.snapshots.filter((s) => !droppedIds.includes(s.id)) }))
     }
   },
   deleteSnapshot: async (id: string): Promise<void> => {
@@ -302,10 +355,7 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
             snapshots: existingResult.data.snapshots.filter((s) => s.id !== id),
             updatedAt: new Date().toISOString()
           }
-          const writeResult = await persistenceApi.write(key, updatedList)
-          if (!writeResult.success) {
-            throw new Error(`Failed to persist snapshot delete: ${writeResult.error}`)
-          }
+          await writeSnapshotList(projectId, updatedList, 'Failed to persist snapshot delete')
         }
         logSnapshotBoundary('delete', projectId, 'ok')
       })

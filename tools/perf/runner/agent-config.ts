@@ -21,6 +21,7 @@
  */
 
 import path from 'node:path'
+import { WS_PROTOCOL_VERSION } from '../../../src/shared/types/web-protocol.types.ts'
 import type { AppHandle } from './launch.ts'
 
 export interface StoredAgentConfig {
@@ -199,17 +200,87 @@ export async function seedPerfProject(handle: AppHandle, projectPath: string): P
   )
 }
 
+/** Outcome of the host-side install, in the same `{ success, ... }` envelope the facades use. */
+type CatalogInstallOutcome =
+  | { success: true; data: { command: string; args: string[] } }
+  | { success: false; error: string; code?: string }
+
+/**
+ * Install a catalog agent through the host's `/ws` contract, the way the app
+ * does: open one relay connection over the Tauri IPC channel carrier
+ * (`ws_channel_open` / `ws_channel_send` / `ws_channel_close`), run the
+ * `authenticate` handshake (no token: the process boundary is the auth), send
+ * `install_acp_agent { agentId }`, and close. The host resolves the agent from
+ * its trusted catalog, downloads the archive and verifies its sha256.
+ */
+async function installCatalogAgentOverChannel(
+  handle: AppHandle,
+  agentId: string
+): Promise<CatalogInstallOutcome> {
+  const script = `
+    (async () => {
+      const internals = window.__TAURI_INTERNALS__
+      if (!internals) throw new Error('withGlobalTauri off: no __TAURI_INTERNALS__')
+      const waiters = new Map()
+      const callback = internals.transformCallback((raw) => {
+        if (!raw || 'end' in raw) return
+        const text = typeof raw.message === 'string' ? raw.message : JSON.stringify(raw.message)
+        let frame
+        try { frame = JSON.parse(text) } catch { return }
+        const waiter = typeof frame.id === 'string' ? waiters.get(frame.id) : undefined
+        if (waiter) { waiters.delete(frame.id); waiter(frame) }
+      })
+      const connectionId = await internals.invoke('ws_channel_open', {
+        onFrame: '__CHANNEL__:' + callback
+      })
+      const request = (id, type, payload) =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            waiters.delete(id)
+            reject(new Error(type + ' timed out'))
+          }, 300000)
+          waiters.set(id, (frame) => { clearTimeout(timer); resolve(frame) })
+          internals
+            .invoke('ws_channel_send', { connectionId, frame: JSON.stringify({ id, type, payload }) })
+            .catch((err) => { clearTimeout(timer); waiters.delete(id); reject(err) })
+        })
+      const refusal = (frame) => ({
+        success: false,
+        error: frame.err ? frame.err.message : 'request refused',
+        code: frame.err ? frame.err.code : undefined
+      })
+      try {
+        const auth = await request('perf-auth', 'authenticate', {
+          protocolVersion: ${JSON.stringify(WS_PROTOCOL_VERSION)},
+          deviceId: 'perf-runner',
+          clientInstanceId: 'perf-runner'
+        })
+        if (!auth.ok) return refusal(auth)
+        const install = await request('perf-install', 'install_acp_agent', {
+          agentId: ${JSON.stringify(agentId)}
+        })
+        return install.ok ? { success: true, data: install.payload } : refusal(install)
+      } finally {
+        await internals.invoke('ws_channel_close', { connectionId }).catch(() => {})
+        if (internals.unregisterCallback) internals.unregisterCallback(callback)
+      }
+    })()
+  `
+  return handle.evaluate<CatalogInstallOutcome>(script)
+}
+
 /**
  * Install + register a catalog agent for real-agent runs. Mirrors the
  * launcher's "install → persist installedBinaryConfig → select" flow:
- * `acp_install_agent` resolves + downloads the catalog binary under THIS
- * identifier's app-data dir (host-owned, sha256-verified), returns
- * `{command, args}`; we persist the StoredAgentConfig under
- * `acp-registry:<id>` (the exact key `buildSupportedAcpAgents` treats as
- * `ready`), then seed `agents/last-selected` so the launcher picks it.
+ * `install_acp_agent` (over the `/ws` channel carrier) resolves + downloads
+ * the catalog binary under THIS identifier's app-data dir (host-owned,
+ * sha256-verified), returns `{command, args}`; we persist the
+ * StoredAgentConfig under `acp-registry:<id>` (the exact key
+ * `buildSupportedAcpAgents` treats as `ready`), then seed
+ * `agents/last-selected` so the launcher picks it.
  *
  * No-op-cost when the binary already installs to the dev-identifier dir —
- * the command is idempotent-ish but we still call it every run because the
+ * the request is idempotent-ish but we still send it every run because the
  * dev app-data dir is wiped at teardown (isolation), so the binary must be
  * reinstalled into the fresh profile.
  */
@@ -218,13 +289,10 @@ export async function installAndSelectCatalogAgent(
   agentId: string
 ): Promise<{ configId: string; command: string }> {
   const configId = `acp-registry:${agentId}`
-  const outcome = await handle.tauriInvoke<
-    | { success: true; data: { command: string; args: string[] } }
-    | { success: false; error: string; code?: string }
-  >('acp_install_agent', { request: { agentId } })
+  const outcome = await installCatalogAgentOverChannel(handle, agentId)
   if (!outcome.success) {
     throw new Error(
-      `acp_install_agent(${agentId}) failed: ${outcome.error} (${outcome.code ?? 'no-code'})`
+      `install_acp_agent(${agentId}) failed: ${outcome.error} (${outcome.code ?? 'no-code'})`
     )
   }
   const { command, args } = outcome.data

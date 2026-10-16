@@ -7,7 +7,6 @@ import { useFileWatcher } from '@/hooks/use-file-watcher'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useProjectSwitch } from '@/hooks/use-project-switch'
 import { useShellUnreadTracker } from '@/hooks/use-shell-unread-tracker'
-import { useWorkspaceManifestSync } from '@/hooks/use-workspace-manifest-sync'
 import { useWorktreeShortcuts } from '@/hooks/use-worktree-shortcuts'
 import { useWorkspaceOverlayBackStack } from '@/layouts/use-workspace-overlay-back-stack'
 import { MobileWorkspaceShell } from '@/layouts/workspace-layout/MobileWorkspaceShell'
@@ -16,7 +15,6 @@ import { useBulkTabClose } from '@/layouts/workspace-layout/use-bulk-tab-close'
 import { useCloseActiveTab } from '@/layouts/workspace-layout/use-close-active-tab'
 import { useCommandPaletteData } from '@/layouts/workspace-layout/use-command-palette-data'
 import { useEditorTabClose } from '@/layouts/workspace-layout/use-editor-tab-close'
-import { useModalBrowserHide } from '@/layouts/workspace-layout/use-modal-browser-hide'
 import { useOverlayActions } from '@/layouts/workspace-layout/use-overlay-actions'
 import { useProjectRootWatch } from '@/layouts/workspace-layout/use-project-root-watch'
 import { useShortcutLabels } from '@/layouts/workspace-layout/use-shortcut-labels'
@@ -99,15 +97,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCommandPaletteOpen,
     isCommandHistoryOpen,
     setIsCommandHistoryOpen,
-    isSshPasswordPromptOpen: ssh.sshPasswordPrompt !== null,
-    closeSshPasswordPrompt: ssh.closeSshPasswordPrompt,
     locationKey: location.key
   })
 
   const handleSelectProject = useCallback(
     (id: string) => {
       selectProject(id)
-      ssh.selectSSHProfile(null) // Deselect SSH when switching to project
+      ssh.selectSSHProfile(null) // Leave the SSH workspace when switching to a project
     },
     [selectProject, ssh.selectSSHProfile]
   )
@@ -118,7 +114,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const { closeActiveTab, handleCloseTerminalRef } = useCloseActiveTab({
     activeTab,
     isAgentLauncherOpen,
-    setDirtyCloseFilePath: editorTabClose.setDirtyCloseFilePath
+    closeEditorTab: editorTabClose.handleCloseEditorTab
   })
 
   // File watcher hook
@@ -131,11 +127,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Editor state persistence
   useEditorPersistence(activeProjectId)
-
-  // Story 6: cross-client workspace manifest sync (the manifest is read by the
-  // project-switch hydration (fetchManifestWorkspace); this hook wires the
-  // debounced write side + conflict surfacing).
-  useWorkspaceManifestSync(activeProjectId)
 
   useTerminalTabSync({ terminals, activeProjectId })
 
@@ -184,8 +175,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCommandHistoryOpen,
     setIsNewProjectModalOpen
   })
-
-  useModalBrowserHide({ isNewProjectModalOpen, isAgentLauncherOpen, activeTab })
 
   const terminalClose = useTerminalClose({ activeProjectId, handleCloseTerminalRef })
   const bulkTabClose = useBulkTabClose({

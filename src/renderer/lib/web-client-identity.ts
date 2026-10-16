@@ -125,11 +125,15 @@ export function ensureClientIdentity(): void {
 /**
  * Full `authenticate` payload every WS client sends on every handshake.
  * `token` is omitted when no token is supplied (never an empty string).
+ * `deviceId` defaults to the page's own id; only tests pass another.
  */
-export function buildAuthenticatePayload(token?: string | null): AcpAuthenticatePayload {
+export function buildAuthenticatePayload(
+  token?: string | null,
+  deviceId: string = getDeviceId()
+): AcpAuthenticatePayload {
   const payload: AcpAuthenticatePayload = {
     protocolVersion: WS_PROTOCOL_VERSION,
-    deviceId: getDeviceId(),
+    deviceId,
     clientInstanceId: getClientInstanceId()
   }
   if (token) payload.token = token

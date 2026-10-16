@@ -97,7 +97,7 @@ async fn owns_session_queries_authoritative_agent_driver_state() {
             name: "test-agent".to_string(),
             config_id: None,
             join_handle: None,
-            killed: Arc::new(AtomicBool::new(false)),
+            exit: Default::default(),
             stamp: SpawnStamp::default(),
         },
     );
@@ -135,7 +135,7 @@ fn list_agent_summaries_returns_identity_rich_entries() {
                 name: name.to_string(),
                 config_id: config_id.map(str::to_string),
                 join_handle: None,
-                killed: Arc::new(AtomicBool::new(false)),
+                exit: Default::default(),
                 stamp: SpawnStamp::default(),
             },
         );
@@ -1585,6 +1585,148 @@ async fn live_update_during_active_turn_nudges_idle_clock_and_fans_out() {
     );
 }
 
+async fn send_command_list(
+    state: &Mutex<DriverState>,
+    sinks: &[Arc<dyn EventSink>],
+    session_id: &str,
+    commands: Vec<agent_client_protocol::schema::v1::AvailableCommand>,
+) {
+    use agent_client_protocol::schema::v1 as acp;
+    let notification = acp::SessionNotification::new(
+        acp::SessionId::new(session_id),
+        acp::SessionUpdate::AvailableCommandsUpdate(acp::AvailableCommandsUpdate::new(commands)),
+    );
+    handle_session_notification(state, None, sinks, &AgentId::new(), notification)
+        .await
+        .expect("commands update");
+}
+
+async fn send_commands(
+    state: &Mutex<DriverState>,
+    sinks: &[Arc<dyn EventSink>],
+    session_id: &str,
+    names: &[&str],
+) {
+    let commands = names
+        .iter()
+        .map(|name| {
+            agent_client_protocol::schema::v1::AvailableCommand::new(
+                *name,
+                format!("{name} command"),
+            )
+        })
+        .collect();
+    send_command_list(state, sinks, session_id, commands).await;
+}
+
+/// The same command set re-sent in another order is dropped before anything
+/// sees it: no sink (so no seq, durable record or live event), no idle nudge
+/// of the active turn, and no stamp on the idle reaper's activity clock.
+#[tokio::test]
+async fn reshuffled_repeat_of_the_command_set_is_dropped() {
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    let mut idle_rx = state
+        .lock()
+        .try_begin_turn("sess-1")
+        .expect("turn starts")
+        .idle_rx;
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    send_commands(&state, &sinks, "sess-1", &["alpha", "beta", "gamma"]).await;
+    assert_eq!(sink.seen.lock().len(), 1);
+    assert_eq!(
+        sink.seen.lock()[0].type_,
+        crate::acp::events::EVENT_COMMANDS_UPDATE
+    );
+    assert!(idle_rx.has_changed().unwrap());
+    idle_rx.borrow_and_update();
+    let reaper_clock = state.lock().activity(0).last_active_at;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+
+    send_commands(&state, &sinks, "sess-1", &["gamma", "alpha", "beta"]).await;
+    assert_eq!(sink.seen.lock().len(), 1, "the repeat reaches no sink");
+    assert!(
+        !idle_rx.has_changed().unwrap(),
+        "the repeat does not nudge the idle clock"
+    );
+    assert_eq!(
+        state.lock().activity(0).last_active_at,
+        reaper_clock,
+        "the repeat is not activity for the idle reaper"
+    );
+}
+
+/// A changed set, a session's first list, and the first list after a reopen
+/// (load/resume) or a close all fan out as before.
+#[tokio::test]
+async fn changed_or_first_command_lists_still_fan_out() {
+    let state = Mutex::new(DriverState::new());
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    send_commands(&state, &sinks, "sess-1", &["alpha", "beta"]).await;
+    send_commands(&state, &sinks, "sess-2", &["alpha", "beta"]).await;
+    assert_eq!(sink.seen.lock().len(), 2, "each session's first list");
+    send_commands(&state, &sinks, "sess-1", &["alpha", "beta", "gamma"]).await;
+    assert_eq!(sink.seen.lock().len(), 3, "a changed set");
+
+    // Same names, but one entry's description, then its input hint, changed.
+    use agent_client_protocol::schema::v1 as acp;
+    let entries = |alpha: acp::AvailableCommand| {
+        vec![
+            alpha,
+            acp::AvailableCommand::new("beta", "beta command"),
+            acp::AvailableCommand::new("gamma", "gamma command"),
+        ]
+    };
+    send_command_list(
+        &state,
+        &sinks,
+        "sess-1",
+        entries(acp::AvailableCommand::new("alpha", "alpha, reworded")),
+    )
+    .await;
+    assert_eq!(sink.seen.lock().len(), 4, "a changed description");
+    send_command_list(
+        &state,
+        &sinks,
+        "sess-1",
+        entries(
+            acp::AvailableCommand::new("alpha", "alpha, reworded").input(
+                acp::AvailableCommandInput::Unstructured(acp::UnstructuredCommandInput::new(
+                    "<path>",
+                )),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(sink.seen.lock().len(), 5, "a changed input hint");
+
+    assert!(state.lock().try_begin_replay_window("sess-1"));
+    send_command_list(
+        &state,
+        &sinks,
+        "sess-1",
+        entries(
+            acp::AvailableCommand::new("alpha", "alpha, reworded").input(
+                acp::AvailableCommandInput::Unstructured(acp::UnstructuredCommandInput::new(
+                    "<path>",
+                )),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(sink.seen.lock().len(), 6, "the first list after a reopen");
+    state.lock().finish_replay_window("sess-1");
+
+    state.lock().remove_session_root("sess-2");
+    send_commands(&state, &sinks, "sess-2", &["alpha", "beta"]).await;
+    assert_eq!(sink.seen.lock().len(), 7, "the first list after a close");
+    let seen = sink.seen.lock();
+    assert!(seen
+        .iter()
+        .all(|event| event.type_ == crate::acp::events::EVENT_COMMANDS_UPDATE));
+}
+
 /// Turn-before-replay ordering at the notification layer: while a turn is
 /// active, replay-window admission is refused, so updates keep fanning out
 /// as live (nothing is misclassified as replayed history and dropped).
@@ -2038,6 +2180,7 @@ async fn resume_session_rejected_when_other_agent_owns_session_mid_turn() {
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect_err("resume must be rejected for a mid-turn owner");
@@ -2076,6 +2219,7 @@ async fn resume_session_same_agent_owner_is_not_blocked_by_cross_agent_guard() {
             SessionId("sess-own".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect_err("fixture rejects session/resume deliberately");
@@ -2129,7 +2273,7 @@ async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
             name: "test-agent".to_string(),
             config_id: None,
             join_handle: None,
-            killed: Arc::new(AtomicBool::new(false)),
+            exit: Default::default(),
             stamp: SpawnStamp::default(),
         },
     );
@@ -2140,6 +2284,7 @@ async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect_err("load must be rejected for a mid-turn owner");
@@ -2170,6 +2315,7 @@ async fn resume_session_passes_when_owner_is_idle() {
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
             Vec::new(),
+            None,
         )
         .await
         .expect("idle owner must not block the resume");
@@ -2590,4 +2736,70 @@ mod spawn_error_cases {
             assert!(!is_launch_refusal(detail), "{detail}");
         }
     }
+}
+
+/// What the teardown announces follows the host's recorded intent: no intent
+/// is a crash, kill/reap carry their reason, process shutdown is silent.
+#[test]
+fn teardown_reason_follows_the_recorded_exit_intent() {
+    use super::exit::{announced_reason, ExitIntent, ExitSignal};
+    let signal = ExitSignal::default();
+    assert_eq!(
+        announced_reason(signal.get()),
+        Some(AgentExitReason::Crashed)
+    );
+    signal.set(ExitIntent::Killed);
+    assert_eq!(
+        announced_reason(signal.get()),
+        Some(AgentExitReason::Killed)
+    );
+    signal.set(ExitIntent::Reaped);
+    assert_eq!(
+        announced_reason(signal.get()),
+        Some(AgentExitReason::Reaped)
+    );
+    signal.set(ExitIntent::Shutdown);
+    assert_eq!(announced_reason(signal.get()), None);
+}
+
+/// The wire form of the exit reason is the lowercase word the clients match on.
+#[test]
+fn exit_reason_serializes_to_the_wire_words() {
+    for (reason, word) in [
+        (AgentExitReason::Killed, "killed"),
+        (AgentExitReason::Reaped, "reaped"),
+        (AgentExitReason::Crashed, "crashed"),
+        (AgentExitReason::Closed, "closed"),
+    ] {
+        assert_eq!(serde_json::to_value(reason).unwrap(), word);
+    }
+    let event = SessionClosedEvent {
+        agent_id: AgentId("a".to_string()),
+        session_id: SessionId::new("s"),
+        reason: AgentExitReason::Closed,
+    };
+    assert_eq!(serde_json::to_value(&event).unwrap()["reason"], "closed");
+}
+
+/// A close with no running turn proceeds at once; a turn that ends
+/// proceeds; a dropped waiter or a terminator that never comes is an error so
+/// the caller forces local cleanup instead of hanging.
+#[tokio::test(start_paused = true)]
+async fn close_waits_for_the_turn_terminator_and_gives_up_after_the_bound() {
+    assert!(await_turn_terminator(None).await.is_ok());
+
+    let (done_tx, done_rx) = oneshot::channel();
+    done_tx.send(()).unwrap();
+    assert!(await_turn_terminator(Some(done_rx)).await.is_ok());
+
+    let (dropped_tx, dropped_rx) = oneshot::channel::<()>();
+    drop(dropped_tx);
+    assert!(await_turn_terminator(Some(dropped_rx))
+        .await
+        .unwrap_err()
+        .contains("dropped"));
+
+    let (_never_tx, never_rx) = oneshot::channel::<()>();
+    let error = await_turn_terminator(Some(never_rx)).await.unwrap_err();
+    assert!(error.contains("timed out"), "{error}");
 }

@@ -18,10 +18,6 @@ export interface StagedProject {
   activeFilePath: string | null
   /** Expanded explorer dirs to apply; null leaves the explorer untouched. */
   expandedDirs: string[] | null
-  /** Manifest-focused ACP session to activate, if any. */
-  focusedSessionId: string | null
-  /** Host manifest revision for the next write; null = no manifest; undefined = not fetched (leave as is). */
-  manifestRevision: number | null | undefined
   /** Persisted legacy layout, consumed by the chat reattach on commit. */
   persistedLayout: PersistedPaneNodeInput | undefined
 }
@@ -33,8 +29,6 @@ export function emptyStagedProject(): StagedProject {
     editorFiles: new Map(),
     activeFilePath: null,
     expandedDirs: null,
-    focusedSessionId: null,
-    manifestRevision: null,
     persistedLayout: undefined
   }
 }

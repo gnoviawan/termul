@@ -2,7 +2,7 @@
 //!
 //! `termul-server onboard` interactively asks for each supported config,
 //! validates answers by reusing the existing validators (`BindMode::parse`,
-//! `resolve_and_validate_project_root`, `UpdateChannel::parse`, …), then
+//! `UpdateChannel::parse`, …), then
 //! auto-detects the host's service manager and launches the server detached
 //! so it survives SSH logout: systemd hosts install + enable + start a
 //! `termul-server.service` unit; non-systemd Linux hosts detach via `setsid`
@@ -22,10 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use crate::server_update::UpdateChannel;
-use crate::web::config::{
-    default_project_root, default_projects_file, default_sessions_dir,
-    resolve_and_validate_project_root, BindMode, ServerConfig,
-};
+use crate::web::config::{default_projects_file, default_sessions_dir, BindMode, ServerConfig};
 
 // ---------------------------------------------------------------------------
 // OnboardAnswers — validated answers + synthesis trio.
@@ -38,7 +35,6 @@ use crate::web::config::{
 pub struct OnboardAnswers {
     pub host: String,
     pub port: u16,
-    pub project_root: PathBuf,
     pub sessions_dir: PathBuf,
     pub projects_file: PathBuf,
     pub allow_remote_writes: bool,
@@ -67,15 +63,9 @@ fn normalize_projects_file_path(path: PathBuf) -> PathBuf {
 impl OnboardAnswers {
     /// Best-effort defaults from env/platform fallbacks. Used as the starting
     /// defaults for [`Self::collect`] (where the value is re-validated + can be
-    /// overridden) and for the non-TTY display path. Project root is validated
-    /// when possible; on failure the raw fallback is kept so the display path
-    /// never panics. Falls back to the user's home dir only — never the parent
-    /// `/home` (over-broad boundary for /git/*,/skills,/search).
+    /// overridden) and for the non-TTY display path. The wizard no longer asks
+    /// for a project root: projects are added to the registry after launch.
     pub fn defaults() -> Self {
-        let project_root = default_project_root()
-            .and_then(|p| resolve_and_validate_project_root(&p).ok())
-            .or_else(default_project_root)
-            .unwrap_or_else(|| PathBuf::from("/"));
         let sessions_dir =
             default_sessions_dir().unwrap_or_else(|| PathBuf::from("/tmp/termul/sessions"));
         let projects_file = default_projects_file()
@@ -84,7 +74,6 @@ impl OnboardAnswers {
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
-            project_root,
             sessions_dir,
             projects_file,
             allow_remote_writes: false,
@@ -127,17 +116,6 @@ impl OnboardAnswers {
             Ok(p)
         });
 
-        let pr_default = default_project_root()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(none — required)".to_string());
-        let project_root = prompt_validated(
-            stdin,
-            stdout,
-            "Project root (boundary for /git/*,/skills,/search)",
-            &pr_default,
-            |s| resolve_and_validate_project_root(Path::new(s)),
-        );
-
         let sd_default = default_sessions_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(none — required)".to_string());
@@ -179,7 +157,7 @@ impl OnboardAnswers {
             prompt_yesno(
                 stdin,
                 stdout,
-                "Allow non-loopback write peers (fs/git/workspace mutations)?",
+                "Allow non-loopback write peers (fs/git mutations)?",
                 false,
             )
         } else {
@@ -230,7 +208,6 @@ impl OnboardAnswers {
         Self {
             host,
             port,
-            project_root,
             sessions_dir,
             projects_file,
             allow_remote_writes,
@@ -250,15 +227,16 @@ impl OnboardAnswers {
             port: self.port,
             event_log_capacity: 4096,
             agent_idle_window_secs: crate::web::config::DEFAULT_AGENT_IDLE_WINDOW_SECS,
+            agent_idle_window_locked: false,
             overflow_tolerance: crate::web::config::DEFAULT_OVERFLOW_TOLERANCE,
+            max_terminals_per_project: crate::web::config::DEFAULT_MAX_TERMINALS_PER_PROJECT,
             receipt_retention_secs: crate::web::config::DEFAULT_RECEIPT_RETENTION_SECS,
-            partition_gc_age_secs: None,
-            partition_byte_budget: None,
+            partition_gc_age_secs: crate::web::config::DEFAULT_PARTITION_GC_AGE_SECS,
+            partition_byte_budget: crate::web::config::DEFAULT_PARTITION_BYTE_BUDGET,
             deprecation_warnings: Vec::new(),
-            project_root: self.project_root.clone(),
+            seed_project_root: None,
             projects_file: Some(self.projects_file.clone()),
             sessions_dir: Some(self.sessions_dir.clone()),
-            workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: self.allow_remote_writes && expose,
@@ -274,7 +252,7 @@ impl OnboardAnswers {
     }
 
     /// Synthesize the foreground CLI args for the server. Matches the golden
-    /// unit ordering: `--host`, `--port`, `--project-root`, `--sessions-dir`,
+    /// unit ordering: `--host`, `--port`, `--sessions-dir`,
     /// `--projects-file`, then `--allow-remote-writes` ONLY when bound to
     /// `0.0.0.0` and enabled. On loopback the flag is a documented no-op and
     /// is omitted. `--projects-file` is ALWAYS passed explicitly even though
@@ -287,8 +265,6 @@ impl OnboardAnswers {
             self.host.clone(),
             "--port".into(),
             self.port.to_string(),
-            "--project-root".into(),
-            self.project_root.display().to_string(),
             "--sessions-dir".into(),
             self.sessions_dir.display().to_string(),
             "--projects-file".into(),
@@ -599,7 +575,7 @@ fn unit_path(scope: &SystemdScope) -> PathBuf {
 
 /// Assemble the systemd `ExecStart` line from the binary + CLI args. Quote
 /// every ExecStart token so paths with spaces survive systemd's
-/// whitespace-tokenizing ExecStart parser. The operator's project-root /
+/// whitespace-tokenizing ExecStart parser. The operator's
 /// sessions-dir / projects-file can legitimately contain spaces (e.g.
 /// /home/me/My Projects); an unquoted token would split into multiple args
 /// and the server would start with a wrong/missing path. Escape embedded
@@ -985,7 +961,6 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
                 target: "termul::onboard",
                 host = %answers.host,
                 port = answers.port,
-                project_root = %answers.project_root.display(),
                 sessions_dir = %answers.sessions_dir.display(),
                 projects_file = %answers.projects_file.display(),
                 allow_remote_writes = answers.allow_remote_writes,

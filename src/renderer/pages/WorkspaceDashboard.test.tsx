@@ -51,7 +51,6 @@ vi.mock('@/stores/terminal-store', () => ({
 vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontSize: () => 14,
   useDefaultShell: () => '',
-  useMaxTerminalsPerProject: () => 10,
   useUpdateAppSetting: () => vi.fn(),
   useAppSettingsStore: () => ({
     getState: () => ({ settings: {}, updateSetting: vi.fn() })

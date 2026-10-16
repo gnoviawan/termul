@@ -1,6 +1,6 @@
 import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   pickDefaultConfiguredAgent,
   pickDefaultSupportedAgent,
@@ -11,6 +11,8 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
+
+const PROJECT_SWITCH_PREWARM_DEBOUNCE_MS = 3_000
 
 /**
  * Load persisted ACP agent configs once at app mount, then resolve the
@@ -33,8 +35,10 @@ export function useAcpAgents(): void {
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const setSelectedAgentConfigId = useAcpStore((s) => s.setSelectedAgentConfigId)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
+  const bootPrewarmDoneRef = useRef(false)
   useEffect(() => {
     let cancelled = false
+    let prewarmTimer: ReturnType<typeof setTimeout> | undefined
     void (async () => {
       await loadAgentConfigs()
       if (cancelled) return
@@ -113,10 +117,21 @@ export function useAcpAgents(): void {
       // Issue #840: web never prewarms on page load. The launcher's
       // `retargetWarmPool` (composer open, configured agent only) is the
       // first — and only — web prewarm path.
-      if (desktop) void prewarmAgent(entry.config.id, cwd)
+      if (!desktop) return
+      const configId = entry.config.id
+      if (bootPrewarmDoneRef.current) {
+        prewarmTimer = setTimeout(
+          () => void prewarmAgent(configId, cwd),
+          PROJECT_SWITCH_PREWARM_DEBOUNCE_MS
+        )
+        return
+      }
+      bootPrewarmDoneRef.current = true
+      void prewarmAgent(configId, cwd)
     })()
     return () => {
       cancelled = true
+      clearTimeout(prewarmTimer)
     }
   }, [loadAgentConfigs, saveAgentConfig, setSelectedAgentConfigId, activeProjectId])
 }

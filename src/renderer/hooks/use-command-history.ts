@@ -1,8 +1,13 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { trimListToCap } from '@/lib/persistence-trim'
 import { type CommandHistoryEntry, useCommandHistoryStore } from '@/stores/command-history-store'
 
-export const COMMAND_HISTORY_KEY = (projectId: string) => `projects/${projectId}/command-history`
+/** The newest entries (the list is newest first) that fit the host's value cap. */
+function newestWithinCap(projectEntries: CommandHistoryEntry[]): readonly CommandHistoryEntry[] {
+  return trimListToCap(projectEntries, (kept) => kept, 'head').items
+}
 
 export function useCommandHistoryLoader(projectId: string | null): void {
   const setHistory = useCommandHistoryStore((state) => state.setHistory)
@@ -13,7 +18,7 @@ export function useCommandHistoryLoader(projectId: string | null): void {
 
     async function load(): Promise<void> {
       const result = await persistenceApi.read<CommandHistoryEntry[]>(
-        COMMAND_HISTORY_KEY(projectId!) // projectId is guaranteed non-null here due to early return
+        PersistenceKeys.commandHistory(projectId!) // projectId is guaranteed non-null here due to early return
       )
       if (result.success && result.data) {
         // Merge with existing entries from other projects
@@ -32,7 +37,10 @@ export function useSaveCommandHistory(projectId: string | null): () => Promise<v
   return useCallback(async () => {
     if (!projectId) return
     const projectEntries = entries.filter((e) => e.projectId === projectId)
-    await persistenceApi.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
+    await persistenceApi.write(
+      PersistenceKeys.commandHistory(projectId),
+      newestWithinCap(projectEntries)
+    )
   }, [projectId, entries])
 }
 
@@ -61,7 +69,10 @@ export function useAddCommand(): (
       // Persist after adding
       const { entries } = useCommandHistoryStore.getState()
       const projectEntries = entries.filter((e) => e.projectId === projectId)
-      await persistenceApi.write(COMMAND_HISTORY_KEY(projectId), projectEntries)
+      await persistenceApi.write(
+        PersistenceKeys.commandHistory(projectId),
+        newestWithinCap(projectEntries)
+      )
     },
     [addCommand]
   )

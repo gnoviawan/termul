@@ -14,7 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
-import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { WriteGate, WriteGateReason } from '@/components/ui/write-gate'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { cn } from '@/lib/utils'
@@ -46,7 +46,7 @@ export function BranchSection({
           variant="ghost"
           size={isMobile ? 'touch' : 'sm'}
           className={cn(
-            'px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary',
+            'px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-foreground/[0.03]',
             isMobile ? 'min-h-11' : 'h-8'
           )}
         >
@@ -80,13 +80,10 @@ export function BranchSection({
                   if (admitted) onSwitchBranch(b)
                 }}
                 disabled={!admitted}
-                className={cn(
-                  'flex w-full items-center justify-between text-xs cursor-pointer',
-                  b === currentBranch && 'bg-accent font-semibold'
-                )}
+                className="flex w-full items-center justify-between text-xs cursor-pointer"
               >
                 <span className="truncate">{b}</span>
-                {b === currentBranch && <Check size={12} className="text-primary" />}
+                {b === currentBranch && <Check size={12} className="shrink-0 text-foreground" />}
                 {!admitted && <WriteGateReason />}
               </DropdownMenuItem>
             </WriteGate>
@@ -130,7 +127,7 @@ export function CreateBranchDialog({
             <label className="text-muted-foreground">Branch name</label>
             <input
               type="text"
-              className={`w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
+              className={cn(PANEL_FIELD_CLASS, 'w-full rounded-md px-3 py-1.5')}
               placeholder="e.g. feature/new-login"
               value={branchName}
               onChange={(e) => onBranchNameChange(e.target.value)}

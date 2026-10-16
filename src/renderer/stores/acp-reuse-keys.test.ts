@@ -66,4 +66,24 @@ describe('parseReuseKey', () => {
   it('tolerates a key with only a config id (empty cwd)', () => {
     expect(parseReuseKey('cfg-1')).toEqual({ configId: 'cfg-1', cwd: '' })
   })
+
+  it('puts a project id in its own segment and does not treat that key as detached', () => {
+    const key = agentReuseKey('cfg-1', '/work', 'p1')
+    expect(key).toBe('cfg-1\0/work\0project\0p1')
+    expect(isDetachedReuseKey(key)).toBe(false)
+    expect(parseReuseKey(key)).toEqual({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
+    const detached = detachedReuseKey(key, 'agent-9')
+    expect(isDetachedReuseKey(detached)).toBe(true)
+    expect(parseReuseKey(detached)).toEqual({
+      configId: 'cfg-1',
+      cwd: '/work',
+      projectId: 'p1',
+      detachedAgentId: 'agent-9'
+    })
+  })
+
+  it('omits the project segment when the project id is blank', () => {
+    expect(agentReuseKey('cfg-1', '/work', '  ')).toBe('cfg-1\0/work')
+    expect(agentReuseKey('cfg-1', '/work', null)).toBe('cfg-1\0/work')
+  })
 })

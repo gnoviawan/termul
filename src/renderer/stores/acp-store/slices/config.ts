@@ -2,15 +2,21 @@
  * Config slice — extracted from ../acp-store.ts (spec-04 PR B). Pure move, no logic changes.
  */
 
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { StateCreator } from 'zustand'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
+  normalizeAgentConfigs,
   saveAgentConfigs as saveAgentConfigsToDisk
 } from '@/lib/acp-agents-persistence'
 import { type AgentId, acpApi } from '@/lib/acp-api'
-import { loadAuthMethodMemory as loadAuthMethodMemoryFromDisk } from '@/lib/acp-auth-method-memory'
+import {
+  loadAuthMethodMemory as loadAuthMethodMemoryFromDisk,
+  normalizeAuthMethodMemory
+} from '@/lib/acp-auth-method-memory'
 import { migrateRetiredCodexConfig } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
+import { syncSharedKey } from '@/lib/shared-key-sync'
 import { configIdFromReuseKey, parseReuseKey } from '../../acp-reuse-keys'
 import {
   type AgentUpdateStoreDeps,
@@ -45,6 +51,40 @@ function agentUpdateDeps(get: AcpGet, set: AcpSet): AgentUpdateStoreDeps {
     isEphemeralSession: isEphemeralAcpSession,
     invalidateOptionsCache: invalidateAgentOptionsCache
   }
+}
+
+let sharedConfigSyncStarted = false
+
+/**
+ * Show agent configs and remembered auth methods that another device or tab
+ * saved. Started once, after the first load: the sync reports nothing before
+ * the key was read. Applying only updates memory, it never saves.
+ */
+function startSharedConfigSync(set: AcpSet, get: AcpGet): void {
+  if (sharedConfigSyncStarted) return
+  sharedConfigSyncStarted = true
+  syncSharedKey<unknown>(PersistenceKeys.acpAgents, (change) => {
+    const previous = get().agentConfigs
+    const next = (change.exists ? normalizeAgentConfigs(change.data) : []).map(
+      (config) => migrateRetiredCodexConfig(config) ?? config
+    )
+    set(() => ({ agentConfigs: next }))
+    for (const config of next) {
+      const before = previous.find((c) => c.id === config.id)
+      if (agentConfigIdentityChanged(before, config)) invalidateAgentOptionsCache(set, config.id)
+    }
+  })
+  // Merge only (like the load): an entry this page just remembered or forgot
+  // may not have reached the host yet. A deleted key forgets every method.
+  syncSharedKey<unknown>(PersistenceKeys.acpAuthMethods, (change) => {
+    if (!change.exists) {
+      rememberedAuthMethods.clear()
+      return
+    }
+    for (const [configId, methodId] of Object.entries(normalizeAuthMethodMemory(change.data))) {
+      if (!forgottenAuthMethodConfigs.has(configId)) rememberedAuthMethods.set(configId, methodId)
+    }
+  })
 }
 
 type ConfigSliceState = Pick<
@@ -121,6 +161,7 @@ export const createConfigSlice: StateCreator<AcpState, [], [], ConfigSliceState>
         message: 'failed to load agent configs; leaving the list empty'
       })
     }
+    startSharedConfigSync(set, get)
     // The remembered auth-method map (spec-acp-persistent-auth-reuse) rides the
     // same init boundary so `authenticateBeforeSession` can auto-authenticate a
     // multi-method agent on demand. Its failure must not fail the config load —

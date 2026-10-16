@@ -90,6 +90,7 @@ pub(crate) fn pair() -> (FaultCarrier, Peer) {
             shared,
             pings_seen: 0,
             events: Vec::new(),
+            arrivals: Vec::new(),
             replies: Vec::new(),
             close: None,
         },
@@ -190,6 +191,10 @@ pub(crate) struct Peer {
     /// Every event frame delivered so far (`events` batches flattened), in
     /// arrival order.
     pub(crate) events: Vec<Value>,
+    /// Every decoded frame in ONE arrival order (`reply:<id>`,
+    /// `event:<type>`), so a reply's position relative to the events around
+    /// it is observable.
+    pub(crate) arrivals: Vec<String>,
     replies: Vec<Value>,
     /// The `Close` frame the relay sent, as `(code, reason)`.
     pub(crate) close: Option<(u16, String)>,
@@ -368,17 +373,12 @@ impl Peer {
     fn absorb(&mut self, message: &Message) {
         match message {
             Message::Text(text) => {
-                let Ok(value) = serde_json::from_str::<Value>(text) else {
-                    return;
-                };
-                if value["type"] == crate::web::ws::WS_BATCH_TYPE {
-                    if let Some(batch) = value["events"].as_array() {
-                        self.events.extend(batch.iter().cloned());
+                for frame in decode_frame(text) {
+                    self.arrivals.push(frame.label());
+                    match frame {
+                        Decoded::Event(event) => self.events.push(event),
+                        Decoded::Reply(reply) => self.replies.push(reply),
                     }
-                } else if value.get("ok").is_some() {
-                    self.replies.push(value);
-                } else {
-                    self.events.push(value);
                 }
             }
             Message::Close(frame) => {
@@ -392,4 +392,39 @@ impl Peer {
             Message::Binary(_) | Message::Pong(_) => {}
         }
     }
+}
+
+/// One decoded outbound text frame (a batch decodes to several).
+pub(crate) enum Decoded {
+    Event(Value),
+    Reply(Value),
+}
+
+impl Decoded {
+    /// The arrival-log label.
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Event(event) => format!("event:{}", event["type"].as_str().unwrap_or("?")),
+            Self::Reply(reply) => format!("reply:{}", reply["id"].as_str().unwrap_or("?")),
+        }
+    }
+}
+
+/// Classify one `/ws` text frame exactly as a client would: an `events` batch
+/// flattens to its events, anything with `ok` is a reply, the rest (events,
+/// heartbeat, gap) are events.
+pub(crate) fn decode_frame(text: &str) -> Vec<Decoded> {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    if value["type"] == crate::web::ws::WS_BATCH_TYPE {
+        return value["events"]
+            .as_array()
+            .map(|batch| batch.iter().cloned().map(Decoded::Event).collect())
+            .unwrap_or_default();
+    }
+    if value.get("ok").is_some() {
+        return vec![Decoded::Reply(value)];
+    }
+    vec![Decoded::Event(value)]
 }

@@ -1,118 +1,72 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
-
-import { logFrontendError } from '@/lib/log-api'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
-import { useProjectStore } from '@/stores/project-store'
-import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
-import type { Project } from '@/types/project'
+import { beforeEach, describe, expect, it } from 'vitest'
+import {
+  buildProjectWorkspace,
+  createProjectWorkspace,
+  getAgentChatSessionIdsInAllTrees,
+  getAllLeafPanes,
+  useWorkspaceStore
+} from '@/stores/workspace-store'
 import { pruneRestoredChatTabs } from './chat-tab-prune'
 
-function project(id: string, isArchived?: boolean): Project {
-  return { id, name: id, color: 'blue', isArchived } as Project
-}
-
-function chatTab(sessionId: string): {
-  type: 'agent-chat'
-  id: string
-  sessionId: string
-} {
-  return { type: 'agent-chat', id: `chat-${sessionId}`, sessionId }
-}
-
-function seedTree(sessionIds: string[]): void {
-  useWorkspaceStore.getState().loadProjectWorkspace({
+function chatLeaf(paneId: string, sessionIds: string[]) {
+  return buildProjectWorkspace({
     type: 'leaf',
-    id: 'pane-1',
+    id: paneId,
     activeTabId: sessionIds[0] ? `chat-${sessionIds[0]}` : null,
-    tabs: sessionIds.map(chatTab)
+    tabs: sessionIds.map((sessionId) => ({
+      type: 'agent-chat' as const,
+      id: `chat-${sessionId}`,
+      sessionId
+    }))
   })
 }
 
-function treeSessionIds(): string[] {
+function prune(indexed: string[], live: string[] = []): void {
+  pruneRestoredChatTabs({ liveSessionIds: new Set(live), indexedSessionIds: new Set(indexed) })
+}
+
+function activeSessionIds(): string[] {
   return getAllLeafPanes(useWorkspaceStore.getState().root).flatMap((leaf) =>
     leaf.tabs.flatMap((tab) => (tab.type === 'agent-chat' ? [tab.sessionId] : []))
   )
 }
 
-const ownership = (owners: Record<string, string>) => ({
-  sessions: {},
-  sessionIndex: Object.entries(owners).map(([id, projectId]) => ({ id, projectId }))
-})
-
-function prune(owners: Record<string, string>, live: string[] = []): void {
-  pruneRestoredChatTabs({
-    liveSessionIds: new Set(live),
-    indexedSessionIds: new Set(Object.keys(owners)),
-    ownership: ownership(owners),
-    activeProjectId: 'p1'
-  })
-}
-
 describe('pruneRestoredChatTabs', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    useProjectStore.setState({
-      activeProjectId: 'p1',
-      projects: [project('p1'), project('p2')]
+    useWorkspaceStore.setState({
+      activeProjectId: '',
+      parkedTrees: {},
+      ...createProjectWorkspace()
     })
-    useAgentChatLifetimeStore.setState({ retainedByProject: {}, focusSessionByProject: {} })
   })
 
   it('removes a corpse tab that is neither live nor indexed', () => {
-    seedTree(['s-corpse', 's-own'])
-    prune({ 's-own': 'p1' })
-    expect(treeSessionIds()).toEqual(['s-own'])
+    useWorkspaceStore.getState().activateProject('p1', chatLeaf('pane-1', ['s-corpse', 's-own']))
+    prune(['s-own'])
+    expect(activeSessionIds()).toEqual(['s-own'])
   })
 
   it('keeps a live session that the index does not know yet', () => {
-    seedTree(['s-live'])
-    prune({}, ['s-live'])
-    expect(treeSessionIds()).toEqual(['s-live'])
+    useWorkspaceStore.getState().activateProject('p1', chatLeaf('pane-1', ['s-live']))
+    prune([], ['s-live'])
+    expect(activeSessionIds()).toEqual(['s-live'])
   })
 
-  it('hands a foreign tab to its owner through retainProjectChats and removes it', () => {
-    seedTree(['s-own', 's-foreign'])
-    prune({ 's-own': 'p1', 's-foreign': 'p2' })
-    expect(treeSessionIds()).toEqual(['s-own'])
-    expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({ p2: ['s-foreign'] })
-    expect(logFrontendError).toHaveBeenCalledTimes(1)
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ level: 'warn', source: 'acp-store.loadSessionIndex' })
-    )
+  it('removes corpse tabs from parked trees too and leaves their other chats', () => {
+    const workspace = useWorkspaceStore.getState()
+    workspace.activateProject('p1', chatLeaf('pane-1', ['s-corpse-1', 's-kept-1']))
+    workspace.activateProject('p2', chatLeaf('pane-2', ['s-kept-2', 's-corpse-2']))
+    prune(['s-kept-1', 's-kept-2'])
+    expect([...getAgentChatSessionIdsInAllTrees(useWorkspaceStore.getState())].sort()).toEqual([
+      's-kept-1',
+      's-kept-2'
+    ])
+    expect(useWorkspaceStore.getState().parkedTrees.p1).toBeDefined()
   })
 
-  it('keeps the tab and defers the hand-off when the owner is not in the project list', () => {
-    seedTree(['s-orphan'])
-    prune({ 's-orphan': 'px' })
-    expect(treeSessionIds()).toEqual(['s-orphan'])
-    expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({ px: ['s-orphan'] })
-    expect(logFrontendError).toHaveBeenCalledTimes(1)
-    expect(vi.mocked(logFrontendError).mock.calls[0][0].message).toContain('s-orphan')
-    expect(vi.mocked(logFrontendError).mock.calls[0][0].message).toContain('px')
-  })
-
-  it('keeps the tab and defers the hand-off when the owner is archived', () => {
-    useProjectStore.setState({ projects: [project('p1'), project('p2', true)] })
-    seedTree(['s-foreign'])
-    prune({ 's-foreign': 'p2' })
-    expect(treeSessionIds()).toEqual(['s-foreign'])
-    expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({ p2: ['s-foreign'] })
-  })
-
-  it('keeps the tab while the project list is not loaded yet', () => {
-    useProjectStore.setState({ projects: [] })
-    seedTree(['s-foreign'])
-    prune({ 's-foreign': 'p2' })
-    expect(treeSessionIds()).toEqual(['s-foreign'])
-    expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({ p2: ['s-foreign'] })
-  })
-
-  it('keeps a tab with unknown or stub ownership without a log', () => {
-    seedTree(['s-stub'])
-    prune({ 's-stub': '' })
-    expect(treeSessionIds()).toEqual(['s-stub'])
-    expect(logFrontendError).not.toHaveBeenCalled()
+  it("never judges ownership: another project's indexed chat stays where it is", () => {
+    useWorkspaceStore.getState().activateProject('p1', chatLeaf('pane-1', ['s-other-project']))
+    prune(['s-other-project'])
+    expect(activeSessionIds()).toEqual(['s-other-project'])
   })
 })

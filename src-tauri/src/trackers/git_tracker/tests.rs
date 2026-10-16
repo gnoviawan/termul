@@ -1022,7 +1022,7 @@ fn it_git_get_log_empty_repo_is_empty() {
     // A freshly-init'd repo has no commits; git log exits non-zero and we
     // must surface an empty list instead of an error.
     let repo = init_repo("log-empty");
-    let commits = git_get_log(repo.to_str().unwrap(), None).unwrap();
+    let commits = git_get_log(repo.to_str().unwrap(), None, false).unwrap();
     assert!(commits.is_empty());
     std::fs::remove_dir_all(&repo).ok();
 }
@@ -1040,7 +1040,7 @@ fn it_git_get_log_reads_linear_history_newest_first() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "second | commit"]);
 
-    let commits = git_get_log(repo.to_str().unwrap(), None).unwrap();
+    let commits = git_get_log(repo.to_str().unwrap(), None, false).unwrap();
     assert_eq!(commits.len(), 2);
     // Newest first; subject with a pipe survives intact.
     assert_eq!(commits[0].subject, "second | commit");
@@ -1080,7 +1080,7 @@ fn it_git_get_log_captures_merge_parents() {
         &["merge", "--no-ff", "-q", "-m", "Merge feature", "feature"],
     );
 
-    let commits = git_get_log(cwd, None).unwrap();
+    let commits = git_get_log(cwd, None, false).unwrap();
     let merge = commits
         .iter()
         .find(|c| c.subject == "Merge feature")
@@ -1189,8 +1189,51 @@ fn it_git_get_log_respects_limit() {
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-qm", &format!("commit {i}")]);
     }
-    let commits = git_get_log(repo.to_str().unwrap(), Some(3)).unwrap();
+    let commits = git_get_log(repo.to_str().unwrap(), Some(3), false).unwrap();
     assert_eq!(commits.len(), 3);
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn it_git_get_log_all_includes_commits_on_other_branches() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("log-all");
+    std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "base"]);
+    git(&repo, &["checkout", "-qb", "side"]);
+    std::fs::write(repo.join("b.txt"), "side\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "side only"]);
+    git(&repo, &["checkout", "-q", "-"]);
+
+    let cwd = repo.to_str().unwrap();
+    let head_only = git_get_log(cwd, None, false).unwrap();
+    assert!(head_only.iter().all(|c| c.subject != "side only"));
+    let all = git_get_log(cwd, None, true).unwrap();
+    assert!(all.iter().any(|c| c.subject == "side only"));
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+#[test]
+fn it_git_get_log_returns_output_larger_than_the_pipe_buffer() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("log-big");
+    std::fs::write(repo.join("a.txt"), "x\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    // One 200 KB subject: the log output is far past the ~64 KB pipe buffer,
+    // which an undrained read would stall on until the timeout.
+    let msg_file = repo.join("msg.tmp");
+    std::fs::write(&msg_file, "s".repeat(200_000)).unwrap();
+    git(&repo, &["commit", "-q", "-F", "msg.tmp"]);
+
+    let commits = git_get_log(repo.to_str().unwrap(), None, true).unwrap();
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].subject.len(), 200_000);
     std::fs::remove_dir_all(&repo).ok();
 }
 

@@ -705,6 +705,34 @@ describe('file-path-links resolution', () => {
     expect(mocks.updateCursorPosition).toHaveBeenCalledWith('/repo/src/App.tsx', 9, 1)
   })
 
+  it('reveals the line in an editor that is already open', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/src/App.tsx',
+        size: 100,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: false
+      }
+    })
+    const reveals: unknown[] = []
+    const onReveal = (event: Event): void => {
+      reveals.push((event as CustomEvent).detail)
+    }
+    window.addEventListener('termul:reveal-line', onReveal)
+
+    try {
+      await openFilePathFromTerminal('src/App.tsx:7', { cwd: '/repo' })
+      await openFilePathFromTerminal('src/App.tsx', { cwd: '/repo' })
+    } finally {
+      window.removeEventListener('termul:reveal-line', onReveal)
+    }
+
+    expect(reveals).toEqual([{ filePath: '/repo/src/App.tsx', lineNumber: 7 }])
+  })
+
   it('returns open-failed when editor open throws', async () => {
     mocks.getFileInfo.mockResolvedValue({
       success: true,

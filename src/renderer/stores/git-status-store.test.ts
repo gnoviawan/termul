@@ -14,6 +14,8 @@ import {
   selectGitBranch,
   selectGitDiffStat,
   selectGitErrors,
+  TRACKED_REFRESH_CONCURRENCY,
+  TRACKED_REFRESH_TIMEOUT_MS,
   useGitStatusStore
 } from './git-status-store'
 import { useProjectStore } from './project-store'
@@ -733,6 +735,202 @@ describe('git-status-store refreshTracked', () => {
     gitApi.getStatus.mockRejectedValue(new Error('boom'))
     await expect(useGitStatusStore.getState().refreshTracked()).resolves.toBeUndefined()
     expect(useGitStatusStore.getState().errors['/a']?.status).toBe('boom')
+  })
+
+  const trackKeys = (keys: string[]) =>
+    useGitStatusStore.setState({ paths: Object.fromEntries(keys.map((k) => [k, k])) })
+
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  /** Holds every `getStatus` call open until released; records the peak. */
+  function holdStatusCalls() {
+    const pending: Array<() => void> = []
+    const probe = { inFlight: 0, peak: 0, calls: [] as string[] }
+    gitApi.getStatus.mockImplementation(
+      (cwd: string) =>
+        new Promise<GitStatusDetail[]>((resolve) => {
+          probe.calls.push(cwd)
+          probe.inFlight += 1
+          probe.peak = Math.max(probe.peak, probe.inFlight)
+          pending.push(() => {
+            probe.inFlight -= 1
+            resolve([])
+          })
+        })
+    )
+    /** Settles held calls until none are left (new ones start as others end);
+     * throws instead of hanging if they never drain. */
+    const drain = async () => {
+      for (let i = 0; i < 200; i++) {
+        await tick()
+        if (pending.length === 0 && probe.inFlight === 0) return
+        for (const release of pending.splice(0)) release()
+      }
+      throw new Error(`drain: ${probe.inFlight} getStatus calls still held`)
+    }
+    return { probe, drain }
+  }
+
+  it('keeps the pool bound in flight and refreshes every tracked key', async () => {
+    const keys = Array.from({ length: 20 }, (_, i) => `/k${String(i).padStart(2, '0')}`)
+    trackKeys(keys)
+    const { probe, drain } = holdStatusCalls()
+
+    const done = useGitStatusStore.getState().refreshTracked()
+    await drain()
+    await done
+
+    expect(probe.peak).toBe(TRACKED_REFRESH_CONCURRENCY)
+    expect([...probe.calls].sort()).toEqual(keys)
+  })
+
+  it('coalesces overlapping calls into the running refresh plus one trailing run', async () => {
+    trackKeys(['/a', '/b'])
+    const { probe, drain } = holdStatusCalls()
+
+    const first = useGitStatusStore.getState().refreshTracked()
+    const second = useGitStatusStore.getState().refreshTracked()
+    const third = useGitStatusStore.getState().refreshTracked()
+    const fourth = useGitStatusStore.getState().refreshTracked()
+    expect(third).toBe(second)
+    expect(fourth).toBe(second)
+    await tick()
+    // No second fan-out while the first run is in flight.
+    expect(probe.calls).toEqual(['/a', '/b'])
+
+    await drain()
+    await Promise.all([first, second, third, fourth])
+
+    expect(probe.calls).toEqual(['/a', '/b', '/a', '/b'])
+    expect(probe.peak).toBe(2)
+  })
+
+  it('a trailing run picks up a key tracked while the first run was in flight', async () => {
+    trackKeys(['/a', '/b'])
+    const { probe, drain } = holdStatusCalls()
+
+    const first = useGitStatusStore.getState().refreshTracked()
+    await tick()
+    trackKeys(['/a', '/b', '/new'])
+    const trailing = useGitStatusStore.getState().refreshTracked()
+
+    await drain()
+    await Promise.all([first, trailing])
+
+    expect(probe.calls.slice(0, 2)).toEqual(['/a', '/b'])
+    expect(probe.calls.slice(2)).toContain('/new')
+  })
+
+  it('keeps refreshing the other keys when one working copy rejects', async () => {
+    trackKeys(['/a', '/b', '/c', '/d'])
+    const original = useGitStatusStore.getState().refreshWorkingCopy
+    const refreshed: string[] = []
+    useGitStatusStore.setState({
+      refreshWorkingCopy: async (cwd: string) => {
+        refreshed.push(cwd)
+        if (cwd === '/b') throw new Error('exploded')
+      }
+    })
+    try {
+      await expect(useGitStatusStore.getState().refreshTracked()).resolves.toBeUndefined()
+      expect(refreshed.sort()).toEqual(['/a', '/b', '/c', '/d'])
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('tracked refresh failed for /b: exploded')
+        })
+      )
+      // The next call is a fresh run that still includes the failing key.
+      refreshed.length = 0
+      await expect(useGitStatusStore.getState().refreshTracked()).resolves.toBeUndefined()
+      expect(refreshed.sort()).toEqual(['/a', '/b', '/c', '/d'])
+    } finally {
+      useGitStatusStore.setState({ refreshWorkingCopy: original })
+    }
+  })
+
+  it('frees a stuck key after the timeout and skips it until its refresh settles', async () => {
+    vi.useFakeTimers()
+    const original = useGitStatusStore.getState().refreshWorkingCopy
+    try {
+      const keys = Array.from({ length: TRACKED_REFRESH_CONCURRENCY + 2 }, (_, i) => `/k${i}`)
+      trackKeys(keys)
+      const refreshed: string[] = []
+      let releaseStuck: (() => void) | undefined
+      useGitStatusStore.setState({
+        refreshWorkingCopy: (cwd: string) => {
+          refreshed.push(cwd)
+          if (cwd !== '/k0') return Promise.resolve()
+          return new Promise<void>((resolve) => {
+            releaseStuck = resolve
+          })
+        }
+      })
+      /** Starts `refreshTracked`; reports whether it has settled. */
+      const startRun = () => {
+        let settled = false
+        void useGitStatusStore
+          .getState()
+          .refreshTracked()
+          .then(() => {
+            settled = true
+          })
+        return { isSettled: () => settled }
+      }
+
+      const first = startRun()
+      await vi.advanceTimersByTimeAsync(0)
+      // Every other key is refreshed while /k0 holds its slot.
+      expect([...refreshed].sort()).toEqual(keys)
+      expect(first.isSettled()).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(TRACKED_REFRESH_TIMEOUT_MS)
+      expect(first.isSettled()).toBe(true)
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('tracked refresh failed for /k0: timed out')
+        })
+      )
+
+      // The next call is not wedged, and the still-pending key is skipped.
+      refreshed.length = 0
+      const second = startRun()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(second.isSettled()).toBe(true)
+      expect([...refreshed].sort()).toEqual(keys.filter((k) => k !== '/k0'))
+      const skipLogs = () =>
+        mockLogFrontendError.mock.calls.filter(
+          ([entry]) =>
+            entry.message ===
+            '[git-status] tracked refresh skipped for /k0: previous refresh still pending'
+        ).length
+      expect(skipLogs()).toBe(1)
+
+      // Still pending: skipped again, but the episode is logged only once.
+      refreshed.length = 0
+      const again = startRun()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(again.isSettled()).toBe(true)
+      expect([...refreshed].sort()).toEqual(keys.filter((k) => k !== '/k0'))
+      expect(skipLogs()).toBe(1)
+
+      // Once the stuck refresh settles, the key is refreshed again.
+      releaseStuck?.()
+      await vi.advanceTimersByTimeAsync(0)
+      refreshed.length = 0
+      useGitStatusStore.setState({
+        refreshWorkingCopy: (cwd: string) => {
+          refreshed.push(cwd)
+          return Promise.resolve()
+        }
+      })
+      const third = startRun()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(third.isSettled()).toBe(true)
+      expect([...refreshed].sort()).toEqual(keys)
+    } finally {
+      useGitStatusStore.setState({ refreshWorkingCopy: original })
+      vi.useRealTimers()
+    }
   })
 })
 

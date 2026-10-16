@@ -8,7 +8,7 @@ import {
   within
 } from '@testing-library/react'
 import { HashRouter, MemoryRouter, type NavigateFunction, useNavigate } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { logFrontendError } from '@/lib/log-api'
 import {
   pressSystemBack,
@@ -159,7 +159,6 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontFamily: vi.fn(() => 'monospace'),
   useTerminalBufferSize: vi.fn(() => 10000),
   useDefaultShell: vi.fn(() => 'bash'),
-  useMaxTerminalsPerProject: vi.fn(() => 10),
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue'),
@@ -339,7 +338,9 @@ const { gitState } = vi.hoisted(() => ({
     branchCreate: vi.fn()
   }
 }))
-vi.mock('@/stores/git-status-store', () => ({
+vi.mock('@/stores/git-status-store', async (importOriginal) => ({
+  selectChangedFileCount: (await importOriginal<typeof import('@/stores/git-status-store')>())
+    .selectChangedFileCount,
   diffKey: (cwd: string, path: string, staged: boolean) => `${cwd}:${path}:${staged}`,
   selectGitBranch: () => () => null,
   countGitStatuses: () => ({ modified: 0, staged: 0, untracked: 0, hasChanges: false }),
@@ -388,15 +389,6 @@ vi.mock('@/components/workspace/PaneRenderer', async () => {
 
 // P17: shared canonical mock shape for the Story 6 sync hook + banner —
 // identical inline factories across the three WorkspaceLayout suites.
-vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
-  useWorkspaceManifestSync: vi.fn(),
-  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
-  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
-  performManifestWrite: vi.fn().mockResolvedValue(undefined)
-}))
-vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
-  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
-}))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
 // Story 6: the stub mirrors the REAL AppPreferencesModal close wiring —
@@ -451,7 +443,7 @@ vi.mock('@/components/mobile/MobileTerminalControls', () => ({
 
 // CAP-6 Patch 3: SSH workspace lazy/Suspense boundary test.
 // Stub SSHWorkspace + SSHFileExplorer so the lazy chunks resolve to
-// lightweight markers. The ssh-store and ssh-connection hooks are stubbed
+// lightweight markers. The ssh-store hooks are stubbed
 // with a controllable profile ref so the SSH render path activates.
 const { sshProfileRef, sshProfilesRef } = vi.hoisted(() => ({
   sshProfileRef: {
@@ -476,7 +468,9 @@ const { sshProfileRef, sshProfilesRef } = vi.hoisted(() => ({
   }
 }))
 
-vi.mock('@/stores/ssh-store', () => ({
+vi.mock('@/stores/ssh-store', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useSSHWorkspaceOpen: () => sshProfileRef.current !== null,
   useActiveSSHProfile: () => sshProfileRef.current,
   useActiveSSHProfileId: () => (sshProfileRef.current ? 'ssh-1' : null),
   useSSHActions: () => ({
@@ -502,28 +496,8 @@ vi.mock('@/stores/ssh-store', () => ({
   })
 }))
 
-vi.mock('@/hooks/use-ssh-connection', () => ({
-  useSSHConnection: () => ({
-    connectionId: 'conn-1',
-    isConnected: true,
-    sftpReady: true,
-    entries: [],
-    currentPath: '/home',
-    expandedDirs: new Set(),
-    childEntries: {},
-    loadingDirs: new Set(),
-    isLoadingRoot: false,
-    handleConnect: vi.fn(),
-    handleBrowseFiles: vi.fn(),
-    toggleDirectory: vi.fn(),
-    loadDirectory: vi.fn()
-  })
-}))
-
 vi.mock('@/components/ssh/SSHWorkspace', () => ({
-  SSHWorkspace: ({ profile }: { profile: { name?: string } }) => (
-    <div data-testid="ssh-workspace-stub">SSH: {profile?.name}</div>
-  )
+  SSHWorkspace: () => <div data-testid="ssh-workspace-stub">SSH workspace</div>
 }))
 
 vi.mock('@/components/ssh/SSHFileExplorer', () => ({
@@ -549,6 +523,12 @@ function renderLayout(): RenderResult {
 const initialWorkspace = useWorkspaceStore.getState()
 
 describe('WorkspaceLayout mobile branch', () => {
+  // GitPanel is React.lazy. Under full-suite load the first cold transform of
+  // its chunk can outlast findBy timeouts, so load it once up front.
+  beforeAll(async () => {
+    await import('@/components/git/GitPanel')
+  }, 60000)
+
   beforeEach(() => {
     vi.clearAllMocks()
     useGitSheetStore.setState({ open: false, cwd: '', projectId: '' })
@@ -698,7 +678,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
       await chooseTerminalItem('Git changes')
 
-      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
     })
 
     it('threads "Command palette" to the palette overlay', async () => {
@@ -786,11 +766,14 @@ describe('WorkspaceLayout mobile branch', () => {
     renderLayout()
 
     // Sheet starts closed: the GitPanel file-list filter input is absent.
-    expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
     // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
     await chooseMoreItem('Git changes')
     // GitPanel mobile branch renders the file-list filter input (full-width).
-    expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    // First test to load the lazy GitPanel chunk: a cold transform can pass 1s.
+    expect(
+      await screen.findByPlaceholderText('Filter changes', {}, { timeout: 5000 })
+    ).toBeInTheDocument()
   })
 
   // a11y floor: the header ⋯ row that opens the Git sheet is a plain button that
@@ -802,12 +785,12 @@ describe('WorkspaceLayout mobile branch', () => {
 
     const trigger = await screen.findByLabelText('More')
     await chooseMoreItem('Git changes')
-    expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: 'Escape' })
 
     await waitFor(() =>
-      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
     )
     await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
@@ -817,13 +800,13 @@ describe('WorkspaceLayout mobile branch', () => {
 
     const trigger = await screen.findByLabelText('More')
     await chooseMoreItem('Git changes')
-    await screen.findByPlaceholderText('Filter changes...')
+    await screen.findByPlaceholderText('Filter changes')
 
     const sheet = document.querySelector('[data-sheet]') as HTMLElement
     fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
 
     await waitFor(() =>
-      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
     )
     await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
@@ -862,7 +845,7 @@ describe('WorkspaceLayout mobile branch', () => {
       await screen.findByLabelText('More')
       const action = screen.getByRole('button', { name: 'Open Git changes' })
       fireEvent.click(action)
-      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
       expect(useGitSheetStore.getState().cwd).toBe('/demo/.worktrees/chat')
       return { action, view }
     }
@@ -873,7 +856,7 @@ describe('WorkspaceLayout mobile branch', () => {
       fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       await waitFor(() => expect(document.activeElement).toBe(action))
       expect(document.activeElement).not.toBe(screen.getByLabelText('More'))
@@ -886,7 +869,7 @@ describe('WorkspaceLayout mobile branch', () => {
       fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       await waitFor(() => expect(document.activeElement).toBe(action))
     })
@@ -898,7 +881,7 @@ describe('WorkspaceLayout mobile branch', () => {
       await pressSystemBack()
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       await waitFor(() => expect(document.activeElement).toBe(action))
     })
@@ -912,7 +895,7 @@ describe('WorkspaceLayout mobile branch', () => {
       fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       await waitFor(() =>
         expect(logFrontendError).toHaveBeenCalledWith({
@@ -932,7 +915,7 @@ describe('WorkspaceLayout mobile branch', () => {
     renderLayout()
 
     await chooseMoreItem('Git changes')
-    const filter = await screen.findByPlaceholderText('Filter changes...')
+    const filter = await screen.findByPlaceholderText('Filter changes', {}, { timeout: 5000 })
 
     // The ⋯ sheet may still be unmounting; pick the Git sheet itself.
     const sheetContent = filter.closest('[data-sheet]')
@@ -958,7 +941,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // MobileChatShell is React.lazy — wait for the ⋯ button, then the row.
     await chooseMoreItem('Git changes')
-    expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+    expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
 
     // Active project switches to one without a path while the sheet is open.
     projectRef.current = { id: 'p2', name: 'NoPath' }
@@ -972,7 +955,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     // The guard effect closes the sheet → GitPanel file list unmounts.
     await waitFor(() =>
-      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
     )
   })
 
@@ -990,7 +973,7 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
 
       await chooseMoreItem('Git changes')
-      await screen.findByPlaceholderText('Filter changes...')
+      await screen.findByPlaceholderText('Filter changes')
 
       expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo')
       expect(useGitSheetStore.getState()).toMatchObject({
@@ -1006,7 +989,7 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
 
       await chooseMoreItem('Git changes')
-      await screen.findByPlaceholderText('Filter changes...')
+      await screen.findByPlaceholderText('Filter changes')
 
       expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo/.worktrees/a')
       expect(gitState.refreshStatus).not.toHaveBeenCalledWith('/demo')
@@ -1018,7 +1001,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
       act(() => useGitSheetStore.getState().openGitSheet('/demo/.worktrees/chat'))
 
-      await screen.findByPlaceholderText('Filter changes...')
+      await screen.findByPlaceholderText('Filter changes')
       expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo/.worktrees/chat')
     })
 
@@ -1030,14 +1013,14 @@ describe('WorkspaceLayout mobile branch', () => {
       act(() => useGitSheetStore.getState().openGitSheet())
 
       expect(useGitSheetStore.getState().open).toBe(false)
-      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       expect(logFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
     })
 
     it('closes the sheet when the active project changes from the one it opened on', async () => {
       const { rerender } = renderLayout()
       await chooseMoreItem('Git changes')
-      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
 
       // Another project with a path becomes active: the snapshotted cwd would
       // be stale, so the sheet closes instead of re-pointing.
@@ -1051,7 +1034,7 @@ describe('WorkspaceLayout mobile branch', () => {
       )
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       expect(useGitSheetStore.getState().open).toBe(false)
     })
@@ -1059,13 +1042,13 @@ describe('WorkspaceLayout mobile branch', () => {
     it('closes the sheet and the store when Escape dismisses it', async () => {
       renderLayout()
       await chooseMoreItem('Git changes')
-      await screen.findByPlaceholderText('Filter changes...')
+      await screen.findByPlaceholderText('Filter changes')
       expect(useGitSheetStore.getState().open).toBe(true)
 
       fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       expect(useGitSheetStore.getState().open).toBe(false)
     })
@@ -1073,12 +1056,12 @@ describe('WorkspaceLayout mobile branch', () => {
     it("closes the sheet and the store from the sheet's own Close button", async () => {
       renderLayout()
       await chooseMoreItem('Git changes')
-      await screen.findByPlaceholderText('Filter changes...')
+      await screen.findByPlaceholderText('Filter changes')
 
       fireEvent.click(screen.getByRole('button', { name: 'Close' }))
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       expect(useGitSheetStore.getState().open).toBe(false)
     })
@@ -1086,7 +1069,7 @@ describe('WorkspaceLayout mobile branch', () => {
     it('closes the store when the layout unmounts, so a remount starts cold', async () => {
       const { unmount } = renderLayout()
       await chooseMoreItem('Git changes')
-      await screen.findByPlaceholderText('Filter changes...')
+      await screen.findByPlaceholderText('Filter changes')
       expect(useGitSheetStore.getState().open).toBe(true)
 
       unmount()
@@ -1102,7 +1085,7 @@ describe('WorkspaceLayout mobile branch', () => {
       renderLayout()
 
       await chooseMoreItem('Git changes')
-      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
 
       // The overlay grew the stack 0 → 1: the managed reconciler arms one
       // history sentinel, and a real back press pops it.
@@ -1111,7 +1094,7 @@ describe('WorkspaceLayout mobile branch', () => {
       await pressSystemBack()
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       expect(window.location.hash).toBe(hashBefore)
       expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
@@ -1133,7 +1116,7 @@ describe('WorkspaceLayout mobile branch', () => {
       )
 
       await chooseMoreItem('Git changes')
-      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
       await waitForSentinelDepth(1)
 
       // The router pushes a route (no popstate): the layout hands its new
@@ -1147,7 +1130,7 @@ describe('WorkspaceLayout mobile branch', () => {
       await pressSystemBack()
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       expect(window.location.hash).toBe('#/snapshots')
       expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
@@ -1158,13 +1141,13 @@ describe('WorkspaceLayout mobile branch', () => {
 
       const trigger = await screen.findByLabelText('More')
       await chooseMoreItem('Git changes')
-      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+      expect(await screen.findByPlaceholderText('Filter changes')).toBeInTheDocument()
 
       await waitForSentinelDepth(1)
       await pressSystemBack()
 
       await waitFor(() =>
-        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+        expect(screen.queryByPlaceholderText('Filter changes')).not.toBeInTheDocument()
       )
       await waitFor(() => expect(document.activeElement).toBe(trigger))
     })
@@ -1266,52 +1249,6 @@ describe('WorkspaceLayout mobile branch', () => {
         backSpy.mockRestore()
         goSpy.mockRestore()
         pushSpy.mockRestore()
-      })
-
-      describe('SSH password prompt', () => {
-        async function openSshPrompt(): Promise<void> {
-          sshProfilesRef.current = [
-            {
-              id: 'ssh-9',
-              name: 'Build box',
-              host: 'build.example',
-              username: 'dev',
-              authMethod: 'password',
-              hasStoredPassword: false
-            }
-          ]
-          renderLayout()
-          await chooseMoreItem('Command palette')
-          await waitForSentinelDepth(1)
-
-          // The palette closes and the inline prompt opens in one batch.
-          fireEvent.click(await screen.findByRole('button', { name: 'Connect SSH profile' }))
-          expect(await screen.findByText('SSH Password')).toBeInTheDocument()
-          await settleOverlayBackStack()
-          expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
-        }
-
-        it('system back closes the prompt and clears it', async () => {
-          await openSshPrompt()
-          const hashBefore = window.location.hash
-
-          await pressSystemBack()
-
-          await waitFor(() => expect(screen.queryByText('SSH Password')).not.toBeInTheDocument())
-          expect(window.location.hash).toBe(hashBefore)
-          expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
-        })
-
-        it('its Cancel button consumes the sentinel', async () => {
-          await openSshPrompt()
-
-          await act(async () => {
-            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-          })
-
-          expect(screen.queryByText('SSH Password')).not.toBeInTheDocument()
-          await waitForSentinelDepth(0)
-        })
       })
 
       it('system back closes App Preferences', async () => {
@@ -1928,7 +1865,7 @@ describe('WorkspaceLayout SSH workspace lazy/Suspense boundary (CAP-6 Patch 3)',
     }
   })
 
-  it('renders SSHWorkspace through React.lazy + <Suspense> when an SSH profile is active', async () => {
+  it('renders SSHWorkspace through React.lazy + <Suspense> when the SSH workspace is open', async () => {
     renderLayout()
 
     // SSHWorkspace is React.lazy — <Suspense> shows ShellSkeleton first, then
@@ -1936,6 +1873,6 @@ describe('WorkspaceLayout SSH workspace lazy/Suspense boundary (CAP-6 Patch 3)',
     // (also lazy) wraps workspaceMain which contains the SSH render site.
     const ssh = await screen.findByTestId('ssh-workspace-stub')
     expect(ssh).toBeInTheDocument()
-    expect(ssh).toHaveTextContent('Test SSH')
+    expect(ssh).toHaveTextContent('SSH workspace')
   })
 })

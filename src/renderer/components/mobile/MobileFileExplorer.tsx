@@ -368,7 +368,6 @@ export function MobileFileExplorer({
             >
               <MaterialFileIcon
                 name={entry.name}
-                extension={entry.extension}
                 isDirectory={entry.type === 'directory'}
                 isExpanded={false}
                 depth={0}

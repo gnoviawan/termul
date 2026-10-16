@@ -27,16 +27,8 @@ vi.mock('@/stores/project-store', () => ({
   })
 }))
 
-vi.mock('@/lib/tauri-remote-api', () => ({
-  setHostDefaultProject: vi.fn()
-}))
-
-vi.mock('@/lib/web-server-api', () => ({
-  webServerProjects: vi.fn()
-}))
-
-vi.mock('@/lib/tauri-runtime', () => ({
-  isTauriContext: () => false
+vi.mock('@/lib/project-registry-api', () => ({
+  projectRegistryApi: { setDefault: vi.fn() }
 }))
 
 import { ProjectSwitcherDrawer } from './ProjectSwitcherDrawer'

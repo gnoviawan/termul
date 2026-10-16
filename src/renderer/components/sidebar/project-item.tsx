@@ -90,7 +90,7 @@ export const ProjectItem = memo(function ProjectItem({
               'rounded-lg',
               RAIL_ROW_INSET_CLASS,
               'transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-              isActive ? 'keycap text-foreground' : 'hover:bg-foreground/[0.03]'
+              isActive ? 'keycap text-foreground' : 'hover:bg-row-hover focus-within:bg-row-hover'
             )}
             aria-current={isActive ? 'page' : undefined}
             aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
@@ -111,56 +111,65 @@ export const ProjectItem = memo(function ProjectItem({
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span
-                className={cn(
-                  // flex-1 min-w-0 is required for truncate to clip inside a flex row
-                  'min-w-0 flex-1 truncate font-medium transition-colors duration-150 ease-out',
-                  isActive
-                    ? 'text-foreground'
-                    : 'text-secondary-foreground group-hover:text-foreground'
+              // Name and diff stat share one box whose width never changes on
+              // hover: the actions sit on top of its end, over a fade, so
+              // nothing reflows and the name is not cut again.
+              <span className="relative flex min-w-0 flex-1 items-center gap-2">
+                <span
+                  className={cn(
+                    // flex-1 min-w-0 is required for truncate to clip inside a flex row
+                    'min-w-0 flex-1 truncate font-medium transition-colors duration-150 ease-out',
+                    isActive
+                      ? 'text-foreground'
+                      : 'text-secondary-foreground group-hover:text-foreground'
+                  )}
+                  title={project.name}
+                >
+                  {project.name}
+                </span>
+                {diffStat && (
+                  <span className="flex shrink-0">
+                    <ProjectDiffStat stat={diffStat} />
+                  </span>
                 )}
-                title={project.name}
-              >
-                {project.name}
+                <span
+                  className={cn(
+                    'absolute inset-y-0 right-0 hidden items-center gap-1 bg-gradient-to-l to-transparent pl-6 group-hover:flex group-focus-within:flex',
+                    // The fade ends in the row's own surface: the Rail keycap
+                    // fill when active, the hover wash otherwise. It shows
+                    // under the same conditions as the wash (hover and
+                    // focus-within).
+                    isActive
+                      ? 'from-[var(--rail-keycap)] from-60%'
+                      : 'from-row-hover-solid from-60%'
+                  )}
+                  data-testid="project-row-actions"
+                >
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSettingsClick()
+                    }}
+                    className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    title="Project settings"
+                    aria-label={`Settings for ${project.name}`}
+                  >
+                    <Settings size={12} />
+                  </button>
+                  {shortcut && (
+                    <Kbd className="inline-flex h-4.5 shrink-0 items-center px-1">{shortcut}</Kbd>
+                  )}
+                </span>
               </span>
             )}
-            {/* Right slot: status marks, then (hover/active) settings + shortcut.
-                The activity spinner yields to the rename input. */}
+            {/* Status marks stay outside the name box: always visible, and the
+                needs-you pill stays clickable. The activity spinner yields to
+                the rename input. */}
             <ProjectStatusMarks
               status={isEditing && status.live === 'activity' ? { ...status, live: null } : status}
               onOpenNeedsYou={onOpenNeedsYou}
             />
-            {diffStat && (
-              <span className="flex shrink-0 group-hover:hidden group-focus-within:hidden">
-                <ProjectDiffStat stat={diffStat} />
-              </span>
-            )}
-            {!isEditing && (
-              <span
-                className={cn(
-                  'shrink-0 items-center gap-1 transition-opacity duration-150 ease-out',
-                  diffStat ? 'hidden group-hover:flex group-focus-within:flex' : 'flex',
-                  isActive && !diffStat
-                    ? 'opacity-100'
-                    : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-                )}
-              >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onSettingsClick()
-                  }}
-                  className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  title="Project settings"
-                  aria-label={`Settings for ${project.name}`}
-                >
-                  <Settings size={12} />
-                </button>
-                {shortcut && (
-                  <Kbd className="inline-flex h-4.5 shrink-0 items-center px-1">{shortcut}</Kbd>
-                )}
-              </span>
-            )}
           </div>
         </ContextMenuTrigger>
         {renderContextMenu?.(project)}

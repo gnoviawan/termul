@@ -48,9 +48,9 @@ when a user instance is running.
 
 Shared: `--seed` (determinism), `--exe`, `--keep-state` (debugging),
 `--use-real-agent <id>` (drive a REAL catalog agent instead of the fake —
-the runner calls `acp_install_agent`, persists the `installedBinaryConfig`
-under `acp-registry:<id>`, and seeds `agents/last-selected` so the launcher
-picks it; the same composer UI drives it. `--use-real-agent opencode` plus
+the runner sends `install_acp_agent` over the `/ws` channel carrier, persists
+the `installedBinaryConfig` under `acp-registry:<id>`, and seeds
+`agents/last-selected` so the launcher picks it; the same composer UI drives it. `--use-real-agent opencode` plus
 the agent's built-in `opencode/*-free` models gives a zero-auth, no-cost
 real-agent run).
 

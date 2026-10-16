@@ -29,7 +29,10 @@ fn entity_keys_name_the_first_entity_and_never_collide_across_kinds() {
         key("send_prompt", json!({"agentId": "a", "sessionId": "s", "text": "x"})),
     );
     assert_eq!(key("install_acp_agent", json!({"agentId": "a"})).as_deref(), Some("agent:a"));
-    assert_eq!(key("watch_project", json!({"projectId": "p"})).as_deref(), Some("project:p"));
+    assert_eq!(
+        key("watch", json!({"watch": "fs", "scope": "p"})).as_deref(),
+        Some("watch:fs:p")
+    );
     assert_eq!(
         key("watch", json!({"watch": "projects"})),
         key("unwatch", json!({"watch": "projects", "scope": ""})),

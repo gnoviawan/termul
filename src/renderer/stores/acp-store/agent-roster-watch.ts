@@ -1,12 +1,11 @@
 /**
  * The agent roster on web: the host's `agents` watch replaces the sid-less
- * `agent_spawned` / `agent_crashed` / `agent_error` / `agent_disconnected`
- * events the relay used to broadcast with `seq = 0`.
+ * `agent_spawned` / `agent_crashed` / `agent_error` / `agent_disconnected` and
+ * `browser_open_request` events the relay used to broadcast with `seq = 0`.
  *
  * A delta carries one of those events with its original payload and goes to
- * the same store reducers a desktop event does. An `agent_removed` delta (an
- * intentional kill, which has no event) disconnects an agent the store still
- * tracks. The full state (on every
+ * the same store reducers a desktop event does. A kill or an idle reap arrives
+ * as `agent_disconnected` with a `reason`. The full state (on every
  * subscribe, so after a reconnect or a lost delta) is reconciled against what
  * the store holds: an agent the host lists that the store lacks counts as
  * spawned, a connected agent the host no longer lists counts as disconnected.
@@ -18,7 +17,8 @@ import type {
   AgentCrashedEvent,
   AgentDisconnectedEvent,
   AgentErrorEvent,
-  AgentSpawnedEvent
+  AgentSpawnedEvent,
+  BrowserOpenRequestEvent
 } from '@/lib/acp-api'
 import type { WatchClient } from '@/lib/acp-transport/watch-client'
 import { logFrontendError } from '@/lib/log-api'
@@ -45,7 +45,7 @@ function reconcileRoster(state: AcpState, summaries: WsAgentSummary[]): void {
   }
   for (const agentId of Object.keys(state.agents)) {
     if (listed.has(agentId) || state.agentStatus[agentId] !== 'connected') continue
-    state._onAgentDisconnected({ agentId })
+    state._onAgentDisconnected({ agentId, reason: 'killed' })
   }
 }
 
@@ -78,12 +78,9 @@ function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
     case 'agent_disconnected':
       state._onAgentDisconnected(delta.payload as AgentDisconnectedEvent)
       return
-    case 'agent_removed':
-      // The host killed the agent on purpose and sent no lifecycle event. The
-      // client that asked for the kill drops the agent from the store itself,
-      // so only an agent still tracked here (whatever its status, e.g. one
-      // left in `error` by a failed turn) is disconnected.
-      if (state.agents[agentId]) state._onAgentDisconnected({ agentId })
+    case 'browser_open_request':
+      // Not roster state: the host's browser-open shim captured an auth URL.
+      state._onBrowserOpenRequest(delta.payload as BrowserOpenRequestEvent)
       return
     default:
       void logFrontendError({

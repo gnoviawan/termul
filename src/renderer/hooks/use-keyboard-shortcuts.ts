@@ -1,8 +1,10 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { useSharedKeySync } from '@/lib/shared-key-sync'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
-import { getDefaultKeyboardShortcuts, KEYBOARD_SHORTCUTS_KEY } from '@/types/settings'
+import { getDefaultKeyboardShortcuts } from '@/types/settings'
 
 // Deep clone the platform-aware defaults (issue #858: Alt-based on web,
 // Ctrl-based on desktop) preserving customKey from loaded data.
@@ -23,9 +25,16 @@ function mergeWithDefaults(loaded: Partial<KeyboardShortcutsConfig>): KeyboardSh
 export function useKeyboardShortcutsLoader(): void {
   const setShortcuts = useKeyboardShortcutsStore((state) => state.setShortcuts)
 
+  // A change another device or tab saved: show it without a reload.
+  useSharedKeySync<KeyboardShortcutsConfig>(PersistenceKeys.keyboardShortcuts, (change) => {
+    if (change.exists && change.data) setShortcuts(mergeWithDefaults(change.data))
+  })
+
   useEffect(() => {
     async function load(): Promise<void> {
-      const result = await persistenceApi.read<KeyboardShortcutsConfig>(KEYBOARD_SHORTCUTS_KEY)
+      const result = await persistenceApi.read<KeyboardShortcutsConfig>(
+        PersistenceKeys.keyboardShortcuts
+      )
       if (result.success && result.data) {
         // Merge with defaults to handle new shortcuts added in updates
         setShortcuts(mergeWithDefaults(result.data))
@@ -50,7 +59,7 @@ export function useUpdateShortcut(): (id: string, customKey: string) => Promise<
       updateShortcut(id, customKey)
       // Zustand updates are synchronous, so getState() returns updated state
       const updatedShortcuts = useKeyboardShortcutsStore.getState().shortcuts
-      await persistenceApi.writeDebounced(KEYBOARD_SHORTCUTS_KEY, updatedShortcuts)
+      await persistenceApi.writeDebounced(PersistenceKeys.keyboardShortcuts, updatedShortcuts)
     },
     [updateShortcut]
   )
@@ -63,7 +72,7 @@ export function useResetShortcut(): (id: string) => Promise<void> {
     async (id: string) => {
       resetShortcut(id)
       const updatedShortcuts = useKeyboardShortcutsStore.getState().shortcuts
-      await persistenceApi.writeDebounced(KEYBOARD_SHORTCUTS_KEY, updatedShortcuts)
+      await persistenceApi.writeDebounced(PersistenceKeys.keyboardShortcuts, updatedShortcuts)
     },
     [resetShortcut]
   )
@@ -75,6 +84,6 @@ export function useResetAllShortcuts(): () => Promise<void> {
   return useCallback(async () => {
     resetAllShortcuts()
     const updatedShortcuts = useKeyboardShortcutsStore.getState().shortcuts
-    await persistenceApi.write(KEYBOARD_SHORTCUTS_KEY, updatedShortcuts)
+    await persistenceApi.write(PersistenceKeys.keyboardShortcuts, updatedShortcuts)
   }, [resetAllShortcuts])
 }

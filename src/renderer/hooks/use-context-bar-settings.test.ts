@@ -1,11 +1,8 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
-import {
-  CONTEXT_BAR_SETTINGS_KEY,
-  type ContextBarSettings,
-  DEFAULT_CONTEXT_BAR_SETTINGS
-} from '@/types/settings'
+import { type ContextBarSettings, DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
 import { useContextBarSettings, useUpdateContextBarSetting } from './use-context-bar-settings'
 
 const { mockPersistenceRead, mockPersistenceWriteDebounced } = vi.hoisted(() => ({
@@ -54,7 +51,7 @@ describe('useContextBarSettings', () => {
       expect(useContextBarSettingsStore.getState().isLoaded).toBe(true)
     })
 
-    expect(mockPersistenceRead).toHaveBeenCalledWith(CONTEXT_BAR_SETTINGS_KEY)
+    expect(mockPersistenceRead).toHaveBeenCalledWith(PersistenceKeys.contextBarSettings)
   })
 
   it('keeps defaults when no persisted key exists', async () => {
@@ -169,7 +166,7 @@ describe('useUpdateContextBarSetting', () => {
       ...DEFAULT_CONTEXT_BAR_SETTINGS,
       showGitStatus: true
     })
-    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(CONTEXT_BAR_SETTINGS_KEY, {
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(PersistenceKeys.contextBarSettings, {
       ...DEFAULT_CONTEXT_BAR_SETTINGS,
       showGitStatus: true
     })

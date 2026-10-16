@@ -1,7 +1,8 @@
 use super::diff_stat::{
-    count_lines, count_untracked_lines, drain_capped, parse_numstat, probe_head, StdoutCap,
-    MAX_UNTRACKED_FILES, MAX_UNTRACKED_FILE_BYTES,
+    count_lines, count_untracked_lines, parse_numstat, probe_head, MAX_UNTRACKED_FILES,
+    MAX_UNTRACKED_FILE_BYTES,
 };
+use super::git_exec::GitRunError;
 use super::*;
 use std::sync::atomic::AtomicU32;
 
@@ -157,14 +158,14 @@ fn count_untracked_lines_never_follows_symlinks() {
 
 #[test]
 fn diff_stat_error_has_stable_code() {
-    let e = DiffStatError::GitFailed {
+    let e = DiffStatError::from(GitRunError::GitFailed {
         command: "diff",
         detail: "boom".to_string(),
-    };
+    });
     assert_eq!(e.code(), "GIT_DIFF_STAT_ERROR");
     assert_eq!(e.to_string(), "git diff failed: boom");
     assert_eq!(
-        DiffStatError::GitUnavailable("x".to_string()).code(),
+        DiffStatError::from(GitRunError::GitUnavailable("x".to_string())).code(),
         "GIT_DIFF_STAT_ERROR"
     );
 }
@@ -361,7 +362,7 @@ fn probe_head_non_repo_is_git_failed_not_no_head() {
     }
     let dir = unique_temp_dir("probe-not-a-repo");
     let err = probe_head(dir.to_str().unwrap()).expect_err("non-repo probe must fail");
-    assert!(matches!(err, DiffStatError::GitFailed { .. }), "{err:?}");
+    assert!(matches!(err, GitRunError::GitFailed { .. }), "{err:?}");
 }
 
 #[test]
@@ -369,7 +370,7 @@ fn probe_head_spawn_failure_is_git_unavailable() {
     let parent = unique_temp_dir("probe-missing");
     let dir = parent.join("does-not-exist");
     let err = probe_head(dir.to_str().unwrap()).expect_err("missing cwd must fail");
-    assert!(matches!(err, DiffStatError::GitUnavailable(_)), "{err:?}");
+    assert!(matches!(err, GitRunError::GitUnavailable(_)), "{err:?}");
 }
 
 #[test]
@@ -384,39 +385,4 @@ fn it_broken_object_store_is_an_error_not_an_empty_tree_stat() {
     // must fail instead of silently counting existing content as additions.
     std::fs::remove_dir_all(repo.join(".git").join("objects")).expect("remove objects");
     assert!(git_get_diff_stat(repo.to_str().unwrap()).is_err());
-}
-
-// ---- stdout cap while draining ----
-
-#[test]
-fn drain_capped_keeps_first_n_nul_paths_and_drains_the_rest() {
-    let data: Vec<u8> = b"a\0b\0c\0d\0e\0".to_vec();
-    let kept = drain_capped(
-        Some(std::io::Cursor::new(data.clone())),
-        StdoutCap::NulPaths(3),
-    )
-    .join()
-    .unwrap();
-    assert_eq!(kept, b"a\0b\0c\0");
-    let all = drain_capped(
-        Some(std::io::Cursor::new(data.clone())),
-        StdoutCap::Unbounded,
-    )
-    .join()
-    .unwrap();
-    assert_eq!(all, data);
-}
-
-#[test]
-fn drain_capped_reads_past_the_cap_across_chunk_boundaries() {
-    // More than one read chunk of paths, so the cap lands mid-stream and the
-    // reader must still reach EOF.
-    let mut data = Vec::new();
-    for i in 0..5000 {
-        data.extend_from_slice(format!("dir/file-{i}.txt\0").as_bytes());
-    }
-    let kept = drain_capped(Some(std::io::Cursor::new(data)), StdoutCap::NulPaths(1000))
-        .join()
-        .unwrap();
-    assert_eq!(kept.iter().filter(|b| **b == 0).count(), 1000);
 }

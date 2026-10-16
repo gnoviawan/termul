@@ -102,6 +102,7 @@ function detectLanguage(filePath: string): string {
     scss: 'css',
     html: 'html',
     htm: 'html',
+    astro: 'astro',
     md: 'markdown',
     yaml: 'yaml',
     yml: 'yaml',

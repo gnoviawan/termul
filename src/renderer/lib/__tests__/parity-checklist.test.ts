@@ -195,7 +195,8 @@ const P1_DOMAINS: DomainCheck[] = [
       // Tauri adapter — pins desktop↔web terminal parity.
       'attach',
       'rotateClaim',
-      'revokeClaim'
+      'revokeClaim',
+      'listPreserved'
     ],
     apiBridgeExport: 'terminalApi',
     testFile: 'tauri-terminal-api.test.ts' // May not exist yet, check in test
@@ -217,21 +218,6 @@ const P1_DOMAINS: DomainCheck[] = [
     methods: ['onShortcut'],
     apiBridgeExport: 'keyboardApi',
     testFile: 'tauri-keyboard-api.test.ts' // May not exist yet
-  },
-  // CAP-5 / Story 5: Workspace manifest facade + parity surfaces. The
-  // Tauri adapter (tauri-workspace-manifest-api.ts) mirrors the three
-  // `#[tauri::command] workspace_manifest_*` handlers; the web adapter
-  // (web-workspace-manifest-api.ts) mirrors the three HTTP routes in
-  // `web/workspace_api.rs`. Both return the SAME `IpcResult<...>` shape
-  // byte-for-byte; this entry pins desktop↔web manifest parity.
-  {
-    domain: 'WorkspaceManifest',
-    priority: 'P1',
-    tauriAdapterFile: 'tauri-workspace-manifest-api.ts',
-    adapterExportName: 'createTauriWorkspaceManifestApi',
-    methods: ['getManifest', 'writeManifest', 'deleteManifest'],
-    apiBridgeExport: 'workspaceManifestApi',
-    testFile: 'tauri-workspace-manifest-api.test.ts'
   }
 ]
 
@@ -401,145 +387,6 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
-  // CAP-5 / Story 5: Workspace manifest parity surfaces. Pins that the
-  // desktop Tauri command + the web HTTP route + the renderer facade all
-  // carry the SAME shape (camelCase IpcResult + tag=status WriteOutcome).
-  // A drift between any pair surfaces here as a parity test failure.
-  describe('Workspace Manifest parity (CAP-5)', () => {
-    const TauriAdapter = join(LIB_DIR, 'tauri-workspace-manifest-api.ts')
-    const WebAdapter = join(LIB_DIR, 'web-workspace-manifest-api.ts')
-
-    it('tauri-workspace-manifest-api.ts exists and exports the factory', () => {
-      expect(existsSync(TauriAdapter), 'tauri-workspace-manifest-api.ts should exist').toBe(true)
-      expect(
-        fileContains(
-          'tauri-workspace-manifest-api.ts',
-          /export\s+(const|function)\s+\bcreateTauriWorkspaceManifestApi\b/
-        ),
-        'should export createTauriWorkspaceManifestApi'
-      ).toBe(true)
-    })
-
-    it('web-workspace-manifest-api.ts exists and exports the singleton', () => {
-      expect(existsSync(WebAdapter), 'web-workspace-manifest-api.ts should exist').toBe(true)
-      expect(
-        fileContains(
-          'web-workspace-manifest-api.ts',
-          /export\s+const\s+\bwebWorkspaceManifestApi\b/
-        ),
-        'should export webWorkspaceManifestApi'
-      ).toBe(true)
-    })
-
-    it('facade singleton exists and branches Tauri vs web by isTauriContext()', () => {
-      const facade = join(LIB_DIR, 'workspace-manifest-api.ts')
-      expect(existsSync(facade), 'workspace-manifest-api.ts should exist').toBe(true)
-      const content = readFileSync(facade, 'utf-8')
-      expect(content).toMatch(/isTauriContext\(\)/)
-      expect(content).toMatch(/createTauriWorkspaceManifestApi/)
-      expect(content).toMatch(/webWorkspaceManifestApi/)
-    })
-
-    it('api.ts exports the workspaceManifestApi singleton', () => {
-      const apiPath = join(LIB_DIR, 'api.ts')
-      const content = readFileSync(apiPath, 'utf-8')
-      expect(content).toMatch(/export\s*\{[^}]*\bworkspaceManifestApi\b[^}]*\}/)
-    })
-
-    it('Tauri adapter invokes the three commands (get/write/delete)', () => {
-      const content = readFileSync(TauriAdapter, 'utf-8')
-      expect(content).toMatch(/workspace_manifest_get/)
-      expect(content).toMatch(/workspace_manifest_write/)
-      expect(content).toMatch(/workspace_manifest_delete/)
-      // The Tauri adapter must pass through `basedRevision` (null = initial
-      // write) + `manifest` + `projectId` to the write command — these are
-      // the camelCase wire args the Rust `#[tauri::command]` declares.
-      expect(content).toMatch(/basedRevision/)
-      expect(content).toMatch(/manifest/)
-      expect(content).toMatch(/projectId/)
-    })
-
-    it('Web adapter hits the three HTTP routes (GET /workspace/:id, POST write, POST delete)', () => {
-      const content = readFileSync(WebAdapter, 'utf-8')
-      expect(content).toMatch(/\/workspace\/\$\{encoded\}/)
-      expect(content).toMatch(/\/workspace\/\$\{encoded\}\/write/)
-      expect(content).toMatch(/\/workspace\/\$\{encoded\}\/delete/)
-      // Network/parse failures must map to `NETWORK_ERROR` (mirrors the
-      // existing web-server-api.ts transport-failure convention).
-      expect(content).toMatch(/NETWORK_ERROR/)
-    })
-
-    it('both adapters expose getManifest / writeManifest / deleteManifest on the typed facade', () => {
-      const tauri = readFileSync(TauriAdapter, 'utf-8')
-      const web = readFileSync(WebAdapter, 'utf-8')
-      for (const method of ['getManifest', 'writeManifest', 'deleteManifest']) {
-        expect(tauri, `tauri-workspace-manifest-api.ts should implement ${method}`).toMatch(
-          new RegExp(`\\b${method}\\s*\\(`)
-        )
-        expect(web, `web-workspace-manifest-api.ts should implement ${method}`).toMatch(
-          new RegExp(`\\b${method}\\s*\\(`)
-        )
-      }
-    })
-
-    it('Story 6 sync hook imports workspaceManifestApi from the facade (not direct transport impls)', () => {
-      // Story 6 wires the renderer to the manifest via the facade singleton
-      // only; it must never import the tauri/web transport impls directly
-      // (Biome's noRestrictedImports bans @tauri-apps/** outside lib/, and
-      // the facade is the transport-neutral seam). This assertion pins that
-      // the sync hook calls through `@/lib/workspace-manifest-api`.
-      const syncHookPath = join(LIB_DIR, '..', 'hooks', 'use-workspace-manifest-sync.ts')
-      expect(existsSync(syncHookPath), 'use-workspace-manifest-sync.ts should exist').toBe(true)
-      const content = readFileSync(syncHookPath, 'utf-8')
-      // P15: must be an actual import line (not a comment mentioning the path).
-      expect(content).toMatch(/^\s*import\s+.*from\s+['"]@\/lib\/workspace-manifest-api['"]/m)
-      // Must NOT import the transport impls directly (strengthened to require
-      // an import-line match, not a bare string mention).
-      expect(content).not.toMatch(
-        /^\s*import\s+.*from\s+['"]@\/lib\/tauri-workspace-manifest-api['"]/m
-      )
-      expect(content).not.toMatch(
-        /^\s*import\s+.*from\s+['"]@\/lib\/web-workspace-manifest-api['"]/m
-      )
-    })
-
-    it('shared types file exists with expected exports (Patch 16)', () => {
-      // Patch 16: this test was previously named "shared types file exists
-      // and mirrors the Rust serde shapes (camelCase)" but only greps for
-      // export presence — it does NOT verify TS field names match Rust serde
-      // field names byte-for-byte (that would require running the Rust
-      // serde shape tests, which live in the Rust suite). Renamed for
-      // accuracy; the Rust side has its own serde shape pinning tests.
-      const typesPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'workspace-manifest.types.ts')
-      expect(existsSync(typesPath), 'workspace-manifest.types.ts should exist').toBe(true)
-      const content = readFileSync(typesPath, 'utf-8')
-      // Core shapes mirrored from `src-tauri/src/acp/workspace_manifest.rs`.
-      expect(content).toMatch(/export\s+interface\s+WorkspaceManifest\b/)
-      expect(content).toMatch(/export\s+type\s+WriteOutcome\b/)
-      expect(content).toMatch(/export\s+interface\s+TerminalDescriptor\b/)
-      expect(content).toMatch(/export\s+interface\s+EditorDescriptor\b/)
-      expect(content).toMatch(/export\s+type\s+PaneNode\b/)
-      // WriteOutcome must be the discriminated union with `status: 'updated' |
-      // 'conflict'` (byte-identical to the Rust serde tagged enum).
-      expect(content).toMatch(/status:\s*'updated'/)
-      expect(content).toMatch(/status:\s*'conflict'/)
-    })
-
-    it('ipc.types.ts declares the WorkspaceManifestIpcChannels map (Patch 11)', () => {
-      // Patch 11: the channel keys use the colon-separated pattern
-      // (`workspace:manifest:get`, etc.) to mirror the existing
-      // `TerminalIpcChannels` (`terminal:spawn`, `terminal:attach`, …).
-      const ipcPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'ipc.types.ts')
-      const content = readFileSync(ipcPath, 'utf-8')
-      expect(content).toMatch(/WorkspaceManifestIpcChannels\b/)
-      // All three channel keys must be present (colon-separated, mirroring
-      // `TerminalIpcChannels`'s `terminal:spawn` pattern).
-      expect(content).toMatch(/'workspace:manifest:get'/)
-      expect(content).toMatch(/'workspace:manifest:write'/)
-      expect(content).toMatch(/'workspace:manifest:delete'/)
-    })
-  })
-
   describe('Factory key host transport parity', () => {
     it('uses matching desktop and web commands without browser persistence', () => {
       const content = readFileSync(join(LIB_DIR, 'factory-key-api.ts'), 'utf-8')
@@ -560,27 +407,13 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
-  // CAP-6 / Story 8: ACP Catalog parity. Mirrors the Workspace Manifest block:
-  // the host-resolved catalog ships on THREE transports (Tauri command
-  // `acp_list_catalog` / `acp_set_catalog_opt_in`, HTTP `GET /acp/catalog` /
-  // `POST /acp/catalog/opt-in`, WS `list_acp_catalog` / `set_catalog_opt_in`).
-  // This block pins the TS-side parity (the Rust-side parity — router route +
-  // ws handler + Tauri command registration — is covered by the Rust test
-  // suite).
+  // CAP-6 / Story 8: ACP Catalog parity. The host-resolved catalog ships on
+  // two carriers: HTTP `GET /acp/catalog` / `POST /acp/catalog/opt-in` (web)
+  // and the `/ws` requests `list_acp_catalog` / `set_catalog_opt_in` (desktop
+  // channel and web). This block pins the TS-side parity (the Rust-side parity
+  // — router route + ws handler — is covered by the Rust test suite).
   describe('ACP Catalog parity (CAP-6)', () => {
-    const TauriAdapter = join(LIB_DIR, 'tauri-acp-catalog-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-acp-catalog-api.ts')
-
-    it('tauri-acp-catalog-api.ts exists and exports the factory', () => {
-      expect(existsSync(TauriAdapter), 'tauri-acp-catalog-api.ts should exist').toBe(true)
-      expect(
-        fileContains(
-          'tauri-acp-catalog-api.ts',
-          /export\s+(const|function)\s+\bcreateTauriAcpCatalogApi\b/
-        ),
-        'should export createTauriAcpCatalogApi'
-      ).toBe(true)
-    })
 
     it('web-acp-catalog-api.ts exists and exports the singleton', () => {
       expect(existsSync(WebAdapter), 'web-acp-catalog-api.ts should exist').toBe(true)
@@ -590,25 +423,10 @@ describe('Parity Checklist Automation', () => {
       ).toBe(true)
     })
 
-    it('facade singleton exists and branches Tauri vs web by isTauriContext()', () => {
-      const facade = join(LIB_DIR, 'acp-catalog-api.ts')
-      expect(existsSync(facade), 'acp-catalog-api.ts should exist').toBe(true)
-      const content = readFileSync(facade, 'utf-8')
-      expect(content).toMatch(/isTauriContext\(\)/)
-      expect(content).toMatch(/createTauriAcpCatalogApi/)
-      expect(content).toMatch(/webAcpCatalogApi/)
-    })
-
     it('api.ts exports the acpCatalogApi singleton', () => {
       const apiPath = join(LIB_DIR, 'api.ts')
       const content = readFileSync(apiPath, 'utf-8')
       expect(content).toMatch(/export\s*\{[^}]*\bacpCatalogApi\b[^}]*\}/)
-    })
-
-    it('Tauri adapter invokes the catalog commands (list_catalog + set_catalog_opt_in)', () => {
-      const content = readFileSync(TauriAdapter, 'utf-8')
-      expect(content).toMatch(/acp_list_catalog/)
-      expect(content).toMatch(/acp_set_catalog_opt_in/)
     })
 
     it('Web adapter hits the catalog routes (GET /acp/catalog + POST /acp/catalog/opt-in)', () => {
@@ -617,19 +435,6 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/\/acp\/catalog\/opt-in/)
       // Network/parse failures must map to `NETWORK_ERROR`.
       expect(content).toMatch(/NETWORK_ERROR/)
-    })
-
-    it('both adapters expose listCatalog + setCatalogOptIn + isCatalogOptedIn on the typed facade', () => {
-      const tauri = readFileSync(TauriAdapter, 'utf-8')
-      const web = readFileSync(WebAdapter, 'utf-8')
-      for (const method of ['listCatalog', 'setCatalogOptIn', 'isCatalogOptedIn']) {
-        expect(tauri, `tauri-acp-catalog-api.ts should implement ${method}`).toMatch(
-          new RegExp(`\\b${method}\\s*\\(`)
-        )
-        expect(web, `web-acp-catalog-api.ts should implement ${method}`).toMatch(
-          new RegExp(`\\b${method}\\s*\\(`)
-        )
-      }
     })
 
     it('shared types file exists with expected exports', () => {
@@ -660,24 +465,12 @@ describe('Parity Checklist Automation', () => {
   })
 
   // CAP-6 / Story 9: ACP Install parity. The host-owned verified-atomic
-  // install ships on THREE transports (Tauri command `acp_install_agent`,
-  // HTTP `POST /acp/install`, WS `install_acp_agent`). This block pins the
-  // TS-side parity (the Rust-side parity — router route + ws handler + Tauri
-  // command registration — is covered by the Rust test suite).
+  // install ships on two carriers: HTTP `POST /acp/install` (web) and the
+  // `/ws` request `install_acp_agent` (desktop channel and web). This block
+  // pins the TS-side parity (the Rust-side parity — router route + ws handler
+  // — is covered by the Rust test suite).
   describe('ACP Install parity (CAP-6)', () => {
-    const TauriAdapter = join(LIB_DIR, 'tauri-acp-install-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-acp-install-api.ts')
-
-    it('tauri-acp-install-api.ts exists and exports the factory', () => {
-      expect(existsSync(TauriAdapter), 'tauri-acp-install-api.ts should exist').toBe(true)
-      expect(
-        fileContains(
-          'tauri-acp-install-api.ts',
-          /export\s+(const|function)\s+\bcreateTauriAcpInstallApi\b/
-        ),
-        'should export createTauriAcpInstallApi'
-      ).toBe(true)
-    })
 
     it('web-acp-install-api.ts exists and exports the singleton', () => {
       expect(existsSync(WebAdapter), 'web-acp-install-api.ts should exist').toBe(true)
@@ -687,24 +480,10 @@ describe('Parity Checklist Automation', () => {
       ).toBe(true)
     })
 
-    it('facade singleton exists and branches Tauri vs web by isTauriContext()', () => {
-      const facade = join(LIB_DIR, 'acp-install-api.ts')
-      expect(existsSync(facade), 'acp-install-api.ts should exist').toBe(true)
-      const content = readFileSync(facade, 'utf-8')
-      expect(content).toMatch(/isTauriContext\(\)/)
-      expect(content).toMatch(/createTauriAcpInstallApi/)
-      expect(content).toMatch(/webAcpInstallApi/)
-    })
-
     it('api.ts exports the acpInstallApi singleton', () => {
       const apiPath = join(LIB_DIR, 'api.ts')
       const content = readFileSync(apiPath, 'utf-8')
       expect(content).toMatch(/export\s*\{[^}]*\bacpInstallApi\b[^}]*\}/)
-    })
-
-    it('Tauri adapter invokes the install command (acp_install_agent)', () => {
-      const content = readFileSync(TauriAdapter, 'utf-8')
-      expect(content).toMatch(/acp_install_agent/)
     })
 
     it('Web adapter hits the install route (POST /acp/install)', () => {
@@ -712,17 +491,6 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/\/acp\/install/)
       // Network/parse failures must map to `NETWORK_ERROR`.
       expect(content).toMatch(/NETWORK_ERROR/)
-    })
-
-    it('both adapters expose installAgent on the typed facade', () => {
-      const tauri = readFileSync(TauriAdapter, 'utf-8')
-      const web = readFileSync(WebAdapter, 'utf-8')
-      expect(tauri, 'tauri-acp-install-api.ts should implement installAgent').toMatch(
-        /\binstallAgent\s*\(/
-      )
-      expect(web, 'web-acp-install-api.ts should implement installAgent').toMatch(
-        /\binstallAgent\s*\(/
-      )
     })
 
     it('shared types file exists with expected exports', () => {
@@ -748,14 +516,17 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
-  // Epic 7 — cross-client workspace continuity: the explicit host-default
-  // change ships on THREE transports (Tauri command `set_host_default_project`,
-  // HTTP `POST /projects/default`, WS `set_default_project` request). This
-  // block pins the TS-side parity (the Rust-side parity — router route + ws
-  // handler + Tauri command registration — is covered by the Rust test suite).
-  // Also pins the wire rename `activeProjectId` → `defaultProjectId` +
-  // `ProjectSummary.isActive` → `isDefault`.
-  describe('Project default parity (Epic 7)', () => {
+  // Project registry parity (story 8): the host owns the project list and
+  // every surface changes it through ONE renderer facade over the `/ws`
+  // transport (the browser over its WebSocket, the desktop over its Channel
+  // carrier) — no per-surface Tauri command, no per-surface HTTP client. The
+  // Rust side (ws handlers, HTTP routes, durable registry) is covered by the
+  // Rust test suite. Also pins the wire rename `activeProjectId` →
+  // `defaultProjectId` + `ProjectSummary.isActive` → `isDefault`.
+  describe('Project registry parity (story 8)', () => {
+    const Facade = join(LIB_DIR, 'project-registry-api.ts')
+    const TransportTypes = join(LIB_DIR, 'acp-transport', 'types.ts')
+    const WsTransport = join(LIB_DIR, 'acp-transport', 'ws-transport.ts')
     const TauriRemoteApi = join(LIB_DIR, 'tauri-remote-api.ts')
     const WebServerApi = join(LIB_DIR, 'web-server-api.ts')
     const SharedTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-projects.types.ts')
@@ -776,38 +547,45 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/projectId:\s*string/)
     })
 
-    it('tauri-remote-api.ts exports setHostDefaultProject + invokes set_host_default_project', () => {
-      expect(existsSync(TauriRemoteApi), 'tauri-remote-api.ts should exist').toBe(true)
-      const content = readFileSync(TauriRemoteApi, 'utf-8')
-      expect(content).toMatch(/export\s+async\s+function\s+setHostDefaultProject\b/)
-      expect(content).toMatch(/set_host_default_project/)
+    it('project-registry-api.ts exposes the commands over the shared transport only', () => {
+      expect(existsSync(Facade), 'project-registry-api.ts should exist').toBe(true)
+      const content = readFileSync(Facade, 'utf-8')
+      for (const operation of ['add', 'update', 'archive', 'restore', 'remove', 'setDefault']) {
+        expect(content, operation).toMatch(new RegExp(`\\b${operation}\\(`))
+      }
+      expect(content).toMatch(/getAcpTransport\(\)/)
+      // One implementation for both surfaces: no surface branch, no raw invoke,
+      // no HTTP client, no browser storage.
+      expect(content).not.toMatch(/isTauriContext/)
+      expect(content).not.toMatch(/\binvoke(Ipc)?\b/)
+      expect(content).not.toMatch(/fetch\(/)
+      expect(content).not.toMatch(/localStorage(?:\.|\[)/)
     })
 
-    it('web-server-api.ts exposes setDefaultProject hitting POST /projects/default', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/setDefaultProject\b/)
-      expect(content).toMatch(/\/projects\/default/)
-    })
-    it('web-server-api.ts exposes addProject hitting POST /projects', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/addProject\b/)
-      expect(content).toMatch(/postJson.*\/projects'/)
-    })
-
-    it('web-server-api.ts exposes updateProject hitting PUT /projects/{id}', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/updateProject\b/)
-      expect(content).toMatch(/\/projects\/\$\{encodeURIComponent\(projectId\)\}/)
+    it('the transport declares and sends the four project requests', () => {
+      const types = readFileSync(TransportTypes, 'utf-8')
+      const ws = readFileSync(WsTransport, 'utf-8')
+      for (const method of ['addProject', 'updateProject', 'removeProject', 'setDefaultProject']) {
+        expect(types, method).toMatch(new RegExp(`\\b${method}\\(`))
+      }
+      for (const request of [
+        'add_project',
+        'update_project',
+        'remove_project',
+        'set_default_project'
+      ]) {
+        expect(ws, request).toMatch(new RegExp(`'${request}'`))
+      }
     })
 
-    it('web-server-api.ts exposes removeProject hitting DELETE /projects/{id}', () => {
-      expect(existsSync(WebServerApi), 'web-server-api.ts should exist').toBe(true)
-      const content = readFileSync(WebServerApi, 'utf-8')
-      expect(content).toMatch(/removeProject\b/)
-      expect(content).toMatch(/method:\s*'DELETE'/)
+    it('the old per-surface project calls are retired', () => {
+      const tauri = readFileSync(TauriRemoteApi, 'utf-8')
+      expect(tauri).not.toMatch(/syncProjects|remote_sync_projects/)
+      expect(tauri).not.toMatch(/setHostDefaultProject|set_host_default_project/)
+      expect(tauri).toMatch(/export\s+async\s+function\s+projectRegistryImport\b/)
+      expect(tauri).toMatch(/project_registry_import/)
+      const web = readFileSync(WebServerApi, 'utf-8')
+      expect(web).not.toMatch(/webServerProjects/)
     })
   })
 
@@ -871,7 +649,6 @@ describe('Parity Checklist Automation', () => {
       'session_payload.rs'
     )
     const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager')
-    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'commands.rs')
     const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws')
     const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
     const AcpApi = join(LIB_DIR, 'acp-api.ts')
@@ -895,12 +672,6 @@ describe('Parity Checklist Automation', () => {
       const content = readRustModule(ManagerRust)
       expect(content).toMatch(/fn record_agent_switch/)
       expect(content).toMatch(/EVENT_AGENT_SWITCH/)
-    })
-
-    it('acp/commands.rs registers the acp_record_agent_switch Tauri command', () => {
-      expect(existsSync(CommandsRust), 'acp/commands.rs should exist').toBe(true)
-      const content = readFileSync(CommandsRust, 'utf-8')
-      expect(content).toMatch(/pub async fn acp_record_agent_switch/)
     })
 
     it('web/ws serves the record_agent_switch route (web parity)', () => {
@@ -928,7 +699,6 @@ describe('Parity Checklist Automation', () => {
       // dir (same layout as acp-store.ts) — grep the whole surface.
       const transportContent = readTsModule(AcpTransport.replace(/\.ts$/, ''))
       expect(transportContent).toMatch(/recordAgentSwitch/)
-      expect(transportContent).toMatch(/acp_record_agent_switch/)
       expect(transportContent).toMatch(/'record_agent_switch'/)
     })
 
@@ -982,11 +752,10 @@ describe('Parity Checklist Automation', () => {
   // negotiated capabilities + auth methods + stable namespace — the renderer
   // populates them synchronously from the response. This block pins the Rust
   // `SpawnOutcome` struct + the TS `SpawnAgentResult` shape + the WS request
-  // type + the Tauri command + the `agent_spawned` event channel.
+  // type + the `agent_spawned` event channel.
   describe('Agent Spawn Metadata parity (CAP-4)', () => {
     const AcpApi = join(LIB_DIR, 'acp-api.ts')
     const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
-    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'commands.rs')
     const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager')
 
     it('Rust SpawnOutcome carries capabilities + auth_methods + stable_namespace', () => {
@@ -1015,12 +784,6 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/'spawn_agent'/)
       expect(content).toMatch(/agent_spawned/) // the event channel (reliability tier)
     })
-
-    it('Tauri command acp_spawn_agent is registered', () => {
-      expect(existsSync(CommandsRust), 'acp/commands.rs should exist').toBe(true)
-      const content = readFileSync(CommandsRust, 'utf-8')
-      expect(content).toMatch(/acp_spawn_agent/)
-    })
   })
 
   // Category E: cross-client host-authority composition. The host (Tauri
@@ -1029,9 +792,7 @@ describe('Parity Checklist Automation', () => {
   // block statically asserts every cross-client state facade reaches for the
   // host, never the `localStorage` API:
   //   - acp-history-api.ts          → invoke (desktop Tauri command)
-  //   - workspace-manifest-api.ts   → branches to host-backed adapters
   //   - terminal-api.ts + adapters  → invoke (desktop) / WS (web)
-  //   - use-workspace-manifest-sync → reads via workspaceManifestApi.getManifest
   //   - acp-transport.ts            → subscribes via WS subscribe + lastSeq
   //
   // NOTE: real-browser Playwright/Cypress tests (mobile suspension, reconnect,
@@ -1041,24 +802,15 @@ describe('Parity Checklist Automation', () => {
   // not localStorage — the authority model the contract requires.
   describe('Cross-client host-authority (CAP-1..6)', () => {
     const HistoryFacade = join(LIB_DIR, 'acp-history-api.ts')
-    const ManifestFacade = join(LIB_DIR, 'workspace-manifest-api.ts')
     const TerminalFacade = join(LIB_DIR, 'terminal-api.ts')
     const TauriTerminalAdapter = join(LIB_DIR, 'tauri-terminal-api.ts')
     const WebTerminalAdapter = join(LIB_DIR, 'web-terminal-api.ts')
-    const ManifestSyncHook = join(LIB_DIR, '..', 'hooks', 'use-workspace-manifest-sync.ts')
     const Transport = join(LIB_DIR, 'acp-transport.ts')
 
     it('acp-history-api.ts calls the host (invoke), never localStorage', () => {
       expect(existsSync(HistoryFacade)).toBe(true)
       const content = readFileSync(HistoryFacade, 'utf-8')
       expect(content).toMatch(/invoke/)
-      expect(content).not.toMatch(/localStorage(?:\.|\[)/)
-    })
-
-    it('workspace-manifest-api.ts branches to host-backed adapters, never localStorage', () => {
-      expect(existsSync(ManifestFacade)).toBe(true)
-      const content = readFileSync(ManifestFacade, 'utf-8')
-      expect(content).toMatch(/isTauriContext\(\)/)
       expect(content).not.toMatch(/localStorage(?:\.|\[)/)
     })
 
@@ -1081,14 +833,6 @@ describe('Parity Checklist Automation', () => {
       // The web adapter is WS-backed (the host WS is the authority) — no localStorage.
       expect(existsSync(WebTerminalAdapter)).toBe(true)
       expect(readFileSync(WebTerminalAdapter, 'utf-8')).not.toMatch(/localStorage(?:\.|\[)/)
-    })
-
-    it('use-workspace-manifest-sync reads via workspaceManifestApi.getManifest, never localStorage', () => {
-      expect(existsSync(ManifestSyncHook), 'use-workspace-manifest-sync.ts should exist').toBe(true)
-      const content = readFileSync(ManifestSyncHook, 'utf-8')
-      expect(content).toMatch(/workspaceManifestApi/)
-      expect(content).toMatch(/getManifest/)
-      expect(content).not.toMatch(/localStorage(?:\.|\[)/)
     })
 
     it('acp-transport.ts subscribes via WS subscribe + lastSeq, never localStorage as the cursor', () => {
@@ -1258,43 +1002,38 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
-  // CAP — Web worktree parity. The 7 launch-flow worktree ops ship on THREE
-  // transports (Tauri command `worktree_*`, HTTP `/worktree/*` route, facade
-  // branch `isTauriContext()` between `invoke(...)` and `webServerWorktree`).
-  // This block pins the TS-side parity (the Rust-side parity — router routes +
-  // Tauri command registration + `web/worktree_api.rs` — is covered by the Rust
-  // test suite). The 8 advanced ops stay `WEB_UNSUPPORTED` on web (deferred).
   describe('Worktree parity (CAP — Web worktree parity)', () => {
     const Facade = join(LIB_DIR, 'worktree-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-    const RouterRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs')
-    const WorktreeApiRust = join(
-      LIB_DIR,
-      '..',
-      '..',
-      '..',
-      'src-tauri',
-      'src',
-      'web',
-      'worktree_api.rs'
-    )
+    const WebRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web')
+    const RouterRust = join(WebRust, 'router.rs')
+    const WorktreeApiRust = join(WebRust, 'worktree_api.rs')
+    const WorktreeSymlinksRust = join(WebRust, 'worktree_api', 'symlinks.rs')
     const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands')
 
-    const LAUNCH_FLOW_METHODS = [
+    const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+    const WEB_OPS = [
       'list',
       'create',
       'remove',
       'branches',
-      'checkDirty',
-      'resolveBaseBranch',
-      'copyIncludeFiles'
-    ] as const
+      'check-dirty',
+      'resolve-base-branch',
+      'copy-include-files',
+      'parse-gitignore',
+      'create-symlinks',
+      'ensure-symlinks'
+    ].map((name) => ({
+      route: `/worktree/${name}`,
+      method: name.replace(/-(\w)/g, (_, c: string) => c.toUpperCase()),
+      handler: name.replaceAll('-', '_'),
+      command: `worktree_${name.replaceAll('-', '_')}`
+    }))
+    const OTHER_WEB_METHODS = ['renameBranch']
 
-    const ADVANCED_METHODS = [
+    const DESKTOP_ONLY_METHODS = [
       'removeAllManaged',
-      'parseGitignore',
-      'createSymlinks',
-      'ensureSymlinks',
       'archive',
       'restore',
       'mergePreview',
@@ -1308,88 +1047,56 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/webServerWorktree/)
     })
 
-    it('web-server-api.ts exports webServerWorktree hitting the 7 routes', () => {
+    it('web-server-api.ts exports webServerWorktree hitting every web route', () => {
       expect(existsSync(WebAdapter), 'web-server-api.ts should exist').toBe(true)
       const content = readFileSync(WebAdapter, 'utf-8')
       expect(content).toMatch(/export\s+const\s+\bwebServerWorktree\b/)
-      for (const route of [
-        '/worktree/list',
-        '/worktree/create',
-        '/worktree/remove',
-        '/worktree/branches',
-        '/worktree/check-dirty',
-        '/worktree/resolve-base-branch',
-        '/worktree/copy-include-files'
-      ]) {
+      for (const { route } of WEB_OPS) {
         expect(content, `web-server-api.ts should hit ${route}`).toMatch(
-          new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+          new RegExp(escapeRe(route))
         )
       }
       // Network/parse failures must map to `NETWORK_ERROR`.
       expect(content).toMatch(/NETWORK_ERROR/)
     })
 
-    it('facade branches the 7 launch-flow methods (invoke on Tauri, webServerWorktree on web)', () => {
+    it('facade branches every web method (invoke on Tauri, webServerWorktree on web)', () => {
       const content = readFileSync(Facade, 'utf-8')
-      for (const method of LAUNCH_FLOW_METHODS) {
+      for (const { method } of WEB_OPS) {
         expect(content, `worktree-api.ts should branch ${method}`).toMatch(
-          new RegExp(`\\b${method}\\s*\\(`)
+          new RegExp(`webServerWorktree\\.${method}\\(`)
         )
       }
-      // The 7 launch-flow methods + `renameBranch` (story 16) reference
-      // `webServerWorktree` (the web branch).
-      const launchFlowRefs = (content.match(/webServerWorktree\./g) ?? []).length
-      expect(
-        launchFlowRefs,
-        '7 launch-flow methods + renameBranch should reference webServerWorktree'
-      ).toBe(8)
+      const webRefs = (content.match(/webServerWorktree\./g) ?? []).length
+      expect(webRefs).toBe(WEB_OPS.length + OTHER_WEB_METHODS.length)
     })
 
-    it('facade keeps the 8 advanced methods as WEB_UNSUPPORTED (no webServerWorktree ref)', () => {
+    it('facade keeps the desktop-only methods as WEB_UNSUPPORTED (no webServerWorktree ref)', () => {
       const content = readFileSync(Facade, 'utf-8')
-      for (const method of ADVANCED_METHODS) {
+      for (const method of DESKTOP_ONLY_METHODS) {
         expect(content, `worktree-api.ts should still define ${method}`).toMatch(
           new RegExp(`\\b${method}\\s*:`)
         )
+        expect(content).not.toMatch(new RegExp(`webServerWorktree\\.${method}\\b`))
       }
-      // Exactly 8 webServerWorktree refs (7 launch-flow + story 16 `renameBranch`) —
-      // the advanced methods do NOT branch.
-      const launchFlowRefs = (content.match(/webServerWorktree\./g) ?? []).length
-      expect(launchFlowRefs).toBe(8)
     })
 
-    it('router.rs registers the 7 /worktree/* routes ahead of the static fallback', () => {
+    it('router.rs registers every /worktree/* web route ahead of the static fallback', () => {
       expect(existsSync(RouterRust), 'router.rs should exist').toBe(true)
       const content = readFileSync(RouterRust, 'utf-8')
-      for (const route of [
-        '/worktree/list',
-        '/worktree/create',
-        '/worktree/remove',
-        '/worktree/branches',
-        '/worktree/check-dirty',
-        '/worktree/resolve-base-branch',
-        '/worktree/copy-include-files'
-      ]) {
-        expect(content, `router.rs should register ${route}`).toMatch(
-          new RegExp(route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-        )
+      for (const { route } of WEB_OPS) {
+        expect(content, `router.rs should register ${route}`).toMatch(new RegExp(escapeRe(route)))
       }
     })
 
-    it('worktree_api.rs exists and defines the 7 Axum handlers', () => {
+    it('worktree_api.rs and worktree_api/symlinks.rs define the Axum handlers', () => {
       expect(existsSync(WorktreeApiRust), 'worktree_api.rs should exist').toBe(true)
-      const content = readFileSync(WorktreeApiRust, 'utf-8')
-      for (const handler of [
-        'pub async fn list',
-        'pub async fn create',
-        'pub async fn remove',
-        'pub async fn branches',
-        'pub async fn check_dirty',
-        'pub async fn resolve_base_branch',
-        'pub async fn copy_include_files'
-      ]) {
-        expect(content, `worktree_api.rs should define ${handler}`).toMatch(
-          new RegExp(handler.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      const content = [WorktreeApiRust, WorktreeSymlinksRust]
+        .map((file) => readFileSync(file, 'utf-8'))
+        .join('\n')
+      for (const { handler } of WEB_OPS) {
+        expect(content, `the web worktree routes should define ${handler}`).toMatch(
+          new RegExp(`pub async fn ${handler}\\b`)
         )
       }
       // IpcBody contract + spawn_blocking + tracing logs.
@@ -1401,20 +1108,12 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/ensure_within_project_boundary/)
     })
 
-    it('commands module defines the 7 desktop Tauri commands (worktree_*)', () => {
+    it('commands module defines the desktop Tauri command for every web route', () => {
       expect(existsSync(CommandsRust), 'commands module should exist').toBe(true)
       const content = readRustModule(CommandsRust)
-      for (const cmd of [
-        'worktree_list',
-        'worktree_create',
-        'worktree_remove',
-        'worktree_branches',
-        'worktree_check_dirty',
-        'worktree_resolve_base_branch',
-        'worktree_copy_include_files'
-      ]) {
+      for (const { command: cmd } of WEB_OPS) {
         expect(content, `commands module should define ${cmd}`).toMatch(
-          new RegExp(`\\b${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+          new RegExp(`\\b${escapeRe(cmd)}\\b`)
         )
       }
     })
@@ -1766,8 +1465,7 @@ describe('Parity Checklist Automation', () => {
   // behind the bearer web auth gate), with the phone-width shell gated by a
   // typed UNSUPPORTED_SURFACE failure. This block pins the TS-side parity
   // (the Rust-side parity — commands/canvas.rs + web/canvas_api.rs + router
-  // registration — is covered by the Rust test suite), following the
-  // WorkspaceManifest parity (CAP-5) block shape.
+  // registration — is covered by the Rust test suite).
   describe('Canvas parity (OpenPencil canvas mode)', () => {
     const TauriAdapter = join(LIB_DIR, 'tauri-canvas-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-canvas-api.ts')
@@ -1911,8 +1609,9 @@ describe('Parity Checklist Automation', () => {
       expect(readFileSync(paneContent, 'utf-8')).toMatch(/CanvasPanel/)
 
       const tabBar = join(LIB_DIR, '..', 'components', 'workspace', 'WorkspaceTabBar.tsx')
-      expect(readFileSync(tabBar, 'utf-8')).toMatch(/case 'canvas'/)
-      expect(readFileSync(tabBar, 'utf-8')).toMatch(/closeCanvas/)
+      expect(readFileSync(tabBar, 'utf-8')).toMatch(/closeWorkspaceTab/)
+      const tabClose = join(LIB_DIR, 'workspace-tab-close.ts')
+      expect(readFileSync(tabClose, 'utf-8')).toMatch(/canvas: \(tab\) => \{[^}]*closeCanvas/)
 
       // The workspace store owns the singleton-per-project tab id helper.
       const workspaceStoreTree = join(LIB_DIR, '..', 'stores', 'workspace-store', 'tree.ts')
@@ -1930,15 +1629,6 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/runSerializedMcpRegistryMutation/)
       // Web entries carry the bearer header for the gated /canvas/mcp route.
       expect(content).toMatch(/Authorization/)
-    })
-
-    it('canvas tabs are dropped as non-portable by the workspace manifest sync', () => {
-      const syncHook = join(LIB_DIR, '..', 'hooks', 'use-workspace-manifest-sync.ts')
-      expect(existsSync(syncHook), 'use-workspace-manifest-sync.ts should exist').toBe(true)
-      const content = readFileSync(syncHook, 'utf-8')
-      // The serializer's non-portable drop list names canvas explicitly
-      // (terminal/editor are the only projected kinds).
-      expect(content).toMatch(/canvas: dropped/i)
     })
 
     it('Rust hosts both transports (commands/canvas.rs + web/canvas_api.rs)', () => {
@@ -1965,49 +1655,49 @@ describe('Parity Checklist Automation', () => {
   })
 })
 
-// #856 (web explorer live refresh): the FS-change event must land on BOTH
-// surfaces — the server-side notify watcher broadcasting `fs_changed` over
-// the control WS (Rust: web/fs_watcher + web/sink) and the shared protocol
-// registry (web-protocol.types.ts) + the renderer filesystem facade's web
-// bridge that dispatches through the SAME onFileChanged chain the desktop
-// tauri-plugin-fs watcher feeds. This block pins all four pieces.
+// #856 (web explorer live refresh): the FS-change push must land on BOTH
+// surfaces — the server-side notify watcher publishing `fs` watch deltas over
+// the control WS (Rust: web/fs_watcher + web/watch) and the shared protocol
+// registry (web-protocol.types.ts) + the renderer filesystem facade's watch
+// that dispatches through the SAME onFileChanged chain the desktop
+// tauri-plugin-fs watcher feeds. This block pins the pieces.
 describe('Web FS watcher parity (#856)', () => {
   const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
   const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
 
-  it('web/fs_watcher is a refcounted per-projectId notify watch hub', () => {
+  it('web/fs_watcher is a refcounted per-projectId notify watch hub that publishes through the watch hub', () => {
     const watcher = join(root, 'web', 'fs_watcher')
     expect(existsSync(watcher), 'web/fs_watcher module should exist').toBe(true)
     const content = readRustModule(watcher)
     expect(content).toMatch(/recommended_watcher/)
     expect(content).toMatch(/RecursiveMode::Recursive/)
     expect(content).toMatch(/pub struct FsWatchHub/)
-    expect(content).toMatch(/FsChangedPayload/)
-    expect(content).toMatch(/"fs_changed"/)
+    expect(content).toMatch(/WatchKind::Fs/)
+    expect(content).not.toMatch(/"fs_changed"|"fs_watch_ended"/)
   })
 
-  it('ws/watch.rs handles watch_project / unwatch_project and dispatch routes them', () => {
+  it('ws/watch.rs serves the fs watch through watch / unwatch; the per-project requests are gone', () => {
     const handlers = readFileSync(join(root, 'web', 'ws', 'watch.rs'), 'utf-8')
-    expect(handlers).toMatch(/fn handle_watch_project/)
-    expect(handlers).toMatch(/fn handle_unwatch_project/)
+    expect(handlers).toMatch(/WatchKind::Fs =>/)
+    expect(handlers).not.toMatch(/handle_watch_project|handle_unwatch_project/)
     const dispatch = readFileSync(join(root, 'web', 'ws', 'dispatch.rs'), 'utf-8')
-    expect(dispatch).toMatch(/"watch_project"/)
-    expect(dispatch).toMatch(/"unwatch_project"/)
+    expect(dispatch).not.toMatch(/"watch_project"|"unwatch_project"/)
   })
 
-  it('web-protocol.types.ts registers fs_changed (event type + reliable tier)', () => {
+  it('web-protocol.types.ts names the fs watch and no longer registers fs_changed or watch_project', () => {
     expect(existsSync(ProtoTypes), 'web-protocol.types.ts should exist').toBe(true)
     const content = readFileSync(ProtoTypes, 'utf-8')
-    expect(content).toMatch(/'fs_changed'/)
-    expect(content).toMatch(/fs_changed: WS_RELAY_TIERS\.RELIABLE/)
+    expect(content).toMatch(/'fs',/)
+    expect(content).not.toMatch(/'fs_changed'|'fs_watch_ended'|'watch_project'|'unwatch_project'/)
   })
 
-  it('the filesystem facade bridges fs_changed into the shared callback chain on web', () => {
+  it('the filesystem facade watches the fs scope and feeds the shared callback chain on web', () => {
     expect(existsSync(FsFacade), 'tauri-filesystem-api.ts should exist').toBe(true)
     const content = readFileSync(FsFacade, 'utf-8')
-    expect(content).toMatch(/wireWebFsChangedBridge/)
-    expect(content).toMatch(/'acp:fs_changed'/)
+    expect(content).toMatch(/startProjectFsWatch/)
+    expect(content).toMatch(/watches\.subscribe<FsWatchState, FsWatchDelta>/)
+    expect(content).not.toMatch(/acp:fs_changed|wireWebFsChangedBridge/)
   })
 })
 
@@ -2130,11 +1820,13 @@ describe('Worktree branch rename parity (shell revamp story 16)', () => {
     expect(readFileSync(LibRust, 'utf-8')).toMatch(/commands::worktree_rename_branch,/)
   })
 
-  it('the worktree_branch_renamed event is in the protocol registry and the history refetch list', () => {
+  it('the worktree_branch_renamed rename is a chat_history watch delta, not a registered event', () => {
     const protocol = readFileSync(ProtocolTypes, 'utf-8')
-    expect(protocol).toMatch(/'worktree_branch_renamed'/)
-    expect(protocol).toMatch(/worktree_branch_renamed: WS_RELAY_TIERS\.RELIABLE/)
-    expect(readFileSync(SinkRust, 'utf-8')).toMatch(/"worktree_branch_renamed"/)
+    expect(protocol).not.toMatch(/worktree_branch_renamed: WS_RELAY_TIERS/)
+    expect(protocol).toMatch(/event\?: 'worktree_branch_renamed'/)
+    const bridge = readFileSync(SinkRust, 'utf-8')
+    expect(bridge).toMatch(/"worktree_branch_renamed"/)
+    expect(bridge).toMatch(/publish_worktree_branch_renamed/)
   })
 
   it('both renderer roots mount useWorktreeBranchRenamed next to useAcpHistory', () => {
@@ -2196,6 +1888,40 @@ describe('Bounded delivery parity (host heartbeat, gap frame)', () => {
   })
 })
 
+describe('Shared chat read marker parity (cross-surface unread)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const protocol = readFileSync(
+    join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts'),
+    'utf-8'
+  )
+
+  it('one host service owns the marker and the relay serves it to every carrier', () => {
+    const service = readFileSync(join(SRC_TAURI, 'web', 'chat_reads.rs'), 'utf-8')
+    expect(service).toMatch(/pub fn mark\(&self, session_id: &str, head: &LogHead, seq: u64\)/)
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(/"mark_chat_read" => handle_mark_chat_read/)
+    const sources = readFileSync(join(SRC_TAURI, 'web', 'watch', 'sources.rs'), 'utf-8')
+    expect(sources).toMatch(/WatchKind::ChatReads/)
+  })
+
+  it('the protocol declares the request, its class and the watch payloads', () => {
+    expect(protocol).toMatch(/'mark_chat_read',/)
+    expect(protocol).toMatch(/mark_chat_read: \['idempotent', null\]/)
+    expect(protocol).toMatch(/interface ChatReadsWatchState/)
+  })
+
+  it('the transport facade and the shell tracker carry it on both renderer roots', () => {
+    const transport = readTsModule(join(LIB_DIR, 'acp-transport'))
+    expect(transport).toMatch(/markChatRead\(sessionId: SessionId, seq: number\)/)
+    expect(transport).toMatch(/'mark_chat_read'/)
+    const shell = readFileSync(join(LIB_DIR, '..', 'hooks', 'use-shell-unread-tracker.ts'), 'utf-8')
+    expect(shell).toMatch(/startChatReadSync\(\)/)
+    expect(shell).toMatch(/useChatReadMarker\(activeSessionIds\)/)
+    const layout = readFileSync(join(LIB_DIR, '..', 'layouts', 'WorkspaceLayout.tsx'), 'utf-8')
+    expect(layout).toMatch(/useShellUnreadTracker\(\)/)
+  })
+})
+
 describe('Watch hub parity (projects, chat history, agent roster)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const hubSource = readFileSync(join(SRC_TAURI, 'web', 'watch', 'hub.rs'), 'utf-8')
@@ -2242,5 +1968,130 @@ describe('Watch hub parity (projects, chat history, agent roster)', () => {
       expect(source, parts.join('/')).not.toMatch(/projects_changed|chat_history_changed/)
     }
     expect(protocol).not.toMatch(/^\s*'(projects_changed|chat_history_changed)',?$/m)
+  })
+})
+
+describe('Claude Accounts parity (ADR-0004)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const desktopTransport = readFileSync(
+    join(LIB_DIR, 'acp-transport', 'desktop-transport.ts'),
+    'utf-8'
+  )
+  const wsTransport = readFileSync(join(LIB_DIR, 'acp-transport', 'ws-transport.ts'), 'utf-8')
+  const facade = readFileSync(join(LIB_DIR, 'claude-accounts-api.ts'), 'utf-8')
+
+  it('desktop and web reach the same list/default/project operations', () => {
+    // Desktop speaks /ws over the Tauri Channel carrier, so it inherits these.
+    expect(desktopTransport).toMatch(/class DesktopAcpTransport extends WsAcpTransport/)
+    expect(desktopTransport).not.toMatch(/ClaudeAccount|ClaudeUsage/)
+    const dispatch = read('web', 'ws', 'dispatch.rs')
+    for (const request of [
+      'list_claude_accounts',
+      'list_claude_usage',
+      'set_default_claude_account',
+      'set_project_claude_account'
+    ]) {
+      expect(wsTransport).toContain(`'${request}'`)
+      expect(dispatch).toContain(`"${request}" => handle_${request}`)
+    }
+  })
+
+  it('add, sign-in, rename and remove are desktop-only and gated in the facade', () => {
+    const dispatch = read('web', 'ws', 'dispatch.rs')
+    for (const command of [
+      'claude_accounts_add',
+      'claude_accounts_login',
+      'claude_accounts_login_cancel',
+      'claude_accounts_rename',
+      'claude_accounts_remove'
+    ]) {
+      expect(facade).toContain(`'${command}'`)
+      expect(read('lib.rs')).toContain(`acp::commands::${command}`)
+    }
+    expect(dispatch).not.toMatch(/"(add|login|rename|remove)_claude_account"/)
+    expect(facade).toMatch(/if \(!isTauriContext\(\)\) return Promise\.reject/)
+  })
+
+  it('the spawn sends the projectId that selects the account on every carrier', () => {
+    // Desktop and the browser share the /ws spawn_agent handler. The host
+    // command file no longer has a per-domain spawn command.
+    expect(wsTransport).toMatch(/'spawn_agent',\s*\{ config, projectId: projectId \?\? null \}/)
+    expect(read('web', 'ws', 'agents.rs')).toMatch(/project_id: Option<String>/)
+    expect(read('acp', 'manager', 'mod.rs')).toMatch(/project_id: Option<String>/)
+  })
+})
+
+// Git History commit detail + commit file diff (main-panel Git History tab).
+// Source-grep checks pin that one shared Rust function backs each Tauri command
+// AND its web read route, and that the renderer facade reaches both.
+describe('Git History commit detail parity', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const GitApiFacade = join(LIB_DIR, 'git-api.ts')
+  const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
+  const RouterRust = join(SRC_TAURI, 'web', 'router.rs')
+  const RouteRust = join(SRC_TAURI, 'web', 'git_history_api.rs')
+  const ServiceRust = join(SRC_TAURI, 'trackers', 'git_tracker', 'commit_detail.rs')
+  const CommandsGitRust = join(SRC_TAURI, 'commands', 'git.rs')
+  const LibRust = join(SRC_TAURI, 'lib.rs')
+
+  const OPS = [
+    {
+      method: 'getCommitDetail',
+      command: 'git_get_commit_detail',
+      route: '/git/commit-detail',
+      handler: 'get_commit_detail',
+      payload: 'GitCommitDetail'
+    },
+    {
+      method: 'getCommitFileDiff',
+      command: 'git_get_commit_file_diff',
+      route: '/git/commit-file-diff',
+      handler: 'get_commit_file_diff',
+      payload: 'GitCommitFileDiff'
+    }
+  ] as const
+
+  for (const op of OPS) {
+    it(`git-api.ts branches ${op.method} on isTauriContext() between invoke and webServerGit`, () => {
+      const content = readFileSync(GitApiFacade, 'utf-8')
+      expect(content).toMatch(new RegExp(`${op.method}: async`))
+      expect(content).toMatch(new RegExp(`invokeIpc<\\w+>\\('${op.command}'`))
+      expect(content).toMatch(new RegExp(`webServerGit\\.${op.method}\\(`))
+    })
+
+    it(`web-server-api.ts exposes webServerGit.${op.method} hitting ${op.route}`, () => {
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(new RegExp(`async ${op.method}\\(`))
+      expect(content).toContain(`'${op.route}'`)
+    })
+
+    it(`router.rs registers ${op.route} in BOTH router variants`, () => {
+      const content = readFileSync(RouterRust, 'utf-8')
+      const occurrences = content.split(`"${op.route}"`).length - 1
+      expect(occurrences, 'both router() and router_with_static() register the route').toBe(2)
+    })
+
+    it(`git_history_api.rs ${op.handler} is a READ route through resolve_cwd and the shared service`, () => {
+      const content = readFileSync(RouteRust, 'utf-8')
+      expect(content).toMatch(new RegExp(`pub async fn ${op.handler}`))
+      expect(content).toContain(`resolve_cwd::<${op.payload}>(&req.cwd, &state, None, false)`)
+      expect(content).toMatch(new RegExp(`git_tracker::${op.command}`))
+    })
+
+    it(`the Tauri command ${op.command} is defined and registered over the shared service`, () => {
+      const command = readFileSync(CommandsGitRust, 'utf-8')
+      expect(command).toMatch(new RegExp(`pub async fn ${op.command}`))
+      expect(command).toMatch(new RegExp(`git_tracker::${op.command}`))
+      expect(readFileSync(LibRust, 'utf-8')).toContain(`commands::${op.command},`)
+      expect(readFileSync(ServiceRust, 'utf-8')).toMatch(new RegExp(`pub fn ${op.command}`))
+    })
+  }
+
+  it('git_history_api.rs logs through tracing and runs git off the async runtime', () => {
+    const content = readFileSync(RouteRust, 'utf-8')
+    expect(content).toMatch(/IpcBody/)
+    expect(content).toMatch(/spawn_blocking/)
+    expect(content).toMatch(/tracing::/)
   })
 })

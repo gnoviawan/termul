@@ -15,6 +15,11 @@
  * - `ACP_AGENT_UNAVAILABLE:` / `ACP_INVALID_AGENT_CONFIG:` → `agent_unavailable`
  *   / `invalid_agent_config` (definite spawn rejections, never auto-retried)
  *
+ * - `ACP_PROVIDER_QUOTA_EXCEEDED:` / `ACP_PROVIDER_SESSION_LIMIT:` /
+ *   `ACP_PROVIDER_REQUEST_REJECTED:` → `provider_quota_exceeded` /
+ *   `provider_session_limit` / `provider_request_rejected` (the upstream
+ *   provider refused the call)
+ *
  * The prefix is stripped from the message the user reads. Anything else is
  * returned untouched.
  */
@@ -35,6 +40,13 @@ export const DEFINITE_SPAWN_REJECTIONS: ReadonlyArray<readonly [code: string, pr
   [WS_ERROR_CODES.INVALID_AGENT_CONFIG, 'ACP_INVALID_AGENT_CONFIG']
 ]
 
+/** Provider failures (`/ws` code, desktop message prefix). */
+export const PROVIDER_ERROR_PREFIXES: ReadonlyArray<readonly [code: string, prefix: string]> = [
+  [WS_ERROR_CODES.PROVIDER_QUOTA_EXCEEDED, 'ACP_PROVIDER_QUOTA_EXCEEDED'],
+  [WS_ERROR_CODES.PROVIDER_SESSION_LIMIT, 'ACP_PROVIDER_SESSION_LIMIT'],
+  [WS_ERROR_CODES.PROVIDER_REQUEST_REJECTED, 'ACP_PROVIDER_REQUEST_REJECTED']
+]
+
 const VERDICT_PREFIXES: ReadonlyArray<readonly [prefix: string, code: string]> = [
   ['outcome_unknown', WS_ERROR_CODES.OUTCOME_UNKNOWN],
   ['command_conflict', WS_ERROR_CODES.COMMAND_CONFLICT],
@@ -42,7 +54,8 @@ const VERDICT_PREFIXES: ReadonlyArray<readonly [prefix: string, code: string]> =
   ['invalid_command_id', WS_ERROR_CODES.INVALID_COMMAND_ID],
   ['command_accepted', COMMAND_ACCEPTED_CODE],
   ['precondition_failed', PRECONDITION_FAILED_CODE],
-  ...DEFINITE_SPAWN_REJECTIONS.map(([code, prefix]) => [prefix, code] as const)
+  ...DEFINITE_SPAWN_REJECTIONS.map(([code, prefix]) => [prefix, code] as const),
+  ...PROVIDER_ERROR_PREFIXES.map(([code, prefix]) => [prefix, code] as const)
 ]
 
 /** Map a rejected Tauri `invoke` value to a typed error when it is a ledger verdict. */

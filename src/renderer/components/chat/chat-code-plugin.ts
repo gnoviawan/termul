@@ -15,6 +15,10 @@ export const chatCodePlugin: CodeHighlighterPlugin = {
   ...shikiCodePlugin,
   highlight(options, callback) {
     if (PLAIN_TEXT_LANGUAGES.has(options.language.trim().toLowerCase())) return null
-    return shikiCodePlugin.highlight(options, callback)
+    // Streamdown types `language` as a plain string; the shiki plugin wants its union.
+    return shikiCodePlugin.highlight(
+      options as Parameters<typeof shikiCodePlugin.highlight>[0],
+      callback
+    )
   }
 }

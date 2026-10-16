@@ -24,6 +24,8 @@ const { mockOnData, mockOnExit } = vi.hoisted(() => ({
   mockOnExit: vi.fn()
 }))
 
+vi.mock('@/lib/active-project', () => ({ writeActiveProject: vi.fn() }))
+
 vi.mock('@/lib/api', () => ({
   terminalApi: {
     onData: mockOnData,

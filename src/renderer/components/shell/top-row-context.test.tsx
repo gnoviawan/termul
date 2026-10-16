@@ -6,7 +6,9 @@ import { TopRowProvider, usePaneTopRow, useTopRow, useTopRowPlatform } from './t
 const roles: TopRowRoles = {
   topEdgeLeafIds: new Set(['A', 'B']),
   rightmostLeafId: 'B',
-  controlsOwner: 'pane'
+  leftmostLeafId: 'A',
+  controlsOwner: 'pane',
+  showPanelOwner: 'pane'
 }
 const desktop: TopRowPlatform = { dragRegions: true, windowControls: true, trafficLights: false }
 
@@ -43,11 +45,13 @@ describe('top row context', () => {
   it('derives each pane role', () => {
     expect(renderHook(() => usePaneTopRow('A'), { wrapper }).result.current).toEqual({
       topEdge: true,
+      leftEdge: true,
       dragRegion: true,
       windowControls: false
     })
     expect(renderHook(() => usePaneTopRow('B'), { wrapper }).result.current).toEqual({
       topEdge: true,
+      leftEdge: false,
       dragRegion: true,
       windowControls: true
     })

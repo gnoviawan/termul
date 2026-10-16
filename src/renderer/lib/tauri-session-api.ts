@@ -1,13 +1,16 @@
 /**
- * Tauri Session API Adapter
+ * Session API Adapter
  *
- * Provides session persistence functionality. Branches on `isTauriContext()`:
- * - Desktop: `@tauri-apps/plugin-store` (`Store.load(STORE_FILE, ...)`).
- * - Web/remote: a localStorage-backed adapter over flat composite keys
- *   shaped `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),
- *   matching the spec's I/O matrix.
+ * Crash-recovery snapshot of the open terminals and workspaces. The snapshot
+ * lives in the persistence facade under `PersistenceKeys.sessionsAutoSave`
+ * (device scope), so it follows the same store as every other device value:
+ * the plugin-store file on desktop, the host store on web.
  *
- * Follows the same pattern as tauri-persistence-api.ts for consistency.
+ * Earlier builds kept it in its own plugin-store file `termul-sessions.json`
+ * (a localStorage shim of that file on web). The first read, write or clear
+ * moves a leftover entry into the facade, marks the move done with
+ * `PersistenceKeys.sessionsLegacyMigrated` and deletes the legacy entry. After
+ * that the legacy file is never read again.
  *
  * Features:
  * - Save/restore session data
@@ -18,58 +21,57 @@
 
 import type { IpcResult, SessionApi, SessionData } from '@shared/types/ipc.types'
 import { IpcErrorCodes } from '@shared/types/ipc.types'
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { Store } from '@tauri-apps/plugin-store'
-
+import { logFrontendError } from './log-api'
+import { persistenceApi } from './persistence-api'
+import { trimSessionData } from './persistence-trim'
 import { isTauriContext } from './tauri-runtime'
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-const STORE_FILE = 'termul-sessions.json'
-const SESSION_KEY = 'sessions/auto-save'
+/** The legacy plugin-store file (and its localStorage shim name on web). */
+const LEGACY_STORE_FILE = 'termul-sessions.json'
+/** The entry the legacy file kept the snapshot under. */
+const LEGACY_SESSION_ENTRY = 'sessions/auto-save'
 const AUTO_SAVE_DEBOUNCE_MS = 2000 // 2 seconds
-const CURRENT_VERSION = 1
 
 // ============================================================================
 // Types
 // ============================================================================
 
-interface PersistedSession {
+/** The `{ _version, data }` envelope the legacy file wrapped the snapshot in. */
+interface LegacyPersistedSession {
   _version: number
   data: SessionData
 }
 
 /**
- * Adapter shape shared by the Tauri `Store` and the web localStorage-backed
- * store. Both expose `get`/`set`/`delete`/`save` so the session methods can
- * branch in `getStore` and stay transport-agnostic. Signatures mirror the
- * real Tauri `Store` (`delete` returns `Promise<boolean>` — whether the key
+ * Read-side shape shared by the Tauri `Store` and the web localStorage-backed
+ * legacy store, so the one-time move is transport-agnostic. Signatures mirror
+ * the real Tauri `Store` (`delete` returns `Promise<boolean>` — whether the key
  * was present) so `Store` is structurally assignable to this interface.
  */
-interface SessionStoreAdapter {
+interface LegacySessionStore {
   get<T>(key: string): Promise<T | undefined>
-  set(key: string, value: unknown): Promise<void>
   delete(key: string): Promise<boolean>
   save(): Promise<void>
 }
 
 /**
- * Web-only localStorage-backed session store adapter (CAP-3). Mirrors the
- * Tauri `Store` shape over flat composite localStorage keys shaped
- * `${STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`),
- * matching the spec's I/O matrix. Each logical key is its own localStorage
- * entry; there is no shared envelope object.
+ * Web-only localStorage-backed shim of the legacy session file (CAP-3). Mirrors
+ * the Tauri `Store` shape over flat composite localStorage keys shaped
+ * `${LEGACY_STORE_FILE}::${key}` (e.g. `termul-sessions.json::sessions/auto-save`).
+ * Each logical key is its own localStorage entry; there is no shared envelope
+ * object.
  *
- * `save()` is a no-op — localStorage writes are synchronous, so `set`
- * already persists. Reads swallow `QuotaExceededError`/`SecurityError`/JSON
- * parse failures and degrade to `undefined` (best-effort on read). Writes do
- * NOT swallow — a `QuotaExceededError` on `set` propagates so `save` can
- * surface a `SESSION_STORE_ERROR` (the session store is not best-effort: a
- * silent write failure would make crash-recovery believe a session persisted
- * that did not).
+ * `save()` is a no-op — localStorage writes are synchronous. Corrupt JSON
+ * degrades to `undefined`; a `getItem` failure propagates. `delete`
+ * propagates `removeItem` failures so the caller can log them.
  */
-class WebSessionStore implements SessionStoreAdapter {
+class WebSessionStore implements LegacySessionStore {
   private readonly storageKey: string
 
   constructor(storageKey: string) {
@@ -82,21 +84,16 @@ class WebSessionStore implements SessionStoreAdapter {
 
   async get<T>(key: string): Promise<T | undefined> {
     if (typeof localStorage === 'undefined') return undefined
+    // A failing `getItem` (SecurityError in private mode) throws, so the caller
+    // can tell "unreadable" from "absent" and retry the move later.
+    const raw = localStorage.getItem(this.compositeKey(key))
+    if (raw === null) return undefined
     try {
-      const raw = localStorage.getItem(this.compositeKey(key))
-      if (raw === null) return undefined
       return JSON.parse(raw) as T
     } catch {
-      // Corrupt JSON / SecurityError (private mode) — degrade silently.
+      // Corrupt JSON: nothing recoverable, treat as absent.
       return undefined
     }
-  }
-
-  async set(key: string, value: unknown): Promise<void> {
-    if (typeof localStorage === 'undefined') return
-    // Propagate QuotaExceededError/SecurityError so `save` reports a
-    // SESSION_STORE_ERROR instead of a false success.
-    localStorage.setItem(this.compositeKey(key), JSON.stringify(value))
   }
 
   async delete(key: string): Promise<boolean> {
@@ -106,18 +103,15 @@ class WebSessionStore implements SessionStoreAdapter {
     try {
       had = localStorage.getItem(composite) !== null
     } catch {
-      // Corrupt access / SecurityError on read — degrade silently, matching `get()`.
+      // SecurityError on read — degrade silently, matching `get()`.
       return false
     }
-    // Propagate removeItem failures so `clear()` can surface a
-    // SESSION_STORE_ERROR instead of reporting a false success (the same
-    // no-silent-write-failure contract `set()` upholds).
     localStorage.removeItem(composite)
     return had
   }
 
   async save(): Promise<void> {
-    // no-op — localStorage is synchronous; `set` already persisted.
+    // no-op — localStorage is synchronous; `delete` already persisted.
   }
 }
 
@@ -125,27 +119,109 @@ class WebSessionStore implements SessionStoreAdapter {
 // State
 // ============================================================================
 
-let storeInstance: SessionStoreAdapter | null = null
+let legacyStoreInstance: LegacySessionStore | null = null
+/** The one-time legacy move: set by the first operation, reset only on failure. */
+let legacySettlement: Promise<void> | null = null
 let autoSaveTimeout: ReturnType<typeof setTimeout> | null = null
 let pendingAutoSaveData: SessionData | null = null
 
 // ============================================================================
-// Store Management
+// Legacy file (read once, then never again)
 // ============================================================================
 
-async function getStore(): Promise<SessionStoreAdapter> {
-  if (storeInstance) return storeInstance
+async function getLegacyStore(): Promise<LegacySessionStore> {
+  if (legacyStoreInstance) return legacyStoreInstance
 
   // Ternary (rather than if/else) so TypeScript's control-flow analysis sees
-  // exactly one branch assigns `storeInstance` — the post-block type narrows
-  // to `SessionStoreAdapter` (not `| null`).
-  storeInstance = isTauriContext()
-    ? await Store.load(STORE_FILE, { autoSave: false, defaults: {} })
-    : new WebSessionStore(STORE_FILE)
+  // exactly one branch assigns `legacyStoreInstance` — the post-block type
+  // narrows to `LegacySessionStore` (not `| null`).
+  legacyStoreInstance = isTauriContext()
+    ? await Store.load(LEGACY_STORE_FILE, { autoSave: false, defaults: {} })
+    : new WebSessionStore(LEGACY_STORE_FILE)
 
-  return storeInstance
+  return legacyStoreInstance
 }
 
+/** The session data inside a legacy entry (versioned envelope or bare). */
+function legacySessionData(raw: LegacyPersistedSession | SessionData): SessionData {
+  return typeof raw === 'object' && raw !== null && '_version' in raw
+    ? (raw as LegacyPersistedSession).data
+    : (raw as SessionData)
+}
+
+/**
+ * Moves a leftover legacy entry into the facade, once. Skipped when the facade
+ * already holds a session or the move was already marked done, so the legacy
+ * file is not even opened in those cases. Facade failures reject (the caller
+ * reports them); legacy-file failures are logged and never block the session
+ * API, which then simply has no legacy entry to offer.
+ */
+async function moveLegacySession(): Promise<void> {
+  const marker = await persistenceApi.read<boolean>(PersistenceKeys.sessionsLegacyMigrated)
+  if (marker.success) return
+  if (marker.code !== 'KEY_NOT_FOUND') throw new Error(marker.error)
+  const current = await persistenceApi.read<SessionData>(PersistenceKeys.sessionsAutoSave)
+  if (current.success) {
+    // The facade already holds a session: mark the move done so a later
+    // `clear()` cannot bring a stale legacy entry back.
+    const done = await persistenceApi.write(PersistenceKeys.sessionsLegacyMigrated, true)
+    if (!done.success) throw new Error(done.error)
+    return
+  }
+  if (current.code !== 'KEY_NOT_FOUND') throw new Error(current.error)
+
+  let legacy: LegacySessionStore
+  let raw: LegacyPersistedSession | SessionData | undefined
+  try {
+    legacy = await getLegacyStore()
+    raw = await legacy.get<LegacyPersistedSession | SessionData>(LEGACY_SESSION_ENTRY)
+  } catch (error) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'tauri-session-api.legacy-read',
+      message: `could not read the legacy session file: ${String(error)}`
+    })
+    // Unreadable is not absent: nothing is marked, so the next call tries again.
+    legacySettlement = null
+    return
+  }
+
+  if (raw !== null && raw !== undefined) {
+    const moved = await persistenceApi.write(
+      PersistenceKeys.sessionsAutoSave,
+      trimSessionData(legacySessionData(raw))
+    )
+    if (!moved.success) throw new Error(moved.error)
+  }
+  // Mark the move before the entry goes, so a later `clear()` can never bring
+  // a stale legacy entry back.
+  const marked = await persistenceApi.write(PersistenceKeys.sessionsLegacyMigrated, true)
+  if (!marked.success) throw new Error(marked.error)
+  if (raw === null || raw === undefined) return
+  try {
+    await legacy.delete(LEGACY_SESSION_ENTRY)
+    await legacy.save()
+  } catch (error) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'tauri-session-api.legacy-delete',
+      message: `could not delete the legacy session entry: ${String(error)}`
+    })
+  }
+}
+
+function settleLegacySession(): Promise<void> {
+  if (!legacySettlement) {
+    legacySettlement = moveLegacySession().catch((error: unknown) => {
+      // Retry on the next call: nothing was marked done.
+      legacySettlement = null
+      throw error
+    })
+  }
+  return legacySettlement
+}
+
+// ============================================================================
 // ============================================================================
 // Validation
 // ============================================================================
@@ -208,6 +284,15 @@ function validateSessionData(data: unknown): data is SessionData {
 // Session API Implementation
 // ============================================================================
 
+/** The stored session, or `undefined` when none is stored. Throws on a store failure. */
+async function readStoredSession(): Promise<SessionData | undefined> {
+  await settleLegacySession()
+  const result = await persistenceApi.read<SessionData>(PersistenceKeys.sessionsAutoSave)
+  if (result.success) return result.data
+  if (result.code === 'KEY_NOT_FOUND') return undefined
+  throw new Error(result.error)
+}
+
 async function save(sessionData: SessionData): Promise<IpcResult<void>> {
   try {
     // Validate session data structure
@@ -219,19 +304,12 @@ async function save(sessionData: SessionData): Promise<IpcResult<void>> {
       }
     }
 
-    const store = await getStore()
-
-    // Create versioned session data
-    const persisted: PersistedSession = {
-      _version: CURRENT_VERSION,
-      data: {
-        ...sessionData,
-        timestamp: new Date().toISOString()
-      }
-    }
-
-    await store.set(SESSION_KEY, persisted)
-    await store.save()
+    await settleLegacySession()
+    const result = await persistenceApi.write(
+      PersistenceKeys.sessionsAutoSave,
+      trimSessionData({ ...sessionData, timestamp: new Date().toISOString() })
+    )
+    if (!result.success) throw new Error(result.error)
 
     return { success: true, data: undefined }
   } catch (error) {
@@ -245,24 +323,14 @@ async function save(sessionData: SessionData): Promise<IpcResult<void>> {
 
 async function restore(): Promise<IpcResult<SessionData>> {
   try {
-    const store = await getStore()
-    const raw = await store.get<PersistedSession | SessionData>(SESSION_KEY)
+    const sessionData = await readStoredSession()
 
-    if (raw === null || raw === undefined) {
+    if (sessionData === undefined || sessionData === null) {
       return {
         success: false,
         error: 'No saved session found',
         code: IpcErrorCodes.SESSION_NOT_FOUND
       }
-    }
-
-    // Handle versioned data
-    let sessionData: SessionData
-    if (typeof raw === 'object' && raw !== null && '_version' in raw) {
-      sessionData = (raw as PersistedSession).data
-    } else {
-      // Legacy data without version
-      sessionData = raw as SessionData
     }
 
     // Validate restored session data
@@ -293,9 +361,9 @@ async function clear(): Promise<IpcResult<void>> {
     }
     pendingAutoSaveData = null
 
-    const store = await getStore()
-    await store.delete(SESSION_KEY)
-    await store.save()
+    await settleLegacySession()
+    const result = await persistenceApi.delete(PersistenceKeys.sessionsAutoSave)
+    if (!result.success) throw new Error(result.error)
 
     return { success: true, data: undefined }
   } catch (error) {
@@ -324,10 +392,6 @@ async function flush(): Promise<IpcResult<void>> {
       pendingAutoSaveData = null
     }
 
-    // Ensure store is saved
-    const store = await getStore()
-    await store.save()
-
     return { success: true, data: undefined }
   } catch (error) {
     return {
@@ -340,20 +404,12 @@ async function flush(): Promise<IpcResult<void>> {
 
 async function hasSession(): Promise<IpcResult<boolean>> {
   try {
-    const store = await getStore()
-    const raw = await store.get<PersistedSession | SessionData>(SESSION_KEY)
+    const sessionData = await readStoredSession()
 
-    const hasData = raw !== null && raw !== undefined
+    const hasData = sessionData !== null && sessionData !== undefined
 
     // Additional validation if data exists
-    if (hasData && typeof raw === 'object') {
-      let sessionData: SessionData
-      if ('_version' in raw) {
-        sessionData = (raw as PersistedSession).data
-      } else {
-        sessionData = raw as SessionData
-      }
-
+    if (hasData && typeof sessionData === 'object') {
       // Return false if data is invalid
       if (!validateSessionData(sessionData)) {
         return { success: true, data: false }
@@ -445,10 +501,11 @@ export function createTauriSessionApi(): SessionApi {
 }
 
 /**
- * @internal Testing only - reset the singleton store instance
+ * @internal Testing only - reset the legacy store and the one-time legacy move
  */
 export function _resetStoreInstanceForTesting() {
-  storeInstance = null
+  legacyStoreInstance = null
+  legacySettlement = null
   if (autoSaveTimeout) {
     clearTimeout(autoSaveTimeout)
     autoSaveTimeout = null

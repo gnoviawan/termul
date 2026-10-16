@@ -44,6 +44,36 @@ describe('PromptQueuePanel', () => {
       expect(screen.getAllByRole('button', { name: 'Remove from queue' })).toHaveLength(2)
     })
 
+    it('matches the Changed files panel: no press-scale, same text sizes', () => {
+      renderPanel()
+      const trigger = screen.getByRole('button', { name: '2 Queued' })
+      // The global press-scale (index.css) would shrink the header on hold.
+      expect(trigger).toHaveAttribute('data-press-feedback', 'off')
+      expect(trigger).toHaveClass('text-xs', 'active:bg-secondary/80', 'select-none')
+      expect(trigger).not.toHaveClass('text-sm')
+      const row = screen.getByText('Fix the lint errors')
+      expect(row).toHaveClass('text-2xs')
+      expect(row).not.toHaveClass('text-sm')
+    })
+
+    it('shows the Changed files keyboard-focus ring on the header', () => {
+      renderPanel()
+      expect(screen.getByRole('button', { name: '2 Queued' })).toHaveClass(
+        'focus-visible:bg-secondary/60',
+        'focus-visible:outline-hidden',
+        'focus-visible:ring-2',
+        'focus-visible:ring-inset',
+        'focus-visible:ring-ring'
+      )
+    })
+
+    it('keeps the forced-colors focus outline inside the header so the composer cannot cover it', () => {
+      renderPanel({ defaultOpen: false })
+      expect(screen.getByRole('button', { name: '2 Queued' })).toHaveClass(
+        'forced-colors:focus-visible:-outline-offset-2'
+      )
+    })
+
     it('starts collapsed with defaultOpen={false}', () => {
       renderPanel({ defaultOpen: false })
       expect(screen.getByRole('button', { name: '2 Queued' })).toHaveAttribute(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AvailableCommand, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
 import {
   applyCommandToInput,
@@ -129,6 +130,30 @@ describe('mid-text slash trigger detection', () => {
     expect(findSlashTrigger('hello /comp', 5)).toBeNull()
     expect(findSlashTrigger('hello /comp more', 16)).toBeNull()
     expect(findSlashTrigger('src/components', 4)).toBeNull()
+  })
+
+  it('findSlashTrigger opens when / is glued to a pill', () => {
+    const skill = skillToken('design', SKILL_PAD_CHAR)
+    const skillValue = `${skill}/design`
+    expect(findSlashTrigger(skillValue, skillValue.length)).toEqual({
+      start: skill.length,
+      end: skillValue.length,
+      filter: 'design'
+    })
+    const command = commandToken('compact')
+    const commandValue = `${command}/clear`
+    expect(findSlashTrigger(commandValue, commandValue.length)).toEqual({
+      start: command.length,
+      end: commandValue.length,
+      filter: 'clear'
+    })
+    const file = fileToken('auth.ts', '/work/auth.ts')
+    const fileValue = `${file}/lint`
+    expect(findSlashTrigger(fileValue, fileValue.length)).toEqual({
+      start: file.length,
+      end: fileValue.length,
+      filter: 'lint'
+    })
   })
 
   it('isSlashTriggerAny detects both leading and mid-text triggers', () => {

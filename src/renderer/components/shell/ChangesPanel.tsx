@@ -8,7 +8,7 @@ import { GitPanelHeader } from '@/components/git/GitPanelHeader'
 import { useGitActions } from '@/components/git/use-git-actions'
 import { useGitPanelModel } from '@/components/git/use-git-panel-model'
 import { useGitSelection } from '@/components/git/use-git-selection'
-import { GraphSection } from '@/components/shell/GraphSection'
+import { HistoryRow } from '@/components/shell/HistoryRow'
 import { useWorkspaceActions } from '@/stores/workspace-store/selectors'
 
 interface ChangesPanelProps {
@@ -19,9 +19,10 @@ interface ChangesPanelProps {
 
 /**
  * Shell Changes panel (CAP-8): the Git tab's parts in one narrow column with
- * the commit Graph docked at the bottom. The upper region (branch + Stash,
- * commit box, filter, Change list, Stash list) scrolls on its own above the
- * Graph. A plain file click opens the Diff tab; the diff itself is not shown here.
+ * a History row at the bottom. The upper region (branch + Stash, commit box,
+ * filter, Change list, Stash list) scrolls on its own above the row, which
+ * opens Git History in the main panel. A plain file click opens the Diff tab;
+ * the diff itself is not shown here.
  */
 export function ChangesPanel({ cwd, isVisible }: ChangesPanelProps): React.JSX.Element {
   const { addDiffTab } = useWorkspaceActions()
@@ -158,7 +159,7 @@ export function ChangesPanel({ cwd, isVisible }: ChangesPanelProps): React.JSX.E
         />
       </div>
 
-      <GraphSection cwd={cwd} isVisible={isVisible} />
+      <HistoryRow cwd={cwd} isVisible={isVisible} />
 
       <GitPanelDialogs actions={actions} />
     </div>

@@ -2,6 +2,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import * as React from 'react'
 import { X } from '@/components/icons'
 
+import { NativeWebviewOccluder } from '@/hooks/use-native-webview-occlusion'
 import { cn } from '@/lib/utils'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 
@@ -59,6 +60,7 @@ const DialogContent = React.forwardRef<
       )}
       {...props}
     >
+      <NativeWebviewOccluder />
       {children}
       {/* Fine pointers keep the 16px glyph box exactly as it was. On coarse
           pointers the box grows to 44px; right-0.5/top-0.5 keep the glyph 24px

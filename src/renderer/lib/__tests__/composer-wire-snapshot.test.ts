@@ -4,6 +4,7 @@ import {
   commandToken,
   extractCommandName,
   insertCommandToken,
+  replaceCommandTokensInline,
   skillToken,
   stripCommandToken
 } from '@/lib/skill-tokens'
@@ -109,10 +110,7 @@ describe('composer wire snapshots', () => {
     )
   })
 
-  it('handles a skill+command scenario (display token text + active command prefix applied by the host)', () => {
-    // The host prepends `/${activeCommand} ` to both wire and display after
-    // buildPromptWithLoadedSkills returns; this snapshot locks the wire body
-    // the composer produces for a skill-carrying message before that prefix.
+  it('frames a skill that sits in the user sentence', () => {
     const display = `${T('git-worktree')} do the thing`
     expect(buildPromptWithLoadedSkills([SKILL_GIT], display)).toMatchInlineSnapshot(
       `
@@ -141,15 +139,27 @@ describe('composer wire snapshots', () => {
       `
     )
   })
+
+  it('keeps a skill marker in the sentence and the path in the header', () => {
+    const display = `buatkan design baru menggunakan skill ini ${T('design')}`
+    expect(buildPromptWithLoadedSkills([{ name: 'design', path: '/path/SKILL.md' }], display)).toBe(
+      [
+        '# Agent Skills',
+        '',
+        'design: /path/SKILL.md',
+        '',
+        '---',
+        '',
+        'buatkan design baru menggunakan skill ini (design)'
+      ].join('\n')
+    )
+  })
 })
 
 /**
- * Command-pill wire snapshots (CAP — Inline command pill). The inline
- * `\uE004<name>\uE005` token replaces the removed `activeCommand` state. At
- * send, `buildPromptParts` calls `extractCommandName(value)` →
- * `wireWithCommand = \`/${name} ${wireText}\`` (byte-identical to the old
- * `activeCommand` path). The token is stripped from `wireText` (the skill wire
- * framer receives the de-commanded text).
+ * Command-pill wire snapshots. A command token stays in the sentence. The
+ * wire replaces it with `/<name>` at that position. It is not moved to the
+ * front of the prompt.
  */
 describe('composer wire snapshots — command pill', () => {
   const CT = (name: string): string => commandToken(name)
@@ -206,62 +216,34 @@ describe('composer wire snapshots — command pill', () => {
     }
   })
 
-  it('byte-identical wire: command pill + text → `/<name> <text>` (matches old activeCommand path)', () => {
-    // The value carries the command token + user text. buildPromptParts strips
-    // the token, builds the skill wire (none here), then prefixes `/<name> `.
+  it('keeps a leading command where it was typed', () => {
     const value = `${CT('compact')} hello`
-    const commandName = extractCommandName(value)
-    const valueDecommanded = stripCommandToken(value)
-    const wireText = buildPromptWithLoadedSkills([], valueDecommanded)
-    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
-    expect(wireWithCommand).toBe('/compact hello')
+    expect(replaceCommandTokensInline(value).trim()).toBe('/compact hello')
   })
 
-  it('byte-identical wire: command pill + skill pill (command prefix + skill framing)', () => {
-    const value = `${CT('compact')} ${T('git-worktree')} do the thing`
-    const commandName = extractCommandName(value)
-    const valueDecommanded = stripCommandToken(value)
-    const wireText = buildPromptWithLoadedSkills([SKILL_GIT], valueDecommanded)
-    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
-    expect(wireWithCommand).toMatchInlineSnapshot(
-      `
-        "/compact # Agent Skills
-
-        git-worktree: /home/u/.agents/skills/git-worktree/SKILL.md
-
-        ---
-
-        (git-worktree) do the thing"
-      `
+  it('keeps a mid-sentence command in the sentence, including inside skill framing', () => {
+    const value = `hello ${CT('compact')} ${T('git-worktree')} world`
+    const wire = buildPromptWithLoadedSkills([SKILL_GIT], replaceCommandTokensInline(value))
+    expect(wire).toBe(
+      [
+        '# Agent Skills',
+        '',
+        'git-worktree: /home/u/.agents/skills/git-worktree/SKILL.md',
+        '',
+        '---',
+        '',
+        'hello /compact (git-worktree) world'
+      ].join('\n')
     )
   })
 
-  it('byte-identical wire: command pill alone (no user text) → `/<name>`', () => {
-    const value = `${CT('compact')} `
-    const commandName = extractCommandName(value)
-    const valueDecommanded = stripCommandToken(value)
-    const wireText = buildPromptWithLoadedSkills([], valueDecommanded)
-    const wireWithCommand = commandName ? `/${commandName} ${wireText}`.trim() : wireText
-    expect(wireWithCommand).toBe('/compact')
+  it('keeps a command-only token as /<name>', () => {
+    expect(replaceCommandTokensInline(`${CT('compact')} `).trim()).toBe('/compact')
   })
 
-  it('display keeps the raw command token while the wire stays readable (token-format snapshot)', () => {
-    // displayWithCommand mirror of `buildPromptParts`: the display keeps the
-    // raw `\uE004<name>\uE005` token (in place of the plain `/name ` prefix)
-    // so the timeline renders the command chip, while the wire stays
-    // byte-identical to the plain-prefix path.
-    const value = `${CT('compact')} hello`
-    const commandName = extractCommandName(value)
-    const valueDecommanded = stripCommandToken(value)
-    const wireText = buildPromptWithLoadedSkills([], valueDecommanded)
-    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
-    const displayWithCommand = commandName
-      ? `${commandToken(commandName)} ${valueDecommanded}`
-      : valueDecommanded
-    expect(wireWithCommand).toBe('/compact hello')
-    // The sentinel pair wraps the name verbatim (the snapshot above carries
-    // the private-use chars literally — invisible in most editors).
-    expect(displayWithCommand).toMatch(/^\uE004compact\uE005 hello$/)
-    expect(displayWithCommand).toMatchInlineSnapshot(`"compact hello"`)
+  it('display keeps the command token in place', () => {
+    const value = `hello ${CT('compact')} world`
+    expect(value).toBe(`hello ${commandToken('compact')} world`)
+    expect(replaceCommandTokensInline(value)).toBe('hello /compact world')
   })
 })

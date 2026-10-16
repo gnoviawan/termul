@@ -3,6 +3,8 @@ import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const gateStatusRef = vi.hoisted(() => ({ current: 'ok' as string }))
+// These suites exercise the real class, not the invoke-backed double from vitest.setup.ts.
+vi.unmock('@/lib/acp-transport/desktop-transport')
 vi.mock('@/lib/web-auth-gate', () => ({
   flagWebAuthUnauthorized: vi.fn(),
   getWebAuthGateState: () => ({ status: gateStatusRef.current, submitting: false })
@@ -19,28 +21,22 @@ vi.mock('@/lib/web-protocol-reload', () => ({
   clearProtocolMismatchLatch: protocolReloadRef.clear
 }))
 
-// Static import of the globally mocked (vitest.setup.ts) Tauri IPC surface —
-// the desktop-path tests assert the exact command names + payloads.
 import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
-import { invoke } from '@tauri-apps/api/core'
 import { logFrontendError } from '@/lib/log-api'
 import { flagWebAuthUnauthorized } from '@/lib/web-auth-gate'
 import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
-  type AcpTransport,
   AcpTransportError,
-  COMMAND_ACCEPTED_CODE,
   COMMAND_IN_PROGRESS_CODE,
   createAcpTransport,
   isOutcomeUncertainError,
   isTransientAcpTransportError,
   resolveWsUrl,
-  toTauriEventName,
   toWsEventType,
   WsAcpTransport
 } from './acp-transport'
-import { createTauriAcpTransport } from './acp-transport/tauri-transport'
+import { DesktopAcpTransport } from './acp-transport/desktop-transport'
 import { classifySetupError } from './agents/acp-spawn-errors'
 
 // Reconnect backoff carries ±25 % jitter; pin it to the neutral factor so the
@@ -78,10 +74,6 @@ class FakeWebSocket {
   static CLOSING = 2
   static CLOSED = 3
   static autoOpen = true
-  /** projectId → err.code the host answers `watch_project` with (all sockets). */
-  static watchProjectRefusals: Record<string, string> = {}
-  /** When true, `watch_project` replies are held back (never answered). */
-  static holdWatchProjectReplies = false
   /** watch name → full state the host answers a `watch` request with. */
   static watchStates: Record<string, unknown> = {}
   /** `hostEpoch` of the watch frames the fake host sends. */
@@ -137,6 +129,10 @@ class FakeWebSocket {
   deletedSessions: string[] = []
   /** CAP-11: when true, the `delete_session` stub replies `not_found`. */
   deleteSessionNotFound = false
+  /** Project registry requests the fake host received, in order. */
+  projectRequests: Array<{ type: string; payload: Record<string, unknown> }> = []
+  /** When set, the project registry stubs reply with this instead of ok. */
+  projectErr: { code: string; message: string; details?: unknown } | null = null
   /** CAP-11 compat: when true, `list_agents` replies with bare id strings
    * (the pre-CAP-11 server shape) instead of summary objects. */
   listAgentsAsStrings = false
@@ -148,7 +144,6 @@ class FakeWebSocket {
   runtimePolicy = {
     turnTimeoutMs: 3_600_000,
     promptInactivityTimeoutMs: 3_600_000,
-    permissionReconnectGraceMs: 15_000,
     pingIntervalMs: 20_000,
     pongTimeoutMs: 75_000
   }
@@ -475,6 +470,30 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
+    // Project registry commands: ok (`add_project` echoes the summary) unless
+    // `projectErr` makes the fake host refuse, like `project_busy`.
+    if (
+      req.type === 'add_project' ||
+      req.type === 'update_project' ||
+      req.type === 'remove_project' ||
+      req.type === 'set_default_project'
+    ) {
+      const payload = req.payload as Record<string, unknown>
+      this.projectRequests.push({ type: req.type, payload })
+      if (this.projectErr) {
+        this.emitReply({ id: req.id, ok: false, err: this.projectErr })
+        return
+      }
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload:
+          req.type === 'add_project'
+            ? { project: { ...payload, path: payload.path, isArchived: false, isDefault: false } }
+            : {}
+      })
+      return
+    }
     if (req.type === 'kill_agent') {
       const payload = req.payload as { agentId?: string }
       if (!payload.agentId) {
@@ -566,18 +585,6 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: { watch, scope: scope ?? '' } })
       return
     }
-    if (req.type === 'watch_project' || req.type === 'unwatch_project') {
-      const projectId = (req.payload as { projectId?: string }).projectId ?? ''
-      if (req.type === 'watch_project' && FakeWebSocket.holdWatchProjectReplies) return
-      const refusal =
-        req.type === 'watch_project' ? FakeWebSocket.watchProjectRefusals[projectId] : undefined
-      if (refusal) {
-        this.emitReply({ id: req.id, ok: false, err: { code: refusal, message: 'refused' } })
-        return
-      }
-      this.emitReply({ id: req.id, ok: true, payload: req.payload })
-      return
-    }
     this.emitReply({
       id: req.id,
       ok: false,
@@ -622,9 +629,8 @@ describe('acp-transport helpers', () => {
     expect(resolveWsUrl({ protocol: 'https:', host: 'example.com' })).toBe('wss://example.com/ws')
   })
 
-  it('translates acp:* ↔ prefix-dropped event names', () => {
+  it('translates acp:* names to prefix-dropped WS event types', () => {
     expect(toWsEventType('acp:message_chunk')).toBe('message_chunk')
-    expect(toTauriEventName('message_chunk')).toBe('acp:message_chunk')
   })
 })
 
@@ -763,6 +769,79 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  describe('project registry commands', () => {
+    async function connected(): Promise<{
+      transport: WsAcpTransport
+      socket: () => FakeWebSocket
+    }> {
+      let socket: FakeWebSocket | null = null
+      class CaptureSocket extends FakeWebSocket {
+        constructor(url: string) {
+          super(url)
+          socket = this
+        }
+      }
+      const transport = new WsAcpTransport({
+        url: 'ws://test/ws',
+        WebSocketImpl: CaptureSocket as unknown as typeof WebSocket
+      })
+      await transport.connect()
+      return { transport, socket: () => socket as unknown as FakeWebSocket }
+    }
+
+    it('sends add_project and returns the summary the host registered', async () => {
+      const { transport, socket } = await connected()
+
+      const project = await transport.addProject({
+        id: 'p1',
+        name: 'App',
+        path: '/app',
+        color: 'blue'
+      })
+
+      expect(socket().projectRequests).toEqual([
+        { type: 'add_project', payload: { id: 'p1', name: 'App', path: '/app', color: 'blue' } }
+      ])
+      expect(project).toMatchObject({ id: 'p1', name: 'App', path: '/app' })
+      transport.dispose()
+    })
+
+    it('sends cascade only when asked to, on remove and on archive', async () => {
+      const { transport, socket } = await connected()
+
+      await transport.removeProject('p1')
+      await transport.removeProject('p1', { cascade: true })
+      await transport.updateProject('p2', { isArchived: true })
+      await transport.updateProject('p2', { isArchived: true, cascade: true })
+      await transport.setDefaultProject('p3')
+
+      expect(socket().projectRequests).toEqual([
+        { type: 'remove_project', payload: { projectId: 'p1' } },
+        { type: 'remove_project', payload: { projectId: 'p1', cascade: true } },
+        { type: 'update_project', payload: { projectId: 'p2', isArchived: true } },
+        { type: 'update_project', payload: { projectId: 'p2', isArchived: true, cascade: true } },
+        { type: 'set_default_project', payload: { projectId: 'p3' } }
+      ])
+      transport.dispose()
+    })
+
+    it('surfaces a project_busy refusal with the bound entities on the error', async () => {
+      const { transport, socket } = await connected()
+      socket().projectErr = {
+        code: 'project_busy',
+        message: 'project has live sessions',
+        details: { sessions: ['s1', 's2'], terminals: ['t1'] }
+      }
+
+      await expect(transport.removeProject('p1')).rejects.toMatchObject({
+        name: 'AcpTransportError',
+        code: 'project_busy',
+        details: { sessions: ['s1', 's2'], terminals: ['t1'] }
+      })
+      transport.dispose()
+    })
+  })
+
   it('authenticate routes the agent `authenticate` method over WS (authenticate_agent)', async () => {
     // The web client must run the ACP agent-advertised `authenticate` method
     // (e.g. `pi_terminal_login`) on the host — NOT throw "is not available
@@ -872,7 +951,7 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
-  it('browser_open_request events reach onEvent subscribers', async () => {
+  it('drops an event without a session log position (the relay sends none but auth_required)', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
       WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
@@ -880,18 +959,16 @@ describe('WsAcpTransport', () => {
     await transport.connect()
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
 
-    const seen: Array<{ agentId: string; url: string }> = []
-    transport.onEvent<{ agentId: string; url: string }>('acp:browser_open_request', (payload) =>
-      seen.push(payload)
-    )
+    const seen: unknown[] = []
+    transport.onEvent('acp:browser_open_request', (payload) => seen.push(payload))
     sock.emit({
       sid: null,
       seq: 0,
       type: 'browser_open_request',
       payload: { agentId: 'agent-1', url: 'https://auth.example.com/x' }
     })
-    await vi.waitFor(() => expect(seen).toHaveLength(1))
-    expect(seen[0]).toEqual({ agentId: 'agent-1', url: 'https://auth.example.com/x' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(seen).toEqual([])
 
     transport.dispose()
   })
@@ -983,6 +1060,19 @@ describe('WsAcpTransport', () => {
     await transport.setSessionReopenTimeout(300)
 
     expect(sock.sent.length).toBe(sentBefore)
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { secs: 7200, source: 'setting' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+    await transport.setAgentIdleWindow(7200)
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/host/agent-idle-window'),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ secs: 7200 }) })
+    )
+    fetchMock.mockRestore()
     transport.dispose()
   })
 
@@ -1467,16 +1557,15 @@ describe('WsAcpTransport', () => {
     sock.emit({ sid: 's1', seq: 7, type: 'message_chunk', payload: { n: 7 } })
     await flushEvents(transport)
     expect(seen).toEqual([{ payload: { n: 7 }, eventSeq: 7 }])
-    // Agent-level / relay events carry no per-session seq: the listener
-    // receives undefined (never a 0 that a `seq <= watermark` check could
-    // misread as history-covered).
-    const agentEvents: Array<{ payload: unknown; eventSeq?: number }> = []
-    transport.onEvent('acp:agent_spawned', (p, eventSeq) => {
-      agentEvents.push({ payload: p, eventSeq })
+    // An event without a session log position (seq 0) is not delivered: the
+    // relay sends none, and a 0 must never reach a `seq <= watermark` check.
+    const agentEvents: unknown[] = []
+    transport.onEvent('acp:agent_spawned', (p) => {
+      agentEvents.push(p)
     })
     sock.emit({ sid: null, seq: 0, type: 'agent_spawned', payload: { agentId: 'a1' } })
     await flushEvents(transport)
-    expect(agentEvents).toEqual([{ payload: { agentId: 'a1' }, eventSeq: undefined }])
+    expect(agentEvents).toEqual([])
     expect(seen).toHaveLength(1)
     transport.dispose()
   })
@@ -2079,6 +2168,27 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('sends mcpServers on reopen only when the caller provides the list', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.loadSession('a1', 's-plain', '/work')
+    await transport.resumeSession('a1', 's-reload', '/work', undefined, { mcpServers: [] })
+
+    const frames = sock.sent.map(
+      (frame) => JSON.parse(frame) as { type: string; payload: Record<string, unknown> }
+    )
+    const load = frames.find((frame) => frame.type === 'load_session')
+    const resume = frames.find((frame) => frame.type === 'resume_session')
+    expect(load?.payload).not.toHaveProperty('mcpServers')
+    expect(resume?.payload.mcpServers).toEqual([])
+    transport.dispose()
+  })
+
   it('registerDiscoveredSession promotes metadata over the WS seam', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -2130,23 +2240,6 @@ describe('WsAcpTransport', () => {
       newSessionId: 's-new',
       summaryText: 'Handoff summary'
     })
-    transport.dispose()
-  })
-
-  it('watchProject / unwatchProject send the per-project watch requests', async () => {
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
-    const lastFrame = () =>
-      JSON.parse(sock.sent.at(-1)!) as { type: string; payload: Record<string, string> }
-
-    await transport.watchProject?.('p-1')
-    expect(lastFrame()).toMatchObject({ type: 'watch_project', payload: { projectId: 'p-1' } })
-    await transport.unwatchProject?.('p-1')
-    expect(lastFrame()).toMatchObject({ type: 'unwatch_project', payload: { projectId: 'p-1' } })
     transport.dispose()
   })
 
@@ -2523,6 +2616,99 @@ describe('WsAcpTransport', () => {
 })
 
 // Story 5.3 (AC3, T6) — transport-level reconnect listener.
+describe('WsAcpTransport host-offline (Close 1001)', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function closeWith1001(transport: WsAcpTransport): void {
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.readyState = FakeWebSocket.CLOSED
+    sock.onclose?.(new CloseEvent('close', { code: 1001 }))
+  }
+
+  it('reports host-offline and opens no socket until /health answers, then reconnects once', async () => {
+    vi.useFakeTimers()
+    const created: FakeWebSocket[] = []
+    class TrackedWebSocket extends FakeWebSocket {
+      constructor(...args: ConstructorParameters<typeof FakeWebSocket>) {
+        super(...args)
+        created.push(this)
+      }
+    }
+    let healthy = false
+    const health = vi.fn(async () => ({ ok: healthy }) as Response)
+    vi.stubGlobal('fetch', health)
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: TrackedWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+    await transport.connect()
+    const before = created.length
+
+    closeWith1001(transport)
+    expect(transport.getConnectionState()).toBe('host-offline')
+    expect(states.at(-1)).toBe('host-offline')
+
+    // The fast backoff window passes: no socket opens, only slow health probes.
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(created.length).toBe(before)
+    await expect(transport.connect()).rejects.toThrow(/offline/)
+
+    // The host stays down across two slow probes, then answers.
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(health).toHaveBeenCalled()
+    expect(created.length).toBe(before)
+    healthy = true
+    await vi.advanceTimersByTimeAsync(15_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(created.length).toBe(before + 1)
+    expect(transport.getConnectionState()).toBe('connected')
+    transport.dispose()
+  })
+
+  it('retryHostOffline asks /health at once', async () => {
+    vi.useFakeTimers()
+    const health = vi.fn(async () => ({ ok: true }) as Response)
+    vi.stubGlobal('fetch', health)
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    closeWith1001(transport)
+    expect(health).not.toHaveBeenCalled()
+    transport.retryHostOffline()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(health).toHaveBeenCalledTimes(1)
+    expect(transport.getConnectionState()).toBe('connected')
+    transport.dispose()
+  })
+
+  it('keeps the backoff loop for any other close code', async () => {
+    vi.useFakeTimers()
+    const health = vi.fn(async () => ({ ok: true }) as Response)
+    vi.stubGlobal('fetch', health)
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.readyState = FakeWebSocket.CLOSED
+    sock.onclose?.(new CloseEvent('close', { code: 1006 }))
+    expect(transport.getConnectionState()).not.toBe('host-offline')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(health).not.toHaveBeenCalled()
+    expect((transport as unknown as { socket: FakeWebSocket }).socket).not.toBe(sock)
+    transport.dispose()
+  })
+})
+
 // Verifies the `setReconnectListener` callback fires `true` on
 // `scheduleReconnect` (WS drop) and `false` on `reconnect` success.
 describe('WsAcpTransport reconnect listener (Story 5.3)', () => {
@@ -2687,167 +2873,6 @@ describe('WsAcpTransport state watches', () => {
 
     expect(watchRequests(transport)).toEqual(['chat_history'])
     expect(states).toHaveLength(2)
-    transport.dispose()
-  })
-})
-
-// Per-project fs watch: the host keeps no watch state across connections, so
-// the transport re-sends `watch_project` after a reconnect and reports watches
-// it cannot restore.
-describe('WsAcpTransport project watches across reconnects', () => {
-  afterEach(() => {
-    FakeWebSocket.watchProjectRefusals = {}
-    FakeWebSocket.holdWatchProjectReplies = false
-    vi.useRealTimers()
-  })
-
-  async function connectedWithWatch(projectId: string): Promise<WsAcpTransport> {
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    await transport.watchProject?.(projectId)
-    return transport
-  }
-
-  const watchFrames = (transport: WsAcpTransport): string[] =>
-    (transport as unknown as { socket: FakeWebSocket }).socket.sent
-      .map((frame) => JSON.parse(frame) as { type: string; payload: { projectId?: string } })
-      .filter((frame) => frame.type === 'watch_project')
-      .map((frame) => frame.payload.projectId ?? '')
-
-  async function dropAndReconnect(transport: WsAcpTransport): Promise<void> {
-    ;(transport as unknown as { socket: FakeWebSocket }).socket.close()
-    // Backoff doubles per consecutive drop (500 ms, 1 s, …); cover the second.
-    await vi.advanceTimersByTimeAsync(2500)
-    await vi.advanceTimersByTimeAsync(50) // let the off-critical-path re-watch settle
-  }
-
-  it('re-sends watch_project for every watched project on the fresh socket', async () => {
-    vi.useFakeTimers()
-    const transport = await connectedWithWatch('p-1')
-    await transport.watchProject?.('p-2')
-
-    await dropAndReconnect(transport)
-
-    expect(watchFrames(transport).sort()).toEqual(['p-1', 'p-2'])
-    transport.dispose()
-  })
-
-  it('drops a watch the host refuses after reconnect and reports it as ended', async () => {
-    vi.useFakeTimers()
-    const transport = await connectedWithWatch('p-gone')
-    const ended: unknown[] = []
-    transport.onEvent('acp:fs_watch_ended', (payload) => ended.push(payload))
-    FakeWebSocket.watchProjectRefusals['p-gone'] = 'not_found'
-
-    await dropAndReconnect(transport)
-
-    expect(ended).toEqual([{ projectId: 'p-gone', reason: 'rewatch_failed' }])
-    // It is no longer re-requested on later reconnects.
-    FakeWebSocket.watchProjectRefusals = {}
-    await dropAndReconnect(transport)
-    expect(watchFrames(transport)).toEqual([])
-    transport.dispose()
-  })
-
-  it('stops re-sending a watch the host ended (fs_watch_ended)', async () => {
-    vi.useFakeTimers()
-    const transport = await connectedWithWatch('p-1')
-    ;(transport as unknown as { socket: FakeWebSocket }).socket.emit({
-      sid: null,
-      seq: 0,
-      type: 'fs_watch_ended',
-      payload: { projectId: 'p-1', reason: 'project_unavailable' }
-    })
-    await vi.advanceTimersByTimeAsync(10)
-
-    await dropAndReconnect(transport)
-
-    expect(watchFrames(transport)).toEqual([])
-    transport.dispose()
-  })
-
-  it('a watch in flight when the socket drops is tracked and re-sent after reconnect', async () => {
-    vi.useFakeTimers()
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    FakeWebSocket.holdWatchProjectReplies = true
-    const pending = transport.watchProject?.('p-1')
-    const settled = pending?.then(
-      () => 'ok',
-      () => 'rejected'
-    )
-
-    // The socket drops while the reply is outstanding: the request rejects.
-    FakeWebSocket.holdWatchProjectReplies = false
-    ;(transport as unknown as { socket: FakeWebSocket }).socket.close()
-    await vi.advanceTimersByTimeAsync(2500)
-    await vi.advanceTimersByTimeAsync(50)
-
-    expect(await settled).toBe('rejected')
-    expect(watchFrames(transport)).toEqual(['p-1'])
-    transport.dispose()
-  })
-
-  it('keeps tracking a watch whose reply timed out, and untracks one the host refuses', async () => {
-    vi.useFakeTimers()
-    const transport = new WsAcpTransport({
-      url: 'ws://test/ws',
-      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
-    })
-    await transport.connect()
-    const tracked = () => (transport as unknown as { watchedProjects: Set<string> }).watchedProjects
-
-    // No reply ever arrives: the request times out, but the host may have
-    // registered the watch, so it stays tracked for the next reconnect.
-    FakeWebSocket.holdWatchProjectReplies = true
-    const timedOut = transport.watchProject?.('p-slow')?.then(
-      () => 'ok',
-      (error: unknown) => (error as { code?: string }).code
-    )
-    await vi.advanceTimersByTimeAsync(10 * 60_000)
-    expect(await timedOut).toBe('timeout')
-    expect(tracked().has('p-slow')).toBe(true)
-
-    // An explicit host refusal on a live socket untracks it.
-    FakeWebSocket.holdWatchProjectReplies = false
-    FakeWebSocket.watchProjectRefusals['p-gone'] = 'not_found'
-    await expect(transport.watchProject?.('p-gone')).rejects.toMatchObject({ code: 'not_found' })
-    expect(tracked().has('p-gone')).toBe(false)
-    transport.dispose()
-  })
-
-  it('a re-watch whose reply never arrives does not hold the reconnect', async () => {
-    vi.useFakeTimers()
-    const transport = await connectedWithWatch('p-1')
-    const states: boolean[] = []
-    transport.setReconnectListener((reconnecting) => states.push(reconnecting))
-    FakeWebSocket.holdWatchProjectReplies = true
-
-    ;(transport as unknown as { socket: FakeWebSocket }).socket.close()
-    await vi.advanceTimersByTimeAsync(600)
-
-    // Reconnected (and the re-watch request went out) while its reply is held.
-    expect(states[states.length - 1]).toBe(false)
-    expect(watchFrames(transport)).toEqual(['p-1'])
-    transport.dispose()
-  })
-
-  it('a failing re-watch never delays or fails the reconnect itself', async () => {
-    vi.useFakeTimers()
-    const transport = await connectedWithWatch('p-1')
-    const states: boolean[] = []
-    transport.setReconnectListener((reconnecting) => states.push(reconnecting))
-    FakeWebSocket.watchProjectRefusals['p-1'] = 'internal'
-
-    await dropAndReconnect(transport)
-
-    expect(states[states.length - 1]).toBe(false)
     transport.dispose()
   })
 })
@@ -4067,33 +4092,6 @@ describe('agent_auth_required transport parity (story 7 frozen contract)', () =>
 
     transport.dispose()
   })
-
-  it('Tauri acp_new_session flattened string rejection classifies as an auth setup error', async () => {
-    // Desktop parity: the Tauri command returns Result<_, String>, so invoke
-    // rejects with the bare Rust error string — no Error instance, no .code
-    // (a session/new auth_required failure flattens to the acp Error Display
-    // message, "Authentication required"). Classification must still land on
-    // `auth` via the message-pattern fallback.
-    const { invoke } = await import('@tauri-apps/api/core')
-    vi.mocked(invoke).mockRejectedValueOnce('Authentication required')
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    const err = await transport.newSession('a1', '/work').then(
-      () => {
-        throw new Error('newSession unexpectedly resolved')
-      },
-      (e: unknown) => e
-    )
-
-    // The desktop path surfaces the flattened string verbatim…
-    expect(err).toBe('Authentication required')
-    // …and still classifies as an auth setup error without a coded error.
-    const classified = classifySetupError(err)
-    expect(classified.category).toBe('auth')
-    expect(classified.detail).toBe('Authentication required')
-
-    transport.dispose()
-  })
 })
 
 describe('createAcpTransport selection', () => {
@@ -4101,140 +4099,21 @@ describe('createAcpTransport selection', () => {
     _resetAcpTransportForTests(null)
   })
 
-  it('desktop transports a successful option change without a snapshot', async () => {
-    vi.mocked(invoke).mockResolvedValue(null)
-    const transport = createAcpTransport({ force: 'tauri' })
-    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
-    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
-      agentId: 'a1',
-      sessionId: 's1',
-      configId: 'model',
-      valueId: 'm2'
+  it('selects the desktop Channel transport in a Tauri context and the plain WS client otherwise', () => {
+    const desktop = createAcpTransport({ force: 'tauri' })
+    expect(desktop).toBeInstanceOf(DesktopAcpTransport)
+    // Desktop history stays in the Tauri store whatever the relay negotiates.
+    expect(desktop.historyMode?.()).toBe('tauri_store')
+    desktop.dispose()
+
+    const web = createAcpTransport({
+      force: 'ws',
+      ws: { url: 'ws://test/ws', WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket }
     })
-    transport.dispose()
-  })
-
-  it('desktop load/resume return the typed Tauri invoke outcome', async () => {
-    const outcome = { configOptions: [] }
-    vi.mocked(invoke).mockResolvedValue(outcome)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
-      agentId: 'a1',
-      sessionId: 's1',
-      cwd: '/work'
-    })
-    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
-      agentId: 'a1',
-      sessionId: 's1',
-      cwd: '/work'
-    })
-    transport.dispose()
-  })
-
-  it('desktop recordAgentSwitch invokes acp_record_agent_switch with the exact five camelCase keys', async () => {
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // CAP-2: the durable agent-switch marker — the desktop adapter must
-    // forward every identity field the command validates.
-    await expect(
-      transport.recordAgentSwitch('s-old', {
-        fromConfigId: 'omp',
-        toConfigId: 'claude',
-        newSessionId: 's-new',
-        summaryText: 'Handoff summary'
-      })
-    ).resolves.toBeUndefined()
-    expect(invoke).toHaveBeenCalledWith('acp_record_agent_switch', {
-      sessionId: 's-old',
-      fromConfigId: 'omp',
-      toConfigId: 'claude',
-      newSessionId: 's-new',
-      summaryText: 'Handoff summary'
-    })
-    transport.dispose()
-  })
-
-  it('desktop promoteSession invokes acp_promote_session and resolves on success', async () => {
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // Story 8: the desktop path delegates promotion to the Rust driver via
-    // `acp_promote_session` — a successful command resolves with no payload.
-    await expect(transport.promoteSession?.('a1', 's1')).resolves.toBeUndefined()
-    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
-      agentId: 'a1',
-      sessionId: 's1'
-    })
-    transport.dispose()
-  })
-
-  it('desktop promoteSession propagates a failed promotion outcome', async () => {
-    vi.mocked(invoke).mockRejectedValue(new Error('failed to persist promoted session: disk full'))
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // A backend promote failure must reject so the store can re-mark the
-    // session ephemeral and warn the user (chat stays non-durable).
-    await expect(transport.promoteSession?.('a1', 's1')).rejects.toThrow(
-      'failed to persist promoted session'
-    )
-    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
-      agentId: 'a1',
-      sessionId: 's1'
-    })
-    transport.dispose()
-  })
-
-  it('desktop sendPrompt/sendPromptBlocks forward the client turnId to acp_send_prompt', async () => {
-    vi.mocked(invoke).mockResolvedValue('end_turn')
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    // The durable `user_prompt` record must carry the client-minted turnId so
-    // the restored bubble materializes `turn:<turnId>` — id-matching the
-    // optimistic bubble scroll-up backfill anchors on (web parity; a dropped
-    // turnId left the twin as `user:seq-*` and duplicated the first prompt).
-    await expect(transport.sendPrompt('a1', 's1', 'hello', 'turn-1')).resolves.toBe('end_turn')
-    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
-      agentId: 'a1',
-      sessionId: 's1',
-      text: 'hello',
-      turnId: 'turn-1',
-      displayContent: undefined
-    })
-
-    await expect(
-      transport.sendPromptBlocks('a1', 's1', [{ type: 'text', text: 'hi' }], 'turn-2')
-    ).resolves.toBe('end_turn')
-    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
-      agentId: 'a1',
-      sessionId: 's1',
-      content: [{ type: 'text', text: 'hi' }],
-      turnId: 'turn-2',
-      displayContent: undefined
-    })
-    transport.dispose()
-  })
-
-  it('desktop listAgentDetails invokes acp_list_agent_details (CAP-11 parity)', async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const summaries = [
-      {
-        id: 'a1',
-        name: 'Claude',
-        configId: 'claude',
-        namespace: 'config:claude',
-        capabilities: { loadSession: true }
-      }
-    ]
-    vi.mocked(invoke).mockResolvedValue(summaries)
-    const transport = createAcpTransport({ force: 'tauri' })
-
-    await expect(transport.listAgentDetails?.()).resolves.toEqual(summaries)
-    expect(invoke).toHaveBeenCalledWith('acp_list_agent_details')
-    transport.dispose()
+    expect(web).toBeInstanceOf(WsAcpTransport)
+    expect(web).not.toBeInstanceOf(DesktopAcpTransport)
+    expect(web.historyMode?.()).toBe('live_only')
+    web.dispose()
   })
 
   it('accepts an injected transport via test helper', async () => {
@@ -4272,28 +4151,6 @@ describe('createAcpTransport selection', () => {
 describe('reopen admission failure parity (ACP_REOPEN_TURN_ACTIVE)', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)
-  })
-
-  it('desktop load/resume surface the admission rejection and recover on retry', async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const transport = createAcpTransport({ force: 'tauri' })
-    // The desktop command rejects the IPC promise with the manager's plain
-    // error string (Result<_, String>).
-    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
-    await expect(transport.loadSession('a1', 's1', '/work')).rejects.toContain(
-      'ACP_REOPEN_TURN_ACTIVE'
-    )
-    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
-    await expect(transport.resumeSession('a1', 's1', '/work')).rejects.toContain(
-      'ACP_REOPEN_TURN_ACTIVE'
-    )
-
-    // Caller recovery: once the active turn finishes, the identical retry succeeds.
-    const outcome = { configOptions: [] }
-    vi.mocked(invoke).mockResolvedValue(outcome)
-    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(outcome)
-    transport.dispose()
   })
 
   it('ws load/resume surface the admission rejection and recover on retry', async () => {
@@ -4958,7 +4815,10 @@ describe('WsAcpTransport commands (AD-5)', () => {
     script.set('load_session', () => ({ ok: true, payload: {}, visible_at: 'soon' }))
     const transport = await connected()
     const onVisibleAt = vi.fn()
-    await transport.loadSession('a1', 's1', '/w', undefined, { commandId: 'c', onVisibleAt })
+    await transport.loadSession('a1', 's1', '/w', undefined, {
+      commandId: 'c',
+      onVisibleAt
+    })
     expect(onVisibleAt).not.toHaveBeenCalled()
     transport.dispose()
   })
@@ -4995,57 +4855,5 @@ describe('WsAcpTransport commands (AD-5)', () => {
       expect(isOutcomeUncertainError(new AcpTransportError(code, 'x'))).toBe(false)
     }
     expect(isOutcomeUncertainError(new Error('closed'))).toBe(false)
-  })
-})
-
-describe('TauriAcpTransport commands (AD-5)', () => {
-  const tauri = (): AcpTransport => createTauriAcpTransport()
-
-  beforeEach(() => {
-    vi.mocked(invoke).mockReset()
-  })
-
-  it('passes commandId as the camelCase argument only when the caller has one', async () => {
-    vi.mocked(invoke).mockResolvedValue(undefined)
-    await tauri().closeSession('a1', 's1', { commandId: 'cmd-1' })
-    await tauri().closeSession('a1', 's1')
-    expect(vi.mocked(invoke).mock.calls).toEqual([
-      ['acp_close_session', { agentId: 'a1', sessionId: 's1', commandId: 'cmd-1' }],
-      ['acp_close_session', { agentId: 'a1', sessionId: 's1' }]
-    ])
-  })
-
-  it.each([
-    ['outcome_unknown: the outcome is no longer known', 'outcome_unknown', true],
-    ['command_in_progress: first run still going', 'command_in_progress', true],
-    ['command_conflict: reused for another request', 'command_conflict', false],
-    ['invalid_command_id: bad id', 'invalid_command_id', false],
-    ['ACP_AGENT_UNAVAILABLE: program not found', 'agent_unavailable', false],
-    ['ACP_INVALID_AGENT_CONFIG: empty name', 'invalid_agent_config', false]
-  ])('maps the verdict "%s" to a typed %s error (uncertain=%s)', async (text, code, uncertain) => {
-    vi.mocked(invoke).mockRejectedValue(text)
-    const error = await tauri()
-      .spawnAgent({ name: 'n', command: 'c', args: [], env: {} }, { commandId: 'c1' })
-      .catch((e) => e)
-    expect(error).toBeInstanceOf(AcpTransportError)
-    expect(error.code).toBe(code)
-    // The prefix is stripped from the text the user reads.
-    expect(error.message).not.toMatch(/^(ACP_|outcome_|command_|invalid_)/)
-    expect(isOutcomeUncertainError(error)).toBe(uncertain)
-  })
-
-  it('command_accepted is the success of a no-result command, and a typed error where a result is needed', async () => {
-    vi.mocked(invoke).mockRejectedValue(
-      'command_accepted: the command ran; its result is not retained'
-    )
-    await expect(tauri().closeSession('a1', 's1', { commandId: 'c' })).resolves.toBeUndefined()
-    await expect(
-      tauri().spawnAgent({ name: 'n', command: 'c', args: [], env: {} }, { commandId: 'c' })
-    ).rejects.toMatchObject({ code: COMMAND_ACCEPTED_CODE })
-  })
-
-  it('leaves ordinary command errors untouched', async () => {
-    vi.mocked(invoke).mockRejectedValue('backend boom')
-    await expect(tauri().closeSession('a1', 's1', { commandId: 'c' })).rejects.toBe('backend boom')
   })
 })

@@ -7,11 +7,10 @@ interface SkillChipProps {
 }
 
 /**
- * Highlighted inline chip for an Agent Skill or a slash command (commands
- * pass the name prefixed by `/`). Colored-text-only treatment
+ * Highlighted inline chip for an Agent Skill. Colored-text-only treatment
  * (`text-primary font-medium`, `Sparkles` icon) — no background, no border,
- * no horizontal padding — so the chip reads at a glance as distinct from the
- * muted `FileChip` while staying flush with the surrounding text.
+ * no horizontal padding — so the chip reads at a glance as distinct from a
+ * muted command chip (`CommandChip`) and a muted file chip (`FileChip`).
  *
  * Inline metrics keep the chip inside exactly one line box (`inline-flex
  * items-center align-baseline leading-none h-[1.1em]`); font size inherits
@@ -20,10 +19,10 @@ interface SkillChipProps {
  *
  * Always non-interactive by construction: there is no `onRemove` or any other
  * interactive/removal prop. In the composer, Backspace removes a chip via the
- * token model (`removeSkillTokenBeforeCaret`/`removeCommandTokenBeforeCaret`
- * + the editor's pill keymap), not an X button; in the timeline the chip is a
- * static pill. Callers (`CommandPillNode`, `SkillPillNode`, `ChatMessage`)
- * pass only `name` (plus an optional `className`).
+ * token model (`removeSkillTokenBeforeCaret` and the editor's pill keymap),
+ * not an X button. In the timeline the chip is a static pill. Callers
+ * (`SkillPillNode`, `ChatMessage`) pass only `name` (plus an optional
+ * `className`).
  */
 export function SkillChip({ name, className }: SkillChipProps): React.JSX.Element {
   return (

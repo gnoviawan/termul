@@ -73,13 +73,10 @@ describe('TrafficLightClearance', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('is an 80px drag spacer by default and takes an explicit width', () => {
-    const { rerender } = render(<TrafficLightClearance trafficLights />)
+  it('is an 80px drag spacer', () => {
+    render(<TrafficLightClearance trafficLights />)
     const spacer = screen.getByTestId('traffic-light-clearance')
-    expect(spacer).toHaveClass('w-[80px]', 'shrink-0')
+    expect(spacer).toHaveStyle({ width: '80px' })
     expect(spacer).toHaveAttribute('data-tauri-drag-region')
-
-    rerender(<TrafficLightClearance trafficLights widthPx={24} />)
-    expect(screen.getByTestId('traffic-light-clearance')).toHaveStyle({ width: '24px' })
   })
 })

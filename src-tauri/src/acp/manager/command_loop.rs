@@ -23,6 +23,7 @@ pub(super) async fn run_command_loop(
     allow_terminal: bool,
     persistence: Option<Arc<SessionPersistence>>,
     profile: AgentRuntimeProfile,
+    terminals: Arc<Mutex<crate::acp::terminal::TerminalRegistry>>,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
@@ -279,6 +280,7 @@ pub(super) async fn run_command_loop(
                 session_id,
                 cwd,
                 additional_directories,
+                mcp_servers,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -364,6 +366,9 @@ pub(super) async fn run_command_loop(
                     // held indefinitely).
                     let mut request = LoadSessionRequest::new(&session_id, cwd.clone())
                         .additional_directories(additional_directories);
+                    if let Some(mcp_servers) = mcp_servers {
+                        request = request.mcp_servers(mcp_servers);
+                    }
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }
@@ -388,6 +393,7 @@ pub(super) async fn run_command_loop(
                 session_id,
                 cwd,
                 additional_directories,
+                mcp_servers,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -451,6 +457,9 @@ pub(super) async fn run_command_loop(
                     };
                     let mut request = ResumeSessionRequest::new(&session_id, cwd.clone())
                         .additional_directories(additional_directories);
+                    if let Some(mcp_servers) = mcp_servers {
+                        request = request.mcp_servers(mcp_servers);
+                    }
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }
@@ -472,15 +481,81 @@ pub(super) async fn run_command_loop(
             }
 
             AcpCommand::CloseSession { session_id, reply } => {
+                // Cancel a running turn first (same signals as `CancelPrompt`)
+                // and wait for its terminator before `session/close`, so the
+                // turn ends with exactly one `prompt_complete` and the close
+                // never races the turn task's own cleanup.
+                let (waiter, pending, pending_questions, pending_elicitations) = {
+                    let mut state = driver_state.lock();
+                    state.signal_cancel(&session_id.0);
+                    (
+                        state.wait_turn_idle(&session_id.0),
+                        state.drain_session(&session_id.0),
+                        state.drain_session_questions(&session_id.0),
+                        state.drain_session_elicitations(&session_id.0),
+                    )
+                };
+                for permission in pending {
+                    let _ = permission.responder.respond(RequestPermissionResponse::new(
+                        RequestPermissionOutcome::Cancelled,
+                    ));
+                }
+                for question in pending_questions {
+                    let _ = question.responder.respond(serde_json::json!({
+                        "questionId": question.question_id,
+                        "cancelled": true,
+                    }));
+                }
+                for elicitation in pending_elicitations {
+                    cancel_elicitation(elicitation);
+                }
+                if waiter.is_some() {
+                    if let Err(error) = cx.send_notification(CancelNotification::new(&session_id)) {
+                        log::warn!("[acp] failed to cancel agent prompt before close: {error}");
+                    }
+                }
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 let req_plan_server = host_plan_server.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = CloseSessionRequest::new(&session_id);
-                    let result = req_cx.send_request(request).block_task().await;
+                    if let Err(error) = await_turn_terminator(waiter).await {
+                        log::warn!(
+                            "[acp] session {} close: {error}; forcing local cleanup",
+                            crate::logging::redact_session_id(&session_id.0)
+                        );
+                        // The agent never confirmed the turn ended, so no
+                        // `session/close` is sent; the session is dropped
+                        // locally and the caller learns the close was not
+                        // clean.
+                        let was_ephemeral =
+                            close_session_locally(&req_state, &req_plan_server, &session_id.0);
+                        if let Err(finalize_error) = finalize_closed_session_if_durable(
+                            req_persistence.as_ref(),
+                            &session_id.0,
+                            was_ephemeral,
+                        )
+                        .await
+                        {
+                            log::warn!(
+                                "[acp] session {} history finalization after forced close failed: {finalize_error}",
+                                crate::logging::redact_session_id(&session_id.0)
+                            );
+                        }
+                        announce_session_closed(&req_sinks, &req_agent_id, &session_id);
+                        send_reply(&task_slot, Err(error));
+                        return;
+                    }
+                    let result = req_cx
+                        .send_request(CloseSessionRequest::new(&session_id))
+                        .block_task()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
                     // Story 8: `begin_close_session` captures the ephemeral mark BEFORE
                     // clearing the session's roots/marks — backend-ephemeral
                     // sessions skip history finalization below (there is no
@@ -488,38 +563,14 @@ pub(super) async fn run_command_loop(
                     // surface a spurious "history finalization failed").
                     let mut was_ephemeral = false;
                     if result.is_ok() {
-                        // Forget the workspace root and resolve any pending
-                        // permissions for the now-closed session.
-                        let pending = {
-                            let mut state = req_state.lock();
-                            let (ephemeral, pending) = state.begin_close_session(&session_id.0);
-                            was_ephemeral = ephemeral;
-                            pending
-                        };
-                        for permission in pending {
-                            let _ = permission.responder.respond(RequestPermissionResponse::new(
-                                RequestPermissionOutcome::Cancelled,
-                            ));
-                        }
-                        // Issue #411: resolve outstanding questions for the
-                        // closed session as cancelled too.
-                        let pending_questions =
-                            req_state.lock().finish_turn_questions(&session_id.0);
-                        for question in pending_questions {
-                            let _ = question.responder.respond(serde_json::json!({
-                                "questionId": question.question_id,
-                                "cancelled": true,
-                            }));
-                        }
-                        for elicitation in req_state.lock().finish_turn_elicitations(&session_id.0)
-                        {
-                            cancel_elicitation(elicitation);
-                        }
-                        // Evict host-plan auth, cache, and any active route only
-                        // after the agent confirms the session is closed.
-                        req_plan_server.unregister_session(&session_id.0);
+                        // Forget the workspace root, resolve any pending
+                        // tickets for the now-closed session, and evict
+                        // host-plan auth only after the agent confirmed the
+                        // close.
+                        was_ephemeral =
+                            close_session_locally(&req_state, &req_plan_server, &session_id.0);
                     }
-                    let mut result = result.map(|_| ()).map_err(|e| e.to_string());
+                    let mut result = result;
                     if result.is_ok() {
                         result = finalize_closed_session_if_durable(
                             req_persistence.as_ref(),
@@ -527,6 +578,7 @@ pub(super) async fn run_command_loop(
                             was_ephemeral,
                         )
                         .await;
+                        announce_session_closed(&req_sinks, &req_agent_id, &session_id);
                     }
                     send_reply(&task_slot, result);
                 });
@@ -737,7 +789,9 @@ pub(super) async fn run_command_loop(
                             send_reply(&task_slot, Ok(stop_reason));
                         }
                         Err(detail) => {
-                            let message = detail.message;
+                            // A provider failure keeps its stable tag so the
+                            // reply carries the code the error event already has.
+                            let message = crate::acp::provider_errors::tag_provider_error(&detail);
                             if !is_ephemeral {
                                 if let Some(persistence) = &turn_persistence {
                                     if let Err(error) =
@@ -850,6 +904,11 @@ pub(super) async fn run_command_loop(
 
             AcpCommand::IsTurnActive { session_id, reply } => {
                 let _ = reply.send(Ok(driver_state.lock().is_turn_active(&session_id.0)));
+            }
+
+            AcpCommand::ActivityProbe { reply } => {
+                let running_terminals = terminals.lock().running_count();
+                let _ = reply.send(Ok(driver_state.lock().activity(running_terminals)));
             }
 
             AcpCommand::WaitTurnIdle { session_id, reply } => {
@@ -1413,7 +1472,7 @@ fn gateway_auth_meta(gateway: &GatewayAuthInput) -> Meta {
     Meta::from_iter([("gateway".to_string(), serde_json::Value::Object(body))])
 }
 
-fn cancel_elicitation(item: PendingElicitation) {
+pub(super) fn cancel_elicitation(item: PendingElicitation) {
     let _ = item
         .responder
         .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));

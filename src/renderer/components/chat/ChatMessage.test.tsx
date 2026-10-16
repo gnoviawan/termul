@@ -226,7 +226,7 @@ describe('ChatMessage', () => {
     const streamdown = screen.getByTestId('streamdown')
     expect(streamdown).toHaveAttribute('data-animated', 'blurIn')
     expect(streamdown).toHaveAttribute('data-animated-duration', '350')
-    expect(streamdown).toHaveAttribute('data-animated-stagger', '60')
+    expect(streamdown).toHaveAttribute('data-animated-stagger', '12')
     expect(streamdown).toHaveAttribute('data-animated-easing', 'cubic-bezier(0.22, 1, 0.36, 1)')
     expect(streamdown).toHaveAttribute('data-animating', 'true')
   })
@@ -573,10 +573,10 @@ describe('ChatMessage', () => {
         </TooltipProvider>
       )
 
-      // The command token renders as a SkillChip with the name prefixed by
-      // `/` (same visual source of truth as the composer's CommandPill).
+      // The command token renders as a CommandChip (`/name`, terminal icon).
       expect(screen.getByText('/compact')).toBeInTheDocument()
-      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="TerminalSquare"]')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
       expect(screen.getByText(/please summarize/)).toBeInTheDocument()
     })
 
@@ -590,11 +590,12 @@ describe('ChatMessage', () => {
       expect(screen.getByText('/compact')).toBeInTheDocument()
       expect(screen.getByText('git-worktree')).toBeInTheDocument()
       expect(screen.getByText('auth.ts')).toBeInTheDocument()
+      expect(container.querySelector('svg[data-termul-icon="TerminalSquare"]')).not.toBeNull()
       expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
       expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
     })
 
-    it('renders the command chip as primary-colored text (clean treatment)', () => {
+    it('renders the command chip as muted text with a terminal icon', () => {
       render(
         <TooltipProvider>
           <ChatMessage message={userMessage(`${CT('compact')} hello`)} />
@@ -602,7 +603,8 @@ describe('ChatMessage', () => {
       )
 
       const chip = screen.getByText('/compact').parentElement!
-      expect(chip).toHaveClass('text-primary', 'font-medium')
+      expect(chip).toHaveClass('text-muted-foreground', 'font-medium')
+      expect(chip).not.toHaveClass('text-primary')
       expect(chip).not.toHaveClass('bg-primary/10')
       expect(chip).not.toHaveClass('border')
       expect(chip).not.toHaveClass('px-2')
@@ -616,9 +618,10 @@ describe('ChatMessage', () => {
           <ChatMessage message={userMessage(text)} />
         </TooltipProvider>
       )
-      // No crash; no chip rendered (no SkillChip Sparkles, no FileChip File
-      // icon, no `/compact` chip text).
+      // No crash; no chip rendered (no skill, command, or file icon, no
+      // `/compact` chip text).
       expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="TerminalSquare"]')).toBeNull()
       expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
       expect(screen.queryByText('/compact')).toBeNull()
       // The malformed sentinel stays inside a plain text span (raw render).
@@ -634,6 +637,7 @@ describe('ChatMessage', () => {
       )
       // No chip rendered; the sentinel pair stays inside a plain text span.
       expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="TerminalSquare"]')).toBeNull()
       expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
       expect(screen.getByText(/x /).textContent).toBe(text)
     })

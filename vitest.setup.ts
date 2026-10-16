@@ -24,6 +24,11 @@ class ResizeObserverMock {
 
 window.ResizeObserver = ResizeObserverMock
 
+// jsdom has no Element.scrollTo; Streamdown pins streaming code blocks to the bottom with it.
+if (typeof Element.prototype.scrollTo !== 'function') {
+  Element.prototype.scrollTo = (() => {}) as typeof Element.prototype.scrollTo
+}
+
 class IntersectionObserverMock {
   observe() {}
   unobserve() {}
@@ -38,6 +43,23 @@ window.IntersectionObserver = IntersectionObserverMock as unknown as typeof Inte
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
 }))
+
+// Desktop-context suites script the ACP carrier through the `invoke` mock above:
+// swap the real `/ws`-over-Channel `DesktopAcpTransport` for the invoke-backed
+// double. Suites that test the real class call `vi.unmock` on this module.
+vi.mock('@/lib/acp-transport/desktop-transport', async () => {
+  // Non-literal specifier: this setup file belongs to the node tsconfig project,
+  // which must not pull renderer sources into its file list.
+  const double = './src/renderer/lib/test-utils/invoke-acp-transport'
+  const { createInvokeAcpTransport } = await import(/* @vite-ignore */ double)
+  return {
+    DESKTOP_CHANNEL_URL: 'channel://desktop',
+    // A plain function: `new` yields the returned transport object.
+    DesktopAcpTransport: function DesktopAcpTransport() {
+      return createInvokeAcpTransport()
+    }
+  }
+})
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(() => Promise.resolve(() => {}))

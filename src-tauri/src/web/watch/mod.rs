@@ -1,7 +1,8 @@
 //! The watch hub (`watch` / `unwatch` requests, `{"type":"watch"}` frames).
 //!
 //! State that is not a session log — the project list, the chat-history index,
-//! the agent roster — reaches a client through a watch instead of a `seq = 0`
+//! the agent roster, file changes, shared store keys, the terminal set —
+//! reaches a client through a watch instead of a `seq = 0`
 //! broadcast a client could miss, receive twice, or never receive on a socket
 //! without a session subscription. A watch sends the full state first, then
 //! deltas under a contiguous `(hostEpoch, n)` revision; the client repairs any
@@ -15,8 +16,10 @@ pub use hub::{
     SubscribeError, WatchFrame, WatchHub, WatchKind, WatchRevision, WS_WATCH_TYPE,
 };
 pub use sources::{
-    agents_state, chat_history_state, projects_state, publish_agent_event, publish_agent_removed,
-    publish_chat_history, publish_projects, AGENT_ROSTER_EVENTS,
+    agents_state, attach_terminal_set_observer, chat_history_state, chat_reads_state, fs_state, projects_state,
+    publish_agent_event, publish_chat_history, publish_chat_read, publish_projects, publish_store,
+    publish_terminals, publish_worktree_branch_renamed, store_state, terminals_state,
+    AGENT_ROSTER_EVENTS, AGENT_TRANSIENT_EVENTS,
 };
 
 #[cfg(test)]

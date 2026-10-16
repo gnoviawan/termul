@@ -1,5 +1,5 @@
 import type { MouseEvent, ReactNode } from 'react'
-import { Copy, CopyX, Edit2, Skull, X, XCircle } from '@/components/icons'
+import { Copy, CopyX, Edit2, RefreshCw, Skull, X, XCircle } from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -54,6 +54,7 @@ export const KIND_PLURAL_LABELS: Record<TabContextMenuKind, string> = {
   git: 'Git Tabs',
   'git-history': 'Git History Tabs',
   diff: 'Diff Tabs',
+  'commit-diff': 'Commit Diff Tabs',
   'agent-chat': 'Agent Chats',
   canvas: 'Canvas Tabs'
 }
@@ -88,6 +89,10 @@ interface TabContextMenuProps extends TabBulkMenuProps {
   onKill?: () => void
   /** Editor: copy the file path. */
   onCopyPath?: () => void
+  /** Agent chat: reload this chat onto a new agent process. */
+  onReloadChat?: () => void
+  reloadChatDisabled?: boolean
+  reloadChatReason?: string | null
   /** Disable close/kill while a close is already in flight (terminal). */
   isClosing?: boolean
   /** Disable close while the editor is saving/reloading (editor). */
@@ -106,6 +111,9 @@ export function TabContextMenu({
   onCloseOtherTabs,
   onCloseAllTabs,
   onCopyPath,
+  onReloadChat,
+  reloadChatDisabled = false,
+  reloadChatReason,
   hasOtherTabsOfKind = false,
   hasOtherTabsInPane = false,
   isClosing = false,
@@ -128,6 +136,16 @@ export function TabContextMenu({
         {showRename && (
           <ContextMenuItem onSelect={onRename}>
             <Edit2 className="mr-2 h-4 w-4" /> Rename
+          </ContextMenuItem>
+        )}
+        {onReloadChat && (
+          <ContextMenuItem onSelect={onReloadChat} disabled={reloadChatDisabled}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {reloadChatDisabled && reloadChatReason ? (
+              <span title={reloadChatReason}>Reload this chat</span>
+            ) : (
+              'Reload this chat'
+            )}
           </ContextMenuItem>
         )}
         <ContextMenuItem onSelect={onClose} disabled={closeDisabled}>

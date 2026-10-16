@@ -3,8 +3,8 @@
  *
  * Sibling of `parity-checklist.test.ts` (kept separate so concurrent stories do
  * not conflict). The record must reach durable storage only through the
- * `persistenceApi` facade, whose desktop (plugin-store) and web (server store)
- * adapters carry the same surface, so both surfaces behave alike.
+ * `persistenceApi` facade: one host-store facade on every surface (the desktop
+ * reaches it over the Channel carrier), so all surfaces behave alike.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -68,19 +68,6 @@ describe('shell-layout persistence parity', () => {
     const sshSection = read(join(RENDERER_DIR, 'components', 'sidebar', 'ssh-section.tsx'))
     expect(sshSection).not.toContain('localStorage')
     expect(sshSection).toContain('setSshSectionHeight')
-  })
-
-  it.each([
-    ['desktop', 'tauri-persistence-api.ts'],
-    ['web', 'web-persistence-api.ts']
-  ])('%s adapter implements read/write/writeDebounced/delete', (_surface, file) => {
-    const source = read(join(LIB_DIR, file))
-    for (const method of ['read', 'writeDebounced', 'delete']) {
-      expect(source, `${file} should implement ${method}`).toMatch(
-        new RegExp(`(async\\s+)?${method}\\s*(<[^>]*>)?\\s*\\(`)
-      )
-    }
-    expect(source, `${file} should implement write`).toMatch(/\bwrite\b/)
   })
 
   it('mounts the hydration hook on both renderer roots', () => {

@@ -88,7 +88,7 @@ describe('DiffTab', () => {
     expect(await screen.findByRole('button', { name: 'Stage hunk' })).toBeEnabled()
     expect(gitApi.getDiff).toHaveBeenCalledTimes(1)
     expect(gitApi.getDiff).toHaveBeenCalledWith(CWD, PATH, false)
-    expect(screen.getByText(PATH)).toBeInTheDocument()
+    expect(screen.getByTitle(PATH)).toBeInTheDocument()
     expect(screen.getByText('Working tree')).toBeInTheDocument()
     expect(screen.getByText(/newLine/)).toBeInTheDocument()
   })

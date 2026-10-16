@@ -46,8 +46,9 @@ describe('AskUserQuestion (issue #411)', () => {
     expect(screen.getByText('Plan B')).toBeInTheDocument()
     expect(screen.getByText(/Fast, iterative/)).toBeInTheDocument()
     // Stepper chrome: Question label + 1 of 1 counter.
-    expect(screen.getByText('Question')).toBeInTheDocument()
-    expect(screen.getByText('1 of 1')).toBeInTheDocument()
+    expect(screen.getByText('Agent question')).toBeInTheDocument()
+    // One question: no pager and no step track.
+    expect(screen.queryByRole('button', { name: 'Previous question' })).not.toBeInTheDocument()
   })
 
   it('bounds the option list in a scrollable region so the panel cannot cover the pane', () => {

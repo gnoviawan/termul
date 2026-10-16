@@ -43,10 +43,17 @@ vi.mock('@/hooks/use-pane-dnd', () => ({
   usePaneDnd: () => ({ isDragging: false, previewTarget: null })
 }))
 vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
-  WorkspaceTabBar: ({ topRow }: { topRow?: { dragRegion: boolean; windowControls: boolean } }) => (
+  WorkspaceTabBar: ({
+    topRow,
+    leading
+  }: {
+    topRow?: { dragRegion: boolean; windowControls: boolean }
+    leading?: React.ReactNode
+  }) => (
     <div
       data-testid="tabbar-stub"
       data-top-row={topRow ? `${topRow.dragRegion}/${topRow.windowControls}` : 'none'}
+      data-leading={leading ? 'show-side-panel-slot' : 'none'}
     />
   )
 }))
@@ -67,11 +74,17 @@ const pane: LeafNode = {
 
 const desktop: TopRowPlatform = { dragRegions: true, windowControls: true, trafficLights: false }
 
-function roles(topEdge: string[], rightmost: string | null): TopRowRoles {
+function roles(
+  topEdge: string[],
+  rightmost: string | null,
+  leftmost: string | null = topEdge[0] ?? null
+): TopRowRoles {
   return {
     topEdgeLeafIds: new Set(topEdge),
     rightmostLeafId: rightmost,
-    controlsOwner: 'pane'
+    leftmostLeafId: leftmost,
+    controlsOwner: 'pane',
+    showPanelOwner: 'pane'
   }
 }
 
@@ -129,5 +142,29 @@ describe('PaneContent top row', () => {
   it('passes no topRow to the tab bar in the classic shell', () => {
     render(<PaneContent pane={pane} />)
     expect(screen.getByTestId('tabbar-stub')).toHaveAttribute('data-top-row', 'none')
+  })
+
+  it('gives only the leftmost top-edge pane the Show side panel slot', () => {
+    const { unmount } = render(
+      <TopRowProvider roles={roles(['pane-1', 'pane-2'], 'pane-2')} platform={desktop}>
+        <PaneContent pane={pane} />
+      </TopRowProvider>
+    )
+    expect(screen.getByTestId('tabbar-stub')).toHaveAttribute(
+      'data-leading',
+      'show-side-panel-slot'
+    )
+    unmount()
+
+    const { unmount: unmount2 } = render(
+      <TopRowProvider roles={roles(['pane-0', 'pane-1'], 'pane-1')} platform={desktop}>
+        <PaneContent pane={pane} />
+      </TopRowProvider>
+    )
+    expect(screen.getByTestId('tabbar-stub')).toHaveAttribute('data-leading', 'none')
+    unmount2()
+
+    render(<PaneContent pane={pane} />)
+    expect(screen.getByTestId('tabbar-stub')).toHaveAttribute('data-leading', 'none')
   })
 })

@@ -10,7 +10,7 @@ interface DiffPreviewProps {
   diff: DiffContent
 }
 
-interface DiffHighlight {
+export interface DiffHighlight {
   oldLines: DiffTokenLine[]
   newLines: DiffTokenLine[]
 }
@@ -20,7 +20,7 @@ interface DiffHighlight {
  * budget (or any failure) falls back to plain text so the card never
  * half-highlights. Colors swap in without layout shift (same glyphs).
  */
-function useDiffHighlight(
+export function useDiffHighlight(
   path: string,
   oldText: string | null | undefined,
   newText: string
@@ -60,6 +60,48 @@ function tokensForLine(highlight: DiffHighlight | null, line: DiffLine): DiffTok
   return index ? (highlight.newLines[index - 1] ?? null) : null
 }
 
+/** Gutter-numbered, syntax-highlighted diff rows over red/green tints. */
+export function DiffRows({
+  lines,
+  highlight
+}: {
+  lines: DiffLine[]
+  highlight: DiffHighlight | null
+}): React.JSX.Element {
+  return (
+    <>
+      {lines.map((line, i) => {
+        const tokens = tokensForLine(highlight, line)
+        const number = line.newLine ?? line.oldLine
+        return (
+          <div
+            key={i}
+            className={cn(
+              'flex',
+              line.type === 'added' && 'bg-diff-added/10 text-diff-added-foreground',
+              line.type === 'removed' && 'bg-destructive/10 text-destructive',
+              line.type === 'context' &&
+                (line.text === '···'
+                  ? 'select-none text-muted-foreground/50'
+                  : 'text-muted-foreground')
+            )}
+          >
+            <span className="w-10 shrink-0 select-none pr-2 text-right tabular-nums text-muted-foreground/50">
+              {number ?? ''}
+            </span>
+            <span className="w-4 shrink-0 select-none opacity-60">
+              {line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}
+            </span>
+            <span className="min-w-0 flex-1 whitespace-pre-wrap">
+              {tokens ? <CodeTokens tokens={tokens} /> : line.text}
+            </span>
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
 /**
  * Minimal file-diff renderer (no external diff library). Shows the path, a
  * "+N −M" summary, gutter line numbers, and stacked removed/added lines with
@@ -85,34 +127,7 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
         </span>
       </div>
       <div className="scroller-thin max-h-48 overflow-auto p-2 font-mono text-xs leading-relaxed">
-        {lines.map((line, i) => {
-          const tokens = tokensForLine(highlight, line)
-          const number = line.newLine ?? line.oldLine
-          return (
-            <div
-              key={i}
-              className={cn(
-                'flex',
-                line.type === 'added' && 'bg-diff-added/10 text-diff-added-foreground',
-                line.type === 'removed' && 'bg-destructive/10 text-destructive',
-                line.type === 'context' &&
-                  (line.text === '···'
-                    ? 'select-none text-muted-foreground/50'
-                    : 'text-muted-foreground')
-              )}
-            >
-              <span className="w-10 shrink-0 select-none pr-2 text-right tabular-nums text-muted-foreground/50">
-                {number ?? ''}
-              </span>
-              <span className="w-4 shrink-0 select-none opacity-60">
-                {line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}
-              </span>
-              <span className="min-w-0 flex-1 whitespace-pre-wrap">
-                {tokens ? <CodeTokens tokens={tokens} /> : line.text}
-              </span>
-            </div>
-          )
-        })}
+        <DiffRows lines={lines} highlight={highlight} />
       </div>
     </div>
   )

@@ -1,5 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  resetNativeWebviewOcclusionForTests,
+  useNativeWebviewOccluded
+} from '@/hooks/use-native-webview-occlusion'
 import { OUTSIDE_PROJECT_ROOT_REASON } from '@/lib/active-worktree'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { mockTerminal } from '@/lib/test-utils/terminal'
@@ -16,7 +20,6 @@ import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 const mocks = vi.hoisted(() => ({
   admits: { value: true },
   openTerminal: vi.fn(),
-  occlusion: vi.fn(),
   create: vi.fn(),
   createSymlinks: vi.fn(),
   reconcile: vi.fn(),
@@ -27,8 +30,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
   useServerAdmitsRemoteWrites: () => mocks.admits.value
 }))
-vi.mock('@/hooks/use-native-webview-occlusion', () => ({
-  useNativeWebviewOcclusion: (open: boolean) => mocks.occlusion(open)
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tauri-runtime')>()),
+  isTauriContext: () => true
 }))
 vi.mock('@/lib/terminal-spawn', () => ({
   openTerminalAtCwd: (...args: unknown[]) => mocks.openTerminal(...args)
@@ -74,9 +78,18 @@ function pickOf(): string | undefined {
   return useShellLayoutStore.getState().worktreePickByProject.p1
 }
 
+function Occluded(): React.JSX.Element {
+  return <span data-testid="occluded">{String(useNativeWebviewOccluded())}</span>
+}
+
 function renderSwitcher(project = makeProject()) {
   useProjectStore.setState({ projects: [project], isWorktreeOperationLocked: false })
-  return render(<WorkspaceSwitcher project={project} />)
+  return render(
+    <>
+      <WorkspaceSwitcher project={project} />
+      <Occluded />
+    </>
+  )
 }
 
 function trigger(): HTMLElement {
@@ -96,7 +109,6 @@ describe('WorkspaceSwitcher', () => {
     mocks.admits.value = true
     for (const fn of [
       mocks.openTerminal,
-      mocks.occlusion,
       mocks.create,
       mocks.createSymlinks,
       mocks.reconcile,
@@ -115,6 +127,7 @@ describe('WorkspaceSwitcher', () => {
   })
   afterEach(() => {
     cleanup()
+    resetNativeWebviewOcclusionForTests()
     useProjectStore.setState({ projects: initialProjects, isWorktreeOperationLocked: false })
   })
 
@@ -126,6 +139,14 @@ describe('WorkspaceSwitcher', () => {
       useShellLayoutStore.setState({ worktreePickByProject: { p1: 'e:/proj/.termul/worktrees/a' } })
       renderSwitcher()
       expect(screen.getByRole('button', { name: /feat\/a/ })).toBeInTheDocument()
+    })
+
+    it('shows the branch in its own case, not as an uppercase section label', () => {
+      useShellLayoutStore.setState({ worktreePickByProject: { p1: 'e:/proj/.termul/worktrees/a' } })
+      renderSwitcher()
+      const label = screen.getByText('feat/a')
+      expect(label).not.toHaveClass('label-panel')
+      expect(label.closest('button')).toHaveClass('text-foreground')
     })
 
     it('reads Workspace for a pruned or outside-root pick', () => {
@@ -191,11 +212,13 @@ describe('WorkspaceSwitcher', () => {
       expect(screen.queryByText(/Create worktree/)).not.toBeInTheDocument()
     })
 
-    it('registers as a native webview occluder while open', async () => {
+    it('hides native webviews while open and releases them on close', async () => {
       renderSwitcher()
-      expect(mocks.occlusion).toHaveBeenLastCalledWith(false)
+      expect(screen.getByTestId('occluded').textContent).toBe('false')
       await openSwitcher()
-      expect(mocks.occlusion).toHaveBeenLastCalledWith(true)
+      await waitFor(() => expect(screen.getByTestId('occluded').textContent).toBe('true'))
+      fireEvent.keyDown(search(), { key: 'Escape' })
+      await waitFor(() => expect(screen.getByTestId('occluded').textContent).toBe('false'))
     })
   })
 

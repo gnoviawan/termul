@@ -3,9 +3,6 @@ import { toast } from 'sonner'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 
-/** Accessible name of the control that shows or hides the Side panel. */
-export const SIDE_PANEL_TOGGLE_LABEL = 'Show or hide side panel'
-
 /**
  * Shows or hides the Side panel through the same persisted path as Ctrl+B
  * (`updatePanelVisibility('fileExplorerVisible', ...)`), with an error toast

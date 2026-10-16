@@ -10,3 +10,8 @@ export function useShortcutLabel(id: string): string | undefined {
   const key = shortcut?.customKey ?? shortcut?.defaultKey
   return key ? formatKeyForDisplay(key) : undefined
 }
+
+/** "Label (Ctrl+B)" when a shortcut is bound, else the label alone. */
+export function withShortcut(label: string, shortcut: string | undefined): string {
+  return shortcut ? `${label} (${shortcut})` : label
+}

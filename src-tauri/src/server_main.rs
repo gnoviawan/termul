@@ -24,18 +24,15 @@ use termul_manager_lib::server_update::{
 };
 use termul_manager_lib::web::auth::{resolve as resolve_web_auth, WebAuthResolution};
 use termul_manager_lib::web::config::ParseCliError;
-use termul_manager_lib::web::permissions::{
-    DEFAULT_PERMISSION_RECONNECT_GRACE, DEFAULT_PERMISSION_TIMEOUT,
-};
 use termul_manager_lib::web::{
-    seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
+    serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
     WsRelaySink,
 };
-use termul_manager_lib::web::store::WebStore;
+use termul_manager_lib::web::project_registry::RootCheck;
+use termul_manager_lib::web::store::{legacy_manifests_dir, StorePolicy, WebStore};
 use termul_manager_lib::{
     AcpCatalogService, AcpInstallService, AcpManager, CwdTracker, ExitCodeTracker,
-    FileProjectRegistry, GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
-    WorkspaceManifestService,
+    GitTracker, PtyManager, SessionPersistence, TerminalEventHub,
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -214,7 +211,7 @@ fn main() -> ExitCode {
             "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
              on {} gain: fs mkdir/write/delete/rename/copy CONFINED to the registered project roots; \
              git + worktree operations confined to the registered project roots; AND host-state mutation via \
-             /projects/default, /acp/install, /log/frontend-error, /workspace/*. Loopback callers \
+             /projects/default, /acp/install, /log/frontend-error. Loopback callers \
              keep ADR-007 breadth (any path). {auth_tail}",
             host,
             auth_tail = auth_tail,
@@ -271,8 +268,10 @@ fn main() -> ExitCode {
         // held. A newer-schema file (or a legacy file that cannot be backed
         // up before migration) refuses startup visibly instead of degrading;
         // the file is left untouched.
-        let store = match WebStore::open(data_paths.store_file.clone()) {
-            Ok(store) => Arc::new(store),
+        let store = match WebStore::open(data_paths.store_file.clone(), StorePolicy::from_config(&cfg)) {
+            // The retired workspace manifests move into the first device that
+            // adopts the store (renamed afterwards).
+            Ok(store) => Arc::new(store.with_legacy_manifests(legacy_manifests_dir(&data_paths.state_dir))),
             Err(error) => {
                 error!("termul-server: refusing to start: {error}");
                 eprintln!("termul-server: {error}");
@@ -284,20 +283,6 @@ fn main() -> ExitCode {
             Err(error) => {
                 error!("termul-server: failed to open sessions store: {error}");
                 eprintln!("termul-server: failed to open sessions store: {error}");
-                return ExitCode::from(1);
-            }
-        };
-        // CAP-5 / Story 5: open the host-owned workspace-manifests root. The
-        // standalone binary owns its own root — NEVER shared with a desktop
-        // host on the same machine (two processes on one JSONL store would
-        // corrupt both). Defaults to `<state dir>/workspace-manifests`; the
-        // explicit `--workspace-manifests-dir` flag overrides.
-        let workspace_manifests_dir = data_paths.workspace_manifests_dir.clone();
-        let workspace_manifest = match WorkspaceManifestService::open(workspace_manifests_dir).await
-        {
-            Ok(service) => Some(service),
-            Err(error) => {
-                eprintln!("termul-server: failed to open workspace-manifests store: {error}");
                 return ExitCode::from(1);
             }
         };
@@ -346,57 +331,33 @@ fn main() -> ExitCode {
             persistence,
             claude_agent,
         ));
-        // Story 1.7: attach the server-side permission rendezvous (bounded
-        // timeout, at-most-one, first-response-wins, disconnect-deny, TOCTOU).
-        // The relay snapshots `acp:permission_request` events into it; the
-        // `/ws` `respond_permission` handler + disconnect cleanup enforce the
-        // policy. The desktop path does NOT attach a rendezvous (it uses the
-        // `acp_respond_permission` Tauri command directly).
-        let rendezvous = Arc::new(PermissionRendezvous::with_policy(
-            Arc::clone(&acp),
-            DEFAULT_PERMISSION_TIMEOUT,
-            DEFAULT_PERMISSION_RECONNECT_GRACE,
-        ));
+        // Attach the permission and question rendezvous. The relay snapshots
+        // `acp:permission_request` and `acp:question_request` events into them
+        // (at-most-one per session, first-response-wins, TOCTOU). A ticket has
+        // no timer: it waits until it is answered or its session ends.
+        let rendezvous = Arc::new(PermissionRendezvous::new(Arc::clone(&acp)));
         ws_relay.set_rendezvous(rendezvous);
-        // Issue #411: attach the server-side question rendezvous (bounded
-        // timeout, first-response-wins, TOCTOU). The relay snapshots
-        // `acp:question_request` events into it; the `/ws` `answer_question`
-        // handler + disconnect cleanup enforce the policy. The desktop path
-        // does NOT attach one (it uses the `acp_answer_question` Tauri command
-        // directly).
-        // Issue #841: questions share the permission reconnect grace so a
-        // user who steps away and returns within the window finds them
-        // still pending instead of instantly cancelled.
-        let question_rendezvous = Arc::new(QuestionRendezvous::with_policy(
-            Arc::clone(&acp),
-            DEFAULT_PERMISSION_TIMEOUT,
-            DEFAULT_PERMISSION_RECONNECT_GRACE,
-        ));
+        let question_rendezvous = Arc::new(QuestionRendezvous::new(Arc::clone(&acp)));
         ws_relay.set_question_rendezvous(question_rendezvous);
-        // Story 4.1: the in-memory project registry. In VPS mode the
-        // standalone binary is the source of truth — it seeds the registry
-        // from the file-backed `FileProjectRegistry` at startup.
-        // `cfg.projects_file` is resolved by `ServerConfig::from_args` from
-        // --projects-file / $TERMUL_PROJECTS_FILE / the state-dir default
+        // The host's ONE project registry, durable at the resolved projects
+        // file. `cfg.projects_file` is resolved by `ServerConfig::from_args`
+        // from --projects-file / $TERMUL_PROJECTS_FILE / the state-dir default
         // (<state dir>/projects.json), so `None` only survives when no
         // platform state dir is discoverable. A missing file is not fatal
-        // (loads as empty, so `/projects` returns empty); a corrupt/invalid
-        // file IS fatal (abort startup so a misconfigured VPS is obvious).
-        // Desktop-hosted mode never reaches here (it calls `serve_router`
-        // directly with a renderer-fed registry).
-        let registry = Arc::new(ProjectRegistry::new());
-        let mut registry_persistence = None;
-        if let Some(ref projects_file) = cfg.projects_file {
-            match FileProjectRegistry::load(projects_file) {
-                Ok(file_reg) => {
-                    let n = file_reg.roots().len();
+        // (opens empty, so `/projects` returns empty and the first project
+        // command creates the file); a corrupt/invalid/newer-schema file IS
+        // fatal (abort startup so a misconfigured VPS is obvious). Desktop
+        // shared-live never reaches here: it builds its own registry once at
+        // desktop setup and calls `serve_router` directly.
+        let registry = if let Some(ref projects_file) = cfg.projects_file {
+            match ProjectRegistry::open_durable(projects_file, RootCheck::Strict) {
+                Ok(registry) => {
                     info!(
-                        "loaded {} project root(s) from '{}'",
-                        n,
+                        "loaded {} project(s) from '{}'",
+                        registry.len(),
                         projects_file.display()
                     );
-                    seed_from_file(&registry, &file_reg);
-                    registry_persistence = Some(Arc::new(parking_lot::Mutex::new(file_reg)));
+                    Arc::new(registry)
                 }
                 Err(e) => {
                     eprintln!(
@@ -417,7 +378,8 @@ fn main() -> ExitCode {
                  registry is in-memory only and projects will NOT persist \
                  across restarts"
             );
-        }
+            Arc::new(ProjectRegistry::new())
+        };
         // The standalone binary owns its interactive PTYs and kills them only
         // after Axum drains. Desktop shared-live passes its existing manager and
         // never reaches that cleanup path.
@@ -434,8 +396,8 @@ fn main() -> ExitCode {
             Arc::clone(&git_tracker),
             Arc::clone(&exit_code_tracker),
         ));
+        pty.set_max_terminals_per_project(cfg.max_terminals_per_project);
 
-        let projects_file = cfg.projects_file.clone();
         // OpenPencil canvas mode (spec-openpencil-canvas-mode): the
         // standalone server owns its own canvas daemon pool — NEVER shared
         // with a desktop host on the same machine. `web::serve` joins its
@@ -457,10 +419,7 @@ fn main() -> ExitCode {
             exit_code_tracker,
             ws_relay,
             registry,
-            registry_persistence,
-            projects_file,
             cfg,
-            workspace_manifest,
             acp_catalog,
             acp_install,
             store,
@@ -724,10 +683,12 @@ OPTIONS:
                                   [default: $TERMUL_SESSIONS_DIR, else
                                   <--state-dir>/sessions when --state-dir
                                   is set, else the platform state dir]
-    --project-root <PATH>         Boundary for /git/*, /skills, /search/content
-                                  routes (NOT /fs/* — ADR-007). Must exist and
-                                  be a directory; validated at startup.
-                                  [default: $TERMUL_PROJECT_ROOT or $HOME]
+    --project-root <PATH>         REMOVED (still parsed, with a startup
+                                  warning). There is no single host project
+                                  root: the boundary is "inside any registered
+                                  project". The value only seeds one project
+                                  while the registry is empty. Must exist and
+                                  be a directory. [default: none]
     --projects-file <PATH>        VFS-roots registry file. A missing file loads
                                   as an empty registry (not fatal); a corrupt
                                   file is fatal. With no state dir
@@ -736,9 +697,6 @@ OPTIONS:
                                   <--state-dir>/projects.json when
                                   --state-dir is set, else the platform
                                   state dir]
-    --workspace-manifests-dir <PATH>
-                                  Workspace manifests root.
-                                  [default: <state dir>/workspace-manifests]
     --acp-catalog-dir <PATH>      ACP catalog root.
                                   [default: <state dir>/acp-catalog]
     --store-file <PATH>           Server-side key-value store for the web client
@@ -767,7 +725,14 @@ OPTIONS:
                                   Idle window after which an idle agent is
                                   reaped. Positive integer.
                                   [env: TERMUL_AGENT_IDLE_REAP_SECS]
-                                  [default: 900]
+                                  [default: 1800]
+    --max-terminals-per-project <N>
+                                  Most live terminals one project may have.
+                                  The host refuses a spawn past it with
+                                  TERMINAL_LIMIT; the host-wide cap is 30.
+                                  Positive integer.
+                                  [env: TERMUL_MAX_TERMINALS_PER_PROJECT]
+                                  [default: 10]
     --overflow-tolerance <N>      Reliable-queue overflow tolerance per client.
                                   Positive integer. Reserved: the host
                                   validates it but does not read it yet.
@@ -781,19 +746,20 @@ OPTIONS:
                                   clamped.
                                   [default: 600]
     --partition-gc-age-secs <SECS>
-                                  Age after which an unused device partition
-                                  is garbage collected. Positive integer.
-                                  Reserved: the host validates it but does
-                                  not read it yet.
+                                  Age after which the web store partition of
+                                  a device that has not connected (and is not
+                                  connected now) is garbage collected.
+                                  Positive integer.
                                   [env: TERMUL_PARTITION_GC_AGE_SECS]
-                                  [default: unset]
+                                  [default: 7776000]
     --partition-byte-budget <BYTES>
-                                  Per-device partition byte budget. Positive
-                                  integer. Reserved: the host validates it
-                                  but does not read it yet.
+                                  Per-device web store partition byte budget;
+                                  a write past it is refused
+                                  (STORE_PARTITION_FULL). Positive integer.
                                   [env: TERMUL_PARTITION_BYTE_BUDGET]
-                                  [default: unset]
-    --permission-timeout <SECS>, --permission-reconnect-grace <SECS>
+                                  [default: 16777216]
+    --permission-timeout <SECS>, --permission-reconnect-grace <SECS>,
+    --workspace-manifests-dir <PATH>
                                   Removed. Still accepted so existing launch
                                   commands keep starting, but ignored (a
                                   warning is logged at startup).
@@ -802,10 +768,10 @@ OPTIONS:
     --allow-remote-writes         Admit non-loopback peers on all guarded write
                                   routes. /fs/* writes reject only .. traversal
                                   (ADR-007 breadth, any path); /git/* and
-                                  /worktree/* writes confined to --project-root;
+                                  /worktree/* writes confined to registered projects;
                                   AND host-state writes (/projects/default,
-                                  /acp/install, /log/frontend-error,
-                                  /workspace/*). Loopback callers keep ADR-007
+                                  /acp/install, /log/frontend-error).
+                                  Loopback callers keep ADR-007
                                   breadth (any path). No-op when bound to
                                   127.0.0.1. The web auth token gate still
                                   applies (see --web-auth-token). Only enable
@@ -860,7 +826,7 @@ ENVIRONMENT:
                                   Fallback: <tmp>/termul
     RUST_LOG                      tracing filter (floor: info). Try
                                   RUST_LOG=termul_manager_lib=debug
-    TERMUL_PROJECT_ROOT           Fallback for --project-root
+    TERMUL_PROJECT_ROOT           Removed fallback for --project-root (seed only)
     TERMUL_PROJECTS_FILE          Fallback for --projects-file
     TERMUL_SESSIONS_DIR           Fallback for --sessions-dir
     TERMUL_STORE_FILE             Fallback for --store-file
@@ -873,19 +839,17 @@ ENVIRONMENT:
 
 EXAMPLES:
     # Local: serve the embedded web client on loopback
-    termul-server --project-root $HOME/src/myproj
+    termul-server
 
     # LAN: expose to phone browsers on the trusted network
-    termul-server --host 0.0.0.0 --port 8080 \
-        --project-root $HOME/src/myproj
+    termul-server --host 0.0.0.0 --port 8080
 
     # LAN with remote writes (trusted network only)
-    termul-server --host 0.0.0.0 --project-root $HOME/src/myproj \
-        --allow-remote-writes
+    termul-server --host 0.0.0.0 --allow-remote-writes
 
     # Background with debug logging
     RUST_LOG=termul_manager_lib=debug termul-server --host 0.0.0.0 \
-        --project-root $HOME/src/myproj > /tmp/termul-server.log 2>&1 &
+        > /tmp/termul-server.log 2>&1 &
 
     # Guided setup (auto-detects systemd or setsid, survives SSH logout)
     termul-server onboard

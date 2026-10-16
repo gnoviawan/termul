@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { serializeTopologyForManifest } from '@/hooks/use-workspace-manifest-sync'
-import { diffTabId } from '@/lib/diff-tab-identity'
+import { commitDiffTabId, diffTabId } from '@/lib/diff-tab-identity'
 import type { LeafNode } from '@/types/workspace.types'
 import { deserializePaneTree, reconcileTerminalTabs, serializePaneTree } from './pane-tree'
 import type { PersistedPaneNodeInput } from './types'
@@ -41,6 +40,62 @@ describe('diff tab persistence', () => {
     expect(restored).toEqual(tree)
   })
 
+  it('round-trips a commit diff tab with its commit and old path', () => {
+    const hash = 'a'.repeat(40)
+    const id = commitDiffTabId('/r', hash, 'src/new.ts')
+    const tree = leaf(
+      [
+        {
+          type: 'commit-diff',
+          id,
+          cwd: '/r',
+          commit: hash,
+          path: 'src/new.ts',
+          oldPath: 'src/old.ts'
+        }
+      ],
+      id
+    )
+
+    const serialized = serializePaneTree(tree)
+    if (serialized.type !== 'leaf') throw new Error('expected leaf')
+    expect(serialized.tabs[0]).toEqual({
+      type: 'commit-diff',
+      id,
+      cwd: '/r',
+      commit: hash,
+      path: 'src/new.ts',
+      oldPath: 'src/old.ts'
+    })
+    expect(deserializePaneTree(serialized)).toEqual(tree)
+  })
+
+  it('rebuilds a missing commit diff id from the commit, not the working-tree side', () => {
+    const hash = 'b'.repeat(40)
+    const persisted = {
+      type: 'leaf',
+      id: 'pane-1',
+      tabs: [{ type: 'commit-diff', cwd: '/r', commit: hash, path: 'a.ts' }],
+      activeTabId: null
+    } as unknown as PersistedPaneNodeInput
+
+    const restored = deserializePaneTree(persisted) as LeafNode
+    expect(restored.tabs[0]).toMatchObject({ type: 'commit-diff', commit: hash })
+    expect(restored.tabs[0].id).toBe(commitDiffTabId('/r', hash, 'a.ts'))
+    expect(restored.tabs[0].id).not.toBe(diffTabId('/r', 'a.ts', false))
+  })
+
+  it('drops a malformed commit diff ref', () => {
+    const persisted = {
+      type: 'leaf',
+      id: 'pane-1',
+      tabs: [{ type: 'commit-diff', cwd: '/r', path: 'a.ts' }],
+      activeTabId: null
+    } as unknown as PersistedPaneNodeInput
+
+    expect((deserializePaneTree(persisted) as LeafNode).tabs).toEqual([])
+  })
+
   it('survives reconcile (a diff tab is kept like the other non-terminal kinds)', () => {
     const tree = leaf(
       [{ type: 'diff', id: DIFF_ID, cwd: '/r', path: 'a.ts', staged: false }],
@@ -70,14 +125,5 @@ describe('diff tab persistence', () => {
     expect(restored.activeTabId).toBeNull()
     expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
     expect(mockLogFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
-  })
-
-  it('is absent from the manifest topology', () => {
-    const topology = serializeTopologyForManifest(
-      leaf([{ type: 'diff', id: DIFF_ID, cwd: '/r', path: 'a.ts', staged: false }], DIFF_ID)
-    )
-    if (topology.type !== 'leaf') throw new Error('expected leaf')
-    expect(topology.terminalIds).toEqual([])
-    expect(topology.editorIds).toEqual([])
   })
 })

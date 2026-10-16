@@ -113,6 +113,16 @@ export interface ChatMessage {
   messageId?: string
 }
 
+/**
+ * Options for one history open. A reload passes the current MCP list and
+ * asks for a new agent process. A normal history open omits both.
+ */
+export interface OpenHistoryOptions {
+  mcpServers?: McpServer[]
+  /** Skip adopting the process that already owns this session. */
+  forceNewAgent?: boolean
+}
+
 export interface AcpSession {
   id: SessionId
   agentId: AgentId
@@ -141,6 +151,12 @@ export interface AcpSession {
    * are not dropped.
    */
   openTurnId: string | null
+  /**
+   * Wire turn id of the newest prompt turn this renderer opened. Unlike
+   * `openTurnId` it survives the turn's end, so a late result of an older turn
+   * can tell a newer one superseded it.
+   */
+  latestPromptTurnId?: string
   modes: SessionModeState | null
   models?: SessionModelState | null
   configOptions: SessionConfigOption[]
@@ -267,17 +283,6 @@ export interface PendingPermission {
   toolCall: unknown
 }
 
-/**
- * A permission the server denied because this device disconnected (L-09). The
- * server emits no event for it, so the store infers it: a request that was
- * pending at a transport loss and later left `pendingPermissions` without the
- * user answering. `tool` is the request's tool title for the notice copy.
- */
-export interface PermissionDenialNotice {
-  requestId: string
-  tool: string
-}
-
 /** A pending structured question (issue #411), keyed by `questionId`. */
 export interface PendingQuestion {
   questionId: string
@@ -354,11 +359,21 @@ export interface AcpState {
    * `createSession` after spawn would otherwise hide Restart.
    */
   pendingRestartVersions: Record<string, string>
+  /**
+   * Chats with a reload in progress. The Reload control stays disabled and
+   * reads "Reloading…".
+   */
+  reloadingChatIds: Record<SessionId, true>
+  /**
+   * In-memory "Agent reloaded" mark. `afterMessageId` is the last message at
+   * the moment of reload, so later messages stay below the line. Not persisted.
+   */
+  agentReloadMarks: Record<SessionId, { afterMessageId: string | null }>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
   /**
-   * Maps a per-project agent reuse key (`agentReuseKey(configId, cwd)`) to its
+   * Maps a per-project agent reuse key (`agentReuseKey(configId, cwd, projectId)`) to its
    * live spawned AgentId (for reuse). Keyed by config+cwd — not config alone —
    * so the same configured agent runs an independent process per project/cwd
    * and one process's disconnect can't cascade to another project's sessions.
@@ -462,12 +477,6 @@ export interface AcpState {
   pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
   pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
   pendingElicitations: Record<string, PendingElicitation>
-  /**
-   * Per-session notice that a permission was denied by a disconnect (see
-   * `PermissionDenialNotice`). Set by `attachPermissionDenialTracking`; cleared
-   * when the session's next turn starts or the session goes away.
-   */
-  permissionDenialNotices: Record<SessionId, PermissionDenialNotice>
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
   promptQueues: Record<SessionId, QueuedPrompt[]>
   /**
@@ -499,7 +508,11 @@ export interface AcpState {
   degradedRecoverySessions: Record<SessionId, true>
 
   // Actions — lifecycle
-  spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
+  /** `projectId` selects the Claude Account of a managed Claude agent. */
+  spawnAgent: (
+    config: Parameters<typeof acpApi.spawnAgent>[0],
+    projectId?: string | null
+  ) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
   /**
    * Headless ACP auth (spec-acp-terminal-auth): dismiss the BrowserAuthDialog
@@ -691,7 +704,7 @@ export interface AcpState {
    * local projection, with the same stale-response guard as `loadSessionIndex`.
    */
   applySessionIndexSnapshot: (entries: SessionIndexEntry[]) => Promise<void>
-  openHistorySession: (id: string) => Promise<void>
+  openHistorySession: (id: string, options?: OpenHistoryOptions) => Promise<void>
   /** R1: Proactively reattach a still-running ACP session on refresh. Mirrors
    * `openHistorySessionInner`'s transcript-install + resume but skips
    * `ensureLiveAgent` (no cold-spawn): the caller passes the authoritative
@@ -710,7 +723,12 @@ export interface AcpState {
   /** Restart the agent for a crashed chat and replay the last user prompt.
    * User-initiated (Retry click) — honors ADR-003's no-silent-respawn (the crash
    * is still surfaced; respawn only happens on explicit user action). */
-  retryCrashedSession: (sessionId: SessionId) => Promise<void>
+  /** Reopen on a fresh agent and (unless `resend: false`) send the last user prompt again. */
+  retryCrashedSession: (sessionId: SessionId, options?: { resend?: boolean }) => Promise<void>
+  /** Record a failed resume of a stopped (`closed`) chat as a `Resume failed: <reason>`
+   * `lastError` so Attention, the panel and remounts agree. No-op when the
+   * session is missing, not `closed`, or already carries a resume failure. */
+  markResumeFailed: (sessionId: SessionId, reason: string) => void
   /** Re-run prepare for a failed chat launch (status 'error' +
    * `launchConfigId`) against the recorded agent config. On success the real
    * session replaces the placeholder and the tab remaps; on failure the
@@ -765,12 +783,12 @@ export interface AcpState {
    */
   upsertCanvasMcpServer: (projectId: string, url: string, token?: string) => Promise<void>
   /**
-   * CAP-7: mirror the app-store MCP registry to the active project's
-   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
-   * host-level project switch so the new project's file is synced with the
-   * desktop's app-store registry before the web route reads it.
+   * CAP-7: mirror the app-store MCP registry to the named project's
+   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called when the host
+   * project list lands and when shared-live starts, so the web route reads the
+   * desktop's app-store registry for that project.
    */
-  syncMcpRegistryToProjectFile: () => Promise<void>
+  syncMcpRegistryToProjectFile: (projectId: string) => Promise<void>
 
   // Actions — MCP probe (on-demand, read-only). State slices above.
   /**
@@ -787,13 +805,15 @@ export interface AcpState {
    * loaded; otherwise delegates to `probeMcpServer(id)`.
    */
   loadMcpTools: (id: string) => Promise<void>
-  /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`.
-   * Opens the system browser, waits for the callback, stores the token. */
-  connectMcpOAuth: (id: string) => Promise<void>
+  /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`,
+   * on behalf of `projectId` (the web host authorizes the URL against that
+   * project's MCP list). Opens the system browser, waits for the callback,
+   * stores the token. */
+  connectMcpOAuth: (projectId: string, id: string) => Promise<void>
   /** Check whether a stored OAuth token exists and update `mcpOAuthConnected`. */
-  checkMcpOAuthStatus: (id: string) => Promise<void>
+  checkMcpOAuthStatus: (projectId: string, id: string) => Promise<void>
   /** Delete the stored OAuth token (the "Disconnect" action). */
-  disconnectMcpOAuth: (id: string) => Promise<void>
+  disconnectMcpOAuth: (projectId: string, id: string) => Promise<void>
 
   // Actions — conversation
   sendPrompt: (sessionId: SessionId, text: string) => Promise<void>

@@ -1,8 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockAcpSession, mockSessionIndexEntry } from '@/lib/test-utils/acp'
-import { useAcpStore } from '@/stores/acp-store'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
+import {
+  _addEphemeralSessionIdForTesting,
+  _resetEphemeralSessionIdsForTesting,
+  useAcpStore
+} from '@/stores/acp-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -84,7 +87,7 @@ beforeEach(() => {
   resetShellLayoutStoreForTests()
   useShellLayoutStore.setState({ status: 'ready' })
   useAgentChatUnreadStore.setState({ unread: {} })
-  useAgentChatLifetimeStore.setState({ closingSessionIds: {} })
+  _resetEphemeralSessionIdsForTesting()
   useAcpStore.setState({
     sessionIndex: [],
     sessions: {},
@@ -233,6 +236,42 @@ describe('ChatsList card content', () => {
     expect(within(card('Chat bare')).getByText('main')).toBeInTheDocument()
   })
 
+  it('shows the selected model config option instead of the creation-time model', () => {
+    setIndex([entry('live', { modelName: 'Index model' })])
+    useAcpStore.setState({
+      sessions: {
+        live: mockAcpSession({
+          id: 'live',
+          models: {
+            currentModelId: 'haiku',
+            availableModels: [
+              { modelId: 'haiku', name: 'Haiku 5.5' },
+              { modelId: 'sonnet', name: 'Sonnet 5.5' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'sonnet',
+              options: [
+                { value: 'haiku', name: 'Haiku 5.5' },
+                { value: 'sonnet', name: 'Sonnet 5.5' }
+              ]
+            }
+          ]
+        })
+      }
+    })
+    render(<ChatsList project={project} />)
+    const card = screen.getByTitle('Chat live')
+    expect(within(card).getByText('Sonnet 5.5')).toBeInTheDocument()
+    expect(within(card).queryByText('Haiku 5.5')).toBeNull()
+    expect(within(card).queryByText('Index model')).toBeNull()
+  })
+
   it('leaves the branch line empty on a project without git', () => {
     setIndex([entry('a')])
     render(<ChatsList project={{ ...project, isGitRepo: false }} />)
@@ -281,6 +320,44 @@ describe('ChatsList card content', () => {
     render(<ChatsList project={project} />)
     expect(screen.getByTitle('Chat a')).toHaveAttribute('aria-current', 'true')
     expect(screen.getByTitle('Chat b')).not.toHaveAttribute('aria-current')
+    // Selected uses the keycap, the same surface as the Rail's active project.
+    expect(screen.getByTitle('Chat a').parentElement).toHaveClass('keycap')
+    expect(screen.getByTitle('Chat b').parentElement).not.toHaveClass('keycap')
+  })
+
+  it('puts the title on line 1 and the model on line 2', () => {
+    setIndex([entry('a', { modelName: 'Opus' })])
+    render(<ChatsList project={project} />)
+    const [line1, line2] = Array.from(screen.getByTitle('Chat a').children)
+    expect(line1).toHaveTextContent('Chat a')
+    expect(line2).toHaveTextContent('Opus')
+  })
+
+  it('shows New activity on an unread closed chat', () => {
+    setIndex([entry('a', { status: 'closed' })])
+    useAcpStore.setState({ sessions: { a: mockAcpSession({ id: 'a', status: 'closed' }) } })
+    useAgentChatUnreadStore.setState({ unread: { a: true } })
+    render(<ChatsList project={project} />)
+    expect(screen.getByRole('button', { name: 'Chat a, New activity' })).toBeInTheDocument()
+    expect(within(screen.getByTitle('Chat a')).getByTitle('New activity')).toBeInTheDocument()
+  })
+
+  it('shows no New activity for an unread ephemeral session', () => {
+    setIndex([entry('eph')])
+    useAcpStore.setState({ sessions: { eph: mockAcpSession({ id: 'eph' }) } })
+    _addEphemeralSessionIdForTesting('eph')
+    useAgentChatUnreadStore.setState({ unread: { eph: true } })
+    render(<ChatsList project={project} />)
+    expect(screen.getByRole('button', { name: 'Chat eph' })).toBeInTheDocument()
+    expect(within(screen.getByTitle('Chat eph')).queryByTitle('New activity')).toBeNull()
+  })
+
+  it('keeps a closed chat at full opacity and says Closed', () => {
+    setIndex([entry('a', { status: 'closed' })])
+    render(<ChatsList project={project} />)
+    const card = screen.getByTitle('Chat a')
+    expect(card.parentElement).not.toHaveClass('opacity-60')
+    expect(within(card).getByText(/^Closed · /)).toBeInTheDocument()
   })
 })
 

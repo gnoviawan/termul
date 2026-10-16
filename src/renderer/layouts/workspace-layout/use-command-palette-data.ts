@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback } from 'react'
 import { toast } from 'sonner'
 import {
@@ -53,7 +54,7 @@ export function useCommandPaletteData({ activeProjectId }: UseCommandPaletteData
   const handleClearCommandHistory = useCallback(async () => {
     if (!activeProjectId) return
     // Persist empty array first, then clear in-memory on success
-    const result = await persistenceApi.write(`projects/${activeProjectId}/command-history`, [])
+    const result = await persistenceApi.write(PersistenceKeys.commandHistory(activeProjectId), [])
     if (!result.success) {
       toast.error(`Failed to clear history: ${result.error}`)
       throw new Error(result.error)

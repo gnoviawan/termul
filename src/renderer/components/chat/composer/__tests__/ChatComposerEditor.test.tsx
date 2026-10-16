@@ -1,8 +1,13 @@
 import { act, render, waitFor } from '@testing-library/react'
 import type { Editor } from '@tiptap/core'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { displayOffsetToDocOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { fileToken, skillToken } from '@/lib/skill-tokens'
+import {
+  displayOffsetToDocOffset,
+  docOffsetToDisplayOffset,
+  SKILL_PAD_DEFAULT
+} from '@/lib/composer/doc-to-prompt'
+import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { ChatComposerEditor } from '../ChatComposerEditor'
 import { getComposerValue, setComposerValue } from '../chat-composer-test-helpers'
 
@@ -318,5 +323,32 @@ describe('docToDisplayText round-trip (patches 7 + 11)', () => {
 
     expect(displayOffsetToDocOffset(editor.state.doc, 1)).toBe(2)
     expect(displayOffsetToDocOffset(editor.state.doc, 2)).toBe(4)
+  })
+})
+
+describe('ChatComposerEditor command position', () => {
+  it('keeps text typed in front of a command pill in front of the pill', async () => {
+    const token = commandToken('compact')
+    function Host() {
+      const [value, setValue] = useState(`${token} hello`)
+      return <ChatComposerEditor value={value} onValueChange={setValue} ariaLabel="Test composer" />
+    }
+    render(<Host />)
+    await waitFor(() => expect(getComposerValue()).toBe(`${token} hello`))
+
+    const el = document.querySelector('[data-composer-editor="true"]') as
+      | (HTMLElement & { __composerEditor?: Editor | null })
+      | null
+    const editor = el?.__composerEditor
+    if (!editor) throw new Error('editor not mounted')
+    act(() => {
+      editor.commands.insertContentAt(1, 'Z')
+    })
+
+    await waitFor(() => {
+      expect(getComposerValue()).toBe(`Z${token} hello`)
+    })
+    const caret = docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
+    expect(caret).toBe(1)
   })
 })

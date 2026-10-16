@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { Locator, Page } from 'playwright/test'
 import { chromium, expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * QA E2E for spec-mobile-text-field-zoom: iOS Safari zooms the page when a
@@ -63,7 +63,7 @@ test.use({
 test.setTimeout(120_000)
 
 /** Server store key holding the web client's last selected project (issue #855). */
-const ACTIVE_PROJECT_KEY = 'web-active-project'
+const ACTIVE_PROJECT_KEY = storeKey('active-project')
 
 /** The store outlives this file: put back the selection the suites before it left. */
 let activeProjectBefore: unknown = null
@@ -418,7 +418,7 @@ for (const phone of PHONES) {
       const questions = page.getByTestId('elicitation-questions')
       await expect(questions).toBeVisible({ timeout: 30_000 })
 
-      const other = page.getByPlaceholder('Or write your own response')
+      const other = page.getByPlaceholder('Something else? Type your own answer')
       await expectSafeFocus(other, touch, 'Question 1 write-your-own', { text: 'purple' })
       await touch(page.getByTestId('elicitation-question-q0').getByRole('button', { name: /Red/ }))
       await expect(questions).toContainText('2 of 2')

@@ -9,7 +9,7 @@ import {
   type Page,
   test
 } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile header and palette parity E2E (spec-mobile-header-palette-parity) on
@@ -64,7 +64,7 @@ test.use({
 test.setTimeout(120_000)
 
 /** Server store key holding the web client's last selected project (issue #855). */
-const ACTIVE_PROJECT_KEY = 'web-active-project'
+const ACTIVE_PROJECT_KEY = storeKey('active-project')
 
 /**
  * Every test pins the selected project, and the store outlives this file: put

@@ -2,6 +2,7 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { useEffect, useRef } from 'react'
 import { RailCollapsed } from '@/components/shell/RailCollapsed'
 import { RailExpanded } from '@/components/shell/RailExpanded'
+import { COLLAPSED_WIDTH } from '@/components/shell/rail-layout'
 import { useRailResize } from '@/components/shell/use-rail-resize'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
@@ -9,9 +10,6 @@ import { EASE_OUT } from '@/lib/motion'
 import { SHELL_LAYOUT_BOUNDS } from '@/stores/shell-layout-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'
 import type { Project } from '@/types/project'
-
-/** Width of the collapsed Rail (`w-12`). */
-export const COLLAPSED_WIDTH = 48
 
 export interface ShellRailProps {
   projects: Project[]
@@ -81,7 +79,8 @@ export function ShellRail({
         aria-label="Projects"
         data-testid="shell-rail"
         data-expanded={expanded}
-        className="relative h-full shrink-0 overflow-hidden bg-background"
+        data-rail-surface
+        className="group/rail relative h-full shrink-0 overflow-hidden bg-sidebar"
         initial={false}
         animate={{ width: targetWidth }}
         transition={{ duration, ease: EASE_OUT }}

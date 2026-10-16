@@ -120,6 +120,15 @@ async fn create_session_with_a_registered_project_reaches_the_agent() {
 async fn add_project_refuses_the_reserved_unassigned_id() {
     let relay = Arc::new(WsRelaySink::new());
     let registry = Arc::new(ProjectRegistry::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let (tx, _rx) = super::tests::test_outbound();
+    let env = super::tests::test_env(
+        &acp,
+        &relay,
+        &registry,
+        &tx,
+        &Arc::new(Subscriptions::default()),
+    );
     let reply = projects::handle_add_project(
         "r1".to_string(),
         &json!({
@@ -128,10 +137,7 @@ async fn add_project_refuses_the_reserved_unassigned_id() {
             "path": "/work/one",
             "color": "blue"
         }),
-        &relay,
-        &registry,
-        None,
-        None,
+        &env,
     )
     .await;
 
@@ -224,26 +230,29 @@ async fn add_and_remove_project_publish_the_post_mutation_list_to_watchers() {
         .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
         .expect("watch");
     let _state = rx.try_recv().expect("full-state frame");
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let (tx, _tx_rx) = super::tests::test_outbound();
+    let env = super::tests::test_env(
+        &acp,
+        &relay,
+        &registry,
+        &tx,
+        &Arc::new(Subscriptions::default()),
+    );
     let dir = std::env::temp_dir().join(format!("termul-pub-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
 
     let added = projects::handle_add_project(
         "r1".to_string(),
         &json!({"id": "p-new", "name": "New", "path": dir.display().to_string(), "color": "blue"}),
-        &relay,
-        &registry,
-        None,
-        None,
+        &env,
     )
     .await;
     assert!(added.ok, "{:?}", added.err);
     let removed = projects::handle_remove_project(
         "r2".to_string(),
         &json!({"projectId": "p-new"}),
-        &relay,
-        &registry,
-        None,
-        None,
+        &env,
     )
     .await;
     assert!(removed.ok, "{:?}", removed.err);
@@ -269,14 +278,20 @@ async fn update_project_publishes_the_renamed_list_to_watchers() {
         .subscribe(crate::web::watch::WatchKind::Projects, "", &out, || json!(null))
         .expect("watch");
     let _state = rx.try_recv().expect("full-state frame");
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let (tx, _tx_rx) = super::tests::test_outbound();
+    let env = super::tests::test_env(
+        &acp,
+        &relay,
+        &registry,
+        &tx,
+        &Arc::new(Subscriptions::default()),
+    );
 
     let reply = projects::handle_update_project(
         "r1".to_string(),
         &json!({"projectId": "p-1", "name": "Renamed"}),
-        &relay,
-        &registry,
-        None,
-        None,
+        &env,
     )
     .await;
     assert!(reply.ok, "{:?}", reply.err);

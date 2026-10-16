@@ -244,7 +244,7 @@ export interface DomainCommandOptions {
   /**
    * Never reuse an unresolved id from an earlier call. For commands whose
    * request carries content the key cannot name (file body, commit message,
-   * hunk patch, manifest): a later call may be a different request.
+   * hunk patch): a later call may be a different request.
    */
   fresh?: boolean
 }
@@ -355,9 +355,6 @@ const LEDGERED_ROUTES: Readonly<Record<string, LedgeredRoute>> = {
   '/acp/install': { kind: 'install_acp_agent', entityKey: (b) => part(b, 'agentId') }
 }
 
-/** `POST /workspace/<projectId>/write`: the project id is in the path. */
-const WORKSPACE_WRITE = /^\/workspace\/([^/]+)\/write$/
-
 /** The key a worktree create is retried under: every field the host fingerprints. */
 export function worktreeCreateKey(body: object): string {
   const flag: unknown = Reflect.get(body, 'isNewBranch')
@@ -373,16 +370,7 @@ export function worktreeCreateKey(body: object): string {
 
 function ledgeredRoute(path: string): LedgeredRoute | null {
   const route = LEDGERED_ROUTES[path]
-  if (route) return route
-  const workspace = WORKSPACE_WRITE.exec(path)
-  if (workspace) {
-    return {
-      kind: 'workspace_write',
-      fresh: true,
-      entityKey: () => decodeURIComponent(workspace[1])
-    }
-  }
-  return null
+  return route ?? null
 }
 
 /**

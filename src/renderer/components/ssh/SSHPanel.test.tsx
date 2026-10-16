@@ -1,152 +1,43 @@
-import type { SSHConnection, SSHProfile } from '@shared/types/ssh.types'
+import type { SSHProfile } from '@shared/types/ssh.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { SSH_HOSTS_TAB, type SSHSession, useSSHStore } from '@/stores/ssh-store'
 import { SSHPanel } from './SSHPanel'
 
-const {
-  mockLoadProfiles,
-  mockDisconnect,
-  mockImportConfig,
-  mockDeleteProfile,
-  mockSelectProfile,
-  mockToastError,
-  profilesRef,
-  connectionsRef,
-  tauriRef
-} = vi.hoisted(() => ({
-  mockLoadProfiles: vi.fn(),
-  mockDisconnect: vi.fn(),
-  mockImportConfig: vi.fn(),
-  mockDeleteProfile: vi.fn(),
-  mockSelectProfile: vi.fn(),
-  mockToastError: vi.fn(),
-  profilesRef: { current: [] as SSHProfile[] },
-  connectionsRef: { current: [] as SSHConnection[] },
-  tauriRef: { current: true }
+const { sshApi, terminalApi, tauriRef, toastMock } = vi.hoisted(() => ({
+  sshApi: {
+    listProfiles: vi.fn(),
+    deleteProfile: vi.fn(),
+    duplicateProfile: vi.fn(),
+    importConfig: vi.fn(),
+    closeSession: vi.fn(async () => ({ success: true as const, data: undefined })),
+    cancelSession: vi.fn(async () => ({ success: true as const, data: true }))
+  },
+  terminalApi: { kill: vi.fn(async () => ({ success: true as const, data: undefined })) },
+  tauriRef: { current: true },
+  toastMock: { success: vi.fn(), info: vi.fn(), error: vi.fn() }
 }))
 
-vi.mock('@/stores/ssh-store', () => ({
-  useSSHProfiles: () => profilesRef.current,
-  useSSHConnections: () => connectionsRef.current,
-  useSSHActions: () => ({
-    loadProfiles: mockLoadProfiles,
-    disconnect: mockDisconnect,
-    importConfig: mockImportConfig,
-    deleteProfile: mockDeleteProfile,
-    selectProfile: mockSelectProfile
-  })
+// loadProfiles starts the cross-device profile sync, which watches the store.
+vi.mock('@/lib/api', () => ({
+  sshApi,
+  terminalApi,
+  persistenceApi: { watchShared: vi.fn(() => () => {}) }
 }))
-
-// Mutable: defaults to desktop. Web-mode tests flip this to verify the
-// Connect/Disconnect context-menu items are absent outside Tauri.
-vi.mock('@/lib/tauri-runtime', () => ({
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+// Mutable: defaults to desktop; web tests flip it.
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   isTauriContext: () => tauriRef.current
 }))
-
-vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), info: vi.fn(), error: mockToastError }
+vi.mock('sonner', () => ({ toast: toastMock }))
+// The editor has its own spec; the stub records which host it was opened for.
+vi.mock('./SSHHostEditor', () => ({
+  SSHHostEditor: ({ open, profile }: { open: boolean; profile: SSHProfile | null }) =>
+    open ? <div data-testid="ssh-host-editor" data-profile-id={profile?.id ?? ''} /> : null
 }))
 
-// The profile form is outside this spec's scope — stub it so the delete/menu
-// tests don't pull in its dependency tree. The stub captures the profile prop
-// so tests can assert the clicked profile is handed to the edit form.
-vi.mock('./SSHProfileForm', () => ({
-  SSHProfileForm: ({ profile }: { profile: SSHProfile | null }) => (
-    <div data-testid="ssh-profile-form" data-profile-id={profile?.id ?? ''} />
-  )
-}))
-
-// Stub the Radix context-menu primitives. The panel renders one menu per row;
-// the stateful stub opens the menu on `contextmenu` (only if the child's
-// onContextMenu did not call preventDefault — mirrors Radix's
-// composeEventHandlers({ checkForDefaultPrevented: true }) so F1-type
-// regressions surface), renders `<ContextMenuContent>` only while open, closes
-// on Escape, and surfaces `<ContextMenuItem>` as a `<button>` so tests can
-// assert presence + click wiring. Mirrors the ProjectSidebar
-// stub pattern.
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
-    open: false,
-    setOpen: () => {}
-  })
-  return {
-    ContextMenu: ({ children }: { children: React.ReactNode }) => {
-      const [open, setOpen] = React.useState(false)
-      React.useEffect(() => {
-        if (!open) return
-        const onKey = (e: KeyboardEvent) => {
-          if (e.key === 'Escape') setOpen(false)
-        }
-        document.addEventListener('keydown', onKey)
-        return () => document.removeEventListener('keydown', onKey)
-      }, [open])
-      return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
-    },
-    ContextMenuTrigger: ({
-      children,
-      asChild
-    }: {
-      children: React.ReactNode
-      asChild?: boolean
-    }) => {
-      const { setOpen } = React.useContext(MenuCtx)
-      const merged = (e: React.MouseEvent) => {
-        // F2: mirror Radix checkForDefaultPrevented — skip open if the child
-        // handler called preventDefault.
-        if (e.defaultPrevented) return
-        e.preventDefault()
-        setOpen(true)
-      }
-      if (asChild && React.isValidElement(children)) {
-        const child = children as React.ReactElement<{
-          onContextMenu?: (e: React.MouseEvent) => void
-        }>
-        return React.cloneElement(child, {
-          onContextMenu: (e: React.MouseEvent) => {
-            child.props.onContextMenu?.(e)
-            merged(e)
-          }
-        })
-      }
-      return <div onContextMenu={merged}>{children}</div>
-    },
-    ContextMenuContent: ({ children }: { children: React.ReactNode }) => {
-      const { open } = React.useContext(MenuCtx)
-      if (!open) return null
-      return <div>{children}</div>
-    },
-    ContextMenuItem: ({
-      children,
-      disabled,
-      onSelect,
-      variant
-    }: {
-      children: React.ReactNode
-      disabled?: boolean
-      onSelect?: () => void
-      variant?: 'default' | 'destructive'
-    }) => {
-      const { setOpen } = React.useContext(MenuCtx)
-      return (
-        <button
-          type="button"
-          disabled={disabled}
-          data-variant={variant}
-          onClick={() => {
-            if (disabled) return
-            onSelect?.()
-            // Radix closes the menu when an item is selected.
-            setOpen(false)
-          }}
-        >
-          {children}
-        </button>
-      )
-    },
-    ContextMenuSeparator: () => <hr />
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 const profile: SSHProfile = {
   id: 'p1',
@@ -158,261 +49,243 @@ const profile: SSHProfile = {
   portForwards: []
 }
 
-const connectedConnection: SSHConnection = {
-  id: 'conn-1',
-  profileId: 'p1',
-  status: 'connected',
-  activeForwards: [],
-  reconnectAttempts: 0
+function liveSession(overrides: Partial<SSHSession> = {}): SSHSession {
+  return {
+    id: 'tab-1',
+    attemptId: 'attempt-1',
+    profileId: 'p1',
+    status: 'connected',
+    stage: null,
+    hostKeyPrompt: null,
+    credentialPrompt: null,
+    error: null,
+    ended: null,
+    ptyId: 'pty-1',
+    claim: 'claim',
+    attached: true,
+    connectedAt: '2026-10-12T00:00:00Z',
+    ...overrides
+  }
 }
 
-function renderPanel(
-  props: { activeProfileId?: string | null; onConnect?: (profileId: string) => Promise<void> } = {}
-) {
-  return render(
-    <SSHPanel activeProfileId={props.activeProfileId ?? null} onConnect={props.onConnect} />
-  )
-}
+beforeEach(() => {
+  vi.clearAllMocks()
+  tauriRef.current = true
+  sshApi.listProfiles.mockResolvedValue({ success: true, data: [profile] })
+  sshApi.deleteProfile.mockResolvedValue({ success: true, data: undefined })
+  sshApi.importConfig.mockResolvedValue({ success: true, data: [] })
+  useSSHStore.setState({
+    profiles: [profile],
+    sessions: [],
+    workspaceOpen: false,
+    activeTab: SSH_HOSTS_TAB,
+    selectedProfileId: null,
+    pendingClose: null,
+    showAddresses: false
+  })
+})
 
-describe('SSHPanel', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockLoadProfiles.mockResolvedValue(undefined)
-    mockDisconnect.mockResolvedValue(true)
-    mockImportConfig.mockResolvedValue([])
-    mockDeleteProfile.mockResolvedValue(true)
-    profilesRef.current = [profile]
-    connectionsRef.current = []
-    tauriRef.current = true
+describe('SSHPanel rows', () => {
+  it('opens the workspace on click and connects on double-click', () => {
+    const onSelectProfile = vi.fn()
+    const onConnect = vi.fn()
+    render(<SSHPanel onSelectProfile={onSelectProfile} onConnect={onConnect} />)
+    const row = screen.getByTestId('ssh-host-row-p1')
+    fireEvent.click(row)
+    expect(onSelectProfile).toHaveBeenCalledWith('p1')
+    fireEvent.doubleClick(row)
+    expect(onConnect).toHaveBeenCalledWith('p1')
   })
 
-  describe('context menu', () => {
-    it('opens on right-click with Edit Profile / Connect / destructive Delete Profile (desktop, disconnected)', () => {
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-
-      expect(screen.getByText('Edit Profile')).toBeInTheDocument()
-      expect(screen.getByText('Connect')).toBeInTheDocument()
-      expect(screen.queryByText('Disconnect')).not.toBeInTheDocument()
-      const deleteItem = screen.getByText('Delete Profile')
-      expect(deleteItem.closest('button')).toHaveAttribute('data-variant', 'destructive')
-    })
-
-    it('offers Disconnect instead of Connect when the profile is connected', () => {
-      connectionsRef.current = [connectedConnection]
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-
-      expect(screen.getByText('Disconnect')).toBeInTheDocument()
-      expect(screen.queryByText('Connect')).not.toBeInTheDocument()
-    })
-
-    it('omits Connect/Disconnect on the web client but keeps Edit/Delete', () => {
-      tauriRef.current = false
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-
-      expect(screen.queryByText('Connect')).not.toBeInTheDocument()
-      expect(screen.queryByText('Disconnect')).not.toBeInTheDocument()
-      expect(screen.getByText('Edit Profile')).toBeInTheDocument()
-      expect(screen.getByText('Delete Profile')).toBeInTheDocument()
-    })
-
-    it('opens the profile form in edit mode via Edit Profile', () => {
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Edit Profile'))
-
-      expect(screen.getByTestId('ssh-profile-form')).toBeInTheDocument()
-      // The clicked profile must be the one handed to the edit form.
-      expect(screen.getByTestId('ssh-profile-form')).toHaveAttribute('data-profile-id', 'p1')
-    })
-    it('disables Connect and Delete while a connect for that profile is in flight', () => {
-      renderPanel({ onConnect: () => new Promise<void>(() => {}) })
-      // Kick off a connect via the row button so connectingId stays set.
-      fireEvent.click(screen.getByTitle('Connect'))
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-
-      expect(screen.getByText('Connect').closest('button')).toBeDisabled()
-      expect(screen.getByText('Delete Profile').closest('button')).toBeDisabled()
-    })
-
-    it('disables Connect while the connection is reconnecting (live/pending connection)', () => {
-      connectionsRef.current = [{ ...connectedConnection, status: 'reconnecting' }]
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-
-      expect(screen.getByText('Connect').closest('button')).toBeDisabled()
-      // No local connect in flight — delete stays available.
-      expect(screen.getByText('Delete Profile').closest('button')).not.toBeDisabled()
-    })
-
-    it('disconnects a connected profile via the Disconnect menu item', async () => {
-      connectionsRef.current = [connectedConnection]
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Disconnect'))
-
-      await waitFor(() => expect(mockDisconnect).toHaveBeenCalledWith('conn-1'))
-    })
+  it('shows the host state from its session tabs, as a lamp and a word', () => {
+    useSSHStore.setState({ sessions: [liveSession()] })
+    render(<SSHPanel />)
+    const row = screen.getByTestId('ssh-host-row-p1')
+    expect(row.querySelector('[data-testid="ssh-host-lamp"]')).toHaveAttribute(
+      'data-state',
+      'connected'
+    )
+    expect(row).toHaveTextContent('Connected')
   })
 
-  describe('delete flow', () => {
-    it('gates delete behind a confirmation dialog', () => {
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-
-      expect(screen.getByText('Delete SSH profile')).toBeInTheDocument()
-      expect(
-        screen.getByText('Delete “prod-box”? This action cannot be undone.')
-      ).toBeInTheDocument()
-      expect(mockDeleteProfile).not.toHaveBeenCalled()
+  it('counts several open sessions in place of the state word', () => {
+    useSSHStore.setState({
+      sessions: [liveSession(), liveSession({ id: 'tab-2', attemptId: 'attempt-2' })]
     })
-
-    it('disconnects before deleting and clears the active selection only after the delete succeeds (connected active profile)', async () => {
-      connectionsRef.current = [connectedConnection]
-      renderPanel({ activeProfileId: 'p1' })
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-
-      await waitFor(() => expect(mockDeleteProfile).toHaveBeenCalledWith('p1'))
-      expect(mockDisconnect).toHaveBeenCalledWith('conn-1')
-      expect(mockSelectProfile).toHaveBeenCalledWith(null)
-      // disconnect must be awaited before deleteProfile runs.
-      expect(mockDisconnect.mock.invocationCallOrder[0]).toBeLessThan(
-        mockDeleteProfile.mock.invocationCallOrder[0]
-      )
-      // Selection is cleared only after the delete succeeded.
-      expect(mockDeleteProfile.mock.invocationCallOrder[0]).toBeLessThan(
-        mockSelectProfile.mock.invocationCallOrder[0]
-      )
-    })
-
-    it('deletes a non-active profile without touching the selection', async () => {
-      renderPanel({ activeProfileId: 'other-profile' })
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-
-      await waitFor(() => expect(mockDeleteProfile).toHaveBeenCalledWith('p1'))
-      expect(mockDisconnect).not.toHaveBeenCalled()
-      expect(mockSelectProfile).not.toHaveBeenCalled()
-    })
-
-    it('cancel leaves the profile untouched (no store calls)', async () => {
-      renderPanel({ activeProfileId: 'p1' })
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-      expect(mockDeleteProfile).not.toHaveBeenCalled()
-      expect(mockDisconnect).not.toHaveBeenCalled()
-      expect(mockSelectProfile).not.toHaveBeenCalled()
-      await waitFor(() => expect(screen.queryByText('Delete SSH profile')).not.toBeInTheDocument())
-    })
-
-    it('surfaces a toast error when deleteProfile fails', async () => {
-      mockDeleteProfile.mockResolvedValue(false)
-      renderPanel({ activeProfileId: 'p1' })
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-
-      await waitFor(() => expect(mockToastError).toHaveBeenCalled())
-      // A failed delete must not strand the user on an unselected live profile.
-      expect(mockSelectProfile).not.toHaveBeenCalled()
-    })
-
-    it('aborts the delete when disconnect fails (no delete, no selection clear, error toast)', async () => {
-      mockDisconnect.mockResolvedValue(false)
-      connectionsRef.current = [connectedConnection]
-      renderPanel({ activeProfileId: 'p1' })
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-
-      await waitFor(() => expect(mockToastError).toHaveBeenCalled())
-      expect(mockDisconnect).toHaveBeenCalledWith('conn-1')
-      expect(mockDeleteProfile).not.toHaveBeenCalled()
-      expect(mockSelectProfile).not.toHaveBeenCalled()
-    })
-
-    it('surfaces a toast error when a store action throws (no unhandled rejection)', async () => {
-      mockDeleteProfile.mockRejectedValue(new Error('boom'))
-      renderPanel()
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-
-      await waitFor(() =>
-        expect(mockToastError).toHaveBeenCalledWith(expect.stringContaining('boom'))
-      )
-    })
-
-    it('disconnects a connected but non-active profile without clearing the selection', async () => {
-      connectionsRef.current = [connectedConnection]
-      renderPanel({ activeProfileId: 'other-profile' })
-      fireEvent.contextMenu(screen.getByText('prod-box'))
-      fireEvent.click(screen.getByText('Delete Profile'))
-      fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
-
-      await waitFor(() => expect(mockDeleteProfile).toHaveBeenCalledWith('p1'))
-      expect(mockDisconnect).toHaveBeenCalledWith('conn-1')
-      expect(mockSelectProfile).not.toHaveBeenCalled()
-    })
+    render(<SSHPanel />)
+    expect(screen.getByTestId('ssh-host-row-p1')).toHaveTextContent('2 sessions')
   })
 
-  describe('hover reveal', () => {
-    it('keeps row actions mounted with the opacity reveal pattern (no display toggle)', () => {
-      renderPanel()
-      const actions = screen.getByTitle('Edit profile').parentElement
-
-      expect(actions).toHaveClass('flex')
-      expect(actions).toHaveClass('pointer-fine:opacity-0')
-      expect(actions).toHaveClass('pointer-fine:group-hover:opacity-100')
-      expect(actions).toHaveClass('group-focus-within:opacity-100')
-      expect(actions).not.toHaveClass('hidden')
-    })
+  it('shows no state word for an idle host', () => {
+    render(<SSHPanel />)
+    expect(screen.getByTestId('ssh-host-row-p1')).not.toHaveTextContent('Idle')
   })
 
-  describe('redesign', () => {
-    it('shows the empty state with Add host and Import buttons wired to the existing handlers', async () => {
-      profilesRef.current = []
-      renderPanel()
+  it('marks a host waiting for input', () => {
+    useSSHStore.setState({ sessions: [liveSession({ status: 'awaitingInput', ptyId: null })] })
+    render(<SSHPanel />)
+    expect(screen.getByTestId('ssh-host-row-p1')).toHaveTextContent('Needs input')
+  })
 
-      expect(screen.getByText('No SSH hosts yet.')).toBeInTheDocument()
-      fireEvent.click(screen.getByRole('button', { name: /Import ~\/\.ssh\/config/ }))
-      await waitFor(() => expect(mockImportConfig).toHaveBeenCalledTimes(1))
+  it('marks the selected host with keycap', () => {
+    render(<SSHPanel activeProfileId="p1" />)
+    expect(screen.getByTestId('ssh-host-row-p1')).toHaveClass('keycap')
+  })
 
-      fireEvent.click(screen.getByRole('button', { name: /Add host/ }))
-      expect(screen.getByTestId('ssh-profile-form')).toBeInTheDocument()
+  it('reveals addresses only on request (privacy)', () => {
+    render(<SSHPanel />)
+    expect(screen.queryByText('deploy@example.com')).toBeNull()
+    const toggle = screen.getByRole('button', { name: 'Show addresses' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggle)
+    expect(screen.getByText('deploy@example.com')).toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveAttribute('title', 'Hide addresses')
+  })
+
+  it('keeps row actions mounted with the opacity reveal (no layout shift)', () => {
+    render(<SSHPanel />)
+    const edit = screen.getByRole('button', { name: 'Edit prod-box' })
+    expect(edit.parentElement?.className).toContain('pointer-fine:opacity-0')
+    expect(screen.getByRole('button', { name: 'Connect to prod-box' })).toBeInTheDocument()
+  })
+})
+
+describe('SSHPanel context menu', () => {
+  it('offers Connect, Edit, Duplicate and a destructive Delete', () => {
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    expect(screen.getByRole('menuitem', { name: 'Connect' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Duplicate' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute(
+      'data-variant',
+      'destructive'
+    )
+  })
+
+  it('says "Open another session" when the host already has one', () => {
+    useSSHStore.setState({ sessions: [liveSession()] })
+    const onConnect = vi.fn()
+    render(<SSHPanel onConnect={onConnect} />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open another session' }))
+    expect(onConnect).toHaveBeenCalledWith('p1')
+  })
+
+  it('omits Connect on the web client but keeps Edit and Delete', () => {
+    tauriRef.current = false
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    expect(screen.queryByRole('menuitem', { name: 'Connect' })).toBeNull()
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
+  })
+
+  it('opens the editor for the host', () => {
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    expect(screen.getByTestId('ssh-host-editor')).toHaveAttribute('data-profile-id', 'p1')
+  })
+
+  it('duplicates a host and reports the new name', async () => {
+    sshApi.duplicateProfile.mockResolvedValue({
+      success: true,
+      data: { ...profile, id: 'p2', name: 'prod-box (copy)' }
     })
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }))
+    await waitFor(() =>
+      expect(toastMock.success).toHaveBeenCalledWith('Duplicated as “prod-box (copy)”')
+    )
+    expect(useSSHStore.getState().profiles.map((p) => p.id)).toEqual(['p1', 'p2'])
+  })
+})
 
-    it('marks the selected host with keycap instead of a primary left border', () => {
-      renderPanel({ activeProfileId: 'p1' })
-
-      const row = screen.getByTestId('ssh-host-row-p1')
-      expect(row).toHaveClass('keycap', 'h-10', 'rounded-md')
-      expect(row).not.toHaveClass('border-l-2')
-      expect(row.className).not.toContain('sidebar-accent')
+describe('SSHPanel delete', () => {
+  it('counts every session it will close, not only connected ones', () => {
+    useSSHStore.setState({
+      sessions: [
+        liveSession(),
+        liveSession({ id: 'tab-2', attemptId: 'attempt-2', status: 'connecting', ptyId: null })
+      ]
     })
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    expect(screen.getByText(/Its 2 sessions will be closed/)).toBeInTheDocument()
+  })
 
-    it('shows a status lamp and state word for the connection state', () => {
-      connectionsRef.current = [{ ...connectedConnection, status: 'failed' }]
-      renderPanel()
+  it('asks first, then closes the host sessions and deletes it', async () => {
+    useSSHStore.setState({ sessions: [liveSession()] })
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
 
-      expect(screen.getByTestId('ssh-host-lamp')).toHaveAttribute('data-state', 'failed')
-      expect(screen.getByText('Failed')).toHaveClass('text-destructive')
-    })
+    expect(screen.getByText(/Its session will be closed/)).toBeInTheDocument()
+    expect(sshApi.deleteProfile).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
-    it('keeps the credentials toggle (it hides user@host, not the panel)', () => {
-      renderPanel()
+    await waitFor(() => expect(sshApi.deleteProfile).toHaveBeenCalledWith('p1'))
+    expect(sshApi.closeSession).toHaveBeenCalledWith('attempt-1')
+    expect(useSSHStore.getState().sessions).toEqual([])
+    expect(useSSHStore.getState().profiles).toEqual([])
+  })
 
-      expect(screen.queryByText('deploy@example.com:22')).not.toBeInTheDocument()
-      fireEvent.click(screen.getByRole('button', { name: 'Show credentials' }))
-      expect(screen.getByText('deploy@example.com:22')).toHaveClass('font-mono', 'text-3xs')
-    })
+  it('cancel leaves everything as it was', () => {
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(sshApi.deleteProfile).not.toHaveBeenCalled()
+    expect(useSSHStore.getState().profiles).toHaveLength(1)
+  })
+
+  it('keeps the host sessions when the delete fails', async () => {
+    sshApi.deleteProfile.mockResolvedValue({ success: false, error: 'locked', code: 'X' })
+    useSSHStore.setState({ sessions: [liveSession()] })
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled())
+    expect(sshApi.closeSession).not.toHaveBeenCalled()
+    expect(useSSHStore.getState().sessions).toHaveLength(1)
+  })
+
+  it('reports a failed delete', async () => {
+    sshApi.deleteProfile.mockResolvedValue({ success: false, error: 'locked', code: 'X' })
+    render(<SSHPanel />)
+    fireEvent.contextMenu(screen.getByText('prod-box'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith('Could not delete “prod-box”. Try again.')
+    )
+    expect(useSSHStore.getState().profiles).toHaveLength(1)
+  })
+})
+
+describe('SSHPanel empty state', () => {
+  it('offers Add host and Import', async () => {
+    useSSHStore.setState({ profiles: [] })
+    sshApi.listProfiles.mockResolvedValue({ success: true, data: [] })
+    render(<SSHPanel />)
+    expect(screen.getByTestId('ssh-empty-state')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Import ~/.ssh/config' }))
+    await waitFor(() => expect(sshApi.importConfig).toHaveBeenCalled())
+    expect(toastMock.info).toHaveBeenCalledWith('No new hosts found in ~/.ssh/config')
+    fireEvent.click(screen.getByRole('button', { name: 'Add host' }))
+    expect(screen.getByTestId('ssh-host-editor')).toHaveAttribute('data-profile-id', '')
+  })
+
+  it('hides Import on the web client', () => {
+    tauriRef.current = false
+    useSSHStore.setState({ profiles: [] })
+    sshApi.listProfiles.mockResolvedValue({ success: true, data: [] })
+    render(<SSHPanel />)
+    expect(screen.queryByRole('button', { name: 'Import ~/.ssh/config' })).toBeNull()
   })
 })

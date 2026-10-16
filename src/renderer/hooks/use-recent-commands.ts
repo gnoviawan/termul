@@ -1,15 +1,14 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { useRecentCommandsStore } from '@/stores/recent-commands-store'
-
-export const RECENT_COMMANDS_KEY = 'settings/recent-commands'
 
 export function useRecentCommandsLoader(): void {
   const setRecentCommands = useRecentCommandsStore((state) => state.setRecentCommands)
 
   useEffect(() => {
     async function load(): Promise<void> {
-      const result = await persistenceApi.read<string[]>(RECENT_COMMANDS_KEY)
+      const result = await persistenceApi.read<string[]>(PersistenceKeys.recentCommands)
       if (result.success && result.data) {
         setRecentCommands(result.data)
       }
@@ -26,7 +25,7 @@ export function useSaveRecentCommand(): (commandId: string) => Promise<void> {
       addRecentCommand(commandId)
       // Persist after optimistic update
       const { recentCommandIds } = useRecentCommandsStore.getState()
-      await persistenceApi.write(RECENT_COMMANDS_KEY, recentCommandIds)
+      await persistenceApi.write(PersistenceKeys.recentCommands, recentCommandIds)
     },
     [addRecentCommand]
   )

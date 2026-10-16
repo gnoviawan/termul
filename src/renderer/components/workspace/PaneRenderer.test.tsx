@@ -143,7 +143,7 @@ describe('PaneRenderer — tween onLayout guard', () => {
     act(() => {
       groupHandle.onLayout?.([60, 40])
     })
-    expect(updatePaneSizes).toHaveBeenCalledWith('split-1', [60, 40])
+    expect(updatePaneSizes).toHaveBeenCalledWith('split-1', [60, 40], undefined)
   })
 
   it('writes layouts normally for a non-drop mount (no tween armed)', () => {
@@ -155,6 +155,6 @@ describe('PaneRenderer — tween onLayout guard', () => {
     act(() => {
       groupHandle.onLayout?.([70, 30])
     })
-    expect(updatePaneSizes).toHaveBeenCalledWith('split-1', [70, 30])
+    expect(updatePaneSizes).toHaveBeenCalledWith('split-1', [70, 30], undefined)
   })
 })

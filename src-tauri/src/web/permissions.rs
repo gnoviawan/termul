@@ -4,90 +4,66 @@
 //! The ACP `Responder<RequestPermissionResponse>` lives on the per-agent
 //! driver thread inside [`crate::acp::manager::AcpManager`] (it is `!Send` and
 //! must not cross threads). This module holds ONLY `Send + Sync` relay-side
-//! ticket metadata + the rendezvous policy (timeout, at-most-one,
-//! first-response-wins, disconnect-deny, TOCTOU re-validation). It never
-//! touches the `Responder` directly — it forwards resolution decisions back
-//! through [`AcpManager::respond_permission`], which resolves the `Responder`
-//! on the driver thread via the existing `AcpCommand` mpsc channel.
+//! ticket metadata + the rendezvous policy (at-most-one, first-response-wins,
+//! TOCTOU re-validation). It never touches the `Responder` directly — it
+//! forwards resolution decisions back through [`AcpManager::respond_permission`],
+//! which resolves the `Responder` on the driver thread via the existing
+//! `AcpCommand` mpsc channel.
+//!
+//! # Durable tickets
+//!
+//! A pending permission is durable host state: the session is awaiting input.
+//! There is no ticket timeout and no disconnect deny. A ticket ends only by
+//!
+//! - an answer ([`PermissionRendezvous::try_respond`], first answer wins),
+//! - an answer given elsewhere ([`PermissionRendezvous::settle`], used by the
+//!   desktop `acp_respond_permission` command), or
+//! - a lifecycle release ([`PermissionRendezvous::release_session`] on turn
+//!   end or session close, [`PermissionRendezvous::release_agent`] on agent
+//!   death), called from [`crate::web::sink::WsRelaySink::emit`].
+//!
+//! Any client may answer by `request_id`, with or without a subscription, for
+//! as long as the ticket exists. Answered and released ids are remembered in a
+//! bounded tombstone memory, so a later answer reads `already_resolved`.
+//!
+//! At most one ticket per session is outstanding; the rest wait in a FIFO
+//! queue. Every answer promotes the next queued ticket. A lifecycle release
+//! drops the whole session queue instead: the driver has already cancelled
+//! every parked responder of the session, so there is nothing left to promote.
 //!
 //! # Wiring
 //!
-//! [`crate::web::sink::WsRelaySink`] holds an `Option<Arc<PermissionRendezvous>>`
-//! (server-side only — `None` on the desktop path, where the browser-less flow
-//! uses the `acp_respond_permission` Tauri command directly). When the relay's
-//! `emit` sees an `acp:permission_request` event, it snapshots a ticket here.
-//! The `/ws` request handler calls [`PermissionRendezvous::try_respond`] for
-//! `respond_permission` frames; the disconnect cleanup calls
-//! [`PermissionRendezvous::deny_all_for_client`].
+//! [`crate::web::sink::WsRelaySink`] holds an `Option<Arc<PermissionRendezvous>>`.
+//! When the relay's `emit` sees an `acp:permission_request` event, it snapshots
+//! a ticket here. The `/ws` request handler calls
+//! [`PermissionRendezvous::try_respond`] for `respond_permission` frames.
 //!
 //! # deny == Cancelled
 //!
 //! The ACP `RequestPermissionOutcome` enum has only `Selected` and `Cancelled`
-//! — there is no dedicated "deny" variant. The architecture's "expiry = deny"
-//! and "disconnect = deny/cancelled" are *semantics*: the operation does not
-//! run. `option_id == None` → `RequestPermissionOutcome::Cancelled`, which the
-//! agent treats as denial (the tool call does not execute). The browser learns
-//! the turn's fate via the normal event stream (the agent continues; if it
-//! then errors, that is Story 1.9's `AgentCrashed`, not a permission event).
+//! — there is no dedicated "deny" variant. `option_id == None` →
+//! `RequestPermissionOutcome::Cancelled`, which the agent treats as denial (the
+//! tool call does not execute).
+
+mod questions;
+mod tombstones;
+mod turn_watermark;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::acp::{AcpManager, AgentId};
 use crate::web::sink::ClientId;
 
-/// Default permission timeout (60s) — the bounded rendezvous window.
-/// Expiry resolves the permission as deny (`Cancelled`). Per FR14 / NFR7-adjacent.
-pub const DEFAULT_PERMISSION_TIMEOUT: Duration = Duration::from_secs(60);
-/// Default last-subscriber reconnect grace (CAP-4: 60s). Widened from 15s so
-/// the mobile wake + reconnect chain (3-8s desktop, 5-15s throttled mobile per
-/// prod logs) completes before pending permission tickets are denied. The
-/// per-ticket timeout keeps running throughout; only the orphan-deny grace is
-/// widened. Already overridable via `permission_reconnect_grace_secs`.
-pub const DEFAULT_PERMISSION_RECONNECT_GRACE: Duration = Duration::from_secs(60);
+pub use questions::{QuestionRendezvous, QuestionRespondError, QuestionRespondOutcome};
+pub use tombstones::RESOLVED_TOMBSTONE_CAPACITY;
+pub use turn_watermark::{TurnClaim, TurnWatermark};
 
-/// How many resolved ticket ids each rendezvous remembers. A later answer to
-/// a remembered id reads `already_resolved`; an older one falls off the end
-/// and reads `stale` (bounded so a long-lived host cannot grow without limit).
-pub const RESOLVED_TOMBSTONE_CAPACITY: usize = 256;
-
-/// Bounded FIFO memory of resolved ticket ids (answered, timed out or denied
-/// on disconnect).
-struct Tombstones {
-    order: VecDeque<String>,
-    ids: std::collections::HashSet<String>,
-}
-
-impl Tombstones {
-    fn new() -> Self {
-        Self {
-            order: VecDeque::new(),
-            ids: std::collections::HashSet::new(),
-        }
-    }
-
-    fn record(&mut self, id: &str) {
-        if !self.ids.insert(id.to_string()) {
-            return;
-        }
-        self.order.push_back(id.to_string());
-        while self.order.len() > RESOLVED_TOMBSTONE_CAPACITY {
-            if let Some(evicted) = self.order.pop_front() {
-                self.ids.remove(&evicted);
-            }
-        }
-    }
-
-    fn contains(&self, id: &str) -> bool {
-        self.ids.contains(id)
-    }
-}
+use tombstones::Tombstones;
 
 /// Outcome of a successful [`PermissionRendezvous::try_respond`] call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,9 +81,9 @@ pub enum RespondError {
     /// aged out of the tombstones, or not yet promoted from the session
     /// queue). Wire `err.code: "stale"`.
     NotFound,
-    /// The ticket was already resolved — by another client (first-wins), a
-    /// timeout or a disconnect deny — and is still in the bounded tombstone
-    /// memory. Wire `err.code: "already_resolved"`.
+    /// The ticket was already resolved — by another client (first-wins) or by
+    /// a lifecycle release — and is still in the bounded tombstone memory.
+    /// Wire `err.code: "already_resolved"`.
     AlreadyResolved,
     /// The *same* client already responded to this ticket (double-respond).
     /// Wire `err.code: "duplicate"`.
@@ -132,256 +108,141 @@ impl RespondError {
     }
 }
 
-/// Why a ticket was resolved as deny (for structured logging only).
-#[derive(Debug, Clone, Copy)]
-enum DenyReason {
-    Timeout,
-    Disconnect,
-}
-
-/// A `request_id` + the owning `agent_id` (for forwarding a deny to the agent).
-type RequestAgentPair = (String, AgentId);
-
 /// A single outstanding permission ticket — relay-side metadata only (never
 /// holds the ACP `Responder`).
 struct PermissionTicket {
     /// Which agent owns the responder (forwarded to
     /// `AcpManager::respond_permission`).
     agent_id: AgentId,
-    /// The session the permission belongs to (for disconnect-deny + ownership).
+    /// The session the permission belongs to (for lifecycle release + ownership).
     session_id: String,
     /// The immutable args snapshot — `options` array from the original
     /// `PermissionRequestEvent` payload. Used for TOCTOU re-validation.
     options: Value,
     /// `Some(client)` once a client has won the ticket (first-response-wins);
-    /// further responses are `AlreadyResolved` (`stale`) or `Duplicate`.
+    /// further responses are `AlreadyResolved` or `Duplicate`.
     resolved_by: Option<ClientId>,
-    /// Cancel handle for the per-ticket timeout task. Sent `()` on resolution
-    /// / disconnect-deny so the timer does not fire after the fact.
-    timeout_cancel: Option<oneshot::Sender<()>>,
 }
 
 /// Per-session queue state for the at-most-one-outstanding rule (FR14).
 struct SessionQueue {
-    /// The currently-outstanding `request_id` for this session (`None` when the
-    /// slot is free). `Some` while a browser is being asked about a permission;
-    /// further `permission_request` events are queued until this resolves.
-    outstanding: Option<String>,
-    /// FIFO of pending tickets waiting for the outstanding slot. Their timeouts
-    /// are armed only when they are promoted to outstanding.
+    /// The currently-outstanding `request_id` for this session. Further
+    /// `permission_request` events are queued until this resolves.
+    outstanding: String,
+    /// FIFO of pending tickets waiting for the outstanding slot.
     queued: VecDeque<QueuedTicket>,
 }
 
-/// A ticket held in a session queue (not yet outstanding; timeout unarmed).
+/// A ticket held in a session queue (not yet outstanding).
 struct QueuedTicket {
     request_id: String,
     agent_id: AgentId,
-    session_id: String,
     options: Value,
+}
+
+/// The ticket table and the per-session queues. One lock covers both, so the
+/// outstanding slot and its ticket never disagree.
+#[derive(Default)]
+struct State {
+    /// `request_id → ticket` for outstanding tickets (one per session).
+    tickets: HashMap<String, PermissionTicket>,
+    /// `session_id → at-most-one queue`. A session has an entry only while it
+    /// has an outstanding ticket.
+    sessions: HashMap<String, SessionQueue>,
+}
+
+impl State {
+    /// Make `request_id` of `session_id` the outstanding ticket.
+    fn open_ticket(
+        &mut self,
+        session_id: &str,
+        request_id: String,
+        agent_id: AgentId,
+        options: Value,
+    ) {
+        self.tickets.insert(
+            request_id,
+            PermissionTicket {
+                agent_id,
+                session_id: session_id.to_string(),
+                options,
+                resolved_by: None,
+            },
+        );
+    }
+
+    /// Forget `request_id` everywhere. When it held its session's outstanding
+    /// slot, the next queued ticket is promoted in the same step, so a
+    /// concurrent `register` never sees a free slot. Returns whether the id
+    /// was known (outstanding or queued).
+    fn settle(&mut self, request_id: &str) -> bool {
+        let owner = match self.tickets.remove(request_id) {
+            Some(ticket) => Some(ticket.session_id),
+            None => self
+                .sessions
+                .iter()
+                .find(|(_, queue)| queue.queued.iter().any(|t| t.request_id == request_id))
+                .map(|(session_id, _)| session_id.clone()),
+        };
+        let Some(session_id) = owner else {
+            return false;
+        };
+        let Some(queue) = self.sessions.get_mut(&session_id) else {
+            return true;
+        };
+        queue.queued.retain(|t| t.request_id != request_id);
+        if queue.outstanding == request_id {
+            match queue.queued.pop_front() {
+                Some(next) => {
+                    queue.outstanding.clone_from(&next.request_id);
+                    self.open_ticket(&session_id, next.request_id, next.agent_id, next.options);
+                }
+                None => {
+                    self.sessions.remove(&session_id);
+                }
+            }
+        }
+        true
+    }
+
+    /// Drop a whole session queue (outstanding + queued). Returns the ids.
+    fn release_session(&mut self, session_id: &str) -> Vec<String> {
+        let Some(queue) = self.sessions.remove(session_id) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<String> = queue.queued.into_iter().map(|t| t.request_id).collect();
+        ids.push(queue.outstanding);
+        for id in &ids {
+            self.tickets.remove(id);
+        }
+        ids
+    }
 }
 
 /// Server-side permission rendezvous (Story 1.7).
 ///
 /// Holds the relay-side ticket table keyed by `request_id` (globally unique —
-/// safe across agents) + per-session at-most-one queueing. The
-/// `AcpManager` reference is server-side-only: the desktop path does not
-/// construct a `PermissionRendezvous` at all (it uses the
-/// `acp_respond_permission` Tauri command directly).
+/// safe across agents) + per-session at-most-one queueing. The same
+/// rendezvous serves the desktop host, the shared-live host, `termul-server`
+/// and the browser client.
 pub struct PermissionRendezvous {
-    /// `request_id → ticket` (outstanding tickets only; resolved tickets are
-    /// removed on resolution so a later `respond_permission` gets `NotFound`).
-    tickets: Mutex<HashMap<String, PermissionTicket>>,
-    /// `session_id → at-most-one queue` (FR14: at most one outstanding per
-    /// session; the rest are queued).
-    sessions: Mutex<HashMap<String, SessionQueue>>,
-    /// The ACP manager — used to forward resolution decisions (deny/select)
+    state: Mutex<State>,
+    /// The ACP manager — used to forward resolution decisions (select/cancel)
     /// back to the agent's `Responder` via the command channel.
     acp: Arc<AcpManager>,
-    /// The bounded timeout window. Expiry → deny.
-    timeout: Duration,
-    /// Grace before disconnect orphaning resolves a session's pending tickets.
-    disconnect_grace: Duration,
-    /// Per-session cancellation for an armed disconnect grace, keyed by a
-    /// generation token so an expired older task cannot evict a newer one.
-    disconnect_graces: Mutex<HashMap<String, (u64, oneshot::Sender<()>)>>,
     /// Bounded memory of resolved request ids (`already_resolved` replies).
+    /// Lock order: `state` before `resolved`.
     resolved: Mutex<Tombstones>,
-    /// A handle to the server's tokio runtime. Captured at construction so the
-    /// per-ticket timeout can be armed from ANY thread (the relay's `emit` runs
-    /// on the per-agent driver thread — a plain `std::thread`, NOT a tokio
-    /// task — so `tokio::spawn` would panic there; `handle.spawn` does not).
-    /// `Ok` in production (constructed inside `serve`/`main`'s runtime); `Err`
-    /// only in unit tests that never arm a timer (handled by falling back to a
-    /// best-effort `tokio::spawn`, which works when the test wraps a runtime).
-    handle: Result<tokio::runtime::Handle, tokio::runtime::TryCurrentError>,
 }
 
 impl PermissionRendezvous {
-    /// Create a rendezvous bound to an [`AcpManager`] with the default 60s timeout.
-    ///
-    /// Captures the current tokio runtime handle (so the per-ticket timeout can
-    /// be armed from the agent driver thread). Call from within a tokio runtime
-    /// context (`serve`/`main`'s `block_on`).
+    /// Create a rendezvous bound to an [`AcpManager`].
     #[must_use]
     pub fn new(acp: Arc<AcpManager>) -> Self {
-        Self::with_timeout(acp, DEFAULT_PERMISSION_TIMEOUT)
-    }
-
-    /// Create a rendezvous with an explicit timeout (testable; also wired from
-    /// `ServerConfig::permission_timeout_secs` in `serve`).
-    ///
-    /// Captures the *current* tokio runtime handle. Call from within a tokio
-    /// runtime context (`serve`/`main`'s `block_on`). For callers that may NOT be
-    /// inside a runtime at construction time (e.g. the desktop path, which
-    /// builds the rendezvous in Tauri's `setup` callback), use
-    /// [`Self::with_handle`] with an explicitly-captured `tauri::async_runtime`
-    /// handle so the per-ticket timeout is reliably armed from the agent driver
-    /// thread.
-    #[must_use]
-    pub fn with_timeout(acp: Arc<AcpManager>, timeout: Duration) -> Self {
-        Self::with_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE)
-    }
-
-    #[must_use]
-    pub fn with_policy(
-        acp: Arc<AcpManager>,
-        timeout: Duration,
-        disconnect_grace: Duration,
-    ) -> Self {
         Self {
-            tickets: Mutex::new(HashMap::new()),
-            sessions: Mutex::new(HashMap::new()),
+            state: Mutex::new(State::default()),
             acp,
-            timeout,
-            disconnect_grace,
-            disconnect_graces: Mutex::new(HashMap::new()),
             resolved: Mutex::new(Tombstones::new()),
-            handle: tokio::runtime::Handle::try_current(),
-        }
-    }
-
-    /// Create a rendezvous with an explicit runtime handle + timeout.
-    ///
-    /// Use this when construction happens outside a guaranteed-runtime context
-    /// (the desktop path in Tauri's `setup`) but a runtime handle is available
-    /// via `tauri::async_runtime::handle()`. Passing the handle explicitly makes
-    /// `arm_timeout` reliable — it does not depend on `Handle::try_current()`
-    /// succeeding at construction time.
-    #[must_use]
-    pub fn with_handle(
-        acp: Arc<AcpManager>,
-        timeout: Duration,
-        handle: tokio::runtime::Handle,
-    ) -> Self {
-        Self::with_handle_and_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE, handle)
-    }
-
-    #[must_use]
-    pub fn with_handle_and_policy(
-        acp: Arc<AcpManager>,
-        timeout: Duration,
-        disconnect_grace: Duration,
-        handle: tokio::runtime::Handle,
-    ) -> Self {
-        Self {
-            tickets: Mutex::new(HashMap::new()),
-            sessions: Mutex::new(HashMap::new()),
-            acp,
-            timeout,
-            disconnect_grace,
-            disconnect_graces: Mutex::new(HashMap::new()),
-            resolved: Mutex::new(Tombstones::new()),
-            handle: Ok(handle),
-        }
-    }
-
-    /// The configured timeout window (for tests + config reflection).
-    #[must_use]
-    pub fn timeout(&self) -> Duration {
-        self.timeout
-    }
-
-    #[must_use]
-    pub fn disconnect_grace(&self) -> Duration {
-        self.disconnect_grace
-    }
-
-    /// Cancel an orphan grace only after a replacement subscription is live.
-    pub fn cancel_disconnect_grace(&self, session_id: &str) {
-        if let Some((_, cancel)) = self.disconnect_graces.lock().remove(session_id) {
-            let _ = cancel.send(());
-            tracing::info!(
-                session_id,
-                "permission disconnect grace cancelled after resubscribe"
-            );
-        }
-    }
-
-    /// Arm a bounded last-subscriber grace. Expiry rechecks the relay count;
-    /// the original per-ticket timeout remains armed throughout.
-    pub fn schedule_disconnect_grace<F>(self: &Arc<Self>, session_id: String, subscriber_count: F)
-    where
-        F: Fn(&str) -> usize + Send + Sync + 'static,
-    {
-        static GRACE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let generation = GRACE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        if let Some((_, previous)) = self
-            .disconnect_graces
-            .lock()
-            .insert(session_id.clone(), (generation, cancel_tx))
-        {
-            let _ = previous.send(());
-        }
-        let this = Arc::clone(self);
-        let grace = self.disconnect_grace;
-        let session_id_for_warn = session_id.clone();
-        let future = async move {
-            if tokio::time::timeout(grace, cancel_rx).await.is_ok() {
-                return;
-            }
-            // Only deny if this is still the latest grace task — a newer
-            // schedule may have replaced us while the timeout was expiring.
-            let is_latest = {
-                let graces = this.disconnect_graces.lock();
-                graces
-                    .get(&session_id)
-                    .is_some_and(|(gen, _)| *gen == generation)
-            };
-            if !is_latest {
-                tracing::info!(
-                    session_id,
-                    "permission disconnect grace superseded; skipping deny"
-                );
-                return;
-            }
-            this.disconnect_graces.lock().remove(&session_id);
-            if subscriber_count(&session_id) != 0 {
-                tracing::info!(
-                    session_id,
-                    "permission disconnect grace expired with subscriber restored"
-                );
-                return;
-            }
-            tracing::warn!(
-                session_id,
-                grace_ms = grace.as_millis(),
-                "permission disconnect grace expired; denying pending tickets"
-            );
-            this.deny_orphaned_session(&session_id).await;
-        };
-        match &self.handle {
-            Ok(handle) => {
-                handle.spawn(future);
-            }
-            Err(_) => match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.spawn(future);
-                }
-                Err(error) => warn!(
-                    "[permissions] cannot arm disconnect grace for {session_id_for_warn}: {error}"
-                ),
-            },
         }
     }
 
@@ -391,8 +252,9 @@ impl PermissionRendezvous {
     /// be subscribed to several sessions; the permission belongs to one).
     #[must_use]
     pub fn session_for_request(&self, request_id: &str) -> Option<String> {
-        self.tickets
+        self.state
             .lock()
+            .tickets
             .get(request_id)
             .map(|t| t.session_id.clone())
     }
@@ -403,8 +265,9 @@ impl PermissionRendezvous {
     /// depth — a client cannot resolve another agent's permission).
     #[must_use]
     pub fn agent_for_request(&self, request_id: &str) -> Option<AgentId> {
-        self.tickets
+        self.state
             .lock()
+            .tickets
             .get(request_id)
             .map(|t| t.agent_id.clone())
     }
@@ -412,119 +275,50 @@ impl PermissionRendezvous {
     /// Whether a `request_id` is currently outstanding (test helper).
     #[cfg(test)]
     pub(crate) fn is_outstanding(&self, request_id: &str) -> bool {
-        self.tickets.lock().contains_key(request_id)
+        self.state.lock().tickets.contains_key(request_id)
     }
 
     /// The number of queued (not-yet-outstanding) permissions for a session
     /// (test helper for the at-most-one rule).
     #[cfg(test)]
     pub(crate) fn queued_count_for_session(&self, session_id: &str) -> usize {
-        self.sessions
+        self.state
             .lock()
+            .sessions
             .get(session_id)
-            .map(|q| q.queued.len())
-            .unwrap_or(0)
+            .map_or(0, |q| q.queued.len())
     }
 
-    /// Snapshot a `permission_request` event into a ticket + arm the timeout
-    /// (FR14: at-most-one outstanding per session; the rest are queued).
+    /// Snapshot a `permission_request` event into a ticket (FR14: at-most-one
+    /// outstanding per session; the rest are queued).
     ///
     /// Called by [`WsRelaySink::emit`] when it sees `acp:permission_request`.
     /// `options` is the `Value` of the event's `options` field (array of
     /// `{optionId, …}`) — the immutable-args snapshot for TOCTOU re-validation.
-    ///
-    /// Takes `self: &Arc<Self>` so the spawned timeout task can capture a clone
-    /// and re-enter the rendezvous to deny + promote the queue on expiry.
     pub fn register(
-        self: &Arc<Self>,
+        &self,
         request_id: String,
         agent_id: AgentId,
         session_id: String,
         options: Value,
     ) {
-        let mut sessions = self.sessions.lock();
-        let queue = sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| SessionQueue {
-                outstanding: None,
-                queued: VecDeque::new(),
-            });
-        if queue.outstanding.is_some() {
-            // Queue — do NOT arm the timeout yet (the browser hasn't seen it).
+        let mut state = self.state.lock();
+        if let Some(queue) = state.sessions.get_mut(&session_id) {
             queue.queued.push_back(QueuedTicket {
                 request_id,
                 agent_id,
-                session_id,
                 options,
             });
             return;
         }
-        // Outstanding — record the ticket + arm the timeout.
-        queue.outstanding = Some(request_id.clone());
-        let ticket = PermissionTicket {
-            agent_id: agent_id.clone(),
-            session_id: session_id.clone(),
-            options: options.clone(),
-            resolved_by: None,
-            timeout_cancel: None,
-        };
-        self.tickets.lock().insert(request_id.clone(), ticket);
-        drop(sessions);
-        self.arm_timeout(request_id, agent_id);
-    }
-
-    /// Arm the per-ticket timeout task (idempotent: a ticket already armed or
-    /// resolved is left alone).
-    ///
-    /// Spawns onto the captured runtime `Handle` (NOT `tokio::spawn`), because
-    /// the relay's `emit` runs on the per-agent driver thread — a plain
-    /// `std::thread`, not a tokio task — and `tokio::spawn` would panic there.
-    /// `Handle::spawn` submits the task to the server's runtime regardless of
-    /// the calling thread.
-    fn arm_timeout(self: &Arc<Self>, request_id: String, agent_id: AgentId) {
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        {
-            let mut tickets = self.tickets.lock();
-            let Some(ticket) = tickets.get_mut(&request_id) else {
-                return; // already resolved + evicted — nothing to time out.
-            };
-            if ticket.timeout_cancel.is_some() {
-                return; // already armed.
-            }
-            ticket.timeout_cancel = Some(cancel_tx);
-        }
-        let this = Arc::clone(self);
-        let timeout = self.timeout;
-        // Clone for the no-runtime warning below (the future moves its own copy).
-        let request_id_for_warn = request_id.clone();
-        let future = async move {
-            // Wait for either the timeout to elapse or the cancel signal.
-            if tokio::time::timeout(timeout, cancel_rx).await.is_err() {
-                // Timed out — resolve as deny (option_id=None → Cancelled).
-                this.deny(&request_id, &agent_id, DenyReason::Timeout).await;
-            }
-            // else: cancelled by resolution/disconnect — nothing to do.
-        };
-        match &self.handle {
-            Ok(handle) => {
-                handle.spawn(future);
-            }
-            // The rendezvous was constructed outside a runtime (e.g. a unit
-            // test's `test_rendezvous()` helper called before `block_on`). Try
-            // capturing the runtime AGAIN at arm time — the caller may now be
-            // inside a runtime (the test helpers wrap `register` in `block_on`).
-            // In production this `Err` branch is unreachable (the rendezvous is
-            // built inside `serve`/`main`'s runtime, so `handle` is `Ok`).
-            Err(_) => match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.spawn(future);
-                }
-                Err(e) => warn!(
-                    "[permissions] cannot arm timeout for {request_id_for_warn}: no tokio runtime ({e}); \
-                     ticket will not auto-deny — construct the rendezvous inside a runtime"
-                ),
+        state.sessions.insert(
+            session_id.clone(),
+            SessionQueue {
+                outstanding: request_id.clone(),
+                queued: VecDeque::new(),
             },
-        }
+        );
+        state.open_ticket(&session_id, request_id, agent_id, options);
     }
 
     /// The rejection for a `request_id` with no outstanding ticket: a recently
@@ -543,17 +337,17 @@ impl PermissionRendezvous {
     /// [`AcpManager::respond_permission`] (resolves the agent's `Responder`).
     /// On rejection, the caller maps the [`RespondError`] to a WS `err.code`.
     pub async fn try_respond(
-        self: &Arc<Self>,
+        &self,
         client_id: ClientId,
         request_id: &str,
         option_id: Option<&str>,
     ) -> Result<RespondOutcome, RespondError> {
-        // 1. Read-only validation under a single lock (TOCTOU re-check +
-        //    first-wins + duplicate detection). The claim step re-checks under
-        //    the same lock to close the race between two concurrent responses.
-        {
-            let tickets = self.tickets.lock();
-            let Some(ticket) = tickets.get(request_id) else {
+        // 1. Validate and claim the ticket (single-use) under one lock: TOCTOU
+        //    re-check, first-wins and duplicate detection.
+        let agent_id = {
+            let mut state = self.state.lock();
+            let Some(ticket) = state.tickets.get_mut(request_id) else {
+                drop(state);
                 return Err(self.missing_ticket_error(request_id));
             };
             if ticket.resolved_by == Some(client_id) {
@@ -569,30 +363,11 @@ impl PermissionRendezvous {
                     return Err(RespondError::InvalidOption);
                 }
             }
-        }
-
-        // 2. Claim the ticket (single-use). Mark resolved + cancel the timeout.
-        let (agent_id, session_id) = {
-            let mut tickets = self.tickets.lock();
-            let Some(ticket) = tickets.get_mut(request_id) else {
-                return Err(self.missing_ticket_error(request_id));
-            };
-            // Re-check under the write lock (a concurrent first-wins could have
-            // raced the read-to-claim window above).
-            if ticket.resolved_by == Some(client_id) {
-                return Err(RespondError::Duplicate);
-            }
-            if ticket.resolved_by.is_some() {
-                return Err(RespondError::AlreadyResolved);
-            }
             ticket.resolved_by = Some(client_id);
-            if let Some(cancel) = ticket.timeout_cancel.take() {
-                let _ = cancel.send(());
-            }
-            (ticket.agent_id.clone(), ticket.session_id.clone())
+            ticket.agent_id.clone()
         };
 
-        // 3. Forward to the agent (resolves the `Responder` on the driver thread).
+        // 2. Forward to the agent (resolves the `Responder` on the driver thread).
         //    T1.3: the agent-side driver loop returns `Err("unknown permission
         //    request: {id}")` when `take_permission` finds no outstanding
         //    `Responder` for this `request_id` (resolved concurrently / drained
@@ -616,171 +391,65 @@ impl PermissionRendezvous {
                 // The agent already resolved it elsewhere: this answer is
                 // `stale`, and remembering the ticket makes any LATER answer
                 // read `already_resolved`.
-                self.resolved.lock().record(request_id);
-                self.tickets.lock().remove(request_id);
-                self.promote_next(&session_id);
+                self.settle(request_id);
                 return Err(RespondError::NotFound);
             }
             warn!("[permissions] respond_permission {request_id} failed: {e}");
         }
 
-        // 4. Evict the resolved ticket (remembering it, so a later answer reads
+        // 3. Evict the resolved ticket (remembering it, so a later answer reads
         //    `already_resolved`) + promote the next queued permission.
-        self.resolved.lock().record(request_id);
-        self.tickets.lock().remove(request_id);
-        self.promote_next(&session_id);
-
+        self.settle(request_id);
         Ok(RespondOutcome::Resolved)
     }
 
-    /// Deny every outstanding + queued ticket for a single session (called by
-    /// [`Self::deny_all_for_client`] after the grace window). Drains the
-    /// session queue and resolves each outstanding ticket as deny.
-    async fn deny_orphaned_session(self: &Arc<Self>, session_id: &str) {
-        // Collect outstanding RequestAgentPair lists from `tickets` in a scoped
-        // guard, drop the tickets lock, then drain the session queue under the
-        // `sessions` lock separately. `register` acquires sessions→tickets;
-        // holding tickets while acquiring sessions here would invert the order
-        // and risk deadlock.
-        let to_deny: Vec<RequestAgentPair> = {
-            let tickets = self.tickets.lock();
-            tickets
-                .iter()
-                .filter(|(_, ticket)| {
-                    ticket.resolved_by.is_none() && ticket.session_id == session_id
-                })
-                .map(|(request_id, ticket)| (request_id.clone(), ticket.agent_id.clone()))
-                .collect()
-        };
-        let queued_to_deny: Vec<RequestAgentPair> = self
-            .sessions
-            .lock()
-            .get_mut(session_id)
-            .map(|queue| {
-                queue
-                    .queued
-                    .drain(..)
-                    .map(|ticket| (ticket.request_id, ticket.agent_id))
-                    .collect()
-            })
-            .unwrap_or_default();
-        for (request_id, agent_id) in to_deny {
-            self.deny(&request_id, &agent_id, DenyReason::Disconnect)
-                .await;
-        }
-        for (request_id, agent_id) in queued_to_deny {
-            self.resolved.lock().record(&request_id);
-            if let Err(error) = self
-                .acp
-                .respond_permission(&agent_id, request_id.clone(), None)
-                .await
-            {
-                warn!("[permissions] disconnect-deny (queued) for {request_id} failed: {error}");
-            }
+    /// Mark a permission as resolved elsewhere: drop its ticket, remember its
+    /// id so a later answer reads `already_resolved`, and promote the next
+    /// queued permission of its session. Idempotent; an id the rendezvous
+    /// never saw is ignored. Called after an answer, and by the desktop
+    /// `acp_respond_permission` command, which answers the agent directly and
+    /// would otherwise leave its ticket holding the session's slot.
+    pub fn settle(&self, request_id: &str) {
+        let mut state = self.state.lock();
+        if state.settle(request_id) {
+            self.resolved.lock().record(request_id);
         }
     }
 
-    /// On browser disconnect, resolve every outstanding ticket whose session no
-    /// longer has any OTHER subscribed client as deny (FR14: disconnect → deny),
-    /// AND drain each such session's queued (not-yet-outstanding) tickets too.
-    ///
-    /// A ticket is denied only when the disconnecting client was the last
-    /// subscriber on its session — otherwise a remaining client can still
-    /// legitimately respond. `session_subscribers` reports the count of clients
-    /// STILL subscribed (after the disconnecting one was unregistered).
-    pub async fn deny_all_for_client<F>(self: &Arc<Self>, session_subscribers: F)
-    where
-        F: Fn(&str) -> usize,
-    {
-        let orphan_sessions: std::collections::HashSet<String> = self
+    /// Drop every ticket of a session whose turn ended or that closed (the
+    /// outstanding one and the queued ones). The driver already cancelled the
+    /// parked responders; later answers read `already_resolved`. Returns how
+    /// many tickets were released.
+    pub fn release_session(&self, session_id: &str) -> usize {
+        let mut state = self.state.lock();
+        let released = state.release_session(session_id);
+        let mut resolved = self.resolved.lock();
+        for id in &released {
+            resolved.record(id);
+        }
+        released.len()
+    }
+
+    /// Drop every ticket of an agent that disconnected, crashed or was killed.
+    /// Returns how many tickets were released.
+    pub fn release_agent(&self, agent_id: &AgentId) -> usize {
+        let mut state = self.state.lock();
+        let sessions: Vec<String> = state
             .tickets
-            .lock()
             .values()
-            .filter(|ticket| {
-                ticket.resolved_by.is_none() && session_subscribers(&ticket.session_id) == 0
-            })
+            .filter(|ticket| ticket.agent_id == *agent_id)
             .map(|ticket| ticket.session_id.clone())
             .collect();
-        for session_id in orphan_sessions {
-            self.deny_orphaned_session(&session_id).await;
-        }
-    }
-
-    /// Resolve a ticket as deny (`option_id=None` → `Cancelled`) and pop the
-    /// session's queue so the next queued permission becomes outstanding.
-    async fn deny(self: &Arc<Self>, request_id: &str, agent_id: &AgentId, reason: DenyReason) {
-        // Take the ticket + cancel its timeout.
-        let session_id = {
-            let mut tickets = self.tickets.lock();
-            if let Some(mut ticket) = tickets.remove(request_id) {
-                // Race guard: a concurrent `try_respond` may have already claimed
-                // the ticket (set `resolved_by=Some(client)`) and forwarded a
-                // `Selected` to the agent, but not yet evicted it (eviction is
-                // after its `.await`). If so, do NOT forward a `Cancelled` too —
-                // the single-use ACP `Responder` was already resolved, and a
-                // second `.respond()` would conflict. Leave the promote to the
-                // claimer's `try_respond` path; we just exit.
-                if ticket.resolved_by.is_some() {
-                    return;
-                }
-                if let Some(cancel) = ticket.timeout_cancel.take() {
-                    let _ = cancel.send(());
-                }
-                self.resolved.lock().record(request_id);
-                ticket.session_id
-            } else {
-                return; // already gone (resolved concurrently).
+        let mut resolved = self.resolved.lock();
+        let mut count = 0;
+        for session_id in sessions {
+            let released = state.release_session(&session_id);
+            for id in &released {
+                resolved.record(id);
             }
-        };
-        // Forward the deny to the agent. `option_id=None` → Cancelled.
-        if let Err(e) = self
-            .acp
-            .respond_permission(agent_id, request_id.to_string(), None)
-            .await
-        {
-            warn!("[permissions] deny ({reason:?}) for {request_id} failed to reach agent: {e}");
+            count += released.len();
         }
-        // Promote the next queued permission for this session.
-        self.promote_next(&session_id);
-    }
-
-    /// Pop the session's queue: promote the next queued permission to
-    /// outstanding + arm its timeout. Called after a ticket resolves (deny/select).
-    fn promote_next(self: &Arc<Self>, session_id: &str) {
-        // Atomically (under ONE sessions-lock acquisition): clear the outstanding
-        // slot, pop the next queued ticket, AND re-set `outstanding=Some(rid)`
-        // for the promoted one. Holding the lock across clear+pop+re-set closes
-        // the race where a concurrent `register` sees `outstanding=None` between
-        // two acquisitions and inserts its own ticket (violating FR14 at-most-one).
-        let promoted = {
-            let mut sessions = self.sessions.lock();
-            let Some(queue) = sessions.get_mut(session_id) else {
-                return;
-            };
-            queue.outstanding = None;
-            let Some(queued) = queue.queued.pop_front() else {
-                return; // queue empty — leave the slot free.
-            };
-            queue.outstanding = Some(queued.request_id.clone());
-            queued
-        };
-        // Insert into `self.tickets` + arm the timeout OUTSIDE the sessions lock
-        // (different mutex; arming spawns onto the captured runtime handle).
-        let QueuedTicket {
-            request_id,
-            agent_id,
-            session_id,
-            options,
-        } = promoted;
-        let ticket = PermissionTicket {
-            agent_id: agent_id.clone(),
-            session_id: session_id.clone(),
-            options: options.clone(),
-            resolved_by: None,
-            timeout_cancel: None,
-        };
-        self.tickets.lock().insert(request_id.clone(), ticket);
-        self.arm_timeout(request_id, agent_id);
+        count
     }
 }
 
@@ -809,711 +478,9 @@ impl Default for PermissionRendezvous {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Question rendezvous (issue #411)
-// ---------------------------------------------------------------------------
-
-/// Why a question ticket was resolved as cancelled (structured logging only).
-#[derive(Debug, Clone, Copy)]
-enum QuestionDenyReason {
-    Timeout,
-    Disconnect,
-}
-
-/// Outcome of a successful [`QuestionRendezvous::try_respond`] call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuestionRespondOutcome {
-    /// The ticket was unresolved; this answer won and was forwarded to the
-    /// agent. The browser should show success.
-    Resolved,
-}
-
-/// Why a [`QuestionRendezvous::try_respond`] call was rejected. Each variant
-/// maps to a stable WS `err.code` (see [`QuestionRespondError::wire_code`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuestionRespondError {
-    /// No outstanding ticket for this `question_id` (never seen, or resolved
-    /// and aged out of the tombstones). Wire `err.code: "stale"`.
-    NotFound,
-    /// The ticket was already resolved — by another client (first-wins), a
-    /// timeout or a disconnect cancel — and is still in the bounded tombstone
-    /// memory. Wire `err.code: "already_resolved"`.
-    AlreadyResolved,
-    /// The *same* client already responded to this ticket (double-respond).
-    /// Wire `err.code: "duplicate"`.
-    Duplicate,
-    /// A submitted `value` was not among the ticket's original immutable
-    /// option values (TOCTOU defense — an attacker can't answer with an option
-    /// that wasn't in the original question). Wire `err.code: "permission_denied"`.
-    InvalidOption,
-}
-
-impl QuestionRespondError {
-    /// The stable snake_case wire code for this rejection.
-    #[must_use]
-    pub const fn wire_code(self) -> &'static str {
-        match self {
-            Self::NotFound => "stale",
-            Self::AlreadyResolved => "already_resolved",
-            Self::Duplicate => "duplicate",
-            Self::InvalidOption => "permission_denied",
-        }
-    }
-}
-
-/// A single outstanding question ticket — relay-side metadata only (never
-/// holds the ACP `Responder`).
-struct QuestionTicket {
-    /// Which agent owns the responder (forwarded to `AcpManager::answer_question`).
-    agent_id: AgentId,
-    /// The session the question belongs to (for disconnect-deny + ownership).
-    session_id: String,
-    /// The immutable args snapshot — `options` array from the original
-    /// `AskUserQuestionEvent` payload. Used for TOCTOU re-validation.
-    options: Value,
-    /// `true` when any option declares `cardinality: "multi"` — multi-select
-    /// allows several values; single-select enforces at most one.
-    multi: bool,
-    /// `Some(client)` once a client has won the ticket (first-response-wins).
-    resolved_by: Option<ClientId>,
-    /// Cancel handle for the per-ticket timeout task.
-    timeout_cancel: Option<oneshot::Sender<()>>,
-}
-
-/// Server-side question rendezvous (issue #411) — the structured-question
-/// sibling of [`PermissionRendezvous`].
-///
-/// Holds the relay-side ticket table keyed by `question_id` (globally unique —
-/// safe across agents). `AcpManager` is server-side-only: the desktop path
-/// does not construct a `QuestionRendezvous` at all (it uses the
-/// `acp_answer_question` Tauri command directly).
-pub struct QuestionRendezvous {
-    /// `question_id → ticket` (outstanding tickets only).
-    tickets: Mutex<HashMap<String, QuestionTicket>>,
-    /// The ACP manager — used to forward answers back to the agent's
-    /// `Responder` via the command channel.
-    acp: Arc<AcpManager>,
-    /// The bounded timeout window. Expiry → cancelled.
-    timeout: Duration,
-    /// Grace before disconnect orphaning resolves a session's pending
-    /// questions as cancelled (issue #841: questions align with the
-    /// permission disconnect grace instead of denying instantly).
-    disconnect_grace: Duration,
-    /// Per-session cancellation for an armed disconnect grace, keyed by a
-    /// generation token so an expired older task cannot evict a newer one.
-    disconnect_graces: Mutex<HashMap<String, (u64, oneshot::Sender<()>)>>,
-    /// Bounded memory of resolved question ids (`already_resolved` replies).
-    resolved: Mutex<Tombstones>,
-    /// Tokio runtime handle (see [`PermissionRendezvous::handle`]).
-    handle: Result<tokio::runtime::Handle, tokio::runtime::TryCurrentError>,
-}
-
-impl QuestionRendezvous {
-    /// Create a rendezvous bound to an [`AcpManager`] with the default 60s timeout.
-    #[must_use]
-    pub fn new(acp: Arc<AcpManager>) -> Self {
-        Self::with_timeout(acp, DEFAULT_PERMISSION_TIMEOUT)
-    }
-
-    /// Create a rendezvous with an explicit timeout (testable).
-    #[must_use]
-    pub fn with_timeout(acp: Arc<AcpManager>, timeout: Duration) -> Self {
-        Self::with_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE)
-    }
-
-    /// Create a rendezvous with an explicit timeout + disconnect grace
-    /// (issue #841: aligns questions with the permission reconnect grace).
-    #[must_use]
-    pub fn with_policy(acp: Arc<AcpManager>, timeout: Duration, disconnect_grace: Duration) -> Self {
-        Self {
-            tickets: Mutex::new(HashMap::new()),
-            acp,
-            timeout,
-            disconnect_grace,
-            disconnect_graces: Mutex::new(HashMap::new()),
-            resolved: Mutex::new(Tombstones::new()),
-            handle: tokio::runtime::Handle::try_current(),
-        }
-    }
-
-    /// Create a rendezvous with an explicit runtime handle + timeout +
-    /// disconnect grace (issue #841).
-    #[must_use]
-    pub fn with_handle_and_policy(
-        acp: Arc<AcpManager>,
-        timeout: Duration,
-        disconnect_grace: Duration,
-        handle: tokio::runtime::Handle,
-    ) -> Self {
-        Self {
-            tickets: Mutex::new(HashMap::new()),
-            acp,
-            timeout,
-            disconnect_grace,
-            disconnect_graces: Mutex::new(HashMap::new()),
-            resolved: Mutex::new(Tombstones::new()),
-            handle: Ok(handle),
-        }
-    }
-
-    /// Create a rendezvous with an explicit runtime handle + timeout.
-    ///
-    /// Use this when construction happens outside a guaranteed-runtime context
-    /// (the desktop path in Tauri's `setup`) but a runtime handle is available
-    /// via `tauri::async_runtime::handle()`. Passing the handle explicitly makes
-    /// `arm_timeout` reliable — it does not depend on `Handle::try_current()`
-    /// succeeding at construction time.
-    #[must_use]
-    pub fn with_handle(
-        acp: Arc<AcpManager>,
-        timeout: Duration,
-        handle: tokio::runtime::Handle,
-    ) -> Self {
-        Self::with_handle_and_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE, handle)
-    }
-
-    /// The session id a pending `question_id` belongs to, or `None`.
-    #[must_use]
-    pub fn session_for_question(&self, question_id: &str) -> Option<String> {
-        self.tickets
-            .lock()
-            .get(question_id)
-            .map(|t| t.session_id.clone())
-    }
-
-    /// The agent id a pending `question_id` belongs to, or `None`.
-    #[must_use]
-    pub fn agent_for_question(&self, question_id: &str) -> Option<AgentId> {
-        self.tickets
-            .lock()
-            .get(question_id)
-            .map(|t| t.agent_id.clone())
-    }
-
-    /// Whether a `question_id` is currently outstanding (test helper).
-    #[cfg(test)]
-    pub(crate) fn is_outstanding(&self, question_id: &str) -> bool {
-        self.tickets.lock().contains_key(question_id)
-    }
-
-    /// Snapshot a `question_request` event into a ticket + arm the timeout.
-    ///
-    /// Called by [`WsRelaySink::emit`] when it sees `acp:question_request`.
-    /// `options` is the `Value` of the event's `options` field (array of
-    /// `{value, label, description?, cardinality?}`) — the immutable-args
-    /// snapshot for TOCTOU re-validation.
-    pub fn register(
-        self: &Arc<Self>,
-        question_id: String,
-        agent_id: AgentId,
-        session_id: String,
-        options: Value,
-    ) {
-        let multi = options.as_array().is_some_and(|arr| {
-            arr.iter().any(|opt| {
-                opt.get("cardinality")
-                    .and_then(Value::as_str)
-                    .is_some_and(|c| c == "multi")
-            })
-        });
-        let ticket = QuestionTicket {
-            agent_id: agent_id.clone(),
-            session_id,
-            options,
-            multi,
-            resolved_by: None,
-            timeout_cancel: None,
-        };
-        self.tickets.lock().insert(question_id.clone(), ticket);
-        self.arm_timeout(question_id, agent_id);
-    }
-
-    /// Arm the per-ticket timeout task (idempotent). Mirrors
-    /// [`PermissionRendezvous::arm_timeout`] but resolves as cancelled.
-    fn arm_timeout(self: &Arc<Self>, question_id: String, agent_id: AgentId) {
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        {
-            let mut tickets = self.tickets.lock();
-            let Some(ticket) = tickets.get_mut(&question_id) else {
-                return;
-            };
-            if ticket.timeout_cancel.is_some() {
-                return;
-            }
-            ticket.timeout_cancel = Some(cancel_tx);
-        }
-        let this = Arc::clone(self);
-        let timeout = self.timeout;
-        let question_id_for_warn = question_id.clone();
-        let future = async move {
-            if tokio::time::timeout(timeout, cancel_rx).await.is_err() {
-                this.deny(&question_id, &agent_id, QuestionDenyReason::Timeout)
-                    .await;
-            }
-        };
-        match &self.handle {
-            Ok(handle) => {
-                handle.spawn(future);
-            }
-            Err(_) => match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.spawn(future);
-                }
-                Err(e) => warn!(
-                    "[questions] cannot arm timeout for {question_id_for_warn}: no tokio runtime ({e}); \
-                     ticket will not auto-cancel — construct the rendezvous inside a runtime"
-                ),
-            },
-        }
-    }
-
-    /// The rejection for a `question_id` with no outstanding ticket: a recently
-    /// resolved one is `AlreadyResolved`, anything else `NotFound`.
-    fn missing_ticket_error(&self, question_id: &str) -> QuestionRespondError {
-        if self.resolved.lock().contains(question_id) {
-            QuestionRespondError::AlreadyResolved
-        } else {
-            QuestionRespondError::NotFound
-        }
-    }
-
-    /// Attempt to resolve a ticket with a client's answer (first-response-wins).
-    ///
-    /// On success, the answer is forwarded to [`AcpManager::answer_question`].
-    /// `values == None` resolves as cancelled; `Some(values)` forwards the
-    /// selected option values (TOCTOU-validated against the registered options).
-    pub async fn try_respond(
-        self: &Arc<Self>,
-        client_id: ClientId,
-        question_id: &str,
-        values: Option<&[String]>,
-    ) -> Result<QuestionRespondOutcome, QuestionRespondError> {
-        {
-            let tickets = self.tickets.lock();
-            let Some(ticket) = tickets.get(question_id) else {
-                return Err(self.missing_ticket_error(question_id));
-            };
-            if ticket.resolved_by == Some(client_id) {
-                return Err(QuestionRespondError::Duplicate);
-            }
-            if ticket.resolved_by.is_some() {
-                return Err(QuestionRespondError::AlreadyResolved);
-            }
-            // TOCTOU: every submitted value MUST be among the original options.
-            // Cancel (None) is always allowed (the user may dismiss).
-            if let Some(values) = values {
-                // An empty array is neither a selection nor a cancel — clients
-                // must send `None` to cancel.
-                if values.is_empty() {
-                    return Err(QuestionRespondError::InvalidOption);
-                }
-                for v in values {
-                    if !question_value_is_valid(&ticket.options, v) {
-                        return Err(QuestionRespondError::InvalidOption);
-                    }
-                }
-                if !ticket.multi && values.len() > 1 {
-                    return Err(QuestionRespondError::InvalidOption);
-                }
-            }
-        }
-
-        let (agent_id, _session_id) = {
-            let mut tickets = self.tickets.lock();
-            let Some(ticket) = tickets.get_mut(question_id) else {
-                return Err(self.missing_ticket_error(question_id));
-            };
-            if ticket.resolved_by == Some(client_id) {
-                return Err(QuestionRespondError::Duplicate);
-            }
-            if ticket.resolved_by.is_some() {
-                return Err(QuestionRespondError::AlreadyResolved);
-            }
-            ticket.resolved_by = Some(client_id);
-            if let Some(cancel) = ticket.timeout_cancel.take() {
-                let _ = cancel.send(());
-            }
-            (ticket.agent_id.clone(), ticket.session_id.clone())
-        };
-
-        let values = values.map(|v| v.to_vec());
-        if let Err(e) = self
-            .acp
-            .answer_question(&agent_id, question_id.to_string(), values)
-            .await
-        {
-            if e.contains("unknown question request") {
-                warn!(
-                    "[questions] answer_question {question_id} — agent has no outstanding request: {e}"
-                );
-                self.resolved.lock().record(question_id);
-                self.tickets.lock().remove(question_id);
-                return Err(QuestionRespondError::NotFound);
-            }
-            warn!("[questions] answer_question {question_id} failed: {e}");
-        }
-
-        self.resolved.lock().record(question_id);
-        self.tickets.lock().remove(question_id);
-        Ok(QuestionRespondOutcome::Resolved)
-    }
-
-    /// Cancel an armed disconnect grace only after a replacement subscription
-    /// is live (issue #841: mirrors
-    /// [`PermissionRendezvous::cancel_disconnect_grace`]).
-    pub fn cancel_disconnect_grace(&self, session_id: &str) {
-        if let Some((_, cancel)) = self.disconnect_graces.lock().remove(session_id) {
-            let _ = cancel.send(());
-            tracing::info!(
-                session_id,
-                "question disconnect grace cancelled after resubscribe"
-            );
-        }
-    }
-
-    /// Arm a bounded last-subscriber grace for a session's pending questions
-    /// (issue #841). Expiry rechecks the relay count; the original
-    /// per-ticket timeout remains armed throughout. Mirrors
-    /// [`PermissionRendezvous::schedule_disconnect_grace`].
-    pub fn schedule_disconnect_grace<F>(self: &Arc<Self>, session_id: String, subscriber_count: F)
-    where
-        F: Fn(&str) -> usize + Send + Sync + 'static,
-    {
-        static GRACE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let generation = GRACE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        if let Some((_, previous)) = self
-            .disconnect_graces
-            .lock()
-            .insert(session_id.clone(), (generation, cancel_tx))
-        {
-            let _ = previous.send(());
-        }
-        let this = Arc::clone(self);
-        let grace = self.disconnect_grace;
-        let session_id_for_warn = session_id.clone();
-        let future = async move {
-            if tokio::time::timeout(grace, cancel_rx).await.is_ok() {
-                return;
-            }
-            // Only cancel if this is still the latest grace task — a newer
-            // schedule may have replaced us while the timeout was expiring.
-            let is_latest = {
-                let graces = this.disconnect_graces.lock();
-                graces
-                    .get(&session_id)
-                    .is_some_and(|(gen, _)| *gen == generation)
-            };
-            if !is_latest {
-                tracing::info!(
-                    session_id,
-                    "question disconnect grace superseded; skipping cancel"
-                );
-                return;
-            }
-            this.disconnect_graces.lock().remove(&session_id);
-            if subscriber_count(&session_id) != 0 {
-                tracing::info!(
-                    session_id,
-                    "question disconnect grace expired with subscriber restored"
-                );
-                return;
-            }
-            tracing::warn!(
-                session_id,
-                grace_ms = grace.as_millis(),
-                "question disconnect grace expired; cancelling pending questions"
-            );
-            this.deny_orphaned_session(&session_id).await;
-        };
-        match &self.handle {
-            Ok(handle) => {
-                handle.spawn(future);
-            }
-            Err(_) => match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    handle.spawn(future);
-                }
-                Err(error) => warn!(
-                    "[questions] cannot arm disconnect grace for {session_id_for_warn}: {error}"
-                ),
-            },
-        }
-    }
-
-    /// Deny every outstanding ticket for a single session as cancelled
-    /// (issue #841: called by [`Self::schedule_disconnect_grace`] after the
-    /// grace window expires with no subscriber restored).
-    async fn deny_orphaned_session(self: &Arc<Self>, session_id: &str) {
-        let to_deny: Vec<(String, AgentId)> = {
-            let tickets = self.tickets.lock();
-            tickets
-                .iter()
-                .filter(|(_, t)| {
-                    t.resolved_by.is_none() && t.session_id == session_id
-                })
-                .map(|(qid, t)| (qid.clone(), t.agent_id.clone()))
-                .collect()
-        };
-        for (question_id, agent_id) in to_deny {
-            self.deny(&question_id, &agent_id, QuestionDenyReason::Disconnect)
-                .await;
-        }
-    }
-
-    /// On browser disconnect, resolve every outstanding ticket whose session no
-    /// longer has any OTHER subscribed client as cancelled (mirrors
-    /// [`PermissionRendezvous::deny_all_for_client`]).
-    ///
-    /// Issue #841: the `/ws` disconnect cleanup no longer calls this directly —
-    /// it arms [`Self::schedule_disconnect_grace`] first; this remains for
-    /// immediate teardown (tests, server shutdown).
-    pub async fn deny_all_for_client<F>(self: &Arc<Self>, session_subscribers: F)
-    where
-        F: Fn(&str) -> usize,
-    {
-        let to_deny: Vec<(String, AgentId)> = {
-            let tickets = self.tickets.lock();
-            tickets
-                .iter()
-                .filter(|(_, t)| t.resolved_by.is_none() && session_subscribers(&t.session_id) == 0)
-                .map(|(qid, t)| (qid.clone(), t.agent_id.clone()))
-                .collect()
-        };
-        for (question_id, agent_id) in to_deny {
-            self.deny(&question_id, &agent_id, QuestionDenyReason::Disconnect)
-                .await;
-        }
-    }
-
-    /// Resolve a ticket as cancelled (values=None).
-    async fn deny(
-        self: &Arc<Self>,
-        question_id: &str,
-        agent_id: &AgentId,
-        reason: QuestionDenyReason,
-    ) {
-        let mut cancel = false;
-        {
-            let mut tickets = self.tickets.lock();
-            if let Some(mut ticket) = tickets.remove(question_id) {
-                if ticket.resolved_by.is_some() {
-                    return;
-                }
-                if let Some(tx) = ticket.timeout_cancel.take() {
-                    let _ = tx.send(());
-                }
-                self.resolved.lock().record(question_id);
-                cancel = true;
-            }
-        }
-        if cancel {
-            if let Err(e) = self
-                .acp
-                .answer_question(agent_id, question_id.to_string(), None)
-                .await
-            {
-                warn!("[questions] deny ({reason:?}) for {question_id} failed to reach agent: {e}");
-            }
-        }
-    }
-}
-
-impl Default for QuestionRendezvous {
-    fn default() -> Self {
-        Self::new(Arc::new(AcpManager::new(vec![])))
-    }
-}
-
-/// Whether `value` appears in the immutable `options` snapshot's `value`
-/// fields (TOCTOU re-validation).
-fn question_value_is_valid(options: &Value, value: &str) -> bool {
-    options.as_array().is_some_and(|arr| {
-        arr.iter().any(|opt| {
-            opt.get("value")
-                .and_then(Value::as_str)
-                .is_some_and(|v| v == value)
-        })
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Turn-id watermark (Story 1.7 T7.2 — FR13/FR11 plumbing; wire field in 1.8)
-// ---------------------------------------------------------------------------
-
-/// Server-side turn-id watermark + dedup set (Story 1.7 T7.2).
-///
-/// FR13 ("the server dedups agent turns by client turn-id with a single
-/// last-completed-turn watermark") and FR11 ("`prompt_complete` idempotent by
-/// turn-id") both need a server-side turn-id store. This struct is the
-/// **mechanism** plumbing — a per-session `last_completed_turn_id` (the
-/// high-water mark) + a per-session set of seen turn-ids for idempotent dedup.
-///
-/// The **wire-level `turnId` field** on `send_prompt`/`prompt_complete` payloads
-/// is deferred to Story 1.8 (where the chat UI + `send_prompt` land and force a
-/// renderer + TS-type change). 1.8's `prompt_complete` handler will call
-/// [`Self::record_completed`] (after dedup via [`Self::is_seen`]); 1.8's
-/// `send_prompt` handler will call [`Self::is_completed`] to reject a stale
-/// turn. No caller exists yet — this is the shipped plumbing the spec required.
-///
-/// `Send + Sync` (the only state is `parking_lot::Mutex<HashMap<…>>`); the
-/// stored ids are opaque `String`s (client-generated uuids in 1.8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnClaim {
-    Claimed,
-    Completed,
-    DuplicateInFlight,
-    Busy,
-}
-
-pub struct TurnWatermark {
-    /// `session_id → completed turn ids` reconstructed from durable history and
-    /// updated on live completion.
-    completed: Mutex<HashMap<String, std::collections::HashSet<String>>>,
-    /// `session_id → currently claimed turn id` (empty string for clients that
-    /// omit turnId). Claiming is atomic with duplicate/busy rejection.
-    in_flight: Mutex<HashMap<String, String>>,
-    /// `session_id → set of seen turn-ids` (idempotent event dedup).
-    seen: Mutex<HashMap<String, std::collections::HashSet<String>>>,
-    /// Sessions whose completed set was restored from durable history (once
-    /// per session, before the first claim).
-    restored: Mutex<std::collections::HashSet<String>>,
-}
-
-impl TurnWatermark {
-    /// Create an empty watermark.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            completed: Mutex::new(HashMap::new()),
-            in_flight: Mutex::new(HashMap::new()),
-            seen: Mutex::new(HashMap::new()),
-            restored: Mutex::new(std::collections::HashSet::new()),
-        }
-    }
-
-    /// Whether `session_id`'s completed set was restored from history.
-    #[must_use]
-    pub fn is_restored(&self, session_id: &str) -> bool {
-        self.restored.lock().contains(session_id)
-    }
-
-    /// Record that `session_id`'s completed set was restored from history.
-    pub fn mark_restored(&self, session_id: &str) {
-        self.restored.lock().insert(session_id.to_string());
-    }
-
-    /// Record that `turn_id` was seen for `session_id` (idempotent dedup set).
-    /// Returns `true` if this was a NEW turn-id (i.e. the caller should process
-    /// it), `false` if it was already seen (the caller should drop it as a
-    /// duplicate — `prompt_complete` is idempotent-by-turn-id).
-    pub fn mark_seen(&self, session_id: &str, turn_id: &str) -> bool {
-        let mut seen = self.seen.lock();
-        seen.entry(session_id.to_string())
-            .or_default()
-            .insert(turn_id.to_string())
-    }
-
-    /// Whether `turn_id` has already been seen for `session_id`.
-    #[must_use]
-    pub fn is_seen(&self, session_id: &str, turn_id: &str) -> bool {
-        self.seen
-            .lock()
-            .get(session_id)
-            .is_some_and(|set| set.contains(turn_id))
-    }
-
-    /// Record that the turn `turn_id` COMPLETED for `session_id` (advances the
-    /// high-water mark). 1.8's `prompt_complete` handler calls this AFTER
-    /// `mark_seen` returns `true` (so the completion is recorded once).
-    pub fn record_completed(&self, session_id: &str, turn_id: &str) {
-        self.completed
-            .lock()
-            .entry(session_id.to_string())
-            .or_default()
-            .insert(turn_id.to_string());
-        self.release_claim(session_id, Some(turn_id));
-    }
-
-    pub fn restore_completed<I>(&self, session_id: &str, turn_ids: I)
-    where
-        I: IntoIterator<Item = String>,
-    {
-        self.completed
-            .lock()
-            .entry(session_id.to_string())
-            .or_default()
-            .extend(turn_ids);
-    }
-
-    /// One completed id for legacy diagnostics/tests; ordering is unspecified.
-    #[must_use]
-    pub fn last_completed(&self, session_id: &str) -> Option<String> {
-        self.completed
-            .lock()
-            .get(session_id)
-            .and_then(|ids| ids.iter().next().cloned())
-    }
-
-    /// Atomically claim the session turn before persistence. Rejects an already
-    /// completed id as stale, the same in-flight id as duplicate, and any other
-    /// concurrent turn as busy.
-    pub fn claim_turn(&self, session_id: &str, turn_id: Option<&str>) -> TurnClaim {
-        let id = turn_id.unwrap_or_default();
-        if !id.is_empty() && self.is_completed(session_id, id) {
-            return TurnClaim::Completed;
-        }
-        let mut in_flight = self.in_flight.lock();
-        if let Some(active) = in_flight.get(session_id) {
-            return if active == id {
-                TurnClaim::DuplicateInFlight
-            } else {
-                TurnClaim::Busy
-            };
-        }
-        in_flight.insert(session_id.to_string(), id.to_string());
-        TurnClaim::Claimed
-    }
-
-    pub fn release_claim(&self, session_id: &str, turn_id: Option<&str>) {
-        let expected = turn_id.unwrap_or_default();
-        let mut in_flight = self.in_flight.lock();
-        if in_flight
-            .get(session_id)
-            .is_some_and(|active| active == expected)
-        {
-            in_flight.remove(session_id);
-        }
-    }
-
-    /// Whether `turn_id` is at-or-before the last-completed watermark for
-    /// `session_id` (i.e. a stale turn a 1.8 `send_prompt` should reject). The
-    /// comparison is by string equality (turn-ids are opaque client uuids with
-    /// no natural ordering; "at-or-before" means "equals the watermark" — a
-    /// turn-id strictly older than the watermark is one the client already
-    /// abandoned and will not resend under the ACP contract).
-    #[must_use]
-    pub fn is_completed(&self, session_id: &str, turn_id: &str) -> bool {
-        self.completed
-            .lock()
-            .get(session_id)
-            .is_some_and(|ids| ids.contains(turn_id))
-    }
-
-    /// Forget a session's watermark state (on explicit session close).
-    pub fn forget_session(&self, session_id: &str) {
-        self.completed.lock().remove(session_id);
-        self.in_flight.lock().remove(session_id);
-        self.seen.lock().remove(session_id);
-        self.restored.lock().remove(session_id);
-    }
-}
-
-impl Default for TurnWatermark {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
+#[cfg(test)]
+mod durable_tests;
+#[cfg(test)]
+mod question_tests;
 #[cfg(test)]
 mod tests;

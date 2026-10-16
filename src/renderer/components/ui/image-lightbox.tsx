@@ -1,6 +1,7 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useId, useState } from 'react'
 import { X } from '@/components/icons'
+import { NativeWebviewOccluder } from '@/hooks/use-native-webview-occlusion'
 
 import { cn } from '@/lib/utils'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
@@ -49,6 +50,7 @@ export function ImageLightbox({ src, alt, children }: ImageLightboxProps): React
             'data-[state=closed]:animate-out data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'
           )}
         >
+          <NativeWebviewOccluder />
           <DialogPrimitive.Title className="sr-only">{alt}</DialogPrimitive.Title>
           <img
             src={src}

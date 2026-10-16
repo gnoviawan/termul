@@ -97,8 +97,10 @@ vi.mock('@/stores/workspace-store', () => {
   }
   return {
     getAllLeafPanes,
+    getAllTreeRoots: (state: { root: PaneNodeLike }) => [state.root],
     findPaneContainingTab,
     agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+    getAgentChatSessionIdsInAllTrees: () => new Set<string>(),
     useWorkspaceStore: {
       getState: () => ({
         addAgentChatTab: addAgentChatTabSpy,
@@ -142,6 +144,7 @@ vi.mock('@/lib/api', async (importActual) => {
 
 import { invoke } from '@tauri-apps/api/core'
 import { _resetAcpTransportForTests } from '@/lib/acp-transport'
+import { PROVIDER_ERROR_MESSAGES } from '@/lib/agents/acp-spawn-errors'
 import {
   _resetAcpAuthForTesting,
   agentReuseKey,
@@ -183,7 +186,9 @@ describe('acp-store multi-project isolation', () => {
     const sessionId = await useAcpStore.getState().startChat('cfg-1', '/b', undefined, 'p1')
     expect(sessionId).toBe('sess-b')
     expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/a')]).toBe('agent-a')
-    expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/b')]).toBe('agent-b')
+    expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/b', 'p1')]).toBe(
+      'agent-b'
+    )
     const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
       (c) => c[0] === 'acp_spawn_agent'
     )
@@ -221,7 +226,7 @@ describe('acp-store multi-project isolation', () => {
       }
     }))
     // Project A's process dies.
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-a' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-a', reason: 'crashed' })
     expect(useAcpStore.getState().sessions['s-a'].status).toBe('closed')
     expect(useAcpStore.getState().agentStatus['agent-a']).toBe('error')
     // Project B is untouched.
@@ -414,7 +419,7 @@ describe('acp-store multi-project isolation', () => {
     })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
     // 3. Disconnect event — must NOT overwrite 'error' to 'closed'
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('error')
     expect(useAcpStore.getState().sessions['s1'].lastError).toBe('child exited')
     expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
@@ -470,11 +475,35 @@ describe('acp-store multi-project isolation', () => {
     expect(state.messages['s1'].map((m) => m.id)).toEqual(['m1', 'm2', 'm3'])
   })
 
+  // The host's stable providerCode decides without `data.errorKind`.
+  it.each([
+    ['provider_quota_exceeded', true],
+    ['provider_session_limit', true],
+    ['provider_request_rejected', false]
+  ] as const)('agent_error with providerCode %s keeps the agent live=%s', (providerCode, live) => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({ agentStatus: { ...s.agentStatus, 'agent-1': 'connected' } }))
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'Internal error',
+      code: -32603,
+      providerCode
+    })
+    const state = useAcpStore.getState()
+    expect(state.agentStatus['agent-1']).toBe(live ? 'connected' : 'error')
+    expect(state.sessions['s1'].status).toBe(live ? 'active' : 'error')
+    expect(state.sessions['s1'].lastError).toContain(PROVIDER_ERROR_MESSAGES[providerCode])
+    expect(state.sessions['s1'].lastError).toContain('Internal error')
+  })
+
   // Story 1.9 review (EC #8): a crash event for an already-closed session
   // must NOT resurrect it to 'error'.
   it('agent_crashed does not resurrect a closed session', () => {
     seedSession('s1', 'agent-1')
-    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     useAcpStore.getState()._onAgentCrashed({
       agentId: 'agent-1',
@@ -535,7 +564,7 @@ describe('acp-store multi-project isolation', () => {
       agentId: 'agent-1',
       message: 'fatal: api key revoked'
     })
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     expect(useAcpStore.getState().sessions['s1'].lastError).toBe('fatal: api key revoked')
   })

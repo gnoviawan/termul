@@ -14,10 +14,11 @@ import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/she
 import type { Project } from '@/types/project'
 import { ShellRail, type ShellRailProps } from './ShellRail'
 
-const { mockNavigate, mockToastError, tauriRef, reconcilerSpy } = vi.hoisted(() => ({
+const { mockNavigate, mockToastError, tauriRef, macRef, reconcilerSpy } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockToastError: vi.fn(),
   tauriRef: { current: true as boolean },
+  macRef: { current: false as boolean },
   reconcilerSpy: vi.fn()
 }))
 
@@ -26,6 +27,16 @@ vi.mock('sonner', () => ({ toast: { error: mockToastError } }))
 vi.mock('@/lib/tauri-runtime', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
   return { ...actual, isTauriContext: () => tauriRef.current }
+})
+
+vi.mock('@/lib/platform', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/platform')>('@/lib/platform')
+  return {
+    ...actual,
+    get isMac() {
+      return macRef.current
+    }
+  }
 })
 
 vi.mock('@/hooks/use-worktree-reconciler', () => ({
@@ -209,6 +220,8 @@ describe('ShellRail', () => {
 
       fireEvent.click(settings)
       expect(useSettingsModalStore.getState().view).toBe('app')
+      expect(settings).toHaveAttribute('aria-pressed', 'true')
+      expect(settings).toHaveClass('keycap')
 
       const { settings: _removed, ...rest } = useKeyboardShortcutsStore.getState().shortcuts
       useKeyboardShortcutsStore.setState({ shortcuts: rest })
@@ -224,34 +237,92 @@ describe('ShellRail', () => {
       expect(props.onShortcutsOpenChange).toHaveBeenCalledWith(true)
     })
 
-    it('has the Rail and Side panel toggles in the Rail header on desktop and web', () => {
+    it('ends the Rail header with the one 28px toggle, after the centered Termul mark', () => {
       for (const tauri of [true, false]) {
         tauriRef.current = tauri
         const { unmount } = renderRail()
         const header = screen.getByTestId('rail-header')
-        const rail = within(header).getByRole('button', { name: 'Expand or collapse projects' })
-        const side = within(header).getByRole('button', { name: 'Show or hide side panel' })
-        expect(rail).toHaveAttribute('aria-pressed', 'true')
-        expect(side).toHaveAttribute('aria-pressed', 'true')
-        // Header is above Search; the Projects header row has no toggle.
-        const nav = screen.getByRole('navigation', { name: 'Projects' })
-        expect(
-          header.compareDocumentPosition(within(nav).getByRole('button', { name: 'Search' })) &
-            Node.DOCUMENT_POSITION_FOLLOWING
-        ).toBeTruthy()
-        expect(screen.getAllByRole('button', { name: 'Expand or collapse projects' })).toHaveLength(
-          1
-        )
+        expect(header).toHaveClass('h-12', 'pt-2')
+        // The mark sits in a 48px slot: its center is the icon column (x = 24).
+        const slot = within(header).getByTestId('rail-header-mark-slot')
+        expect(slot).toHaveClass('w-12', 'justify-center')
+        expect(within(slot).getByTestId('shell-brand-mark')).toBeInTheDocument()
+
+        const toggles = screen.getAllByRole('button', { name: 'Expand or collapse projects' })
+        expect(toggles).toHaveLength(1)
+        expect(toggles[0]).toHaveAttribute('aria-pressed', 'true')
+        expect(toggles[0]).toHaveAttribute('data-testid', 'rail-toggle')
+        expect(toggles[0]).toHaveClass('size-7')
+        // The toggle is the header's only and last control.
+        const headerButtons = within(header).getAllByRole('button')
+        expect(headerButtons).toEqual([toggles[0]])
+        expect(header.lastElementChild).toBe(toggles[0])
         unmount()
       }
     })
 
-    it('marks only the header root as a drag region on desktop, never on web', () => {
+    it('keeps the Termul mark after the traffic-light clearance on macOS', () => {
+      tauriRef.current = true
+      macRef.current = true
+      try {
+        renderRail()
+        const header = screen.getByTestId('rail-header')
+        const clearance = within(header).getByTestId('traffic-light-clearance')
+        expect(clearance.nextElementSibling).toBe(within(header).getByTestId('shell-brand-mark'))
+        expect(within(header).queryByTestId('rail-header-mark-slot')).not.toBeInTheDocument()
+        expect(header.lastElementChild).toBe(screen.getByTestId('rail-toggle'))
+      } finally {
+        macRef.current = false
+      }
+    })
+
+    it('shows the toggle tooltip below the header', async () => {
+      renderRail()
+      fireEvent.focus(screen.getByRole('button', { name: 'Expand or collapse projects' }))
+      const tooltip = await screen.findByRole('tooltip')
+      expect(tooltip).toHaveTextContent('Collapse projects')
+      expect(tooltip.parentElement).toHaveAttribute('data-side', 'bottom')
+    })
+
+    it('has an icon-only footer: Settings at the left, Theme and Shortcuts at the right', () => {
+      renderRail()
+      const settings = screen.getByRole('button', { name: 'Settings' })
+      expect(settings).toHaveClass('size-7')
+      expect(settings.textContent).toBe('')
+      expect(screen.queryByText('Settings')).not.toBeInTheDocument()
+
+      const footer = settings.parentElement as HTMLElement
+      expect(footer).toHaveClass('pl-2.5')
+      const names = within(footer)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+      expect(names).toEqual(['Settings', 'Color themes', 'Open keyboard shortcuts menu'])
+      expect(
+        within(footer).queryByRole('button', { name: 'Expand or collapse projects' })
+      ).toBeNull()
+    })
+
+    it('paints the Rail with the sidebar surface and no canvas patches inside', () => {
+      renderRail()
+      const nav = screen.getByTestId('shell-rail')
+      expect(nav).toHaveClass('bg-sidebar', 'group/rail')
+      // Scopes the Rail keycap fill (`--rail-keycap` in index.css).
+      expect(nav).toHaveAttribute('data-rail-surface')
+      expect(nav.querySelector('.bg-background')).toBeNull()
+    })
+
+    it('marks the header, mark slot and spacer as drag regions on desktop, never the toggle or web', () => {
       tauriRef.current = true
       const { unmount } = renderRail()
       const header = screen.getByTestId('rail-header')
       expect(header).toHaveAttribute('data-tauri-drag-region')
-      for (const button of within(header).getAllByRole('button')) {
+      expect(within(header).getByTestId('rail-header-mark-slot')).toHaveAttribute(
+        'data-tauri-drag-region'
+      )
+      expect(within(header).getByTestId('rail-toggle')).not.toHaveAttribute(
+        'data-tauri-drag-region'
+      )
+      for (const button of within(header).queryAllByRole('button')) {
         expect(button).not.toHaveAttribute('data-tauri-drag-region')
       }
       unmount()
@@ -259,12 +330,6 @@ describe('ShellRail', () => {
       tauriRef.current = false
       renderRail()
       expect(document.querySelector('[data-tauri-drag-region]')).toBeNull()
-    })
-
-    it('persists the Side panel toggle through the panel visibility path', () => {
-      renderRail()
-      fireEvent.click(screen.getByRole('button', { name: 'Show or hide side panel' }))
-      expect(updatePanelVisibility).toHaveBeenCalledWith('fileExplorerVisible', false)
     })
 
     it('occludes native webviews while the + menu is open', async () => {
@@ -345,16 +410,19 @@ describe('ShellRail', () => {
       useShellLayoutStore.setState({ railExpanded: false })
     })
 
-    it('shows only the icons: toggle, project switcher, Column tabs, Search, Canvas, SSH, Settings', () => {
+    it('shows only the icons: project stack, Column tabs, Search, Canvas, SSH, Settings', () => {
       renderRail()
 
       const nav = screen.getByRole('navigation', { name: 'Projects' })
       const names = within(nav)
         .getAllByRole('button')
         .map((button) => button.getAttribute('aria-label'))
+      // The Rail toggle shares the top slot with the Termul mark.
       expect(names).toEqual([
         'Expand or collapse projects',
         'Switch project (Alpha)',
+        // Other open projects (not archived) follow the active one.
+        'Open Beta',
         'Chats',
         'Explorer',
         'Changes',
@@ -363,19 +431,78 @@ describe('ShellRail', () => {
         'SSH hosts',
         'Settings'
       ])
-      expect(
-        within(nav).getByRole('button', { name: 'Expand or collapse projects' })
-      ).toHaveAttribute('aria-pressed', 'false')
       expect(within(nav).queryByText('Projects')).not.toBeInTheDocument()
       expect(within(nav).queryByTestId('ssh-section')).not.toBeInTheDocument()
       expect(screen.getByTestId('shell-rail')).toHaveStyle({ width: '48px' })
-      // The top 40px is an empty band, drag space on desktop.
+      // The top band (8px gutter + 40px row) is drag space on desktop.
+      // Without traffic lights the mark / toggle swap sits in it.
       const band = screen.getByTestId('rail-top-band')
-      expect(band).toHaveClass('h-10')
-      expect(band).toBeEmptyDOMElement()
+      expect(band).toHaveClass('h-12', 'pt-2')
       expect(band).toHaveAttribute('data-tauri-drag-region')
-      // Settings is pinned at the bottom.
-      expect(screen.getByRole('button', { name: 'Settings' }).parentElement).toHaveClass('mt-auto')
+      expect(within(band).getByTestId('rail-brand-swap')).toBeInTheDocument()
+      // Settings alone is pinned at the bottom.
+      const bottom = screen.getByRole('button', { name: 'Settings' }).parentElement as HTMLElement
+      expect(bottom).toHaveClass('mt-auto')
+      expect(within(bottom).getAllByRole('button')).toHaveLength(1)
+    })
+
+    it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {
+      tauriRef.current = true
+      macRef.current = true
+      try {
+        renderRail()
+        const band = screen.getByTestId('rail-top-band')
+        const swap = screen.getByTestId('rail-brand-swap')
+        expect(within(band).queryByTestId('rail-brand-swap')).toBeNull()
+        expect(band.nextElementSibling).toBe(swap)
+        expect(
+          within(swap).getByRole('button', { name: 'Expand or collapse projects' })
+        ).toBeInTheDocument()
+      } finally {
+        macRef.current = false
+      }
+    })
+
+    it('swaps the Termul mark for the toggle in one clipped slot on hover, focus and touch', () => {
+      renderRail()
+      const swap = screen.getByTestId('rail-brand-swap')
+      expect(swap).toHaveClass('size-9', 'overflow-hidden', 'group/swap')
+      expect(screen.getByTestId('shell-rail')).toHaveClass('group/rail')
+
+      const mark = screen.getByTestId('rail-brand-swap-mark')
+      expect(within(mark).getByTestId('shell-brand-mark')).toBeInTheDocument()
+      expect(mark).toHaveClass(
+        'group-hover/rail:translate-x-full',
+        'group-hover/rail:opacity-0',
+        'group-focus-within/swap:translate-x-full',
+        'group-focus-within/swap:opacity-0',
+        // jsdom cannot evaluate media queries: the pinned-on-no-hover state is
+        // covered by asserting these tokens, not by simulating the condition.
+        '[@media(any-hover:none)]:pointer-events-none',
+        '[@media(any-hover:none)]:opacity-0',
+        'duration-[220ms]',
+        'motion-reduce:transition-none'
+      )
+
+      const toggleSlot = screen.getByTestId('rail-brand-swap-toggle')
+      const toggle = within(toggleSlot).getByRole('button', {
+        name: 'Expand or collapse projects'
+      })
+      expect(toggle).toHaveAttribute('aria-pressed', 'false')
+      // The slot clips at 36px, so the focus ring is drawn inside.
+      expect(toggle).toHaveClass('size-9', 'focus-visible:ring-inset')
+      // Rest: off to the left and transparent; shown on hover, focus, touch.
+      expect(toggleSlot).toHaveClass(
+        '-translate-x-full',
+        'opacity-0',
+        'group-hover/rail:translate-x-0',
+        'group-hover/rail:opacity-100',
+        'group-focus-within/swap:translate-x-0',
+        'group-focus-within/swap:opacity-100',
+        '[@media(any-hover:none)]:translate-x-0',
+        '[@media(any-hover:none)]:opacity-100',
+        'motion-reduce:transition-none'
+      )
     })
 
     it('names the switcher without a project and keeps Canvas disabled', () => {
@@ -396,7 +523,7 @@ describe('ShellRail', () => {
   })
 
   describe('expand and collapse', () => {
-    it('flips through the persisted path and keeps the chosen state', async () => {
+    it('flips through the persisted path from the header toggle and the collapsed swap toggle', async () => {
       tauriRef.current = false
       renderRail()
       const nav = screen.getByTestId('shell-rail')

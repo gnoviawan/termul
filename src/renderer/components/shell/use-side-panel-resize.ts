@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useResizeHandle } from '@/hooks/use-resize-handle'
 import {
   SHELL_LAYOUT_BOUNDS,
   useShellLayoutStore,
@@ -6,7 +6,6 @@ import {
 } from '@/stores/shell-layout-store'
 
 const { min: MIN_WIDTH, max: MAX_WIDTH } = SHELL_LAYOUT_BOUNDS.sidePanelWidth
-const KEY_STEP = 16
 
 interface SidePanelResize {
   width: number
@@ -23,61 +22,19 @@ interface SidePanelResize {
  */
 export function useSidePanelResize(): SidePanelResize {
   const width = useSidePanelWidth()
-  const dragCleanupRef = useRef<(() => void) | null>(null)
-
-  const endDrag = useCallback(() => {
-    document.body.style.userSelect = ''
-    dragCleanupRef.current?.()
-    dragCleanupRef.current = null
-  }, [])
-
-  const onResizeMouseDown = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault()
-      endDrag()
-      document.body.style.userSelect = 'none'
-      const startX = event.clientX
-      const startWidth = useShellLayoutStore.getState().sidePanelWidth
-
-      const onMouseMove = (moveEvent: MouseEvent): void => {
-        useShellLayoutStore.getState().setSidePanelWidth(startWidth + moveEvent.clientX - startX)
-      }
-      document.addEventListener('mousemove', onMouseMove)
-      document.addEventListener('mouseup', endDrag)
-      window.addEventListener('blur', endDrag)
-      dragCleanupRef.current = () => {
-        document.removeEventListener('mousemove', onMouseMove)
-        document.removeEventListener('mouseup', endDrag)
-        window.removeEventListener('blur', endDrag)
-      }
-    },
-    [endDrag]
-  )
-
-  const onResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
-    const { setSidePanelWidth, sidePanelWidth } = useShellLayoutStore.getState()
-    switch (event.key) {
-      case 'Home':
-        event.preventDefault()
-        setSidePanelWidth(MIN_WIDTH)
-        return
-      case 'End':
-        event.preventDefault()
-        setSidePanelWidth(MAX_WIDTH)
-        return
-      case 'ArrowLeft':
-        event.preventDefault()
-        setSidePanelWidth(sidePanelWidth - KEY_STEP)
-        return
-      case 'ArrowRight':
-        event.preventDefault()
-        setSidePanelWidth(sidePanelWidth + KEY_STEP)
-        return
-    }
-  }, [])
-
-  // A drag in flight when the panel unmounts must not leak its listeners.
-  useEffect(() => endDrag, [endDrag])
-
-  return { width, min: MIN_WIDTH, max: MAX_WIDTH, onResizeMouseDown, onResizeKeyDown }
+  const { onDragStart, onKeyDown } = useResizeHandle({
+    axis: 'x',
+    direction: 1,
+    min: MIN_WIDTH,
+    max: MAX_WIDTH,
+    read: () => useShellLayoutStore.getState().sidePanelWidth,
+    write: (next) => useShellLayoutStore.getState().setSidePanelWidth(next)
+  })
+  return {
+    width,
+    min: MIN_WIDTH,
+    max: MAX_WIDTH,
+    onResizeMouseDown: onDragStart,
+    onResizeKeyDown: onKeyDown
+  }
 }

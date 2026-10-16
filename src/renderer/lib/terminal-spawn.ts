@@ -10,7 +10,6 @@ import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
 import { ensureWorktreeSymlinks } from '@/lib/worktree-context'
-import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -20,8 +19,6 @@ export interface SpawnTerminalOptions {
   shell?: string
   /** Project environment variables for spawn. */
   envVars?: Array<{ key: string; value: string; enabled?: boolean }>
-  /** Per-project terminal limit. If set, spawns are blocked when the project's terminal count reaches this value. */
-  maxTerminalsPerProject?: number
 }
 
 export interface SpawnTerminalResult {
@@ -44,27 +41,6 @@ export async function spawnTerminalInPane(
 ): Promise<SpawnTerminalResult> {
   const terminalStore = useTerminalStore.getState()
   const workspaceStore = useWorkspaceStore.getState()
-
-  // Check per-project terminal limit
-  if (options?.maxTerminalsPerProject !== undefined) {
-    const projectTerminalCount = terminalStore.terminals.filter(
-      (t) => t.projectId === projectId
-    ).length
-    if (projectTerminalCount >= options.maxTerminalsPerProject) {
-      return {
-        success: false,
-        error: `Maximum ${options.maxTerminalsPerProject} terminals per project`
-      }
-    }
-  }
-
-  // Check global terminal limit
-  if (terminalStore.isTerminalLimitReached()) {
-    return {
-      success: false,
-      error: `Maximum ${terminalStore.terminals.length} terminals allowed across all projects`
-    }
-  }
 
   // Resolve shell: explicit → project default → app default → undefined (backend picks)
   const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
@@ -142,8 +118,7 @@ export type OpenTerminalOutcome =
  * a worktree must not move the user's active worktree. Used by the project
  * chat-row terminal icon and the create-worktree flow. Reuses {@link spawnTerminalInPane}
  * (which still wires worktree symlinks when `cwd` matches a stored worktree
- * path) and reads `activePaneId` + the per-project terminal limit from the
- * stores at call time. Durable failure logs go through `log-api.ts`
+ * path) and reads `activePaneId` from the store at call time. Durable failure logs go through `log-api.ts`
  * (`no-pane` warn, `spawn-failed` error); successful spawns are not logged
  * (the facade exposes no info level, and warn-on-success would be noise).
  */
@@ -161,10 +136,7 @@ export async function openTerminalAtCwd(
     return { status: 'no-pane' }
   }
 
-  const maxTerminalsPerProject = useAppSettingsStore.getState().settings.maxTerminalsPerProject
-  const result = await spawnTerminalInPane(paneId, projectId, cwd, {
-    maxTerminalsPerProject
-  })
+  const result = await spawnTerminalInPane(paneId, projectId, cwd)
 
   if (result.success) {
     return { status: 'opened', terminalId: result.terminalId }

@@ -1,8 +1,8 @@
 import type React from 'react'
 import { BranchSection } from '@/components/git/BranchSection'
-import { Archive, Search } from '@/components/icons'
-import { Button } from '@/components/ui/button'
-import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { ChangesFilter } from '@/components/git/rows'
+import { Archive } from '@/components/icons'
+import { QUIET_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { WriteGate } from '@/components/ui/write-gate'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { cn } from '@/lib/utils'
@@ -13,6 +13,8 @@ interface GitPanelHeaderProps {
   variant: 'desktop' | 'mobile' | 'column'
   branches: string[]
   currentBranch: string | null | undefined
+  /** Commits ahead of upstream; shown next to the branch when > 0. */
+  ahead?: number
   hasUncommittedChanges: boolean
   isGenerating: boolean
   searchQuery: string
@@ -24,11 +26,23 @@ interface GitPanelHeaderProps {
   belowBranch?: React.ReactNode
 }
 
-/** Branch picker + Stash button + "Filter changes..." input. */
+/**
+ * Story 10: the mobile web shell (≤767px) grows the controls to the touch
+ * floor. Mobile `pr-14` reserves the sheet close target so it does not overlap
+ * the Stash changes button at the right edge of the branch row.
+ */
+const HEADER_CHROME = {
+  desktop: { row: 'h-10 pl-2 pr-1.5', stashButton: 'size-7', stashIcon: 14 },
+  column: { row: 'h-10 pl-2 pr-1.5', stashButton: 'size-7', stashIcon: 14 },
+  mobile: { row: 'min-h-14 pl-1 pr-14', stashButton: 'size-11', stashIcon: 16 }
+} as const
+
+/** Branch picker + ahead count + Stash button + "Filter changes" field. */
 export function GitPanelHeader({
   variant,
   branches,
   currentBranch,
+  ahead = 0,
   hasUncommittedChanges,
   isGenerating,
   searchQuery,
@@ -39,139 +53,62 @@ export function GitPanelHeader({
   belowBranch
 }: GitPanelHeaderProps) {
   const admitted = useServerAdmitsRemoteWrites()
-  if (variant === 'column') {
-    return (
-      <div className="flex flex-col bg-muted/20">
-        <div
-          className={cn(
-            'p-3 flex items-center justify-between',
-            !belowBranch && 'border-b border-border'
-          )}
-        >
-          <BranchSection
-            branches={branches}
-            currentBranch={currentBranch}
-            onCreateBranch={onCreateBranch}
-            onSwitchBranch={onSwitchBranch}
-          />
-
-          <WriteGate gated={!admitted}>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
-              title="Stash changes"
-              onClick={onOpenStash}
-              disabled={!hasUncommittedChanges || isGenerating || !admitted}
-            >
-              <Archive size={14} />
-            </Button>
-          </WriteGate>
-        </div>
-
-        {belowBranch}
-
-        <div className={cn('p-3 border-b border-border', belowBranch && 'border-t')}>
-          <div className="relative">
-            <Search
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-              size={14}
-            />
-            <input
-              type="text"
-              placeholder="Filter changes..."
-              className={`w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
-              value={searchQuery}
-              onChange={(e) => onSearchQueryChange(e.target.value)}
-            />
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (variant === 'mobile') {
-    return (
-      // pr-14 reserves the sheet close target so it does not overlap the
-      // Stash changes button at the right edge of the first row.
-      <div className="p-2 pr-14 border-b border-border flex flex-col gap-2 bg-muted/20">
-        <div className="flex items-center justify-between">
-          <BranchSection
-            variant="mobile"
-            branches={branches}
-            currentBranch={currentBranch}
-            onCreateBranch={onCreateBranch}
-            onSwitchBranch={onSwitchBranch}
-          />
-
-          <WriteGate gated={!admitted}>
-            <Button
-              variant="ghost"
-              size="touch"
-              className="w-11 text-muted-foreground hover:text-foreground hover:bg-secondary"
-              title="Stash changes"
-              onClick={onOpenStash}
-              disabled={!hasUncommittedChanges || isGenerating || !admitted}
-            >
-              <Archive size={16} />
-            </Button>
-          </WriteGate>
-        </div>
-
-        <div className="relative">
-          <Search
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-            size={14}
-          />
-          <input
-            type="text"
-            placeholder="Filter changes..."
-            className={`w-full bg-secondary/50 border-none rounded-md py-2.5 pl-8 pr-3 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
-            value={searchQuery}
-            onChange={(e) => onSearchQueryChange(e.target.value)}
-          />
-        </div>
-      </div>
-    )
-  }
+  const chrome = HEADER_CHROME[variant]
+  const isMobile = variant === 'mobile'
 
   return (
-    <div className="p-3 border-b border-border flex flex-col gap-2 bg-muted/20">
-      <div className="flex items-center justify-between">
+    <>
+      <div className={cn('flex shrink-0 items-center gap-1', chrome.row)}>
+        {/* BranchSection's trigger carries its own px-2, so pl-2 here puts
+            the branch icon on the 16px panel inset. */}
         <BranchSection
+          variant={isMobile ? 'mobile' : undefined}
           branches={branches}
           currentBranch={currentBranch}
           onCreateBranch={onCreateBranch}
           onSwitchBranch={onSwitchBranch}
         />
-
-        <WriteGate gated={!admitted}>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
+        {ahead > 0 && (
+          <span
+            className="shrink-0 text-2xs tabular-nums text-muted-foreground"
+            title={`${ahead} commit${ahead === 1 ? '' : 's'} ahead of upstream`}
+          >
+            ↑{ahead}
+          </span>
+        )}
+        <WriteGate gated={!admitted} className="ml-auto shrink-0">
+          <button
+            type="button"
+            className={cn(
+              QUIET_ICON_BUTTON_CLASS,
+              'flex shrink-0 disabled:cursor-not-allowed disabled:opacity-40',
+              admitted && 'ml-auto',
+              chrome.stashButton
+            )}
             title="Stash changes"
+            aria-label="Stash changes"
             onClick={onOpenStash}
             disabled={!hasUncommittedChanges || isGenerating || !admitted}
           >
-            <Archive size={14} />
-          </Button>
+            <Archive size={chrome.stashIcon} />
+          </button>
         </WriteGate>
       </div>
 
-      <div className="relative">
-        <Search
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-          size={14}
-        />
-        <input
-          type="text"
-          placeholder="Filter changes..."
-          className={`w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
+      {variant === 'column' && belowBranch}
+
+      <div
+        className={cn(
+          'shrink-0 px-2 pb-2',
+          variant === 'column' && belowBranch && 'border-t border-border pt-2'
+        )}
+      >
+        <ChangesFilter
           value={searchQuery}
-          onChange={(e) => onSearchQueryChange(e.target.value)}
+          onChange={onSearchQueryChange}
+          variant={isMobile ? 'mobile' : undefined}
         />
       </div>
-    </div>
+    </>
   )
 }

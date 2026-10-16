@@ -1,9 +1,11 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { acpApi } from '@/lib/api'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
-import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
+import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { AppPreferencesModal } from './AppPreferences'
 
 /**
@@ -21,7 +23,9 @@ vi.mock('@/lib/api', () => ({
     setTurnTimeout: vi.fn().mockResolvedValue({ success: true }),
     setTurnIdleTimeout: vi.fn().mockResolvedValue({ success: true }),
     setSessionNewTimeout: vi.fn().mockResolvedValue({ success: true }),
-    setSessionReopenTimeout: vi.fn().mockResolvedValue({ success: true })
+    setSessionReopenTimeout: vi.fn().mockResolvedValue({ success: true }),
+    setAgentIdleWindow: vi.fn().mockResolvedValue(undefined),
+    getAgentIdleWindow: vi.fn().mockResolvedValue({ secs: 1800, source: 'default' })
   },
   logApi: {
     revealLogDir: vi.fn(),
@@ -35,7 +39,6 @@ vi.mock('@/lib/api', () => ({
       data: { default: null, available: [] }
     })
   },
-  terminalApi: { updateOrphanDetection: vi.fn().mockResolvedValue({ success: true }) },
   persistenceApi: {
     read: vi.fn().mockResolvedValue({ success: true, data: null }),
     write: (...args: unknown[]) => mockWrite(...args),
@@ -181,6 +184,27 @@ describe('AppPreferences editor auto-save controls (GH-539)', () => {
   })
 })
 
+describe('AppPreferences idle chat window', () => {
+  beforeEach(() => {
+    tauriRef.current = true
+    vi.clearAllMocks()
+    useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+  })
+
+  it('saves Keep idle chats and pushes the window to the host', async () => {
+    renderPage()
+
+    fireEvent.change(await screen.findByLabelText('Close idle chats after'), {
+      target: { value: '7200' }
+    })
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.agentIdleWindowSecs).toBe(7200)
+      expect(acpApi.setAgentIdleWindow).toHaveBeenCalledWith(7200)
+    })
+  })
+})
+
 describe('AppPreferences notification switches (issue #865)', () => {
   beforeEach(() => {
     tauriRef.current = true
@@ -254,16 +278,22 @@ describe('AppPreferences web honesty gates (Story 8)', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('replaces the ACP timeout selects with a read-only managed note on web', async () => {
+  it('keeps Close idle chats after editable on web and leaves the other timeouts read-only', async () => {
     renderWeb()
 
-    expect(
-      await screen.findByText(/Managed by the server — timeouts for agents spawned/i)
-    ).toBeInTheDocument()
-    expect(screen.queryByLabelText(/Turn Timeout \(hard cap\)/)).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Turn Idle Timeout')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Session/New Timeout')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Session Reopen Timeout')).not.toBeInTheDocument()
+    expect(await screen.findByText('Set on the server.')).toBeInTheDocument()
+    const keep = screen.getByLabelText('Close idle chats after')
+    expect(keep).toBeEnabled()
+    expect(screen.queryByLabelText('If an answer goes quiet')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Longest one answer')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Start a new chat')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Open a saved chat')).not.toBeInTheDocument()
+
+    fireEvent.change(keep, { target: { value: '7200' } })
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().settings.agentIdleWindowSecs).toBe(7200)
+      expect(acpApi.setAgentIdleWindow).toHaveBeenCalledWith(7200)
+    })
   })
 
   it('hides the New Browser Tab shortcut row on web but keeps other shortcuts', async () => {
@@ -360,7 +390,7 @@ describe.each([
     })
     expect(toggle).toHaveAttribute('aria-checked', 'true')
     expect(mockWriteDebounced).toHaveBeenCalledWith(
-      APP_SETTINGS_KEY,
+      PersistenceKeys.appSettings,
       expect.objectContaining({ terminalScreenReaderMode: true })
     )
     await waitFor(() => {
@@ -381,7 +411,7 @@ describe.each([
     })
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(mockWriteDebounced).toHaveBeenLastCalledWith(
-      APP_SETTINGS_KEY,
+      PersistenceKeys.appSettings,
       expect.objectContaining({ terminalScreenReaderMode: false })
     )
     await waitFor(() => {
@@ -424,7 +454,7 @@ describe.each([
     })
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(mockWrite).toHaveBeenCalledWith(
-      APP_SETTINGS_KEY,
+      PersistenceKeys.appSettings,
       expect.objectContaining({ terminalScreenReaderMode: false })
     )
   })

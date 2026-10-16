@@ -1,12 +1,24 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
-import type { useSSHConnection } from '@/hooks/use-ssh-connection'
+import type { SSHProfile } from '@shared/types/ssh.types'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useProjectStore } from '@/stores/project-store'
+import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
+import { SSH_HOSTS_TAB, type SSHSession, useSSHStore } from '@/stores/ssh-store'
 import { SSHWorkspace } from './SSHWorkspace'
 
-vi.mock('@/components/terminal/ConnectedTerminal', () => ({ ConnectedTerminal: () => null }))
-vi.mock('./SSHFileEditor', () => ({ SSHFileEditor: () => null }))
-vi.mock('@/stores/ssh-store', () => ({ useSSHEditorFile: () => null }))
+const { sshApi, terminalApi } = vi.hoisted(() => ({
+  sshApi: {
+    openSession: vi.fn(() => new Promise(() => {})),
+    closeSession: vi.fn(async () => ({ success: true as const, data: undefined })),
+    cancelSession: vi.fn(async () => ({ success: true as const, data: true })),
+    listKeys: vi.fn(async () => ({ success: true as const, data: [] }))
+  },
+  terminalApi: { kill: vi.fn(async () => ({ success: true as const, data: undefined })) }
+}))
+
 vi.mock('@/lib/api', () => ({
+  sshApi,
+  terminalApi,
   windowApi: {
     onMaximizeChange: () => () => {},
     minimize: vi.fn(),
@@ -14,62 +26,211 @@ vi.mock('@/lib/api', () => ({
     close: vi.fn()
   }
 }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isTauriContext: () => true
+}))
+vi.mock('@/components/terminal/ConnectedTerminal', () => ({
+  ConnectedTerminal: ({ terminalId }: { terminalId: string }) => (
+    <div data-testid="terminal" data-pty={terminalId} />
+  )
+}))
+vi.mock('./SSHFileEditor', () => ({ SSHFileEditor: () => <div data-testid="file-editor" /> }))
+vi.mock('./SSHHostEditor', () => ({ SSHHostEditor: () => null }))
 
-const profile = { id: 's1', name: 'prod' } as never
-const conn = {
-  isConnected: false,
-  isConnectingStatus: false,
-  isConnecting: false,
-  localTerminalPtyId: null,
-  connectionId: null,
-  handleConnect: vi.fn(),
-  handleDisconnect: vi.fn()
-} as unknown as ReturnType<typeof useSSHConnection>
+const profile: SSHProfile = {
+  id: 'p1',
+  name: 'prod',
+  host: 'prod.example',
+  port: 22,
+  username: 'deploy',
+  authMethod: 'password',
+  portForwards: []
+}
 
-const header = (): HTMLElement =>
-  screen.getByText('SSH: prod').closest('div.flex.items-center.border-b') as HTMLElement
+function session(id: string, overrides: Partial<SSHSession> = {}): SSHSession {
+  return {
+    id,
+    attemptId: `attempt-${id}`,
+    profileId: 'p1',
+    status: 'connected',
+    stage: null,
+    hostKeyPrompt: null,
+    credentialPrompt: null,
+    error: null,
+    ended: null,
+    ptyId: `pty-${id}`,
+    claim: 'c',
+    attached: true,
+    connectedAt: '2026-10-12T00:00:00Z',
+    ...overrides
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  useSSHStore.setState({
+    profiles: [profile],
+    sessions: [],
+    workspaceOpen: true,
+    activeTab: SSH_HOSTS_TAB,
+    selectedProfileId: null,
+    pendingClose: null,
+    editingFile: null
+  })
+})
 
 describe('SSHWorkspace header', () => {
-  it('is the classic 36px header without topRow', () => {
-    const { container } = render(<SSHWorkspace profile={profile} conn={conn} />)
-    expect(header()).toHaveClass('h-9')
-    expect(header()).not.toHaveClass('h-10')
+  it('has no drag region or window controls without topRow', () => {
+    const { container } = render(<SSHWorkspace />)
     expect(container.querySelector('[data-tauri-drag-region]')).toBeNull()
     expect(screen.queryByTestId('window-controls')).toBeNull()
   })
 
-  it('is a 40px drag header with the controls flush right when it owns the top row', () => {
+  it('is the window top row with topRow', () => {
     const { container } = render(
-      <SSHWorkspace
-        profile={profile}
-        conn={conn}
-        topRow={{ dragRegion: true, windowControls: true }}
-      />
+      <SSHWorkspace topRow={{ dragRegion: true, windowControls: true, showSidePanel: true }} />
     )
-    const root = header()
-    expect(root).toHaveClass('h-10')
-    expect(root).not.toHaveClass('h-9')
-    expect(root).toHaveAttribute('data-tauri-drag-region')
-    // Root and the flex-1 spacer only; no button carries it.
-    expect(container.querySelectorAll('[data-tauri-drag-region]')).toHaveLength(2)
-    for (const button of screen.getAllByRole('button')) {
-      expect(button).not.toHaveAttribute('data-tauri-drag-region')
-    }
-    const controls = screen.getByTestId('window-controls')
-    expect(root.lastElementChild).toBe(controls)
-    expect(screen.getAllByRole('button', { name: /window$/ })).toHaveLength(3)
+    expect(container.querySelectorAll('[data-tauri-drag-region]').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('window-controls')).toBeInTheDocument()
   })
 
-  it('renders no drag attribute and no controls on web or macOS', () => {
-    const { container } = render(
-      <SSHWorkspace
-        profile={profile}
-        conn={conn}
-        topRow={{ dragRegion: false, windowControls: false }}
-      />
+  describe('Show side panel button', () => {
+    const topRow = { dragRegion: true, windowControls: false, showSidePanel: true }
+
+    beforeEach(() => {
+      resetShellLayoutStoreForTests()
+      useShellLayoutStore.setState({ status: 'unavailable', sidePanelVisible: false })
+      useProjectStore.setState({
+        projects: [{ id: 'proj', name: 'Proj', path: '/repo' }] as never,
+        activeProjectId: 'proj'
+      })
+    })
+
+    it('starts the header while the Side panel is hidden', () => {
+      render(<SSHWorkspace topRow={topRow} />)
+      const slot = screen.getByTestId('show-side-panel-slot')
+      expect(within(slot).getByRole('button', { name: 'Show side panel' })).toBeInTheDocument()
+      expect(slot.nextElementSibling).toBe(screen.getAllByRole('tablist')[0])
+    })
+
+    it('is absent while the Side panel is visible', () => {
+      useShellLayoutStore.setState({ sidePanelVisible: true })
+      render(<SSHWorkspace topRow={topRow} />)
+      expect(screen.queryByTestId('show-side-panel-slot')).toBeNull()
+    })
+
+    it('is absent when the header does not own it, or the project has no folder', () => {
+      const { unmount } = render(<SSHWorkspace topRow={{ ...topRow, showSidePanel: false }} />)
+      expect(screen.queryByTestId('show-side-panel-slot')).toBeNull()
+      unmount()
+
+      useProjectStore.setState({ projects: [{ id: 'proj', name: 'Proj' }] as never })
+      render(<SSHWorkspace topRow={topRow} />)
+      expect(screen.queryByTestId('show-side-panel-slot')).toBeNull()
+    })
+  })
+})
+
+describe('SSHWorkspace tabs', () => {
+  it('starts on the Hosts tab and lists hosts', () => {
+    render(<SSHWorkspace />)
+    expect(screen.getByRole('tab', { name: 'Hosts' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel', { name: 'Hosts' })).toBeVisible()
+    expect(screen.getByText('prod')).toBeInTheDocument()
+  })
+
+  it('opens a session tab when a host is clicked', () => {
+    render(<SSHWorkspace />)
+    fireEvent.click(screen.getByRole('button', { name: /Connect to prod/ }))
+    const tab = screen.getByRole('tab', { name: /prod, Connecting/ })
+    expect(tab).toHaveAttribute('aria-selected', 'true')
+    expect(sshApi.openSession).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'p1' }))
+    expect(screen.getByTestId('ssh-connection-panel')).toHaveAttribute('data-status', 'connecting')
+  })
+
+  it('keeps every session view mounted and shows only the active one', () => {
+    useSSHStore.setState({ sessions: [session('a'), session('b')], activeTab: 'b' })
+    render(<SSHWorkspace />)
+    const terminals = screen.getAllByTestId('terminal')
+    expect(terminals.map((t) => t.dataset.pty)).toEqual(['pty-a', 'pty-b'])
+    expect(screen.getByRole('tabpanel', { name: /prod \(2\)/ })).toBeVisible()
+    expect(screen.getByRole('tab', { name: /prod \(1\)/ })).toHaveAttribute(
+      'aria-selected',
+      'false'
     )
-    expect(header()).toHaveClass('h-10')
-    expect(container.querySelector('[data-tauri-drag-region]')).toBeNull()
-    expect(screen.queryByTestId('window-controls')).toBeNull()
+  })
+
+  it('moves between tabs with the arrow keys', () => {
+    useSSHStore.setState({ sessions: [session('a')] })
+    render(<SSHWorkspace />)
+    const hosts = screen.getByRole('tab', { name: 'Hosts' })
+    hosts.focus()
+    fireEvent.keyDown(hosts, { key: 'ArrowRight' })
+    expect(useSSHStore.getState().activeTab).toBe('a')
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: /prod/ }))
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowRight' })
+    expect(useSSHStore.getState().activeTab).toBe(SSH_HOSTS_TAB)
+  })
+
+  it('asks before closing a live session and closes it on confirm', async () => {
+    useSSHStore.setState({ sessions: [session('a')], activeTab: 'a' })
+    render(<SSHWorkspace />)
+    fireEvent.click(screen.getByRole('button', { name: 'Close prod' }))
+    expect(screen.getByText('Close session?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close session' }))
+    await waitFor(() => expect(sshApi.closeSession).toHaveBeenCalledWith('attempt-a'))
+    expect(useSSHStore.getState().sessions).toEqual([])
+    expect(useSSHStore.getState().activeTab).toBe(SSH_HOSTS_TAB)
+  })
+
+  it('closes a failed session without asking', async () => {
+    useSSHStore.setState({
+      sessions: [
+        session('a', { status: 'failed', ptyId: null, error: { code: 'SSH_TIMEOUT', detail: 'x' } })
+      ],
+      activeTab: 'a'
+    })
+    render(<SSHWorkspace />)
+    fireEvent.click(screen.getByRole('button', { name: 'Close prod' }))
+    expect(screen.queryByText('Close session?')).toBeNull()
+    await waitFor(() => expect(useSSHStore.getState().sessions).toEqual([]))
+  })
+
+  it('shows the kept output and a Reconnect action after the connection drops', () => {
+    useSSHStore.setState({
+      sessions: [
+        session('a', {
+          status: 'disconnected',
+          ended: { reason: 'lost', exitCode: null, detail: 'Keepalive timeout' }
+        })
+      ],
+      activeTab: 'a'
+    })
+    render(<SSHWorkspace />)
+    const banner = screen.getByTestId('ssh-session-ended')
+    expect(within(banner).getByText('Connection lost.')).toBeInTheDocument()
+    expect(within(banner).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
+    expect(screen.getByTestId('terminal')).toBeInTheDocument()
+  })
+
+  it('shows the remote editor only for the session the file came from', () => {
+    useSSHStore.setState({
+      sessions: [session('a'), session('b')],
+      activeTab: 'b',
+      editingFile: {
+        connectionId: 'attempt-a',
+        path: '/etc/hosts',
+        name: 'hosts',
+        content: '',
+        originalContent: ''
+      }
+    })
+    const { rerender } = render(<SSHWorkspace />)
+    expect(screen.queryByTestId('file-editor')).toBeNull()
+    useSSHStore.setState({ activeTab: 'a' })
+    rerender(<SSHWorkspace />)
+    expect(screen.getByTestId('file-editor')).toBeInTheDocument()
   })
 })

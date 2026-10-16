@@ -132,6 +132,25 @@ pub(crate) fn fold_step(state: FoldState, type_: &str, payload: &Value) -> (Fold
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FoldCounts {
+    pub message_count: u64,
+    pub tool_count: u64,
+    pub state: FoldState,
+}
+
+pub(super) fn fold_counts(records: &mut [PersistedEventRecord]) -> FoldCounts {
+    records.sort_by_key(|record| record.seq);
+    let mut counts = FoldCounts::default();
+    for record in records.iter() {
+        counts.tool_count += u64::from(is_tool_event(&record.type_));
+        let (next, opens_message) = fold_step(counts.state, &record.type_, &record.payload);
+        counts.state = next;
+        counts.message_count += u64::from(opens_message);
+    }
+    counts
+}
+
 /// Paths longer than this (in chars) are never persisted in a file-change
 /// summary — the field is omitted instead.
 pub(crate) const MAX_SUMMARY_PATH_CHARS: usize = 4096;
@@ -389,8 +408,49 @@ pub(super) fn derive_title(payload: &Value) -> String {
                 None => Some(text.to_string()),
             },
         )
+        .map(|text| skills_framing_title(&text).unwrap_or(text))
         .unwrap_or_else(|| "Untitled Chat".to_string());
     normalize_title(&text)
+}
+
+fn skills_framing_title(text: &str) -> Option<String> {
+    let text = text.replace("\r\n", "\n");
+    let (command, framed) = match text.strip_prefix('/').and_then(|rest| rest.split_once(' ')) {
+        Some((name, rest)) if !name.is_empty() && !name.contains(['/', '\n', '\t']) => {
+            (Some(name), rest)
+        }
+        _ => (None, text.as_str()),
+    };
+    let body = framed.strip_prefix("# Agent Skills\n\n")?;
+    let (header, user_text) = body
+        .split_once("\n\n---\n\n")
+        .map_or((body, ""), |(header, user_text)| (header, user_text.trim()));
+    let is_skill_name = |name: &str| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+    };
+    let names = header
+        .split('\n')
+        .map(|line| {
+            let (name, path) = line.split_once(": ")?;
+            (is_skill_name(name) && !path.is_empty()).then_some(name)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let rest = if user_text.is_empty() {
+        names
+            .iter()
+            .map(|name| format!("({name})"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        user_text.to_string()
+    };
+    Some(match command {
+        Some(command) => format!("/{command} {rest}"),
+        None => rest,
+    })
 }
 
 #[must_use]
@@ -400,3 +460,7 @@ pub fn now_millis() -> u64 {
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[path = "normalize_tests.rs"]
+mod tests;

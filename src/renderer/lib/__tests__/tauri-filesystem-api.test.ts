@@ -723,6 +723,33 @@ describe('tauriFilesystemApi', () => {
       cleanupDeleted()
     })
 
+    it('drops access events so a file read never reports a change', async () => {
+      // An open editor tab reloads by reading the file; if that read came back
+      // as a change the tab would reload again and spin forever.
+      const emit = await watchAndCapture()
+      const onChanged = vi.fn()
+      const cleanupChanged = tauriFilesystemApi.onFileChanged(onChanged)
+
+      for (const access of [
+        { kind: 'open', mode: 'any' },
+        { kind: 'open', mode: 'write' },
+        { kind: 'close', mode: 'read' },
+        { kind: 'close', mode: 'write' },
+        { kind: 'any' },
+        { kind: 'other' }
+      ]) {
+        emit({ type: { access }, paths: ['/test/open.md'] })
+      }
+      expect(onChanged).not.toHaveBeenCalled()
+
+      emit({ type: { modify: { kind: 'data', mode: 'any' } }, paths: ['/test/open.md'] })
+      emit({ type: 'any', paths: ['/test/open.md'] })
+      expect(onChanged).toHaveBeenCalledTimes(2)
+      expect(onChanged).toHaveBeenCalledWith({ type: 'change', path: '/test/open.md' })
+
+      cleanupChanged()
+    })
+
     it('fires a callback subscribed for all types exactly once per event', async () => {
       // Mirrors callers that pass one function to all three subscriptions
       // (e.g. use-composer-mentions cache invalidation).

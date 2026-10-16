@@ -1,6 +1,7 @@
 import * as SelectPrimitive from '@radix-ui/react-select'
 import * as React from 'react'
 import { Check, ChevronDown, ChevronUp } from '@/components/icons'
+import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 
 import { cn } from '@/lib/utils'
 import {
@@ -13,7 +14,32 @@ import {
 } from './menu-styles'
 import { FIELD_FOCUS_CLASS } from './panel-styles'
 
-const Select = SelectPrimitive.Root
+/**
+ * Occlusion is tracked on the root, not with a `NativeWebviewOccluder` in the
+ * content: Radix renders a closed Select's content children into a detached
+ * `DocumentFragment` so `SelectValue` can read item labels, so a mounted
+ * content child does not mean the list is open.
+ */
+function Select({
+  open,
+  defaultOpen = false,
+  onOpenChange,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Root>): React.JSX.Element {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen)
+  useNativeWebviewOcclusion(open ?? uncontrolledOpen)
+  return (
+    <SelectPrimitive.Root
+      open={open}
+      defaultOpen={defaultOpen}
+      onOpenChange={(next) => {
+        setUncontrolledOpen(next)
+        onOpenChange?.(next)
+      }}
+      {...props}
+    />
+  )
+}
 
 const SelectGroup = SelectPrimitive.Group
 

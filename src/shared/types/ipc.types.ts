@@ -1,6 +1,5 @@
 // IPC Result pattern from architecture.md
 import type { AcpCatalog } from './acp-catalog.types'
-import type { WorkspaceManifest, WriteOutcome } from './workspace-manifest.types'
 
 // ============================================================================
 // Domain-command carriers (AD-5): `X-Command-Id` header of the ledgered HTTP
@@ -182,34 +181,9 @@ export type TerminalIpcChannels = {
   'terminal:kill': (terminalId: string) => IpcResult<void>
 }
 
-// CAP-5 / Story 5: Workspace manifest IPC channels. Mirrors the three Tauri
-// commands (`workspace_manifest_get` / `_write` / `_delete`) and the three
-// HTTP routes (`GET /workspace/:projectId`, `POST /workspace/:projectId/write`,
-// `POST /workspace/:projectId/delete`) — both transports return the SAME
-// `IpcResult<...>` shape byte-for-byte. Conflict is a SUCCESS body variant of
-// `WriteOutcome` (NOT an error code); an excluded-field payload (`envVars`,
-// raw `claim`, `fullscreenPaneId`) fails serde `deny_unknown_fields` and maps
-// to `VALIDATION_ERROR` with no state change.
-//
-// Patch 11: the channel keys use the colon-separated pattern
-// (`workspace:manifest:get`, etc.) to mirror the existing
-// `TerminalIpcChannels` (`terminal:spawn`, `terminal:attach`, …). The Tauri
-// adapter's IPC_COMMANDS map uses the underscored Rust command names
-// (`workspace_manifest_get`); the channel map keys are a documentation /
-// type-safety surface, not the literal invoke() strings.
-export type WorkspaceManifestIpcChannels = {
-  'workspace:manifest:get': (projectId: string) => IpcResult<WorkspaceManifest | null>
-  'workspace:manifest:write': (
-    projectId: string,
-    basedRevision: number | null,
-    manifest: WorkspaceManifest
-  ) => IpcResult<WriteOutcome>
-  'workspace:manifest:delete': (projectId: string) => IpcResult<void>
-}
-
-// CAP-6 / Story 8: ACP catalog IPC channels. Mirrors the two Tauri commands
-// (`acp_list_catalog` / `acp_set_catalog_opt_in`) and the two HTTP routes
-// (`GET /acp/catalog` / `POST /acp/catalog/opt-in`) — both transports return
+// CAP-6 / Story 8: ACP catalog IPC channels. Mirrors the two `/ws` requests
+// (`list_acp_catalog` / `set_catalog_opt_in`) and the two HTTP routes
+// (`GET /acp/catalog` / `POST /acp/catalog/opt-in`) — both carriers return
 // the SAME `IpcResult<...>` shape byte-for-byte. The catalog is
 // credential-free, path-free, read-only host introspection. The opt-in is a
 // single boolean that gates CDN registry augmentation.
@@ -218,13 +192,10 @@ export type AcpCatalogIpcChannels = {
   'acp:catalog:set_opt_in': (enabled: boolean) => IpcResult<void>
 }
 
-// CAP-6 / Story 9: ACP install IPC channel. Mirrors the Tauri command
-// `acp_install_agent` and the HTTP route `POST /acp/install` — both transports
+// CAP-6 / Story 9: ACP install IPC channel. Mirrors the `/ws` request
+// `install_acp_agent` and the HTTP route `POST /acp/install` — both carriers
 // return the SAME `IpcResult<InstallOutcome>` shape byte-for-byte. The request
 // is `{ agentId }` only; the host resolves everything from the trusted catalog.
-// The declared channel type is honest about the actual invoke payload shape:
-// the Tauri adapter wraps `agentId` in a `request` object (Tauri's convention
-// for single-struct-arg commands), so the channel signature reflects that.
 import type { InstallOutcome } from './acp-install.types'
 export type AcpInstallIpcChannels = {
   'acp:install:install_agent': (request: { agentId: string }) => IpcResult<InstallOutcome>
@@ -297,6 +268,44 @@ export interface GitCommit {
   subject: string
 }
 
+/** How a commit changed a file: added, modified, deleted, renamed, copied or type-changed. */
+export type GitCommitFileStatus = 'A' | 'M' | 'D' | 'R' | 'C' | 'T'
+
+/** One file changed by a commit (diff against the first parent). */
+export interface GitCommitFile {
+  /** Path after the commit (the new path of a rename). */
+  path: string
+  /** Path before the commit, for a rename or copy only. */
+  oldPath: string | null
+  status: GitCommitFileStatus
+  /** Added lines; `null` for a binary file. */
+  added: number | null
+  /** Removed lines; `null` for a binary file. */
+  removed: number | null
+}
+
+/** What the Git History detail pane shows beyond the log row. */
+export interface GitCommitDetail {
+  /** Full hash (40 hex characters, or 64 in a SHA-256 repository). */
+  hash: string
+  authorEmail: string
+  /** Full commit message: subject, blank line, body. */
+  message: string
+  /** Parent full hashes, first-parent first. */
+  parents: string[]
+  files: GitCommitFile[]
+  /** More files changed than the host returns; `files` holds the first ones. */
+  filesTruncated: boolean
+}
+
+/** One file's unified diff in a commit, for the read-only commit Diff tab. */
+export interface GitCommitFileDiff {
+  /** Unified diff text; empty when `tooLarge`. */
+  diff: string
+  /** The diff is larger than the host cap, so the host did not send it. */
+  tooLarge: boolean
+}
+
 /**
  * Resolved project icon (spec-project-icon). Runtime-neutral contract shared
  * by both transports: `project_icon_resolve` (Tauri `IpcResult` data) and
@@ -348,7 +357,16 @@ export interface GitApi {
   stage: (cwd: string, path: string) => Promise<void>
   unstage: (cwd: string, path: string) => Promise<void>
   discard: (cwd: string, path: string) => Promise<void>
-  getLog: (cwd: string, limit?: number) => Promise<GitCommit[]>
+  /** `all`: every branch, tag and remote ref instead of `HEAD` only. */
+  getLog: (cwd: string, limit?: number, all?: boolean) => Promise<GitCommit[]>
+  getCommitDetail: (cwd: string, hash: string) => Promise<GitCommitDetail>
+  /** One file's unified diff in a commit against its first parent. */
+  getCommitFileDiff: (
+    cwd: string,
+    hash: string,
+    path: string,
+    oldPath?: string
+  ) => Promise<GitCommitFileDiff>
   /** `expectedHead`: the full sha HEAD must be at (`''` for an unborn branch); a moved HEAD refuses the commit (`precondition_failed`). */
   commit: (
     cwd: string,
@@ -406,20 +424,15 @@ export interface TerminalApi {
   getGitStatus: (terminalId: string) => Promise<IpcResult<GitStatus | null>>
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
-  updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
   /**
-   * Story 5 (preserved-PTY reattach): enumerate the server-preserved
-   * terminals of a project on an AUTHED connection, each with metadata and
-   * a freshly issued claim (the pre-reload claim is invalidated by the
-   * re-issue). Web transport only — the desktop API never implements this
-   * (desktop restore owns its PTYs in-process); callers must treat an
-   * unimplemented/failed result as "nothing preserved" and fall back to
-   * spawn.
+   * Story 5 (preserved-PTY reattach): enumerate the host-preserved
+   * terminals of a project, each with metadata and a freshly issued claim
+   * (the pre-reload claim is invalidated by the re-issue). Callers treat a
+   * failed result as "nothing preserved" and fall back to spawn.
    */
-  listPreserved?: (projectId: string) => Promise<IpcResult<PreservedTerminalEntry[]>>
+  listPreserved: (projectId: string) => Promise<IpcResult<PreservedTerminalEntry[]>>
 }
 
-/** One preserved terminal as returned by the web `list_preserved` op. */
 export interface PreservedTerminalEntry {
   id: string
   shell: string
@@ -488,69 +501,6 @@ export const IpcErrorCodes = {
 
 export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes]
 
-// ============================================================================
-// Worktree Types
-// ============================================================================
-
-export interface WorktreeInfo {
-  name: string
-  branch: string
-  path: string
-  headCommit: string
-  /**
-   * Web `/worktree/list` only: the worktree is outside the registered project
-   * folder (listed but not actionable, AD-9). Absent on desktop.
-   */
-  outsideProjectRoot?: boolean
-}
-
-export interface BranchInfo {
-  name: string
-  isRemote: boolean
-  isCurrent: boolean
-  upstream?: string | null
-  hasOtherWorktree: boolean
-}
-
-export interface DirtyStatus {
-  modified: number
-  staged: number
-  untracked: number
-  hasChanges: boolean
-}
-
-export interface RemoveResult {
-  worktreePath: string
-  success: boolean
-  error?: string | null
-}
-
-export interface GitignoreDir {
-  dirName: string
-  exists: boolean
-}
-
-export interface SymlinkResult {
-  path: string
-  target: string
-  status: 'created' | 'skipped' | 'failed'
-  reason?: string
-}
-
-/** Live line emitted while `git worktree add` runs. `line` is a git
- * stderr line; sentinels `preparing`/`done`/`termul:error: <msg>` carry
- * phase boundaries. The error sentinel is `termul:`-namespaced because real
- * git stderr lines can legitimately start with `error:`/`fatal:` mid-run —
- * those are ordinary log lines, never the terminator. `progressId` is the
- * renderer-generated correlation id so concurrent launches and cross-window
- * events cannot cross-talk. On web the create response is an NDJSON stream
- * that terminates via its `result` frame (an `IpcResult`), not a
- * `done`/`termul:error:` line. */
-export interface WorktreeProgressEvent {
-  progressId: string
-  line: string
-}
-
 // Dialog API for file/directory selection
 export interface DialogApi {
   selectDirectory: () => Promise<IpcResult<string>>
@@ -558,6 +508,10 @@ export interface DialogApi {
     filters?: Array<{ name: string; extensions: string[] }>
     title?: string
   }) => Promise<IpcResult<string>>
+  /** Pick one or more files (desktop only; CANCELLED elsewhere). */
+  selectFiles: (options?: { title?: string }) => Promise<IpcResult<string[]>>
+  /** Choose where to save a file; the OS dialog asks before overwriting (desktop only). */
+  saveFile: (options?: { title?: string; defaultPath?: string }) => Promise<IpcResult<string>>
 }
 
 // Shell detection types
@@ -577,13 +531,73 @@ export interface ShellApi {
   getAvailableShells: () => Promise<IpcResult<DetectedShells>>
 }
 
+// Optional precondition/idempotency options for `PersistenceApi.write`.
+export interface PersistenceWriteOpts {
+  // Compare-and-set precondition (shared/cas keys): the logical value the key
+  // must currently hold; `null` means the key must be absent.
+  expected?: unknown
+  // Idempotency id; a resend of the same write reuses it so the host can
+  // recognise its own applied write.
+  commandId?: string
+  // The caller re-reads and resends a write that lost a compare-and-set race.
+  // Such a conflict is not reported on the error bus; set it on every attempt
+  // except the last one, so only the final failure reaches the user.
+  retrying?: boolean
+}
+
+// A read that also reports the host's per-key revision stamp.
+export interface StampedValue<T> {
+  value: T
+  // 0 = key absent.
+  revision: number
+  clientInstanceId: string | null
+}
+
+// Codes of failed store writes that the user must hear about: the value was
+// not saved and the writer cannot fix it alone.
+export const PERSISTENCE_ERROR_CODES = [
+  'STORE_VALUE_TOO_LARGE',
+  'STORE_PARTITION_FULL',
+  'STORE_NOT_HYDRATED',
+  'STORE_WRITE_FAILED',
+  'STORE_BASE_REQUIRED',
+  'STORE_CAS_FAILED'
+] as const
+
+export type PersistenceErrorCode = (typeof PERSISTENCE_ERROR_CODES)[number]
+
+// One failed write, by logical key.
+export interface PersistenceErrorEvent {
+  key: string
+  code: PersistenceErrorCode
+  message: string
+}
+
+export type PersistenceErrorListener = (event: PersistenceErrorEvent) => void
+
+// What a store key holds, as a watch reports it (the stored envelope is unwrapped).
+export interface PersistenceKeyChange<T = unknown> {
+  // `false` when the key is absent (never written, or deleted).
+  exists: boolean
+  data?: T
+}
+
 // Persistence API for renderer
 export interface PersistenceApi {
   read: <T>(key: string) => Promise<IpcResult<T>>
-  write: <T>(key: string, data: T) => Promise<IpcResult<void>>
+  readStamped: <T>(key: string) => Promise<IpcResult<StampedValue<T>>>
+  write: <T>(key: string, data: T, opts?: PersistenceWriteOpts) => Promise<IpcResult<void>>
   writeDebounced: <T>(key: string, data: T) => Promise<IpcResult<void>>
   flushPendingWrites: () => Promise<IpcResult<void>>
   delete: (key: string) => Promise<IpcResult<void>>
+  // Subscribe to failed writes (any caller, debounced or not). Returns the
+  // unsubscribe function.
+  onPersistenceError: (listener: PersistenceErrorListener) => () => void
+  // Report each change another device or tab makes to a key (by logical key),
+  // once this page has read it. Echoes of this page's own writes are not
+  // reported. Returns the unsubscribe function. Every real surface has it;
+  // it is optional so a partial test double need not carry it.
+  watchShared?: (key: string, listener: (change: PersistenceKeyChange) => void) => () => void
 }
 
 // System API for renderer

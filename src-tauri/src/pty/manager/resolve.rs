@@ -172,15 +172,28 @@ pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
         }
         // Extract quoted strings: "..."
         let quotes: Vec<&str> = line.split('"').collect();
-        // The invocation pattern uses two quoted paths:
+        // The interpreter+script form carries two quoted paths:
         //   index 1 = executable (node.exe path)
         //   index 3 = script path
-        if quotes.len() < 5 {
+        // A single quoted token is the native-binary form shipped by npm
+        // packages that bundle a PE image (e.g. Anthropic's claude.cmd:
+        //   "%dp0%\node_modules\...\bin\claude.exe" %*).
+        if quotes.len() < 3 {
             continue;
         }
         let raw_exe = quotes[1].trim();
-        let raw_script = quotes[3].trim();
-        if raw_exe.is_empty() || raw_script.is_empty() {
+        let raw_script = if quotes.len() >= 5 {
+            quotes[3].trim()
+        } else {
+            ""
+        };
+        if raw_exe.is_empty() || (quotes.len() >= 5 && raw_script.is_empty()) {
+            continue;
+        }
+        // With no second quoted token the program is invoked bare — accept
+        // only a clean `%*` tail so literal batch tokens (flags, redirects)
+        // are not silently dropped from the rewritten spawn argv.
+        if raw_script.is_empty() && quotes[2..].concat().trim() != "%*" {
             continue;
         }
 
@@ -203,15 +216,20 @@ pub(super) fn parse_npm_cmd_shim(shim_path: &str) -> Option<ResolvedProgram> {
         } else {
             exe_path_str
         };
-        let script_path_str = resolve_dp0(raw_script);
-
         let exe_path = std::path::Path::new(&exe_path_str);
-        let script_path = std::path::Path::new(&script_path_str);
-
         // The executable must exist and be a directly-executable image.
         if !exe_path.exists() || !is_directly_executable_windows(&exe_path_str) {
             continue;
         }
+
+        // Native-binary shim (`"<exe>" %*`): nothing is prepended — the
+        // image already is the agent's entrypoint.
+        if raw_script.is_empty() {
+            return Some(ResolvedProgram::new(exe_path_str));
+        }
+
+        let script_path_str = resolve_dp0(raw_script);
+        let script_path = std::path::Path::new(&script_path_str);
         // The script should exist (not strictly required but a good check).
         if !script_path.exists() {
             continue;

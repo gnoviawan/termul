@@ -5,7 +5,13 @@
  * it without importing each other.
  */
 
-export const SHELL_LAYOUT_VERSION = 1
+/**
+ * Version 2 replaced `graphHeight` (the docked Graph is gone) with
+ * `gitHistoryDetailWidth`. The sanitizer drops unknown fields, so a version 1
+ * record loads as is; a build that only knows version 1 reads version 2 as
+ * newer and leaves it alone.
+ */
+export const SHELL_LAYOUT_VERSION = 2
 
 /** Tabs the Side panel remembers per project. SSH is a mode, never a last tab. */
 export const SHELL_LAST_COLUMN_TABS = ['chats', 'explorer', 'changes'] as const
@@ -21,7 +27,7 @@ export const SHELL_LAYOUT_BOUNDS = {
   railWidth: { min: 180, max: 360, default: 200 },
   sidePanelWidth: { min: 220, max: 560, default: 260 },
   sshSectionHeight: { min: 48, max: 400, default: 140 },
-  graphHeight: { min: 120, max: 600, default: 240 }
+  gitHistoryDetailWidth: { min: 320, max: 560, default: 400 }
 } as const satisfies Record<string, ShellLayoutBounds>
 
 export interface ShellLayoutRecord {
@@ -32,7 +38,7 @@ export interface ShellLayoutRecord {
   sidePanelWidth: number
   sshSectionVisible: boolean
   sshSectionHeight: number
-  graphHeight: number
+  gitHistoryDetailWidth: number
   lastColumnTabByProject: Record<string, ShellLastColumnTab>
   /** Normalized working-copy path (a key, not a cwd) per project. */
   worktreePickByProject: Record<string, string>
@@ -47,7 +53,7 @@ export function defaultShellLayoutRecord(): ShellLayoutRecord {
     sidePanelWidth: SHELL_LAYOUT_BOUNDS.sidePanelWidth.default,
     sshSectionVisible: true,
     sshSectionHeight: SHELL_LAYOUT_BOUNDS.sshSectionHeight.default,
-    graphHeight: SHELL_LAYOUT_BOUNDS.graphHeight.default,
+    gitHistoryDetailWidth: SHELL_LAYOUT_BOUNDS.gitHistoryDetailWidth.default,
     lastColumnTabByProject: {},
     worktreePickByProject: {}
   }
@@ -105,7 +111,10 @@ export function sanitizeShellLayout(raw: unknown): ShellLayoutRecord {
     sidePanelWidth: clampToBounds(raw.sidePanelWidth, SHELL_LAYOUT_BOUNDS.sidePanelWidth),
     sshSectionVisible: booleanOr(raw.sshSectionVisible, defaults.sshSectionVisible),
     sshSectionHeight: clampToBounds(raw.sshSectionHeight, SHELL_LAYOUT_BOUNDS.sshSectionHeight),
-    graphHeight: clampToBounds(raw.graphHeight, SHELL_LAYOUT_BOUNDS.graphHeight),
+    gitHistoryDetailWidth: clampToBounds(
+      raw.gitHistoryDetailWidth,
+      SHELL_LAYOUT_BOUNDS.gitHistoryDetailWidth
+    ),
     lastColumnTabByProject: sanitizeMap(raw.lastColumnTabByProject, isShellLastColumnTab),
     worktreePickByProject: sanitizeMap(raw.worktreePickByProject, isNonEmptyString)
   }

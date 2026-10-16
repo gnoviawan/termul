@@ -17,6 +17,11 @@ const diffTabs = (): WorkspaceTab[] =>
     leaf.tabs.filter((t) => t.type === 'diff')
   )
 
+const diffKindTabs = (): WorkspaceTab[] =>
+  leavesOf(useWorkspaceStore.getState().root).flatMap((leaf) =>
+    leaf.tabs.filter((t) => t.type === 'diff' || t.type === 'commit-diff')
+  )
+
 describe('workspace-store addDiffTab', () => {
   beforeEach(() => {
     useWorkspaceStore.setState(() => {
@@ -116,5 +121,46 @@ describe('workspace-store addDiffTab', () => {
     expect(useWorkspaceStore.getState().fullscreenPaneId).toBe('pane-root')
     store.addDiffTab('/repo', 'a.ts', true, 'pane-root')
     expect(useWorkspaceStore.getState().fullscreenPaneId).toBe('pane-root')
+  })
+})
+
+describe('workspace-store addCommitDiffTab', () => {
+  const HASH = 'e44b917c2a90d3f81b6e0c4a'.padEnd(40, '0')
+
+  beforeEach(() => {
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return { root, activePaneId: 'pane-root', fullscreenPaneId: null }
+    })
+  })
+
+  it('opens one read-only commit diff tab per (working copy, commit, path) and focuses it again', () => {
+    const store = useWorkspaceStore.getState()
+    store.addCommitDiffTab('/repo', HASH, 'src/new.ts', 'src/old.ts')
+    store.addCommitDiffTab('/repo/', HASH, 'src/new.ts', 'src/old.ts')
+
+    const tabs = diffKindTabs()
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]).toMatchObject({
+      type: 'commit-diff',
+      cwd: '/repo',
+      path: 'src/new.ts',
+      commit: HASH,
+      oldPath: 'src/old.ts'
+    })
+    expect(tabs[0]).not.toHaveProperty('staged')
+    expect((useWorkspaceStore.getState().root as LeafNode).activeTabId).toBe(tabs[0].id)
+  })
+
+  it('keeps the commit diff apart from the working-tree diff of the same path', () => {
+    const store = useWorkspaceStore.getState()
+    store.addDiffTab('/repo', 'src/a.ts', false, 'pane-root')
+    store.addCommitDiffTab('/repo', HASH, 'src/a.ts')
+    store.addCommitDiffTab('/repo', 'f'.repeat(40), 'src/a.ts')
+
+    const tabs = diffKindTabs()
+    expect(tabs).toHaveLength(3)
+    expect(new Set(tabs.map((t) => t.id)).size).toBe(3)
+    expect(tabs[1]).not.toHaveProperty('oldPath')
   })
 })

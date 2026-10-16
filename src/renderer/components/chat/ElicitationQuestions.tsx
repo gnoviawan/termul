@@ -3,6 +3,7 @@ import type { ElicitationField } from '@/lib/acp-api'
 import type { PendingElicitation } from '@/stores/acp-store'
 import { questionShape } from './elicitation-shape'
 import { QuestionStepper } from './QuestionStepper'
+import type { QuestionStepState } from './question-panel'
 
 interface ElicitationQuestionsProps {
   pending: PendingElicitation
@@ -24,8 +25,9 @@ const NO_SELECTION: ReadonlySet<string> = new Set()
 
 /**
  * Paginated multi-question panel for question-shaped elicitation requests
- * (GH-935): one field at a time through `QuestionStepper` — `‹ i of N ›`
- * navigation in the header, numbered option rows for `enum`/`multi-enum`,
+ * (GH-935): one field at a time through `QuestionStepper` — a step track
+ * (answered, skipped, pending) and `‹ i / N ›` navigation in the header,
+ * numbered option rows for `enum`/`multi-enum`,
  * an inline free-text row when the agent permits custom answers
  * (`_meta["cognition.ai/allowOther"]`), and `Skip`/`Next` actions. Picking a
  * single-select option auto-advances to the next question; `Skip` leaves
@@ -51,6 +53,9 @@ export function ElicitationQuestions({
   const [single, setSingle] = useState<Record<string, string>>({})
   const [multi, setMulti] = useState<Record<string, Set<string>>>({})
   const [otherText, setOtherText] = useState<Record<string, string>>({})
+  // Fields the user passed with Skip, for the progress track. An answer given
+  // later wins over the skip mark.
+  const [skipped, setSkipped] = useState<ReadonlySet<string>>(NO_SELECTION)
 
   const shape = questionShape(pending.fields)
   const questions = shape?.questions ?? pending.fields
@@ -155,8 +160,16 @@ export function ElicitationQuestions({
     return answers
   }
 
+  const hasAnswer = (f: ElicitationField): boolean =>
+    trimmedOther(otherText, f.name) !== '' || (multi[f.name]?.size ?? 0) > 0 || f.name in single
+
+  const steps: QuestionStepState[] = questions.map((f) =>
+    hasAnswer(f) ? 'answered' : skipped.has(f.name) ? 'skipped' : 'pending'
+  )
+
   const skip = (): void => {
     if (submitting) return
+    setSkipped((state) => new Set(state).add(field.name))
     if (isLast) {
       onSubmit(buildAnswers(field.name))
       return
@@ -190,6 +203,7 @@ export function ElicitationQuestions({
       note={note}
       index={index}
       total={total}
+      steps={steps}
       onNavigate={setIndex}
       options={field.options}
       multi={isMulti}

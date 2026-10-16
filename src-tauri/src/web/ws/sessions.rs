@@ -434,12 +434,6 @@ pub(super) async fn handle_recover_session_snapshot(
     for prior in subscribed_clients.replace(&parsed.session_id, &prior_clients, client_id) {
         relay.unsubscribe(&parsed.session_id, prior);
     }
-    if let Some(rendezvous) = relay.rendezvous() {
-        rendezvous.cancel_disconnect_grace(&parsed.session_id);
-    }
-    if let Some(question_rendezvous) = relay.question_rendezvous() {
-        question_rendezvous.cancel_disconnect_grace(&parsed.session_id);
-    }
     spawn_event_forwarder(stream, out_tx.clone());
     WsReply::ok(
         id,

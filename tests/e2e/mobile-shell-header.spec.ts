@@ -10,7 +10,7 @@ import {
   test,
   type WebSocketRoute
 } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile shell header E2E on termul-server, on a phone-sized touch viewport.
@@ -84,7 +84,7 @@ function chatRow(drawer: Locator, chatTitle: string): Locator {
 }
 
 /** Server store key holding the web client's last selected project (issue #855). */
-const ACTIVE_PROJECT_KEY = 'web-active-project'
+const ACTIVE_PROJECT_KEY = storeKey('active-project')
 
 /**
  * Every test pins the selected project, and the store outlives this file: put
@@ -253,7 +253,7 @@ async function startChatFromEmptyPane(page: Page, prompt: string): Promise<void>
  * git probe that reveals the isolation picker), so the helper waits for each of
  * them (and, in `submitPrompt`, for the composer) instead of racing them.
  *
- * The launcher remembers the last isolation mode. `local` picks Local
+ * The launcher remembers the last isolation mode. `local` picks Current checkout
  * explicitly, for a project whose previous chat used a worktree; choosing an
  * option closes the select with an exit animation and then returns focus to
  * its trigger, which must finish before the composer is focused or the late
@@ -270,9 +270,9 @@ async function startChatFromLauncher(
     launcher.getByRole('button', { name: 'Agent and model. Currently Fake Longrun' })
   ).toBeVisible()
   if (local) {
-    const isolation = launcher.getByRole('combobox', { name: 'Isolation mode' })
+    const isolation = launcher.getByRole('combobox', { name: 'Workspace' })
     await isolation.tap()
-    await page.getByRole('option', { name: 'Local', exact: true }).tap()
+    await page.getByRole('option', { name: 'Current checkout', exact: true }).tap()
     await expect(page.getByRole('listbox')).toBeHidden()
     await expect(isolation).toBeFocused()
   }
@@ -642,7 +642,7 @@ test('a worktree chat shows its chat/ branch and Worktree; another chat shows Lo
 
   // Launch the first chat in a new git worktree.
   const worktreePrompt = 'charlie worktree chat'
-  await page.getByRole('combobox', { name: 'Isolation mode' }).tap()
+  await page.getByRole('combobox', { name: 'Workspace' }).tap()
   await page.getByRole('option', { name: 'New worktree' }).tap()
   await startChatFromEmptyPane(page, worktreePrompt)
   await expect(title(page)).toHaveText(worktreePrompt)
@@ -1032,9 +1032,9 @@ test('attention pill counts the other chats that need you, opens the drawer, and
   request
 }) => {
   // A prompt carrying `[PERMISSION]` makes the fake agent ask for a tool
-  // approval, and the approval stays pending for as long as the page is
-  // connected (the host denies it only after a 60s disconnect grace): that chat
-  // "needs you" for the whole test.
+  // approval, and the approval stays pending until a person answers it (the
+  // host keeps it through disconnects): that chat "needs you" for the whole
+  // test.
   const project = 'shdr-attention-project-with-a-long-name'
   await createProject(request, project, { git: true })
   await openMobileWorkspace(page, project)

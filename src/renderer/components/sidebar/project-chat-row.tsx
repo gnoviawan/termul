@@ -1,6 +1,6 @@
 import type { ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
 import { Spinner } from '@/components/ui/spinner'
-import { formatRelativeTimeFromMs } from '@/lib/git-time'
+import { formatRelativeTimeFromMs } from '@/lib/relative-time'
 
 export type ProjectChatEntry = ChatHistorySidebarEntry
 
@@ -10,13 +10,20 @@ export type ProjectChatEntry = ChatHistorySidebarEntry
  */
 export type ProjectChatLiveState = 'running' | 'needs-you' | 'done' | 'idle'
 
-/** Right slot of a chat row: running spinner, needs-you, done dot, or relative last-activity time. */
+/**
+ * Right slot of a chat row: running spinner, needs-you pill, "New" mark, or
+ * relative last-activity time ("Closed · 2d" for a closed chat). Blue stays
+ * on the spinner only: it means live work (docs/design/colors.md).
+ */
 export function ChatRowTrail({
   liveState,
-  lastActivityAt
+  lastActivityAt,
+  closed = false
 }: {
   liveState: ProjectChatLiveState
   lastActivityAt: number
+  /** The chat is closed: the idle time reads "Closed · <time>". */
+  closed?: boolean
 }): React.JSX.Element {
   switch (liveState) {
     case 'running':
@@ -27,23 +34,28 @@ export function ChatRowTrail({
       )
     case 'needs-you':
       return (
-        <span className="flex shrink-0 items-center gap-1 text-3xs font-medium text-warning">
+        <span className="flex shrink-0 items-center gap-1 rounded-md bg-warning/10 px-1.5 text-3xs font-medium text-warning">
           <span aria-hidden="true" className="size-1.5 rounded-full bg-warning" />
           Needs you
         </span>
       )
     case 'done':
       return (
-        <span className="flex shrink-0 items-center">
-          <span aria-hidden="true" className="size-2 rounded-full bg-primary-fill" />
-          <span className="sr-only">New activity</span>
+        <span
+          className="flex shrink-0 items-center gap-1 text-2xs font-medium text-foreground"
+          title="New activity"
+        >
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-foreground" />
+          New
         </span>
       )
-    case 'idle':
+    case 'idle': {
+      const time = formatRelativeTimeFromMs(lastActivityAt)
       return (
-        <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
-          {formatRelativeTimeFromMs(lastActivityAt)}
+        <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
+          {closed ? `Closed · ${time}` : time}
         </span>
       )
+    }
   }
 }

@@ -2,12 +2,15 @@ import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PersistedSnapshotList } from '../../shared/types/persistence.types'
 
-const { mockPersistence } = vi.hoisted(() => ({
+const { mockPersistence, mockToastWarning } = vi.hoisted(() => ({
   mockPersistence: {
     read: vi.fn(),
     write: vi.fn()
-  }
+  },
+  mockToastWarning: vi.fn()
 }))
+
+vi.mock('sonner', () => ({ toast: { warning: mockToastWarning } }))
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: mockPersistence
@@ -21,6 +24,7 @@ vi.mock('./project-store', () => ({
   })
 }))
 
+import { STORE_VALUE_MAX_BYTES, storedValueBytes } from '@/lib/persistence-trim'
 import { mockPersistedTerminal } from '@/lib/test-utils/terminal'
 import {
   useSnapshotActions,
@@ -38,6 +42,7 @@ beforeEach(() => {
 
   mockPersistence.read.mockReset()
   mockPersistence.write.mockReset()
+  mockToastWarning.mockReset()
 })
 
 describe('snapshot-store', () => {
@@ -280,6 +285,127 @@ describe('snapshot-store', () => {
         })
       )
     })
+
+    describe('host value cap', () => {
+      // About 100 KB of terminal output per snapshot: two fit under the 256 KiB
+      // cap, three do not.
+      const output = (id: string): string[] =>
+        Array.from(
+          { length: 1050 },
+          (_, i) => `${id} line ${String(i).padStart(5, '0')} ${'.'.repeat(80)}`
+        )
+      const persisted = (id: string, name = id) => ({
+        id,
+        projectId: 'project-cap',
+        name,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        terminals: [mockPersistedTerminal({ id: `${id}-t`, scrollback: output(id) })],
+        activeTerminalId: `${id}-t`
+      })
+      const asSnapshot = (id: string, name = id) => ({
+        id,
+        projectId: 'project-cap',
+        name,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        paneCount: 1,
+        processCount: 0
+      })
+
+      it('keeps every snapshot but cuts the output of the oldest to fit, and tells the user', async () => {
+        mockPersistence.read.mockResolvedValue({
+          success: true,
+          data: {
+            snapshots: [persisted('e2'), persisted('e1')],
+            updatedAt: '2026-01-01T00:00:00.000Z'
+          } as PersistedSnapshotList
+        })
+        mockPersistence.write.mockResolvedValue({ success: true })
+        const { result } = renderHook(() => useSnapshotActions())
+        const { result: storeResult } = renderHook(() => useSnapshotStore())
+
+        let created: Awaited<ReturnType<typeof result.current.createSnapshot>>
+        await act(async () => {
+          created = await result.current.createSnapshot(
+            'New',
+            undefined,
+            'project-cap',
+            [mockPersistedTerminal({ id: 'new-t', scrollback: output('new') })],
+            'new-t'
+          )
+        })
+
+        const [key, written] = mockPersistence.write.mock.calls[0]
+        const list = written as PersistedSnapshotList
+        expect(key).toBe('snapshots/project-cap')
+        expect(storedValueBytes(list)).toBeLessThanOrEqual(STORE_VALUE_MAX_BYTES)
+        expect(list.snapshots.map((snap) => snap.id)).toEqual([created!.id, 'e2', 'e1'])
+        // Newest first: the newest two keep their output, the oldest lost it.
+        expect(list.snapshots[0].terminals[0].scrollback).toEqual(output('new'))
+        expect(list.snapshots[1].terminals[0].scrollback).toEqual(output('e2'))
+        expect(list.snapshots[2].terminals[0].scrollback).toBeUndefined()
+        expect(list.snapshots[2].terminals).toHaveLength(1)
+        expect(mockToastWarning).toHaveBeenCalledTimes(1)
+        expect(mockToastWarning.mock.calls[0][0]).toContain(
+          '1 snapshot(s) lost older terminal output'
+        )
+        expect(storeResult.current.snapshots).toHaveLength(1)
+      })
+
+      it('writes a list that fits as it is, without a warning', async () => {
+        mockPersistence.read.mockResolvedValue({
+          success: true,
+          data: {
+            snapshots: [persisted('e1')],
+            updatedAt: '2026-01-01T00:00:00.000Z'
+          } as PersistedSnapshotList
+        })
+        mockPersistence.write.mockResolvedValue({ success: true })
+        const { result } = renderHook(() => useSnapshotActions())
+
+        await act(async () => {
+          await result.current.createSnapshot('New', undefined, 'project-cap', [], null)
+        })
+
+        const list = mockPersistence.write.mock.calls[0][1] as PersistedSnapshotList
+        expect(list.snapshots[1].terminals[0].scrollback).toEqual(output('e1'))
+        expect(mockToastWarning).not.toHaveBeenCalled()
+      })
+
+      it('removes the oldest snapshots from memory when only removing them makes room', async () => {
+        const named = (id: string): string => `${id}-${'n'.repeat(100_000)}`
+        useSnapshotStore.setState({
+          snapshots: [
+            asSnapshot('e1', named('e1')),
+            asSnapshot('e2', named('e2')),
+            asSnapshot('e3', named('e3'))
+          ]
+        })
+        mockPersistence.read.mockResolvedValue({
+          success: true,
+          data: {
+            snapshots: [
+              { ...persisted('e1', named('e1')), terminals: [] },
+              { ...persisted('e2', named('e2')), terminals: [] },
+              { ...persisted('e3', named('e3')), terminals: [] }
+            ],
+            updatedAt: '2026-01-01T00:00:00.000Z'
+          } as PersistedSnapshotList
+        })
+        mockPersistence.write.mockResolvedValue({ success: true })
+        const { result } = renderHook(() => useSnapshotActions())
+        const { result: storeResult } = renderHook(() => useSnapshotStore())
+
+        await act(async () => {
+          await result.current.createSnapshot('New', undefined, 'project-cap', [], null)
+        })
+
+        const list = mockPersistence.write.mock.calls[0][1] as PersistedSnapshotList
+        expect(storedValueBytes(list)).toBeLessThanOrEqual(STORE_VALUE_MAX_BYTES)
+        expect(list.snapshots.map((snap) => snap.id).slice(1)).toEqual(['e1', 'e2'])
+        expect(storeResult.current.snapshots.map((snap) => snap.id).slice(1)).toEqual(['e1', 'e2'])
+        expect(mockToastWarning.mock.calls[0][0]).toContain('1 oldest snapshot(s) were removed')
+      })
+    })
   })
 
   describe('loadSnapshots', () => {
@@ -414,6 +540,38 @@ describe('snapshot-store', () => {
       })
 
       expect(storeResult.current.snapshots).toHaveLength(0)
+    })
+
+    it('trims a list that is already over the cap when it deletes', async () => {
+      const snap = (id: string) => ({
+        id,
+        projectId: 'project-big',
+        name: id,
+        createdAt: new Date().toISOString(),
+        terminals: [
+          {
+            id: `t-${id}`,
+            name: 'T',
+            shell: 'bash',
+            cwd: '/',
+            scrollback: Array.from({ length: 1500 }, (_, i) => `${id} ${i} ${'x'.repeat(100)}`)
+          }
+        ],
+        activeTerminalId: null
+      })
+      const list = { snapshots: [snap('a'), snap('b'), snap('c')], updatedAt: 'x' }
+      useSnapshotStore.setState({ snapshots: list.snapshots as never })
+      mockPersistence.read.mockResolvedValue({ success: true, data: list })
+      mockPersistence.write.mockResolvedValue({ success: true })
+
+      const { result } = renderHook(() => useSnapshotActions())
+      await act(async () => {
+        await result.current.deleteSnapshot('c')
+      })
+
+      const written = mockPersistence.write.mock.calls.at(-1)?.[1] as typeof list
+      expect(JSON.stringify({ _version: 1, data: written }).length).toBeLessThanOrEqual(256 * 1024)
+      expect(written.snapshots.some((s) => s.id === 'c')).toBe(false)
     })
 
     it('should do nothing if snapshot not found', async () => {

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import {
   type BulkCloseRequest,
   isEditorTabBusy,
@@ -9,12 +8,36 @@ import {
 import { blockSaveOnDraftConflict } from '@/layouts/workspace-layout/draft-conflict-save-guard'
 import { fileNeedsAttention } from '@/lib/editor-file-attention'
 import { logFrontendError } from '@/lib/log-api'
+import { closeWorkspaceTab } from '@/lib/workspace-tab-close'
 import { useConfirmTerminalClose } from '@/stores/app-settings-store'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import { useCanvasStore } from '@/stores/canvas-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { editorTabId, useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
+
+function closeBulkEditorTab(filePath: string, approvedDirty: ReadonlySet<string>): void {
+  const fileState = useEditorStore.getState().openFiles.get(filePath)
+  if (!fileState) {
+    useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+    return
+  }
+  if (fileNeedsAttention(fileState) && !approvedDirty.has(filePath)) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'WorkspaceLayout.bulkClose',
+      message: `bulk close: skipped ${filePath} — file became dirty after confirmation`
+    })
+    return
+  }
+  if (useEditorStore.getState().closeFileIfIdle(filePath)) {
+    useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+    return
+  }
+  void logFrontendError({
+    level: 'warn',
+    source: 'WorkspaceLayout.bulkClose',
+    message: `bulk close: editor tab ${editorTabId(filePath)} did not close`
+  })
+}
 
 interface UseBulkTabCloseOptions {
   activeProjectId: string
@@ -40,86 +63,36 @@ export function useBulkTabClose({
   // dirty at execute time is skipped rather than discarded without consent.
   const closeBulkTabNow = useCallback(
     (tab: WorkspaceTab, approvedDirty: ReadonlySet<string>): void => {
-      switch (tab.type) {
-        case 'terminal':
-          void closeTerminalTabByTabId(tab.id)
-            .then((didClose) => {
-              if (!didClose) {
+      closeWorkspaceTab(
+        tab,
+        {
+          terminal: (terminalTab) => {
+            void closeTerminalTabByTabId(terminalTab.id)
+              .then((didClose) => {
+                if (!didClose) {
+                  void logFrontendError({
+                    level: 'warn',
+                    source: 'WorkspaceLayout.bulkClose',
+                    message: `bulk close: terminal tab ${terminalTab.id} did not close`
+                  })
+                }
+              })
+              .catch((error) => {
                 void logFrontendError({
                   level: 'warn',
                   source: 'WorkspaceLayout.bulkClose',
-                  message: `bulk close: terminal tab ${tab.id} did not close`
+                  message: `bulk close: terminal tab ${terminalTab.id} close threw: ${error instanceof Error ? error.message : String(error)}`
                 })
-              }
-            })
-            .catch((error) => {
-              void logFrontendError({
-                level: 'warn',
-                source: 'WorkspaceLayout.bulkClose',
-                message: `bulk close: terminal tab ${tab.id} close threw: ${error instanceof Error ? error.message : String(error)}`
               })
-            })
-          break
-        case 'editor': {
-          const filePath = tab.filePath
-          const fileState = useEditorStore.getState().openFiles.get(filePath)
-          if (!fileState) {
-            // Ghost editor tab: closeFileIfIdle returns false forever for a
-            // file absent from openFiles — drop the orphaned workspace tab
-            // like the single-close path (handleCloseEditorTab) does.
-            useWorkspaceStore.getState().removeTab(editorTabId(filePath))
-            break
+            return false
+          },
+          editor: (editorTab) => {
+            closeBulkEditorTab(editorTab.filePath, approvedDirty)
+            return false
           }
-          if (fileNeedsAttention(fileState) && !approvedDirty.has(filePath)) {
-            void logFrontendError({
-              level: 'warn',
-              source: 'WorkspaceLayout.bulkClose',
-              message: `bulk close: skipped ${filePath} — file became dirty after confirmation`
-            })
-            break
-          }
-          const didClose = useEditorStore.getState().closeFileIfIdle(filePath)
-          if (didClose) {
-            useWorkspaceStore.getState().removeTab(editorTabId(filePath))
-          } else {
-            void logFrontendError({
-              level: 'warn',
-              source: 'WorkspaceLayout.bulkClose',
-              message: `bulk close: editor tab ${tab.id} did not close`
-            })
-          }
-          break
-        }
-        case 'browser':
-          useBrowserSessionStore.getState().removeTab(tab.browserTabId)
-          useWorkspaceStore.getState().removeTab(tab.id)
-          break
-        case 'git':
-        case 'git-history':
-        case 'diff':
-          useWorkspaceStore.getState().removeTab(tab.id)
-          break
-        case 'agent-chat':
-          requestCloseAgentChat(tab.sessionId, () => {
-            useWorkspaceStore.getState().removeTab(tab.id)
-          })
-          break
-        case 'canvas':
-          // Canvas disposal on bulk close — same route as the tab bar's
-          // closeWorkspaceTab (daemon evict + tab removal).
-          void useCanvasStore.getState().closeCanvas(tab.projectId)
-          useWorkspaceStore.getState().removeTab(tab.id)
-          break
-        default: {
-          // Exhaustiveness guard: a new WorkspaceTab kind must be routed above.
-          const unknownTab: never = tab
-          void logFrontendError({
-            level: 'warn',
-            source: 'WorkspaceLayout.bulkClose',
-            message: `bulk close: unhandled workspace tab kind ${JSON.stringify(unknownTab)}`
-          })
-        }
-      }
+        },
+        'WorkspaceLayout.bulkClose'
+      )
     },
     [closeTerminalTabByTabId]
   )

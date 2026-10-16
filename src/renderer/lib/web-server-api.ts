@@ -17,27 +17,34 @@
  * the web auth gate's 401 UNAUTHORIZED) keeps the server-provided code/message.
  */
 import type {
-  BranchInfo,
   DetectedShells,
   DirectoryEntry,
-  DirtyStatus,
   FileInfo,
   GitCommit,
   GitCommitContext,
+  GitCommitDetail,
+  GitCommitFileDiff,
   GitDiffStat,
   GitStashInfo,
   GitStatusDetail,
   IpcResult,
-  ProjectIcon,
-  WorktreeInfo,
-  WorktreeProgressEvent
+  ProjectIcon
 } from '@shared/types/ipc.types'
 import {
   COMMAND_ID_HEADER,
   type FsWriteExpected,
   type HashedFileContent
 } from '@shared/types/ipc.types'
-import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
+import type {
+  BaseBranchInfo,
+  BranchInfo,
+  DirtyStatus,
+  GitignoreDir,
+  IncludeCopyResult,
+  SymlinkResult,
+  WorktreeInfo,
+  WorktreeProgressEvent
+} from '@shared/types/worktree.types'
 import {
   bodyToResult,
   getJson,
@@ -53,7 +60,6 @@ import {
 import { logFrontendError } from './log-api'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { authHeader } from './web-auth-token'
-import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
 /**
  * POST JSON and read an `application/x-ndjson` response stream. Each line is
@@ -279,12 +285,35 @@ export const webServerGit = {
     if (!res.success) throw ipcFailureError(res)
   },
 
-  async getLog(cwd: string, limit?: number): Promise<GitCommit[]> {
+  async getLog(cwd: string, limit?: number, all = false): Promise<GitCommit[]> {
     const res = await postJson<GitCommit[]>('/git/log', {
       cwd,
-      ...(limit !== undefined ? { limit } : {})
+      ...(limit !== undefined ? { limit } : {}),
+      ...(all ? { all } : {})
     })
     if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  async getCommitDetail(cwd: string, hash: string): Promise<GitCommitDetail> {
+    const res = await postJson<GitCommitDetail>('/git/commit-detail', { cwd, hash })
+    if (!res.success) throw ipcFailureError(res)
+    return res.data
+  },
+
+  async getCommitFileDiff(
+    cwd: string,
+    hash: string,
+    path: string,
+    oldPath?: string
+  ): Promise<GitCommitFileDiff> {
+    const res = await postJson<GitCommitFileDiff>('/git/commit-file-diff', {
+      cwd,
+      hash,
+      path,
+      ...(oldPath ? { oldPath } : {})
+    })
+    if (!res.success) throw ipcFailureError(res)
     return res.data
   },
 
@@ -403,78 +432,17 @@ export const webServerShell = {
 }
 
 /**
- * Project-list mirror routed to `termul-server` (`GET /projects`). Returns the
- * desktop's non-archived + archived project summaries the renderer synced into
- * the in-memory `ProjectRegistry` (Epic-4 bridge). Web/remote mode only.
- *
- * Also exposes the explicit host-default change (`POST /projects/default`,
- * Epic 7) — mirrors the `set_host_default_project` Tauri command + the
- * `set_default_project` WS request (transport parity).
+ * MCP registry persistence shared by standalone and desktop-hosted web clients.
+ * The host keeps one `.termul/mcp-servers.json` per project, so every call names
+ * the `projectId` (an unknown or archived project is refused `NOT_FOUND`).
  */
-export const webServerProjects = {
-  async list(): Promise<IpcResult<ProjectListPayload>> {
-    return getJson<ProjectListPayload>('/projects')
-  },
-
-  /**
-   * Set the host's default project (Epic 7 — cross-client workspace
-   * continuity). Validates the project is switchable, updates
-   * `registry.set_default_project`, persists to the `FileProjectRegistry`
-   * (VPS), and publishes the project state to every `projects` watcher.
-   */
-  async setDefaultProject(projectId: string): Promise<IpcResult<void>> {
-    return postJson<void>('/projects/default', { projectId })
-  },
-
-  /**
-   * Create / upsert a project (Option B: the standalone server is a first-class
-   * project-list authority). Canonicalizes + validates the path on the server,
-   * persists to `FileProjectRegistry` (VPS), and publishes the project state.
-   * Mirrors the `add_project` WS request.
-   */
-  async addProject(params: {
-    id: string
-    name: string
-    path: string
-    color: string
-    isArchived?: boolean
-  }): Promise<IpcResult<ProjectSummary>> {
-    return postJson<ProjectSummary>('/projects', params)
-  },
-
-  /**
-   * Patch a project's display fields (name, color, archived). All fields
-   * optional (partial update). Mirrors the `update_project` WS request +
-   * `PUT /projects/{id}`.
-   */
-  async updateProject(
-    projectId: string,
-    patch: { name?: string; color?: string; isArchived?: boolean }
-  ): Promise<IpcResult<void>> {
-    return putJson<void>(`/projects/${encodeURIComponent(projectId)}`, patch)
-  },
-
-  /**
-   * Remove a project. Mirrors the `remove_project` WS request +
-   * `DELETE /projects/{id}`.
-   */
-  async removeProject(projectId: string): Promise<IpcResult<void>> {
-    const res = await fetch(`${serverBase()}/projects/${encodeURIComponent(projectId)}`, {
-      method: 'DELETE',
-      headers: authHeader()
-    })
-    return parseBody<void>(res)
-  }
-}
-
-/** Global MCP registry persistence shared by standalone and desktop-hosted web clients. */
 export const webServerMcpServers = {
-  async get(): Promise<IpcResult<unknown>> {
-    return getJson<unknown>('/mcp-servers')
+  async get(projectId: string): Promise<IpcResult<unknown>> {
+    return getJson<unknown>(`/mcp-servers?projectId=${encodeURIComponent(projectId)}`)
   },
 
-  async put(registry: unknown[]): Promise<IpcResult<void>> {
-    return putJson<void>('/mcp-servers', registry)
+  async put(projectId: string, registry: unknown[]): Promise<IpcResult<void>> {
+    return putJson<void>(`/mcp-servers?projectId=${encodeURIComponent(projectId)}`, registry)
   }
 }
 
@@ -500,6 +468,16 @@ export const webServerSkills = {
   }
 }
 
+const SERVER_LOG_FIELD_CHARS = 4096
+
+function truncateCodePoints(value: string, max: number): string {
+  return value.length <= max ? value : Array.from(value).slice(0, max).join('')
+}
+
+function capLogField(value: string): string {
+  return truncateCodePoints(value, SERVER_LOG_FIELD_CHARS + 1)
+}
+
 /**
  * Frontend error forwarding routed to `termul-server` (`POST /log/frontend-error`).
  * CAP-2 parity: mirrors the desktop `log_frontend_error` Tauri command. Returns
@@ -515,10 +493,11 @@ export const webServerLog = {
   }): Promise<void> {
     const res = await postJson<void>('/log/frontend-error', {
       level: payload.level ?? 'error',
-      message: payload.message,
-      source: payload.source ?? 'renderer',
-      stack: payload.stack ?? null,
-      componentStack: payload.componentStack ?? null
+      message: capLogField(payload.message),
+      source: capLogField(payload.source ?? 'renderer'),
+      stack: payload.stack === undefined ? null : capLogField(payload.stack),
+      componentStack:
+        payload.componentStack === undefined ? null : capLogField(payload.componentStack)
     })
     if (!res.success) throw new Error(res.error)
   }
@@ -630,8 +609,7 @@ export const webServerMcpProbe = {
  * parity: each method mirrors a desktop `#[tauri::command] worktree_*` handler
  * and returns the SAME `IpcResult<T>` contract (the renderer facade
  * `worktree-api.ts` branches `isTauriContext()` between `invoke(...)` and these
- * HTTP impls). Only the 7 launch-flow routes ship here; the 8 advanced ops
- * stay `WEB_UNSUPPORTED` on web (deferred — see deferred-work.md).
+ * HTTP impls).
  */
 export const webServerWorktree = {
   async list(projectPath: string): Promise<IpcResult<WorktreeInfo[]>> {
@@ -720,22 +698,57 @@ export const webServerWorktree = {
       projectPath,
       worktreePath
     })
+  },
+
+  async parseGitignore(projectPath: string): Promise<IpcResult<GitignoreDir[]>> {
+    return postJson<GitignoreDir[]>('/worktree/parse-gitignore', { projectPath })
+  },
+
+  async createSymlinks(
+    projectPath: string,
+    worktreePath: string,
+    symlinkDirs: string[]
+  ): Promise<IpcResult<SymlinkResult[]>> {
+    return postJson<SymlinkResult[]>('/worktree/create-symlinks', {
+      projectPath,
+      worktreePath,
+      symlinkDirs
+    })
+  },
+
+  async ensureSymlinks(
+    projectPath: string,
+    worktreePath: string,
+    symlinkDirs: string[]
+  ): Promise<IpcResult<SymlinkResult[]>> {
+    return postJson<SymlinkResult[]>('/worktree/ensure-symlinks', {
+      projectPath,
+      worktreePath,
+      symlinkDirs
+    })
   }
 }
-/** MCP OAuth web parity — mirrors the desktop Tauri commands. */
+/**
+ * MCP OAuth web parity — mirrors the desktop Tauri commands. Every call names
+ * the `projectId` it acts for; `start` authorizes the server URL against that
+ * project's MCP list. Tokens stay keyed by server URL on the host.
+ */
 export const webServerMcpOAuth = {
   /** Start the OAuth flow; returns the auth URL to redirect the browser to. */
-  async start(serverUrl: string): Promise<IpcResult<{ authUrl: string; redirectUri: string }>> {
-    return postJson('/mcp-servers/oauth/start', { serverUrl })
+  async start(
+    projectId: string,
+    serverUrl: string
+  ): Promise<IpcResult<{ authUrl: string; redirectUri: string }>> {
+    return postJson('/mcp-servers/oauth/start', { projectId, serverUrl })
   },
 
   /** Check whether a stored OAuth token exists for a server URL. */
-  async status(serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
-    return postJson('/mcp-servers/oauth/status', { serverUrl })
+  async status(projectId: string, serverUrl: string): Promise<IpcResult<{ hasToken: boolean }>> {
+    return postJson('/mcp-servers/oauth/status', { projectId, serverUrl })
   },
 
   /** Delete the stored OAuth token for a server URL. */
-  async disconnect(serverUrl: string): Promise<IpcResult<void>> {
-    return postJson('/mcp-servers/oauth/disconnect', { serverUrl })
+  async disconnect(projectId: string, serverUrl: string): Promise<IpcResult<void>> {
+    return postJson('/mcp-servers/oauth/disconnect', { projectId, serverUrl })
   }
 }

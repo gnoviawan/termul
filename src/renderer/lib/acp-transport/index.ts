@@ -1,10 +1,11 @@
 /**
  * ACP transport abstraction (Story 1.6).
  *
- * Desktop: Tauri `invoke` / `listen`.
- * Web: multiplexed `/ws` client — request/reply by `id`, events with `seq`
- * dedup + gap-fill, cursor reconnect via `subscribe`, reliability tiers from
- * `@shared/types/web-protocol.types`.
+ * One protocol client, two carriers: the multiplexed `/ws` client — request/
+ * reply by `id`, events with `seq` dedup + gap-fill, cursor reconnect via
+ * `subscribe`, reliability tiers from `@shared/types/web-protocol.types`.
+ * Web speaks it over a WebSocket; desktop over a Tauri IPC Channel
+ * (`ChannelSocket`), keeping only host-local domain commands on `invoke`.
  *
  * Envelope fields are snake_case; payloads stay camelCase (Story 1.4 AC3).
  * Event names: store uses `acp:*`; WS uses prefix-dropped types — translated here.
@@ -13,23 +14,24 @@
  * (`.message` is the human string callers already toast).
  *
  * Module layout: `./types` holds the transport contract + error surface,
- * `./event-names` the `acp:*` ↔ WS-type translation, `./tauri-transport` the
- * desktop `invoke`/`listen` implementation, `./ws-transport` the web/server
- * WebSocket client, and this file the transport-selection factory + lazy
- * singleton. The `@/lib/acp-transport` facade re-exports this surface.
+ * `./event-names` the `acp:*` ↔ WS-type translation, `./ws-transport` the
+ * protocol client, `./channel-socket` + `./desktop-transport` the desktop
+ * carrier, `./desktop-local-events` the few plain-Tauri `acp:*` events, and
+ * this file the transport-selection factory + lazy singleton. The
+ * `@/lib/acp-transport` facade re-exports this surface.
  */
 
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { createTauriAcpTransport } from './tauri-transport'
+import { DesktopAcpTransport } from './desktop-transport'
 import type { AcpTransport } from './types'
 import { WsAcpTransport } from './ws-transport'
 
-export { toTauriEventName, toWsEventType } from './event-names'
-export { _resetTauriEventRegistryForTests } from './tauri-transport'
+export { toWsEventType } from './event-names'
 export {
   type AcpConnectionState,
   type AcpTransport,
   AcpTransportError,
+  type AgentIdleWindowStatus,
   COMMAND_ACCEPTED_CODE,
   COMMAND_IN_PROGRESS_CODE,
   type CommandCallOptions,
@@ -51,9 +53,9 @@ export function createAcpTransport(opts?: {
   force?: 'tauri' | 'ws'
   ws?: { url?: string; WebSocketImpl?: typeof WebSocket }
 }): AcpTransport {
-  if (opts?.force === 'tauri') return createTauriAcpTransport()
+  if (opts?.force === 'tauri') return new DesktopAcpTransport()
   if (opts?.force === 'ws') return new WsAcpTransport(opts.ws)
-  if (isTauriContext()) return createTauriAcpTransport()
+  if (isTauriContext()) return new DesktopAcpTransport()
   return new WsAcpTransport(opts?.ws)
 }
 

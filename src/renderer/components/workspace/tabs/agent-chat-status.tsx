@@ -2,32 +2,35 @@ import { CircleDot } from '@/components/icons'
 import { Spinner } from '@/components/ui/spinner'
 import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
 import { type AcpSession, isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 
 /**
  * Per-session status signals shared by the desktop `AgentChatTabInline` and
- * the mobile drawer's Open chat rows, so both derive "needs you", "closing"
- * and "working" from one source. The desktop tab collapses them into a single
- * trailing slot (Closing, then Needs you, then Working, then New activity);
+ * the mobile drawer's Open chat rows, so both derive "needs you" and "working"
+ * from one source. The desktop tab collapses them into a single trailing slot
+ * (Needs you, then Working, then New activity);
  * the drawer rows have room for every active status, so they use
  * `agentChatStatusSlots` and `AgentChatStatusGlyphs` below instead.
  */
 export interface AgentChatStatusSignals {
   session: AcpSession | undefined
   /**
-   * Permission, question, elicitation, or a closed/disconnected chat
-   * (`agentChatNeedsAttention`).
+   * Permission, question, elicitation, a disconnected chat, or a closed chat
+   * that cannot resume by itself (`agentChatNeedsAttention`).
    */
   needsAttention: boolean
-  /** A close is in flight (`useAgentChatLifetimeStore.closingSessionIds`). */
-  closing: boolean
   /**
    * Only a live, non-ephemeral session counts: closed/error sessions can carry
    * stale openTurnId/activeTurn flags (e.g. a crashed-session retry) and
    * warm-pool sessions are not chats.
    */
   liveSession: boolean
+  /**
+   * A real chat: the session exists and is not a warm-pool (ephemeral)
+   * session, whatever its status. Gates the unread dot, which stays on a
+   * stopped (`closed`) or crashed chat until the chat is viewed.
+   */
+  realChat: boolean
   turnBusy: boolean
 }
 
@@ -49,7 +52,6 @@ export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSig
       (elicitation) => elicitation.sessionId === sessionId
     )
   )
-  const closing = useAgentChatLifetimeStore((s) => Boolean(s.closingSessionIds[sessionId]))
   const ephemeral = session ? isEphemeralAcpSession(session.id) : false
   const needsAttention = session
     ? agentChatNeedsAttention({
@@ -59,53 +61,51 @@ export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSig
         pendingPermission,
         pendingQuestion,
         pendingElicitation,
+        lastError: session.lastError ?? null,
         ephemeral
       })
     : false
   // The old lamp slot is now a turn-lifecycle cue: a live turn spins, and a
   // turn that finishes while this chat is not any pane's active tab leaves an
   // unread dot (owned by `useAgentChatUnreadStore`) until the chat becomes an
-  // active tab.
-  const liveSession =
-    session != null && !ephemeral && session.status !== 'closed' && session.status !== 'error'
+  // active tab, live or stopped.
+  const realChat = session != null && !ephemeral
+  const liveSession = realChat && session.status !== 'closed' && session.status !== 'error'
   const turnBusy = liveSession && sessionTurnBusy(session)
-  return { session, needsAttention, closing, liveSession, turnBusy }
+  return { session, needsAttention, liveSession, realChat, turnBusy }
 }
 
 export interface AgentChatStatusSlotsInput {
-  closing: boolean
   needsAttention: boolean
   turnBusy: boolean
-  liveSession: boolean
+  realChat: boolean
   unread: boolean
 }
 
 export interface AgentChatStatusSlots {
   showWorking: boolean
   showUnread: boolean
-  /** Ordered Closing, Needs you, Working, New activity. */
+  /** Ordered Needs you, Working, New activity. */
   statuses: string[]
   /** `statuses.join(', ')`: feeds the aria-label suffix and any live region. */
   statusText: string
 }
 
 /**
- * Drawer-row slot priority: the Closing spinner wins, then the running
- * spinner, then the unread dot. Needs you shows alongside whichever slot is
- * active. (The desktop tab chrome has one trailing slot and pins Needs you
+ * Drawer-row slot priority: the running spinner wins over the unread dot.
+ * Needs you shows alongside whichever slot is active. (The desktop tab chrome has one trailing slot and pins Needs you
  * over Working and New activity instead; see `agent-chat-tab.tsx`.)
  */
 export function agentChatStatusSlots({
-  closing,
   needsAttention,
   turnBusy,
-  liveSession,
+  realChat,
   unread
 }: AgentChatStatusSlotsInput): AgentChatStatusSlots {
-  const showWorking = !closing && turnBusy
-  const showUnread = liveSession && !closing && !turnBusy && unread
+  const showWorking = turnBusy
+  // Any real chat keeps its unread dot, closed (idle-stopped) included.
+  const showUnread = realChat && !turnBusy && unread
   const statuses: string[] = []
-  if (closing) statuses.push('Closing')
   if (needsAttention) statuses.push('Needs you')
   if (showWorking) statuses.push('Working')
   if (showUnread) statuses.push('New activity')
@@ -113,7 +113,6 @@ export function agentChatStatusSlots({
 }
 
 interface AgentChatStatusGlyphsProps {
-  closing: boolean
   needsAttention: boolean
   showWorking: boolean
   showUnread: boolean
@@ -121,22 +120,12 @@ interface AgentChatStatusGlyphsProps {
 
 /** The status glyphs (each with `sr-only` text) rendered in slot-priority order. */
 export function AgentChatStatusGlyphs({
-  closing,
   needsAttention,
   showWorking,
   showUnread
 }: AgentChatStatusGlyphsProps): React.JSX.Element {
   return (
     <>
-      {closing ? (
-        <span
-          className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
-          title="Closing. This chat stops when the turn finishes."
-        >
-          <Spinner size={12} decorative />
-          <span className="sr-only">Closing</span>
-        </span>
-      ) : null}
       {needsAttention ? (
         <span
           className="inline-flex size-3.5 shrink-0 items-center justify-center text-warning"

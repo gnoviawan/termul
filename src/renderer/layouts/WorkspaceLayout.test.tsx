@@ -156,7 +156,6 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontFamily: vi.fn(() => 'monospace'),
   useTerminalBufferSize: vi.fn(() => 10000),
   useDefaultShell: vi.fn(() => 'bash'),
-  useMaxTerminalsPerProject: vi.fn(() => 10),
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue'),
@@ -276,15 +275,6 @@ vi.mock('@/hooks/use-editor-persistence', () => ({
 // P17: shared canonical mock shape for the Story 6 sync hook + banner —
 // identical inline factories across the three WorkspaceLayout suites so a
 // future export-surface refactor breaks all three with the same error.
-vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
-  useWorkspaceManifestSync: vi.fn(),
-  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
-  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
-  performManifestWrite: vi.fn().mockResolvedValue(undefined)
-}))
-vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
-  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
-}))
 
 const { mockSaveTerminalLayout } = vi.hoisted(() => ({
   mockSaveTerminalLayout: vi.fn(() => Promise.resolve())
@@ -388,8 +378,6 @@ const { mockApi } = vi.hoisted(() => ({
       runMigration: vi.fn(),
       rollback: vi.fn()
     },
-    addRendererRef: vi.fn(),
-    removeRendererRef: vi.fn(),
     hasActiveTerminalSessions: vi.fn()
   }
 }))
@@ -407,8 +395,6 @@ vi.mock('@/lib/api', () => ({
   visibilityApi: mockApi.visibility,
   sessionApi: mockApi.session,
   dataMigrationApi: mockApi.dataMigration,
-  addRendererRef: mockApi.addRendererRef,
-  removeRendererRef: mockApi.removeRendererRef,
   hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
   sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
   gitApi: { getCommitContext: vi.fn().mockResolvedValue({ branch: null }) },
@@ -506,13 +492,6 @@ const renderWithRouter = (initialEntries = ['/']) => {
 }
 
 describe('WorkspaceLayout - Empty States', () => {
-  it('mounts the workspace conflict banner at the workspace root', () => {
-    renderWithRouter()
-
-    // Patch 18: the Story 6 conflict banner is mounted at the workspace root.
-    expect(screen.getByTestId('workspace-conflict-banner')).toBeInTheDocument()
-  })
-
   it('does not persist a project whose switch has not committed yet before unload', async () => {
     mockUseActiveProjectId.mockReturnValue('project-1')
     mockUseActiveProject.mockReturnValue(createProject('project-1', '/workspace/project-1', 'blue'))
@@ -532,10 +511,6 @@ describe('WorkspaceLayout - Empty States', () => {
     useWorkspaceStore.setState({ activeProjectId: 'project-1' })
 
     renderWithRouter()
-
-    // Patch 19: the Story 6 sync hook is mounted with the active project id.
-    const { useWorkspaceManifestSync } = await import('@/hooks/use-workspace-manifest-sync')
-    expect(useWorkspaceManifestSync).toHaveBeenCalledWith('project-1')
 
     window.dispatchEvent(new Event('beforeunload'))
 

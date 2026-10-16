@@ -146,7 +146,6 @@ vi.mock('@/stores/app-settings-store', () => ({
   useTerminalFontFamily: vi.fn(() => 'monospace'),
   useTerminalBufferSize: vi.fn(() => 10000),
   useDefaultShell: vi.fn(() => 'bash'),
-  useMaxTerminalsPerProject: vi.fn(() => 10),
   useConfirmTerminalClose: vi.fn(() => true),
   useUpdateAppSetting: vi.fn(() => vi.fn()),
   useDefaultProjectColor: vi.fn(() => 'blue'),
@@ -345,15 +344,6 @@ vi.mock('@/hooks/use-editor-persistence', () => ({
   persistState: vi.fn()
 }))
 
-vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
-  useWorkspaceManifestSync: vi.fn(),
-  loadWorkspaceManifest: vi.fn().mockResolvedValue(false),
-  resolveManifestConflict: vi.fn().mockResolvedValue(undefined),
-  performManifestWrite: vi.fn().mockResolvedValue(undefined)
-}))
-vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
-  WorkspaceConflictBanner: () => <div data-testid="workspace-conflict-banner" />
-}))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
 vi.mock('@/pages/AppPreferences', () => ({ AppPreferencesModal: () => <div>preferences</div> }))
@@ -386,49 +376,28 @@ vi.mock('@/components/mobile/MobileTerminalControls', () => ({
   MobileTerminalControls: () => null
 }))
 
-vi.mock('@/stores/ssh-store', () => ({
+vi.mock('@/stores/ssh-store', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useSSHWorkspaceOpen: () => false,
   useActiveSSHProfile: () => null,
   useActiveSSHProfileId: () => null,
-  // Desktop branch only: SSHPanel (inside the Rail) lists connections.
-  useSSHConnections: () => [],
+  useActiveSSHSession: () => null,
+  // Desktop branch only: SSHPanel (inside the Rail) lists hosts.
+  useSSHProfiles: () => [],
+  useSSHSessions: () => [],
   useSSHActions: () => ({
     loadProfiles: vi.fn(),
     saveProfile: vi.fn(),
     deleteProfile: vi.fn(),
+    duplicateProfile: vi.fn(),
+    toggleFavorite: vi.fn(),
     importConfig: vi.fn(),
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    startPortForward: vi.fn(),
-    stopPortForward: vi.fn(),
-    clearCompletedTransfers: vi.fn(),
     selectProfile: vi.fn(),
-    markConnecting: vi.fn(),
-    markDisconnected: vi.fn(),
-    updateConnectionId: vi.fn(),
-    updateConnectionStatusByProfile: vi.fn(),
-    setEditingFile: vi.fn()
-  }),
-  useSSHProfiles: () => [],
-  useSSHStore: Object.assign(vi.fn(), {
-    getState: () => ({ profiles: [], activeSSHProfileId: null })
-  })
-}))
-
-vi.mock('@/hooks/use-ssh-connection', () => ({
-  useSSHConnection: () => ({
-    connectionId: 'conn-1',
-    isConnected: true,
-    sftpReady: true,
-    entries: [],
-    currentPath: '/home',
-    expandedDirs: new Set(),
-    childEntries: {},
-    loadingDirs: new Set(),
-    isLoadingRoot: false,
-    handleConnect: vi.fn(),
-    handleBrowseFiles: vi.fn(),
-    toggleDirectory: vi.fn(),
-    loadDirectory: vi.fn()
+    openWorkspace: vi.fn(),
+    setActiveTab: vi.fn(),
+    clearCompletedTransfers: vi.fn(),
+    setEditingFile: vi.fn(),
+    setEditingContent: vi.fn()
   })
 }))
 

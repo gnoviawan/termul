@@ -426,6 +426,80 @@ describe('ToolCallCard', () => {
   })
 })
 
+describe('ToolCallCard edit diffs', () => {
+  const edit = (content: ToolCall['content']): ToolCall => ({
+    toolCallId: 'edit-1',
+    title: 'Edit lib.rs',
+    kind: 'edit',
+    status: 'completed',
+    rawInput: { path: '/repo/src/lib.rs' },
+    content
+  })
+  const diff = {
+    type: 'diff',
+    path: '/repo/src/lib.rs',
+    oldText: 'a\nb\nc\n',
+    newText: 'a\nB\nc\n'
+  }
+
+  beforeEach(() => {
+    openFilePathFromTerminal.mockClear()
+  })
+
+  it('shows the diff inline without the row, chevron, or open-file icon', () => {
+    const { container } = render(
+      withTooltip(<Card toolCall={edit([diff])} filePathContext={{ cwd: '/repo' }} />)
+    )
+
+    expect(container.querySelector('[data-diff-block="/repo/src/lib.rs"]')).toBeInTheDocument()
+    expect(screen.getByText('B')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open file' })).not.toBeInTheDocument()
+    expect(container.querySelector('[aria-expanded]')).toBeNull()
+  })
+
+  it('opens the file at the first changed line when the header is clicked', () => {
+    const context = { cwd: '/repo' }
+    render(withTooltip(<Card toolCall={edit([diff])} filePathContext={context} />))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open lib.rs at line 2' }))
+
+    expect(openFilePathFromTerminal).toHaveBeenCalledWith('/repo/src/lib.rs:2', context)
+  })
+
+  it('renders one block per diff in the call', () => {
+    const { container } = render(
+      <Card toolCall={edit([diff, { ...diff, path: '/repo/src/main.rs' }])} />
+    )
+
+    expect(container.querySelectorAll('[data-diff-block]')).toHaveLength(2)
+  })
+
+  it('keeps non-diff output behind the disclosure when a call also has a diff', () => {
+    render(
+      <Card
+        toolCall={edit([
+          diff,
+          { type: 'content', content: { type: 'text', text: 'wrote the helper' } }
+        ])}
+      />
+    )
+
+    expect(screen.getByText('B')).toBeInTheDocument()
+    expect(screen.queryByText('wrote the helper')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+
+    expect(screen.getByText('wrote the helper')).toBeInTheDocument()
+  })
+
+  it('keeps the compact row when the call carries no diff', () => {
+    render(<Card toolCall={{ ...edit([]), diffStat: { added: 3, removed: 1 } }} />)
+
+    expect(document.querySelector('[data-diff-block]')).toBeNull()
+    expect(screen.getByText('+3')).toBeInTheDocument()
+  })
+})
+
 describe('ToolCallCard read results', () => {
   const read = (path: string): ToolCall => ({
     toolCallId: 'read-1',

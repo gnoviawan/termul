@@ -8,6 +8,7 @@ const { mockTransport, mockHistoryApi } = vi.hoisted(() => {
     listPersistedSessions: Mock
     openPersistedSession: Mock
     getSessionPayload: Mock
+    getSessionPayloadTail: Mock
     deleteSession?: Mock
   } = {
     historyMode: vi.fn(() => 'tauri_store' as const),
@@ -15,11 +16,13 @@ const { mockTransport, mockHistoryApi } = vi.hoisted(() => {
     listPersistedSessions: vi.fn(),
     openPersistedSession: vi.fn(),
     getSessionPayload: vi.fn(),
+    getSessionPayloadTail: vi.fn(),
     deleteSession: vi.fn()
   }
   const mockHistoryApi = {
     list: vi.fn(),
     get: vi.fn(),
+    getTail: vi.fn(),
     listLegacy: vi.fn(),
     getLegacy: vi.fn(),
     save: vi.fn(),
@@ -56,7 +59,9 @@ import {
   flushSessionHistory,
   fromPersistedSessionSummary,
   getCachedSessionPayload,
+  getPinnedSessionPayloadIds,
   groupSessionsByRecency,
+  HISTORY_TAIL_MESSAGE_LIMIT,
   INACTIVE_PAYLOAD_CACHE_BUDGET,
   loadSessionIndex,
   loadSessionPayload,
@@ -82,7 +87,6 @@ import {
   setCachedSessionPayload,
   toPersistedSessionSummaries,
   trackPendingIndexWrite,
-  unpinProjectSessionPayloads,
   unpinSessionPayload,
   waitForPendingSessionIndexWrite
 } from './acp-history-persistence'
@@ -118,6 +122,8 @@ beforeEach(() => {
   mockTransport.connect.mockResolvedValue(undefined)
   mockHistoryApi.list.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.get.mockResolvedValue(null)
+  mockHistoryApi.getTail.mockResolvedValue(null)
+  mockTransport.getSessionPayloadTail.mockResolvedValue(null)
   mockHistoryApi.listLegacy.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.getLegacy.mockResolvedValue(null)
   mockHistoryApi.save.mockResolvedValue(undefined)
@@ -829,30 +835,152 @@ describe('deleteSessionPayload routing (CAP-11)', () => {
 })
 
 describe('bounded full-payload cache', () => {
-  it('keeps whole-session restored summaries when slicing a cached tail', async () => {
-    const messages = Array.from({ length: 6 }, (_, i) => ({
-      ...msg(i % 2 === 0 ? 'user' : 'agent', `t-${i}`),
-      seq: 10 + i
-    }))
-    setCachedSessionPayload('s-tail-sum', {
-      ...payload('s-tail-sum', messages),
-      toolCalls: [
-        {
-          toolCallId: 'early-summary',
-          kind: 'edit',
-          locations: [{ path: 'src/a.ts' }],
-          diffStat: { added: 3, removed: 1 },
-          seq: 1,
-          timestamp: 1,
-          restoredSummary: true
-        },
-        { toolCallId: 'early-card', kind: 'read', seq: 2, timestamp: 2 },
-        { toolCallId: 'tail-card', kind: 'read', seq: 15, timestamp: 15 }
-      ]
-    })
-    const tail = await loadSessionPayloadTail('s-tail-sum', 2)
-    expect(tail?.messages.map((m) => m.seq)).toEqual([14, 15])
-    expect(tail?.toolCalls?.map((t) => t.toolCallId)).toEqual(['early-summary', 'tail-card'])
+  // The transcript a reopen installs must be the host's current one. A full
+  // payload cached by an earlier scroll-up stops at that moment (live events
+  // never refresh it), so it must never answer a tail read.
+  const atSeq = (p: SessionPayload, lastSeq: number, logEpoch = 'epoch-1'): SessionPayload => ({
+    ...p,
+    metadata: { ...p.metadata, lastSeq, logEpoch }
+  })
+  const early = [{ ...msg('user', 'prompt'), seq: 7 }]
+  const current = [...early, { ...msg('agent', 'final reply'), seq: 1478 }]
+
+  it('reads the tail from the host even when an older full payload is cached', async () => {
+    setCachedSessionPayload('s-tail', atSeq(payload('s-tail', early), 7))
+    mockHistoryApi.getTail.mockResolvedValueOnce(atSeq(payload('s-tail', current), 1655))
+
+    const tail = await loadSessionPayloadTail('s-tail', 2)
+
+    expect(mockHistoryApi.getTail).toHaveBeenCalledWith('s-tail', 2)
+    expect(tail?.messages.map((m) => m.seq)).toEqual([7, 1478])
+  })
+
+  it('reads the tail through the transport in server mode even when a full payload is cached', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    setCachedSessionPayload('s-web', atSeq(payload('s-web', early), 7))
+    mockTransport.getSessionPayloadTail.mockResolvedValueOnce(
+      atSeq(payload('s-web', current), 1655)
+    )
+
+    const tail = await loadSessionPayloadTail('s-web')
+
+    expect(mockTransport.getSessionPayloadTail).toHaveBeenCalledWith(
+      's-web',
+      HISTORY_TAIL_MESSAGE_LIMIT
+    )
+    expect(mockHistoryApi.getTail).not.toHaveBeenCalled()
+    expect(tail?.messages.map((m) => m.seq)).toEqual([7, 1478])
+  })
+
+  it('drops the cached full payload and its pin, so the next full read refetches', async () => {
+    markSessionPayloadPinned('s-stale')
+    setCachedSessionPayload('s-stale', atSeq(payload('s-stale', early), 7))
+    mockHistoryApi.getTail.mockResolvedValueOnce(atSeq(payload('s-stale', current), 1655))
+
+    await loadSessionPayloadTail('s-stale')
+
+    expect(getCachedSessionPayload('s-stale')).toBeUndefined()
+    expect(getPinnedSessionPayloadIds()).not.toContain('s-stale')
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'acp.historyPersistence',
+        message:
+          'Re-read session s-stale… from the host: the dropped cached copy ended at seq 7, the host is at seq 1655'
+      })
+    )
+    mockHistoryApi.get.mockResolvedValueOnce(payload('s-stale', current))
+    await expect(loadSessionPayload('s-stale')).resolves.toEqual(payload('s-stale', current))
+    expect(mockHistoryApi.get).toHaveBeenCalledWith('s-stale')
+  })
+
+  it('drops a cached copy whose newest message seq matches the host (reply still streaming then)', async () => {
+    const partial = [...early, { ...msg('agent', 'final re'), seq: 1478 }]
+    setCachedSessionPayload('s-partial', atSeq(payload('s-partial', partial), 1500))
+    mockHistoryApi.getTail.mockResolvedValueOnce(atSeq(payload('s-partial', current), 1655))
+
+    await loadSessionPayloadTail('s-partial')
+
+    expect(getCachedSessionPayload('s-partial')).toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('ended at seq 1500') })
+    )
+  })
+
+  it('reports a cached copy from an older log incarnation even when it is ahead', async () => {
+    setCachedSessionPayload('s-epoch', atSeq(payload('s-epoch', current), 2000, 'epoch-old'))
+    mockHistoryApi.getTail.mockResolvedValueOnce(atSeq(payload('s-epoch', early), 10, 'epoch-new'))
+
+    await loadSessionPayloadTail('s-epoch')
+
+    expect(getCachedSessionPayload('s-epoch')).toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('ended at seq 2000') })
+    )
+  })
+
+  it('drops the cached copy before the read, so a fallback after a failed tail read refetches', async () => {
+    setCachedSessionPayload('s-fail', atSeq(payload('s-fail', early), 7))
+    mockHistoryApi.getTail.mockRejectedValueOnce(new Error('ipc down'))
+
+    await expect(loadSessionPayloadTail('s-fail')).rejects.toThrow('ipc down')
+
+    expect(getCachedSessionPayload('s-fail')).toBeUndefined()
+    mockHistoryApi.get.mockResolvedValueOnce(payload('s-fail', current))
+    await expect(loadSessionPayload('s-fail')).resolves.toEqual(payload('s-fail', current))
+    expect(mockHistoryApi.get).toHaveBeenCalledWith('s-fail')
+  })
+
+  it('logs nothing when the dropped copy already matched the host', async () => {
+    setCachedSessionPayload('s-same', atSeq(payload('s-same', current), 1655))
+    mockHistoryApi.getTail.mockResolvedValueOnce(atSeq(payload('s-same', current), 1655))
+
+    await loadSessionPayloadTail('s-same')
+
+    expect(getCachedSessionPayload('s-same')).toBeUndefined()
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it('returns no tail in live-only mode and keeps the cached payload', async () => {
+    mockTransport.historyMode.mockReturnValue('live_only')
+    setCachedSessionPayload('s-live', payload('s-live', [msg('user', 'hi')]))
+
+    await expect(loadSessionPayloadTail('s-live')).resolves.toBeNull()
+    expect(mockHistoryApi.getTail).not.toHaveBeenCalled()
+    expect(mockTransport.getSessionPayloadTail).not.toHaveBeenCalled()
+    expect(getCachedSessionPayload('s-live')).toBeDefined()
+  })
+
+  it('keeps a plan fence from the dropped copy and merges it into the host tail by message id', async () => {
+    const fence = '```termul-plan\n[{"content":"ship","status":"completed"}]\n```'
+    const reply = { ...msg('agent', 'final reply'), seq: 1478 }
+    setCachedSessionPayload(
+      's-fence',
+      atSeq(
+        payload('s-fence', [
+          ...early,
+          { ...reply, blocks: [...reply.blocks, { type: 'text', text: fence }] }
+        ]),
+        1500
+      )
+    )
+    const later = { ...msg('agent', 'more work'), seq: 1600 }
+    mockHistoryApi.getTail.mockResolvedValueOnce(
+      atSeq(payload('s-fence', [...early, reply, later]), 1655)
+    )
+
+    const tail = await loadSessionPayloadTail('s-fence')
+
+    // Host transcript, not the stale copy: the later message is there.
+    expect(tail?.messages.map((m) => m.id)).toEqual(['m-prompt', 'm-final reply', 'm-more work'])
+    expect(tail?.messages[1].blocks.map((b) => b.text)).toEqual(['final reply', '\n', fence])
+    expect(tail?.messages[2].blocks.map((b) => b.text)).toEqual(['more work'])
+    expect(getCachedSessionPayload('s-fence')).toBeUndefined()
+
+    // A later full read from the host gets the fence too.
+    mockHistoryApi.get.mockResolvedValueOnce(payload('s-fence', [...early, reply]))
+    const full = await loadSessionPayload('s-fence')
+    expect(full?.messages[1].blocks.map((b) => b.text)).toEqual(['final reply', '\n', fence])
   })
 
   it('evicts least-recent inactive entries and reloads them from Rust', async () => {
@@ -946,36 +1074,6 @@ describe('bounded full-payload cache', () => {
     expect(getCachedSessionPayload('rp-1')).toBeUndefined()
     expect(getCachedSessionPayload('rp-2')).toBeDefined()
     expect(getCachedSessionPayload('rp-9')).toBeDefined()
-  })
-
-  it('unpinProjectSessionPayloads unpins only matching projectId', () => {
-    // project-1 (the `entry` default) payloads: two pinned, one unpinned.
-    for (const id of ['s-p1-a', 's-p1-b']) {
-      setCachedSessionPayload(id, payload(id))
-      markSessionPayloadPinned(id)
-    }
-    setCachedSessionPayload('s-p1-plain', payload('s-p1-plain'))
-    // A project-2 payload, pinned.
-    const p2 = payload('s-p2-a')
-    p2.metadata.projectId = 'project-2'
-    setCachedSessionPayload('s-p2-a', p2)
-    markSessionPayloadPinned('s-p2-a')
-
-    unpinProjectSessionPayloads('project-1')
-
-    // project-1 entries were pinned before the call; if the unpin had not
-    // engaged they would survive any budget pressure. Under pressure they
-    // evict (no longer pinned) while the project-2 pin survives.
-    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
-      setCachedSessionPayload(`other-${index}`, payload(`other-${index}`))
-    }
-    expect(getCachedSessionPayload('s-p1-a')).toBeUndefined()
-    expect(getCachedSessionPayload('s-p1-b')).toBeUndefined()
-    expect(getCachedSessionPayload('s-p1-plain')).toBeUndefined()
-    expect(getCachedSessionPayload('s-p2-a')).toBeDefined()
-    // Unpinning a project with no matching payloads is a no-op.
-    expect(() => unpinProjectSessionPayloads('project-none')).not.toThrow()
-    expect(getCachedSessionPayload('s-p2-a')).toBeDefined()
   })
 
   it('saveSessionPayload never reads or writes the store (host-authored history)', async () => {

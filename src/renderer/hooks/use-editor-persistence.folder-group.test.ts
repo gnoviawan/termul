@@ -1,9 +1,9 @@
 /**
  * #903 acceptance: two projects in one folder group each have their own pane
  * tree (parked while the other is visible). Switching p1 -> p2 -> p1 must show each project exactly its own chat tabs and
- * must never write one project's chats into the other's `editor-state`. Real
+ * must never write one project's chats into the other's workspace record. Real
  * workspace / lifetime / acp / project stores; only the transports are faked
- * (in-memory persistence map, no manifest, no editor/explorer I/O).
+ * (in-memory persistence map, no editor/explorer I/O).
  */
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -40,14 +40,6 @@ vi.mock('@/lib/api', async (importActual) => {
     }
   }
 })
-
-vi.mock('@/lib/workspace-manifest-api', () => ({
-  workspaceManifestApi: {
-    getManifest: vi.fn(async () => ({ success: true, data: null })),
-    writeManifest: vi.fn(),
-    deleteManifest: vi.fn()
-  }
-}))
 
 const { loadSessionIndexMock } = vi.hoisted(() => ({ loadSessionIndexMock: vi.fn() }))
 vi.mock('@/lib/acp-history-persistence', async (orig) => {
@@ -89,8 +81,11 @@ import { useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
-import { isManifestRestoreInProgressFor } from '@/stores/workspace-manifest-sync-store'
-import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
+import {
+  getAgentChatSessionIdsInAllTrees,
+  getAllLeafPanes,
+  useWorkspaceStore
+} from '@/stores/workspace-store'
 import type { Project } from '@/types/project'
 import { useEditorPersistence } from './use-editor-persistence'
 
@@ -156,8 +151,7 @@ describe('#903 folder-group chat tab isolation', () => {
     useAgentChatLifetimeStore.setState({
       retainedByProject: {},
       activeSessionByProject: {},
-      focusSessionByProject: {},
-      closingSessionIds: {}
+      focusSessionByProject: {}
     })
     useWorkspaceStore.getState().resetLayout()
     useWorkspaceStore.setState({ activeProjectId: '', parkedTrees: {} })
@@ -169,7 +163,7 @@ describe('#903 folder-group chat tab isolation', () => {
   })
 
   async function restored(projectId: string): Promise<void> {
-    await waitFor(() => expect(isManifestRestoreInProgressFor(projectId)).toBe(false))
+    await waitFor(() => expect(useWorkspaceStore.getState().activeProjectId).toBe(projectId))
   }
 
   async function switchTo(
@@ -198,75 +192,28 @@ describe('#903 folder-group chat tab isolation', () => {
 
     // Let any debounced persist fire, then check nothing leaked across.
     await new Promise((resolve) => setTimeout(resolve, 650))
-    expect(writtenChatIds('editor-state/p2')).toEqual([])
-    expect(writtenChatIds('editor-state/p1').sort()).toEqual(expect.arrayContaining(P1_CHATS))
+    expect(writtenChatIds('workspace/p2')).toEqual([])
+    expect(writtenChatIds('workspace/p1').sort()).toEqual(expect.arrayContaining(P1_CHATS))
     hook.unmount()
   })
 
-  it('prunes foreign chats that sat in the tree before the index loaded and reattaches them for the owner', async () => {
-    // Ownership unknown at first (index not loaded): fail-open everywhere.
+  it('an index load prunes corpse chat tabs of a parked project and nothing else', async () => {
     const hook = renderHook(({ id }) => useEditorPersistence(id), { initialProps: { id: 'p1' } })
     await restored('p1')
-    for (const id of P1_CHATS) useWorkspaceStore.getState().addAgentChatTab(id)
-
+    for (const id of ['s1', 's-corpse']) useWorkspaceStore.getState().addAgentChatTab(id)
     await switchTo(hook, 'p2')
-    // p1's chats land in p2's tree fail-open (ownership still unknown), next to p2's own.
-    for (const id of [...P1_CHATS, 's4']) useWorkspaceStore.getState().addAgentChatTab(id)
-    expect(treeChatIds()).toEqual([...P1_CHATS, 's4'])
+    useWorkspaceStore.getState().addAgentChatTab('s4')
 
-    // Now the index loads and proves s1..s3 belong to p1.
-    loadSessionIndexMock.mockResolvedValueOnce([
-      ...P1_CHATS.map((id) => indexEntry(id, 'p1')),
-      indexEntry('s4', 'p2')
-    ])
+    // s1 belongs to p1, s4 to p2; neither is judged by owner. Only s-corpse is unknown.
+    loadSessionIndexMock.mockResolvedValueOnce([indexEntry('s1', 'p1'), indexEntry('s4', 'p2')])
     await act(async () => {
       await useAcpStore.getState().loadSessionIndex()
     })
     expect(treeChatIds()).toEqual(['s4'])
-    expect(useAgentChatLifetimeStore.getState().retainedByProject.p1).toEqual(
-      expect.arrayContaining(P1_CHATS)
-    )
-
-    await switchTo(hook, 'p1')
-    expect(treeChatIds()).toEqual(P1_CHATS)
-
-    await new Promise((resolve) => setTimeout(resolve, 650))
-    expect(writtenChatIds('editor-state/p2')).not.toEqual(expect.arrayContaining(P1_CHATS))
-    hook.unmount()
-  })
-
-  it('keeps a foreign chat whose owner is archived, and hands it over once the owner is unarchived', async () => {
-    const archived = { ...project('p2'), isArchived: true }
-    useProjectStore.setState({
-      projects: [project('p1'), archived, project('p3')],
-      activeProjectId: 'p1'
-    })
-    const hook = renderHook(({ id }) => useEditorPersistence(id), { initialProps: { id: 'p1' } })
-    await restored('p1')
-    // s9 belongs to the archived p2 but sat in p1's tree before ownership was known.
-    useWorkspaceStore.getState().addAgentChatTab('s1')
-    useWorkspaceStore.getState().addAgentChatTab('s9')
-
-    loadSessionIndexMock.mockResolvedValueOnce([indexEntry('s1', 'p1'), indexEntry('s9', 'p2')])
-    await act(async () => {
-      await useAcpStore.getState().loadSessionIndex()
-    })
-    // Kept where it is (owner cannot restore it), not closed.
-    expect(treeChatIds()).toEqual(['s1', 's9'])
-
-    // Leaving the project drops the kept tab from the tree; the deferred hand-off keeps it.
-    await switchTo(hook, 'p3')
-    expect(treeChatIds()).toEqual([])
-    expect(useAgentChatLifetimeStore.getState().retainedByProject.p2).toEqual(['s9'])
-
-    // Owner unarchived and selected: the chat reattaches there.
-    useProjectStore.setState({ projects: [project('p1'), project('p2'), project('p3')] })
-    await switchTo(hook, 'p2')
-    expect(treeChatIds()).toEqual(['s9'])
-
-    await new Promise((resolve) => setTimeout(resolve, 650))
-    expect(writtenChatIds('editor-state/p3')).toEqual([])
-    expect(writtenChatIds('editor-state/p1')).not.toContain('s9')
+    const parked = useWorkspaceStore.getState().parkedTrees.p1
+    expect([...getAgentChatSessionIdsInAllTrees({ root: parked.root, parkedTrees: {} })]).toEqual([
+      's1'
+    ])
     hook.unmount()
   })
 })

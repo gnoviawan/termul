@@ -7,6 +7,7 @@ use crate::acp::session_persistence::{
     SESSION_SCHEMA_VERSION,
 };
 use serde::Serialize;
+use serde_json::json;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -163,47 +164,30 @@ async fn ws_relay_sink_delivers_events_in_order() {
         "acp:message_chunk",
         &TestPayload::new("a1", "sess-1", "second"),
     );
-    fan_out(
-        &sinks,
-        None,
-        "acp:browser_open_request",
-        &TestPayload::new("a1", "sess-1", "third"),
-    );
 
-    // Lossy and reliable events share the channel in emission order;
-    // reliable browser_open_request is last.
     let drained = drain_rx(&mut rx);
-    assert_eq!(drained.len(), 3, "exactly three events were delivered");
-    // Session-scoped events get monotonic seq; agent-level gets seq=0.
+    assert_eq!(drained.len(), 2, "exactly two events were delivered");
+    // Session-scoped events get a monotonic seq.
     assert_eq!(drained[0].type_, "message_chunk");
     assert_eq!(drained[0].sid.as_deref(), Some("sess-1"));
     assert_eq!(drained[0].seq, 1);
     assert_eq!(drained[0].payload["message"], "first");
     assert_eq!(drained[1].seq, 2);
     assert_eq!(drained[1].payload["message"], "second");
-    assert_eq!(drained[2].type_, "browser_open_request");
-    assert_eq!(drained[2].seq, 0);
-    assert!(
-        drained[2].sid.is_none(),
-        "agent-level event must carry no sid"
-    );
     // camelCase wire shape is preserved end-to-end (AC3).
     assert_eq!(drained[0].payload["agentId"], "a1");
     assert_eq!(drained[0].payload["sessionId"], "sess-1");
 }
 
-/// AC: `WsRelaySink` + `TauriEventSink` in the same fan-out both receive
-/// the SAME payload (Story 1.1 byte-identity invariant). We can't
-/// construct a real `AppHandle` in a unit test, so a custom sink records
-/// the `AcpEvent` the way `TauriEventSink` would emit it; we then assert
-/// the WS relay delivered an identical `Value` to a subscribed client.
+/// AC: `WsRelaySink` + a second sink in the same fan-out both receive
+/// the SAME payload (byte-identity invariant). A custom sink records the
+/// `AcpEvent` it is handed; we then assert the WS relay delivered an
+/// identical `Value` to a subscribed client.
 /// The relay strips the `acp:` prefix from `type_` (AC2) but passes the
 /// `payload` `Value` through verbatim (AC3 — byte-identity invariant).
 #[tokio::test]
 async fn fan_out_delivers_identical_payload_to_every_sink() {
-    /// A second recorder used as a stand-in for `TauriEventSink`'s view of
-    /// the event (we can't build a real `AppHandle` here). It captures the
-    /// exact `AcpEvent` handed to `emit`.
+    /// A second recorder that captures the exact `AcpEvent` handed to `emit`.
     struct CapturingSink {
         seen: Mutex<Vec<AcpEvent>>,
     }
@@ -214,10 +198,10 @@ async fn fan_out_delivers_identical_payload_to_every_sink() {
     }
 
     let ws = Arc::new(WsRelaySink::new());
-    let tauri_stand_in = Arc::new(CapturingSink {
+    let second_sink = Arc::new(CapturingSink {
         seen: Mutex::new(Vec::new()),
     });
-    let sinks: Vec<Arc<dyn EventSink>> = vec![tauri_stand_in.clone(), ws.clone()];
+    let sinks: Vec<Arc<dyn EventSink>> = vec![second_sink.clone(), ws.clone()];
 
     // Subscribe BEFORE emitting so the WS client receives the event live.
     ws.seed_session_for_test("sess-7");
@@ -230,17 +214,17 @@ async fn fan_out_delivers_identical_payload_to_every_sink() {
         &TestPayload::new("a2", "sess-7", "hello"),
     );
 
-    let tauri_view = tauri_stand_in.seen.lock().drain(..).collect::<Vec<_>>();
+    let second_view = second_sink.seen.lock().drain(..).collect::<Vec<_>>();
     let ws_view = drain_rx(&mut rx);
 
-    assert_eq!(tauri_view.len(), 1);
+    assert_eq!(second_view.len(), 1);
     assert_eq!(ws_view.len(), 1);
     // The relay strips the `acp:` prefix from the WS event type (AC2).
-    assert_eq!(tauri_view[0].type_, "acp:tool_call");
+    assert_eq!(second_view[0].type_, "acp:tool_call");
     assert_eq!(ws_view[0].type_, "tool_call");
-    assert_eq!(ws_view[0].sid.as_deref(), tauri_view[0].sid.as_deref());
+    assert_eq!(ws_view[0].sid.as_deref(), second_view[0].sid.as_deref());
     assert_eq!(
-        ws_view[0].payload, tauri_view[0].payload,
+        ws_view[0].payload, second_view[0].payload,
         "both sinks must see the SAME serialized Value (serialize-once-fan-out-N)"
     );
     assert_eq!(ws_view[0].payload["message"], "hello");
@@ -390,6 +374,7 @@ async fn fan_out_agent_error_and_crashed_carry_code_and_data() {
         message: "auth".to_string(),
         code: Some(-32000),
         data: Some(data.clone()),
+        provider_code: None,
     };
     fan_out(&sinks, Some("sess-err"), "acp:agent_error", &with_detail);
     let without_detail = AgentErrorEvent {
@@ -398,6 +383,7 @@ async fn fan_out_agent_error_and_crashed_carry_code_and_data() {
         message: "turn idle timeout".to_string(),
         code: None,
         data: None,
+        provider_code: None,
     };
     fan_out(&sinks, Some("sess-err"), "acp:agent_error", &without_detail);
     let crashed = AgentCrashedEvent {
@@ -768,10 +754,9 @@ async fn agent_roster_watch_needs_no_session_subscription() {
     assert_eq!(watch_deltas(&mut watch_rx).len(), 1);
 }
 
-/// The other agent-level events keep their `seq = 0` delivery until they get a
-/// watch of their own, and never reach the `agents` watch.
+/// A browser-open request is an `agents` delta, never a session event.
 #[tokio::test]
-async fn other_agent_level_events_still_fan_out_as_seq_zero() {
+async fn browser_open_request_reaches_the_agents_watch_only() {
     let relay = Arc::new(WsRelaySink::new());
     relay.seed_session_for_test("sess-1");
     let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
@@ -781,11 +766,11 @@ async fn other_agent_level_events_still_fan_out_as_seq_zero() {
         type_: "acp:browser_open_request",
         payload: json!({"agentId": "a-1"}),
     });
-    let drained = drain_rx(&mut rx);
-    assert_eq!(drained.len(), 1);
-    assert_eq!(drained[0].type_, "browser_open_request");
-    assert_eq!(drained[0].seq, 0);
-    assert!(watch_deltas(&mut watch_rx).is_empty(), "not a roster event");
+    assert!(drain_rx(&mut rx).is_empty(), "no session event leaves the relay");
+    let deltas = watch_deltas(&mut watch_rx);
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0]["event"], "browser_open_request");
+    assert_eq!(deltas[0]["payload"]["agentId"], "a-1");
 }
 
 /// CAP-2: with host persistence attached, session lifecycle events publish a

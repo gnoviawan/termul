@@ -67,13 +67,15 @@ pub struct GitPathRequest {
     pub path: String,
 }
 
-/// `POST /git/log { cwd, limit? }` body. `limit` is clamped server-side
-/// (`GIT_LOG_DEFAULT_LIMIT`/`GIT_LOG_MAX_LIMIT`).
+/// `POST /git/log { cwd, limit?, all? }` body. `limit` is clamped server-side
+/// (`GIT_LOG_DEFAULT_LIMIT`/`GIT_LOG_MAX_LIMIT`); `all` walks every ref.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitLogRequest {
     pub cwd: String,
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub all: bool,
 }
 
 /// `POST /git/commit { cwd, summary, description?, amend? }` body.
@@ -392,7 +394,8 @@ pub async fn get_log(
     };
     let cwd_for_log = cwd.clone();
     let limit = req.limit;
-    let result = tokio::task::spawn_blocking(move || git_tracker::git_get_log(&cwd, limit))
+    let all = req.all;
+    let result = tokio::task::spawn_blocking(move || git_tracker::git_get_log(&cwd, limit, all))
         .await
         .map_err(|e| format!("git log task failed: {e}"));
     let body = match result {

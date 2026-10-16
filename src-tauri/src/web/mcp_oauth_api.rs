@@ -4,6 +4,14 @@
 //! `GET /oauth/callback` — the AS redirect target; exchanges code for token.
 //! `POST /mcp-servers/oauth/status` — check for stored token.
 //! `POST /mcp-servers/oauth/disconnect` — delete stored token.
+//!
+//! Every request names the `projectId` it acts for; an unknown, archived or
+//! pathless project is refused `NOT_FOUND`. `start` authorizes the server URL
+//! against THAT project's `.termul/mcp-servers.json` only. The token store
+//! itself stays keyed by server URL and host-global (`acp::mcp_oauth`): a token
+//! belongs to the host's credential for that URL, not to a project, so
+//! `status`/`disconnect` validate the project but read and delete the one
+//! URL-keyed token.
 
 use std::net::SocketAddr;
 
@@ -14,11 +22,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::acp::mcp_oauth;
 use crate::web::fs_api::{check_local_only, IpcBody};
+use crate::web::mcp_servers_api::project_root_or_not_found;
 use crate::web::ws::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthStartRequest {
+    pub project_id: String,
     pub server_url: String,
 }
 
@@ -51,11 +61,13 @@ pub async fn oauth_start(
     // service. Resolve the URL against the persisted MCP server registry
     // (`.termul/mcp-servers.json`) — reject if no enabled HTTP/SSE entry
     // matches.
-    let authorized = match state.registry.default_canonical_root() {
-        Some(project_root) => is_authorized_mcp_server_url(&project_root, &request.server_url).await,
-        None => false,
-    };
-    if !authorized {
+    let project_root =
+        match project_root_or_not_found::<OAuthStartResponse>(&state.registry, &request.project_id)
+        {
+            Ok(root) => root,
+            Err(body) => return Json(body),
+        };
+    if !is_authorized_mcp_server_url(&project_root, &request.server_url).await {
         log::warn!(
             "[mcp-oauth] web flow start rejected: server URL not in authorized registry (url redacted)"
         );
@@ -177,6 +189,7 @@ fn urlencode(s: &str) -> String {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthStatusRequest {
+    pub project_id: String,
     pub server_url: String,
 }
 
@@ -199,6 +212,9 @@ pub async fn oauth_status(
     ) {
         return Json(err);
     }
+    if let Err(body) = project_root_or_not_found(&state.registry, &request.project_id) {
+        return Json(body);
+    }
     let has_token = mcp_oauth::load_stored_token(&request.server_url)
         .map(|t| t.is_some())
         .unwrap_or(false);
@@ -218,6 +234,9 @@ pub async fn oauth_disconnect(
     ) {
         return Json(err);
     }
+    if let Err(body) = project_root_or_not_found(&state.registry, &request.project_id) {
+        return Json(body);
+    }
     match mcp_oauth::delete_stored_token(&request.server_url) {
         Ok(()) => {
             log::info!("[mcp-oauth] web disconnect completed (url redacted)");
@@ -234,7 +253,7 @@ pub async fn oauth_disconnect(
 }
 
 /// Check whether the given `server_url` matches an enabled HTTP/SSE entry in
-/// the persisted MCP server registry (`{default_project_root}/.termul/mcp-servers.json`).
+/// the persisted MCP server registry (`{project_root}/.termul/mcp-servers.json`) of the named project.
 /// This prevents a web client from using the OAuth start endpoint to make the
 /// host discover OAuth metadata for an attacker-selected URL.
 async fn is_authorized_mcp_server_url(project_root: &std::path::Path, server_url: &str) -> bool {

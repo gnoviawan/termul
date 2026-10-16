@@ -3,6 +3,10 @@
  */
 
 import type { StateCreator } from 'zustand'
+import {
+  alignSessionModelProjection,
+  withSessionModelOnIndex
+} from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
 import { applyTerminalStream, type TerminalStreamFields } from '@/components/chat/terminal-output'
 import type {
@@ -47,10 +51,13 @@ import { useAcpStore } from '../index'
 import {
   activeWirePromptTurns,
   commitMessageCollectors,
+  echoedWirePromptTurns,
   handoffOnlyTurnIds,
   historySeqWatermarks,
   isHistoryCoveredEvent,
+  isHistoryCoveredToolEvent,
   liveSwitchSources,
+  liveTurnReplaySeq,
   MAX_COMMIT_MESSAGE_RESPONSE_CHARS,
   MAX_TERMINAL_ASSIST_RESPONSE_CHARS,
   nextSeq,
@@ -59,7 +66,13 @@ import {
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
-import type { AcpState, ChatMessage, MessageRole, OpenCodeSessionNotice } from '../types'
+import type {
+  AcpSession,
+  AcpState,
+  ChatMessage,
+  MessageRole,
+  OpenCodeSessionNotice
+} from '../types'
 import { clearPromptReconcile, clearPromptReconcileForTurn } from './prompt-reconcile'
 import { createFlushClock, type FlushTier } from './transcript-flush-clock'
 
@@ -639,9 +652,44 @@ const inFlightDurabilityProbes = new Set<SessionId>()
 const untrimmableSessions = new Set<SessionId>()
 
 /**
- * Free per-session transcript maps held in the WebView heap.
- * Disk history is untouched — reopen lazy-loads via `openHistorySession`.
- * Call only after any needed `persistSession` so the last mirror is flushed.
+ * Drop per-session module-level bookkeeping so a closed/deleted session never
+ * leaks a backfill allowance, an in-flight load guard, a stale history
+ * watermark, a durability-probe/untrimmable mark, a pending prompt command, or
+ * a live-switch link (a recreated session must re-establish its own; a
+ * resolving probe must not resurrect a pin). Runs on every close, including a
+ * close that keeps the transcript maps for an open chat tab.
+ */
+export function dropSessionBookkeeping(
+  sessionId: SessionId,
+  opts: { keepLiveSwitchLinks?: boolean } = {}
+): void {
+  backfillCounts.delete(sessionId)
+  // A pending (unconfirmed) prompt command — its reconcile timer, store flag and
+  // wire-turn tracking — dies with the session: nothing may resend into it.
+  clearPromptReconcile(sessionId)
+  activeWirePromptTurns.delete(sessionId)
+  echoedWirePromptTurns.delete(sessionId)
+  loadingOlderSessions.delete(sessionId)
+  historySeqWatermarks.delete(sessionId)
+  inFlightDurabilityProbes.delete(sessionId)
+  untrimmableSessions.delete(sessionId)
+  // A close that keeps the transcript for an open tab keeps the links too: a
+  // later history reopen re-splices the pre-switch conversation through them.
+  if (opts.keepLiveSwitchLinks) return
+  // Live-switch source links die with either endpoint: the target's entry
+  // outright, and any entry pointing at the dropped session as source.
+  liveSwitchSources.delete(sessionId)
+  for (const [target, link] of liveSwitchSources) {
+    if (link.sourceId === sessionId) liveSwitchSources.delete(target)
+  }
+}
+
+/**
+ * Free per-session transcript maps held in the WebView heap, plus the
+ * session's bookkeeping (`dropSessionBookkeeping`), clamp-log dedup entries
+ * and payload pin. Disk history is untouched — reopen lazy-loads via
+ * `openHistorySession`. Call only after any needed `persistSession` so the
+ * last mirror is flushed. Idempotent.
  */
 export function dropSessionTranscriptState(
   state: Pick<
@@ -653,26 +701,7 @@ export function dropSessionTranscriptState(
   AcpState,
   'messages' | 'toolCalls' | 'agentSwitches' | 'commands' | 'sessionUsage' | 'plans'
 > {
-  // Drop per-session module-level bookkeeping too so a closed/deleted session
-  // never leaks a backfill allowance, an in-flight load guard, a stale history
-  // watermark, a durability-probe/untrimmable mark, or clamp-log dedup entries
-  // (a recreated session must re-establish its own; a resolving probe must not
-  // resurrect a pin).
-  backfillCounts.delete(sessionId)
-  // A pending (unconfirmed) prompt command — its reconcile timer, store flag and
-  // wire-turn tracking — dies with the session: nothing may resend into it.
-  clearPromptReconcile(sessionId)
-  activeWirePromptTurns.delete(sessionId)
-  loadingOlderSessions.delete(sessionId)
-  historySeqWatermarks.delete(sessionId)
-  inFlightDurabilityProbes.delete(sessionId)
-  untrimmableSessions.delete(sessionId)
-  // Live-switch source links die with either endpoint: the target's entry
-  // outright, and any entry pointing at the dropped session as source.
-  liveSwitchSources.delete(sessionId)
-  for (const [target, source] of liveSwitchSources) {
-    if (source === sessionId) liveSwitchSources.delete(target)
-  }
+  dropSessionBookkeeping(sessionId)
   for (const call of state.toolCalls[sessionId] ?? []) {
     clampedToolCallIds.delete(clampLogKey(call.toolCallId))
   }
@@ -1027,12 +1056,21 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
   },
 
   _onUserPrompt: (e, eventSeq) => {
+    // AD-6: an echo citing a turn id is the host's proof it ACCEPTED that
+    // command (the driver sequences it on acceptance). Both steps run before
+    // the replay-coverage drop, since a history-covered echo is the same proof:
+    // the echo of THIS client's open wire turn is recorded (`runPromptTurn`
+    // reads it when the dispatch reply is lost, so an accepted turn never
+    // enters pending-reconcile), and a prompt already waiting to confirm stops
+    // waiting and is never resent.
+    if (e.turnId) {
+      if (activeWirePromptTurns.get(e.sessionId) === e.turnId) {
+        echoedWirePromptTurns.set(e.sessionId, e.turnId)
+      }
+      clearPromptReconcileForTurn(e.sessionId, e.turnId)
+    }
     // CAP-3 replay contract: drop events the installed payload already covers.
     if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
-    // AD-6: an echo citing a turn id is the host's proof it ACCEPTED that
-    // command (the driver sequences it on acceptance), so a prompt that lost
-    // its reply stops waiting to confirm and is never resent.
-    if (e.turnId) clearPromptReconcileForTurn(e.sessionId, e.turnId)
     // Story 3: the echo of a summary-only handoff turn (no draft → no
     // optimistic user bubble) carries the summary wire text; it must not
     // render as a user bubble. The dispatch closure registered the turn id.
@@ -1306,8 +1344,10 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       rejectTerminalAssistCollector(e.sessionId, 'The ACP agent attempted to use a tool')
       return
     }
-    // CAP-3 replay contract: drop events the installed payload already covers.
-    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // CAP-3 replay contract: drop events the installed payload already covers,
+    // unless the open turn's attach replay re-delivers them in full.
+    if (isHistoryCoveredToolEvent(e.sessionId, eventSeq)) return
+    const replaySeq = liveTurnReplaySeq(e.sessionId, eventSeq)
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
     const apply = (s: AcpState): Partial<AcpState> => {
@@ -1315,6 +1355,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
       // can interleave tool calls with messages on one chronological timeline.
+      // A replayed card keeps its server seq, which places it among the
+      // payload's messages instead of below them.
       // CAP-2/F-2: clamp rawOutput/title/content/rawInput/locations on the
       // initial call. Codex terminal chunks are accumulated first, then the
       // same bound applies so a long shell stream cannot bypass it.
@@ -1326,7 +1368,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         ...e.toolCall,
         ...stream,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
-        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
+        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : (replaySeq ?? nextSeq())
       })
       // Dropped entirely: even the structural subset exceeds the live bound
       // (the agent-sent toolCallId/kind/status alone is oversized).
@@ -1374,8 +1416,9 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
 
   _onToolCallUpdate: (e, eventSeq) => {
     // CAP-3 replay contract: drop events the installed payload already covers
-    // (the restored card already reflects the persisted update).
-    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // (the restored card already reflects the persisted update), unless the
+    // open turn's attach replay re-delivers them in full.
+    if (isHistoryCoveredToolEvent(e.sessionId, eventSeq)) return
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
     const apply = (s: AcpState): Partial<AcpState> => {
@@ -1491,11 +1534,18 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         creationEchoLogged = { ...creationEchoLogged }
         for (const optionId of preservedOptionIds) creationEchoLogged[optionId] = true
       }
+      const draft: AcpSession = {
+        ...session,
+        configOptions: merged,
+        creationEchoLogged
+      }
+      const next = alignSessionModelProjection(draft)
       return {
         sessions: {
           ...s.sessions,
-          [e.sessionId]: { ...session, configOptions: merged, creationEchoLogged }
-        }
+          [e.sessionId]: next
+        },
+        sessionIndex: withSessionModelOnIndex(s.sessionIndex, e.sessionId, next)
       }
     })
     for (const optionId of preservedOptionIds) {
@@ -1564,6 +1614,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       if (e.cost && Number.isFinite(e.cost.amount) && e.cost.amount > 0 && e.cost.currency) {
         next.cost = { amount: e.cost.amount, currency: e.cost.currency }
       }
+      const rateLimit = e.rateLimit ?? prev?.rateLimit
+      if (rateLimit) next.rateLimit = rateLimit
       return {
         sessionUsage: { ...s.sessionUsage, [e.sessionId]: next }
       }

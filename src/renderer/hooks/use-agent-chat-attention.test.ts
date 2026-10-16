@@ -5,6 +5,7 @@ import {
   _resetEphemeralSessionIdsForTesting,
   useAcpStore
 } from '@/stores/acp-store'
+import { RESUME_FAILED_PREFIX } from '@/stores/acp-store/helpers'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatProjectSignals } from './use-agent-chat-attention'
@@ -94,5 +95,20 @@ describe('useAgentChatProjectSignals', () => {
     })
 
     expect(result.current.attentionCounts).toEqual({})
+  })
+
+  it('counts a closed chat only when it cannot resume by itself', () => {
+    seedOptionsSession('clean', 'agent-1', { projectId: 'p1', status: 'closed' })
+    seedOptionsSession('failed', 'agent-1', {
+      projectId: 'p1',
+      status: 'closed',
+      lastError: `${RESUME_FAILED_PREFIX}agent exited`
+    })
+    useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['clean', 'failed'] } })
+
+    const { result } = renderHook(() => useAgentChatProjectSignals())
+
+    expect(result.current.attentionCounts).toEqual({ p1: 1 })
+    expect(result.current.firstNeedsYouSessionId).toEqual({ p1: 'failed' })
   })
 })

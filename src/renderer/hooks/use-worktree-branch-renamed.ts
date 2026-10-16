@@ -1,3 +1,4 @@
+import type { ChatHistoryWatchDelta } from '@shared/types/web-protocol.types'
 import { useEffect } from 'react'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
@@ -5,7 +6,7 @@ import { reconcileProjectWorktrees, worktreeKey } from '@/lib/worktree-reconcile
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 
-/** Wire payload of `acp:worktree_branch_renamed` (agent-level, story 16). */
+/** Payload of a worktree branch rename (the `acp:worktree_branch_renamed` event on desktop, a `chat_history` delta on web). */
 export interface WorktreeBranchRenamedPayload {
   worktreePath: string
   oldBranch: string
@@ -81,20 +82,23 @@ export function handleWorktreeBranchRenamed(payload: unknown): void {
 }
 
 /**
- * Subscribe to `acp:worktree_branch_renamed`. Both transports deliver the same
- * event name (Tauri sink on desktop, WS relay in the browser), so unlike
- * `useAcpHistory`'s web-only subscription this one is not transport-gated.
- * Mounted next to `useAcpHistory()` in both renderer roots.
+ * React to a host-side branch rename. On web the rename arrives as a delta of
+ * the `chat_history` watch (the host sends no `seq = 0` event); the desktop
+ * Tauri sink still emits `acp:worktree_branch_renamed`. Mounted next to
+ * `useAcpHistory()` in both renderer roots.
  */
 export function useWorktreeBranchRenamed(): void {
   useEffect(() => {
-    const unsubscribe = getAcpTransport().onEvent<WorktreeBranchRenamedPayload>(
-      EVENT_NAME,
-      handleWorktreeBranchRenamed
-    )
-    return () => {
-      unsubscribe()
+    const transport = getAcpTransport()
+    if (transport.watches) {
+      return transport.watches.subscribe<unknown, ChatHistoryWatchDelta>('chat_history', {
+        onState: () => undefined,
+        onDelta: (delta) => {
+          if (delta?.event === 'worktree_branch_renamed') handleWorktreeBranchRenamed(delta.payload)
+        }
+      })
     }
+    return transport.onEvent<WorktreeBranchRenamedPayload>(EVENT_NAME, handleWorktreeBranchRenamed)
   }, [])
 }
 

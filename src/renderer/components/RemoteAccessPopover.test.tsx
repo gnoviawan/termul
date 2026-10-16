@@ -25,14 +25,11 @@ vi.mock('@/lib/api', () => ({
     start: (...args: unknown[]) => startMock(...args),
     stop: () => stopMock(),
     status: vi.fn()
-  },
-  syncProjects: vi.fn(() => Promise.resolve({ success: true, data: undefined }))
+  }
 }))
 
 vi.mock('@/stores/project-store', () => ({
-  useProjectStore: {
-    getState: () => ({ projects: [], activeProjectId: null })
-  }
+  useProjectStore: { getState: () => ({ activeProjectId: 'p-active' }) }
 }))
 
 const { syncMcpRegistryToProjectFile } = vi.hoisted(() => ({
@@ -49,17 +46,6 @@ vi.mock('@/stores/acp-store', () => ({
   }
 }))
 
-const { noteHostDefault, resetHostDefault } = vi.hoisted(() => ({
-  noteHostDefault: vi.fn(() => 'changed'),
-  resetHostDefault: vi.fn()
-}))
-vi.mock('@/hooks/use-projects-persistence', () => ({
-  toProjectSummaries: vi.fn(() => []),
-  nextSyncSeq: vi.fn(() => 7),
-  noteHostDefault,
-  resetHostDefault
-}))
-
 vi.mock('@/lib/acp-history-persistence', () => ({
   toPersistedSessionSummaries: vi.fn(() => [])
 }))
@@ -67,7 +53,6 @@ vi.mock('@/lib/acp-history-persistence', () => ({
 // Silence sonner toasts in test output.
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
-import { syncProjects } from '@/lib/api'
 import { useRemoteStatus } from '@/stores/remote-status-store'
 
 const RUNNING: RemoteStatus = {
@@ -140,7 +125,7 @@ describe('RemoteAccessPopover', () => {
     expect(screen.queryByTestId('qr')).toBeNull()
   })
 
-  it('starts remote access with no bind-mode arg on toggle on and seeds the web client', async () => {
+  it('starts remote access with no bind-mode arg on toggle on and mirrors the MCP servers', async () => {
     startMock.mockResolvedValueOnce({ success: true, data: RUNNING })
     renderPopover()
 
@@ -153,16 +138,23 @@ describe('RemoteAccessPopover', () => {
     })
     expect(startMock).toHaveBeenCalledWith()
     expect(setStatus).toHaveBeenCalledWith(RUNNING)
-    // Project metadata is seeded; chat history is read directly from the
-    // durable Rust provider by the desktop-hosted browser.
-    await waitFor(() => {
-      expect(syncProjects).toHaveBeenCalledTimes(1)
-    })
-    // The seed pushes the project list only — never the active project as default.
-    expect(syncProjects).toHaveBeenCalledWith([])
-    // The seed is the baseline for the auto-save sync's change detection and
-    // mirrors the desktop MCP servers to the default the host picked.
-    expect(noteHostDefault).toHaveBeenCalledWith(7, undefined)
+    // The host registry is durable: no project list is pushed. The desktop MCP
+    // servers are mirrored to the active project's file.
     expect(syncMcpRegistryToProjectFile).toHaveBeenCalledTimes(1)
+    expect(syncMcpRegistryToProjectFile).toHaveBeenCalledWith('p-active')
+  })
+
+  it('does not mirror the MCP servers when turning remote access off', async () => {
+    vi.mocked(useRemoteStatus).mockReturnValue(RUNNING)
+    stopMock.mockResolvedValueOnce({ success: true, data: { ...RUNNING, running: false } })
+    renderPopover()
+
+    const toggle = await openPopover()
+    await fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(stopMock).toHaveBeenCalledTimes(1)
+    })
+    expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
   })
 })

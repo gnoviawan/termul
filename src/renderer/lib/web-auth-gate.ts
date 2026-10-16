@@ -5,8 +5,8 @@
  * On a token-gated `termul-server`, `GET /projects` answers 401 with
  * `{success:false, code:'UNAUTHORIZED'}` until a valid bearer token is
  * presented (the auth gate refuses gated API routes — see
- * `src-tauri/src/web/router.rs`). The projects loader (`useProjectsLoader`)
- * silently discards the failure, so `isLoaded` never flips and the workspace
+ * `src-tauri/src/web/router.rs`). The projects watch (`useProjectRegistry`)
+ * never delivers a state, so `isLoaded` never flips and the workspace
  * stays on its Loading screen with no way to enter a token. An installed iOS
  * PWA cannot even add `#token=` to its URL.
  *

@@ -17,6 +17,19 @@ describe('deriveSurfaces', () => {
     expect(lightness(surfaces.card)).toBeGreaterThan(lightness(palette.neutral))
   })
 
+  it('puts the dark sidebar a visible step above the neutral canvas', () => {
+    const palette = BUNDLED_COLOR_THEMES.termul.dark.palette
+    const surfaces = deriveSurfaces(palette, 'dark')
+    expect(lightness(surfaces.sidebar)).toBeGreaterThan(lightness(palette.neutral))
+    expect(lightness(surfaces.sidebar)).toBeLessThan(lightness(surfaces.card))
+  })
+
+  it('keeps the light sidebar a small step darker than the neutral canvas', () => {
+    const palette = BUNDLED_COLOR_THEMES['termul-light'].dark.palette
+    const surfaces = deriveSurfaces(palette, 'light')
+    expect(lightness(surfaces.sidebar)).toBeLessThan(lightness(palette.neutral))
+  })
+
   it('darkens surfaces for light appearance', () => {
     const palette = BUNDLED_COLOR_THEMES['termul-light'].dark.palette
     const surfaces = deriveSurfaces(palette, 'light')

@@ -1,4 +1,5 @@
-import { type Dispatch, type SetStateAction, useState } from 'react'
+import type { BaseBranchInfo } from '@shared/types/worktree.types'
+import type { Dispatch, SetStateAction } from 'react'
 import { Folder, FolderGit2, GitBranch } from '@/components/icons'
 import {
   Select,
@@ -8,11 +9,9 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { WriteGate } from '@/components/ui/write-gate'
-import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { OUTSIDE_PROJECT_ROOT_REASON } from '@/lib/active-worktree'
 import { cn } from '@/lib/utils'
 import { worktreeLabel } from '@/lib/workspace-rows'
-import type { BaseBranchInfo } from '@/lib/worktree-api'
 import type { Worktree } from '@/types/project'
 import { STRIP_MENU_ITEM_CLASS, STRIP_TRIGGER_CLASS } from './launcher-classes'
 import type { LaunchWorkspace } from './use-launch-workspace'
@@ -69,12 +68,6 @@ export function LauncherContextStrip({
   isGitRepo: boolean
 }): React.JSX.Element {
   const { isolationMode, setIsolationMode, existingWorktreeId, setExistingWorktreeId } = workspace
-  const [openMenus, setOpenMenus] = useState({ mode: false, worktree: false, base: false })
-  useNativeWebviewOcclusion(openMenus.mode || openMenus.worktree || openMenus.base)
-  const trackOpen =
-    (menu: keyof typeof openMenus) =>
-    (open: boolean): void =>
-      setOpenMenus((prev) => ({ ...prev, [menu]: open }))
   const existingReason = existingDisabledReason(worktrees)
 
   return (
@@ -91,7 +84,6 @@ export function LauncherContextStrip({
                 ? setIsolationMode(value)
                 : undefined
             }
-            onOpenChange={trackOpen('mode')}
           >
             <SelectTrigger aria-label="Workspace" className={STRIP_TRIGGER_CLASS}>
               {isolationMode === 'current' ? (
@@ -148,7 +140,6 @@ export function LauncherContextStrip({
               <Select
                 value={existingWorktreeId ?? ''}
                 onValueChange={(value) => setExistingWorktreeId(value)}
-                onOpenChange={trackOpen('worktree')}
               >
                 <SelectTrigger
                   aria-label="Worktree"
@@ -188,11 +179,7 @@ export function LauncherContextStrip({
                   Detached HEAD - pick a base
                 </span>
               )}
-              <Select
-                value={baseBranch ?? ''}
-                onValueChange={(value) => setBaseBranch(value)}
-                onOpenChange={trackOpen('base')}
-              >
+              <Select value={baseBranch ?? ''} onValueChange={(value) => setBaseBranch(value)}>
                 <SelectTrigger
                   aria-label="Base branch"
                   className={cn(STRIP_TRIGGER_CLASS, 'min-w-0 [&>span]:truncate')}

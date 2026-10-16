@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
+import { RESUME_FAILED_PREFIX } from '@/stores/acp-store/helpers'
 import {
   agentChatIsRunning,
   agentChatNeedsAttention,
@@ -13,21 +15,49 @@ const live = {
   pendingPermission: false,
   pendingQuestion: false,
   pendingElicitation: false,
+  lastError: null as string | null,
   ephemeral: false
 }
+
+const resumeFailed = `${RESUME_FAILED_PREFIX}agent exited`
 
 describe('agentChatNeedsAttention', () => {
   it('is quiet for a live chat and for a finished turn', () => {
     expect(agentChatNeedsAttention(live)).toBe(false)
   })
 
-  it('is Attention for a permission, a question, an elicitation, or an Agent process stop', () => {
+  it('is Attention for a permission, a question, an elicitation, or a disconnected Agent', () => {
     expect(agentChatNeedsAttention({ ...live, pendingPermission: true })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, pendingQuestion: true })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, pendingElicitation: true })).toBe(true)
-    expect(agentChatNeedsAttention({ ...live, sessionStatus: 'closed' })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, agentStatus: 'disconnected' })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, sessionStatus: 'error' })).toBe(false)
+  })
+
+  it('is quiet for a cleanly stopped chat: it resumes when the user types', () => {
+    const closed = { ...live, sessionStatus: 'closed' as const, agentStatus: undefined }
+    expect(agentChatNeedsAttention(closed)).toBe(false)
+    expect(agentChatNeedsAttention({ ...closed, lastError: 'Turn ended: max tokens' })).toBe(false)
+  })
+
+  it('is Attention for a closed chat that cannot resume by itself', () => {
+    const closed = { ...live, sessionStatus: 'closed' as const, agentStatus: undefined }
+    expect(agentChatNeedsAttention({ ...closed, lastError: resumeFailed })).toBe(true)
+    expect(agentChatNeedsAttention({ ...closed, lastError: CODEX_CLI_SIGNED_OUT_MESSAGE })).toBe(
+      true
+    )
+  })
+
+  it('keeps a pending permission as Attention whatever the status', () => {
+    for (const sessionStatus of ['active', 'closed', 'error'] as const) {
+      expect(agentChatNeedsAttention({ ...live, sessionStatus, pendingPermission: true })).toBe(
+        true
+      )
+    }
+  })
+
+  it('reads a resume failure only on a closed chat', () => {
+    expect(agentChatNeedsAttention({ ...live, lastError: resumeFailed })).toBe(false)
   })
 
   it('ignores an entrance warm-up', () => {
@@ -64,7 +94,8 @@ describe('attentionCountForProject', () => {
       attentionCountForProject('a', [
         live,
         { ...live, pendingPermission: true },
-        { ...live, projectId: 'b', sessionStatus: 'closed' },
+        { ...live, projectId: 'b', sessionStatus: 'closed', lastError: resumeFailed },
+        { ...live, sessionStatus: 'closed', lastError: resumeFailed },
         { ...live, sessionStatus: 'closed' }
       ])
     ).toBe(2)

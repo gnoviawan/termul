@@ -11,7 +11,7 @@ interface UseGitPanelModelOptions {
 /**
  * Store wiring shared by the Git panels (`GitPanel` and the shell
  * `ChangesPanel`): the status / commit-context / stash / branch refresh while
- * visible, the working copy's branches and stashes, the "Filter changes..."
+ * visible, the working copy's branches and stashes, the "Filter changes"
  * query and the filtered staged / unstaged lists.
  */
 export function useGitPanelModel({ cwd, isVisible }: UseGitPanelModelOptions) {

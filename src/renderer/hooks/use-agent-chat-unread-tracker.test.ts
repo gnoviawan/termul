@@ -6,7 +6,6 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useAgentChatUnreadTracker } from './use-agent-chat-unread-tracker'
 
@@ -38,14 +37,6 @@ function setTurn(sessionId: string, busy: boolean): void {
   })
 }
 
-function setClosing(sessionId: string, closing: boolean): void {
-  act(() => {
-    useAgentChatLifetimeStore.setState({
-      closingSessionIds: closing ? { [sessionId]: true } : {}
-    })
-  })
-}
-
 function unreadIds(): string[] {
   return Object.keys(useAgentChatUnreadStore.getState().unread).sort()
 }
@@ -59,14 +50,21 @@ function renderTracker(activeSessionIds: readonly string[]) {
 beforeEach(() => {
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatLifetimeStore.setState({
-    retainedByProject: {},
-    activeSessionByProject: {},
-    focusSessionByProject: {},
-    closingSessionIds: {}
+  useAgentChatUnreadStore.setState({
+    unread: {},
+    unreadSince: {},
+    seenTurnEndSeq: {},
+    sharedReadSeq: {}
   })
-  useAgentChatUnreadStore.setState({ unread: {} })
 })
+
+function turnEnd(sessionId: string, seq: number): void {
+  act(() => useAgentChatUnreadStore.getState().noteTurnEnd(sessionId, seq))
+}
+
+function readElsewhere(sessionId: string, seq: number): void {
+  act(() => useAgentChatUnreadStore.getState().setReadMark(sessionId, seq))
+}
 
 describe('useAgentChatUnreadTracker', () => {
   it('marks a background chat unread when its turn finishes (busy to idle)', () => {
@@ -159,20 +157,6 @@ describe('useAgentChatUnreadTracker', () => {
 
     rerender({ active: ['a'] })
     expect(unreadIds()).toEqual(['b'])
-  })
-
-  it('lets closing win: a turn that ends while the chat is closing banks nothing', () => {
-    seedChat('a')
-    seedChat('b', true)
-    renderTracker(['a'])
-    setClosing('b', true)
-
-    setTurn('b', false)
-    expect(unreadIds()).toEqual([])
-
-    // Not even after the closing flag clears.
-    setClosing('b', false)
-    expect(unreadIds()).toEqual([])
   })
 
   it('banks nothing when the turn ends because the session closed', () => {
@@ -275,5 +259,51 @@ describe('useAgentChatUnreadTracker', () => {
 
     expect(() => renderTracker(['a'])).not.toThrow()
     expect(unreadIds()).toEqual([])
+  })
+
+  it('clears a dot when another surface reads the turn end that raised it', () => {
+    seedChat('a')
+    seedChat('b')
+    renderTracker(['a'])
+    setTurn('b', true)
+    turnEnd('b', 12)
+    setTurn('b', false)
+    expect(unreadIds()).toEqual(['b'])
+
+    readElsewhere('b', 12)
+
+    expect(unreadIds()).toEqual([])
+  })
+
+  it('keeps a dot whose turn ended with no turn end seen here, when an older read is swept again', () => {
+    seedChat('a')
+    seedChat('b')
+    turnEnd('b', 10)
+    readElsewhere('b', 10)
+    renderTracker(['a'])
+    setTurn('b', true)
+    setTurn('b', false)
+    expect(unreadIds()).toEqual(['b'])
+
+    turnEnd('a', 11)
+    act(() => useAgentChatUnreadStore.getState().setReadMarks({ b: 10 }))
+
+    expect(unreadIds()).toEqual(['b'])
+  })
+
+  it('keeps a dot when a second background turn ends with no turn end and the first is read elsewhere', () => {
+    seedChat('a')
+    seedChat('b')
+    renderTracker(['a'])
+    setTurn('b', true)
+    turnEnd('b', 10)
+    setTurn('b', false)
+    setTurn('b', true)
+    setTurn('b', false)
+    expect(unreadIds()).toEqual(['b'])
+
+    readElsewhere('b', 10)
+
+    expect(unreadIds()).toEqual(['b'])
   })
 })

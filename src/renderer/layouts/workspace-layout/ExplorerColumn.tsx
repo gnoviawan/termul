@@ -1,13 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { lazy, type ReactNode, Suspense } from 'react'
-import {
-  FileExplorerToggleButton,
-  panelEdgeToggleButtonClass
-} from '@/components/TitlebarPanelToggles'
-import { edgeToggleMotion, panelRevealMotion } from '@/layouts/workspace-layout/panel-motion'
+import { panelRevealMotion } from '@/layouts/workspace-layout/panel-motion'
 import { ShellSkeleton } from '@/layouts/workspace-layout/ShellSkeleton'
 import type { SSHWorkspaceState } from '@/layouts/workspace-layout/use-ssh-workspace'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 import type { Project } from '@/types/project'
@@ -20,8 +15,8 @@ interface ExplorerColumnProps {
   activeProject: Project | undefined
   ssh: SSHWorkspaceState
   /**
-   * Shell Side panel that fills the file column. Not rendered while an SSH
-   * profile is active: the SSH block then stands alone.
+   * Shell Side panel that fills the file column. Not rendered while the SSH
+   * workspace is open: the remote file browser then stands alone.
    */
   sidePanel: ReactNode
 }
@@ -39,21 +34,19 @@ export function ExplorerColumn({
 }: ExplorerColumnProps): React.JSX.Element {
   const reducedMotion = useReducedMotion() ?? false
   const isExplorerVisible = useFileExplorerVisible()
-  const {
-    activeSSHProfile,
-    sshConn,
-    handleSSHMkdir,
-    handleSSHCreateFile,
-    handleSSHDelete,
-    handleSSHRename
-  } = ssh
+  const { workspaceOpen, activeSSHProfile, activeSSHSession } = ssh
   const showFileColumn = Boolean(
-    isExplorerVisible && activeProject?.path && !(sidePanel && activeSSHProfile)
+    isExplorerVisible && activeProject?.path && !(sidePanel && workspaceOpen)
   )
+  // Remote files of the active, connected session tab.
+  const sftpSession =
+    workspaceOpen && isExplorerVisible && activeSSHSession?.status === 'connected'
+      ? activeSSHSession
+      : null
 
   return (
     <AnimatePresence initial={false}>
-      {showFileColumn || activeSSHProfile ? (
+      {showFileColumn || sftpSession ? (
         <motion.div
           key="explorer-column"
           className="flex-shrink-0 h-full overflow-hidden"
@@ -64,7 +57,7 @@ export function ExplorerColumn({
               {showFileColumn && (
                 <motion.div
                   key="file-explorer-panel"
-                  className={cn('overflow-hidden', activeSSHProfile ? 'flex-1 min-h-0' : 'h-full')}
+                  className={cn('overflow-hidden', sftpSession ? 'flex-1 min-h-0' : 'h-full')}
                   {...panelRevealMotion(reducedMotion)}
                 >
                   <Suspense fallback={<ShellSkeleton />}>{sidePanel}</Suspense>
@@ -72,7 +65,7 @@ export function ExplorerColumn({
               )}
             </AnimatePresence>
             <AnimatePresence initial={false}>
-              {activeSSHProfile && (
+              {sftpSession && (
                 <motion.div
                   key="ssh-explorer-panel"
                   className="flex-1 min-h-0 overflow-hidden"
@@ -81,31 +74,16 @@ export function ExplorerColumn({
                   <div
                     className={cn(
                       'h-full bg-background rounded-xl overflow-hidden flex flex-col border border-border',
-                      !showFileColumn && 'w-64',
+                      !showFileColumn && 'w-80',
                       // Revamped frame: no gap before the main card, so keep the gutter here.
                       sidePanel && !showFileColumn && 'mr-2'
                     )}
                   >
                     <Suspense fallback={<ShellSkeleton />}>
                       <SSHFileExplorer
-                        connectionId={sshConn.connectionId ?? ''}
-                        isConnected={sshConn.isConnected}
-                        sftpReady={sshConn.sftpReady}
-                        entries={sshConn.entries}
-                        currentPath={sshConn.currentPath}
-                        expandedDirs={sshConn.expandedDirs}
-                        childEntries={sshConn.childEntries}
-                        loadingDirs={sshConn.loadingDirs}
-                        isLoadingRoot={sshConn.isLoadingRoot}
-                        profileName={activeSSHProfile.name}
-                        onConnect={sshConn.handleConnect}
-                        onBrowseFiles={sshConn.handleBrowseFiles}
-                        onToggleDir={sshConn.toggleDirectory}
-                        onLoadDir={sshConn.loadDirectory}
-                        onMkdir={handleSSHMkdir}
-                        onCreateFile={handleSSHCreateFile}
-                        onDelete={handleSSHDelete}
-                        onRename={handleSSHRename}
+                        key={sftpSession.attemptId}
+                        connectionId={sftpSession.attemptId}
+                        profileName={activeSSHProfile?.name ?? 'host'}
                       />
                     </Suspense>
                   </div>
@@ -114,23 +92,7 @@ export function ExplorerColumn({
             </AnimatePresence>
           </div>
         </motion.div>
-      ) : (
-        !isExplorerVisible &&
-        activeProject?.path &&
-        !isTauriContext() && (
-          // Web-only slim edge toggle so a hidden file explorer
-          // stays re-openable. Desktop re-opens via the
-          // Rail and top row toggles. Its enter is deferred until the column's
-          // collapse exits (edgeToggleMotion).
-          <motion.div
-            key="explorer-edge-toggle"
-            className={cn('flex-shrink-0 flex items-start overflow-hidden', sidePanel && 'mr-2')}
-            {...edgeToggleMotion(reducedMotion)}
-          >
-            <FileExplorerToggleButton className={panelEdgeToggleButtonClass} />
-          </motion.div>
-        )
-      )}
+      ) : null}
     </AnimatePresence>
   )
 }

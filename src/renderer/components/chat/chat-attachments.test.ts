@@ -56,6 +56,7 @@ describe('isTextLike', () => {
     expect(isTextLike('data.json')).toBe(true)
     expect(isTextLike('notes.md')).toBe(true)
     expect(isTextLike('icon.svg')).toBe(true)
+    expect(isTextLike('ContactAvatar.astro')).toBe(true)
   })
 
   it('accepts known extension-less text files', () => {

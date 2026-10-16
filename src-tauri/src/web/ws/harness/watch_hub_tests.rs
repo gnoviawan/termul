@@ -257,9 +257,8 @@ async fn the_agents_state_lists_each_live_agent_with_its_id_and_capabilities() {
     assert!(agents[0]["capabilities"].is_object(), "{}", agents[0]);
 }
 
-/// An intentional kill emits no lifecycle event, so the roster watch is told
-/// directly: a watcher sees `agent_removed`, and the killed agent is gone from
-/// a fresh state.
+/// A kill is announced to every sink as `agent_disconnected`, which the roster
+/// watch carries; the killed agent is gone from a fresh state.
 #[tokio::test(start_paused = true)]
 async fn a_killed_agent_leaves_the_roster_watch() {
     let host = Host::new(|acp, sessions| {
@@ -272,11 +271,6 @@ async fn a_killed_agent_leaves_the_roster_watch() {
     host.state.acp.kill(&AgentId(AGENT.to_string())).await.expect("kill");
     conn.peer.read_for(Duration::from_millis(50)).await;
 
-    let all = frames(&conn, "agents");
-    assert_eq!(
-        all[1]["delta"],
-        json!({ "event": "agent_removed", "payload": { "agentId": AGENT } })
-    );
     let reply = conn.request("w2", "watch", json!({ "watch": "agents" })).await;
     assert_eq!(reply["ok"], true);
     conn.peer.read_for(Duration::from_millis(50)).await;

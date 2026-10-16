@@ -40,7 +40,7 @@ vi.mock('../persistence-api', () => ({
 }))
 
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { createAskpassScript, createSSHApi } from '../ssh-api'
+import { createSSHApi } from '../ssh-api'
 
 const profile = (overrides: Partial<SSHProfile> = {}): SSHProfile => ({
   id: 'p-1',
@@ -119,15 +119,88 @@ describe('sshApi (web branch)', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
-  it('connect returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
+  it('saveProfile asserts the key is absent (expected null) on the first write', async () => {
     const api = createSSHApi()
-    const result = await api.connect('profile-1')
+    mockPersistenceApi.read.mockResolvedValue({
+      success: false,
+      error: 'Key not found: ssh/profiles',
+      code: 'KEY_NOT_FOUND'
+    })
 
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockInvoke).not.toHaveBeenCalled()
+    await api.saveProfile(profile())
+
+    expect(mockPersistenceApi.write).toHaveBeenCalledWith('ssh/profiles', [expect.anything()], {
+      expected: null,
+      retrying: true
+    })
+  })
+
+  it('saveProfile and deleteProfile assert the exact list they read', async () => {
+    const api = createSSHApi()
+    const stored = [profile({ id: 'keep' }), profile({ id: 'drop' })]
+    mockPersistenceApi.read.mockResolvedValue({ success: true, data: stored })
+
+    await api.saveProfile(profile({ id: 'new' }))
+    await api.deleteProfile('drop')
+
+    expect(mockPersistenceApi.write.mock.calls.map((c) => c[2])).toEqual([
+      { expected: stored, retrying: true },
+      { expected: stored, retrying: true }
+    ])
+  })
+
+  it('saveProfile re-reads and retries when another device won the compare-and-set', async () => {
+    const api = createSSHApi()
+    const first = [profile({ id: 'a' })]
+    const second = [profile({ id: 'a' }), profile({ id: 'b' })]
+    mockPersistenceApi.read
+      .mockResolvedValueOnce({ success: true, data: first })
+      .mockResolvedValueOnce({ success: true, data: second })
+    mockPersistenceApi.write
+      .mockResolvedValueOnce({ success: false, error: 'stale', code: 'STORE_CAS_FAILED' })
+      .mockResolvedValueOnce({ success: true, data: undefined })
+
+    const result = await api.saveProfile(profile({ id: 'c' }))
+
+    expect(result.success).toBe(true)
+    expect(mockPersistenceApi.write.mock.calls.map((c) => c[2])).toEqual([
+      { expected: first, retrying: true },
+      { expected: second, retrying: true }
+    ])
+    expect((mockPersistenceApi.write.mock.calls[1][1] as SSHProfile[]).map((p) => p.id)).toEqual([
+      'a',
+      'b',
+      'c'
+    ])
+  })
+
+  it('saveProfile gives up with STORE_CAS_FAILED after five lost races and surfaces other errors at once', async () => {
+    const api = createSSHApi()
+    mockPersistenceApi.read.mockResolvedValue({ success: true, data: [] })
+    mockPersistenceApi.write.mockResolvedValue({
+      success: false,
+      error: 'stale',
+      code: 'STORE_CAS_FAILED'
+    })
+    expect(await api.saveProfile(profile())).toMatchObject({ code: 'STORE_CAS_FAILED' })
+    expect(mockPersistenceApi.write).toHaveBeenCalledTimes(5)
+    // Only the last lost race is reported to the user.
+    expect(mockPersistenceApi.write.mock.calls.map((c) => c[2].retrying)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false
+    ])
+
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.write.mockResolvedValue({
+      success: false,
+      error: 'down',
+      code: 'STORE_UNAVAILABLE'
+    })
+    expect(await api.saveProfile(profile())).toMatchObject({ code: 'STORE_UNAVAILABLE' })
+    expect(mockPersistenceApi.write).toHaveBeenCalledTimes(1)
   })
 
   it('session commands return WEB_UNSUPPORTED when !isTauriContext()', async () => {
@@ -167,16 +240,6 @@ describe('sshApi (web branch)', () => {
   it('sftpListDir returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
     const api = createSSHApi()
     const result = await api.sftpListDir('conn-1', '/remote')
-
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockInvoke).not.toHaveBeenCalled()
-  })
-
-  it('createAskpassScript returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
-    const result = await createAskpassScript('secret')
 
     expect(result.success).toBe(false)
     if (!result.success) {

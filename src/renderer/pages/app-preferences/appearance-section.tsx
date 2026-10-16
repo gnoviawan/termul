@@ -1,13 +1,13 @@
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { Label } from '@/components/ui/label'
-import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { Switch } from '@/components/ui/switch'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { cn } from '@/lib/utils'
 import {
   type AppSettings,
   BUFFER_SIZE_OPTIONS,
   FONT_FAMILY_OPTIONS,
-  MAX_TERMINALS_OPTIONS,
   TERMINAL_RENDERER_OPTIONS,
   UI_ZOOM_DEFAULT,
   UI_ZOOM_MAX,
@@ -22,7 +22,6 @@ interface AppearanceSectionProps {
   bufferSize: number
   terminalRenderer: AppSettings['terminalRenderer']
   screenReaderMode: boolean
-  maxTerminals: number
   handleFontFamilyChange: (value: string) => void
   handleFontSizeChange: (value: number) => void
   handleUiZoomChange: (value: number) => void
@@ -30,7 +29,6 @@ interface AppearanceSectionProps {
   handleBufferSizeChange: (value: number) => void
   handleRendererChange: (value: string) => void
   handleScreenReaderModeChange: (enabled: boolean) => void
-  handleMaxTerminalsChange: (value: number) => void
 }
 
 export function AppearanceSection({
@@ -40,15 +38,13 @@ export function AppearanceSection({
   bufferSize,
   terminalRenderer,
   screenReaderMode,
-  maxTerminals,
   handleFontFamilyChange,
   handleFontSizeChange,
   handleUiZoomChange,
   handleUiZoomReset,
   handleBufferSizeChange,
   handleRendererChange,
-  handleScreenReaderModeChange,
-  handleMaxTerminalsChange
+  handleScreenReaderModeChange
 }: AppearanceSectionProps): React.JSX.Element {
   return (
     <SettingsSection id="appearance">
@@ -106,7 +102,7 @@ export function AppearanceSection({
             <select
               value={fontFamily}
               onChange={(e) => handleFontFamilyChange(e.target.value)}
-              className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
+              className={cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm')}
             >
               {FONT_FAMILY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -148,7 +144,7 @@ export function AppearanceSection({
             <select
               value={bufferSize}
               onChange={(e) => handleBufferSizeChange(parseInt(e.target.value, 10))}
-              className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
+              className={cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm')}
             >
               {BUFFER_SIZE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -162,27 +158,6 @@ export function AppearanceSection({
             </p>
           </div>
 
-          {/* Max Terminals */}
-          <div>
-            <label className="block text-sm font-medium text-secondary-foreground mb-2">
-              Max Terminals Per Project
-            </label>
-            <select
-              value={maxTerminals}
-              onChange={(e) => handleMaxTerminalsChange(parseInt(e.target.value, 10))}
-              className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
-            >
-              {MAX_TERMINALS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground mt-1">
-              Maximum number of terminal tabs allowed per project.
-            </p>
-          </div>
-
           {/* Terminal Renderer */}
           <div>
             <label className="block text-sm font-medium text-secondary-foreground mb-2">
@@ -191,7 +166,7 @@ export function AppearanceSection({
             <select
               value={terminalRenderer}
               onChange={(e) => handleRendererChange(e.target.value)}
-              className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
+              className={cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm')}
             >
               {TERMINAL_RENDERER_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>

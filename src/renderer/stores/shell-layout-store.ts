@@ -1,10 +1,10 @@
 /**
  * Shell-layout store (shell revamp AD-4, CAP-16/CAP-18): the one persisted
- * owner of rail, side panel, SSH section and graph layout plus the per-project
+ * owner of rail, side panel, SSH section and Git History detail layout plus the per-project
  * last column tab and worktree pick.
  *
  * Persistence runs only through `persistenceApi` under `PersistenceKeys.shellLayout`
- * (desktop plugin-store, web server store). A hydration gate protects the saved
+ * (the host store on every surface). A hydration gate protects the saved
  * record: nothing is written until the record has been read (or migrated), and
  * a store that could not read it (`unavailable`) stays usable in memory but
  * never writes, so defaults cannot overwrite a record that merely failed to load.
@@ -50,8 +50,6 @@ export type ShellLayoutStatus = 'idle' | 'hydrating' | 'ready' | 'unavailable'
 
 interface ShellLayoutState extends ShellLayoutRecord {
   status: ShellLayoutStatus
-  /** In-memory only: whether the graph is open. Never persisted. */
-  graphOpen: boolean
 
   hydrate: () => Promise<void>
   setRailExpanded: (expanded: boolean) => void
@@ -60,8 +58,7 @@ interface ShellLayoutState extends ShellLayoutRecord {
   setSidePanelWidth: (width: number) => void
   setSshSectionVisible: (visible: boolean) => void
   setSshSectionHeight: (height: number) => void
-  setGraphHeight: (height: number) => void
-  setGraphOpen: (open: boolean) => void
+  setGitHistoryDetailWidth: (width: number) => void
   setLastColumnTab: (projectId: string, tab: ShellLastColumnTab) => void
   /** Stores `normalizePath(path)`; `null` clears the pick. */
   setWorktreePick: (projectId: string, path: string | null) => void
@@ -89,7 +86,7 @@ function snapshotOf(state: ShellLayoutRecord): ShellLayoutRecord {
     sidePanelWidth: state.sidePanelWidth,
     sshSectionVisible: state.sshSectionVisible,
     sshSectionHeight: state.sshSectionHeight,
-    graphHeight: state.graphHeight,
+    gitHistoryDetailWidth: state.gitHistoryDetailWidth,
     lastColumnTabByProject: { ...state.lastColumnTabByProject },
     worktreePickByProject: { ...state.worktreePickByProject }
   }
@@ -144,15 +141,17 @@ function withoutPendingRemovals(record: ShellLayoutRecord): ShellLayoutRecord {
   return { ...record, lastColumnTabByProject, worktreePickByProject }
 }
 
-/** Applies queued removals to the live state once hydration has settled. */
-function flushPendingRemovals(): void {
-  if (pendingRemovedProjects.size === 0) return
+/** Applies queued removals to the live state once hydration has settled;
+ * `true` when it saved the result. */
+function flushPendingRemovals(): boolean {
+  if (pendingRemovedProjects.size === 0) return false
   const { lastColumnTabByProject, worktreePickByProject } = withoutPendingRemovals(
     snapshotOf(useShellLayoutStore.getState())
   )
   pendingRemovedProjects.clear()
   useShellLayoutStore.setState({ lastColumnTabByProject, worktreePickByProject })
   persistSnapshot()
+  return true
 }
 
 async function runHydration(): Promise<void> {
@@ -170,8 +169,11 @@ async function runHydration(): Promise<void> {
         log('warn', `[shell] unsupported shell-layout version ${version}; layout is not saved`)
         return
       }
-      set({ ...sanitizeShellLayout(result.data), status: 'ready' })
-      flushPendingRemovals()
+      const record = sanitizeShellLayout(result.data)
+      // A record older than the current version is saved as the current one.
+      const upgraded = typeof version !== 'number' || version < SHELL_LAYOUT_VERSION
+      set({ ...record, status: 'ready' })
+      if (!flushPendingRemovals() && upgraded) persistSnapshot()
       log('info', '[shell] shell layout hydrated')
       return
     }
@@ -222,7 +224,6 @@ async function runHydration(): Promise<void> {
 export const useShellLayoutStore = create<ShellLayoutState>((_set, get) => ({
   ...defaultShellLayoutRecord(),
   status: 'idle',
-  graphOpen: true,
 
   hydrate: () => {
     if (hydration) return hydration
@@ -255,20 +256,10 @@ export const useShellLayoutStore = create<ShellLayoutState>((_set, get) => ({
     mutate('setSshSectionHeight', () => ({
       sshSectionHeight: clampToBounds(height, SHELL_LAYOUT_BOUNDS.sshSectionHeight)
     })),
-  setGraphHeight: (height) =>
-    mutate('setGraphHeight', () => ({
-      graphHeight: clampToBounds(height, SHELL_LAYOUT_BOUNDS.graphHeight)
+  setGitHistoryDetailWidth: (width) =>
+    mutate('setGitHistoryDetailWidth', () => ({
+      gitHistoryDetailWidth: clampToBounds(width, SHELL_LAYOUT_BOUNDS.gitHistoryDetailWidth)
     })),
-  setGraphOpen: (open) => {
-    if (typeof open !== 'boolean') return
-    // In-memory only: no persist, but gated like every other mutation.
-    const { status } = get()
-    if (status !== 'ready' && status !== 'unavailable') {
-      logIgnored('setGraphOpen', status)
-      return
-    }
-    useShellLayoutStore.setState({ graphOpen: open })
-  },
   setLastColumnTab: (projectId, tab) => {
     // SSH is a mode, never a last tab: anything else is ignored.
     if (!projectId || projectId === '__proto__' || !isShellLastColumnTab(tab)) return
@@ -319,10 +310,10 @@ export const useShellLayoutStore = create<ShellLayoutState>((_set, get) => ({
     try {
       const result = await persistenceApi.delete(editorStateKey(projectId))
       if (!result.success && result.code !== 'KEY_NOT_FOUND') {
-        log('warn', `[shell] editor-state cleanup failed: ${result.code ?? 'UNKNOWN'}`)
+        log('warn', `[shell] workspace record cleanup failed: ${result.code ?? 'UNKNOWN'}`)
       }
     } catch {
-      log('warn', '[shell] editor-state cleanup failed: UNKNOWN')
+      log('warn', '[shell] workspace record cleanup failed: UNKNOWN')
     }
   }
 }))
@@ -331,7 +322,7 @@ export const useShellLayoutStore = create<ShellLayoutState>((_set, get) => ({
 export function resetShellLayoutStoreForTests(): void {
   hydration = null
   pendingRemovedProjects.clear()
-  useShellLayoutStore.setState({ ...defaultShellLayoutRecord(), status: 'idle', graphOpen: true })
+  useShellLayoutStore.setState({ ...defaultShellLayoutRecord(), status: 'idle' })
 }
 
 export const useShellLayoutStatus = (): ShellLayoutStatus =>
@@ -345,8 +336,8 @@ export const useSshSectionVisible = (): boolean =>
   useShellLayoutStore((state) => state.sshSectionVisible)
 export const useSshSectionHeight = (): number =>
   useShellLayoutStore((state) => state.sshSectionHeight)
-export const useGraphHeight = (): number => useShellLayoutStore((state) => state.graphHeight)
-export const useGraphOpen = (): boolean => useShellLayoutStore((state) => state.graphOpen)
+export const useGitHistoryDetailWidth = (): number =>
+  useShellLayoutStore((state) => state.gitHistoryDetailWidth)
 export const useLastColumnTab = (projectId: string): ShellLastColumnTab | undefined =>
   useShellLayoutStore((state) => state.lastColumnTabByProject[projectId])
 export const useWorktreePick = (projectId: string): string | undefined =>

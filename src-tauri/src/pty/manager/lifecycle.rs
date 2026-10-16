@@ -10,8 +10,6 @@ impl PtyManager {
             .ok_or_else(|| format!("Terminal not found: {}", id))?
             .clone();
 
-        instance.update_activity();
-
         let mut writer_guard = instance.writer.lock().await;
 
         let writer = writer_guard
@@ -41,7 +39,6 @@ impl PtyManager {
             resizer(cols, rows)?;
             *instance.cols.write() = cols;
             *instance.rows.write() = rows;
-            instance.update_activity();
             return Ok(());
         }
 
@@ -57,9 +54,7 @@ impl PtyManager {
 
                 *instance.cols.write() = cols;
                 *instance.rows.write() = rows;
-                instance.update_activity();
-
-                return Ok(());
+                        return Ok(());
             }
         }
 
@@ -82,8 +77,6 @@ impl PtyManager {
 
         *instance.cols.write() = cols;
         *instance.rows.write() = rows;
-        instance.update_activity();
-
         Ok(())
     }
 
@@ -112,7 +105,7 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        self.release_terminal_slot();
+        let project_id = instance.project_id.clone();
 
         // Wrap blocking cleanup in spawn_blocking to avoid panic
         let instance_clone = instance.clone();
@@ -128,6 +121,7 @@ impl PtyManager {
         self.exit_code_tracker.remove_terminal(id);
         self.terminal_events.remove(id);
         self.claims.remove(id);
+        self.set_observer.notify(project_id.as_deref());
 
         Ok(())
     }
@@ -143,7 +137,7 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        self.release_terminal_slot();
+        let project_id = instance.project_id.clone();
 
         let instance_clone = instance.clone();
         tokio::task::spawn_blocking(move || {
@@ -157,40 +151,9 @@ impl PtyManager {
         self.exit_code_tracker.remove_terminal(id);
         self.terminal_events.remove(id);
         self.claims.remove(id);
+        self.set_observer.notify(project_id.as_deref());
 
         Ok(())
-    }
-
-    /// Add a renderer reference to a terminal
-    pub fn add_renderer_ref(&self, id: &str, renderer_id: &str) -> Result<(), String> {
-        self.terminals
-            .read()
-            .get(id)
-            .ok_or_else(|| format!("Terminal not found: {}", id))
-            .map(|instance| instance.add_renderer_ref(renderer_id.to_string()))
-    }
-
-    /// Remove a renderer reference from a terminal
-    pub fn remove_renderer_ref(&self, id: &str, renderer_id: &str) -> Result<(), String> {
-        self.terminals
-            .read()
-            .get(id)
-            .ok_or_else(|| format!("Terminal not found: {}", id))
-            .map(|instance| instance.remove_renderer_ref(renderer_id))
-    }
-
-    /// Update a terminal's orphan-reaping protection.
-    ///
-    /// Protection is enabled at spawn and should be disabled only when the
-    /// terminal is genuinely released by the renderer (its project is closed or
-    /// the terminal tab is closed). Once unprotected AND lacking renderer refs,
-    /// the terminal becomes eligible for orphan reaping again. This is a no-op
-    /// (rather than an error) when the terminal is already gone, so callers can
-    /// release idempotently.
-    pub fn set_protected(&self, id: &str, protected: bool) {
-        if let Some(instance) = self.terminals.read().get(id) {
-            instance.set_protected(protected);
-        }
     }
 
     pub fn terminal_events(&self) -> TerminalEventHub {
@@ -287,6 +250,21 @@ impl PtyManager {
         self.terminals.read().values().cloned().collect()
     }
 
+    /// Ids of the live terminals bound to `project_id` (the write-once project
+    /// stamped at spawn), sorted for a stable listing. The project registry
+    /// refuses to remove or archive a project while this is non-empty.
+    pub fn terminal_ids_for_project(&self, project_id: &str) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .terminals
+            .read()
+            .values()
+            .filter(|instance| instance.project_matches(project_id))
+            .map(|instance| instance.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
     /// Get terminal count
     pub fn get_count(&self) -> usize {
         self.terminals.read().len()
@@ -294,7 +272,7 @@ impl PtyManager {
 
     /// Check if terminal limit is reached
     pub fn is_limit_reached(&self) -> bool {
-        self.active_terminal_slots.load(Ordering::SeqCst) >= GLOBAL_TERMINAL_LIMIT
+        self.live_terminal_count() >= GLOBAL_TERMINAL_LIMIT
     }
 
     /// Kill all terminals (best-effort), used as app-exit safety net.
@@ -313,7 +291,7 @@ impl PtyManager {
                 None => continue,
             };
 
-            self.release_terminal_slot();
+                let project_id = instance.project_id.clone();
 
             // Wrap blocking cleanup in spawn_blocking to avoid panic
             let instance_clone = instance.clone();
@@ -332,32 +310,9 @@ impl PtyManager {
             exit_code_tracker.remove_terminal(&id);
             self.terminal_events.remove(&id);
             self.claims.remove(&id);
+            self.set_observer.notify(project_id.as_deref());
         }
     }
-
-    /// Update orphan detection settings (timeout in milliseconds)
-    pub fn update_orphan_detection(&self, enabled: bool, timeout_ms: Option<u64>) {
-        self.orphan_detection_enabled
-            .store(enabled, Ordering::Relaxed);
-        if let Some(timeout) = timeout_ms {
-            self.orphan_timeout_ms.store(timeout, Ordering::Relaxed);
-        }
-    }
-
-    /// Update orphan detection settings (timeout in minutes, for async API compatibility)
-    pub async fn update_orphan_detection_settings(
-        &self,
-        enabled: bool,
-        timeout_minutes: Option<u64>,
-    ) {
-        self.orphan_detection_enabled
-            .store(enabled, Ordering::Relaxed);
-        if let Some(timeout) = timeout_minutes {
-            self.orphan_timeout_ms
-                .store(timeout * 60 * 1000, Ordering::Relaxed);
-        }
-    }
-
 
     /// The live terminal whose spawn carried `command_id` (AD-5 entity
     /// lookup: a spawn resend whose ledger outcome is gone finds its PTY by the
@@ -426,7 +381,7 @@ impl PtyManager {
     /// attachment task alive at re-issue time is stale by definition, so
     /// `old != 0` still severs it.
     ///
-    /// #851 (second device): terminals with a LIVE web attachment on another
+    /// #851 (second device): terminals with a LIVE attachment on another
     /// connection now get a SHARED claim (`issue_shared` appends a digest
     /// WITHOUT invalidating the existing holder, generation unchanged) plus
     /// `live_attachment: true` ownership info — so a second device's
@@ -447,22 +402,23 @@ impl PtyManager {
             .map(|instance| {
                 let cols = *instance.cols.read();
                 let rows = *instance.rows.read();
-                let live_attachment = instance.has_web_attachment();
+                let live_attachment = instance.has_live_attachment();
                 let claim = if live_attachment {
                     // #851: another connection holds a live forwarder —
                     // APPEND a shared credential rather than replacing the
                     // record. The existing holder's lease keeps verifying
                     // and its forwarder stays attached (no generation bump);
                     // the listing connection may now attach read/write too.
-                    // A shared issuance failure (revoked/unknown) collapses
-                    // to the same empty-string contract as before — no
-                    // claim offered, caller falls back to spawn.
+                    // A shared issuance failure (revoked/unknown) offers no
+                    // claim: the caller falls back to spawn.
                     self.claims
                         .issue_shared(&instance.id, instance.project_id.as_deref())
-                        .unwrap_or_default()
+                        .ok()
                 } else {
-                    self.claims
-                        .issue(&instance.id, instance.project_id.as_deref())
+                    Some(
+                        self.claims
+                            .issue(&instance.id, instance.project_id.as_deref()),
+                    )
                 };
                 let info = TerminalInfo {
                     id: instance.id.clone(),
@@ -482,15 +438,15 @@ impl PtyManager {
     }
 
     /// Set the app window hidden state.
-    /// When hidden=true, orphan detection will not kill orphaned terminals
-    /// and kill() operations are deferred. Prevents ConPTY lifecycle issues
+    /// When hidden=true, kill() operations and the exited-PTY sweep are
+    /// deferred. Prevents ConPTY lifecycle issues
     /// on Windows where window minimize can cause PTY processes to die.
     pub fn set_hidden(&self, hidden: bool) {
         self.is_hidden.store(hidden, Ordering::Relaxed);
         if hidden {
-            log::info!("[PtyManager] App window hidden — killing and orphan cleanup deferred");
+            log::info!("[PtyManager] App window hidden — killing and exited-terminal cleanup deferred");
         } else {
-            log::info!("[PtyManager] App window visible — killing and orphan cleanup resumed");
+            log::info!("[PtyManager] App window visible — killing and exited-terminal cleanup resumed");
         }
     }
 

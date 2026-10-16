@@ -13,8 +13,10 @@ use super::cwd_tracker::CwdTracker;
 use super::{TerminalEvent, TerminalEventHub};
 
 mod commands;
+mod commit_detail;
 mod commit_stamp;
 mod diff_stat;
+mod git_exec;
 mod polling;
 mod resolve;
 mod types;
@@ -41,6 +43,10 @@ pub use commands::{
     git_checkout_branch, git_commit_stamped, git_create_branch, git_discard_file,
     git_get_commit_context, git_get_diff, git_get_log, git_get_status_detail, git_push_current,
     git_stage_file, git_stage_hunk, git_unstage_file, git_unstage_hunk,
+};
+pub use commit_detail::{
+    git_get_commit_detail, git_get_commit_file_diff, CommitDetailError, GitCommitDetail,
+    GitCommitFileDiff,
 };
 pub use diff_stat::{git_get_diff_stat, DiffStatError, GitDiffStat};
 pub use resolve::{resolve_executable, resolve_git_binary};
@@ -486,9 +492,7 @@ impl GitTracker {
         let mut command = backend_command(resolve_git_binary());
         command
             .args(args.iter().map(|a| a.as_ref()))
-            .current_dir(cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .current_dir(cwd);
         Self::spawn_and_wait(command, args, cwd, timeout_ms)
     }
 
@@ -501,47 +505,33 @@ impl GitTracker {
             .args(args)
             .current_dir(cwd)
             .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdin(Stdio::null());
         Self::spawn_and_wait(command, args, cwd, timeout_ms)
     }
 
-    /// Spawn a prepared git `Command` and wait up to `timeout_ms`, killing the
-    /// child on timeout. `args`/`cwd` are used only for the timeout log line.
+    /// `args`/`cwd` are used only for the timeout log line.
     fn spawn_and_wait<S: AsRef<std::ffi::OsStr>>(
         mut command: Command,
         args: &[S],
         cwd: &str,
         timeout_ms: u64,
     ) -> Option<std::process::Output> {
-        let mut child = command.spawn().ok()?;
-
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => return child.wait_with_output().ok(),
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        let rendered: Vec<String> = args
-                            .iter()
-                            .map(|a| a.as_ref().to_string_lossy().into_owned())
-                            .collect();
-                        log::warn!(
-                            "[GitTracker] Timed out running git {} in {}",
-                            rendered.join(" "),
-                            cwd
-                        );
-                        return None;
-                    }
-
-                    std::thread::sleep(Duration::from_millis(25));
-                }
-                Err(_) => return None,
+        let child = git_exec::spawn_git(&mut command, git_exec::StdoutCap::Unbounded).ok()?;
+        match child.wait(timeout_ms) {
+            Ok(output) => Some(output),
+            Err(git_exec::GitWaitError::TimedOut) => {
+                let rendered: Vec<String> = args
+                    .iter()
+                    .map(|a| a.as_ref().to_string_lossy().into_owned())
+                    .collect();
+                log::warn!(
+                    "[GitTracker] Timed out running git {} in {}",
+                    rendered.join(" "),
+                    cwd
+                );
+                None
             }
+            Err(git_exec::GitWaitError::Io(_)) => None,
         }
     }
 
@@ -560,6 +550,10 @@ impl GitTracker {
 }
 
 #[cfg(test)]
+mod commit_detail_tests;
+#[cfg(test)]
 mod diff_stat_tests;
+#[cfg(test)]
+mod git_exec_tests;
 #[cfg(test)]
 mod tests;

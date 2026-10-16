@@ -18,6 +18,7 @@ import {
   ContextMenuSeparator
 } from '@/components/ui/context-menu'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { useFileExplorerStore } from '@/stores/file-explorer-store'
 
 interface FileTreeContextMenuContentProps {
   entry: DirectoryEntry
@@ -33,8 +34,6 @@ interface FileTreeContextMenuContentProps {
   onOpenInTerminal: (dirPath: string) => void
   onOpenWithExternal: (filePath: string) => void
   onShowInFileManager: (path: string) => void
-  selectedCount?: number
-  hasClipboardContent?: boolean
 }
 
 const ICON_CLASS = 'mr-2 h-3.5 w-3.5'
@@ -52,7 +51,17 @@ const ICON_CLASS = 'mr-2 h-3.5 w-3.5'
  * items are gated by `isTauriContext()` (absent on web, not just disabled) so
  * the FileExplorer parity invariants stay green.
  */
-export function FileTreeContextMenuContent({
+export function FileTreeContextMenuContent(
+  props: FileTreeContextMenuContentProps
+): React.JSX.Element {
+  return (
+    <ContextMenuContent className="w-56">
+      <FileTreeContextMenuItems {...props} />
+    </ContextMenuContent>
+  )
+}
+
+function FileTreeContextMenuItems({
   entry,
   onNewFile,
   onNewFolder,
@@ -65,16 +74,16 @@ export function FileTreeContextMenuContent({
   onDuplicate,
   onOpenInTerminal,
   onOpenWithExternal,
-  onShowInFileManager,
-  selectedCount = 1,
-  hasClipboardContent = false
+  onShowInFileManager
 }: FileTreeContextMenuContentProps): React.JSX.Element {
+  const selectedCount = useFileExplorerStore((state) => state.selectedPaths.size)
+  const hasClipboardContent = useFileExplorerStore((state) => state.clipboard !== null)
   const isDir = entry.type === 'directory'
   const selectionLabel = selectedCount > 1 ? ` (${selectedCount})` : ''
   const isDesktop = isTauriContext()
 
   return (
-    <ContextMenuContent className="w-56">
+    <>
       {/* New File/Folder (directories only) */}
       {isDir && (
         <>
@@ -146,6 +155,6 @@ export function FileTreeContextMenuContent({
       <ContextMenuItem variant="destructive" onSelect={() => onDelete(entry)}>
         <Trash2 className={ICON_CLASS} /> Delete{selectionLabel}…
       </ContextMenuItem>
-    </ContextMenuContent>
+    </>
   )
 }

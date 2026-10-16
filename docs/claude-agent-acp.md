@@ -79,12 +79,71 @@ For an explicit state directory, pass `--state-dir PATH` after `claude`.
 Auth-mode changes are written to `PATH/claude-auth-mode`; the API key stays
 in the OS keychain.
 
+## Claude accounts
+
+In Claude Code login mode, a host can hold several Claude subscription logins
+(Accounts). Each Project uses one Account; a Project with no choice uses the
+Default Account. The built-in Account uses the host's normal Claude config
+folder (`~/.claude`, or `CLAUDE_CONFIG_DIR` when the host sets it). See
+[ADR-0004](./adr/0004-claude-accounts-linked-config-dirs.md).
+
+Every other Account has its own folder at `<state dir>/claude-accounts/<id>`.
+Termul starts the Claude agent of that Account with `CLAUDE_CONFIG_DIR` set to
+it. The login and `.claude.json` stay in that folder; `projects`, `skills`,
+`plugins`, `rules`, `plans`, `file-history`, `agents`, `commands`,
+`settings.json` and `CLAUDE.md` are links back to the shared folder, so session
+history, settings and skills are the same on every Account. Termul never reads
+or refreshes the login tokens; Claude Code keeps them in its own credential
+store. The Account list (`<state dir>/claude-accounts.json`) holds names and
+ids only.
+
+Headless hosts manage Accounts with:
+
+```sh
+termul-server claude account list
+termul-server claude account add "Work"
+termul-server claude account login <id>
+termul-server claude account rename <id> "Office"
+termul-server claude account default <id>
+termul-server claude account project <project-id> <id>
+termul-server claude account project <project-id> default
+termul-server claude account remove <id>
+```
+
+### Account usage
+
+Termul reads the usage windows of each Account (5-hour session, weekly, and
+per-model weekly windows, with percent used and reset time) through the Claude
+Agent SDK that ships with the managed Claude ACP package. It runs a short
+`node` probe with the Account's `CLAUDE_CONFIG_DIR`, so Claude Code uses and
+refreshes its own login; Termul never reads a token, and the probe prints only
+the limits and the plan type. The probe asks only for plan limits
+(`skipBehaviors`), writes no session file, and loads no MCP servers or user
+settings. Reads are cached on the host for 5 minutes; a forced refresh reuses a
+read younger than 60 seconds. An Account with no login reads as `signed_out`;
+API-key mode reads as `unavailable`. The SDK usage call is experimental, so an
+unknown reply shape yields no windows instead of an error.
+
+During a turn, the Claude ACP adapter also attaches the live rate-limit state
+(`allowed`, `allowed_warning`, or `rejected`, with reset time and percent) to
+`usage_update` events. Termul forwards it as `rateLimit` on `acp:usage_update`.
+
+`remove` signs the Claude CLI out of that Account, deletes its folder (never
+the shared folder), and moves its Projects back to the Default Account. The
+built-in Account cannot be removed. On Windows, a link that cannot be created
+(file links can need Developer Mode) is logged and left out; that entry is then
+separate for the Account.
+
 ## Remote browser clients
 
 Authenticated remote users can launch Claude ACP through the host and use the
 host's configured credential. Credential status and management remain local to
 the server host's CLI. There are no HTTP or WS routes for reading or changing
-Claude credentials.
+Claude credentials. A remote client can list the Accounts (names, ids, and
+signed-in state) and their usage, and choose the Default or a Project Account
+(`list_claude_accounts`, `list_claude_usage`, `set_default_claude_account`,
+`set_project_claude_account`); view-only connections can only list. Adding,
+signing in, renaming and removing an Account stay on the host.
 
 ## Per-project Claude profiles
 

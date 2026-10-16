@@ -1,5 +1,6 @@
 import type { AppCloseRequestedCallback, IpcResult, WindowApi } from '@shared/types/ipc.types'
 import { getCurrentWindow, LogicalPosition, LogicalSize } from '@tauri-apps/api/window'
+import { logFrontendError } from './log-api'
 import { isWindows } from './platform'
 
 /**
@@ -49,6 +50,16 @@ function isTauriContext(): boolean {
     typeof window !== 'undefined' &&
     typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
   )
+}
+
+// Registered app-close listeners (the close/hide decision owners). Other
+// close listeners prevent their own event only while one exists, so the
+// window still closes when no owner is mounted (issue #1146).
+let appCloseOwners = 0
+
+/** Whether an app-close listener currently owns the close/hide decision. */
+export function hasAppCloseOwner(): boolean {
+  return appCloseOwners > 0
 }
 
 /**
@@ -114,7 +125,11 @@ export function createTauriWindowApi(): WindowApi {
           try {
             await window.hide()
           } catch (error) {
-            console.error('Failed to hide window to tray:', error)
+            void logFrontendError({
+              source: 'tauri-window-api',
+              message: `Failed to hide window to tray: ${error instanceof Error ? error.message : String(error)}`,
+              stack: error instanceof Error ? error.stack : undefined
+            })
           }
           return
         }
@@ -124,9 +139,25 @@ export function createTauriWindowApi(): WindowApi {
           event.preventDefault()
         }
       })
+      // Count the owner before registration settles: an unprevented close in
+      // that window would quit the app, while an early count at worst ignores
+      // one click that arrives before this listener is live.
+      appCloseOwners += 1
+      let counted = true
+      const release = (): void => {
+        if (!counted) return
+        counted = false
+        appCloseOwners -= 1
+      }
+      void unlisten.catch(release)
       // Return sync cleanup function - unwrap the Promise
       return () => {
-        void unlisten.then((fn) => fn())
+        release()
+        // A failed registration is already handled (and released) above.
+        void unlisten.then(
+          (fn) => fn(),
+          () => undefined
+        )
       }
     },
 

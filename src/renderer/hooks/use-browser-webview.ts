@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useNativeWebviewOccluded } from '@/hooks/use-native-webview-occlusion'
+import { getAppliedUiZoom } from '@/hooks/use-ui-zoom'
 import {
   browserTabCreate,
   browserTabDestroy,
@@ -20,13 +21,14 @@ interface BrowserBounds {
   height: number
 }
 
-function getElementBounds(el: HTMLElement): BrowserBounds {
+function measureLogicalBounds(el: HTMLElement): BrowserBounds {
   const rect = el.getBoundingClientRect()
+  const zoom = getAppliedUiZoom()
   return {
-    x: rect.x,
-    y: rect.y,
-    width: rect.width,
-    height: rect.height
+    x: rect.x * zoom,
+    y: rect.y * zoom,
+    width: rect.width * zoom,
+    height: rect.height * zoom
   }
 }
 
@@ -60,7 +62,7 @@ export function useBrowserWebview(browserTabId: string, paneVisible: boolean, ur
   const updateBounds = useCallback((): Promise<void> => {
     const el = containerRef.current
     if (!el || !createdRef.current) return Promise.resolve()
-    const bounds = getElementBounds(el)
+    const bounds = measureLogicalBounds(el)
     return browserTabResize(browserTabId, bounds)
       .then((result) => {
         if (!result.success) {
@@ -91,7 +93,7 @@ export function useBrowserWebview(browserTabId: string, paneVisible: boolean, ur
     useBrowserSessionStore.getState().setLoading(browserTabId, true)
     armLoadingTimeout()
 
-    const bounds = getElementBounds(el)
+    const bounds = measureLogicalBounds(el)
     browserTabCreate(browserTabId, urlRef.current, bounds)
       .then((result) => {
         if (!mountedRef.current || mountToken !== mountTokenRef.current) {
@@ -107,6 +109,9 @@ export function useBrowserWebview(browserTabId: string, paneVisible: boolean, ur
         }
         if (result.success) {
           createdRef.current = true
+          useBrowserSessionStore
+            .getState()
+            .setAgentControlled(browserTabId, result.data.agentControlled)
           // Resync bounds after creation. The container was measured once at
           // call time (before browserTabCreate above), but the pane layout can
           // still be mid-transition — pane wrappers use `transition-all
@@ -124,7 +129,7 @@ export function useBrowserWebview(browserTabId: string, paneVisible: boolean, ur
             if (!mountedRef.current || mountToken !== mountTokenRef.current) return
             const elNow = containerRef.current
             if (!elNow) return
-            const next = getElementBounds(elNow)
+            const next = measureLogicalBounds(elNow)
             // Wait until the full rect (position + size) is stable across two
             // consecutive frames: a same-size container can still MOVE during a
             // layout transition (sidebar toggle, gutter drag), so x/y must

@@ -33,6 +33,7 @@ import { ChatMarkdownCode } from './chat-markdown-code'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
 import { remarkTermulImages, resolveLocalImagePath } from './chat-markdown-images'
 import { ChatMarkdownTable } from './chat-markdown-table'
+import { ChatMarkdownSpan } from './chat-markdown-word'
 
 /** Always-on remark plugins: streamdown defaults plus the termul-image rewrite. */
 const IMAGE_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulImages]
@@ -84,6 +85,7 @@ const STREAMDOWN_CONTROLS = {
 
 const STREAMDOWN_COMPONENTS = {
   code: ChatMarkdownCode,
+  span: ChatMarkdownSpan,
   table: ChatMarkdownTable
 } as const
 
@@ -96,7 +98,7 @@ const STREAMDOWN_ANIMATED = {
   duration: 350,
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
   sep: 'word',
-  stagger: 60
+  stagger: 12
 } as const
 
 /**

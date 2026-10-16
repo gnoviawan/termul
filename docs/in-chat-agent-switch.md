@@ -75,9 +75,12 @@ cancel-then-switch is offered there.
 The old agent is retired, not killed mid-flight. After a switch:
 
 - The old session's process is detached from the project's reuse key at
-  switch time (the old session record stays live and readable). The idle
-  reaper stops the process once it is idle and no chat tab still shows
-  its sessions — a running turn or an open tab keeps it up.
+  switch time (the old session record stays live and readable). The host's
+  idle reaper stops the process after a whole idle window (default 30
+  minutes; desktop: Settings → AI Agents → Close idle chats after, or
+  `TERMUL_AGENT_IDLE_REAP_SECS`; server: `--agent-idle-window-secs`) with
+  no activity — a running turn, a pending approval or a running agent
+  terminal keeps it up; an open tab does not.
 - No further old-agent output lands in the new session's chat after the
   switch.
 

@@ -18,7 +18,13 @@ import {
 } from '@/lib/agents/acp-registry'
 import { acpCatalogApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
-import { agentReuseKey, configIdFromReuseKey, detachedReuseKey } from './acp-reuse-keys'
+import {
+  agentReuseKey,
+  configIdFromReuseKey,
+  detachedReuseKey,
+  isDetachedReuseKey,
+  parseReuseKey
+} from './acp-reuse-keys'
 import type { AcpGet, AcpSet, AcpState } from './acp-store'
 
 /**
@@ -241,7 +247,8 @@ export function detachAgentForNewCredentials(
   cwd: string
 ): void {
   const { get, set, isEphemeralSession } = deps
-  const reuseKey = agentReuseKey(configId, cwd)
+  const trimmedCwd = cwd.trim()
+  const reuseKey = agentReuseKey(configId, trimmedCwd)
   for (const key of [
     ...Object.keys(get().preparedSessions),
     ...Object.keys(get().preparingChatKeys),
@@ -250,25 +257,32 @@ export function detachAgentForNewCredentials(
     if (key.startsWith(`${reuseKey}\0`)) get().cancelPreparedChat(key)
   }
   // Preserve the old process and its active sessions. Only future launches
-  // may consume the newly stored credentials.
+  // may consume the newly stored credentials. Detach every Project-scoped
+  // key for this config and cwd, not only the legacy two-segment key.
   set((s) => {
     const configToLiveAgent = { ...s.configToLiveAgent }
-    const previousAgent = configToLiveAgent[reuseKey]
-    delete configToLiveAgent[reuseKey]
-    if (
-      previousAgent &&
-      Object.values(s.sessions).some(
-        (session) =>
-          session.agentId === previousAgent &&
-          session.status !== 'closed' &&
-          !isEphemeralSession(session.id)
-      )
-    ) {
-      // Keep the old agent resolvable for live chat history, model changes,
-      // and cleanup, without allowing the next prepare to reuse its key.
-      configToLiveAgent[detachedReuseKey(reuseKey, previousAgent)] = previousAgent
+    let changed = false
+    for (const [key, previousAgent] of Object.entries(s.configToLiveAgent)) {
+      if (isDetachedReuseKey(key)) continue
+      const parsed = parseReuseKey(key)
+      if (parsed.configId !== configId || parsed.cwd !== trimmedCwd) continue
+      delete configToLiveAgent[key]
+      changed = true
+      if (
+        previousAgent &&
+        Object.values(s.sessions).some(
+          (session) =>
+            session.agentId === previousAgent &&
+            session.status !== 'closed' &&
+            !isEphemeralSession(session.id)
+        )
+      ) {
+        // Keep the old agent resolvable for live chat history, model changes,
+        // and cleanup, without allowing the next prepare to reuse its key.
+        configToLiveAgent[detachedReuseKey(key, previousAgent)] = previousAgent
+      }
     }
-    return { configToLiveAgent }
+    return changed ? { configToLiveAgent } : {}
   })
 }
 

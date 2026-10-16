@@ -194,6 +194,40 @@ describe('WatchClient', () => {
     expect(sent).toHaveLength(1)
   })
 
+  it('tells the handlers about a refusal for a scope that does not exist, and stops asking', async () => {
+    const { transport, sent, failNext } = makeTransport()
+    failNext(Object.assign(new Error('project not found'), { code: 'not_found' }))
+    const client = new WatchClient(transport)
+    const onRefused = vi.fn()
+    client.subscribe('fs', { onState: vi.fn(), onRefused }, 'p-gone')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sent).toHaveLength(1)
+    expect(onRefused).toHaveBeenCalledTimes(1)
+    expect(onRefused).toHaveBeenCalledWith(expect.objectContaining({ code: 'not_found' }))
+  })
+
+  it('keeps watches of one name apart by scope', async () => {
+    const { transport, sent } = makeTransport()
+    const client = new WatchClient(transport)
+    const a = vi.fn()
+    const b = vi.fn()
+    client.subscribe('store', { onState: a }, 'key-a')
+    client.subscribe('store', { onState: b }, 'key-b')
+    await flush()
+    expect(sent.map((request) => request.scope)).toEqual(['key-a', 'key-b'])
+
+    client.handleFrame({
+      type: 'watch',
+      watch: 'store',
+      scope: 'key-b',
+      revision: { hostEpoch: EPOCH, n: 1 },
+      reset: true,
+      state: { exists: true, value: 1 }
+    })
+    expect(a).not.toHaveBeenCalled()
+    expect(b).toHaveBeenCalledWith({ exists: true, value: 1 })
+  })
+
   it('shares one subscription between handlers and refreshes state for all when one joins', async () => {
     const { transport, sent } = makeTransport()
     const client = new WatchClient(transport)

@@ -1,6 +1,6 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CONTEXT_BAR_SETTINGS_KEY } from '@/types/settings'
 import TauriApp from './TauriApp'
 
 const { mockPersistenceRead } = vi.hoisted(() => ({
@@ -101,9 +101,8 @@ vi.mock('./hooks/use-keyboard-shortcuts', () => ({
   useKeyboardShortcutsLoader: () => undefined
 }))
 
-vi.mock('./hooks/use-projects-persistence', () => ({
-  useProjectsLoader: () => undefined,
-  useProjectsAutoSave: () => undefined
+vi.mock('./hooks/use-project-registry', () => ({
+  useProjectRegistry: () => undefined
 }))
 
 vi.mock('./hooks/use-menu-updater-listener', () => ({
@@ -128,6 +127,14 @@ vi.mock('./hooks/use-visibility-state', () => ({
 
 const { mockUseSmoothWheelScroll } = vi.hoisted(() => ({
   mockUseSmoothWheelScroll: vi.fn(() => undefined)
+}))
+
+const { mockUsePersistenceErrorToasts } = vi.hoisted(() => ({
+  mockUsePersistenceErrorToasts: vi.fn(() => undefined)
+}))
+
+vi.mock('./hooks/use-persistence-error-toasts', () => ({
+  usePersistenceErrorToasts: mockUsePersistenceErrorToasts
 }))
 
 vi.mock('./hooks/use-smooth-wheel-scroll', () => ({
@@ -169,7 +176,7 @@ describe('TauriApp', () => {
     render(<TauriApp />)
 
     await waitFor(() => {
-      expect(mockPersistenceRead).toHaveBeenCalledWith(CONTEXT_BAR_SETTINGS_KEY)
+      expect(mockPersistenceRead).toHaveBeenCalledWith(PersistenceKeys.contextBarSettings)
     })
   })
 
@@ -181,5 +188,10 @@ describe('TauriApp', () => {
   it('mounts useSmoothWheelScroll in AppEffects', () => {
     render(<TauriApp />)
     expect(mockUseSmoothWheelScroll).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts the store write error toasts in AppEffects (parity with App.tsx)', () => {
+    render(<TauriApp />)
+    expect(mockUsePersistenceErrorToasts).toHaveBeenCalledTimes(1)
   })
 })

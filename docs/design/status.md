@@ -12,7 +12,7 @@ Status colour is a role, not a hue. Pair it with a label or icon — never colou
 
 `diff-modified` marks changed files in git lists. Do not use `warning` for “this file changed”. Diff line additions use `diff-added`; deletions use `destructive`.
 
-SSH (`SSHStatusBadge.tsx`): disconnected → muted; connecting **and** reconnecting → `warning`; connected → `success`; failed → `destructive`. Do not split reconnecting onto `project-orange`.
+SSH (`components/ssh/ssh-host-status.tsx`, the one source for the lamp and the state word): idle and disconnected → muted lamp; connecting → `warning` spinner; needs input → `warning`; connected → `success`; failed → `destructive`. An idle host shows no word. Do not split reconnecting onto `project-orange`.
 
 StatusBar is quiet: `h-7 border-t border-border bg-card text-2xs text-muted-foreground`. Do not use `bg-status-bar*`, `bg-project-*` or `text-primary-foreground` on the bar. The project colour is in the 14px project glyph only.
 
@@ -47,7 +47,7 @@ connected: { label: 'Connected', color: 'bg-success/20 text-success' },
 failed: { label: 'Failed', color: 'bg-destructive/20 text-destructive' },
 ```
 
-Warning copy on a banner uses `bg-warning/10 text-warning` (`WorkspaceConflictBanner`). `Alert` variants are `default` | `destructive` only (`ui/alert.tsx`) — there is no `warning` Alert.
+Warning copy on a banner uses `bg-warning/10 text-warning`. `Alert` variants are `default` | `destructive` only (`ui/alert.tsx`) — there is no `warning` Alert.
 
 Toasts (Sonner and the Radix toaster) use the active theme card: `bg-card`, `border-border`, `text-foreground`, description `text-muted-foreground`. They follow light themes and the other families. Do not enable Sonner `richColors`. Info and default icons use `muted-foreground`. Success, warning, and error icons use `success`, `warning`, and `destructive`. The card surface stays the same for every toast type. Dark appearance may add a drop shadow. Termul light uses the hairline only.
 

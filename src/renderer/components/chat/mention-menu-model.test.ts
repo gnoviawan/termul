@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
 import {
   activeMentionToken,
   buildMentionSections,
@@ -61,6 +62,30 @@ describe('activeMentionToken', () => {
   it('rejects an out-of-range caret', () => {
     expect(activeMentionToken('@auth', -1)).toBeNull()
     expect(activeMentionToken('@auth', 99)).toBeNull()
+  })
+
+  it('opens when @ is glued to a pill', () => {
+    const skill = skillToken('design', SKILL_PAD_CHAR)
+    const skillValue = `${skill}@auth`
+    expect(activeMentionToken(skillValue, skillValue.length)).toEqual({
+      at: skill.length,
+      end: skillValue.length,
+      query: 'auth'
+    })
+    const command = commandToken('compact')
+    const commandValue = `${command}@auth`
+    expect(activeMentionToken(commandValue, commandValue.length)).toEqual({
+      at: command.length,
+      end: commandValue.length,
+      query: 'auth'
+    })
+    const file = fileToken('a.ts', '/work/a.ts')
+    const fileValue = `${file}@b`
+    expect(activeMentionToken(fileValue, fileValue.length)).toEqual({
+      at: file.length,
+      end: fileValue.length,
+      query: 'b'
+    })
   })
 })
 

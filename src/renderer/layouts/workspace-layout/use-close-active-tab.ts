@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
-import { fileNeedsAttention } from '@/lib/editor-file-attention'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
-import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import { useEditorStore } from '@/stores/editor-store'
-import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
+import { closeWorkspaceTab } from '@/lib/workspace-tab-close'
+import type { WorkspaceTab } from '@/stores/workspace-store'
 
 interface UseCloseActiveTabOptions {
   activeTab: WorkspaceTab | undefined
   isAgentLauncherOpen: boolean
-  setDirtyCloseFilePath: (filePath: string | null) => void
+  closeEditorTab: (filePath: string) => boolean
 }
 
 /**
@@ -22,7 +18,7 @@ interface UseCloseActiveTabOptions {
 export function useCloseActiveTab({
   activeTab,
   isAgentLauncherOpen,
-  setDirtyCloseFilePath
+  closeEditorTab
 }: UseCloseActiveTabOptions) {
   // Ref for terminal close handler — used inside keydown effect to avoid
   // declaration-order dependency. The ref is updated each render.
@@ -30,44 +26,19 @@ export function useCloseActiveTab({
 
   /** Close the active tab (reused by keyboard shortcut and native menu event). */
   const closeActiveTab = useCallback(() => {
-    if (!activeTab) return
-    switch (activeTab.type) {
-      case 'editor': {
-        const fileState = useEditorStore.getState().openFiles.get(activeTab.filePath)
-        if (fileNeedsAttention(fileState)) {
-          setDirtyCloseFilePath(activeTab.filePath)
-        } else {
-          const didClose = useEditorStore.getState().closeFileIfIdle(activeTab.filePath)
-          if (didClose) {
-            useWorkspaceStore.getState().removeTab(activeTab.id)
-          }
-        }
-        break
-      }
-      case 'git':
-      case 'git-history':
-      case 'diff':
-        useWorkspaceStore.getState().removeTab(activeTab.id)
-        break
-      case 'terminal':
-        handleCloseTerminalRef.current?.(activeTab.terminalId, activeTab.id)
-        break
-      case 'browser':
-        useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
-        useWorkspaceStore.getState().removeTab(activeTab.id)
-        break
-      case 'agent-chat':
-        requestCloseAgentChat(activeTab.sessionId, () => {
-          useWorkspaceStore.getState().removeTab(activeTab.id)
-        })
-        break
-      case 'canvas':
-        // Unchanged: canvas has no keyboard/menu close path here.
-        break
-      default:
-        reportUnknownTabKind(activeTab, 'WorkspaceLayout.closeActiveTab', 'not closed')
-    }
-  }, [activeTab, setDirtyCloseFilePath])
+    if (!activeTab || activeTab.type === 'canvas') return
+    closeWorkspaceTab(
+      activeTab,
+      {
+        terminal: (tab) => {
+          handleCloseTerminalRef.current?.(tab.terminalId, tab.id)
+          return false
+        },
+        editor: (tab) => closeEditorTab(tab.filePath)
+      },
+      'WorkspaceLayout.closeActiveTab'
+    )
+  }, [activeTab, closeEditorTab])
 
   // Listen for native menu "Close Tab" event (macOS Cmd+W intercepted by menu bar)
   useEffect(() => {

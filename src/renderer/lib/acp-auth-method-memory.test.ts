@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/api', () => ({
@@ -8,11 +9,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { persistenceApi } from '@/lib/api'
-import {
-  ACP_AUTH_METHODS_KEY,
-  loadAuthMethodMemory,
-  saveAuthMethodMemory
-} from './acp-auth-method-memory'
+import { loadAuthMethodMemory, saveAuthMethodMemory } from './acp-auth-method-memory'
 
 describe('acp auth-method memory persistence', () => {
   beforeEach(() => {
@@ -35,7 +32,7 @@ describe('acp auth-method memory persistence', () => {
       data: stored
     })
     expect(await loadAuthMethodMemory()).toEqual(stored)
-    expect(persistenceApi.read).toHaveBeenCalledWith(ACP_AUTH_METHODS_KEY)
+    expect(persistenceApi.read).toHaveBeenCalledWith(PersistenceKeys.acpAuthMethods)
   })
 
   it('round-trips a saved map through write → load', async () => {
@@ -46,7 +43,7 @@ describe('acp auth-method memory persistence', () => {
       data: map
     })
     await saveAuthMethodMemory(map)
-    expect(persistenceApi.write).toHaveBeenCalledWith(ACP_AUTH_METHODS_KEY, map)
+    expect(persistenceApi.write).toHaveBeenCalledWith(PersistenceKeys.acpAuthMethods, map)
     expect(await loadAuthMethodMemory()).toEqual(map)
   })
 
@@ -101,7 +98,9 @@ describe('acp auth-method memory persistence', () => {
   it('writes under the dedicated key and throws on failure', async () => {
     ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
     await saveAuthMethodMemory({ 'cfg-1': 'm1' })
-    expect(persistenceApi.write).toHaveBeenCalledWith(ACP_AUTH_METHODS_KEY, { 'cfg-1': 'm1' })
+    expect(persistenceApi.write).toHaveBeenCalledWith(PersistenceKeys.acpAuthMethods, {
+      'cfg-1': 'm1'
+    })
     ;(persistenceApi.write as ReturnType<typeof vi.fn>).mockResolvedValue({
       success: false,
       error: 'disk full'

@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -9,10 +10,20 @@ import { request } from 'playwright/test'
 import type { APIRequestContext } from 'playwright-core'
 import type { WebSocket as WsSocket } from 'ws'
 import { WebSocket as WsSocketCtor } from 'ws'
+import { scopedKey, scopeOf } from '../../src/shared/types/persistence.types'
+import { WS_PROTOCOL_VERSION } from '../../src/shared/types/web-protocol.types'
 
 export const E2E_TOKEN = 'e2e-test-token-12345'
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8188)
 export const E2E_BASE_URL = `http://127.0.0.1:${E2E_PORT}`
+
+/**
+ * The `deviceId` of every browser context in the suite: playwright.config
+ * seeds it into `localStorage['termul.deviceId']`, and the WS helpers below
+ * authenticate with it, so device-scoped keys a spec seeds land in the
+ * partition the page reads (`device/<deviceId>/…`).
+ */
+export const E2E_DEVICE_ID = 'e2e-device'
 
 /**
  * One-shot crash arming for the fake ACP agent (crash-recovery suite):
@@ -55,6 +66,7 @@ export async function waitForHealth(base: string, timeoutMs = 30_000): Promise<v
 export interface SeededServer {
   child: ChildProcess
   stateDir: string
+  baseUrl: string
   projectIds: Record<'a' | 'b' | 'c' | 'e' | 'w' | 'x', string>
   stop: () => Promise<void>
 }
@@ -65,10 +77,10 @@ export function serverBinaryName(): string {
 }
 
 /**
- * Spawn an isolated termul-server with a throwaway state dir + three
- * registered projects (proj-a/b/c) + the fake long-running agent config in
- * the server-side store (`acp/agents`) so the web launcher shows a ready
- * agent without any user setup.
+ * Spawn an isolated termul-server with a throwaway state dir, register the
+ * suite's projects (proj-a/b/c/e/w/x) and seed the fake long-running agent
+ * config in the server-side store (shared `acp/agents`) so the web launcher
+ * shows a ready agent without any user setup.
  */
 export async function startSeededServer(opts: {
   serverBinary: string
@@ -89,9 +101,7 @@ export async function startSeededServer(opts: {
       '--sessions-dir',
       join(stateDir, 'sessions'),
       '--projects-file',
-      projectsFile,
-      '--project-root',
-      opts.workspaceRoot
+      projectsFile
     ],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -192,10 +202,7 @@ export async function startSeededServer(opts: {
       },
       allowTerminal: false
     }
-    await wsRequest(baseUrl, 'store_write', {
-      key: 'acp/agents',
-      value: { _version: 1, data: [agentConfig] }
-    })
+    await storeWrite('acp/agents', [agentConfig])
     seeded = true
   } catch (error) {
     await stop()
@@ -221,45 +228,6 @@ export async function startSeededServer(opts: {
   }
 }
 
-const APP_SETTINGS_STORE_KEY = 'settings/app'
-
-/**
- * Which shell the web client boots with. `classic` pins `shellLayout:
- * 'classic'` in the server-side app settings (what every pre-revamp spec was
- * written against); `default` removes the stored flag so the code default
- * applies (the revamped shell since story 30).
- */
-export type ShellSeed = 'classic' | 'default'
-
-/**
- * Read-modify-write of `settings/app`: only `shellLayout` changes, so any
- * other setting a spec seeded survives. Call before the page loads — the
- * shell is captured once per load.
- */
-export async function seedShellLayout(shell: ShellSeed): Promise<void> {
-  const reply = await wsRequest<{ value?: unknown } | null>(E2E_BASE_URL, 'store_read', {
-    key: APP_SETTINGS_STORE_KEY
-  })
-  const raw = reply?.value ?? null
-  const stored =
-    raw !== null && typeof raw === 'object' && '_version' in raw
-      ? (raw as { data?: unknown }).data
-      : raw
-  const current: Record<string, unknown> =
-    stored !== null && typeof stored === 'object' ? { ...(stored as Record<string, unknown>) } : {}
-  if (shell === 'classic') {
-    if (current.shellLayout === 'classic') return
-    current.shellLayout = 'classic'
-  } else {
-    if (!('shellLayout' in current)) return
-    delete current.shellLayout
-  }
-  await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: APP_SETTINGS_STORE_KEY,
-    value: { _version: 1, data: current }
-  })
-}
-
 /** SIGTERM → SIGKILL → wait for the process to actually exit. */
 async function killAndWait(child: ChildProcess, termGraceMs = 3_000): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
@@ -274,6 +242,101 @@ async function killAndWait(child: ChildProcess, termGraceMs = 3_000): Promise<vo
   }
 }
 
+/** Who a helper connection authenticates as; store keys under `device/<deviceId>/` are its own. */
+export interface WsIdentity {
+  deviceId: string
+  clientInstanceId: string
+}
+
+const DEFAULT_WS_IDENTITY: WsIdentity = { deviceId: E2E_DEVICE_ID, clientInstanceId: 'e2e-helper' }
+
+/**
+ * The host-store key of a logical persistence key, the way the web client
+ * maps it: `device/<deviceId>/<key>`, `shared/lww/<key>` or `shared/cas/<key>`.
+ */
+export function storeKey(logicalKey: string, identity: WsIdentity = DEFAULT_WS_IDENTITY): string {
+  return scopedKey(logicalKey, identity.deviceId)
+}
+
+interface StoreReadReply {
+  value: unknown
+  revision: number
+}
+
+/**
+ * Read a logical key. `data` is the value inside the client's
+ * `{ _version, data }` envelope (`null` when the key is absent); `value` is
+ * the stored value as-is and `revision` its store revision (0 = absent).
+ */
+export async function storeRead<T = unknown>(
+  logicalKey: string,
+  identity: WsIdentity = DEFAULT_WS_IDENTITY
+): Promise<{ data: T | null; value: unknown; revision: number }> {
+  const reply = await wsRequest<StoreReadReply>(
+    E2E_BASE_URL,
+    'store_read',
+    { key: storeKey(logicalKey, identity) },
+    undefined,
+    identity
+  )
+  const value = reply?.value ?? null
+  const data =
+    value !== null && typeof value === 'object' && '_version' in value && 'data' in value
+      ? value.data
+      : value
+  // Test-side typing of seeded data; the host stores opaque JSON.
+  return { data: data as T | null, value, revision: reply?.revision ?? 0 }
+}
+
+/**
+ * Replace a logical key with `data` (wrapped as `{ _version: 1, data }`),
+ * carrying the precondition its scope requires: none for a device key, the
+ * current `baseRevision` for a shared/lww key, `expected` + `commandId` for a
+ * shared/cas key.
+ */
+export async function storeWrite(
+  logicalKey: string,
+  data: unknown,
+  identity: WsIdentity = DEFAULT_WS_IDENTITY
+): Promise<void> {
+  await storeWriteValue(logicalKey, { _version: 1, data }, identity)
+}
+
+/** `storeWrite` for an already wrapped value (restoring what `storeRead` returned). */
+export async function storeWriteValue(
+  logicalKey: string,
+  value: unknown,
+  identity: WsIdentity = DEFAULT_WS_IDENTITY
+): Promise<void> {
+  const payload: Record<string, unknown> = { key: storeKey(logicalKey, identity), value }
+  Object.assign(payload, await storePrecondition(logicalKey, identity))
+  await wsRequest(E2E_BASE_URL, 'store_write', payload, undefined, identity)
+}
+
+/** Delete a logical key with the precondition its scope requires. */
+export async function storeDelete(
+  logicalKey: string,
+  identity: WsIdentity = DEFAULT_WS_IDENTITY
+): Promise<void> {
+  const payload: Record<string, unknown> = { key: storeKey(logicalKey, identity) }
+  Object.assign(payload, await storePrecondition(logicalKey, identity))
+  await wsRequest(E2E_BASE_URL, 'store_delete', payload, undefined, identity)
+}
+
+async function storePrecondition(
+  logicalKey: string,
+  identity: WsIdentity
+): Promise<Record<string, unknown>> {
+  switch (scopeOf(logicalKey)) {
+    case 'device':
+      return {}
+    case 'sharedLww':
+      return { baseRevision: (await storeRead(logicalKey, identity)).revision }
+    case 'sharedCas':
+      return { expected: (await storeRead(logicalKey, identity)).value, commandId: randomUUID() }
+  }
+}
+
 /**
  * Raw WS request against the relay's `/ws` (authenticate handshake included).
  * Resolves with the reply payload, rejects on `ok: false` with the code.
@@ -284,7 +347,8 @@ export function wsRequest<T = unknown>(
   baseUrl: string,
   type: string,
   payload: unknown,
-  timeoutMs = 15_000
+  timeoutMs = 15_000,
+  identity: WsIdentity = DEFAULT_WS_IDENTITY
 ): Promise<T> {
   const wsUrl = baseUrl.replace(/^http/, 'ws')
   return new Promise<T>((resolve, reject) => {
@@ -296,7 +360,11 @@ export function wsRequest<T = unknown>(
     }, timeoutMs)
     socket.on('open', () => {
       socket.send(
-        JSON.stringify({ id: 'auth', type: 'authenticate', payload: { token: E2E_TOKEN } })
+        JSON.stringify({
+          id: 'auth',
+          type: 'authenticate',
+          payload: { token: E2E_TOKEN, protocolVersion: WS_PROTOCOL_VERSION, ...identity }
+        })
       )
     })
     socket.on('message', (data: unknown) => {

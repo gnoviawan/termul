@@ -47,12 +47,6 @@ export const useTerminalRenderer = () =>
 // Strict `=== true` guards a corrupt or missing persisted value.
 export const useTerminalScreenReaderMode = () =>
   useAppSettingsStore((state) => state.settings.terminalScreenReaderMode === true)
-export const useMaxTerminalsPerProject = () =>
-  useAppSettingsStore((state) => state.settings.maxTerminalsPerProject)
-export const useOrphanDetectionEnabled = () =>
-  useAppSettingsStore((state) => state.settings.orphanDetectionEnabled)
-export const useOrphanDetectionTimeout = () =>
-  useAppSettingsStore((state) => state.settings.orphanDetectionTimeout)
 export const useConfirmTerminalClose = () =>
   useAppSettingsStore((state) => state.settings.confirmTerminalClose)
 export const useTerminalUrlOpenMode = () =>
@@ -71,6 +65,8 @@ export const useAcpSessionNewTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpSessionNewTimeoutSecs)
 export const useAcpSessionReopenTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpSessionReopenTimeoutSecs)
+export const useAgentIdleWindow = () =>
+  useAppSettingsStore((state) => state.settings.agentIdleWindowSecs)
 export const useNotifyOnTerminalIdle = () =>
   useAppSettingsStore((state) => state.settings.notifyOnTerminalIdle)
 export const useNotifyOnAgentChatTurnFinished = () =>

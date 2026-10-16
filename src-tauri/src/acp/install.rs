@@ -19,9 +19,8 @@
 //!
 //! # Per-agent serialization
 //!
-//! An `Arc<TokioMutex<()>>` map keyed by `agent_id` (mirrors
-//! `WorkspaceManifestService::project_lock`), held under a parking_lot
-//! `Mutex`, so concurrent installs of the *same* agent serialize while
+//! An `Arc<TokioMutex<()>>` map keyed by `agent_id`, held under a
+//! parking_lot `Mutex`, so concurrent installs of the *same* agent serialize while
 //! *different* agents can perform package I/O in parallel. A separate async
 //! lock serializes manifest read-modify-write cycles.
 //!
@@ -411,9 +410,8 @@ pub struct InstalledAgent {
     pub installed_at: u64,
 }
 
-/// Schema-versioned envelope for `installed.json`. Mirrors the
-/// `WorkspaceManifestFile` pattern so future migrations route through a
-/// `migrate` hook. A corrupt file is backed up via `backup_corrupt` then
+/// Schema-versioned envelope for `installed.json`, so future migrations
+/// route through a `migrate` hook. A corrupt file is backed up via `backup_corrupt` then
 /// treated as empty (fresh install proceeds).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -432,7 +430,7 @@ impl Default for InstalledManifestFile {
 }
 
 // ---------------------------------------------------------------------------
-// Per-agent lock map (mirrors WorkspaceManifestService::ProjectLockMap)
+// Per-agent lock map
 // ---------------------------------------------------------------------------
 
 type AgentLockMap = HashMap<String, Arc<TokioMutex<()>>>;
@@ -444,8 +442,7 @@ type AgentLockMap = HashMap<String, Arc<TokioMutex<()>>>;
 /// Host-owned verified-atomic ACP install service. One instance per host
 /// runtime (desktop OR standalone `termul-server`, never shared across
 /// processes). Constructed via [`AcpInstallService::open`], which creates the
-/// root directory + idempotent re-open (mirrors `WorkspaceManifestService::open`
-/// + `AcpCatalogService::open`).
+/// root directory + idempotent re-open (like `AcpCatalogService::open`).
 ///
 /// The service holds an `Arc<AcpCatalogService>` for the convenience
 /// `install_by_id` path only; the catalog-agnostic `install(agent, host)`
@@ -471,8 +468,7 @@ pub struct AcpInstallService {
 impl AcpInstallService {
     /// Open (or re-open) an install root. Creates the directory if missing;
     /// idempotent re-open returns a fresh `Arc<Self>` over the same root.
-    /// Mirrors `WorkspaceManifestService::open` + `AcpCatalogService::open`:
-    /// Unix `0700` root, create the dir, load the manifest with corrupt-backup,
+    /// Mirrors `AcpCatalogService::open`: Unix `0700` root, create the dir, load the manifest with corrupt-backup,
     /// return an `Arc<Self>`. A non-directory root is an error.
     pub async fn open(root: PathBuf, catalog: Arc<AcpCatalogService>) -> io::Result<Arc<Self>> {
         Self::open_with_npm_installer(root, catalog, Arc::new(SystemNpmPackageInstaller)).await
@@ -584,8 +580,7 @@ impl AcpInstallService {
         }
     }
 
-    /// Persist the manifest atomically (mirrors `WorkspaceManifestService::write`'s
-    /// `spawn_blocking` + `atomic_file::replace`).
+    /// Persist the manifest atomically (`atomic_file::replace`).
     fn persist_manifest_blocking(root: &Path, manifest: &InstalledManifestFile) -> io::Result<()> {
         let path = root.join(INSTALLED_MANIFEST_FILENAME);
         let serialized = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
@@ -1235,7 +1230,7 @@ fn rollback_activated_install(install_dir: &Path, backup: &Path) -> io::Result<(
     Ok(())
 }
 
-/// Epoch-millis timestamp (mirrors `workspace_manifest::now_millis`).
+/// Epoch-millis timestamp.
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

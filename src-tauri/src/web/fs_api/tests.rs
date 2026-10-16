@@ -94,14 +94,11 @@ fn test_state_with_root(root: &Path) -> AppState {
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
             &root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         ),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
             std::collections::HashMap::new(),
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,
@@ -1616,8 +1613,8 @@ async fn fs_containment_boundary_relationship() {
     assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
 }
 
-/// CAP-2: a web client that switched to a non-default registered project
-/// (per-connection `switch_project`) can still run git/skills operations.
+/// CAP-2: a web client working in a non-default registered project can still
+/// run git/skills operations.
 /// The containment boundary follows ANY registered project root, not just
 /// the host default. An unregistered path is still rejected.
 #[tokio::test]
@@ -1718,7 +1715,7 @@ async fn operations_accept_registered_non_default_project() {
 async fn mkdir_remote_refused_when_no_project_is_registered() {
     let dir = TempDir::new("mkdir-empty-registry");
     let state = test_state_remote_writes_with_root(dir.path());
-    state.registry.clear();
+    state.registry.set(Vec::new(), None);
     let target = dir.path().join("made");
     let remote = SocketAddr::from(([10, 0, 0, 5], 50000));
     let resp = post_json_from(

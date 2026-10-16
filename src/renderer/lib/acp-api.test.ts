@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Exercises the real desktop transport, not the invoke-backed double from vitest.setup.ts.
+vi.unmock('@/lib/acp-transport/desktop-transport')
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn()
 }))
@@ -14,120 +16,62 @@ vi.mock('@/lib/tauri-runtime', () => ({
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
-  acpAuthenticate,
+  acpAnswerQuestion,
   acpCancelPrompt,
-  acpNewSession,
   acpRespondPermission,
   acpSendPrompt,
-  acpSetConfigOption,
-  acpSpawnAgent,
   onAcpEvent,
   parseAcpErrorDetail
 } from './acp-api'
 import {
   _resetAcpTransportForTests,
-  _resetTauriEventRegistryForTests,
-  _setAcpTransportForTests
+  _setAcpTransportForTests,
+  AcpTransportError
 } from './acp-transport'
+import { _resetDesktopLocalEventsForTests } from './acp-transport/desktop-local-events'
 
-describe('acp-api command wrappers (Tauri transport)', () => {
+describe('acp-api desktop path (Tauri context)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // Force a fresh Tauri transport so invoke mocks are used.
     _resetAcpTransportForTests(null)
   })
 
-  it('acpSpawnAgent passes the config arg and returns the full spawn result', async () => {
-    const spawnResult = {
-      agentId: 'agent-1',
-      capabilities: { loadSession: true },
-      authMethods: [{ id: 'cursor_login', name: 'Sign in with Cursor' }],
-      stableNamespace: 'config:cursor'
-    }
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(spawnResult)
-    const config = { name: 'Gemini', command: 'gemini', args: [], env: {} }
-    const result = await acpSpawnAgent(config)
-    expect(invoke).toHaveBeenCalledWith('acp_spawn_agent', {
-      config,
-      commandId: expect.any(String)
-    })
-    expect(result).toEqual(spawnResult)
-    expect(result.agentId).toBe('agent-1')
-    expect(result.authMethods).toHaveLength(1)
-  })
+  it('claims a commandId for permission and question answers like the browser (desktop speaks /ws now)', async () => {
+    const respondPermission = vi.fn().mockResolvedValue(undefined)
+    const answerQuestion = vi.fn().mockResolvedValue(undefined)
+    _setAcpTransportForTests({ respondPermission, answerQuestion, dispose: vi.fn() } as never)
 
-  it('acpNewSession passes agentId, cwd, mcpServers', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: 's1' })
-    await acpNewSession('agent-1', '/home/user', [{ type: 'stdio', name: 'fs', command: 'npx' }])
-    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
-      agentId: 'agent-1',
-      cwd: '/home/user',
-      mcpServers: [{ type: 'stdio', name: 'fs', command: 'npx' }],
-      commandId: expect.any(String)
-    })
-  })
-
-  it('acpSendPrompt sends text under the text key', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue('end_turn')
-    const reason = await acpSendPrompt('agent-1', 's1', 'hello')
-    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
-      agentId: 'agent-1',
-      sessionId: 's1',
-      text: 'hello'
-    })
-    expect(reason).toBe('end_turn')
-  })
-
-  it('acpSetConfigOption uses configId/valueId', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue([])
-    await acpSetConfigOption('agent-1', 's1', 'mode', 'code')
-    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
-      agentId: 'agent-1',
-      sessionId: 's1',
-      configId: 'mode',
-      valueId: 'code'
-    })
-  })
-
-  it('acpRespondPermission forwards optionId (undefined = cancel)', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
     await acpRespondPermission('agent-1', 'req-1', 'allow')
-    expect(invoke).toHaveBeenCalledWith('acp_respond_permission', {
-      agentId: 'agent-1',
-      requestId: 'req-1',
-      optionId: 'allow'
+    await acpAnswerQuestion('agent-1', 'q-1', ['a'])
+
+    expect(respondPermission).toHaveBeenCalledWith('agent-1', 'req-1', 'allow', {
+      commandId: expect.any(String),
+      onVisibleAt: expect.any(Function)
+    })
+    expect(answerQuestion).toHaveBeenCalledWith('agent-1', 'q-1', ['a'], {
+      commandId: expect.any(String),
+      onVisibleAt: expect.any(Function)
     })
   })
 
-  it('acpAuthenticate forwards agentId and methodId to acp_authenticate', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
-    await acpAuthenticate('agent-1', 'cursor_login')
-    expect(invoke).toHaveBeenCalledWith('acp_authenticate', {
-      agentId: 'agent-1',
-      methodId: 'cursor_login',
-      commandId: expect.any(String)
-    })
-  })
-
-  it('acpAuthenticate propagates a rejected authenticate (provider login required)', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue('login required')
-    await expect(acpAuthenticate('agent-1', 'cursor_login')).rejects.toBe('login required')
-  })
-
-  it('propagates a rejected command (acp commands throw on Err)', async () => {
-    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue('boom')
-    await expect(acpCancelPrompt('agent-1', 's1')).rejects.toBe('boom')
+  it('propagates a rejected command untouched (non-uncertain errors end the command)', async () => {
+    const rejection = new AcpTransportError('not_found', 'no such agent')
+    _setAcpTransportForTests({
+      cancelPrompt: vi.fn().mockRejectedValue(rejection),
+      dispose: vi.fn()
+    } as never)
+    await expect(acpCancelPrompt('agent-1', 's1')).rejects.toBe(rejection)
   })
 })
 
-describe('onAcpEvent subscription (Tauri transport)', () => {
+describe('onAcpEvent subscription (Tauri context)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     _resetAcpTransportForTests(null)
-    _resetTauriEventRegistryForTests()
+    _resetDesktopLocalEventsForTests()
   })
 
-  it('subscribes to the named event and forwards payloads', async () => {
+  it('delivers desktop-local acp:worktree_progress events through a plain Tauri listener', async () => {
     const unlisten = vi.fn()
     let captured: ((e: { payload: unknown }) => void) | null = null
     ;(listen as ReturnType<typeof vi.fn>).mockImplementation(
@@ -138,33 +82,17 @@ describe('onAcpEvent subscription (Tauri transport)', () => {
     )
 
     const received: unknown[] = []
-    onAcpEvent<{ x: number }>('acp:message_chunk', (p) => received.push(p))
+    const detach = onAcpEvent<{ line: string }>('acp:worktree_progress', (p) => received.push(p))
 
-    expect(listen).toHaveBeenCalledWith('acp:message_chunk', expect.any(Function))
-    // flush the listen() promise so the unlisten is captured
+    expect(listen).toHaveBeenCalledWith('acp:worktree_progress', expect.any(Function))
     await Promise.resolve()
-    ;(captured as ((e: { payload: unknown }) => void) | null)?.({ payload: { x: 1 } })
-    expect(received).toEqual([{ x: 1 }])
-  })
+    ;(captured as ((e: { payload: unknown }) => void) | null)?.({ payload: { line: 'x' } })
+    expect(received).toEqual([{ line: 'x' }])
 
-  it('detached callback never receives events (shared per-name listen stays armed)', async () => {
-    // The transport keeps ONE Tauri listen per event name and fans out to a
-    // registry — unsubscribing must remove the callback from that set, not
-    // tear down the shared hook (which would unhook other subscribers).
-    const captured = new Map<string, (e: { payload: unknown }) => void>()
-    ;(listen as ReturnType<typeof vi.fn>).mockImplementation(
-      (name: string, cb: (e: { payload: unknown }) => void) => {
-        captured.set(name, cb)
-        return Promise.resolve(vi.fn())
-      }
-    )
-
-    const received: unknown[] = []
-    const detach = onAcpEvent('acp:agent_error', (p) => received.push(p))
-    detach() // called before listen resolves
-    await Promise.resolve()
-    captured.get('acp:agent_error')?.({ payload: { x: 1 } })
-    expect(received).toEqual([])
+    detach()
+    ;(captured as ((e: { payload: unknown }) => void) | null)?.({ payload: { line: 'y' } })
+    expect(received).toEqual([{ line: 'x' }])
+    expect(unlisten).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -223,6 +151,21 @@ describe('parseAcpErrorDetail (gh-821)', () => {
         data: { reason: 'login' }
       })
     ).toEqual({ code: -32000, data: { reason: 'login' } })
+  })
+
+  it('extracts a known provider code and drops an unknown one', () => {
+    expect(
+      parseAcpErrorDetail({
+        message: 'limit',
+        code: -32603,
+        providerCode: 'provider_session_limit'
+      })
+    ).toEqual({ code: -32603, providerCode: 'provider_session_limit' })
+    expect(parseAcpErrorDetail({ providerCode: 'provider_quota_exceeded' })).toEqual({
+      providerCode: 'provider_quota_exceeded'
+    })
+    expect(parseAcpErrorDetail({ providerCode: 'something_else' })).toEqual({})
+    expect(parseAcpErrorDetail({ providerCode: 429 })).toEqual({})
   })
 
   it('ignores a non-integer code and tolerates non-object payloads', () => {

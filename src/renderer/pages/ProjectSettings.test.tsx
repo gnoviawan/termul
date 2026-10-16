@@ -14,6 +14,8 @@ const apiMocks = vi.hoisted(() => ({
   parseGitignore: vi.fn()
 }))
 
+vi.mock('@/lib/active-project', () => ({ writeActiveProject: vi.fn() }))
+
 vi.mock('@/lib/api', () => ({
   dialogApi: {
     selectFile: apiMocks.selectFile,

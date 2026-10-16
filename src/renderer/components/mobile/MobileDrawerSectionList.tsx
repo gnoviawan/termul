@@ -1,9 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import { Edit2, FileDiff, GitBranch, Globe, Pencil, TerminalSquare, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { sectionForTab } from '@/hooks/use-mobile-section'
 import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
+import { commitDiffTabLabel } from '@/lib/diff-tab-identity'
 import { fileNeedsAttention } from '@/lib/editor-file-attention'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
@@ -72,7 +74,7 @@ function findByDataValue(
 /** Every tab the Editors list shows (a stray canvas tab included, for exhaustiveness). */
 type EditorKindTab = Extract<
   WorkspaceTab,
-  { type: 'editor' | 'git' | 'diff' | 'browser' | 'canvas' }
+  { type: 'editor' | 'git' | 'diff' | 'commit-diff' | 'browser' | 'canvas' }
 >
 
 /** An Editors row's label (also the name of its close button). */
@@ -87,6 +89,8 @@ function editorTabLabel(
       return 'Git Changes'
     case 'diff':
       return `${basename(tab.path)}${tab.staged ? ' (staged)' : ''}`
+    case 'commit-diff':
+      return commitDiffTabLabel(tab.path, tab.commit)
     case 'browser':
       return browserLabel(tab.browserTabId)
     case 'canvas':
@@ -375,9 +379,17 @@ export function MobileDrawerSectionList({
                   data-section-row-select={tab.id}
                   onClick={() => choose(paneId, tab.id)}
                 >
-                  {tab.type === 'editor' && <Pencil size={16} />}
+                  {tab.type === 'editor' && (
+                    <MaterialFileIcon
+                      name={basename(tab.filePath)}
+                      isDirectory={false}
+                      isExpanded={false}
+                      depth={0}
+                      size={16}
+                    />
+                  )}
                   {tab.type === 'git' && <GitBranch size={16} />}
-                  {tab.type === 'diff' && <FileDiff size={16} />}
+                  {(tab.type === 'diff' || tab.type === 'commit-diff') && <FileDiff size={16} />}
                   {tab.type === 'browser' && <Globe size={16} />}
                   {tab.type === 'canvas' && <Edit2 size={16} />}
                   <span className="min-w-0 flex-1 truncate text-left">{rowLabel}</span>

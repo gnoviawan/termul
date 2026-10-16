@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
 import { Palette, SlidersHorizontal } from '@/components/icons'
-import { RailRow } from '@/components/shell/RailRow'
 import { RailButton, railButtonClass } from '@/components/shell/rail-button'
 import { useShortcutLabel } from '@/components/shell/use-shortcut-label'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
@@ -14,9 +13,10 @@ interface RailFooterProps {
 }
 
 /**
- * Expanded Rail footer: the Settings row, then today's 36px Theme picker and
- * Shortcuts buttons. Closing the picker or the shortcuts popover returns
- * focus to its button when focus fell to the page body.
+ * Expanded Rail footer, one row of 28px icon buttons: Settings at the left
+ * (centered on the Rail icon column, x = 24), then the Theme picker and
+ * Shortcuts grouped at the right. Closing the picker or the shortcuts
+ * popover returns focus to its button when focus fell to the page body.
  */
 export function RailFooter({
   isShortcutsOpen,
@@ -46,18 +46,25 @@ export function RailFooter({
   }, [isThemePickerOpen])
 
   return (
-    <div className="flex shrink-0 flex-col gap-1 px-2 pb-2 pt-1">
-      <RailRow
+    // `pl-2.5` puts the 28px Settings button's center at x = 24 (the icon
+    // column); `pr-1.5` lines Shortcuts up with the header's Rail toggle.
+    <div className="flex shrink-0 items-center gap-0.5 pb-2 pl-2.5 pr-1.5 pt-1">
+      <RailButton
         label="Settings"
         hint={settingsShortcut}
-        icon={<SlidersHorizontal size={16} />}
+        size="sm"
+        aria-label="Settings"
         pressed={settingsView === 'app'}
         onClick={() => useSettingsModalStore.getState().openApp()}
-      />
+      >
+        <SlidersHorizontal size={16} />
+      </RailButton>
+      <div className="min-w-0 flex-1" />
 
-      <div ref={buttonsRef} className="flex items-center gap-1">
+      <div ref={buttonsRef} className="flex shrink-0 items-center gap-0.5">
         <RailButton
           label="Color themes"
+          size="sm"
           aria-label="Color themes"
           pressed={onToggleThemePicker ? isThemePickerOpen : undefined}
           disabled={!onToggleThemePicker}
@@ -67,7 +74,7 @@ export function RailFooter({
         </RailButton>
 
         <TitleBarShortcutsPopover
-          buttonClassName={railButtonClass(isShortcutsOpen)}
+          buttonClassName={railButtonClass(isShortcutsOpen, 'sm')}
           open={isShortcutsOpen}
           onOpenChange={onShortcutsOpenChange}
           restoreFocusOnClose

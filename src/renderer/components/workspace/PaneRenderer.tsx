@@ -6,6 +6,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { usePaneSplitAnimation } from '@/hooks/use-pane-split-animation'
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
+import { useProjectPaneContext } from '@/stores/workspace-store/pane-context'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
 import { PaneContent } from './PaneContent'
 
@@ -129,6 +130,8 @@ const PaneSplitRenderer = memo(
     defaultShell
   }: PaneSplitRendererProps): React.JSX.Element => {
     const updatePaneSizes = useWorkspaceStore((state) => state.updatePaneSizes)
+    // Resizes of a hidden-but-mounted tree must land in that project's tree.
+    const paneProjectId = useProjectPaneContext()?.projectId
     const pendingSizesRef = useRef<number[] | null>(null)
     const isDraggingRef = useRef(false)
     const groupRef = useRef<ImperativePanelGroupHandle>(null)
@@ -158,11 +161,11 @@ const PaneSplitRenderer = memo(
         // Only commit to store when not actively dragging to prevent
         // re-render feedback loop that fights with the drag direction
         if (!isDraggingRef.current) {
-          updatePaneSizes(node.id, sizes)
+          updatePaneSizes(node.id, sizes, paneProjectId)
           pendingSizesRef.current = null
         }
       },
-      [node.id, updatePaneSizes, isTweeningLayoutRef]
+      [node.id, updatePaneSizes, paneProjectId, isTweeningLayoutRef]
     )
 
     const handleDragging = useCallback(
@@ -170,11 +173,11 @@ const PaneSplitRenderer = memo(
         isDraggingRef.current = dragging
         if (!dragging && pendingSizesRef.current) {
           // Drag ended — flush pending sizes to the store
-          updatePaneSizes(node.id, pendingSizesRef.current)
+          updatePaneSizes(node.id, pendingSizesRef.current, paneProjectId)
           pendingSizesRef.current = null
         }
       },
-      [node.id, updatePaneSizes]
+      [node.id, updatePaneSizes, paneProjectId]
     )
 
     useEffect(() => {

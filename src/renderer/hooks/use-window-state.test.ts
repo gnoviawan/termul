@@ -1,4 +1,4 @@
-import type { WindowState } from '@shared/types/persistence.types'
+import { PersistenceKeys, type WindowState } from '@shared/types/persistence.types'
 import type { Monitor } from '@tauri-apps/api/window'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +18,7 @@ const {
   primaryMock,
   waylandMock,
   logMock,
+  closeOwnerState,
   LogicalPositionStub,
   LogicalSizeStub
 } = vi.hoisted(() => {
@@ -65,6 +66,7 @@ const {
     primaryMock: vi.fn(async (): Promise<Monitor | null> => null),
     waylandMock: vi.fn(async (): Promise<boolean> => false),
     logMock: vi.fn(async (_payload: unknown) => {}),
+    closeOwnerState: { hasOwner: true },
     LogicalPositionStub,
     LogicalSizeStub
   }
@@ -88,6 +90,10 @@ vi.mock('@/lib/tauri-wayland', () => ({
 
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: (payload: unknown) => logMock(payload)
+}))
+
+vi.mock('@/lib/tauri-window-api', () => ({
+  hasAppCloseOwner: () => closeOwnerState.hasOwner
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({
@@ -166,6 +172,7 @@ describe('useWindowState restoration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     runtimeMock.isTauri = true
+    closeOwnerState.hasOwner = true
     waylandMock.mockResolvedValue(false)
     windowMock.setPosition.mockImplementation(async () => {})
     windowMock.isMaximized.mockResolvedValue(false)
@@ -255,6 +262,44 @@ describe('useWindowState restoration', () => {
     expect(persistenceMock.write).toHaveBeenCalled()
     const saved = persistenceMock.write.mock.calls.at(-1)?.[1] as unknown as WindowState
     expect(saved).toMatchObject({ x: 150, y: 100, width: 1200, height: 800 })
+  })
+
+  const runCloseHandler = async (): Promise<ReturnType<typeof vi.fn>> => {
+    const { result } = renderHook(() => useWindowState())
+    await waitFor(() => expect(result.current).toBe(true))
+    await waitFor(() => expect(windowMock.onCloseRequested).toHaveBeenCalledOnce())
+    const closeHandler = (windowMock.onCloseRequested.mock.calls[0] as unknown[])[0] as (event: {
+      preventDefault: () => void
+    }) => void
+    const preventDefault = vi.fn()
+    await act(async () => {
+      closeHandler({ preventDefault })
+      await Promise.resolve()
+    })
+    return preventDefault
+  }
+
+  it('persists on close without overriding the app-close owner (issue #1146)', async () => {
+    // An unprevented close event makes @tauri-apps/api destroy the window,
+    // which quits the app and kills its agents instead of hiding to the tray.
+    const preventDefault = await runCloseHandler()
+
+    expect(preventDefault).toHaveBeenCalledOnce()
+    await waitFor(() =>
+      expect(persistenceMock.write).toHaveBeenCalledWith(
+        PersistenceKeys.windowState,
+        expect.objectContaining({ x: 0, y: 0, width: 1200, height: 800 })
+      )
+    )
+  })
+
+  it('lets the window close on close when no app-close owner is mounted', async () => {
+    closeOwnerState.hasOwner = false
+
+    const preventDefault = await runCloseHandler()
+
+    expect(preventDefault).not.toHaveBeenCalled()
+    await waitFor(() => expect(persistenceMock.write).toHaveBeenCalled())
   })
 
   it('is immediately ready outside the Tauri context', async () => {

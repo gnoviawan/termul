@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { FIELD_FOCUS_CLASS, FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { Skeleton } from '@/components/ui/skeleton'
+import { NativeWebviewOccluder } from '@/hooks/use-native-webview-occlusion'
 import { dialogApi, filesystemApi, gitApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { claimEscape, isEscapeClaimed } from '@/lib/escape-claim'
@@ -30,7 +31,7 @@ interface NewProjectModalProps {
     path?: string,
     defaultShell?: string,
     envVars?: EnvVariable[]
-  ) => Project | undefined
+  ) => Promise<Project | undefined>
 }
 
 /**
@@ -300,7 +301,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           }
         }
 
-        const created = onCreateProject(
+        const created = await onCreateProject(
           trimmedName,
           selectedColor,
           trimmedPath,
@@ -418,6 +419,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={onClose}
         >
+          <NativeWebviewOccluder />
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}

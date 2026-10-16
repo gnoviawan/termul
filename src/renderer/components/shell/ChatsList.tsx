@@ -12,7 +12,7 @@ import { buildChatCards, filterChatCards } from './chat-cards'
 import { useChatCardActions } from './use-chat-card-actions'
 
 /** First-paint card height; real heights are measured after mount. */
-const ESTIMATED_CARD_HEIGHT = 60
+const ESTIMATED_CARD_HEIGHT = 44
 const CARD_GAP = 2
 const OVERSCAN = 6
 

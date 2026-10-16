@@ -188,11 +188,18 @@ Browser tab work spans:
 
 ## Persistence and Local Data
 
-The app stores local state using Tauri plugin store adapters:
+The app keeps its state in the host store on every surface; the desktop reaches it
+over its Tauri channel connection, and the store file is `store.json` in the app data
+directory (`termul-server`: its state directory). Keys are logical, for example
+`projects`, `terminals/{projectId}`, `snapshots/{projectId}` and `window-state`; the
+host scopes them per device or shares them (see `docs/api-contracts.md`).
 
-- `termul-data.json` — general app persistence
-- `termul-sessions.json` — session persistence
-- logical keys like `projects`, `terminals/{projectId}`, `snapshots/{projectId}`, `window-state`
+- `termul-data.json` — retired plugin-store file. The host imports it once on the
+  first start after the upgrade and renames it to `termul-data.json.imported-<unix time>`.
+- `termul-sessions.json` — retired plugin-store file of the session auto-save, read only by the
+  one-shot migration into the host store.
+- Small device-local files (what's new, update channel, backup and rollback records) stay in their
+  own plugin-store files.
 
 Project env vars are persisted in local store data, but secret-marked values are redacted before persistence and must be re-entered after app restart until secure OS storage is added.
 

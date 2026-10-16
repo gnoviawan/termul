@@ -7,10 +7,11 @@
  * rebuilt on load from the active `cwd`.
  */
 
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { MentionMatch } from '@/components/chat/mention-menu-model'
 import { persistenceApi } from '@/lib/api'
+import { trimListToCap } from '@/lib/persistence-trim'
 
-export const ACP_MENTION_RECENTS_KEY = 'acp/mention-recents'
 export const MENTION_RECENTS_CAP = 20
 
 export interface StoredRecent {
@@ -34,7 +35,7 @@ export function compositeKey(projectId: string, cwd: string): string {
  * separator and path characters safe as a store key.
  */
 export function mentionRecentsKey(projectId: string, cwd: string): string {
-  return `${ACP_MENTION_RECENTS_KEY}/${encodeURIComponent(compositeKey(projectId, cwd))}`
+  return PersistenceKeys.acpMentionRecents(encodeURIComponent(compositeKey(projectId, cwd)))
 }
 
 export function toStoredRecent(match: MentionMatch): StoredRecent {
@@ -86,7 +87,7 @@ export async function loadMentionRecents(projectId: string, cwd: string): Promis
   // survive the upgrade. Subsequent saves write the per-partition key, so this
   // legacy read runs at most once per partition.
   if (!res.success && res.code === 'KEY_NOT_FOUND') {
-    const legacy = await persistenceApi.read<RecentsMap>(ACP_MENTION_RECENTS_KEY)
+    const legacy = await persistenceApi.read<RecentsMap>(PersistenceKeys.acpMentionRecentsLegacy)
     if (legacy.success && legacy.data) {
       const entries = legacy.data[compositeKey(projectId, cwd)]
       if (Array.isArray(entries)) return entries.map((e) => fromStoredRecent(e, cwd))
@@ -102,10 +103,9 @@ export async function saveMentionRecents(
 ): Promise<void> {
   // Per-partition write — no read-modify-write, so concurrent saves for
   // different partitions cannot clobber each other.
-  const write = await persistenceApi.write(
-    mentionRecentsKey(projectId, cwd),
-    recents.map(toStoredRecent)
-  )
+  // Newest first: past the host's value cap the oldest recents go.
+  const stored = trimListToCap(recents.map(toStoredRecent), (kept) => kept, 'head').items
+  const write = await persistenceApi.write(mentionRecentsKey(projectId, cwd), stored)
   if (!write.success) {
     throw new Error(write.error ?? 'Failed to persist mention recents')
   }

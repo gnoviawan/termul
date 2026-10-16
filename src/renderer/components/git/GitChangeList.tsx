@@ -7,6 +7,7 @@ import type { GitSelectionSection } from '@/components/git/use-git-selection'
 import { Minus, Plus, RotateCcw } from '@/components/icons'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
+import { cn } from '@/lib/utils'
 
 interface GitChangeListProps {
   /** `column` is the desktop look at full width without its own scroll area:
@@ -68,24 +69,21 @@ export function GitChangeList({
   const rowActionTouch = isMobile ? true : undefined
 
   const isColumn = variant === 'column'
+  const busy = isMutating || isGenerating
 
   const body = (
-    <div
-      className={
-        isMobile || isColumn ? 'p-2 pr-3 space-y-4 w-full' : 'p-2 pr-3 space-y-4 w-[303px]'
-      }
-    >
+    <div className={cn('space-y-2 px-2 pb-2', variant === 'desktop' ? 'w-[312px]' : 'w-full')}>
       {stagedFiles.length > 0 && (
-        <div className="space-y-1">
+        <div>
           <SectionHeader
-            label="Staged Changes"
+            label="Staged"
             count={stagedFiles.length}
             selectionCount={stagedSelectionCount}
           >
             <SectionAction
               icon={<Minus size={13} />}
               label="Unstage all changes"
-              disabled={isMutating || isGenerating}
+              disabled={busy}
               gated={!admitted}
               onClick={() => runUnstage(stagedFiles.map((f) => f.path))}
             />
@@ -105,7 +103,7 @@ export function GitChangeList({
                   icon={<Minus size={rowIconSize} />}
                   label="Unstage changes"
                   touch={rowActionTouch}
-                  disabled={isMutating || isGenerating}
+                  disabled={busy}
                   gated={!admitted}
                   onClick={() => runUnstage(targetsFor(file.path, 'staged'))}
                 />
@@ -115,7 +113,7 @@ export function GitChangeList({
         </div>
       )}
 
-      <div className="space-y-1">
+      <div>
         <SectionHeader
           label="Changes"
           count={unstagedFiles.length}
@@ -127,14 +125,14 @@ export function GitChangeList({
                 icon={<RotateCcw size={13} />}
                 label="Discard all changes"
                 variant="danger"
-                disabled={isMutating || isGenerating}
+                disabled={busy}
                 gated={!admitted}
                 onClick={() => requestDiscard(unstagedFiles.map((f) => f.path))}
               />
               <SectionAction
                 icon={<Plus size={13} />}
                 label="Stage all changes"
-                disabled={isMutating || isGenerating}
+                disabled={busy}
                 gated={!admitted}
                 onClick={() => runStage(unstagedFiles.map((f) => f.path))}
               />
@@ -162,7 +160,7 @@ export function GitChangeList({
                   label="Discard changes"
                   touch={rowActionTouch}
                   variant="danger"
-                  disabled={isMutating || isGenerating}
+                  disabled={busy}
                   gated={!admitted}
                   onClick={() => requestDiscard(targetsFor(file.path, 'unstaged'))}
                 />
@@ -170,7 +168,7 @@ export function GitChangeList({
                   icon={<Plus size={rowIconSize} />}
                   label="Stage changes"
                   touch={rowActionTouch}
-                  disabled={isMutating || isGenerating}
+                  disabled={busy}
                   gated={!admitted}
                   onClick={() => runStage(targetsFor(file.path, 'unstaged'))}
                 />

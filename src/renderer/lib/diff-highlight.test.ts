@@ -15,6 +15,7 @@ describe('resolveDiffLanguage', () => {
     ['data.json', 'json'],
     ['style.css', 'css'],
     ['page.html', 'html'],
+    ['src/ContactAvatar.astro', 'astro'],
     ['main.py', 'python'],
     ['lib.rs', 'rust'],
     ['main.go', 'go'],
@@ -79,6 +80,16 @@ describe('highlightDiffText', () => {
 
   it('returns null for an unknown language without throwing', async () => {
     await expect(highlightDiffText('hello', 'not-a-real-lang')).resolves.toBeNull()
+  })
+
+  it('colors an Astro component with the bundled grammar', async () => {
+    const text = '---\nconst name = "Faiz"\n---\n<div class="a"></div>'
+    const lines = await highlightDiffText(text, 'astro')
+    expect(lines).not.toBeNull()
+    const tokens = lines!.flat()
+    expect(tokens.find((token) => token.content === 'const')?.dark).toBeTruthy()
+    expect(tokens.find((token) => token.content === 'div')?.dark).toBeTruthy()
+    expect(tokens.find((token) => token.content === '"Faiz"')?.dark).toBeTruthy()
   })
 
   it('strips carriage returns to align with diff line splitting', async () => {

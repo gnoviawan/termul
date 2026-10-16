@@ -12,7 +12,7 @@ import {
   useLastColumnTab,
   useShellLayoutStore
 } from '@/stores/shell-layout-store'
-import { useActiveSSHProfileId } from '@/stores/ssh-store'
+import { useSSHWorkspaceOpen } from '@/stores/ssh-store'
 import type { Project } from '@/types/project'
 
 const NEED_PROJECT = 'Open a project first'
@@ -21,7 +21,7 @@ const NEED_PROJECT = 'Open a project first'
  * Collapsed Rail's Column tab icons (CAP-2): Chats, Explorer and Changes.
  * Each selects the project's Column tab and shows a hidden Side panel; the
  * pressed one follows the project's selected tab while the panel is visible.
- * With an SSH profile active the tab is never written (the click only shows
+ * With the SSH workspace open the tab is never written (the click only shows
  * the column). Every write goes through the shell-layout store.
  */
 export function RailColumnIcons({
@@ -33,7 +33,7 @@ export function RailColumnIcons({
   const hasProject = Boolean(activeProject)
   const selected: ShellLastColumnTab = useLastColumnTab(projectId ?? '') ?? 'chats'
   const panelVisible = useFileExplorerVisible()
-  const sshProfileId = useActiveSSHProfileId()
+  const sshOpen = useSSHWorkspaceOpen()
   const updatePanelVisibility = useUpdatePanelVisibility()
   const { cwd } = useColumnWorkingCopy(activeProject)
   const changedCount = useGitStatusStore(selectChangedFileCount(cwd))
@@ -42,7 +42,7 @@ export function RailColumnIcons({
 
   const select = (tab: ShellLastColumnTab): void => {
     if (!projectId) return
-    if (sshProfileId === null) useShellLayoutStore.getState().setLastColumnTab(projectId, tab)
+    if (!sshOpen) useShellLayoutStore.getState().setLastColumnTab(projectId, tab)
     if (!panelVisible) {
       void updatePanelVisibility('fileExplorerVisible', true).catch((error: unknown) => {
         toast.error(
@@ -53,7 +53,7 @@ export function RailColumnIcons({
   }
 
   const pressed = (tab: ShellLastColumnTab): boolean =>
-    hasProject && panelVisible && sshProfileId === null ? selected === tab : false
+    hasProject && panelVisible && !sshOpen ? selected === tab : false
 
   return (
     <>
@@ -68,7 +68,7 @@ export function RailColumnIcons({
           isRunning ? (
             <span
               data-testid="rail-chats-live-dot"
-              className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+              className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary ring-2 ring-sidebar"
             />
           ) : null
         }
@@ -100,7 +100,7 @@ export function RailColumnIcons({
               count={changedCount}
               max={99}
               data-testid="rail-changes-badge"
-              className="pointer-events-none absolute -top-0.5 -right-1 h-3.5 min-w-3.5 text-4xs ring-2 ring-background"
+              className="pointer-events-none absolute -top-0.5 -right-1 h-3.5 min-w-3.5 text-4xs ring-2 ring-sidebar"
             />
           ) : null
         }

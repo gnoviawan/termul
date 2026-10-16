@@ -21,10 +21,6 @@ export type WebTerminalRequestType =
   | 'get_git_branch'
   | 'get_git_status'
   | 'get_exit_code'
-  | 'add_renderer_ref'
-  | 'remove_renderer_ref'
-  | 'set_protected'
-  | 'update_orphan_detection'
   | 'list_preserved'
 
 /**
@@ -52,7 +48,15 @@ export const WEB_TERMINAL_ERROR_CODES = {
   // The `commandId` was already used for a different request.
   COMMAND_CONFLICT: 'COMMAND_CONFLICT',
   // The `commandId` is not 1-128 characters of `[A-Za-z0-9_-]`.
-  INVALID_COMMAND_ID: 'INVALID_COMMAND_ID'
+  INVALID_COMMAND_ID: 'INVALID_COMMAND_ID',
+  // A `spawn` was refused by a host terminal cap (per project or global).
+  // Nothing was created and no slot is held; the reply `error` names both
+  // limits. The same code is the desktop `terminal_spawn` `IpcResult.code`.
+  TERMINAL_LIMIT: 'TERMINAL_LIMIT',
+  // A `spawn` named a project that is being removed or archived (its
+  // sessions and terminals are being stopped). Retry never helps: the project
+  // is going away.
+  PROJECT_BUSY: 'PROJECT_BUSY'
 } as const
 
 export interface WebTerminalRequest {

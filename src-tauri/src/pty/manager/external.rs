@@ -25,12 +25,12 @@ impl PtyManager {
         &self,
         terminal: ExternalTerminal,
     ) -> Result<SpawnedTerminal, String> {
-        self.start_orphan_detection();
-        let mut slot_reservation = self
-            .try_reserve_terminal_slot()
-            .ok_or_else(|| "Global terminal limit reached".to_string())?;
-
+        self.start_exit_sweeper();
         let id = self.generate_id();
+        // Adopted terminals have no project, so only the global cap applies.
+        let _slot_reservation = self
+            .try_reserve_terminal_slot(&id, None)
+            .map_err(|limit| limit.to_string())?;
         let claim = self.claims.issue(&id, None);
         let ExternalTerminal {
             reader,
@@ -55,10 +55,6 @@ impl PtyManager {
             shell: shell.clone(),
             cwd: cwd.clone(),
             pid: 0,
-            last_activity: Arc::new(RwLock::new(Instant::now())),
-            orphan_since: Arc::new(RwLock::new(None)),
-            renderer_refs: Arc::new(RwLock::new(HashSet::new())),
-            protected: Arc::new(AtomicBool::new(true)),
             cols: Arc::new(RwLock::new(cols)),
             rows: Arc::new(RwLock::new(rows)),
             broadcast_tx: Arc::new(tokio::sync::broadcast::channel(TERM_BROADCAST_CAPACITY).0),
@@ -66,10 +62,12 @@ impl PtyManager {
             output_log_bytes: Arc::new(AtomicUsize::new(0)),
             next_output_seq: Arc::new(AtomicU64::new(0)),
             log_epoch: uuid::Uuid::new_v4().to_string(),
-            web_attachments: Arc::new(AtomicUsize::new(0)),
-            last_web_listed: Arc::new(RwLock::new(None)),
+            live_attachments: Arc::new(AtomicUsize::new(0)),
             web_size_owner: Arc::new(RwLock::new(None)),
             resizer: Some(resizer),
+            exited: AtomicBool::new(false),
+            exited_at: parking_lot::Mutex::new(None),
+            set_observer: self.set_observer.clone(),
             #[cfg(target_os = "windows")]
             conpty_handles: None,
         });
@@ -118,7 +116,6 @@ impl PtyManager {
 
         self.terminals.write().insert(id.clone(), instance);
         self.exit_code_tracker.initialize_terminal(&id);
-        slot_reservation.commit();
         log::info!("[PtyManager] Adopted external terminal {}", id);
 
         Ok(SpawnedTerminal {

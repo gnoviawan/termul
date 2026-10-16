@@ -6,7 +6,7 @@ use super::{
 use crate::acp::config::AgentConfig;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 struct SupportedRuntime;
 
@@ -18,7 +18,7 @@ impl ClaudeRuntimeProbe for SupportedRuntime {
 
     async fn cli_authentication_status(
         &self,
-        _env: &HashMap<String, String>,
+        _config_dir: Option<&Path>,
     ) -> Result<Option<bool>, String> {
         Ok(Some(true))
     }
@@ -34,7 +34,7 @@ impl ClaudeRuntimeProbe for UnsupportedRuntime {
 
     async fn cli_authentication_status(
         &self,
-        _env: &HashMap<String, String>,
+        _config_dir: Option<&Path>,
     ) -> Result<Option<bool>, String> {
         Ok(None)
     }
@@ -50,30 +50,9 @@ impl ClaudeRuntimeProbe for SignedOutRuntime {
 
     async fn cli_authentication_status(
         &self,
-        _env: &HashMap<String, String>,
+        _config_dir: Option<&Path>,
     ) -> Result<Option<bool>, String> {
         Ok(Some(false))
-    }
-}
-
-/// Signed-in runtime that records the env the auth preflight ran with.
-#[derive(Default)]
-struct RecordingRuntime {
-    seen_env: Mutex<Option<HashMap<String, String>>>,
-}
-
-#[async_trait::async_trait]
-impl ClaudeRuntimeProbe for RecordingRuntime {
-    async fn ensure_supported(&self) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn cli_authentication_status(
-        &self,
-        env: &HashMap<String, String>,
-    ) -> Result<Option<bool>, String> {
-        *self.seen_env.lock().unwrap() = Some(env.clone());
-        Ok(Some(true))
     }
 }
 
@@ -649,35 +628,4 @@ async fn api_key_is_injected_only_for_the_managed_claude_install() {
         "custom configs must not claim host-managed authentication"
     );
     assert!(!custom.env.contains_key("ANTHROPIC_API_KEY"));
-}
-
-/// The auth preflight must evaluate the env the agent will run with (project
-/// env such as `CLAUDE_CONFIG_DIR` arrives merged into `config.env`), not
-/// Termul's own, so a per-project Claude profile is the one checked.
-#[tokio::test]
-async fn auth_preflight_runs_with_the_agent_config_env() {
-    let state = TempState::new();
-    let entrypoint = state.managed_entrypoint();
-    let probe = Arc::new(RecordingRuntime::default());
-    let service = ClaudeAgentService::with_adapters(
-        Arc::new(InMemoryClaudeCredentialStore::default()),
-        Some(state.install_root()),
-        Arc::clone(&probe) as Arc<dyn ClaudeRuntimeProbe>,
-    );
-    let mut managed = managed_config(&entrypoint);
-    managed.env.insert(
-        "CLAUDE_CONFIG_DIR".to_string(),
-        "/home/me/.claude-work".to_string(),
-    );
-
-    assert!(service.prepare_managed_config(&mut managed).await.unwrap());
-
-    let seen = probe.seen_env.lock().unwrap().clone();
-    assert_eq!(
-        seen.as_ref()
-            .and_then(|env| env.get("CLAUDE_CONFIG_DIR"))
-            .map(String::as_str),
-        Some("/home/me/.claude-work"),
-        "the preflight must see the agent's CLAUDE_CONFIG_DIR"
-    );
 }

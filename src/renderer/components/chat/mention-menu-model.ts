@@ -2,10 +2,12 @@
  * Pure helpers for the @-file mention menu. Kept free of React/store so they
  * can be unit-tested directly. Mirrors the slash-menu-model split.
  *
- * A mention token is an `@` preceded by start-of-text or whitespace, plus the
- * contiguous non-whitespace, non-`@` run after it. The token is "active" while
- * the caret sits within `(at, end]`. See ADR 0003.
+ * A mention token is an `@` preceded by start-of-text, whitespace, or the end
+ * of a pill, plus the contiguous non-whitespace, non-`@` run after it. The
+ * token is "active" while the caret sits within `(at, end]`. See ADR 0003.
  */
+
+import { isComposerTriggerBoundary } from '@/lib/skill-tokens'
 
 export interface MentionToken {
   /** Index of the `@` in the composer value. */
@@ -28,8 +30,7 @@ export function activeMentionToken(value: string, caret: number): MentionToken |
   if (caret < 0 || caret > value.length) return null
   for (let i = caret - 1; i >= 0; i--) {
     if (value[i] !== '@') continue
-    const prev = i === 0 ? '' : value[i - 1]
-    if (prev !== '' && !/\s/.test(prev)) continue
+    if (!isComposerTriggerBoundary(value, i)) continue
     let end = i + 1
     while (end < value.length && isTokenChar(value[end])) end++
     if (caret > i && caret <= end) {

@@ -159,7 +159,7 @@ export function gitHistoryTabId(cwd: string): string {
 }
 
 /** Diff tab id: `diff:` + stable hash of the canonical (cwd, path, side) identity. */
-export { diffTabId } from '@/lib/diff-tab-identity'
+export { commitDiffTabId, diffTabId } from '@/lib/diff-tab-identity'
 
 export function canvasTabId(projectId: string): string {
   return `canvas-${projectId}`

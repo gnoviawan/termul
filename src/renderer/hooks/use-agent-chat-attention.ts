@@ -59,6 +59,7 @@ export function useAgentChatProjectSignals(): ProjectAgentChatSignals {
         pendingPermission: permissions.has(sessionId),
         pendingQuestion: questions.has(sessionId),
         pendingElicitation: elicitations.has(sessionId),
+        lastError: session.lastError ?? null,
         ephemeral
       })
       if (needsAttention) {

@@ -22,6 +22,8 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronsDownUpIcon,
+  ChevronsLeftIcon,
+  ChevronsRightIcon,
   ChevronUpIcon,
   CircleArrowUp02Icon,
   CircleDotIcon,
@@ -91,7 +93,9 @@ import {
   MusicNote01Icon,
   NetworkIcon,
   PaletteIcon,
+  PanelLeftCloseIcon,
   PanelLeftIcon,
+  PanelLeftOpenIcon,
   PanelRightIcon,
   PaperclipIcon as PaperclipIconData,
   PencilEdit01Icon,
@@ -120,6 +124,7 @@ import {
   TypeIcon,
   Unlink01Icon,
   Upload01Icon,
+  UserIcon,
   Video01Icon,
   Wifi01Icon,
   WifiOff01Icon,
@@ -176,6 +181,7 @@ export const Home = hugeIcon('Home', Home01Icon)
 export const Settings = hugeIcon('Settings', Settings01Icon)
 export const Download = hugeIcon('Download', Download01Icon)
 export const Upload = hugeIcon('Upload', Upload01Icon)
+export const User = hugeIcon('User', UserIcon)
 export const X = hugeIcon('X', XIconData)
 export const Plus = hugeIcon('Plus', PlusIcon)
 export const Minus = hugeIcon('Minus', MinusIcon)
@@ -216,6 +222,8 @@ export const ChevronLeft = hugeIcon('ChevronLeft', ChevronLeftIcon)
 export const ChevronRight = hugeIcon('ChevronRight', ChevronRightIcon)
 export const ChevronUp = hugeIcon('ChevronUp', ChevronUpIcon)
 export const ChevronsDownUp = hugeIcon('ChevronsDownUp', ChevronsDownUpIcon)
+export const ChevronsLeft = hugeIcon('ChevronsLeft', ChevronsLeftIcon)
+export const ChevronsRight = hugeIcon('ChevronsRight', ChevronsRightIcon)
 export const Circle = hugeIcon('Circle', CircleIcon)
 export const CircleDot = hugeIcon('CircleDot', CircleDotIcon)
 export const Clipboard = hugeIcon('Clipboard', ClipboardIcon)
@@ -276,6 +284,10 @@ export const Music2Icon = hugeIcon('Music2Icon', MusicNote01Icon)
 export const Network = hugeIcon('Network', NetworkIcon)
 export const Palette = hugeIcon('Palette', PaletteIcon)
 export const PanelLeft = hugeIcon('PanelLeft', PanelLeftIcon)
+// Named by action: in Hugeicons `PanelLeftOpenIcon` points left (collapse) and
+// `PanelLeftCloseIcon` points right (expand), the reverse of their names.
+export const PanelLeftCollapse = hugeIcon('PanelLeftCollapse', PanelLeftOpenIcon)
+export const PanelLeftExpand = hugeIcon('PanelLeftExpand', PanelLeftCloseIcon)
 export const PanelRight = hugeIcon('PanelRight', PanelRightIcon)
 export const Paperclip = hugeIcon('Paperclip', PaperclipIconData)
 export const PenTool = hugeIcon('PenTool', PenTool01Icon)

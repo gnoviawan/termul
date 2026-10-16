@@ -10,6 +10,7 @@ import type {
   SessionMode,
   SessionModeState
 } from '@/lib/acp-api'
+import { isComposerTriggerBoundary } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
 import {
   dropDuplicateSingletonConfigOptions,
@@ -20,6 +21,7 @@ export interface SlashCommandItem {
   kind: 'command'
   name: string
   description: string | null
+  hint: string | null
 }
 
 export interface SlashConfigItem {
@@ -150,7 +152,12 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
       const promoted = promotedSkillName(c.name)
       return promoted === null || !injectedSkillNames.has(promoted)
     })
-    .map((c) => ({ kind: 'command', name: c.name, description: c.description ?? null }))
+    .map((c) => ({
+      kind: 'command',
+      name: c.name,
+      description: c.description ?? null,
+      hint: c.input?.hint?.trim() || null
+    }))
   if (commandItems.length > 0) {
     sections.push({ id: 'commands', heading: 'Commands', items: commandItems })
   }
@@ -224,7 +231,7 @@ export function findSlashTrigger(
   const previous = value[caret - 1]
   if (previous === undefined || /\s/.test(previous)) return null
   let start = caret - 1
-  while (start > 0 && !/\s/.test(value[start - 1] ?? '')) start -= 1
+  while (start > 0 && !isComposerTriggerBoundary(value, start)) start -= 1
   if (value[start] !== '/') return null
   if (caret <= start) return null
   return { start, end: caret, filter: value.slice(start + 1, caret) }

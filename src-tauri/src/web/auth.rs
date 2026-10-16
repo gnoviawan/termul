@@ -82,6 +82,10 @@ impl PartialEq for WebAuthToken {
 }
 impl Eq for WebAuthToken {}
 
+/// Request extension the web auth gate adds once the bearer token matched.
+#[derive(Debug, Clone, Copy)]
+pub struct BearerVerified;
+
 /// The active gate: one bearer token, compared in constant time.
 pub struct WebAuth {
     token: WebAuthToken,

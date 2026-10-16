@@ -207,6 +207,10 @@ fn desktop_lock_set_covers_app_data_and_its_overridable_stores() {
         .lock_file(&desktop_store_file(&app_data))
         .unwrap_err()
         .is_busy());
+    assert!(rival
+        .lock_file(&desktop_projects_file(&app_data))
+        .unwrap_err()
+        .is_busy());
     drop(held);
     lock_desktop_data(&app_data).expect("released after the desktop exits");
     let _ = fs::remove_dir_all(root);
@@ -218,13 +222,11 @@ fn standalone_paths_follow_overrides_and_default_under_the_state_dir() {
     let state = root.join("state");
     let mut cfg = ServerConfig::from_args(["--state-dir", state.to_str().unwrap()]).unwrap();
     cfg.store_file = None;
-    cfg.workspace_manifests_dir = None;
     cfg.acp_catalog_dir = None;
 
     let defaults = StandalonePaths::resolve(&cfg);
     assert_eq!(defaults.state_dir, state);
     assert_eq!(defaults.store_file, state.join("store.json"));
-    assert_eq!(defaults.workspace_manifests_dir, state.join("workspace-manifests"));
     assert_eq!(defaults.acp_catalog_dir, state.join("acp-catalog"));
 
     let elsewhere = root.join("elsewhere").join("store.json");

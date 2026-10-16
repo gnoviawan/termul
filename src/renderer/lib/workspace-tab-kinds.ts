@@ -4,25 +4,26 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 export type WorkspaceTabKind = WorkspaceTab['type']
 
 /**
- * Per tab kind: whether it is written to editor-state (`persisted`) and whether
- * it projects into the host workspace manifest topology (`manifestPortable`).
- * `satisfies Record<WorkspaceTabKind, …>` makes a new `WorkspaceTab['type']`
- * member a compile error here until its persistence story is declared.
- * Canvas is explicitly neither: its daemon/iframe runtime is host-local state
- * and the canvas re-opens user-initiated, never auto-restored.
+ * Per tab kind: whether it is written to the project's workspace record
+ * (`persisted`). `satisfies Record<WorkspaceTabKind, …>` makes a new
+ * `WorkspaceTab['type']` member a compile error here until its persistence
+ * story is declared. Canvas is not persisted: its daemon/iframe runtime is
+ * host-local state and the canvas re-opens user-initiated, never
+ * auto-restored.
  */
 export const WORKSPACE_TAB_KIND_TRAITS = {
-  terminal: { persisted: true, manifestPortable: true },
-  editor: { persisted: true, manifestPortable: true },
-  browser: { persisted: true, manifestPortable: false },
-  git: { persisted: true, manifestPortable: false },
-  'agent-chat': { persisted: true, manifestPortable: false },
-  'git-history': { persisted: true, manifestPortable: false },
-  diff: { persisted: true, manifestPortable: false },
-  canvas: { persisted: false, manifestPortable: false }
-} as const satisfies Record<WorkspaceTabKind, { persisted: boolean; manifestPortable: boolean }>
+  terminal: { persisted: true },
+  editor: { persisted: true },
+  browser: { persisted: true },
+  git: { persisted: true },
+  'agent-chat': { persisted: true },
+  'git-history': { persisted: true },
+  diff: { persisted: true },
+  'commit-diff': { persisted: true },
+  canvas: { persisted: false }
+} as const satisfies Record<WorkspaceTabKind, { persisted: boolean }>
 
-/** The tab kinds that are written to editor-state (derived from the traits). */
+/** The tab kinds that are written to the workspace record (derived from the traits). */
 export type PersistedWorkspaceTabKind = {
   [K in WorkspaceTabKind]: (typeof WORKSPACE_TAB_KIND_TRAITS)[K]['persisted'] extends true
     ? K

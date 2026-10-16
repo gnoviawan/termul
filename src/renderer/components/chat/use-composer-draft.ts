@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react'
 import { persistenceApi } from '@/lib/api'
 
@@ -25,7 +26,7 @@ export function useComposerDraft({
   // debounce writes on change, and clear (delete) when the composer empties
   // (covers both manual clear and clear-on-send). External seeding (editing a
   // message) takes precedence over a stale draft.
-  const draftKey = `chat-draft/${projectId}/${sessionId}`
+  const draftKey = PersistenceKeys.chatDraft(String(projectId), String(sessionId))
   // Guard against undefined/null ids collapsing the key to
   // `chat-draft/undefined/undefined` and cross-session drafts colliding.
   const canPersistDraft = projectId != null && sessionId != null

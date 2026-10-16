@@ -1,4 +1,5 @@
 import type { IpcResult } from '@shared/types/ipc.types'
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import type {
   ActivePortForward,
   PortForwardConfig,
@@ -6,9 +7,6 @@ import type {
   SFTPEntry,
   SFTPTransferProgress,
   SSHApi,
-  SSHConnection,
-  SSHConnectionStatus,
-  SSHConnectionStatusCallback,
   SSHHostKeyPrompt,
   SSHKeyFileInfo,
   SSHLiveSession,
@@ -24,8 +22,8 @@ import { invokeIpc as invokeTauriIpc } from './ipc/tauri'
 import { persistenceApi } from './persistence-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
-/** Web mode: SSH profiles live in the server-side store (issue #613). */
-const SSH_PROFILES_KEY = 'ssh/profiles'
+/** How many times a profile list rewrite is tried before a lost compare-and-set race ends it. */
+const PROFILE_WRITE_ATTEMPTS = 5
 
 /**
  * Web mode has no OS keychain — persist profile metadata without secrets,
@@ -39,14 +37,29 @@ function toStoredProfile(profile: SSHProfile): SSHProfile {
 
 /** Read web profiles from the server-side store; first run = empty list. */
 async function readProfilesFromStore(): Promise<IpcResult<SSHProfile[]>> {
-  const result = await persistenceApi.read<SSHProfile[]>(SSH_PROFILES_KEY)
-  if (result.success) return { success: true, data: result.data }
-  if (result.code === 'KEY_NOT_FOUND') return { success: true, data: [] }
+  const result = await readProfilesSnapshot()
+  return result.success ? { success: true, data: result.data.profiles } : result
+}
+
+/**
+ * The profile list plus the CAS precondition for rewriting it: the list the
+ * host holds, or `null` when the key does not exist yet (first run) so the
+ * first write asserts "key must be absent".
+ */
+async function readProfilesSnapshot(): Promise<
+  IpcResult<{ profiles: SSHProfile[]; expected: SSHProfile[] | null }>
+> {
+  const result = await persistenceApi.read<SSHProfile[]>(PersistenceKeys.sshProfiles)
+  if (result.success) {
+    return { success: true, data: { profiles: result.data, expected: result.data } }
+  }
+  if (result.code === 'KEY_NOT_FOUND') {
+    return { success: true, data: { profiles: [], expected: null } }
+  }
   return result
 }
 
 const SSH_EVENTS = {
-  CONNECTION_STATUS_CHANGED: 'ssh-connection-status-changed',
   PORT_FORWARD_STATUS_CHANGED: 'ssh-port-forward-status-changed',
   TRANSFER_PROGRESS: 'ssh-transfer-progress',
   SESSION_PROGRESS: 'ssh-session-progress',
@@ -78,12 +91,7 @@ const SSH_COMMANDS = {
   SESSION_LIST: 'ssh_session_list',
   DUPLICATE_PROFILE: 'ssh_duplicate_profile',
   INSPECT_KEY: 'ssh_inspect_key',
-  LIST_KEYS: 'ssh_list_keys',
-  // Legacy connection commands (see SSHConnection)
-  CONNECT: 'ssh_connect',
-  DISCONNECT: 'ssh_disconnect',
-  GET_CONNECTIONS: 'ssh_get_connections',
-  CREATE_ASKPASS: 'ssh_create_askpass'
+  LIST_KEYS: 'ssh_list_keys'
 } as const
 
 async function invokeIpc<T>(
@@ -130,15 +138,20 @@ export function createSSHApi(): SSHApi {
 
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const list = await readProfilesFromStore()
+        for (let attempt = 0; attempt < PROFILE_WRITE_ATTEMPTS; attempt++) {
+          const list = await readProfilesSnapshot()
           if (!list.success) return list
-          const updated = list.data.filter((p) => p.id !== profile.id)
+          const updated = list.data.profiles.filter((p) => p.id !== profile.id)
           updated.push(toStoredProfile(profile))
 
-          // webPersistenceApi supports CAS via an undocumented 3rd parameter `expected`
-          // We cast it to any to bypass the strict signature in ipc.types.ts
-          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          // `ssh/profiles` is a shared/cas key: the write is only accepted while
+          // the host still holds `expected` (null = key absent). The facade
+          // journals the commandId, so a resend of this exact write reuses it.
+          const res = await persistenceApi.write(PersistenceKeys.sshProfiles, updated, {
+            expected: list.data.expected,
+            // Only the last lost race is reported to the user.
+            retrying: attempt < PROFILE_WRITE_ATTEMPTS - 1
+          })
           if (res.success || res.code !== 'STORE_CAS_FAILED') return res
         }
         return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }
@@ -148,13 +161,18 @@ export function createSSHApi(): SSHApi {
 
     async deleteProfile(profileId: string): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const list = await readProfilesFromStore()
+        for (let attempt = 0; attempt < PROFILE_WRITE_ATTEMPTS; attempt++) {
+          const list = await readProfilesSnapshot()
           if (!list.success) return list
-          const updated = list.data.filter((p) => p.id !== profileId)
-          if (updated.length === list.data.length) return { success: true, data: undefined }
+          const updated = list.data.profiles.filter((p) => p.id !== profileId)
+          if (updated.length === list.data.profiles.length)
+            return { success: true, data: undefined }
 
-          const res = await (persistenceApi.write as any)(SSH_PROFILES_KEY, updated, list.data)
+          const res = await persistenceApi.write(PersistenceKeys.sshProfiles, updated, {
+            expected: list.data.expected,
+            // Only the last lost race is reported to the user.
+            retrying: attempt < PROFILE_WRITE_ATTEMPTS - 1
+          })
           if (res.success || res.code !== 'STORE_CAS_FAILED') return res
         }
         return { success: false, error: 'Concurrent modification failed', code: 'STORE_CAS_FAILED' }
@@ -164,28 +182,6 @@ export function createSSHApi(): SSHApi {
 
     async importConfig(): Promise<IpcResult<SSHProfile[]>> {
       return invokeIpc<SSHProfile[]>(SSH_COMMANDS.IMPORT_CONFIG)
-    },
-
-    // Legacy connection management (see SSHConnection)
-    async connect(profileId: string, password?: string): Promise<IpcResult<SSHConnection>> {
-      return invokeIpc<SSHConnection>(SSH_COMMANDS.CONNECT, {
-        request: { profileId, password }
-      })
-    },
-
-    async disconnect(connectionId: string): Promise<IpcResult<void>> {
-      return invokeIpc<void>(SSH_COMMANDS.DISCONNECT, { connectionId })
-    },
-
-    async getConnections(): Promise<IpcResult<SSHConnection[]>> {
-      return invokeIpc<SSHConnection[]>(SSH_COMMANDS.GET_CONNECTIONS)
-    },
-
-    onConnectionStatusChanged(callback: SSHConnectionStatusCallback): () => void {
-      return listenDesktop<{ id: string; status: SSHConnectionStatus; error?: string }>(
-        SSH_EVENTS.CONNECTION_STATUS_CHANGED,
-        (payload) => callback(payload.id, payload.status, payload.error)
-      )
     },
 
     // Port forwarding
@@ -350,11 +346,3 @@ export function createSSHApi(): SSHApi {
 }
 
 export const sshApi = createSSHApi()
-
-/**
- * Legacy: create an SSH_ASKPASS helper script in the temp directory and
- * return its path. Removed with the legacy connection API.
- */
-export async function createAskpassScript(password: string): Promise<IpcResult<string>> {
-  return invokeIpc<string>(SSH_COMMANDS.CREATE_ASKPASS, { password })
-}

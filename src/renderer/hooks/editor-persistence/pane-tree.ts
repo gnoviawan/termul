@@ -1,27 +1,22 @@
-import { chatForeignToProject as chatForeignToProjectIn } from '@/lib/acp-session-ownership'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
-import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
-import { browserTabId, diffTabId, editorTabId, terminalTabId } from '@/stores/workspace-store'
+import {
+  browserTabId,
+  commitDiffTabId,
+  diffTabId,
+  editorTabId,
+  terminalTabId
+} from '@/stores/workspace-store'
 import type { Terminal } from '@/types/project'
 import type { PaneNode, SplitNode } from '@/types/workspace.types'
 import type { PersistedTerminalLayout } from '../../../shared/types/persistence.types'
 import type { PersistedPaneNode, PersistedPaneNodeInput, PersistedTabRef } from './types'
 
 // Serialize pane tree for persistence with both editor and terminal tabs.
-// `options.agentChatOwnedBy` (when provided) drops agent-chat tabs the
-// predicate rejects — the per-project persistence filter (see persistState).
-interface SerializePaneTreeOptions {
-  agentChatOwnedBy?: (sessionId: string) => boolean
-}
-
-export function serializePaneTree(
-  node: PaneNode,
-  options?: SerializePaneTreeOptions
-): PersistedPaneNode {
+export function serializePaneTree(node: PaneNode): PersistedPaneNode {
   if (node.type === 'leaf') {
     const tabs: PersistedTabRef[] = node.tabs.flatMap((tab): PersistedTabRef[] => {
       switch (tab.type) {
@@ -38,18 +33,23 @@ export function serializePaneTree(
         case 'agent-chat':
           // The session itself is persisted separately (P5 history); we persist
           // the tab so the pane reappears on restart. The chat shows its closed/
-          // empty state until reopened from history. An ownership predicate
-          // (persistState) drops other projects' chats — the global tree can
-          // carry them mid-switch, and persisting them would seed cross-project
-          // tab leaks on restore.
-          if (options?.agentChatOwnedBy && !options.agentChatOwnedBy(tab.sessionId)) {
-            return []
-          }
+          // empty state until reopened from history.
           return [{ type: 'agent-chat', id: tab.id, sessionId: tab.sessionId }]
         case 'git-history':
           return [{ type: 'git-history', id: tab.id, cwd: tab.cwd }]
         case 'diff':
           return [{ type: 'diff', id: tab.id, cwd: tab.cwd, path: tab.path, staged: tab.staged }]
+        case 'commit-diff':
+          return [
+            {
+              type: 'commit-diff',
+              id: tab.id,
+              cwd: tab.cwd,
+              commit: tab.commit,
+              path: tab.path,
+              ...(tab.oldPath ? { oldPath: tab.oldPath } : {})
+            }
+          ]
         case 'canvas':
           // Not persisted (see WORKSPACE_TAB_KIND_TRAITS): the canvas re-opens
           // user-initiated.
@@ -72,7 +72,7 @@ export function serializePaneTree(
     type: 'split',
     id: node.id,
     direction: node.direction,
-    children: node.children.map((child) => serializePaneTree(child, options)),
+    children: node.children.map((child) => serializePaneTree(child)),
     sizes: node.sizes
   }
 }
@@ -221,6 +221,7 @@ export function reconcileTerminalTabs(
           case 'agent-chat':
           case 'git-history':
           case 'diff':
+          case 'commit-diff':
             return [tab]
           case 'canvas':
             // Canvas tabs: the daemon/iframe runtime is host-local state, never
@@ -278,11 +279,42 @@ export function reconcileTerminalTabs(
   return normalizePaneTree(visit(root))
 }
 
+/** A persisted commit diff ref as a tab; a malformed ref is dropped with one warn. */
+function restoreCommitDiff(ref: {
+  id?: unknown
+  cwd?: unknown
+  commit?: unknown
+  path?: unknown
+  oldPath?: unknown
+}): WorkspaceTab[] {
+  // Never coerce a malformed commit diff ref: drop it with one warn.
+  if (
+    typeof ref.cwd !== 'string' ||
+    typeof ref.commit !== 'string' ||
+    typeof ref.path !== 'string'
+  ) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'useEditorPersistence.deserializePaneTree',
+      message:
+        'Dropped malformed commit diff tab (cwd/commit/path invalid) during workspace restore'
+    })
+    return []
+  }
+  return [
+    {
+      type: 'commit-diff',
+      id: typeof ref.id === 'string' ? ref.id : commitDiffTabId(ref.cwd, ref.commit, ref.path),
+      cwd: ref.cwd,
+      commit: ref.commit,
+      path: ref.path,
+      ...(typeof ref.oldPath === 'string' ? { oldPath: ref.oldPath } : {})
+    }
+  ]
+}
+
 // Deserialize pane tree with full tab mapping
-// `projectId` (when given) drops agent-chat tabs KNOWN to belong to another
-// project — a layout saved while a foreign chat leaked into the shared pane
-// tree would otherwise re-render that chat on this project.
-export function deserializePaneTree(persisted: PersistedPaneNodeInput, projectId = ''): PaneNode {
+export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode {
   if (persisted.type === 'leaf') {
     const tabs: WorkspaceTab[] = ('tabs' in persisted ? persisted.tabs : []).flatMap(
       (tab): WorkspaceTab[] => {
@@ -334,14 +366,6 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput, projectId
               })
               return []
             }
-            if (chatForeignToProject(tab.sessionId, projectId)) {
-              void logFrontendError({
-                level: 'warn',
-                source: 'useEditorPersistence.deserializePaneTree',
-                message: `Dropped foreign-project chat tab (session ${tab.sessionId}) during workspace restore for project ${projectId}`
-              })
-              return []
-            }
             return [
               {
                 type: 'agent-chat',
@@ -383,6 +407,8 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput, projectId
               }
             ]
           }
+          case 'commit-diff':
+            return restoreCommitDiff(tab)
           case 'terminal':
             return [
               {
@@ -430,20 +456,7 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput, projectId
     type: 'split',
     id: persisted.id,
     direction: persisted.direction,
-    children: persisted.children.map((child) => deserializePaneTree(child, projectId)),
+    children: persisted.children.map((child) => deserializePaneTree(child)),
     sizes: persisted.sizes
   }
-}
-
-/**
- * Whether an agent-chat session belongs to a project other than `projectId`
- * — FAIL-OPEN (see `lib/acp-session-ownership`): an id with NO ownership data
- * anywhere (index not yet loaded on a fresh mount, a session the host has
- * never seen) is kept; only sessions the store/index attribute to a
- * DIFFERENT project are filtered out. Fail-open preserves the
- * restore-before-index-load contract (reattach must not drop tabs it cannot
- * yet judge) while still cutting every known foreign session.
- */
-export function chatForeignToProject(sessionId: string, projectId: string): boolean {
-  return chatForeignToProjectIn(sessionId, projectId, useAcpStore.getState())
 }

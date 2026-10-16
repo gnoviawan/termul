@@ -67,19 +67,6 @@ describe('useShellLayoutHydration', () => {
     expect(mockRemoveProject).toHaveBeenCalledWith('c')
   })
 
-  it('covers the sidebar delete path (deleteProject)', () => {
-    useProjectStore.setState({
-      projects: [project('a'), project('b')],
-      activeProjectId: 'a',
-      isLoaded: true
-    })
-    renderHook(() => useShellLayoutHydration())
-    act(() => {
-      useProjectStore.getState().deleteProject('b')
-    })
-    expect(mockRemoveProject).toHaveBeenCalledWith('b')
-  })
-
   it('ignores unrelated store changes and stops after unmount', () => {
     useProjectStore.setState({ projects: [project('a')], activeProjectId: 'a', isLoaded: true })
     const { unmount } = renderHook(() => useShellLayoutHydration())

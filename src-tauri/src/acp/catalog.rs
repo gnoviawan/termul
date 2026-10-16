@@ -181,9 +181,8 @@ pub struct SetCatalogOptInRequest {
 /// Current on-disk opt-in config schema version.
 const CATALOG_CONFIG_SCHEMA_VERSION: u32 = 1;
 
-/// Schema-versioned envelope for the opt-in config file. Mirrors the
-/// `WorkspaceManifestFile` pattern so future migrations route through a
-/// `migrate` hook. A corrupt file is backed up via
+/// Schema-versioned envelope for the opt-in config file, so future
+/// migrations route through a `migrate` hook. A corrupt file is backed up via
 /// [`atomic_file::backup_corrupt`] then treated as fresh (opt-in = false).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -280,7 +279,7 @@ fn snapshot_fetcher(delegate: SnapshotFetchDelegate) -> SnapshotFetcher {
 /// Host-owned ACP catalog service. One instance per host runtime (desktop OR
 /// standalone `termul-server`, never shared across processes). Constructed via
 /// [`AcpCatalogService::open`], which creates the root directory + idempotent
-/// re-open (mirrors `WorkspaceManifestService::open`).
+/// re-open.
 ///
 /// The service:
 /// 1. Parses the bundled `agents.json` (embedded via `include_str!`) at
@@ -315,8 +314,8 @@ pub struct AcpCatalogService {
 impl AcpCatalogService {
     /// Open (or re-open) an acp-catalog root. Creates the directory if
     /// missing; idempotent re-open returns a fresh `Arc<Self>` over the same
-    /// root. Mirrors `WorkspaceManifestService::open`: Unix 0700 root, create
-    /// the dir, return an `Arc<Self>`. A non-directory root is an error so a
+    /// root: Unix 0700 root, create the dir, return an `Arc<Self>`. A
+    /// non-directory root is an error so a
     /// misconfigured host fails loudly at startup.
     pub async fn open(root: PathBuf) -> io::Result<Arc<Self>> {
         if root.exists() && !root.is_dir() {
@@ -521,7 +520,7 @@ impl AcpCatalogService {
 
     /// Read the opt-in flag. Returns `false` when the file is missing (the
     /// default — CDN augmentation is off) or when the file is corrupt / older
-    /// (backed up + treated as fresh, mirroring `WorkspaceManifestService`). A
+    /// (backed up + treated as fresh). A
     /// NEWER-schema file also reads as `false` but is logged and left untouched;
     /// [`Self::set_opt_in`] refuses to overwrite it.
     pub fn is_opt_in(&self) -> bool {
@@ -1096,7 +1095,7 @@ pub fn overlay_installed(
     }
 }
 
-/// Epoch-millis timestamp (mirrors `workspace_manifest::now_millis`).
+/// Epoch-millis timestamp.
 #[allow(dead_code)]
 fn now_millis() -> u64 {
     SystemTime::now()

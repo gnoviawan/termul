@@ -17,7 +17,7 @@ use crate::shell_paths::git_bash_paths;
 #[cfg(target_os = "windows")]
 use parking_lot::Mutex as ParkingMutex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -33,7 +33,9 @@ use tokio::sync::Mutex as AsyncMutex;
 mod external;
 mod instance;
 mod lifecycle;
+mod limits;
 mod resolve;
+mod set_watch;
 mod spawn;
 mod types;
 #[cfg(target_os = "windows")]
@@ -44,24 +46,23 @@ mod windows;
 // they resolved against the single-file module.
 #[cfg(target_os = "windows")]
 use self::windows::*;
-#[cfg(test)]
-use instance::should_reap_orphan;
-#[cfg(test)]
-use instance::should_reap_web_listed;
-use instance::{ClaimRollbackGuard, TerminalSlotReservation};
+use instance::ClaimRollbackGuard;
+use limits::PendingSpawns;
 #[cfg(all(test, target_os = "windows"))]
 use resolve::{
     is_directly_executable_windows, merge_windows_environment_map, parse_npm_cmd_shim,
     parse_powershell_cmd_shim, try_parse_windows_cmd_shim,
 };
 use types::{
-    GLOBAL_TERMINAL_LIMIT, ORPHAN_CHECK_INTERVAL_MS, ORPHAN_TIMEOUT_MS, TERM_BROADCAST_CAPACITY,
-    WEB_LISTED_REAP_AFTER_MS,
+    EXITED_SWEEP_INTERVAL_MS, EXITED_TERMINAL_TTL_MS, GLOBAL_TERMINAL_LIMIT,
+    TERM_BROADCAST_CAPACITY,
 };
 
 // `crate::pty::manager` public/`pub(crate)` surface preserved via re-export.
 pub use external::ExternalTerminal;
 pub use instance::TerminalInstance;
+pub use limits::{SpawnError, TERMINAL_LIMIT_CODE};
+pub use set_watch::TerminalSetObserver;
 pub(crate) use resolve::{resolve_spawn_program, ResolvedProgram};
 pub use types::{
     ExternalResizer, PreservedTerminal, SpawnOptions, SpawnedTerminal, TerminalAttachResult,
@@ -72,12 +73,15 @@ pub use types::{
 /// Manages all PTY instances
 pub struct PtyManager {
     terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
-    active_terminal_slots: Arc<AtomicUsize>,
+    /// Spawns that hold a cap slot but have not registered their PTY yet.
+    pending_spawns: PendingSpawns,
+    /// Per-project terminal cap; the global cap is `GLOBAL_TERMINAL_LIMIT`.
+    max_terminals_per_project: Arc<AtomicUsize>,
     id_counter: Arc<AtomicU64>,
     terminal_events: TerminalEventHub,
-    orphan_detection_enabled: Arc<AtomicBool>,
-    orphan_timeout_ms: Arc<AtomicU64>,
-    orphan_detection_started: Arc<AtomicBool>,
+    /// How long an exited PTY stays tracked before the sweeper removes it.
+    exited_ttl_ms: Arc<AtomicU64>,
+    exit_sweeper_started: Arc<AtomicBool>,
     cwd_tracker: Arc<CwdTracker>,
     git_tracker: Arc<GitTracker>,
     exit_code_tracker: Arc<ExitCodeTracker>,
@@ -85,15 +89,12 @@ pub struct PtyManager {
     /// claim lifecycle coupled to the terminal lifecycle: issued at spawn,
     /// removed at kill/reap.
     claims: Arc<crate::pty::claims::TerminalClaimRegistry>,
-    /// When true, orphan detection and kill operations are deferred.
+    /// When true, kill operations and the exited-PTY sweep are deferred.
     /// Set when the app window is minimized/hidden to prevent
     /// ConPTY lifecycle issues on Windows.
     is_hidden: Arc<AtomicBool>,
-    /// #851b: web-listed reap window in ms. A web-spawned terminal that no
-    /// client has listed for this long (and that has no live web attachment
-    /// or renderer ref) is swept by the orphan reaper. Shared `AtomicU64`
-    /// so the reaper task reads the live value and tests can shrink it.
-    web_listed_reap_after_ms: Arc<AtomicU64>,
+    /// Told when a project's terminal set changes (the `terminals` watch).
+    set_observer: TerminalSetObserver,
 }
 
 impl PtyManager {
@@ -106,18 +107,20 @@ impl PtyManager {
     ) -> Self {
         Self {
             terminals: Arc::new(RwLock::new(HashMap::new())),
-            active_terminal_slots: Arc::new(AtomicUsize::new(0)),
+            pending_spawns: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            max_terminals_per_project: Arc::new(AtomicUsize::new(
+                crate::web::config::DEFAULT_MAX_TERMINALS_PER_PROJECT,
+            )),
             id_counter: Arc::new(AtomicU64::new(0)),
             terminal_events,
-            orphan_detection_enabled: Arc::new(AtomicBool::new(true)),
-            orphan_timeout_ms: Arc::new(AtomicU64::new(ORPHAN_TIMEOUT_MS)),
-            orphan_detection_started: Arc::new(AtomicBool::new(false)),
-            web_listed_reap_after_ms: Arc::new(AtomicU64::new(WEB_LISTED_REAP_AFTER_MS)),
+            exited_ttl_ms: Arc::new(AtomicU64::new(EXITED_TERMINAL_TTL_MS)),
+            exit_sweeper_started: Arc::new(AtomicBool::new(false)),
             is_hidden: Arc::new(AtomicBool::new(false)),
             cwd_tracker,
             git_tracker,
             exit_code_tracker,
             claims: Arc::new(crate::pty::claims::TerminalClaimRegistry::new()),
+            set_observer: TerminalSetObserver::default(),
         }
     }
 
@@ -187,120 +190,54 @@ impl PtyManager {
         }
     }
 
-    fn try_reserve_terminal_slot(&self) -> Option<TerminalSlotReservation> {
-        TerminalSlotReservation::try_acquire(self.active_terminal_slots.clone())
-    }
-
-    fn release_terminal_slot(&self) {
-        self.active_terminal_slots.fetch_sub(1, Ordering::SeqCst);
-    }
-
-    /// Start the orphan detection background task
-    /// This is called lazily when the first terminal is spawned
-    fn start_orphan_detection(&self) {
-        // Check if already started using compare_exchange
+    /// Start the exited-PTY sweeper. Called lazily when the first terminal is
+    /// spawned. The sweeper removes only PTYs whose process has already
+    /// exited and whose TTL ran out; it never touches a live PTY.
+    fn start_exit_sweeper(&self) {
         if self
-            .orphan_detection_started
+            .exit_sweeper_started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
             .is_err()
         {
             return; // Already started
         }
 
-        let terminals = self.terminals.clone();
-        let _terminal_events = self.terminal_events.clone();
-        let cwd_tracker = self.cwd_tracker.clone();
-        let git_tracker = self.git_tracker.clone();
-        let exit_code_tracker = self.exit_code_tracker.clone();
-        let claims = self.claims.clone();
-        let active_slots = self.active_terminal_slots.clone();
-        let enabled = self.orphan_detection_enabled.clone();
-        let timeout_ms = self.orphan_timeout_ms.clone();
+        let sweep = self.exit_sweep();
+        let ttl_ms = self.exited_ttl_ms.clone();
         let is_hidden = self.is_hidden.clone();
-        let web_listed_reap_after_ms = self.web_listed_reap_after_ms.clone();
 
         tokio::spawn(async move {
             let mut interval =
-                tokio::time::interval(Duration::from_millis(ORPHAN_CHECK_INTERVAL_MS));
+                tokio::time::interval(Duration::from_millis(EXITED_SWEEP_INTERVAL_MS));
 
             loop {
                 interval.tick().await;
 
-                // Check if detection is enabled
-                if !enabled.load(Ordering::Relaxed) {
-                    continue;
-                }
-
-                // SKIP orphan cleanup when app is hidden to prevent
-                // ConPTY lifecycle issues on Windows
+                // Skip while the window is hidden: dropping ConPTY handles
+                // then is the lifecycle problem `set_hidden` guards against.
                 if is_hidden.load(Ordering::Relaxed) {
                     continue;
                 }
 
-                let timeout = Duration::from_millis(timeout_ms.load(Ordering::Relaxed));
-
-                // Find orphaned terminals.
-                let web_listed_timeout =
-                    Duration::from_millis(web_listed_reap_after_ms.load(Ordering::Relaxed));
-                let orphans: Vec<String> = terminals
-                    .read()
-                    .iter()
-                    .filter(|(_, instance)| {
-                        // Never reap terminals that are still owned by an open
-                        // project/tab. A backgrounded project's terminals lose
-                        // their renderer refs (component unmount) but remain
-                        // live and may be running tasks — reaping them caused
-                        // the "Terminal not found"/hang bug.
-                        instance.is_orphan_reapable(timeout)
-                            // #851b: web-spawned terminals stay `protected`
-                            // (they never collect renderer refs, so the rule
-                            // above never fires and they leaked to the 30-
-                            // terminal global cap). The web-listed window
-                            // sweeps them once NO client has listed them for
-                            // the window and no live web attachment /
-                            // renderer ref keeps them observable. Desktop-
-                            // only terminals (never listed by the web
-                            // surface) are untouched by this rule.
-                            || instance.is_web_listed_reapable(web_listed_timeout)
-                    })
-                    .map(|(id, _)| id.clone())
-                    .collect();
-
-                // Clean up orphans
-                for id in orphans {
-                    // #851b: the web-listed sweep is a NEW reap reason —
-                    // log it distinctly (tracing) so operators can tell a
-                    // web-PTY sweep (expected: no client listed it for the
-                    // window) from an ordinary orphan cleanup.
-                    let web_swept = terminals.read().get(&id).is_some_and(|instance| {
-                        !instance.is_orphan_reapable(timeout)
-                            && instance.is_web_listed_reapable(web_listed_timeout)
-                    });
-                    if web_swept {
-                        tracing::info!(
-                            "[pty] reaping web terminal not listed for {:?}: {}",
-                            web_listed_timeout,
-                            id
-                        );
-                    } else {
-                        log::info!("Cleaning up orphaned terminal: {}", id);
-                    }
-
-                    if let Some(instance) = terminals.write().remove(&id) {
-                        active_slots.fetch_sub(1, Ordering::SeqCst);
-                        tokio::task::spawn_blocking(move || {
-                            Self::cleanup_terminal_resources_sync(instance, true);
-                        });
-
-                        // Stop tracking (sync operations)
-                        cwd_tracker.stop_tracking(&id);
-                        git_tracker.remove_terminal(&id);
-                        exit_code_tracker.remove_terminal(&id);
-                        claims.remove(&id);
-                    }
-                }
+                sweep
+                    .remove_expired(Duration::from_millis(ttl_ms.load(Ordering::Relaxed)))
+                    .await;
             }
         });
+    }
+
+    /// Handles the sweeper needs, detached from `&self` so the background
+    /// task can own them.
+    fn exit_sweep(&self) -> ExitSweep {
+        ExitSweep {
+            terminals: self.terminals.clone(),
+            cwd_tracker: self.cwd_tracker.clone(),
+            git_tracker: self.git_tracker.clone(),
+            exit_code_tracker: self.exit_code_tracker.clone(),
+            terminal_events: self.terminal_events.clone(),
+            claims: self.claims.clone(),
+            set_observer: self.set_observer.clone(),
+        }
     }
 
     /// Generate a unique terminal ID
@@ -314,5 +251,62 @@ impl PtyManager {
     }
 }
 
+/// Removes exited PTYs past their TTL. Owned by the sweeper task; tests drive
+/// it directly.
+struct ExitSweep {
+    terminals: Arc<RwLock<HashMap<String, Arc<TerminalInstance>>>>,
+    cwd_tracker: Arc<CwdTracker>,
+    git_tracker: Arc<GitTracker>,
+    exit_code_tracker: Arc<ExitCodeTracker>,
+    terminal_events: TerminalEventHub,
+    claims: Arc<crate::pty::claims::TerminalClaimRegistry>,
+    set_observer: TerminalSetObserver,
+}
+
+impl ExitSweep {
+    /// Remove every tracked PTY that exited more than `ttl` ago, releasing
+    /// its resources like a kill. A PTY whose process is still alive has no
+    /// `exited_for` and is never matched. Returns the ids removed.
+    async fn remove_expired(&self, ttl: Duration) -> Vec<String> {
+        let expired: Vec<String> = self
+            .terminals
+            .read()
+            .iter()
+            .filter(|(_, instance)| instance.exited_for().is_some_and(|age| age > ttl))
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let mut removed = Vec::with_capacity(expired.len());
+        for id in expired {
+            // Re-check under the write lock: the PTY may have been killed
+            // (and its id reused is impossible, ids are unique) in between.
+            let Some(instance) = self.terminals.write().remove(&id) else {
+                continue;
+            };
+            log::info!("Removing exited terminal past its TTL: {}", id);
+            let cleanup = instance.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                PtyManager::cleanup_terminal_resources_sync(cleanup, true);
+            })
+            .await
+            {
+                log::warn!("spawn_blocking failed for terminal {}: {}", id, e);
+            }
+            self.cwd_tracker.stop_tracking(&id);
+            self.git_tracker.remove_terminal(&id);
+            self.exit_code_tracker.remove_terminal(&id);
+            self.terminal_events.remove(&id);
+            self.claims.remove(&id);
+            self.set_observer.notify(instance.project_id.as_deref());
+            removed.push(id);
+        }
+        removed
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests;
+#[cfg(test)]
+mod limit_tests;
 #[cfg(test)]
 mod tests;

@@ -10,7 +10,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   mockSetTerminals,
   mockSelectTerminal,
-  mockIsTerminalLimitReached,
   mockAddTabToPane,
   mockTerminalApiSpawn,
   mockEnsureWorktreeSymlinks,
@@ -18,7 +17,6 @@ const {
 } = vi.hoisted(() => ({
   mockSetTerminals: vi.fn(),
   mockSelectTerminal: vi.fn(),
-  mockIsTerminalLimitReached: vi.fn(),
   mockAddTabToPane: vi.fn(),
   mockTerminalApiSpawn: vi.fn(),
   mockEnsureWorktreeSymlinks: vi.fn(),
@@ -30,8 +28,7 @@ vi.mock('@/stores/terminal-store', () => ({
     getState: () => ({
       terminals: mockTerminals,
       setTerminals: mockSetTerminals,
-      selectTerminal: mockSelectTerminal,
-      isTerminalLimitReached: mockIsTerminalLimitReached
+      selectTerminal: mockSelectTerminal
     })
   }
 }))
@@ -50,12 +47,6 @@ vi.mock('@/stores/project-store', () => ({
     getState: () => ({
       projects: [{ id: 'proj-1', name: 'Test', path: '/test', envVars: [] }]
     })
-  }
-}))
-
-vi.mock('@/stores/app-settings-store', () => ({
-  useAppSettingsStore: {
-    getState: () => ({ settings: { maxTerminalsPerProject: 10 } })
   }
 }))
 
@@ -91,7 +82,6 @@ describe('launchAgentInPane', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockTerminals.length = 0
-    mockIsTerminalLimitReached.mockReturnValue(false)
     // CAP-3: spawn is the only claim issuance path — the fixture carries the
     // issued lease credential alongside the terminal info.
     mockTerminalApiSpawn.mockResolvedValue({
@@ -199,13 +189,19 @@ describe('launchAgentInPane', () => {
     )
   })
 
-  it('blocks when the per-project terminal limit is reached', async () => {
+  it('shows the host terminal_limit refusal and records nothing', async () => {
+    const hostMessage =
+      'Terminal limit reached (10 per project, 30 total): this project is at its limit'
     mockTerminals.push({ projectId: 'proj-1' }, { projectId: 'proj-1' })
-    const result = await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x', {
-      maxTerminalsPerProject: 2
+    mockTerminalApiSpawn.mockResolvedValue({
+      success: false,
+      error: hostMessage,
+      code: 'TERMINAL_LIMIT'
     })
-    expect(result.success).toBe(false)
-    expect(mockTerminalApiSpawn).not.toHaveBeenCalled()
+    const result = await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x')
+    expect(result).toEqual({ success: false, error: hostMessage })
+    expect(mockSetTerminals).not.toHaveBeenCalled()
+    expect(mockAddTabToPane).not.toHaveBeenCalled()
   })
 
   it('surfaces a spawn failure as a result error', async () => {

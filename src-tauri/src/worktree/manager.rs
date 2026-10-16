@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path};
 
 use super::*;
 
@@ -99,12 +99,13 @@ impl WorktreeManager {
         on_progress: Option<&mut dyn FnMut(&str)>,
     ) -> Result<GitWorktreeEntry, WorktreeError> {
         let target = match target_path {
-            Some(p) => p.to_string(),
-            None => format!(
+            Some(p) => Some(p.to_string()),
+            None if is_only_plain_folder_names(name) => Some(format!(
                 "{}/.termul/worktrees/{}/",
                 project_path.trim_end_matches('/'),
                 name
-            ),
+            )),
+            None => None,
         };
 
         // Boundary log: record the create inputs before ANY early return so
@@ -132,6 +133,15 @@ impl WorktreeManager {
                 error
             );
         };
+
+        let Some(target) = target else {
+            log_failure(&WorktreeError::InvalidWorktreeName);
+            return Err(WorktreeError::InvalidWorktreeName);
+        };
+        if let Err(error) = ensure_valid_branch_name(branch, project_path) {
+            log_failure(&error);
+            return Err(error);
+        }
 
         // Validate path length (Windows MAX_PATH guard)
         let target_path_obj = Path::new(&target);
@@ -454,8 +464,7 @@ impl WorktreeManager {
                 continue;
             }
 
-            // Skip if it contains path separators (subdirectory patterns like src/dist/)
-            if dir_name.contains('/') || dir_name.contains('\\') {
+            if !is_single_safe_folder_name(dir_name) {
                 continue;
             }
 
@@ -499,19 +508,13 @@ impl WorktreeManager {
         let mut results = Vec::new();
 
         for dir_name in symlink_dirs {
-            // Validate: reject absolute paths and path-traversal components
-            let dir_path = Path::new(dir_name);
-            if dir_path.is_absolute()
-                || dir_path
-                    .components()
-                    .any(|c| c == std::path::Component::ParentDir)
-            {
+            if !is_single_safe_folder_name(dir_name) {
                 results.push(SymlinkResult {
                     path: worktree_root.join(dir_name).to_string_lossy().to_string(),
                     target: project_root.join(dir_name).to_string_lossy().to_string(),
                     status: "skipped".to_string(),
                     reason: Some(format!(
-                        "Invalid symlink directory name (absolute or path traversal): {}",
+                        "Invalid symlink directory name (must be one folder name with no path separator or shell metacharacter): {}",
                         dir_name
                     )),
                 });
@@ -580,4 +583,12 @@ impl WorktreeManager {
     ) -> Vec<SymlinkResult> {
         Self::create_symlinks(project_path, worktree_path, symlink_dirs)
     }
+}
+
+fn is_only_plain_folder_names(name: &str) -> bool {
+    let mut components = Path::new(name).components().peekable();
+    // `components()` silently drops interior `.`, so `feat/./login` would alias `feat/login`.
+    components.peek().is_some()
+        && components.all(|c| matches!(c, Component::Normal(_)))
+        && !name.split(['/', '\\']).any(|segment| segment == ".")
 }

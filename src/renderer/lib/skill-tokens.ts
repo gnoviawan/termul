@@ -535,6 +535,27 @@ export const FILE_TOKEN_END = '\uE007'
 export const FILE_TOKEN_SEP = '\u001F'
 
 /**
+ * True when a `/` or `@` at `index` is a trigger, not part of a word.
+ *
+ * The character before `index` is a boundary at the start of the text, on
+ * whitespace, or at the end of a pill (`\uE001`, `\uE003`, `\uE005`, `\uE007`).
+ * The figure space inside a skill padding block is not a boundary: the scanner
+ * stops on the sentinel that closes the pill, so a trigger glued to a pill
+ * still opens the menu.
+ */
+export function isComposerTriggerBoundary(value: string, index: number): boolean {
+  if (index <= 0) return true
+  const prev = value[index - 1]
+  if (prev === undefined || /\s/.test(prev)) return true
+  return (
+    prev === SKILL_TOKEN_END ||
+    prev === SKILL_PAD_END ||
+    prev === CMD_TOKEN_END ||
+    prev === FILE_TOKEN_END
+  )
+}
+
+/**
  * Folder mentions (gh-896) reuse the file token with a trailing `/` on the
  * `absPath` as the dir marker, so the token format and the file wire output
  * stay unchanged. A folder token's display is the project-relative path with a

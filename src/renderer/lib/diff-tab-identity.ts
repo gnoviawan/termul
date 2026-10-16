@@ -47,3 +47,15 @@ export function diffTabId(cwd: string, path: string, staged: boolean): string {
   const { workingCopy, path: relPath, staged: side } = diffTabIdentity(cwd, path, staged)
   return `diff:${stableHash(JSON.stringify([workingCopy, relPath, side ? 'staged' : 'unstaged']))}`
 }
+
+/** Commit diff tab label: `a.ts @ e44b917` (last path segment, short hash). */
+export function commitDiffTabLabel(path: string, commit: string): string {
+  const segments = path.split('/').filter(Boolean)
+  return `${segments[segments.length - 1] ?? path} @ ${commit.slice(0, 7)}`
+}
+
+/** Commit Diff tab id: one file at one commit (read-only), in the `diff:` id space so saved ids keep matching. */
+export function commitDiffTabId(cwd: string, hash: string, path: string): string {
+  const { workingCopy, path: relPath } = diffTabIdentity(cwd, path, false)
+  return `diff:${stableHash(JSON.stringify([workingCopy, relPath, 'commit', hash]))}`
+}

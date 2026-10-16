@@ -12,10 +12,9 @@
 //! | `terminal_rotate_claim` | command, receipt-only       | `OUTCOME_UNKNOWN` (see below)   |
 //! | `terminal_revoke_claim` | command, receipt-only       | ok                              |
 //!
-//! Every other terminal request (resize, detach, protection, renderer refs,
-//! orphan detection, visibility, reads) is naturally idempotent and never
-//! enters the ledger; `list_preserved` is a write in disguise (it re-issues
-//! claims) and is deliberately never replayed.
+//! Every other terminal request (resize, detach, visibility, reads) is
+//! naturally idempotent and never enters the ledger; `list_preserved` is a
+//! write in disguise (it re-issues claims) and is deliberately never replayed.
 //!
 //! Nothing here stores a credential: the ledger records only that the command
 //! succeeded or its rejection code, and a spawn replay builds its reply from
@@ -34,7 +33,7 @@ use tauri::ipc::{Channel, Response};
 use parking_lot::Mutex;
 use tracing::warn;
 
-use crate::pty::manager::SpawnedTerminal;
+use crate::pty::manager::{SpawnedTerminal, TERMINAL_LIMIT_CODE};
 use crate::pty::{PtyManager, SpawnOptions};
 use crate::web::command_ledger::{
     is_valid_command_id, run_command_released, ClassKind, Command, CommandClass, CommandLedger,
@@ -62,6 +61,7 @@ pub const REVOKE_CLAIM: &str = "terminal_revoke_claim";
 /// back to one of these.
 const REJECTION_CODES: &[&str] = &[
     "SPAWN_FAILED",
+    TERMINAL_LIMIT_CODE,
     "WRITE_FAILED",
     "KILL_FAILED",
     "UNAUTHORIZED",
@@ -425,9 +425,9 @@ pub async fn spawn(
             }
             match run_pty.spawn(options, on_data).await {
                 Ok(spawned) => Effect::Done(spawned),
-                Err(message) => Effect::Released {
-                    code: "SPAWN_FAILED",
-                    message,
+                Err(error) => Effect::Released {
+                    code: error.code(),
+                    message: error.to_string(),
                 },
             }
         },

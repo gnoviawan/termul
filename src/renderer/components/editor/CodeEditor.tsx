@@ -139,6 +139,10 @@ export function CodeEditor({
       lastAppliedLineRef.current = customEvent.detail.lineNumber
       pendingRevealLineRef.current = null
       pendingRevealTermRef.current = undefined
+      // The window slot is only for an editor that mounts after the event.
+      // Leaving it set replays the line on the next mount.
+      ;(window as unknown as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine =
+        undefined
     }
 
     window.addEventListener('termul:reveal-line', handler)

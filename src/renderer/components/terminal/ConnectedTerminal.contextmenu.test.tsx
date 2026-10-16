@@ -32,22 +32,7 @@ vi.mock('@/lib/platform', () => ({
   isSecondaryModifier: (e: KeyboardEvent) => (isMacRef.current ? e.ctrlKey : e.metaKey)
 }))
 
-// Inline (always-visible) context-menu stub so the shortcut text is queryable
-// without opening the menu (F4 is about the shortcut TEXT, not open behavior).
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const wrap = (props: { children?: React.ReactNode }) =>
-    React.createElement('div', null, props.children)
-  return {
-    ContextMenu: wrap,
-    ContextMenuTrigger: wrap,
-    ContextMenuContent: wrap,
-    ContextMenuItem: wrap,
-    ContextMenuSeparator: () => null,
-    ContextMenuShortcut: (props: { children?: React.ReactNode }) =>
-      React.createElement('span', null, props.children)
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 // --- Stable dep mocks (re-evaluated after vi.resetModules()) ---
 
@@ -141,14 +126,6 @@ vi.mock('@/lib/api', async () => {
   }
 })
 
-vi.mock('@/lib/tauri-terminal-api', async () => {
-  const { vi: v } = await import('vitest')
-  return {
-    addRendererRef: v.fn().mockResolvedValue({ success: true }),
-    removeRendererRef: v.fn().mockResolvedValue({ success: true })
-  }
-})
-
 vi.mock('@/lib/terminal-continuity-instrumentation', async () => {
   const { vi: v } = await import('vitest')
   return {
@@ -218,7 +195,14 @@ vi.mock('@/stores/terminal-store', async () => {
   ;(storeHook as unknown as { getState: () => typeof state }).getState = () => state
   return { useTerminalStore: storeHook }
 })
-vi.mock('@/stores/project-store', () => ({ useActiveProject: () => ({ path: '/project' }) }))
+vi.mock('@/stores/project-store', () => ({
+  useProjectStore: (
+    selector: (state: {
+      projects: Array<{ id: string; path: string }>
+      activeProjectId: string
+    }) => unknown
+  ) => selector({ projects: [{ id: 'project-a', path: '/project' }], activeProjectId: 'project-a' })
+}))
 vi.mock('@/stores/keyboard-shortcuts-store', async () => {
   const { vi: v } = await import('vitest')
   return {
@@ -255,11 +239,12 @@ describe('ConnectedTerminal context menu shortcuts (F4)', () => {
     isMacRef.current = true
     vi.resetModules()
     const React = await import('react')
-    const { render, screen, cleanup } = await import('@testing-library/react')
+    const { fireEvent, render, screen, cleanup } = await import('@testing-library/react')
     cleanupFn = cleanup
     const { ConnectedTerminal } = await import('./ConnectedTerminal')
 
-    render(React.createElement(ConnectedTerminal))
+    const { container } = render(React.createElement(ConnectedTerminal))
+    fireEvent.contextMenu(container.firstElementChild as Element)
 
     expect(screen.getByText('⌘+C')).toBeInTheDocument()
     expect(screen.getByText('⌘+V')).toBeInTheDocument()
@@ -270,11 +255,12 @@ describe('ConnectedTerminal context menu shortcuts (F4)', () => {
     isMacRef.current = false
     vi.resetModules()
     const React = await import('react')
-    const { render, screen, cleanup } = await import('@testing-library/react')
+    const { fireEvent, render, screen, cleanup } = await import('@testing-library/react')
     cleanupFn = cleanup
     const { ConnectedTerminal } = await import('./ConnectedTerminal')
 
-    render(React.createElement(ConnectedTerminal))
+    const { container } = render(React.createElement(ConnectedTerminal))
+    fireEvent.contextMenu(container.firstElementChild as Element)
 
     expect(screen.getByText('Ctrl+C')).toBeInTheDocument()
     expect(screen.getByText('Ctrl+V')).toBeInTheDocument()

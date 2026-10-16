@@ -19,6 +19,9 @@ use crate::web::ws::{AppState, ClientIdentity};
 pub enum Carrier {
     /// The multiplexed ACP relay (`/ws`).
     Ws,
+    /// The desktop's in-process Tauri `ipc::Channel` (`ws_channel_*`): the
+    /// same relay as `/ws`, reached without a network socket.
+    Ipc,
     /// The dedicated interactive terminal socket (`/terminal/ws`).
     TerminalWs,
 }
@@ -30,6 +33,7 @@ impl Carrier {
         match self {
             Self::Ws => "ws",
             Self::TerminalWs => "terminal_ws",
+            Self::Ipc => "ipc",
         }
     }
 }
@@ -198,7 +202,9 @@ pub fn device_store_prefix(device_id: &str) -> Option<String> {
 /// What a `/ws` request type needs from the connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Requirement {
-    /// Reads, ping, subscribe: any authenticated connection.
+    /// Reads, ping, subscribe and a chat read (`mark_chat_read` moves only
+    /// the shared unread marker a viewer clears by reading): any
+    /// authenticated connection.
     View,
     /// `store_write` / `store_delete`: view-only connections only for keys
     /// under their own `device/<deviceId>/` prefix.
@@ -216,12 +222,9 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         "authenticate"
         | "ping"
         | "subscribe"
-        // A per-project fs watch is a subscription like `subscribe`: it only
-        // routes `fs_changed` events to this connection.
-        | "watch_project"
-        | "unwatch_project"
-        // The state watches (projects, chat history, agents) only route frames
-        // to this connection, like `subscribe`.
+        // The watches (projects, chat history, agents, file changes, store
+        // keys, terminals) only route frames to this connection, like
+        // `subscribe`.
         | "watch"
         | "unwatch"
         | "list_persisted_sessions"
@@ -233,7 +236,10 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "list_sessions"
         | "list_agents"
         | "list_acp_catalog"
-        | "store_read" => Requirement::View,
+        | "list_claude_accounts"
+        | "list_claude_usage"
+        | "store_read"
+        | "mark_chat_read" => Requirement::View,
         "store_write" | "store_delete" => Requirement::DeviceStore,
         _ => Requirement::Write,
     }
@@ -263,7 +269,7 @@ pub fn ws_request_permitted(
 
 /// `/terminal/ws` request types a view-only connection may still send.
 /// Everything else mutates the host: spawn/write/resize/kill, claim rotation
-/// and revocation, renderer refs, protection, orphan detection — and
+/// and revocation — and
 /// `list_preserved`, which re-issues (replaces) the claim of every terminal
 /// without a live attachment, so a view-only peer could lock out its owner.
 /// A view-only connection therefore cannot obtain a claim to `attach` (claims

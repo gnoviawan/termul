@@ -5,9 +5,8 @@
 //!
 //! * Ledgered (`Command`/`Create`): fs write/rename/copy, git commit,
 //!   discard, stash save/apply/pop/drop, stage/unstage hunk, create-branch,
-//!   worktree create/rename-branch, workspace write (a resend after the first
-//!   run answers its `updated` outcome, not a `conflict` against itself), plus
-//!   the `install_acp_agent` row of the `/ws` table. Kinds whose request
+//!   worktree create/rename-branch, plus the `install_acp_agent` row of the
+//!   `/ws` table. Kinds whose request
 //!   carries content (fs write, discard, commit, stash save, hunk patches) are
 //!   receipt-only: a recorded rejection keeps its code but not its text, which
 //!   could echo that content.
@@ -15,8 +14,8 @@
 //!   fs mkdir/delete (deleting an absent path is ok), git
 //!   init/stage/unstage/push/checkout/branch-switch, worktree
 //!   remove/copy-include-files, projects, MCP servers, catalog opt-in,
-//!   factory-key (a secret body, never stored), workspace delete, search
-//!   cancel, canvas open/close/save, oauth disconnect.
+//!   factory-key (a secret body, never stored), search cancel, canvas
+//!   open/close/save, oauth disconnect.
 //! * Never admitted: log frontend-error, oauth start (secret), probes, reads.
 //!
 //! A ledgered request without a `commandId` is refused with
@@ -27,6 +26,7 @@
 //! body, content, token or secret (fingerprints hash entity names).
 
 use std::future::{ready, Future, Ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
@@ -34,9 +34,6 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::acp::commands::{
-    COMMAND_ACCEPTED, COMMAND_CONFLICT, COMMAND_IN_PROGRESS, INVALID_COMMAND_ID, OUTCOME_UNKNOWN,
-};
 use crate::web::fs_api::IpcBody;
 
 use super::{
@@ -61,6 +58,22 @@ pub const IN_PROGRESS_RECEIPT: &str = "in_progress";
 
 /// Error-text prefix (Tauri) of a stale precondition.
 pub const PRECONDITION_FAILED_PREFIX: &str = "precondition_failed";
+
+// Error-text prefixes (Tauri) of the verdicts that are not an outcome: a
+// `Result<T, String>` command cannot carry a code, so the text starts with one.
+
+/// Error-text prefix for a malformed `commandId`.
+const INVALID_COMMAND_ID: &str = "invalid_command_id";
+/// Error-text prefix for a `commandId` reused for a different request.
+const COMMAND_CONFLICT: &str = "command_conflict";
+/// Error-text prefix for a resend whose outcome is no longer known.
+const OUTCOME_UNKNOWN: &str = "outcome_unknown";
+/// Error-text prefix for a resend while the first run is still going.
+const COMMAND_IN_PROGRESS: &str = "command_in_progress";
+/// Error-text prefix for a resend of a command that succeeded but whose reply
+/// is not retained (receipt-only kinds, or a reply over the storage cap). The
+/// command ran; only its result is gone.
+const COMMAND_ACCEPTED: &str = "command_accepted";
 
 /// A create whose reply and rejection text are never stored (its request
 /// carries content).
@@ -90,7 +103,6 @@ const DOMAIN_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     // existence" (which could turn an original rejection into success).
     ("git_create_branch", CommandClass::command(Replay::Payload)),
     ("worktree_create", CommandClass::command(Replay::Payload)),
-    ("workspace_write", CommandClass::command(Replay::Payload)),
     (
         "worktree_rename_branch",
         CommandClass::command(Replay::Payload),
@@ -205,6 +217,27 @@ fn body_of<T: DeserializeOwned>(kind: &str, result: CommandResult) -> IpcBody<T>
     }
 }
 
+tokio::task_local! {
+    static ADMISSION: Arc<AtomicBool>;
+}
+
+/// Whether a request run under [`AdmissionWatch::watch`] entered the ledger,
+/// readable after its future is dropped. A route that merely tolerates
+/// `X-Command-Id` (or runs an idempotent kind through [`run_http`]) never sets it.
+#[derive(Default)]
+pub struct AdmissionWatch(Arc<AtomicBool>);
+
+impl AdmissionWatch {
+    pub fn watch<F: Future>(&self, future: F) -> impl Future<Output = F::Output> {
+        ADMISSION.scope(Arc::clone(&self.0), future)
+    }
+
+    #[must_use]
+    pub fn admitted(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
 /// How an HTTP effect ended, for [`run_http_released`].
 pub enum HttpRan<T> {
     /// Record the reply and replay it to resends.
@@ -284,7 +317,10 @@ where
     };
     async move {
         let (command_id, kind, class, fingerprint) = match admission {
-            Ok(admitted) => admitted,
+            Ok(admitted) => {
+                let _ = ADMISSION.try_with(|flag| flag.store(true, Ordering::Release));
+                admitted
+            }
             Err(None) => {
                 return match execute.await {
                     HttpRan::Settled(body) | HttpRan::Released(body) => body,

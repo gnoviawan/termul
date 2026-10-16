@@ -369,13 +369,12 @@ vi.mock('@/lib/terminal-api', () => ({
 vi.mock('@/stores/terminal-store', () => {
   const state = {
     terminals: [] as unknown[],
-    isTerminalLimitReached: () => false,
     setTerminals: vi.fn(),
     selectTerminal: vi.fn()
   }
   const useTerminalStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
   useTerminalStore.getState = () => state
-  return { useTerminalStore, GLOBAL_TERMINAL_LIMIT: 30 }
+  return { useTerminalStore }
 })
 
 vi.mock('@/lib/worktree-context', () => ({
@@ -943,6 +942,34 @@ describe('AgentLauncher ACP new thread', () => {
         [{ type: 'text', text: 'ready now' }],
         { skipUserAppend: true }
       )
+    )
+  })
+
+  it('applies the displayed options to a claimed warm session before the first prompt', async () => {
+    const key = 'acp-registry:claude-acp /work '
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    mockClaimPreparedChat.mockReturnValue('prepared-1')
+    renderLauncher()
+    await screen.findByRole('button', { name: /Model One/ })
+
+    setComposerValue('warm start')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    expect(mockClaimPreparedChat).toHaveBeenCalledWith(key, 'p1')
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalled())
+    expect(mockApplyPendingLauncherOptions).toHaveBeenCalledWith('prepared-1', {
+      modelId: 'm1',
+      modeId: 'agent',
+      configValues: { model: 'm1', thinking: 'medium' }
+    })
+    expect(mockApplyPendingLauncherOptions.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSendPrompt.mock.invocationCallOrder[0]
     )
   })
 
@@ -3003,10 +3030,6 @@ describe('AgentLauncher worktree isolation', () => {
     expect(mockSetWorktreePick).not.toHaveBeenCalled()
   })
 
-  // Non-collision git failures (WORKTREE_CREATE_FAILED covers GitError/IoError
-  // — e.g. a real usage/argument error) must NOT trigger the `-2` collision
-  // retry: the launcher retries only on WORKTREE_EXISTS /
-  // BRANCH_ALREADY_HAS_WORKTREE, and surfaces anything else to the user.
   it('does not retry when worktree create fails with a non-collision error', async () => {
     mockWorktreeCreate.mockReset()
     mockWorktreeCreate.mockResolvedValue({

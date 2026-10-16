@@ -135,7 +135,10 @@ fn lifecycle_fixtures() -> (
 /// returned guard alive for the test.
 fn shared_live_fixture() -> (SharedLiveData, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("temp app_data_dir");
-    let store = WebStore::open(crate::data_lock::desktop_store_file(dir.path()))
+    let store = WebStore::open(
+        crate::data_lock::desktop_store_file(dir.path()),
+        crate::web::store::StorePolicy::default(),
+    )
         .expect("open the desktop web store");
     let data = SharedLiveData {
         store: Arc::new(store),
@@ -162,7 +165,6 @@ async fn remote_server_state_start_then_stop_lifecycle() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -199,7 +201,6 @@ async fn remote_server_state_start_then_stop_lifecycle() {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("restart after stop succeeds");
@@ -226,7 +227,6 @@ async fn remote_server_state_double_start_is_rejected() {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("first start succeeds");
@@ -240,7 +240,6 @@ async fn remote_server_state_double_start_is_rejected() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -277,7 +276,6 @@ async fn remote_server_state_start_stop_does_not_kill_agents() {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("start succeeds");
@@ -289,6 +287,55 @@ async fn remote_server_state_start_stop_does_not_kill_agents() {
     // direct kill_all assertion possible without a spy; the invariant is
     // structural: serve_router does not call kill_all, host::stop does not
     // call kill_all. This test guards the path end-to-end.)
+}
+
+#[tokio::test]
+async fn the_durable_registry_survives_a_shared_live_stop_and_restart() {
+    // The registry belongs to the desktop, not to the server: stopping and
+    // starting shared-live neither clears it nor loses what it persisted.
+    let (acp, pty, relay, _in_memory) = lifecycle_fixtures();
+    let (data, data_dir) = shared_live_fixture();
+    let project_dir = data_dir.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let file = crate::data_lock::desktop_projects_file(data_dir.path());
+    let registry = Arc::new(
+        ProjectRegistry::open_durable(&file, crate::acp::RootCheck::Lenient).expect("open"),
+    );
+    registry.set(
+        vec![crate::web::ProjectSummary {
+            id: "p-1".to_string(),
+            name: "One".to_string(),
+            color: "blue".to_string(),
+            path: Some(project_dir.to_string_lossy().into_owned()),
+            is_archived: false,
+            is_default: false,
+        }],
+        Some("p-1".to_string()),
+    );
+
+    let state = RemoteServerState::new();
+    for _ in 0..2 {
+        state
+            .start(
+                acp.clone(),
+                pty.clone(),
+                relay.clone(),
+                registry.clone(),
+                RemoteBindMode::Localhost,
+                false,
+                &data,
+                None,
+                None,
+            )
+            .await
+            .expect("start succeeds");
+        assert_eq!(registry.len(), 1, "the list is served while running");
+        state.stop().await.expect("stop succeeds");
+        assert_eq!(registry.len(), 1, "stop leaves the list alone");
+    }
+    let reopened =
+        ProjectRegistry::open_durable(&file, crate::acp::RootCheck::Lenient).expect("reopen");
+    assert_eq!(reopened.snapshot().default_project_id.as_deref(), Some("p-1"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -309,7 +356,6 @@ async fn status_clears_tunnel_url_when_cloudflared_child_exits() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -476,7 +522,6 @@ async fn shared_live_with_a_tunnel_requires_the_token_and_shares_it_in_the_url()
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("start with a planned tunnel");
@@ -536,7 +581,6 @@ async fn shared_live_on_loopback_without_a_tunnel_is_ungated_and_writes_no_token
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("start");
@@ -566,7 +610,6 @@ async fn shared_live_requested_beyond_loopback_requires_the_token_even_without_a
             RemoteBindMode::All,
             false,
             &data,
-            None,
             None,
             None,
         )
@@ -600,8 +643,18 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
         crate::data_lock::desktop_store_file(data_dir.path()),
         "the shared-live store is app_data_dir/store.json"
     );
+    let identity = crate::web::ws::ClientIdentity {
+        device_id: "desktop-test".to_string(),
+        client_instance_id: "tab".to_string(),
+    };
     data.store
-        .write("sentinel", serde_json::json!("kept"), None)
+        .write(
+            "device/desktop-test/sentinel",
+            serde_json::json!("kept"),
+            crate::web::store::Precondition::default(),
+            &identity,
+            1,
+        )
         .expect("seed the store");
 
     let state = RemoteServerState::new();
@@ -617,12 +670,14 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
                 &data,
                 None,
                 None,
-                None,
             )
             .await
             .unwrap_or_else(|e| panic!("start round {round} must not lock again: {e}"));
         assert_eq!(
-            data.store.read("sentinel").expect("read"),
+            data.store
+                .read("device/desktop-test/sentinel", &identity, 2)
+                .expect("read")
+                .value,
             Some(serde_json::json!("kept")),
             "the same store instance survives round {round}"
         );
@@ -641,7 +696,6 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
                 || n == crate::web::auth::WEB_AUTH_TOKEN_FILE
                 || n.contains("lock")
                 || n == "acp-sessions"
-                || n == "workspace-manifests"
                 || n == "acp-catalog"
                 || n == "acp-registry-binaries"
         }),
@@ -654,12 +708,11 @@ fn remote_server_state_default_equals_new() {
     let _ = RemoteServerState::default();
 }
 
-/// A host started with an empty registry seeds exactly one registered project
-/// (the resolved seed root) so the registry-only boundary does not reject
-/// everything before the renderer's first project sync; a non-empty registry
-/// is left alone.
+/// A desktop host started with an empty registry registers nothing: there is
+/// no host project root to seed from, the durable registry is fed by the
+/// renderer's project list.
 #[tokio::test]
-async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
+async fn shared_live_start_never_seeds_a_project() {
     let (acp, pty, relay, registry) = lifecycle_fixtures();
     assert!(registry.is_empty());
     let (data, _data_dir) = shared_live_fixture();
@@ -675,16 +728,11 @@ async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
             &data,
             None,
             None,
-            None,
         )
         .await
         .expect("start with an empty registry");
-    let snap = registry.snapshot();
-    assert_eq!(snap.projects.len(), 1, "one seeded project");
-    assert_eq!(
-        snap.default_project_id.as_deref(),
-        Some(crate::web::project_registry::SEEDED_PROJECT_ID)
-    );
+    assert!(registry.is_empty(), "start must not seed a project");
+    assert_eq!(registry.snapshot().default_project_id, None);
     let _ = state.stop().await;
 }
 
@@ -714,10 +762,13 @@ async fn shared_live_start_seeds_one_project_only_when_registry_is_empty() {
 async fn shared_live_boundary_is_any_registered_cross_drive_project() {
     let (acp, pty, relay, registry) = lifecycle_fixtures();
 
-    // Resolve the user home dir the way the buggy `default_project_root()`
-    // does, then pick a base provably OUTSIDE the home tree so the project
-    // dirs reproduce the cross-drive / outside-home rejection the bug caused.
-    let Some(home) = crate::web::config::default_project_root() else {
+    // Resolve the user home dir the way the old host project-root default did,
+    // then pick a base provably OUTSIDE the home tree so the project dirs
+    // reproduce the cross-drive / outside-home rejection the bug caused.
+    let Some(home) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+    else {
         eprintln!("skip: cannot resolve user home dir for cross-drive test");
         return;
     };
@@ -867,7 +918,6 @@ async fn shared_live_boundary_is_any_registered_cross_drive_project() {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )

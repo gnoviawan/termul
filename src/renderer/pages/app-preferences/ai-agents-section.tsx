@@ -1,13 +1,20 @@
+import { useEffect, useState } from 'react'
 import { Bot } from '@/components/icons'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
-import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
+import type { AgentIdleWindowStatus } from '@/lib/acp-api'
+import { acpApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { cn } from '@/lib/utils'
 import {
   ACP_SESSION_NEW_TIMEOUT_OPTIONS,
   ACP_SESSION_REOPEN_TIMEOUT_OPTIONS,
   ACP_TURN_IDLE_TIMEOUT_OPTIONS,
-  ACP_TURN_TIMEOUT_OPTIONS
+  ACP_TURN_TIMEOUT_OPTIONS,
+  AGENT_IDLE_WINDOW_OPTIONS,
+  formatAgentIdleWindow
 } from '@/types/settings'
 
 interface AiAgentsSectionProps {
@@ -15,10 +22,62 @@ interface AiAgentsSectionProps {
   acpTurnIdleTimeoutSecs: number | null
   acpSessionNewTimeoutSecs: number | null
   acpSessionReopenTimeoutSecs: number | null
+  agentIdleWindowSecs: number | null
   handleAcpTurnTimeoutChange: (value: number | null) => void
   handleAcpTurnIdleTimeoutChange: (value: number | null) => void
   handleAcpSessionNewTimeoutChange: (value: number | null) => void
   handleAcpSessionReopenTimeoutChange: (value: number | null) => void
+  handleAgentIdleWindowChange: (value: number | null) => void
+}
+
+interface TimeoutChoice {
+  value: number | null
+  label: string
+}
+
+function formatLimit(secs: number | null, fallback: string): string {
+  if (secs === null) return fallback
+  return formatAgentIdleWindow(secs)
+}
+
+function TimeoutSelect({
+  id,
+  label,
+  value,
+  options,
+  help,
+  onChange
+}: {
+  id: string
+  label: string
+  value: number | null
+  options: TimeoutChoice[]
+  help: string
+  onChange: (value: number | null) => void
+}): React.JSX.Element {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-secondary-foreground mb-2">
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value === null ? 'null' : String(value)}
+        onChange={(e) => onChange(e.target.value === 'null' ? null : parseInt(e.target.value, 10))}
+        className={cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm')}
+      >
+        {options.map((option) => (
+          <option
+            key={option.value === null ? 'null' : String(option.value)}
+            value={option.value === null ? 'null' : String(option.value)}
+          >
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <p className="text-xs text-muted-foreground mt-1">{help}</p>
+    </div>
+  )
 }
 
 export function AiAgentsSection({
@@ -26,11 +85,47 @@ export function AiAgentsSection({
   acpTurnIdleTimeoutSecs,
   acpSessionNewTimeoutSecs,
   acpSessionReopenTimeoutSecs,
+  agentIdleWindowSecs,
   handleAcpTurnTimeoutChange,
   handleAcpTurnIdleTimeoutChange,
   handleAcpSessionNewTimeoutChange,
-  handleAcpSessionReopenTimeoutChange
+  handleAcpSessionReopenTimeoutChange,
+  handleAgentIdleWindowChange
 }: AiAgentsSectionProps): React.JSX.Element {
+  const isDesktop = isTauriContext()
+  const [liveWindow, setLiveWindow] = useState<AgentIdleWindowStatus | null>(null)
+  const [liveWindowFailed, setLiveWindowFailed] = useState(false)
+
+  useEffect(() => {
+    // `agentIdleWindowSecs` is the refetch key. The host answer can differ
+    // from the saved value when TERMUL_AGENT_IDLE_REAP_SECS is set.
+    let cancelled = false
+    void agentIdleWindowSecs
+    void acpApi
+      .getAgentIdleWindow()
+      .then((status) => {
+        if (cancelled) return
+        setLiveWindow(status)
+        setLiveWindowFailed(false)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setLiveWindow(null)
+        setLiveWindowFailed(true)
+        void logFrontendError({
+          level: 'warn',
+          source: 'AiAgentsSection.idleWindow',
+          message: `Failed to read the agent idle window: ${error instanceof Error ? error.message : String(error)}`
+        })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentIdleWindowSecs])
+
+  const envLocksWindow = liveWindow?.source === 'env'
+  const operatorLocksWindow = liveWindow?.source === 'operator'
+
   return (
     <SettingsSection id="ai-agents">
       <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
@@ -39,193 +134,75 @@ export function AiAgentsSection({
             <Bot size={18} className="text-primary" />
             <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            View ACP agent availability and warm/auth status. Agent Chat supports these agents
-            automatically.
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">See which agents are ready.</p>
         </div>
-        <div className="w-full space-y-4 md:w-full md:w-2/3">
-          <AcpAgentsSettings />
-          {isTauriContext() ? (
+        <div className="w-full space-y-4 md:w-2/3">
+          <TimeoutSelect
+            id="agent-idle-window"
+            label="Close idle chats after"
+            value={agentIdleWindowSecs === 1800 ? null : agentIdleWindowSecs}
+            options={AGENT_IDLE_WINDOW_OPTIONS}
+            onChange={handleAgentIdleWindowChange}
+            help="A chat closes after you leave it this long. A running answer or a waiting question keeps it open."
+          />
+          {(envLocksWindow || operatorLocksWindow) && liveWindow ? (
+            <p className="text-xs text-muted-foreground">
+              Using {formatAgentIdleWindow(liveWindow.secs)} from server setup. This menu applies
+              after a restart without that setup.
+            </p>
+          ) : null}
+          {liveWindowFailed ? (
+            <p className="text-xs text-muted-foreground">
+              Could not read the current time. Your choice is still saved.
+            </p>
+          ) : null}
+          {isDesktop ? (
             <>
-              <div>
-                <label className="block text-sm font-medium text-secondary-foreground mb-2">
-                  Turn Timeout (hard cap)
-                </label>
-                <select
-                  value={acpTurnTimeoutSecs === null ? 'null' : String(acpTurnTimeoutSecs)}
-                  onChange={(e) =>
-                    handleAcpTurnTimeoutChange(
-                      e.target.value === 'null' ? null : parseInt(e.target.value, 10)
-                    )
-                  }
-                  className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
-                >
-                  {ACP_TURN_TIMEOUT_OPTIONS.map((option) => (
-                    <option
-                      key={option.value === null ? 'null' : String(option.value)}
-                      value={option.value === null ? 'null' : String(option.value)}
-                    >
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Maximum wall-clock duration for a single agent turn. Active turns that stream
-                  continuously run until this cap; a silent (wedged) turn errors per the Turn Idle
-                  Timeout below. The TERMUL_ACP_TURN_TIMEOUT_SECS env var still overrides this
-                  (operator/diagnostic).
-                </p>
-              </div>
-              <div>
-                <label
-                  htmlFor="acp-turn-idle-timeout"
-                  className="block text-sm font-medium text-secondary-foreground mb-2"
-                >
-                  Turn Idle Timeout
-                </label>
-                <select
-                  id="acp-turn-idle-timeout"
-                  value={acpTurnIdleTimeoutSecs === null ? 'null' : String(acpTurnIdleTimeoutSecs)}
-                  onChange={(e) =>
-                    handleAcpTurnIdleTimeoutChange(
-                      e.target.value === 'null' ? null : parseInt(e.target.value, 10)
-                    )
-                  }
-                  className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
-                >
-                  {ACP_TURN_IDLE_TIMEOUT_OPTIONS.map((option) => (
-                    <option
-                      key={option.value === null ? 'null' : String(option.value)}
-                      value={option.value === null ? 'null' : String(option.value)}
-                    >
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Window with no agent activity after which a turn is treated as wedged and
-                  cancelled. The TERMUL_ACP_TURN_IDLE_TIMEOUT_SECS env var still overrides this
-                  (operator/diagnostic).
-                </p>
-              </div>
-              <div>
-                <label
-                  htmlFor="acp-session-new-timeout"
-                  className="block text-sm font-medium text-secondary-foreground mb-2"
-                >
-                  Session/New Timeout
-                </label>
-                <select
-                  id="acp-session-new-timeout"
-                  value={
-                    acpSessionNewTimeoutSecs === null ? 'null' : String(acpSessionNewTimeoutSecs)
-                  }
-                  onChange={(e) =>
-                    handleAcpSessionNewTimeoutChange(
-                      e.target.value === 'null' ? null : parseInt(e.target.value, 10)
-                    )
-                  }
-                  className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
-                >
-                  {ACP_SESSION_NEW_TIMEOUT_OPTIONS.map((option) => (
-                    <option
-                      key={option.value === null ? 'null' : String(option.value)}
-                      value={option.value === null ? 'null' : String(option.value)}
-                    >
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  How long to wait for an agent to answer session/new before the spawn fails
-                  (cold-start model fetches may need more). The TERMUL_ACP_SESSION_NEW_TIMEOUT_SECS
-                  env var still overrides this (operator/diagnostic).
-                </p>
-              </div>
-              <div>
-                <label
-                  htmlFor="acp-session-reopen-timeout"
-                  className="block text-sm font-medium text-secondary-foreground mb-2"
-                >
-                  Session Reopen Timeout
-                </label>
-                <select
-                  id="acp-session-reopen-timeout"
-                  value={
-                    acpSessionReopenTimeoutSecs === null
-                      ? 'null'
-                      : String(acpSessionReopenTimeoutSecs)
-                  }
-                  onChange={(e) =>
-                    handleAcpSessionReopenTimeoutChange(
-                      e.target.value === 'null' ? null : parseInt(e.target.value, 10)
-                    )
-                  }
-                  className={`w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
-                >
-                  {ACP_SESSION_REOPEN_TIMEOUT_OPTIONS.map((option) => (
-                    <option
-                      key={option.value === null ? 'null' : String(option.value)}
-                      value={option.value === null ? 'null' : String(option.value)}
-                    >
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  How long to wait for session/load / session/resume (large histories replay before
-                  responding; they may need more). The TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS env
-                  var still overrides this (operator/diagnostic).
-                </p>
-              </div>
+              <TimeoutSelect
+                id="acp-turn-idle-timeout"
+                label="If an answer goes quiet"
+                value={acpTurnIdleTimeoutSecs}
+                options={ACP_TURN_IDLE_TIMEOUT_OPTIONS}
+                onChange={handleAcpTurnIdleTimeoutChange}
+                help="Cancel the answer after this long with no update."
+              />
+              <TimeoutSelect
+                id="acp-turn-timeout"
+                label="Longest one answer"
+                value={acpTurnTimeoutSecs}
+                options={ACP_TURN_TIMEOUT_OPTIONS}
+                onChange={handleAcpTurnTimeoutChange}
+                help="Stop an answer that is still writing."
+              />
+              <TimeoutSelect
+                id="acp-session-new-timeout"
+                label="Start a new chat"
+                value={acpSessionNewTimeoutSecs === 60 ? null : acpSessionNewTimeoutSecs}
+                options={ACP_SESSION_NEW_TIMEOUT_OPTIONS}
+                onChange={handleAcpSessionNewTimeoutChange}
+                help="How long to wait for the agent to start."
+              />
+              <TimeoutSelect
+                id="acp-session-reopen-timeout"
+                label="Open a saved chat"
+                value={acpSessionReopenTimeoutSecs === 60 ? null : acpSessionReopenTimeoutSecs}
+                options={ACP_SESSION_REOPEN_TIMEOUT_OPTIONS}
+                onChange={handleAcpSessionReopenTimeoutChange}
+                help="How long to wait. A long chat can need more time."
+              />
             </>
           ) : (
-            // Web (#843): the ACP timeout budgets are enforced by the server
-            // (env-var driven on the standalone server; the renderer-side
-            // selects push desktop-only Tauri commands). Show the effective
-            // values read-only when the store has them, plus a managed note.
-            <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
-              <div className="text-sm font-medium text-foreground">ACP timeouts</div>
-              <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
-                <li>
-                  Turn timeout (hard cap):{' '}
-                  <span className="font-mono text-foreground">
-                    {acpTurnTimeoutSecs === null ? 'server default' : `${acpTurnTimeoutSecs}s`}
-                  </span>
-                </li>
-                <li>
-                  Turn idle timeout:{' '}
-                  <span className="font-mono text-foreground">
-                    {acpTurnIdleTimeoutSecs === null
-                      ? 'server default'
-                      : `${acpTurnIdleTimeoutSecs}s`}
-                  </span>
-                </li>
-                <li>
-                  Session/new timeout:{' '}
-                  <span className="font-mono text-foreground">
-                    {acpSessionNewTimeoutSecs === null
-                      ? 'server default'
-                      : `${acpSessionNewTimeoutSecs}s`}
-                  </span>
-                </li>
-                <li>
-                  Session reopen timeout:{' '}
-                  <span className="font-mono text-foreground">
-                    {acpSessionReopenTimeoutSecs === null
-                      ? 'server default'
-                      : `${acpSessionReopenTimeoutSecs}s`}
-                  </span>
-                </li>
-              </ul>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Managed by the server — timeouts for agents spawned by the standalone server come
-                from its env vars (TERMUL_ACP_*_TIMEOUT_SECS), not from the browser client. The
-                values above reflect the effective budgets in this session.
-              </p>
+            <div className="bg-secondary/30 border border-border rounded-md px-4 py-3 text-xs text-muted-foreground">
+              <p className="text-sm font-medium text-foreground">While an answer is running</p>
+              <p className="mt-1">Goes quiet: {formatLimit(acpTurnIdleTimeoutSecs, 'No limit')}</p>
+              <p>Still writing: {formatLimit(acpTurnTimeoutSecs, 'No limit')}</p>
+              <p className="mt-3 text-sm font-medium text-foreground">Starting a chat</p>
+              <p className="mt-1">New chat: {formatLimit(acpSessionNewTimeoutSecs, '1 minute')}</p>
+              <p>Saved chat: {formatLimit(acpSessionReopenTimeoutSecs, '1 minute')}</p>
+              <p className="mt-2">Set on the server.</p>
             </div>
           )}
+          <AcpAgentsSettings />
         </div>
       </div>
     </SettingsSection>

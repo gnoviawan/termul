@@ -11,18 +11,19 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
+import { RECONNECT_GRACE_MS, useDelayedFlag } from '@/hooks/use-delayed-flag'
 import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useInterfaceOverlayOpen } from '@/hooks/use-native-webview-occlusion'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { logFrontendError } from '@/lib/log-api'
 import {
-  extractCommandNames,
   extractSkillNames,
-  replaceFileTokensInline,
-  stripAllCommandTokens
+  replaceCommandTokensInline,
+  replaceFileTokensInline
 } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getProjectRootPath } from '@/lib/worktree-context'
@@ -33,9 +34,11 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import { isResumeFailureError } from '@/stores/acp-store/helpers'
 import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { useProjectStore } from '@/stores/project-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
@@ -50,13 +53,14 @@ import { ChatMessageList } from './ChatMessageList'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
+import { ClaudeLimitNotice } from './claude-account/ClaudeLimitNotice'
 import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 import { PromptReconcileNotice } from './PromptReconcileNotice'
 import { useApprovalDock } from './use-approval-dock'
-import { usePermissionDenialNotice } from './use-permission-denial-notice'
+import { AUTO_RESUME_FAILED_REASON, useIdleStopAutoResume } from './use-idle-stop-auto-resume'
 
 /** Concatenate the text blocks of a message into a single string. */
 function messageText(blocks: ContentBlock[]): string {
@@ -134,15 +138,40 @@ export function AgentChatPanel({
   // — not session.cwd which may be a worktree path with no .agents/skills/.
   const skillsProjectRoot = session ? getProjectRootPath(session.projectId) : undefined
   const { skills: availableSkills } = useAgentSkills(skillsProjectRoot)
-  const imageCapable = useAcpStore((s) =>
-    session ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.image) : false
+  const switching = session?.switching ?? null
+  const switchToConfigId = switching?.toConfigId ?? null
+  const switchPreparedSessionId = useAcpStore((s) =>
+    switchToConfigId && session
+      ? (s.preparedSessions[prepareChatKey(switchToConfigId, session.cwd, undefined)] ?? null)
+      : null
   )
-  const embedCapable = useAcpStore((s) =>
-    session
-      ? Boolean(s.agents[session.agentId]?.capabilities?.promptCapabilities?.embeddedContext)
+  const switchPreparedSession = useAcpStore(
+    useShallow((s) => {
+      const prepared = switchPreparedSessionId ? s.sessions[switchPreparedSessionId] : undefined
+      return {
+        agentId: prepared?.agentId ?? null,
+        models: prepared?.models,
+        modes: prepared?.modes,
+        configOptions: prepared?.configOptions,
+        mcpServerCount: prepared?.mcpServerCount
+      }
+    })
+  )
+  const promptAgentId = switching ? switchPreparedSession.agentId : (session?.agentId ?? null)
+  const promptSessionId = switching ? switchPreparedSessionId : sessionId
+  const imageCapable = useAcpStore((s) =>
+    promptAgentId
+      ? Boolean(s.agents[promptAgentId]?.capabilities?.promptCapabilities?.image)
       : false
   )
-  const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
+  const embedCapable = useAcpStore((s) =>
+    promptAgentId
+      ? Boolean(s.agents[promptAgentId]?.capabilities?.promptCapabilities?.embeddedContext)
+      : false
+  )
+  const commands = useAcpStore((s) =>
+    promptSessionId ? (s.commands[promptSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
+  )
   const hasFileChanges = useMemo(
     () => toolCalls.some((t) => t.kind === 'edit' || t.kind === 'delete' || t.kind === 'move'),
     [toolCalls]
@@ -178,6 +207,7 @@ export function AgentChatPanel({
   // CAP-5: the panel owns the fallback card while the strip is not hosting —
   // mirrored by the render gate below (`showBrowserConsentCard`).
   const stripHosting = useIsConsentStripHosting()
+  const overlayOpen = useInterfaceOverlayOpen()
   const registerConsentCard = useConsentCardHost((s) => s.register)
   const unregisterConsentCard = useConsentCardHost((s) => s.unregister)
   // A registered session means "a visible consent card is on screen in this
@@ -199,6 +229,7 @@ export function AgentChatPanel({
   const removeQueuedPrompt = useAcpStore((s) => s.removeQueuedPrompt)
   const sendQueuedPromptNow = useAcpStore((s) => s.sendQueuedPromptNow)
   const retryCrashedSession = useAcpStore((s) => s.retryCrashedSession)
+  const markResumeFailed = useAcpStore((s) => s.markResumeFailed)
   const retryFailedLaunch = useAcpStore((s) => s.retryFailedLaunch)
   const promptQueue = usePromptQueue(sessionId)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
@@ -209,8 +240,20 @@ export function AgentChatPanel({
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
   // uses the WS transport, so this stays `false` there.
   const transportReconnecting = useAcpStore((s) => s.transportReconnecting)
+  const hostOffline = useConnectionStatusStore((s) => s.controlChannel === 'host-offline')
   const promptCommand = useAcpStore((s) => s.promptCommandStates[sessionId])
   const recheckPromptCommand = useAcpStore((s) => s.recheckPromptCommand)
+  // Quiet resume: a socket replaced on returning to the tab usually reconnects
+  // (and settles any unconfirmed prompt) in well under a second, so the
+  // "Reconnecting…" overlay and the "Waiting to confirm" pill only show once the
+  // state has lasted the grace period. "Host offline" is not delayed. Above the
+  // early returns so the hook order never changes.
+  const showReconnecting = useDelayedFlag(transportReconnecting, RECONNECT_GRACE_MS)
+  const showTransportOverlay = transportReconnecting && (hostOffline || showReconnecting)
+  const showPromptReconcile = useDelayedFlag(
+    promptCommand != null && session?.activeTurn === true,
+    RECONNECT_GRACE_MS
+  )
 
   // Story 5.3 (AC1): OSK awareness on mobile web. On Tauri desktop, the hook
   // returns a no-OSK default and `useMobileWebShell()` is always false — the
@@ -282,6 +325,39 @@ export function AgentChatPanel({
     }
   }, [isVisible, session, hasHistoryEntry, rehydrateError, openHistorySession, sessionId])
 
+  // A chat the idle reaper stopped resumes on the first keystroke or send
+  // (never on view alone; the effect above deliberately skips 'closed').
+  const { isResumableStop, autoResumeActive, startAutoResume } = useIdleStopAutoResume({
+    sessionId,
+    session,
+    hasHistoryEntry,
+    hasDiscoveredReopenContext: discoveredReopenContext != null,
+    isOpeningHistory,
+    isRestoringChat,
+    isLaunchingSession,
+    queuedCount: promptQueue.length,
+    openHistorySession,
+    markResumeFailed
+  })
+
+  // Manual "Resume chat" on a stopped chat (stopped bar or error notice). A
+  // reopen can resolve still `closed` (read-only strategy) after clearing
+  // `lastError`; record that as a failed resume so the bar, Needs you and a
+  // remount keep agreeing (the store skips a Codex sign-out / existing failure).
+  const resumeStoppedChat = useCallback(() => {
+    void openHistorySession(sessionId).then(
+      () => {
+        if (useAcpStore.getState().sessions[sessionId]?.status === 'closed') {
+          markResumeFailed(sessionId, AUTO_RESUME_FAILED_REASON)
+        }
+      },
+      (err) => {
+        if (isAgentDeadError(err)) return
+        toast.error('Could not resume this chat. Try again.')
+      }
+    )
+  }, [openHistorySession, markResumeFailed, sessionId])
+
   // A persisted launch-* tab is a failed-launch corpse. deserialize drops it
   // and reattach must not put it back; if one still mounts with no session
   // and no history, close it instead of "The session no longer exists."
@@ -320,24 +396,29 @@ export function AgentChatPanel({
     [sendQueuedPromptNow, sessionId]
   )
 
+  // A send into a cleanly stopped chat starts the resume FIRST: the open marks
+  // `openingHistoryIds` synchronously, so `runPromptTurn` queues the prompt
+  // and the open dispatches it once the agent is back.
   const handleSend = useCallback(
     (text: string) => {
+      startAutoResume()
       void sendPrompt(sessionId, text).catch((err) => {
         if (isAgentDeadError(err)) return
         toast.error('Could not send your message. Try again.')
       })
     },
-    [sendPrompt, sessionId]
+    [sendPrompt, sessionId, startAutoResume]
   )
 
   const handleSendBlocks = useCallback(
     (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => {
+      startAutoResume()
       void sendPromptBlocks(sessionId, blocks, { displayBlocks }).catch((err) => {
         if (isAgentDeadError(err)) return
         toast.error('Could not send your message. Try again.')
       })
     },
-    [sendPromptBlocks, sessionId]
+    [sendPromptBlocks, sessionId, startAutoResume]
   )
 
   const handleCancel = useCallback(() => {
@@ -346,20 +427,6 @@ export function AgentChatPanel({
     })
   }, [cancelPrompt, sessionId])
 
-  // Armed-switch option scoping (spec-acp-composer-option-fidelity): while a
-  // switch is armed the composer is a launcher for the TARGET config — its
-  // chips render the target's advertised options (prepared session →
-  // `agentOptionsCache` → empty) with `switching.pendingOptions` overlaid, and
-  // picks route into `setSwitchPendingOption` instead of the live session's
-  // setters (the old session's wire + persisted cache stay untouched).
-  const switching = session?.switching ?? null
-  const switchToConfigId = switching?.toConfigId ?? null
-  const switchPreparedSessionId = useAcpStore((s) =>
-    switchToConfigId && session
-      ? (s.preparedSessions[prepareChatKey(switchToConfigId, session.cwd, undefined)] ?? null)
-      : null
-  )
-  const switchPreparedSession = useAcpSession(switchPreparedSessionId)
   const switchOptionsCache = useAcpStore((s) =>
     switchToConfigId ? (s.agentOptionsCache[switchToConfigId] ?? null) : null
   )
@@ -368,26 +435,25 @@ export function AgentChatPanel({
       switching == null
         ? null
         : overlayPendingLauncherOptions({
-            models: switchPreparedSession?.models ?? switchOptionsCache?.models ?? null,
-            modes: switchPreparedSession?.modes ?? switchOptionsCache?.modes ?? null,
+            models: switchPreparedSession.models ?? switchOptionsCache?.models ?? null,
+            modes: switchPreparedSession.modes ?? switchOptionsCache?.modes ?? null,
             configOptions:
-              switchPreparedSession?.configOptions ?? switchOptionsCache?.configOptions ?? [],
+              switchPreparedSession.configOptions ?? switchOptionsCache?.configOptions ?? [],
             pending: switching.pendingOptions ?? emptyPendingLauncherOptions()
           }),
     [switching, switchPreparedSession, switchOptionsCache]
   )
-  // ChatInputBar reads `session.models` / `session.modes` internally for the
-  // model and Agent chips — pass a memoized session carrying the TARGET's
-  // option state while armed.
+  const switchMcpServerCount = switchPreparedSession.mcpServerCount
   const composerSession = useMemo(() => {
     if (!session || !armedOptions) return session
     return {
       ...session,
       models: armedOptions.models,
       modes: armedOptions.modes,
-      configOptions: armedOptions.configOptions
+      configOptions: armedOptions.configOptions,
+      mcpServerCount: switchMcpServerCount
     }
-  }, [session, armedOptions])
+  }, [session, armedOptions, switchMcpServerCount])
 
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string | boolean) => {
@@ -478,6 +544,20 @@ export function AgentChatPanel({
       })
       return
     }
+    // A stopped (closed) chat whose resume failed: reopen like the stopped
+    // bar's Resume chat (never re-sends the finished last turn; keeps the
+    // recorded failure until the open succeeds; flushes a queued prompt).
+    // Offered even without a user turn. Clear the dismissal first so an
+    // identical repeat failure re-surfaces the notice.
+    if (
+      session?.status === 'closed' &&
+      !discoveredReopenContext &&
+      isResumeFailureError(session.lastError)
+    ) {
+      setDismissedError(null)
+      resumeStoppedChat()
+      return
+    }
     if (!lastUserBlocks || !canRetryLastUserTurn) return
     setDismissedError(session?.lastError ?? null)
     // A crashed/disconnected chat can't re-send into the dead agent — restart
@@ -497,14 +577,11 @@ export function AgentChatPanel({
     // The display (token) blocks are passed through unchanged so the timeline
     // keeps rendering inline chips. If a skill name no longer resolves to a
     // path (e.g. the skill was uninstalled), surface a clear error and abort.
-    // Mirrors `buildPromptParts` exactly: strip the command tokens before the
-    // skill/file framer, then prefix `/<name> ` back so a retried command turn
-    // stays byte-identical to a fresh send (no sentinel leaks to the agent).
+    // Mirrors `buildPromptParts`: command tokens become `/<name>` where the
+    // user typed them. They are not moved to the front of the prompt.
     const tokenText = lastUserText
-    const commandNames = extractCommandNames(tokenText)
-    const commandName = commandNames[0] ?? null
-    const valueDecommanded = commandNames.length > 0 ? stripAllCommandTokens(tokenText) : tokenText
-    const skillNames = extractSkillNames(valueDecommanded)
+    const valueWithCommandText = replaceCommandTokensInline(tokenText)
+    const skillNames = extractSkillNames(tokenText)
     const skills = skillNames.map((name) => ({
       name,
       path: availableSkills.find((s) => s.name === name)?.path ?? ''
@@ -516,10 +593,10 @@ export function AgentChatPanel({
     }
     // File tokens → `(display)` before the skill framer (buildPromptParts'
     // `valueDefiled`) so file-mention sentinels never leak to the wire either.
-    const valueDefiled = replaceFileTokensInline(valueDecommanded)
+    const valueDefiled = replaceFileTokensInline(valueWithCommandText)
     const wireText =
       skills.length > 0 ? buildPromptWithLoadedSkills(skills, valueDefiled) : valueDefiled
-    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
+    const wireWithCommand = wireText
     // Build wire blocks: replace the text payload with the re-framed wire text,
     // preserving non-text (image/resource) blocks from the original message.
     const wireBlocks: ContentBlock[] = []
@@ -541,6 +618,8 @@ export function AgentChatPanel({
     sendPromptBlocks,
     retryCrashedSession,
     retryFailedLaunch,
+    resumeStoppedChat,
+    discoveredReopenContext,
     sessionId,
     session?.status,
     session?.launchConfigId,
@@ -562,6 +641,7 @@ export function AgentChatPanel({
     }),
     [session, projects]
   )
+  const reloadMark = useAcpStore((s) => s.agentReloadMarks?.[sessionId] ?? null)
   const timeline = useMemo(() => {
     const items = consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches))
     // The worktree-creation progress row is a first-class timeline item
@@ -581,8 +661,19 @@ export function AgentChatPanel({
         progressId
       })
     }
+    if (reloadMark) {
+      const anchor = reloadMark.afterMessageId
+        ? items.findIndex(
+            (item) => item.kind === 'message' && item.message.id === reloadMark.afterMessageId
+          )
+        : -1
+      items.splice(anchor >= 0 ? anchor + 1 : items.length, 0, {
+        kind: 'reload',
+        key: `reload:${sessionId}:${reloadMark.afterMessageId ?? 'start'}`
+      })
+    }
     return items
-  }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId])
+  }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId, reloadMark, sessionId])
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.
   const showRunningIndicator = Boolean(session?.activeTurn)
@@ -610,8 +701,6 @@ export function AgentChatPanel({
     elicitationId: approvalsLive ? (pendingElicitation?.requestId ?? null) : null
   })
   const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
-  // A permission the server denied because this device disconnected (L-09).
-  const { message: denialMessage, dismiss: dismissDenial } = usePermissionDenialNotice(sessionId)
   // The mobile dock (prompts, or the changed-files bar plus the composer)
   // reports its top edge so the toast stack clears it. The wrapper is a plain
   // box on the mobile shell and `display: contents` on desktop, so desktop
@@ -620,7 +709,9 @@ export function AgentChatPanel({
   const dockRef = useDockClearance(isMobileShell && isVisible)
   const dockClassName = isMobileShell ? 'flex shrink-0 flex-col' : 'contents'
 
-  if (isRestoringChat) return <ChatRestorePreload />
+  // An automatic resume keeps the composer (and the draft being typed)
+  // mounted; the "Resuming chat…" strip covers the reconnect instead.
+  if (isRestoringChat && !(session && autoResumeActive)) return <ChatRestorePreload />
 
   if (!session) {
     if (rehydrateError) {
@@ -672,15 +763,17 @@ export function AgentChatPanel({
   }
 
   const isClosed = session.status === 'closed'
-  // CAP-5: gate the card (and its gutter wrapper) on every suppression term —
-  // closed sessions never show it, and remote (non-Tauri) or strip-hosted
-  // states render nothing instead of an empty padded gutter block.
   const showBrowserConsentCard =
-    pendingBrowserConsent != null && !isClosed && !stripHosting && isTauriContext()
+    pendingBrowserConsent != null && !isClosed && !stripHosting && !overlayOpen && isTauriContext()
   // Failed launches keep the Retry affordance even without a user prompt in
   // the transcript (the retry relaunches without re-sending).
   const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
   const canOfferRetry = (canRetryLastUserTurn || isFailedLaunch) && !session.activeTurn
+  // The error notice's "Resume chat" for a stopped chat whose resume failed
+  // reopens without re-sending, so it needs no user turn in the transcript.
+  const isClosedResumeFailure =
+    isClosed && !discoveredReopenContext && isResumeFailureError(session.lastError)
+  const canOfferNoticeRetry = (canOfferRetry || isClosedResumeFailure) && !session.activeTurn
   const retryDiscoveredReopen = discoveredReopenContext
     ? () => {
         void openDiscoveredSession(
@@ -727,7 +820,11 @@ export function AgentChatPanel({
     >
       <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
-        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground"
+        >
           <Spinner size={12} decorative />
           Resuming chat…
         </div>
@@ -749,6 +846,7 @@ export function AgentChatPanel({
           </div>
         )}
       {isClosed &&
+        !isResumableStop &&
         !isOpeningHistory &&
         !isLaunchingSession &&
         !discoveredReopenContext &&
@@ -762,9 +860,7 @@ export function AgentChatPanel({
                   openCodexSignIn()
                   return
                 }
-                void openHistorySession(sessionId).catch(() => {
-                  toast.error('Could not resume this chat. Try again.')
-                })
+                resumeStoppedChat()
               }}
               className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
@@ -772,29 +868,25 @@ export function AgentChatPanel({
             </button>
           </div>
         )}
-      {transportReconnecting && (
-        // Story 5.3 (AC3, T5.3): transport-level reconnect overlay. This is
-        // DISTINCT from the session-level "Reconnecting to agent…" banner
-        // above (which fires when `openHistorySession` is in flight). Both can
-        // show simultaneously. The overlay is non-blocking (`pointer-events-none`
-        // on the container) so already-rendered messages remain interactive.
-        // Reuses `AgentConnectionLamp` (amber+pulse via the `reconnecting`
-        // prop) — no new indicator component (NFR9, AC3).
+      {showTransportOverlay && (
         <div
           className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
           role="status"
           aria-live="polite"
         >
-          <AgentConnectionLamp connected={false} reconnecting decorative size={8} />
-          <span>Reconnecting…</span>
+          <AgentConnectionLamp
+            connected={false}
+            reconnecting={!hostOffline}
+            hostOffline={hostOffline}
+            decorative
+            size={8}
+          />
+          <span>{hostOffline ? 'Host offline' : 'Reconnecting…'}</span>
         </div>
       )}
-      {/* No Retry: the agent has to ask again. Cleared by the store when the
-          session's next turn starts. */}
-      <ChatErrorNotice message={denialMessage} onDismiss={dismissDenial} />
       <ChatErrorNotice
         message={activeError}
-        onRetry={canOfferRetry ? handleRetry : undefined}
+        onRetry={canOfferNoticeRetry ? handleRetry : undefined}
         retryLabel={
           !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
             ? 'Resume chat'
@@ -816,7 +908,7 @@ export function AgentChatPanel({
         onEditMessage={seedComposer}
         onRetry={canOfferRetry ? handleRetry : undefined}
       />
-      {promptCommand && session.activeTurn && (
+      {showPromptReconcile && promptCommand && session.activeTurn && (
         // AD-6: the host has not yet confirmed the last prompt (the connection
         // dropped before the reply). Not an error — the same turn id is resent, and
         // the user can re-check it (same id; a new send only after a rejection).
@@ -883,11 +975,20 @@ export function AgentChatPanel({
               isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
             }
           />
+          {!isClosed && (
+            <div className={CHAT_GUTTER_X}>
+              <div className="mx-auto w-full max-w-3xl">
+                <ClaudeLimitNotice sessionId={sessionId} />
+              </div>
+            </div>
+          )}
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
             busy={session.activeTurn}
-            disabled={isClosed}
+            disabled={isClosed && !isResumableStop}
+            controlsDisabled={isClosed}
+            onDraftStart={isResumableStop ? startAutoResume : undefined}
             imageCapable={imageCapable}
             embedCapable={embedCapable}
             onSend={handleSend}

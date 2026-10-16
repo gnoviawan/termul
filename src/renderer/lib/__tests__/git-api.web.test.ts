@@ -263,7 +263,89 @@ describe('gitApi (web vs desktop branch)', () => {
     )
   })
   it('getLog: desktop → invoke("git_get_log")', async () => {
-    await expectDesktopCall(() => gitApi.getLog(CWD), 'git_get_log', { cwd: CWD, limit: undefined })
+    await expectDesktopCall(() => gitApi.getLog(CWD), 'git_get_log', {
+      cwd: CWD,
+      limit: undefined,
+      all: false
+    })
+  })
+  it('getLog: web → POST /git/log with all only when every ref is asked for', async () => {
+    await expectWebCall(
+      () => gitApi.getLog(CWD, 5, true),
+      '/git/log',
+      'POST',
+      { cwd: CWD, limit: 5, all: true },
+      { success: true, data: [] }
+    )
+  })
+  it('getLog: desktop → invoke("git_get_log") with all', async () => {
+    await expectDesktopCall(() => gitApi.getLog(CWD, 5, true), 'git_get_log', {
+      cwd: CWD,
+      limit: 5,
+      all: true
+    })
+  })
+
+  // ---- getCommitDetail / getCommitFileDiff ----
+  it('getCommitDetail: web → POST /git/commit-detail, returns the unwrapped detail', async () => {
+    mockIsTauriContext.mockReturnValue(false)
+    const detail = {
+      hash: 'abc',
+      authorEmail: 'a@b',
+      message: 'm',
+      parents: [],
+      files: [],
+      filesTruncated: false
+    }
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: detail }))
+    const result = await gitApi.getCommitDetail(CWD, 'abc1234')
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/git/commit-detail`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ cwd: CWD, hash: 'abc1234' })
+      })
+    )
+    expect(mockInvoke).not.toHaveBeenCalled()
+    expect(result).toEqual(detail)
+  })
+  it('getCommitDetail: desktop → invoke("git_get_commit_detail"), error envelope throws', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValueOnce({
+      success: false,
+      error: 'not a commit hash',
+      code: 'INVALID_COMMIT_HASH'
+    })
+    await expect(gitApi.getCommitDetail(CWD, 'zz')).rejects.toThrow('not a commit hash')
+    expect(mockInvoke).toHaveBeenCalledWith('git_get_commit_detail', { cwd: CWD, hash: 'zz' })
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+  it('getCommitFileDiff: desktop → invoke("git_get_commit_file_diff") with a null oldPath', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    const data = { diff: 'diff --git a/x b/x', tooLarge: false }
+    mockInvoke.mockResolvedValueOnce({ success: true, data })
+    const result = await gitApi.getCommitFileDiff(CWD, 'abc1234', 'x')
+    expect(mockInvoke).toHaveBeenCalledWith('git_get_commit_file_diff', {
+      cwd: CWD,
+      hash: 'abc1234',
+      path: 'x',
+      oldPath: null
+    })
+    expect(result).toEqual(data)
+  })
+  it('getCommitFileDiff: web → POST /git/commit-file-diff, error envelope throws', async () => {
+    mockIsTauriContext.mockReturnValue(false)
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ success: false, error: 'unsafe path', code: 'INVALID_PATH' })
+    )
+    await expect(gitApi.getCommitFileDiff(CWD, 'abc1234', '../x', 'y')).rejects.toThrow(
+      'unsafe path'
+    )
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/git/commit-file-diff`,
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(mockInvoke).not.toHaveBeenCalled()
   })
 
   // ---- commit ----

@@ -45,9 +45,12 @@ The default light theme (`termul-light`) uses the paper ramp. Page, card, and po
 | State | On `background` / `card` | On `popover` |
 | --- | --- | --- |
 | Hover | `bg-foreground/[0.03]` | `bg-foreground/[0.06]` |
+| Rail row hover (hover and focus-within) | `bg-row-hover`; a fade that ends in it uses `from-row-hover-solid` | n/a |
 | Selected / you are here | `.keycap` (index.css) | `Check` icon, no fill |
 | Active segment in a track | `.keycap` | `bg-foreground/10` |
 | Focus | neutral `ring` | neutral `ring` |
+
+The Rail paints `bg-sidebar`. Keycaps inside it (`[data-rail-surface]`) fill with `--rail-keycap`: `muted` in dark themes, `muted` plus 6% `foreground` in light themes. `--row-hover-solid` is flattened over `--sidebar-background`.
 
 Blue (`primary`, `primary-fill`) has three jobs only: live work (a running agent, a working spinner, a drop target), the one primary button in a view, and count badges that ask for attention (`CountBadge` in `components/ui/count-badge.tsx`: the Git change count on the activity rail and the Git Changes tab, `bg-primary-fill text-primary-foreground`). Focus, selection and hover stay neutral.
 

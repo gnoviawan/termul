@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
-import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import {
   describeProjectSubtitle,
   useChatIsolationContext
@@ -9,8 +8,11 @@ import {
 import { useMobileAttentionCount } from '@/hooks/use-mobile-attention-count'
 import { sectionForTab } from '@/hooks/use-mobile-section'
 import { useMobileTabActions } from '@/hooks/use-mobile-tab-actions'
+import { useReloadChat } from '@/hooks/use-reload-chat'
 import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
+import { closeAgentChat } from '@/lib/agent-chat-close'
 import { returnFocusAfterConfirm } from '@/lib/confirm-focus-return'
+import { commitDiffTabLabel } from '@/lib/diff-tab-identity'
 import {
   holdSheetReturnTargets,
   recordSheetOpener,
@@ -226,6 +228,8 @@ export function MobileChatShell({
         return 'Git History'
       case 'diff':
         return fileBasename(activeTab.path)
+      case 'commit-diff':
+        return commitDiffTabLabel(activeTab.path, activeTab.commit)
       case 'browser':
         return browserTabLabel(activeBrowserTab)
       case 'canvas':
@@ -341,12 +345,12 @@ export function MobileChatShell({
     moreSheetCloseAutoFocus(event)
   }
 
-  // Header ⋯ "Close chat": the same teardown the drawer's Recents rows use, which
-  // asks the idle-shutdown guard before the tab goes.
+  // Header ⋯ "Close chat": the same teardown the drawer's Recents rows use.
+  const chatReload = useReloadChat(activeTab?.type === 'agent-chat' ? activeTab.sessionId : null)
   const closeActiveChat = (): void => {
     if (activeTab?.type !== 'agent-chat') return
     const tabId = activeTab.id
-    requestCloseAgentChat(activeTab.sessionId, () => {
+    closeAgentChat(activeTab.sessionId, () => {
       useWorkspaceStore.getState().removeTab(tabId)
     })
   }
@@ -478,6 +482,9 @@ export function MobileChatShell({
         onNewTerminal={newTerminal}
         onOpenProjectSettings={openProjectSettings}
         onCloseChat={activeTab?.type === 'agent-chat' ? closeActiveChat : undefined}
+        onReloadChat={activeTab?.type === 'agent-chat' ? chatReload.reload : undefined}
+        reloadChatDisabled={chatReload.disabled}
+        reloadChatReason={chatReload.reason}
         onCloseTab={closeActiveOtherTab}
       />
 

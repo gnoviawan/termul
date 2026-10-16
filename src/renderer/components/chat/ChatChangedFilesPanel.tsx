@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { CHAT_GUTTER_X, CHAT_HIT_MIN_H } from '@/components/chat/chat-layout'
 import { baseName, describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
+import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import { ChevronDown, ChevronRight, FileDiff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
@@ -166,7 +167,7 @@ function FileRow({
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
       )}
     >
-      <FileDiff size={13} className="shrink-0 text-diff-modified" aria-hidden />
+      <MaterialFileIcon name={label} isDirectory={false} isExpanded={false} depth={0} size={14} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-2xs font-medium leading-tight">{label}</span>
         {dir && <span className="block truncate text-4xs leading-tight opacity-50">{dir}</span>}

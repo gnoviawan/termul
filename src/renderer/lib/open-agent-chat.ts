@@ -1,9 +1,8 @@
 import { toast } from 'sonner'
-import { sessionOwnerProjectId } from '@/lib/acp-session-ownership'
 import { logFrontendError } from '@/lib/log-api'
 import { projectSwitch } from '@/lib/project-switch/coordinator'
-import { releaseFocusNotOwnedBy } from '@/lib/release-foreign-focus'
-import { useAcpStore } from '@/stores/acp-store'
+import { releaseFocusNotOfProject } from '@/lib/release-stale-focus'
+import { sessionProjectId, useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSSHStore } from '@/stores/ssh-store'
@@ -72,7 +71,7 @@ export function openAgentChatInOwnProject(
   placement?: AgentChatPlacement
 ): OpenAgentChatOutcome {
   const acp = useAcpStore.getState()
-  const owner = sessionOwnerProjectId(sessionId, acp)
+  const owner = sessionProjectId(acp, sessionId)
   const activeProjectId = useProjectStore.getState().activeProjectId
   if (!owner || owner === activeProjectId) {
     if (placement) openAgentChatAtPlacement(sessionId, placement)
@@ -96,7 +95,7 @@ export function openAgentChatInOwnProject(
     message: `Opening chat ${sessionId} switches project ${activeProjectId} -> ${owner}`
   })
   // Same as the sidebar's project select (client-only on every surface).
-  releaseFocusNotOwnedBy(owner)
+  releaseFocusNotOfProject(owner)
   useProjectStore.getState().selectProject(owner)
   useSSHStore.getState().selectProfile(null)
   // An explicit open (not an effect-driven pick): it survives the pick the

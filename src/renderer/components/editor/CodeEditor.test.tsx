@@ -108,6 +108,11 @@ describe('CodeEditor', () => {
       />
     )
 
+    ;(global as { __termulPendingRevealLine?: unknown }).__termulPendingRevealLine = {
+      filePath: '/project/src/example.ts',
+      lineNumber: 7,
+      searchTerm: 'needle'
+    }
     window.dispatchEvent(
       new CustomEvent('termul:reveal-line', {
         detail: {

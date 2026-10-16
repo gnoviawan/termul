@@ -1,6 +1,6 @@
 import { terminalApi } from '@/lib/terminal-api'
 import { randomUUID } from '@/lib/uuid'
-import { GLOBAL_TERMINAL_LIMIT, useTerminalStore } from '@/stores/terminal-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 
 /**
@@ -22,13 +22,6 @@ export async function spawnAcpLoginTerminal(opts: {
 }): Promise<{ success: boolean; ptyId?: string; error?: string }> {
   const terminalStore = useTerminalStore.getState()
   const workspaceStore = useWorkspaceStore.getState()
-
-  if (terminalStore.isTerminalLimitReached()) {
-    return {
-      success: false,
-      error: `Maximum ${GLOBAL_TERMINAL_LIMIT} terminals allowed across all projects`
-    }
-  }
 
   try {
     const spawnResult = await terminalApi.spawn({

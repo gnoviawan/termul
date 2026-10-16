@@ -2,21 +2,31 @@
  * ACP (Agent Client Protocol) renderer facade.
  *
  * This is the ONLY module in the renderer that talks to the P0 ACP backend
- * (Tauri commands `acp_*` / events `acp:*`, or the web WS relay). Components
+ * (the `/ws` relay protocol, carried over a WebSocket on web and a Tauri IPC
+ * Channel on desktop, plus the host-local `acp_*` domain commands). Components
  * and the acp-store go through here.
  *
- * Transport selection (Story 1.6): `getAcpTransport()` picks Tauri IPC when
- * `isTauriContext()` is true, otherwise the multiplexed WS client. Public
- * method names and TypeScript signatures are unchanged.
+ * Transport selection: `getAcpTransport()` returns the desktop subclass of the
+ * `/ws` client when `isTauriContext()` is true, otherwise the plain WS client.
+ * Public method names and TypeScript signatures are unchanged.
  *
- * IMPORTANT: ACP commands surface failures by throwing (Tauri `Result` Err
- * string, or `AcpTransportError` from WS `{ok:false,err}`). Callers (the store)
- * normalize it (toast, etc.).
+ * IMPORTANT: ACP commands surface failures by throwing (`AcpTransportError`
+ * from a `/ws` `{ok:false,err}` reply, or a Tauri `Result` Err string from a
+ * host-local domain command). Callers (the store) normalize it (toast, etc.).
  */
 
-import type { AgentCapabilities } from '@shared/types/web-protocol.types'
+import type { ClaudeRateLimit } from '@shared/types/claude-accounts.types'
+import {
+  type AgentCapabilities,
+  isProviderErrorCode,
+  type ProviderErrorCode
+} from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
-import { type CommandCallOptions, getAcpTransport } from '@/lib/acp-transport'
+import {
+  type AgentIdleWindowStatus,
+  type CommandCallOptions,
+  getAcpTransport
+} from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { type CommandRun, runCommand } from '@/lib/command-engine'
 import { keyDigest } from '@/lib/command-journal'
@@ -24,6 +34,8 @@ import { waitUntilVisible } from '@/lib/command-visibility'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
+
+export type { AgentIdleWindowStatus }
 
 // --- Identifiers -----------------------------------------------------------
 
@@ -69,7 +81,7 @@ export interface PromptReceipt {
   receipt: 'in_progress' | 'accepted'
 }
 
-/** `send_prompt` / `acp_send_prompt` result: a stop reason or a receipt. */
+/** `send_prompt` result: a stop reason or a receipt. */
 export type PromptDispatchResult = StopReason | PromptReceipt
 
 export function isPromptReceipt(value: unknown): value is PromptReceipt {
@@ -298,7 +310,7 @@ export interface ProbeResult {
   error?: string
   wwwAuthenticateHeader?: string
 }
-/** Wire type forwarded verbatim to the backend `acp_new_session` command. */
+/** Wire type forwarded verbatim to the backend `create_session` request. */
 export type McpServer = McpServerConfig
 
 export interface AgentConfig {
@@ -405,10 +417,9 @@ export interface BrowserOpenRequestEvent {
 }
 
 /**
- * Authoritative spawn result returned by `acp_spawn_agent` (Tauri) and
- * `spawn_agent` (WS) — the single contract for both transports (CAP-4: the
- * spawn response — not the async `acp:agent_spawned` event — is the source of
- * truth). The renderer populates `capabilities` + `authMethods` synchronously
+ * Authoritative spawn result returned by the `spawn_agent` WS request — the
+ * single contract for every carrier (CAP-4: the spawn response — not the async
+ * `acp:agent_spawned` event — is the source of truth). The renderer populates `capabilities` + `authMethods` synchronously
  * from this response, eliminating the former 250ms no-auth fallback.
  */
 export interface SpawnAgentResult {
@@ -568,6 +579,9 @@ export interface AgentErrorEvent {
   code?: number
   /** gh-821: JSON-RPC error `data` (structured; also folded into `message`). */
   data?: unknown
+  /** Stable provider failure code (quota / session limit / rejected request).
+   * Absent for any other error and for older hosts. */
+  providerCode?: ProviderErrorCode
 }
 /** Story 1.9 FR26: the agent subprocess crashed mid-turn (a typed event
  * distinct from `agent_error` (non-fatal) + `agent_disconnected` (always)).
@@ -586,6 +600,7 @@ export interface AgentCrashedEvent {
 export interface AcpErrorDetail {
   code?: number
   data?: unknown
+  providerCode?: ProviderErrorCode
 }
 
 /**
@@ -595,18 +610,31 @@ export interface AcpErrorDetail {
  */
 export function parseAcpErrorDetail(payload: unknown): AcpErrorDetail {
   if (typeof payload !== 'object' || payload === null) return {}
-  const { code, data } = payload as { code?: unknown; data?: unknown }
+  const { code, data, providerCode } = payload as {
+    code?: unknown
+    data?: unknown
+    providerCode?: unknown
+  }
   const detail: AcpErrorDetail = {}
   if (typeof code === 'number' && Number.isInteger(code)) detail.code = code
   if (data !== undefined && data !== null) detail.data = data
+  if (isProviderErrorCode(providerCode)) detail.providerCode = providerCode
   return detail
 }
+/**
+ * Why an agent or one of its sessions ended (mirror of the host's
+ * `AgentExitReason`). `closed` is only ever sent for an explicit
+ * `close_session`; `crashed` is the only reason that keeps the error state.
+ */
+export type AgentExitReason = 'killed' | 'reaped' | 'crashed' | 'closed'
 export interface AgentDisconnectedEvent {
   agentId: AgentId
+  reason: AgentExitReason
 }
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
+  reason: AgentExitReason
 }
 /** OpenCode 2 compaction marker from `session_info_update` `_meta`. */
 export interface OpenCodeCompactionNotice {
@@ -662,6 +690,8 @@ export interface UsageUpdateEvent {
   used: number
   size: number
   cost?: UsageCost | null
+  /** Claude plan rate-limit state, when the Claude ACP adapter sends it. */
+  rateLimit?: ClaudeRateLimit | null
 }
 
 /** Agent-reported context window state for a session. */
@@ -671,6 +701,8 @@ export interface SessionUsage {
   /** First `used` snapshot for this session — static agent bootstrap prefix. */
   baselineUsed: number
   cost?: UsageCost
+  /** Latest Claude plan rate-limit state of the session's Account. */
+  rateLimit?: ClaudeRateLimit
   updatedAt: number
   source: 'reported'
 }
@@ -764,9 +796,8 @@ export async function acpInstallRegistryBinary(
  * CAP-6 / Story 9: host-owned verified-atomic install. The request is
  * `{ agentId }` only; the host resolves everything (archive URL, cmd, args,
  * sha256) from the trusted catalog. The outcome `{ command, args }` flows
- * through `installedBinaryConfig` → `saveAgentConfig` unchanged. Mirrors the
- * `acp_install_agent` Tauri command + `POST /acp/install` + WS
- * `install_acp_agent` byte-for-byte.
+ * through `installedBinaryConfig` → `saveAgentConfig` unchanged. Mirrors
+ * `POST /acp/install` + WS `install_acp_agent` byte-for-byte.
  */
 export async function acpInstallAcpAgent(
   agentId: string
@@ -807,13 +838,15 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
 }
 // --- MCP OAuth (desktop: Tauri command, web: HTTP route) -------------------
 
-/** Start the OAuth flow for an MCP server URL. On desktop, opens the system
+/** Start the OAuth flow for an MCP server URL on behalf of `projectId` (the
+ * web host authorizes the URL against that project's MCP list; the desktop
+ * Tauri command authorizes nothing and takes the URL only). On desktop, opens the system
  * browser and waits for the callback (the Tauri command blocks until the
  * token is stored). On web, opens a blank window first (preserves transient
  * user activation for the popup), navigates it to the auth URL once returned,
  * then polls the status endpoint until the token is stored. Throws on
  * failure (discovery, registration, timeout). */
-export async function startMcpOAuth(serverUrl: string): Promise<void> {
+export async function startMcpOAuth(projectId: string, serverUrl: string): Promise<void> {
   if (isTauriContext()) {
     await invoke('acp_mcp_oauth_start', { serverUrl })
     return
@@ -827,7 +860,7 @@ export async function startMcpOAuth(serverUrl: string): Promise<void> {
   }
   let authUrl: string
   try {
-    const result = await webServerMcpOAuth.start(serverUrl)
+    const result = await webServerMcpOAuth.start(projectId, serverUrl)
     if (!result.success) {
       throw new Error(result.error ?? 'OAuth start failed')
     }
@@ -845,7 +878,7 @@ export async function startMcpOAuth(serverUrl: string): Promise<void> {
   const deadline = Date.now() + POLL_TIMEOUT_MS
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
-    const status = await webServerMcpOAuth.status(serverUrl)
+    const status = await webServerMcpOAuth.status(projectId, serverUrl)
     if (status.success && status.data?.hasToken) {
       return
     }
@@ -853,24 +886,25 @@ export async function startMcpOAuth(serverUrl: string): Promise<void> {
   throw new Error('OAuth flow timed out — user did not complete authorization in time')
 }
 
-/** Check whether a stored OAuth token exists for a server URL. */
-export async function hasMcpOAuthToken(serverUrl: string): Promise<boolean> {
+/** Check whether a stored OAuth token exists for a server URL (`projectId` is
+ * validated by the web host; the desktop command takes the URL only). */
+export async function hasMcpOAuthToken(projectId: string, serverUrl: string): Promise<boolean> {
   if (isTauriContext()) {
     return invoke<boolean>('acp_mcp_oauth_has_token', { serverUrl })
   }
-  const result = await webServerMcpOAuth.status(serverUrl)
+  const result = await webServerMcpOAuth.status(projectId, serverUrl)
   return result.success && result.data ? result.data.hasToken : false
 }
 
 /** Delete the stored OAuth token for a server URL (the "Disconnect" action).
  * On web, inspects the IpcResult and throws when `success: false`. On desktop,
  * the Tauri invoke path propagates failures as before. */
-export async function disconnectMcpOAuth(serverUrl: string): Promise<void> {
+export async function disconnectMcpOAuth(projectId: string, serverUrl: string): Promise<void> {
   if (isTauriContext()) {
     await invoke('acp_mcp_oauth_disconnect', { serverUrl })
     return
   }
-  const result = await webServerMcpOAuth.disconnect(serverUrl)
+  const result = await webServerMcpOAuth.disconnect(projectId, serverUrl)
   if (!result.success) {
     throw new Error(result.error ?? 'OAuth disconnect failed')
   }
@@ -918,15 +952,18 @@ export async function acpFetchRegistrySnapshot(forceRefresh = false): Promise<Ac
   return getAcpTransport().fetchRegistrySnapshot(forceRefresh)
 }
 
-export async function acpSpawnAgent(config: AgentConfig): Promise<SpawnAgentResult> {
+export async function acpSpawnAgent(
+  config: AgentConfig,
+  projectId?: string | null
+): Promise<SpawnAgentResult> {
   const run = await ledgered(
     'spawn_agent',
     // args/env are digested (env can hold credentials): a changed launch is a
     // different spawn, and no raw value reaches the journal or engine state.
-    `${config.configId ?? ''}|${config.name}|${config.command}|${keyDigest(
+    `${config.configId ?? ''}|${config.name}|${config.command}|${projectId ?? ''}|${keyDigest(
       JSON.stringify([config.args, config.env, config.allowTerminal ?? false])
     )}`,
-    (call) => getAcpTransport().spawnAgent(config, call)
+    (call) => getAcpTransport().spawnAgent(config, call, projectId)
   )
   return run.result
 }
@@ -987,12 +1024,24 @@ export async function acpLoadSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string,
-  additionalDirectories?: string[]
+  additionalDirectories?: string[],
+  mcpServers?: McpServer[]
 ): Promise<SessionReopenOutcome> {
+  // A reload carries a different server list than a plain reopen. Digest it
+  // so an in-flight history open is not reused as the reload command.
+  const mcpKey = mcpServers ? keyDigest(JSON.stringify(mcpServers)) : ''
   const run = await ledgered(
     'load_session',
-    `${agentId}|${sessionId}|${cwd}`,
-    (call) => getAcpTransport().loadSession(agentId, sessionId, cwd, additionalDirectories, call),
+    `${agentId}|${sessionId}|${cwd}|${mcpKey}`,
+    (call) =>
+      getAcpTransport().loadSession(
+        agentId,
+        sessionId,
+        cwd,
+        additionalDirectories,
+        // Keep command options in the fifth slot. An empty list is still sent.
+        mcpServers === undefined ? call : { ...call, mcpServers }
+      ),
     { acceptedWithoutResult: () => ({}) }
   )
   await untilSessionVisible(sessionId, run.visibleAt)
@@ -1003,12 +1052,21 @@ export async function acpResumeSession(
   agentId: AgentId,
   sessionId: SessionId,
   cwd: string,
-  additionalDirectories?: string[]
+  additionalDirectories?: string[],
+  mcpServers?: McpServer[]
 ): Promise<SessionReopenOutcome> {
+  const mcpKey = mcpServers ? keyDigest(JSON.stringify(mcpServers)) : ''
   const run = await ledgered(
     'resume_session',
-    `${agentId}|${sessionId}|${cwd}`,
-    (call) => getAcpTransport().resumeSession(agentId, sessionId, cwd, additionalDirectories, call),
+    `${agentId}|${sessionId}|${cwd}|${mcpKey}`,
+    (call) =>
+      getAcpTransport().resumeSession(
+        agentId,
+        sessionId,
+        cwd,
+        additionalDirectories,
+        mcpServers === undefined ? call : { ...call, mcpServers }
+      ),
     { acceptedWithoutResult: () => ({}) }
   )
   await untilSessionVisible(sessionId, run.visibleAt)
@@ -1118,9 +1176,8 @@ export async function acpRegisterDiscoveredSession(input: {
 
 /**
  * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch marker.
- * Host is the sole author — the Tauri command (`acp_record_agent_switch`)
- * and the WS route (`record_agent_switch`) author ONE `agent_switch`
- * record: the host relay numbers it, persists it and delivers the same event
+ * Host is the sole author — the WS route (`record_agent_switch`) authors ONE
+ * `agent_switch` record: the host relay numbers it, persists it and delivers the same event
  * live under that seq; the host then flushes. Throws on a host
  * write failure (record absent, no partial state — the caller surfaces it).
  */
@@ -1202,14 +1259,6 @@ export async function acpRespondPermission(
   requestId: string,
   optionId?: string
 ): Promise<void> {
-  // The desktop `acp_respond_permission` command takes no `commandId` (the
-  // approval is resolved in-process; a duplicate answer is already_resolved):
-  // claiming an id there would be false idempotency, so the desktop path sends
-  // the bare command.
-  if (isTauriContext()) {
-    await getAcpTransport().respondPermission(agentId, requestId, optionId)
-    return
-  }
   await ledgered(
     'respond_permission',
     `${agentId}|${requestId}|${optionId ?? ''}`,
@@ -1227,12 +1276,6 @@ export async function acpAnswerQuestion(
   questionId: string,
   values?: string[]
 ): Promise<void> {
-  // Desktop `acp_answer_question` takes no `commandId` either (see
-  // `acpRespondPermission`): no id is claimed there.
-  if (isTauriContext()) {
-    await getAcpTransport().answerQuestion(agentId, questionId, values)
-    return
-  }
   await ledgered(
     'answer_question',
     `${agentId}|${questionId}`,
@@ -1306,13 +1349,26 @@ export async function acpSetSessionReopenTimeout(secs: number | null): Promise<v
   await getAcpTransport().setSessionReopenTimeout(secs)
 }
 
+// Push how long an idle agent chat stays open, in seconds, or `null` to clear.
+// Desktop updates the reaper. The web transport no-ops; the server locks the
+// window at startup.
+export async function acpSetAgentIdleWindow(secs: number | null): Promise<void> {
+  await getAcpTransport().setAgentIdleWindow(secs)
+}
+
+// The window the host is using now.
+export async function acpGetAgentIdleWindow(): Promise<AgentIdleWindowStatus> {
+  return getAcpTransport().getAgentIdleWindow()
+}
+
 // --- Event subscription ----------------------------------------------------
 
 /**
- * Subscribe to a backend event. Transport-agnostic: Tauri `listen` on desktop,
- * WS event fan-in on web (Story 1.6). On web, the callback also receives the
- * server envelope seq as `eventSeq` (absent on desktop) for CAP-3 replay
- * seq-dedupe against the authoritative fetched payload.
+ * Subscribe to a backend event. Relay events arrive over the transport's
+ * carrier (WebSocket on web, IPC Channel on desktop); the few desktop-local
+ * `acp:*` events (worktree progress) are plain Tauri events. The callback also
+ * receives the server envelope seq as `eventSeq` for per-session relay events
+ * (CAP-3 replay seq-dedupe against the authoritative fetched payload).
  */
 export function onAcpEvent<T>(
   eventName: string,
@@ -1349,6 +1405,8 @@ export const acpApi = {
   setTurnIdleTimeout: acpSetTurnIdleTimeout,
   setSessionNewTimeout: acpSetSessionNewTimeout,
   setSessionReopenTimeout: acpSetSessionReopenTimeout,
+  setAgentIdleWindow: acpSetAgentIdleWindow,
+  getAgentIdleWindow: acpGetAgentIdleWindow,
   installRegistryBinary: acpInstallRegistryBinary,
   installAcpAgent: acpInstallAcpAgent,
   probeRuntime: acpProbeRuntime,

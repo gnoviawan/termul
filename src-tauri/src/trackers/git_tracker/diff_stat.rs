@@ -12,20 +12,18 @@
 //!
 //! File contents are never logged.
 
+use super::git_exec::{
+    git_stdout, run_git_capture, GitRunError, StdoutCap, EMPTY_TREE, GIT_READ_TIMEOUT_MS,
+};
 use super::*;
 
 use std::io::Read;
 use std::path::Path;
 
-/// Object id of git's well-known empty tree; the diff base when there is no HEAD.
-const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// Maximum untracked files scanned per call; the rest contribute 0.
 pub(super) const MAX_UNTRACKED_FILES: usize = 5000;
 /// Maximum size of a single untracked file we will read; larger files contribute 0.
 pub(super) const MAX_UNTRACKED_FILE_BYTES: u64 = 2 * 1024 * 1024;
-/// Generous per-command timeout: `diff` on a large worktree can outlast the
-/// 2s status-poll default, which would fail the whole stat.
-const DIFF_STAT_GIT_TIMEOUT_MS: u64 = 15_000;
 
 /// Added / removed line totals for a working tree.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,16 +33,15 @@ pub struct GitDiffStat {
     pub removed: u64,
 }
 
-/// Why a diff stat could not be computed.
+/// Why a diff stat could not be computed: git could not be started or timed
+/// out, or it exited non-zero (for example, the cwd is not a repository).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DiffStatError {
-    /// git could not be started, or it timed out.
-    GitUnavailable(String),
-    /// git ran and exited non-zero (for example, the cwd is not a repository).
-    GitFailed {
-        command: &'static str,
-        detail: String,
-    },
+pub struct DiffStatError(pub GitRunError);
+
+impl From<GitRunError> for DiffStatError {
+    fn from(e: GitRunError) -> Self {
+        DiffStatError(e)
+    }
 }
 
 impl DiffStatError {
@@ -56,17 +53,7 @@ impl DiffStatError {
 
 impl std::fmt::Display for DiffStatError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DiffStatError::GitUnavailable(detail) => {
-                write!(f, "Failed to run git for diff stat: {detail}")
-            }
-            DiffStatError::GitFailed { command, detail } if detail.is_empty() => {
-                write!(f, "git {command} failed")
-            }
-            DiffStatError::GitFailed { command, detail } => {
-                write!(f, "git {command} failed: {detail}")
-            }
-        }
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -136,144 +123,24 @@ fn compute_diff_stat(cwd: &str) -> Result<GitDiffStat, DiffStatError> {
 /// Does the repository have a HEAD commit? Status-preserving: only git's
 /// documented "not a valid ref" result (exit 1 under `--verify --quiet`) means
 /// no HEAD (an unborn branch) and selects the empty-tree base. A spawn failure
-/// or timeout is [`DiffStatError::GitUnavailable`] and any other non-zero exit
-/// is [`DiffStatError::GitFailed`], so a failed probe never turns existing
+/// or timeout is [`GitRunError::GitUnavailable`] and any other non-zero exit
+/// is [`GitRunError::GitFailed`], so a failed probe never turns existing
 /// content into additions.
-pub(super) fn probe_head(cwd: &str) -> Result<bool, DiffStatError> {
+pub(super) fn probe_head(cwd: &str) -> Result<bool, GitRunError> {
     let output = run_git_capture(
         cwd,
         StdoutCap::Unbounded,
         &["rev-parse", "--verify", "--quiet", "HEAD"],
-        DIFF_STAT_GIT_TIMEOUT_MS,
+        GIT_READ_TIMEOUT_MS,
     )?;
     match output.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err(DiffStatError::GitFailed {
+        _ => Err(GitRunError::GitFailed {
             command: "rev-parse HEAD",
             detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         }),
     }
-}
-
-/// Run git and return stdout, mapping spawn failure / timeout / non-zero exit
-/// to a [`DiffStatError`].
-fn git_stdout(
-    cwd: &str,
-    label: &'static str,
-    cap: StdoutCap,
-    args: &[&str],
-) -> Result<Vec<u8>, DiffStatError> {
-    let output = run_git_capture(cwd, cap, args, DIFF_STAT_GIT_TIMEOUT_MS)?;
-    if output.status.success() {
-        Ok(output.stdout)
-    } else {
-        Err(DiffStatError::GitFailed {
-            command: label,
-            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        })
-    }
-}
-
-/// Spawn git, drain stdout/stderr on helper threads (so large output cannot
-/// fill the pipe and stall the child), and kill it after `timeout_ms`.
-fn run_git_capture(
-    cwd: &str,
-    cap: StdoutCap,
-    args: &[&str],
-    timeout_ms: u64,
-) -> Result<std::process::Output, DiffStatError> {
-    let mut command = backend_command(resolve_git_binary());
-    command
-        .args(args)
-        .current_dir(cwd)
-        // Read-only stat: never take the index lock for an opportunistic refresh.
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|e| DiffStatError::GitUnavailable(e.to_string()))?;
-
-    let stdout = drain_capped(child.stdout.take(), cap);
-    let stderr = drain_capped(child.stderr.take(), StdoutCap::Unbounded);
-
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(DiffStatError::GitUnavailable(format!(
-                    "git {} timed out",
-                    args.first().copied().unwrap_or("")
-                )));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(e) => return Err(DiffStatError::GitUnavailable(e.to_string())),
-        }
-    };
-
-    Ok(std::process::Output {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    })
-}
-
-/// How much of a child's stdout to retain while it is drained.
-#[derive(Debug, Clone, Copy)]
-pub(super) enum StdoutCap {
-    /// Keep everything.
-    Unbounded,
-    /// Keep only the first N NUL-terminated paths (`-z` listings); the rest is
-    /// read and discarded so the child never blocks on a full pipe.
-    NulPaths(usize),
-}
-
-/// Drain `pipe` to EOF on a helper thread, retaining output per `cap`.
-pub(super) fn drain_capped<R: Read + Send + 'static>(
-    pipe: Option<R>,
-    cap: StdoutCap,
-) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut kept = Vec::new();
-        let Some(mut pipe) = pipe else {
-            return kept;
-        };
-        let mut chunk = [0u8; 8192];
-        let mut paths = 0usize;
-        let mut full = false;
-        loop {
-            let n = match pipe.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => n,
-            };
-            if full {
-                continue;
-            }
-            match cap {
-                StdoutCap::Unbounded => kept.extend_from_slice(&chunk[..n]),
-                StdoutCap::NulPaths(max) => {
-                    let mut end = n;
-                    for (idx, byte) in chunk[..n].iter().enumerate() {
-                        if *byte == 0 {
-                            paths += 1;
-                            if paths >= max {
-                                end = idx + 1;
-                                full = true;
-                                break;
-                            }
-                        }
-                    }
-                    kept.extend_from_slice(&chunk[..end]);
-                }
-            }
-        }
-        kept
-    })
 }
 
 /// Sum a `git diff --numstat` listing. Binary rows (`-\t-\t<path>`) and any

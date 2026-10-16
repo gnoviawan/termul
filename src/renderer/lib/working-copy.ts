@@ -229,6 +229,7 @@ export function tabPath(
       value = tab.filePath
       break
     case 'diff':
+    case 'commit-diff':
       // The tab's stored cwd plus its repo-relative path; no working copy is resolved.
       value = tab.cwd.trim() && tab.path ? `${tab.cwd.replace(/[/\\]+$/, '')}/${tab.path}` : null
       break

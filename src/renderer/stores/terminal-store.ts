@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { randomUUID } from '@/lib/uuid'
 import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
 
-export const GLOBAL_TERMINAL_LIMIT = 30
 export const HIDDEN_BUFFER_TRUNCATION_DELAY = 15 * 60 * 1000 // 15 minutes
 export const TRUNCATED_BUFFER_SIZE = 5000
 export const MAX_TRANSCRIPT_CHARS = 1_500_000
@@ -17,18 +17,50 @@ export interface TerminalAgentMetadata {
   agentArgs: string[]
 }
 
-function trimTranscriptToMaxChars(transcript: string): string {
-  if (transcript.length <= MAX_TRANSCRIPT_CHARS) {
-    return transcript
-  }
-
+/**
+ * Keep the newest `MAX_TRANSCRIPT_CHARS` chars and start them on a whole line
+ * (the partial head line is dropped). Applies the alignment even when the
+ * input is already within the cap, so callers decide when a trim is due.
+ */
+function alignTranscriptTail(transcript: string): string {
   const tail = transcript.slice(-MAX_TRANSCRIPT_CHARS)
   const firstBreak = LINE_BREAK_PATTERN.exec(tail)
   return firstBreak ? tail.slice(firstBreak.index + firstBreak[0].length) : tail
 }
 
+function trimTranscriptToMaxChars(transcript: string): string {
+  if (transcript.length <= MAX_TRANSCRIPT_CHARS) {
+    return transcript
+  }
+
+  return alignTranscriptTail(transcript)
+}
+
+/**
+ * Keep the last `TRUNCATED_BUFFER_SIZE` lines by slicing the original string,
+ * so the kept bytes (including `\r\n` / `\r` separators) are untouched. Returns
+ * the input itself when it has no more lines than that.
+ */
 function trimTranscriptToRecentLines(transcript: string): string {
-  return transcript.split(LINE_BREAK_PATTERN).slice(-TRUNCATED_BUFFER_SIZE).join('\n')
+  // Scan back for the TRUNCATED_BUFFER_SIZE-th line break (`\r\n`, `\r` or
+  // `\n`) from the end; everything after it is the last TRUNCATED_BUFFER_SIZE
+  // lines. Scanning backwards stops early instead of splitting 1.5M chars.
+  let breaks = 0
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const code = transcript.charCodeAt(i)
+    if (code !== 10 && code !== 13) {
+      continue
+    }
+    breaks++
+    if (breaks === TRUNCATED_BUFFER_SIZE) {
+      return transcript.slice(i + 1)
+    }
+    // `\r\n` is a single break.
+    if (code === 10 && i > 0 && transcript.charCodeAt(i - 1) === 13) {
+      i--
+    }
+  }
+  return transcript
 }
 
 export interface TerminalState {
@@ -45,7 +77,9 @@ export interface TerminalState {
     projectId: string,
     shell?: Terminal['shell'],
     cwd?: string,
-    pendingScrollback?: string[]
+    pendingScrollback?: string[],
+    /** `activate: false` keeps the current active terminal (background terminals). */
+    options?: { activate?: boolean }
   ) => Terminal
   closeTerminal: (id: string, projectId: string) => void
   renameTerminal: (id: string, name: string) => void
@@ -80,7 +114,6 @@ export interface TerminalState {
   truncateHiddenTerminalBuffers: () => void
   cleanupProjectTerminals: (projectId: string) => void
   getTerminalCount: () => number
-  isTerminalLimitReached: () => boolean
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -100,16 +133,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     projectId: string,
     shell: Terminal['shell'] = 'powershell',
     cwd?: string,
-    pendingScrollback?: string[]
+    pendingScrollback?: string[],
+    { activate = true }: { activate?: boolean } = {}
   ): Terminal => {
-    // Check global terminal limit
-    const { terminals } = get()
-    if (terminals.length >= GLOBAL_TERMINAL_LIMIT) {
-      throw new Error(`Maximum ${GLOBAL_TERMINAL_LIMIT} terminals allowed across all projects`)
-    }
-
     const newTerminal: Terminal = {
-      id: Date.now().toString(),
+      // Unique even for terminals added in the same millisecond (a restore loop).
+      id: randomUUID(),
       name,
       projectId,
       shell,
@@ -121,7 +150,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
     set((state) => ({
       terminals: [...state.terminals, newTerminal],
-      activeTerminalId: newTerminal.id
+      activeTerminalId: activate ? newTerminal.id : state.activeTerminalId
     }))
     return newTerminal
   },
@@ -311,9 +340,19 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           const combined = (t.transcript || '') + data
 
+          // `>=` rather than `>`: the detached-output hook clips its coalescing
+          // buffer to exactly MAX_TRANSCRIPT_CHARS, so a buffer at the cap has
+          // already lost its head mid-line and must be line-aligned and flagged
+          // too. The flag stays set until `consumeTranscript`, telling a cached
+          // xterm that the transcript no longer continues the screen it holds.
+          if (combined.length < MAX_TRANSCRIPT_CHARS) {
+            return { ...t, transcript: combined }
+          }
+
           return {
             ...t,
-            transcript: trimTranscriptToMaxChars(combined)
+            transcript: alignTranscriptTail(combined),
+            transcriptTrimmed: true
           }
         })
       }
@@ -329,7 +368,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     let consumed = ''
 
     set((state) => {
-      const target = state.terminals.find((t) => t.ptyId === ptyId && t.transcript)
+      // The trimmed flag is cleared together with the transcript, including a
+      // trim that left an empty transcript, so the next detach starts clean.
+      const target = state.terminals.find(
+        (t) => t.ptyId === ptyId && (t.transcript || t.transcriptTrimmed)
+      )
       if (!target) {
         return state
       }
@@ -338,13 +381,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
       return {
         terminals: state.terminals.map((t) => {
-          if (t.ptyId !== ptyId || !t.transcript) {
+          if (t.ptyId !== ptyId || !(t.transcript || t.transcriptTrimmed)) {
             return t
           }
 
           return {
             ...t,
-            transcript: undefined
+            transcript: undefined,
+            transcriptTrimmed: undefined
           }
         })
       }
@@ -533,6 +577,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 claim: undefined,
                 healthStatus: 'running',
                 transcript: undefined,
+                transcriptTrimmed: undefined,
                 pendingScrollback: undefined,
                 pendingModes: undefined
               }
@@ -613,10 +658,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           return t
         }
 
+        // The transcript only changes here when its head was dropped, so it no
+        // longer continues the screen a cached xterm holds.
+        const transcriptRewritten = nextTranscript !== t.transcript
+
         return {
           ...t,
           pendingScrollback: nextScrollback,
           transcript: nextTranscript,
+          ...(transcriptRewritten ? { transcriptTrimmed: true } : {}),
           detachedOutput: nextDetachedOutput
         }
       })
@@ -649,10 +699,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   getTerminalCount: (): number => {
     return get().terminals.length
-  },
-
-  isTerminalLimitReached: (): boolean => {
-    return get().terminals.length >= GLOBAL_TERMINAL_LIMIT
   }
 }))
 

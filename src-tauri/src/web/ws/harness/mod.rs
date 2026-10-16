@@ -11,7 +11,12 @@
 
 pub(crate) mod carrier;
 pub(crate) mod raw_client;
+pub(crate) mod wire;
 
+#[cfg(test)]
+mod chat_reads_tests;
+#[cfg(test)]
+mod relay_approval_tests;
 #[cfg(test)]
 mod relay_bounded_tests;
 #[cfg(test)]
@@ -21,11 +26,18 @@ mod relay_command_tests;
 #[cfg(test)]
 mod relay_fault_tests;
 #[cfg(test)]
+mod relay_contract_tests;
+#[cfg(test)]
 mod relay_liveness_tests;
 #[cfg(test)]
 mod relay_prompt_tests;
 #[cfg(test)]
 mod watch_hub_tests;
+mod store_tests;
+#[cfg(test)]
+mod store_desktop_import_tests;
+#[cfg(test)]
+mod watch_scoped_tests;
 #[cfg(test)]
 mod watch_tests;
 
@@ -48,6 +60,8 @@ pub(crate) const SESSION: &str = "sess-h";
 pub(crate) struct Host {
     pub(crate) relay: Arc<WsRelaySink>,
     pub(crate) state: AppState,
+    /// The desktop Channel host over the same pieces, built on first use.
+    channel: std::sync::OnceLock<(crate::web::ws::channel::WsChannelHost, tempfile::TempDir)>,
 }
 
 impl Host {
@@ -78,10 +92,7 @@ impl Host {
             pty,
             relay: Arc::clone(&relay),
             registry: Arc::new(ProjectRegistry::new()),
-            registry_persistence: None,
-            projects_file: None,
             history_mode,
-            workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,
             store: None,
@@ -94,7 +105,49 @@ impl Host {
             oauth_base_url: "http://127.0.0.1".to_string(),
             connections: Default::default(),
         };
-        Self { relay, state }
+        Self {
+            relay,
+            state,
+            channel: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The desktop's Channel host (`AppState::desktop_local`) sharing this
+    /// host's ACP manager, relay, registry, PTYs and store (a scratch store
+    /// when none is attached; attach it with [`Host::with_store`] first). Its
+    /// own connection runtime is what `WsChannelHost::drain` stops.
+    pub(crate) fn channel_host(&self) -> &crate::web::ws::channel::WsChannelHost {
+        &self
+            .channel
+            .get_or_init(|| {
+                let scratch = tempfile::tempdir().expect("scratch store dir");
+                let store = self.state.store.clone().unwrap_or_else(|| {
+                    Arc::new(
+                        crate::web::store::WebStore::open(
+                            scratch.path().join("store.json"),
+                            crate::web::store::StorePolicy::default(),
+                        )
+                        .expect("open the scratch store"),
+                    )
+                });
+                let state = AppState::desktop_local(crate::web::router::DesktopLocalParts {
+                    acp: Arc::clone(&self.state.acp),
+                    pty: Arc::clone(&self.state.pty),
+                    relay: Arc::clone(&self.relay),
+                    registry: Arc::clone(&self.state.registry),
+                    acp_catalog: None,
+                    acp_install: None,
+                    store,
+                });
+                (crate::web::ws::channel::WsChannelHost::new(state), scratch)
+            })
+            .0
+    }
+
+    /// Attach a store (the default host runs without one, as in degraded mode).
+    pub(crate) fn with_store(mut self, store: Arc<crate::web::store::WebStore>) -> Self {
+        self.state.store = Some(store);
+        self
     }
 
     /// Open a connection: the production relay loop on a fault carrier.
@@ -120,7 +173,7 @@ impl Host {
             let _finished = Finished(done_tx);
             // The harness peer is a local, write-capable connection.
             let local_peer = SocketAddr::from(([127, 0, 0, 1], 0));
-            serve_socket(lease, carrier, state, local_peer).await;
+            serve_socket(lease, carrier, state, local_peer, Carrier::Ws).await;
         });
         Conn { peer, task, done }
     }
@@ -137,14 +190,19 @@ pub(crate) struct Conn {
 impl Conn {
     /// Run the versioned `authenticate` handshake and require `ok`.
     pub(crate) async fn authenticate(&mut self) {
+        self.authenticate_as("device-harness", "tab-harness").await;
+    }
+
+    /// `authenticate` as one tab of one device.
+    pub(crate) async fn authenticate_as(&mut self, device_id: &str, client_instance_id: &str) {
         let reply = self
             .request(
                 "auth",
                 "authenticate",
                 json!({
                     "protocolVersion": WS_PROTOCOL_VERSION,
-                    "deviceId": "device-harness",
-                    "clientInstanceId": "tab-harness",
+                    "deviceId": device_id,
+                    "clientInstanceId": client_instance_id,
                 }),
             )
             .await;

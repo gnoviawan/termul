@@ -46,56 +46,41 @@ export const remoteServerApi: RemoteServerApi = {
 }
 
 /**
- * Push the desktop renderer's current project list into the in-memory
- * `ProjectRegistry` (Epic-4 bridge) so the web/remote client can read it via
- * `GET /projects`. No env-var values cross the wire — `ProjectSummary` redacts
- * by omission. Call on server-start success + on every project-list mutation
- * while the server runs (a no-op when the server is stopped just returns ok).
- *
- * Desktop navigation never moves the host default: the push carries no
- * `defaultProjectId`. The host keeps its current default while that project is
- * still valid (so a default set from the web or via `setHostDefaultProject` is
- * not reverted by a later list mutation), else the project the summaries flag
- * as stored default (`isDefault`), else the first switchable one. The reply
- * carries the resulting host default id (`null` when there is none).
+ * One-shot import of the desktop renderer's old project list into the host's
+ * durable registry (`project_registry_import`). The host accepts it only while
+ * its registry file says nothing was imported: unknown ids are added, existing
+ * ones are kept, the default applies only when none is set, and a repeat is an
+ * ok no-op (`imported: false`). Either reply is an acknowledgement; the caller
+ * deletes the old `projects` key only after one. No env-var values cross the
+ * wire — `ProjectSummary` redacts by omission.
  */
-export async function syncProjects(projects: ProjectSummary[]): Promise<IpcResult<string | null>> {
-  return invokeIpc<string | null>('remote_sync_projects', {
-    payload: { projects }
+export async function projectRegistryImport(
+  projects: ProjectSummary[],
+  defaultProjectId: string | null
+): Promise<IpcResult<{ imported: boolean }>> {
+  return invokeIpc<{ imported: boolean }>('project_registry_import', {
+    payload: { projects, defaultProjectId }
   })
 }
 
 /**
- * Explicitly set the host's default project (Epic 7 — cross-client workspace
- * continuity). Distinct from a per-connection `switch_project`: this changes
- * the host default that new web clients start with. Validates the project is
- * switchable, updates `registry.set_default_project`, and publishes
- * the project state to every `projects` watcher. Mirrors the
- * `set_default_project` WS request + the `POST /projects/default` HTTP route
- * (transport parity). The explicit way to select the host default (a project-list
- * sync only changes it when the current default is no longer valid); it stores
- * the default and rebinds nothing.
- */
-export async function setHostDefaultProject(projectId: string): Promise<IpcResult<void>> {
-  return invokeIpc<void>('set_host_default_project', { projectId })
-}
-
-/**
- * Mirror the desktop app-store MCP registry to the host default project's
- * `.termul/mcp-servers.json` (CAP-7 — registry sync gap; interim bridge until
- * per-project MCP naming). The Rust `remote_sync_mcp_registry` command
- * resolves the default project root via the shared `ProjectRegistry` and
- * writes the registry via `atomic_file::replace`, so the web `GET /mcp-servers`
- * route (file-based) serves the same registry the desktop app store holds.
+ * Mirror the desktop app-store MCP registry to the named project's
+ * `.termul/mcp-servers.json` (CAP-7 — registry sync gap). The Rust
+ * `remote_sync_mcp_registry` command resolves `projectId` through the shared
+ * `ProjectRegistry` (an unknown, archived or pathless project is refused
+ * `NOT_FOUND`) and writes the registry via `atomic_file::replace`, so the web
+ * `GET /mcp-servers?projectId=` route (file-based) serves the same registry the
+ * desktop app store holds.
  *
  * Best-effort: the result is `IpcResult<void>` (never throws — invoke errors map
  * to `{ success: false, code: 'INVOKE_ERROR' }`). Callers log a failure but never
  * let it block the app-store save or the project switch.
  */
 export async function syncMcpRegistryToProject(
+  projectId: string,
   registry: StoredMcpServer[]
 ): Promise<IpcResult<void>> {
-  return invokeIpc<void>('remote_sync_mcp_registry', { registry })
+  return invokeIpc<void>('remote_sync_mcp_registry', { projectId, registry })
 }
 
 /**

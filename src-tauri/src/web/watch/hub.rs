@@ -40,8 +40,12 @@ use crate::web::ws::{EnqueueOutcome, Outbound, OutboundSender};
 /// Top-level frame type of every watch frame: `{"type":"watch", ...}`.
 pub const WS_WATCH_TYPE: &str = "watch";
 
+/// Longest scope (project id or store key) a watch accepts; the same bound the
+/// store applies to its keys.
+const MAX_SCOPE_BYTES: usize = 1024;
+
 /// What a watch observes. The scope of a watch narrows it (`""` for the
-/// host-wide watches below).
+/// host-wide watches, a project id, or a store key).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WatchKind {
     /// The project list plus the host default project.
@@ -50,6 +54,14 @@ pub enum WatchKind {
     ChatHistory,
     /// The live agent roster.
     Agents,
+    /// The file changes below one project's root (scope = project id).
+    Fs,
+    /// One shared store key (scope = the key).
+    Store,
+    /// The terminals of one project (scope = project id).
+    Terminals,
+    /// The shared last-read marker of every agent chat.
+    ChatReads,
 }
 
 impl WatchKind {
@@ -60,6 +72,10 @@ impl WatchKind {
             Self::Projects => "projects",
             Self::ChatHistory => "chat_history",
             Self::Agents => "agents",
+            Self::Fs => "fs",
+            Self::Store => "store",
+            Self::Terminals => "terminals",
+            Self::ChatReads => "chat_reads",
         }
     }
 
@@ -70,15 +86,25 @@ impl WatchKind {
             "projects" => Some(Self::Projects),
             "chat_history" => Some(Self::ChatHistory),
             "agents" => Some(Self::Agents),
+            "fs" => Some(Self::Fs),
+            "store" => Some(Self::Store),
+            "terminals" => Some(Self::Terminals),
+            "chat_reads" => Some(Self::ChatReads),
             _ => None,
         }
     }
 
-    /// Whether `scope` is a scope this watch accepts. The three host-wide
-    /// watches have exactly one, the empty scope.
+    /// Whether `scope` is a scope this watch accepts. The host-wide watches
+    /// have exactly one, the empty scope; the scoped watches need a non-blank
+    /// scope of a bounded length.
     #[must_use]
     pub fn accepts_scope(self, scope: &str) -> bool {
-        scope.is_empty()
+        match self {
+            Self::Projects | Self::ChatHistory | Self::Agents | Self::ChatReads => scope.is_empty(),
+            Self::Fs | Self::Store | Self::Terminals => {
+                !scope.trim().is_empty() && scope.len() <= MAX_SCOPE_BYTES
+            }
+        }
     }
 }
 
@@ -365,6 +391,41 @@ impl WatchHub {
         if list.is_empty() {
             inner.subscribers.remove(&key);
         }
+    }
+}
+
+impl WatchHub {
+    /// End every subscription of `(kind, scope)`: each subscriber gets `delta`
+    /// as its last frame (it waits for room in a full queue, so the notice is
+    /// delayed, never lost), and the subscription is released. The client
+    /// asks again for the watch when it wants it back.
+    pub fn end(&self, kind: WatchKind, scope: &str, delta: &Value) {
+        let mut inner = self.inner.lock();
+        let host_epoch = inner.host_epoch.clone();
+        let Some(list) = inner.subscribers.remove(&(kind, scope.to_string())) else {
+            return;
+        };
+        for mut subscriber in list {
+            subscriber.retired.cancel();
+            subscriber.n += 1;
+            let revision = WatchRevision {
+                host_epoch: host_epoch.clone(),
+                n: subscriber.n,
+            };
+            let frame = || Outbound::Watch(WatchFrame::delta(kind, scope, revision.clone(), delta.clone()));
+            if subscriber.out.try_enqueue(frame()) == EnqueueOutcome::Full {
+                let out = subscriber.out.clone();
+                let frame = frame();
+                subscriber.runtime.spawn(async move {
+                    out.enqueue(frame).await;
+                });
+            }
+        }
+        info!(
+            target: "termul::web::watch",
+            watch = kind.as_str(),
+            "watch ended by the host"
+        );
     }
 }
 

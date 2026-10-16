@@ -1,16 +1,49 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback, useEffect } from 'react'
-import { acpApi, persistenceApi, terminalApi } from '@/lib/api'
+import { acpApi, persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { useSharedKeySync } from '@/lib/shared-key-sync'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { getSystemAppearance, normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
 import { setSidebarVisible } from '@/stores/sidebar-store'
 import { setSSHPanelVisible } from '@/stores/ssh-panel-store'
-import { useTerminalStore } from '@/stores/terminal-store'
 import type { AppSettings, AppSettingsUpdate } from '@/types/settings'
-import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
+import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 
 type PanelSettingKey = 'sidebarVisible' | 'fileExplorerVisible' | 'sshPanelVisible'
+
+let idleWindowEpoch = 0
+let idleWindowQueue: Promise<void> = Promise.resolve()
+
+/** Push one idle-window choice. A newer choice skips an older push still in line. */
+export function queueAgentIdleWindowPush(secs: number | null): Promise<void> {
+  idleWindowEpoch += 1
+  const epoch = idleWindowEpoch
+  const run = idleWindowQueue.then(async () => {
+    if (epoch !== idleWindowEpoch) return
+    try {
+      await acpApi.setAgentIdleWindow(secs)
+    } catch (error) {
+      void logFrontendError({
+        level: 'error',
+        source: 'queueAgentIdleWindowPush',
+        message: `Failed to apply the agent idle window: ${error instanceof Error ? error.message : String(error)}`
+      })
+    }
+  })
+  idleWindowQueue = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
+
+function queueSavedAgentIdleWindow(): void {
+  if (idleWindowEpoch !== 0) return
+  queueAgentIdleWindowPush(useAppSettingsStore.getState().settings.agentIdleWindowSecs)
+}
 
 function applyPanelVisibility(panel: PanelSettingKey, visible: boolean): void {
   if (panel === 'sidebarVisible') {
@@ -22,156 +55,91 @@ function applyPanelVisibility(panel: PanelSettingKey, visible: boolean): void {
   }
 }
 
-/** @internal Test-only: legacy name kept for existing suites; disarms the orphan retry. */
-export function resetAppSettingsPersistenceQueueForTests(): void {
-  disposeOrphanDetectionRetryForTests()
-}
-
-/** @internal Test-only: disarm the one-shot post-attach retry. */
-export function disposeOrphanDetectionRetryForTests(): void {
-  orphanDetectionRetryArmed = false
-  orphanDetectionRetryUnsubscribe?.()
-  orphanDetectionRetryUnsubscribe = undefined
-}
-
-/** Whether the one-shot post-attach orphan-detection retry is armed. */
-let orphanDetectionRetryArmed = false
-/** Test-reset hook for the retry's store subscription. */
-let orphanDetectionRetryUnsubscribe: (() => void) | undefined
+/** Settings an older version persisted that no longer have any effect. */
+const RETIRED_SETTING_KEYS = [
+  'maxTerminalsPerProject',
+  'orphanDetectionEnabled',
+  'orphanDetectionTimeout'
+] as const
 
 /**
- * QA round 2 / spec story 5: retry the orphan-detection settings push ONCE
- * after the first terminal of the session attaches. The immediate push in
- * `useAppSettingsLoader` now succeeds whenever the terminal channel is
- * authenticated; the residual failure mode is the push landing while the
- * connection is still un-authed (server answers the single generic
- * UNAUTHORIZED). Once a terminal has a ptyId the connection that spawned or
- * attached it is necessarily authenticated, so the retry then succeeds.
- * One-shot: success or failure both disarm (boundary logged; no retries
- * storming the settings surface). Desktop is unaffected — the Tauri
- * transport's updateOrphanDetection never fails with UNAUTHORIZED.
+ * Fills a stored settings record in from the defaults and drops or rewrites
+ * what an older version wrote. `changed` tells that the stored record differs
+ * from the result.
  */
-function scheduleOrphanDetectionRetryAfterFirstAttach(settings: AppSettings): void {
-  if (orphanDetectionRetryArmed) return
-  orphanDetectionRetryArmed = true
+function normalizeStoredSettings(data: AppSettings): { settings: AppSettings; changed: boolean } {
+  // Merge with defaults to handle any missing keys from older versions
+  let settings: AppSettings = { ...DEFAULT_APP_SETTINGS, ...data }
+  let changed = false
 
-  const retry = (attempt: number): void => {
-    const store = useTerminalStore.getState()
-    const hasAttachedTerminal = store.terminals.some((terminal) => !!terminal.ptyId)
-    if (!hasAttachedTerminal) {
-      // No terminal attached yet — keep watching (bounded by unsubscribe on
-      // unmount; the store subscription below re-drives the check).
-      return
-    }
-    unsubscribe()
-    // CodeRabbit: read the CURRENT settings at retry time, not the snapshot
-    // captured at load — the user may have changed orphan detection since
-    // boot, and re-pushing the stale snapshot would override their choice.
-    const current = useAppSettingsStore.getState().settings
-    void terminalApi
-      .updateOrphanDetection(current.orphanDetectionEnabled, current.orphanDetectionTimeout)
-      .then((result) => {
-        if (result.success) {
-          void logFrontendError({
-            level: 'warn',
-            source: 'use-app-settings.orphanDetectionRetry',
-            message: 'orphan detection settings applied on post-attach retry'
-          })
-        } else {
-          void logFrontendError({
-            level: 'warn',
-            source: 'use-app-settings.orphanDetectionRetry',
-            message: `post-attach orphan detection retry failed (${result.code ?? 'UNKNOWN'}) — settings not applied`
-          })
-        }
-      })
-      .catch(() => {
-        void logFrontendError({
-          level: 'warn',
-          source: 'use-app-settings.orphanDetectionRetry',
-          message: `post-attach orphan detection retry failed (attempt ${attempt}) — settings not applied`
-        })
-      })
+  // The per-project terminal limit moved to the host, and a live PTY no
+  // longer expires by inactivity. Drop the retired keys an older version
+  // persisted so they are not carried forward.
+  const retiredKeys = RETIRED_SETTING_KEYS.filter((key) => key in settings)
+  if (retiredKeys.length > 0) {
+    const current: Record<string, unknown> = { ...settings }
+    for (const key of retiredKeys) delete current[key]
+    settings = current as unknown as AppSettings
+    changed = true
   }
 
-  const unsubscribe = useTerminalStore.subscribe(() => retry(1))
-  orphanDetectionRetryUnsubscribe = unsubscribe
+  const rawAppearance = data.appearanceMode as string | undefined
+  const hasLegacyLightThemeId = settings.colorTheme.endsWith('-light')
 
-  // The store may already have an attached terminal at arm time.
-  retry(0)
+  if (hasLegacyLightThemeId) {
+    settings = {
+      ...settings,
+      colorTheme: normalizeThemeFamilyId(settings.colorTheme),
+      appearanceMode: settings.appearanceMode ?? 'light'
+    }
+    changed = true
+  }
+
+  if (rawAppearance === undefined && !hasLegacyLightThemeId) {
+    settings = { ...settings, appearanceMode: 'dark' }
+    changed = true
+  }
+
+  if (rawAppearance === 'system') {
+    settings = { ...settings, appearanceMode: getSystemAppearance() }
+    changed = true
+  } else if (settings.appearanceMode !== 'light' && settings.appearanceMode !== 'dark') {
+    settings = { ...settings, appearanceMode: 'dark' }
+    changed = true
+  }
+
+  // Migrate persisted "canvas" renderer preference to "dom"
+  // xterm 6.0 removed @xterm/addon-canvas; DOM is now the built-in fallback
+  if ((settings as unknown as Record<string, unknown>).terminalRenderer === 'canvas') {
+    settings = { ...settings, terminalRenderer: 'dom' as const }
+    changed = true
+  }
+  return { settings, changed }
 }
+
 export function useAppSettingsLoader(): void {
   const setSettings = useAppSettingsStore((state) => state.setSettings)
 
+  // A change another device or tab saved: show it without a reload.
+  useSharedKeySync<AppSettings>(PersistenceKeys.appSettings, (change) => {
+    if (change.exists && change.data) setSettings(normalizeStoredSettings(change.data).settings)
+  })
+
   useEffect(() => {
     async function load(): Promise<void> {
-      const result = await persistenceApi.read<AppSettings>(APP_SETTINGS_KEY)
+      const result = await persistenceApi.read<AppSettings>(PersistenceKeys.appSettings)
       let settings: AppSettings
 
       if (result.success && result.data) {
-        // Merge with defaults to handle any missing keys from older versions
-        settings = { ...DEFAULT_APP_SETTINGS, ...result.data }
-        let shouldPersistSettings = false
-        const rawAppearance = result.data.appearanceMode as string | undefined
-        const hasLegacyLightThemeId = settings.colorTheme.endsWith('-light')
-
-        if (hasLegacyLightThemeId) {
-          settings = {
-            ...settings,
-            colorTheme: normalizeThemeFamilyId(settings.colorTheme),
-            appearanceMode: settings.appearanceMode ?? 'light'
-          }
-          shouldPersistSettings = true
-        }
-
-        if (rawAppearance === undefined && !hasLegacyLightThemeId) {
-          settings = { ...settings, appearanceMode: 'dark' }
-          shouldPersistSettings = true
-        }
-
-        if (rawAppearance === 'system') {
-          settings = { ...settings, appearanceMode: getSystemAppearance() }
-          shouldPersistSettings = true
-        } else if (settings.appearanceMode !== 'light' && settings.appearanceMode !== 'dark') {
-          settings = { ...settings, appearanceMode: 'dark' }
-          shouldPersistSettings = true
-        }
-
-        // Migrate persisted "canvas" renderer preference to "dom"
-        // xterm 6.0 removed @xterm/addon-canvas; DOM is now the built-in fallback
-        if ((settings as unknown as Record<string, unknown>).terminalRenderer === 'canvas') {
-          settings = { ...settings, terminalRenderer: 'dom' as const }
-          shouldPersistSettings = true
-        }
-
+        const normalized = normalizeStoredSettings(result.data)
+        settings = normalized.settings
         setSettings(settings)
-        if (shouldPersistSettings) {
-          void persistenceApi.writeDebounced(APP_SETTINGS_KEY, settings)
+        if (normalized.changed) {
+          void persistenceApi.writeDebounced(PersistenceKeys.appSettings, settings)
         }
       } else {
         settings = DEFAULT_APP_SETTINGS
         setSettings(settings)
-      }
-
-      // Apply orphan detection settings to PtyManager after settings load.
-      // QA round 2 / spec story 5: the server now ACCEPTS this push on any
-      // authed connection (even with zero terminals attached), so the
-      // immediate push succeeds on web boot. The deferral below is the
-      // robustness net for the case the push races the auth handshake
-      // (UNAUTHORIZED): retry ONCE after the first terminal attach — by then
-      // the connection is authenticated and the op is admissible. If no
-      // terminal ever attaches, no retry fires (harmless — nothing to
-      // configure the lifecycle of).
-      try {
-        const orphanResult = await terminalApi.updateOrphanDetection(
-          settings.orphanDetectionEnabled,
-          settings.orphanDetectionTimeout
-        )
-        if (!orphanResult.success && orphanResult.code === 'UNAUTHORIZED') {
-          scheduleOrphanDetectionRetryAfterFirstAttach(settings)
-        }
-      } catch (error) {
-        console.error('Failed to apply orphan detection settings:', error)
       }
 
       // Push the ACP timeout overrides to the Rust core (desktop-only via the
@@ -197,6 +165,35 @@ export function useAppSettingsLoader(): void {
       } catch (error) {
         console.error('Failed to apply ACP session reopen timeout:', error)
       }
+      try {
+        if (isTauriContext()) {
+          // One desktop process owns this window. Apply the saved choice at
+          // startup. A choice made while this load is in flight stays ahead
+          // of this push. The browser must not POST on load: that would
+          // replace the server's shared value with whatever this page saved.
+          queueSavedAgentIdleWindow()
+        } else {
+          const epoch = idleWindowEpoch
+          const live = await acpApi.getAgentIdleWindow()
+          if (epoch !== idleWindowEpoch) return
+          if (live.source === 'setting' || live.source === 'default') {
+            const next = live.source === 'default' || live.secs === 1800 ? null : live.secs
+            if (next !== settings.agentIdleWindowSecs) {
+              useAppSettingsStore.getState().updateSetting('agentIdleWindowSecs', next)
+              await persistenceApi.writeDebounced(
+                PersistenceKeys.appSettings,
+                useAppSettingsStore.getState().settings
+              )
+            }
+          }
+        }
+      } catch (error) {
+        void logFrontendError({
+          level: 'error',
+          source: 'useAppSettingsLoader.agentIdleWindow',
+          message: `Failed to apply the agent idle window: ${error instanceof Error ? error.message : String(error)}`
+        })
+      }
     }
     load()
   }, [setSettings])
@@ -214,7 +211,7 @@ export function useUpdateAppSetting<K extends keyof AppSettings>(): (
       // Use callback to get the latest state after update
       // Note: Zustand updates are synchronous, so getState() after updateSetting() returns updated state
       const updatedSettings = useAppSettingsStore.getState().settings
-      await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
+      await persistenceApi.writeDebounced(PersistenceKeys.appSettings, updatedSettings)
     },
     [updateSetting]
   )
@@ -227,7 +224,7 @@ export function useUpdateAppSettings(): (updates: AppSettingsUpdate) => Promise<
     async (updates: AppSettingsUpdate) => {
       updateSettings(updates)
       const updatedSettings = useAppSettingsStore.getState().settings
-      await persistenceApi.writeDebounced(APP_SETTINGS_KEY, updatedSettings)
+      await persistenceApi.writeDebounced(PersistenceKeys.appSettings, updatedSettings)
     },
     [updateSettings]
   )
@@ -257,7 +254,7 @@ export function useResetAppSettings(): () => Promise<void> {
     applyPanelVisibility('fileExplorerVisible', true)
     applyPanelVisibility('sshPanelVisible', true)
 
-    await persistenceApi.write(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
+    await persistenceApi.write(PersistenceKeys.appSettings, DEFAULT_APP_SETTINGS)
     // Clear the in-process ACP timeout overrides too (mirrors the load
     // hook's push, so a reset doesn't leave stale overrides in the Rust core).
     try {
@@ -280,5 +277,6 @@ export function useResetAppSettings(): () => Promise<void> {
     } catch (error) {
       console.error('Failed to clear ACP session reopen timeout on reset:', error)
     }
+    await queueAgentIdleWindowPush(DEFAULT_APP_SETTINGS.agentIdleWindowSecs)
   }, [resetToDefaults])
 }

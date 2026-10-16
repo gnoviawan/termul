@@ -20,6 +20,7 @@ export function sectionForTab(tab: WorkspaceTab | null | undefined): MobileSecti
     case 'editor':
     case 'git':
     case 'diff':
+    case 'commit-diff':
     case 'browser':
     case 'canvas':
       return 'editors'

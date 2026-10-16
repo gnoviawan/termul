@@ -105,6 +105,7 @@ const EXT_MIME: Record<string, string> = {
   gql: 'application/graphql',
   vue: 'text/plain',
   svelte: 'text/plain',
+  astro: 'text/plain',
   // images (picker -> resource_link)
   png: 'image/png',
   jpg: 'image/jpeg',

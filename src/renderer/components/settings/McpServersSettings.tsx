@@ -30,6 +30,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { randomUUID } from '@/lib/uuid'
 import { useAcpStore } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 
 type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer }
 
@@ -108,6 +109,9 @@ export function McpServersSettings(): React.JSX.Element {
   const connectMcpOAuth = useAcpStore((state) => state.connectMcpOAuth)
   const disconnectMcpOAuth = useAcpStore((state) => state.disconnectMcpOAuth)
   const checkMcpOAuthStatus = useAcpStore((state) => state.checkMcpOAuthStatus)
+  // OAuth host calls name the active project (the web host authorizes the URL
+  // against that project's MCP list).
+  const activeProjectId = useProjectStore((state) => state.activeProjectId)
   const [dialog, setDialog] = useState<McpDialogState | null>(null)
   const [jsonText, setJsonText] = useState('')
   const [jsonErrors, setJsonErrors] = useState<string[]>([])
@@ -137,10 +141,10 @@ export function McpServersSettings(): React.JSX.Element {
   useEffect(() => {
     for (const server of servers) {
       if (transportOf(server) === 'http' || transportOf(server) === 'sse') {
-        void checkMcpOAuthStatus(server.id)
+        void checkMcpOAuthStatus(activeProjectId, server.id)
       }
     }
-  }, [servers.map((s) => s.id).join('|')])
+  }, [servers.map((s) => s.id).join('|'), activeProjectId])
 
   const closeDialog = (): void => {
     setDialog(null)
@@ -363,11 +367,11 @@ export function McpServersSettings(): React.JSX.Element {
                       disabled={Boolean(mcpOAuthConnecting[server.id])}
                       onClick={() => {
                         if (mcpOAuthConnected[server.id]) {
-                          void disconnectMcpOAuth(server.id).catch(() =>
+                          void disconnectMcpOAuth(activeProjectId, server.id).catch(() =>
                             toast.error('Could not disconnect OAuth. Try again.')
                           )
                         } else {
-                          void connectMcpOAuth(server.id)
+                          void connectMcpOAuth(activeProjectId, server.id)
                             .then(() => toast.success(`Connected to ${server.name}`))
                             .catch(() =>
                               toast.error(

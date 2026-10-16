@@ -210,7 +210,13 @@ fn watch_names_and_scopes_round_trip() {
         assert!(kind.accepts_scope(""));
         assert!(!kind.accepts_scope("x"));
     }
-    assert_eq!(WatchKind::parse("fs"), None);
+    for kind in [WatchKind::Fs, WatchKind::Store, WatchKind::Terminals] {
+        assert_eq!(WatchKind::parse(kind.as_str()), Some(kind));
+        assert!(!kind.accepts_scope(""));
+        assert!(!kind.accepts_scope("  "));
+        assert!(kind.accepts_scope("x"));
+    }
+    assert_eq!(WatchKind::parse("bogus"), None);
 }
 
 #[tokio::test]
@@ -271,4 +277,58 @@ async fn subscribing_outside_a_runtime_is_refused_not_a_panic() {
     .expect("no panic");
     assert_eq!(outcome, Err(SubscribeError::Closed));
     assert_eq!(hub.subscriber_count(WatchKind::Projects, ""), 0);
+}
+
+#[test]
+fn scoped_watches_need_a_bounded_non_blank_scope_and_the_others_none() {
+    for kind in [WatchKind::Projects, WatchKind::ChatHistory, WatchKind::Agents] {
+        assert!(kind.accepts_scope(""));
+        assert!(!kind.accepts_scope("p-1"));
+    }
+    for kind in [WatchKind::Fs, WatchKind::Store, WatchKind::Terminals] {
+        assert!(kind.accepts_scope("p-1"));
+        assert!(!kind.accepts_scope(""));
+        assert!(!kind.accepts_scope("   "));
+        assert!(!kind.accepts_scope(&"k".repeat(1025)));
+        assert_eq!(WatchKind::parse(kind.as_str()), Some(kind));
+    }
+}
+
+#[tokio::test]
+async fn scopes_of_one_watch_are_independent_streams() {
+    let hub = WatchHub::new();
+    let (out, mut rx) = connection(16);
+    hub.subscribe(WatchKind::Store, "a", &out, || json!({ "exists": false }))
+        .expect("subscribe a");
+    hub.subscribe(WatchKind::Store, "b", &out, || json!({ "exists": false }))
+        .expect("subscribe b");
+
+    hub.publish(WatchKind::Store, "a", || json!({ "exists": true, "value": 1 }));
+
+    let frames = drain(&mut rx);
+    let revisions: Vec<(String, u64)> = frames
+        .iter()
+        .map(|f| (serde_json::to_value(f).unwrap()["scope"].as_str().unwrap().to_string(), f.revision().n))
+        .collect();
+    assert_eq!(
+        revisions,
+        vec![("a".to_string(), 1), ("b".to_string(), 1), ("a".to_string(), 2)]
+    );
+}
+
+#[tokio::test]
+async fn end_sends_a_last_delta_and_releases_the_subscription() {
+    let hub = WatchHub::new();
+    let (out, mut rx) = connection(16);
+    hub.subscribe(WatchKind::Fs, "p-1", &out, || json!({ "root": "/r" }))
+        .expect("subscribe");
+
+    hub.end(WatchKind::Fs, "p-1", &json!({ "ended": true }));
+    hub.publish(WatchKind::Fs, "p-1", || json!({ "root": "/r", "paths": [] }));
+
+    let frames = drain(&mut rx);
+    assert_eq!(frames.len(), 2, "state, then the ended notice; the later publish reaches nobody");
+    assert_eq!(frames[1].revision().n, 2);
+    assert_eq!(frames[1].delta_value(), Some(&json!({ "ended": true })));
+    assert_eq!(hub.subscriber_count(WatchKind::Fs, "p-1"), 0);
 }

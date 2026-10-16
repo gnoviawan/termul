@@ -81,12 +81,46 @@ The act of starting a new Agent process for the same Session after an Agent proc
 _Avoid_: reconnect
 
 **Attention**:
-A Project or Agent chat that has a pending permission, a pending question, or an Agent process stop.
+A Project or Agent chat that has a pending permission, a pending question, or a stopped Agent chat that cannot resume by itself.
 _Avoid_: badge, unread, notification
 
 **Session**:
 The stored conversation that one Agent chat shows.
 _Avoid_: history item, transcript
+
+### Providers & accounts
+
+**Provider**:
+The vendor of an agent that the user signs in to, for example Claude Code. A Provider has one or more Accounts.
+_Avoid_: agent (the agent is the ACP program, not the vendor), account
+
+**Account**:
+One subscription login under a Provider, with its own usage limits. The user gives each Account a short name, and Termul shows that name instead of the email address.
+_Avoid_: provider, profile, API key
+
+**Project Account**:
+The Account that the Agent chats of one Project use. Different Projects can use different Accounts at the same time, for example a work Project and a personal Project.
+_Avoid_: active account, current account
+
+**Default Account**:
+The Account that a Project uses when the user has not chosen a Project Account for it. There is always exactly one Default Account while any Account exists.
+_Avoid_: main account, primary account
+
+**Usage window**:
+A period in which an Account's usage is counted against a limit, for example the 5-hour window or the weekly window. Each window has a utilization and a reset time.
+_Avoid_: quota, rate limit (a rate limit is the event of reaching the limit)
+
+**Limit warning**:
+The notice that an Account is near the limit of a Usage window, shown before work stops.
+_Avoid_: rate limit error
+
+**Limit reached**:
+The state where an Account cannot run more turns until a Usage window resets.
+_Avoid_: crash, disconnect, Agent process stop
+
+**Account switch**:
+The act of changing a Project Account. The open Agent chats of that Project continue on the new Account, and the conversation stays visible. The new Project Account stays until the user changes it again.
+_Avoid_: logout, re-login, reconnect
 
 ### Iconography
 

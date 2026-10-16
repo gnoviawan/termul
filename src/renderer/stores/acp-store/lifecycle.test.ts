@@ -97,6 +97,10 @@ vi.mock('@/stores/workspace-store', () => {
   }
   return {
     getAllLeafPanes,
+    getAllTreeRoots: (state: {
+      root: PaneNodeLike
+      parkedTrees?: Record<string, { root: PaneNodeLike }>
+    }) => [state.root, ...Object.values(state.parkedTrees ?? {}).map((tree) => tree.root)],
     findPaneContainingTab,
     agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
     useWorkspaceStore: {
@@ -104,7 +108,8 @@ vi.mock('@/stores/workspace-store', () => {
         addAgentChatTab: addAgentChatTabSpy,
         removeTab: workspaceStateRef.current.removeTab,
         remapAgentChatSession: workspaceStateRef.current.remapAgentChatSession,
-        root: workspaceStateRef.current.root
+        root: workspaceStateRef.current.root,
+        parkedTrees: {}
       })
     }
   }
@@ -559,9 +564,7 @@ describe('failed session lifecycle (story 5)', () => {
     expect(workspaceStateRef.current.removeTab).toHaveBeenCalledWith('chat-s-corpse')
   })
 
-  it('RELOAD_PRUNE: removes tabs the index proves foreign to the active project and hands them back to the owner', async () => {
-    // Inserted fail-open before the index loaded: s-foreign belongs to p2 but
-    // sits in p1's tree. s-own (p1) and s-unattributed ('' stub) stay.
+  it('RELOAD_PRUNE: never judges ownership — an indexed chat of another project keeps its tab', async () => {
     useProjectStore.setState({
       activeProjectId: 'p1',
       projects: [
@@ -573,97 +576,14 @@ describe('failed session lifecycle (story 5)', () => {
     workspaceStateRef.current.root = {
       type: 'leaf',
       id: 'pane-1',
-      activeTabId: 'chat-s-foreign',
-      tabs: [
-        { type: 'agent-chat', id: 'chat-s-own', sessionId: 's-own' },
-        { type: 'agent-chat', id: 'chat-s-foreign', sessionId: 's-foreign' },
-        { type: 'agent-chat', id: 'chat-s-unattributed', sessionId: 's-unattributed' }
-      ]
-    }
-    const entry = (id: string, projectId: string) => ({
-      id,
-      agentId: 'agent-1',
-      title: id,
-      cwd: '/work',
-      projectId,
-      createdAt: 1,
-      lastActivityAt: 2,
-      messageCount: 1,
-      status: 'closed' as const
-    })
-    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
-      entry('s-own', 'p1'),
-      entry('s-foreign', 'p2'),
-      entry('s-unattributed', '')
-    ])
-
-    await useAcpStore.getState().loadSessionIndex()
-
-    expect(workspaceStateRef.current.removeTab).toHaveBeenCalledTimes(1)
-    expect(workspaceStateRef.current.removeTab).toHaveBeenCalledWith('chat-s-foreign')
-    // Lossless: the owner reattaches it on switch-back.
-    expect(useAgentChatLifetimeStore.getState().retainedByProject.p2).toEqual(['s-foreign'])
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'acp-store.loadSessionIndex', level: 'warn' })
-    )
-  })
-
-  it('RELOAD_PRUNE: keeps a foreign tab whose owner project is missing or archived', async () => {
-    useProjectStore.setState({
-      activeProjectId: 'p1',
-      projects: [
-        { id: 'p1', name: 'p1', color: 'blue' },
-        { id: 'p2', name: 'p2', color: 'blue', isArchived: true }
-      ]
-    })
-    useAgentChatLifetimeStore.setState({ retainedByProject: {} })
-    workspaceStateRef.current.root = {
-      type: 'leaf',
-      id: 'pane-1',
-      activeTabId: null,
-      tabs: [
-        { type: 'agent-chat', id: 'chat-s-archived', sessionId: 's-archived' },
-        { type: 'agent-chat', id: 'chat-s-gone', sessionId: 's-gone' }
-      ]
-    }
-    const entry = (id: string, projectId: string) => ({
-      id,
-      agentId: 'agent-1',
-      title: id,
-      cwd: '/work',
-      projectId,
-      createdAt: 1,
-      lastActivityAt: 2,
-      messageCount: 1,
-      status: 'closed' as const
-    })
-    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
-      entry('s-archived', 'p2'),
-      entry('s-gone', 'px')
-    ])
-
-    await useAcpStore.getState().loadSessionIndex()
-
-    expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
-    // Deferred hand-off: retained for the owners so the open chats survive a switch.
-    expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({
-      p2: ['s-archived'],
-      px: ['s-gone']
-    })
-  })
-
-  it('RELOAD_PRUNE: no active project judges nothing foreign', async () => {
-    workspaceStateRef.current.root = {
-      type: 'leaf',
-      id: 'pane-1',
-      activeTabId: null,
-      tabs: [{ type: 'agent-chat', id: 'chat-s-foreign', sessionId: 's-foreign' }]
+      activeTabId: 'chat-s-other',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-other', sessionId: 's-other' }]
     }
     vi.mocked(loadSessionIndex).mockResolvedValueOnce([
       {
-        id: 's-foreign',
+        id: 's-other',
         agentId: 'agent-1',
-        title: 'x',
+        title: 's-other',
         cwd: '/work',
         projectId: 'p2',
         createdAt: 1,
@@ -676,6 +596,7 @@ describe('failed session lifecycle (story 5)', () => {
     await useAcpStore.getState().loadSessionIndex()
 
     expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
+    expect(useAgentChatLifetimeStore.getState().retainedByProject).toEqual({})
   })
 
   it('RELOAD_PRUNE: a failed index load preserves every tab', async () => {
@@ -936,5 +857,85 @@ describe('failed session lifecycle (story 5)', () => {
     expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-p1')
     expect(addAgentChatTabSpy).not.toHaveBeenCalledWith('s-p2')
     expect(takeAllDroppedLaunchPlaceholders()).toEqual([{ projectId: 'p2', count: 1 }])
+  })
+
+  describe('sends during a launch', () => {
+    type SentPrompt = { agentId: string; sessionId: string }
+
+    async function startGatedLaunch(initialText?: string): Promise<{
+      placeholderId: string
+      sent: SentPrompt[]
+      release: () => void
+      launch: Promise<unknown>
+    }> {
+      await useAcpStore
+        .getState()
+        .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+      const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+        cwd: '/work',
+        projectId: 'p1',
+        initialUserBlocks: initialText ? [{ type: 'text', text: initialText }] : undefined
+      })
+      let releaseCreate!: (value: { sessionId: string }) => void
+      const createGate = new Promise<{ sessionId: string }>((resolve) => {
+        releaseCreate = resolve
+      })
+      const sent: SentPrompt[] = []
+      ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+        async (command: string, args?: SentPrompt) => {
+          if (command === 'acp_spawn_agent')
+            return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+          if (command === 'acp_new_session') return createGate
+          if (command === 'acp_send_prompt' && args) {
+            sent.push({ agentId: args.agentId, sessionId: args.sessionId })
+            return 'end_turn'
+          }
+          return undefined
+        }
+      )
+      const launch = useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialText
+      })
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+      )
+      return {
+        placeholderId,
+        sent,
+        release: () => releaseCreate({ sessionId: 'sess-real' }),
+        launch
+      }
+    }
+
+    it('queues a send made before the agent binds and delivers it to the real session', async () => {
+      const { placeholderId, sent, release, launch } = await startGatedLaunch()
+      await useAcpStore.getState().sendPrompt(placeholderId, 'early message')
+      expect(sent).toEqual([])
+      expect(useAcpStore.getState().promptQueues[placeholderId]?.map((q) => q.blocks)).toEqual([
+        [{ type: 'text', text: 'early message' }]
+      ])
+
+      release()
+      await launch
+      await vi.waitFor(() => expect(sent).toEqual([{ agentId: 'agent-1', sessionId: 'sess-real' }]))
+      expect(useAcpStore.getState().promptQueues[placeholderId]).toBeUndefined()
+    })
+
+    it('carries a send queued behind the first prompt onto the real session', async () => {
+      const { placeholderId, sent, release, launch } = await startGatedLaunch('first message')
+      await useAcpStore.getState().sendPrompt(placeholderId, 'second message')
+
+      release()
+      await launch
+      expect(sent).toEqual([{ agentId: 'agent-1', sessionId: 'sess-real' }])
+      expect(useAcpStore.getState().promptQueues['sess-real']?.map((q) => q.blocks)).toEqual([
+        [{ type: 'text', text: 'second message' }]
+      ])
+      expect(useAcpStore.getState().promptQueues[placeholderId]).toBeUndefined()
+    })
   })
 })

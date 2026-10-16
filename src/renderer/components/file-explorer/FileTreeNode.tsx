@@ -1,6 +1,6 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import type { ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -192,7 +192,6 @@ export function FileTreeNode({
               </span>
               <MaterialFileIcon
                 name={entry.name}
-                extension={entry.extension}
                 isDirectory={isDir}
                 isExpanded={isExpanded}
                 depth={depth}
@@ -261,7 +260,7 @@ type FileTreeNodeWrapperProps = Pick<
   'entry' | 'depth' | 'onContextMenu' | 'onClick' | 'renderContextMenu'
 >
 
-function FileTreeNodeWrapper({
+const FileTreeNodeWrapper = memo(function FileTreeNodeWrapper({
   entry,
   depth,
   onContextMenu,
@@ -308,6 +307,6 @@ function FileTreeNodeWrapper({
       renderContextMenu={renderContextMenu}
     />
   )
-}
+})
 
 export { FileTreeNodeWrapper }

@@ -7,7 +7,7 @@
 //! mount (AC1).
 
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
@@ -18,13 +18,13 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::web::acp_api;
-use crate::web::auth::WebAuth;
+use crate::web::auth::{BearerVerified, WebAuth};
 
 use crate::acp::{
-    AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService,
+    AcpCatalogService, AcpInstallService, AcpManager,
 };
 use crate::canvas::pool::CanvasDaemonPool;
 use crate::pty::PtyManager;
@@ -34,6 +34,7 @@ use crate::web::connection_runtime::ConnectionRuntime;
 use crate::web::fs_api;
 use crate::web::git_api;
 use crate::web::git_diff_stat_api;
+use crate::web::git_history_api;
 use crate::web::git_hunk_api;
 use crate::web::install_api;
 use crate::web::log_api;
@@ -44,17 +45,71 @@ use crate::web::origin::{self, OriginPolicy};
 use crate::web::project_icon_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
+use crate::web::route_deadline;
 use crate::web::search_api;
 use crate::web::sink::WsRelaySink;
 use crate::web::skills_api;
 use crate::web::store::WebStore;
 use crate::web::terminal_ws::terminal_ws_upgrade;
-use crate::web::workspace_api;
 use crate::web::worktree_api;
 use crate::web::worktree_rename_api;
 use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 
 use super::assets;
+
+/// The desktop host pieces a local (in-process) relay connection needs: what
+/// `lib.rs` already built for the Tauri app, shared with every carrier.
+pub struct DesktopLocalParts {
+    pub acp: Arc<AcpManager>,
+    pub pty: Arc<PtyManager>,
+    pub relay: Arc<WsRelaySink>,
+    pub registry: Arc<ProjectRegistry>,
+    pub acp_catalog: Option<Arc<AcpCatalogService>>,
+    pub acp_install: Option<Arc<AcpInstallService>>,
+    pub store: Arc<WebStore>,
+}
+
+impl AppState {
+    /// The state behind the desktop's own Tauri `ipc::Channel` carrier.
+    ///
+    /// Unlike the shared-live host (token gate, every write denied because a
+    /// tunnel forwards public traffic from loopback), the caller here is the
+    /// app's own webview across the process boundary: no token gate
+    /// (`web_auth: None`), writes allowed for the loopback peer
+    /// (`shared_live_writes_denied: false`, `allow_remote_writes: false`).
+    /// Never serve this state from a network listener. It owns a fresh
+    /// [`ConnectionRuntime`] so the exit path can drain its connections.
+    #[must_use]
+    pub fn desktop_local(parts: DesktopLocalParts) -> Self {
+        let history_mode = if parts.relay.persistence().is_some() {
+            HistoryMode::Server
+        } else {
+            HistoryMode::LiveOnly
+        };
+        Self {
+            terminal_events: parts.pty.terminal_events(),
+            cwd_tracker: parts.pty.cwd_tracker(),
+            git_tracker: parts.pty.git_tracker(),
+            exit_code_tracker: parts.pty.exit_code_tracker(),
+            acp: parts.acp,
+            pty: parts.pty,
+            relay: parts.relay,
+            registry: parts.registry,
+            history_mode,
+            acp_catalog: parts.acp_catalog,
+            acp_install: parts.acp_install,
+            store: Some(parts.store),
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+            pending_oauth_flows: Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            web_auth: None,
+            connections: ConnectionRuntime::default(),
+        }
+    }
+}
 
 /// Build the ACP web-server Axum router (serves the web client + WS + health).
 ///
@@ -105,10 +160,7 @@ pub fn router(
     exit_code_tracker: Arc<ExitCodeTracker>,
     ws_relay: Arc<WsRelaySink>,
     registry: Arc<ProjectRegistry>,
-    registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    projects_file: Option<PathBuf>,
     history_mode: HistoryMode,
-    workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
     acp_install: Option<Arc<AcpInstallService>>,
     store: Option<Arc<WebStore>>,
@@ -122,25 +174,28 @@ pub fn router(
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
+        .route(
+            "/host/agent-idle-window",
+            get(agent_idle_window).post(set_agent_idle_window),
+        )
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
-        // Project list mirror (Epic-4 bridge): the web client reads the
-        // desktop's non-archived + archived projects here. Registered AHEAD of
+        // The host's project registry: the web client reads the non-archived +
+        // archived projects here and adds one with `POST`. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
         .route(
             "/projects",
             get(projects_api::list).post(projects_api::create_project),
         )
         // Explicit host-default change (Epic 7 — cross-client workspace
-        // continuity). Mirrors the `set_default_project` WS request + the
-        // `set_host_default_project` Tauri command (transport parity).
+        // continuity). Mirrors the `set_default_project` WS request.
         .route("/projects/default", post(projects_api::set_default_project))
-        // Option B: project-list mutations (the standalone server is a
-        // first-class project-list authority, not just a read-only mirror).
-        // `PUT /projects/{id}` patches display fields; `DELETE /projects/{id}`
-        // removes the root. Both persist to `FileProjectRegistry` (VPS) with
-        // rollback + publish the project state. Mirrors the
-        // `add_project`/`update_project`/`remove_project` WS requests.
+        // Project mutations through the shared command service.
+        // `PUT /projects/{id}` patches display fields and archives/restores
+        // (`isArchived`); `DELETE /projects/{id}` removes the project. Both
+        // refuse `PROJECT_BUSY` while sessions/terminals are bound unless
+        // `cascade` is set. Mirrors the `update_project`/`remove_project` WS
+        // requests.
         .route(
             "/projects/{projectId}",
             put(projects_api::update_project).delete(projects_api::remove_project),
@@ -192,6 +247,14 @@ pub fn router(
         .route("/git/unstage-hunk", post(git_hunk_api::unstage_hunk))
         .route("/git/discard", post(git_api::discard))
         .route("/git/log", post(git_api::get_log))
+        .route(
+            "/git/commit-detail",
+            post(git_history_api::get_commit_detail),
+        )
+        .route(
+            "/git/commit-file-diff",
+            post(git_history_api::get_commit_file_diff),
+        )
         .route("/git/commit", post(git_api::commit))
         .route("/git/push", post(git_api::push))
         .route("/git/commit-context", post(git_api::get_commit_context))
@@ -220,17 +283,8 @@ pub fn router(
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))
         // Frontend error forwarding (CAP-2): `POST /log/frontend-error`.
-        // Loopback-only (enforced inside the handler).
-        .route("/log/frontend-error", post(log_api::frontend_error))
+        .route("/log/frontend-error", log_api::route())
         .route("/shells", get(fs_api::shells))
-        // Workspace manifest web routes (CAP-5: Web & Mobile 1:1 Parity).
-        // Each mirrors a desktop `#[tauri::command] workspace_manifest_*`
-        // handler; see `web/workspace_api.rs`. Registered AHEAD of the static
-        // fallback so the SPA mount cannot shadow them. Write + delete are
-        // loopback-guarded inside the handler.
-        .route("/workspace/{projectId}", get(workspace_api::get))
-        .route("/workspace/{projectId}/write", post(workspace_api::write))
-        .route("/workspace/{projectId}/delete", post(workspace_api::delete))
         // ACP catalog web routes (CAP-6: Web & Mobile 1:1 Parity). Each
         // mirrors a desktop `#[tauri::command] acp_*_catalog` handler; see
         // `web/catalog_api.rs`. Registered AHEAD of the static fallback so
@@ -253,11 +307,7 @@ pub fn router(
         // Worktree web routes (CAP — Web worktree parity). Each mirrors a
         // desktop `#[tauri::command] worktree_*` handler; see
         // `web/worktree_api.rs`. Registered AHEAD of the static fallback so the
-        // SPA mount cannot shadow them. Write routes (`create`/`remove`/
-        // `copy-include-files`/`rename-branch`) are loopback-guarded inside the handler; read
-        // routes (`list`/`branches`/`check-dirty`/`resolve-base-branch`)
-        // enforce containment only. Only the 7 launch-flow routes ship here;
-        // the 8 advanced ops are deferred (see deferred-work.md).
+        // SPA mount cannot shadow them.
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))
         .route("/worktree/remove", post(worktree_api::remove))
@@ -274,6 +324,18 @@ pub fn router(
         .route(
             "/worktree/rename-branch",
             post(worktree_rename_api::rename_branch),
+        )
+        .route(
+            "/worktree/parse-gitignore",
+            post(worktree_api::parse_gitignore),
+        )
+        .route(
+            "/worktree/create-symlinks",
+            post(worktree_api::create_symlinks),
+        )
+        .route(
+            "/worktree/ensure-symlinks",
+            post(worktree_api::ensure_symlinks),
         );
     let mut r = r
         // Canvas web routes (OpenPencil canvas mode, CAP-5): open/close/
@@ -314,6 +376,7 @@ pub fn router(
     // layer marks them `no-cache, must-revalidate`; on the embedded path it
     // writes the same value the embed already sets (idempotent).
     r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    r = r.layer(middleware::from_fn(route_deadline::bound));
     // #857: gzip responses when `Accept-Encoding` allows (cold load 3.66 MB →
     // ~1 MB) + pin Vite-hashed `/assets/*` immutable for a year on the disk
     // `ServeDir` path (the embedded path already sets the same value in
@@ -331,10 +394,7 @@ pub fn router(
         exit_code_tracker,
         relay: ws_relay,
         registry,
-        registry_persistence,
-        projects_file: projects_file.map(Arc::new),
         history_mode,
-        workspace_manifest,
         acp_catalog,
         acp_install,
         store,
@@ -378,6 +438,7 @@ const PUBLIC_PATHS: &[&str] = &["/health", "/ws", "/terminal/ws", "/oauth/callba
 /// (CAP-1 intent: "every endpoint"). Everything else — the static bundle and
 /// SPA client routes — stays public so the login page can load.
 const GATED_PREFIXES: &[&str] = &[
+    "/host/",
     "/projects",
     "/project/",
     "/mcp-servers",
@@ -387,7 +448,6 @@ const GATED_PREFIXES: &[&str] = &[
     "/skills",
     "/log/",
     "/shells",
-    "/workspace/",
     "/acp/",
     "/worktree/",
     // OpenPencil canvas mode: the /canvas/open|close|save API routes
@@ -449,13 +509,20 @@ fn presented_token(request: &Request) -> Option<String> {
 /// Axum middleware enforcing the web auth gate on gated API routes. The 401
 /// body mirrors the `IpcBody` failure shape (`{success, error, code}`) the
 /// renderer's REST helpers parse; the token is never logged or echoed.
-async fn web_auth_gate(State(auth): State<Arc<WebAuth>>, request: Request, next: Next) -> Response {
+async fn web_auth_gate(
+    State(auth): State<Arc<WebAuth>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     if !requires_token(request.uri().path()) {
         return next.run(request).await;
     }
     let presented = presented_token(&request);
     match presented {
-        Some(token) if auth.accepts(&token) => next.run(request).await,
+        Some(token) if auth.accepts(&token) => {
+            request.extensions_mut().insert(BearerVerified);
+            next.run(request).await
+        }
         _ => {
             tracing::warn!(
                 target: "termul::web::router",
@@ -476,17 +543,6 @@ async fn web_auth_gate(State(auth): State<Arc<WebAuth>>, request: Request, next:
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
-///
-/// Patch 9: this variant ALWAYS sets `workspace_manifest: None` so the
-/// `/workspace/*` routes run in degraded fresh-only mode (get → `Ok(None)`;
-/// write → `WORKSPACE_MANIFEST_UNAVAILABLE`; delete → `Ok(())`). It is
-/// intended for tests/dev only — production callers must use [`router`]
-/// (which threads the real `WorkspaceManifestService`) so the web/remote
-/// client gets a live manifest store. Adding a `workspace_manifest`
-/// parameter here would break every test call site for no real benefit
-/// (the tests do not exercise the manifest routes); the doc comment
-/// surfaces the degraded behavior loudly enough that a production caller
-/// won't silently pick this variant.
 #[allow(clippy::too_many_arguments)]
 pub fn router_with_static(
     acp: Arc<AcpManager>,
@@ -501,6 +557,10 @@ pub fn router_with_static(
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
+        .route(
+            "/host/agent-idle-window",
+            get(agent_idle_window).post(set_agent_idle_window),
+        )
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
         .route("/projects", get(projects_api::list))
@@ -528,6 +588,14 @@ pub fn router_with_static(
         .route("/git/unstage-hunk", post(git_hunk_api::unstage_hunk))
         .route("/git/discard", post(git_api::discard))
         .route("/git/log", post(git_api::get_log))
+        .route(
+            "/git/commit-detail",
+            post(git_history_api::get_commit_detail),
+        )
+        .route(
+            "/git/commit-file-diff",
+            post(git_history_api::get_commit_file_diff),
+        )
         .route("/git/commit", post(git_api::commit))
         .route("/git/push", post(git_api::push))
         .route("/git/commit-context", post(git_api::get_commit_context))
@@ -549,11 +617,8 @@ pub fn router_with_static(
         .route("/search/cancel", post(search_api::cancel))
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))
-        .route("/log/frontend-error", post(log_api::frontend_error))
+        .route("/log/frontend-error", log_api::route())
         .route("/shells", get(fs_api::shells))
-        .route("/workspace/{projectId}", get(workspace_api::get))
-        .route("/workspace/{projectId}/write", post(workspace_api::write))
-        .route("/workspace/{projectId}/delete", post(workspace_api::delete))
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         .route("/acp/install", post(install_api::install))
@@ -600,6 +665,7 @@ pub fn router_with_static(
     // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
     // so the disk-served bundle doesn't stall SW updates (same layer).
     let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    let r = r.layer(middleware::from_fn(route_deadline::bound));
     // #857 parity with `router`: gzip + immutable hashed-asset caching on the
     // disk-served static bundle.
     let r = r
@@ -615,10 +681,7 @@ pub fn router_with_static(
             pty,
             relay: ws_relay,
             registry,
-            registry_persistence: None,
-            projects_file: None,
             history_mode: HistoryMode::LiveOnly,
-            workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,
             store: None,
@@ -680,6 +743,92 @@ async fn health_check(
 struct HealthBody {
     status: &'static str,
     allow_remote_writes: bool,
+}
+
+/// `GET /host/agent-idle-window` — the live idle-chat window. Same `IpcResult`
+/// envelope as the other host reads so the web client can parse it with
+/// `getJson`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentIdleWindowBody {
+    success: bool,
+    data: crate::web::agent_reaper::AgentIdleWindowStatus,
+}
+
+async fn agent_idle_window() -> impl IntoResponse {
+    let data = crate::web::agent_reaper::resolved_agent_idle_window();
+    tracing::debug!(
+        target: "termul::web::agent_reaper",
+        secs = data.secs,
+        source = data.source,
+        "agent idle window probe"
+    );
+    (StatusCode::OK, Json(idle_window_ok(data)))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetAgentIdleWindowRequest {
+    secs: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentIdleWindowError {
+    success: bool,
+    error: String,
+    code: String,
+}
+
+fn idle_window_ok(data: crate::web::agent_reaper::AgentIdleWindowStatus) -> AgentIdleWindowBody {
+    AgentIdleWindowBody {
+        success: true,
+        data,
+    }
+}
+
+/// `POST /host/agent-idle-window` — save the Settings choice. A flag or
+/// `$TERMUL_AGENT_IDLE_REAP_SECS` keeps the live window. View-only peers
+/// (shared-live, or a remote peer without `--allow-remote-writes`) are refused.
+async fn set_agent_idle_window(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(body): Json<SetAgentIdleWindowRequest>,
+) -> Response {
+    let allowed = crate::web::capabilities::write_decision(
+        peer,
+        crate::web::capabilities::WriteFlags::from_state(&state),
+    )
+    .is_allowed();
+    if !allowed {
+        tracing::info!(
+            target: "termul::web::agent_reaper",
+            "agent idle window change refused for a view-only peer"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(AgentIdleWindowError {
+                success: false,
+                error: "this connection cannot change host settings".to_string(),
+                code: "FORBIDDEN".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if matches!(body.secs, Some(0)) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AgentIdleWindowError {
+                success: false,
+                error: "agent idle window must be greater than 0 seconds".to_string(),
+                code: "INVALID_IDLE_WINDOW".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    crate::web::agent_reaper::set_agent_idle_window_override(body.secs);
+    let data = crate::web::agent_reaper::resolved_agent_idle_window();
+    (StatusCode::OK, Json(idle_window_ok(data))).into_response()
 }
 
 #[cfg(test)]

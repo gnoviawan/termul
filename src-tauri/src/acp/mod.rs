@@ -14,6 +14,7 @@ pub mod atomic_file;
 pub mod browser_shim;
 pub mod catalog;
 pub mod chat_history_store;
+pub mod claude_accounts;
 pub mod claude_admin;
 pub mod claude_agent;
 pub mod client;
@@ -32,11 +33,11 @@ pub mod mcp_oauth;
 pub mod mcp_probe;
 pub mod opencode_version;
 pub mod project_registry;
+pub mod provider_errors;
 pub mod session;
 pub mod session_payload;
 pub mod session_persistence;
 pub mod terminal;
-pub mod workspace_manifest;
 
 // Re-exported for the renderer bridge (P1+) and `lib.rs` wiring. `AcpManager`
 // is used now (managed in `lib.rs`); the config/id types are part of the public
@@ -65,17 +66,12 @@ pub use install::{
 };
 #[allow(unused_imports)]
 pub use manager::{AcpManager, AgentSummary, SessionCreationContext, SpawnOutcome};
-pub use project_registry::{FileProjectRegistry, VfsRoot};
+pub use session::AgentActivity;
+pub use project_registry::{FileProjectRegistry, ProjectRegistryError, RootCheck, VfsRoot};
 #[allow(unused_imports)]
 pub use session_persistence::{
     PersistedEventRecord, PersistedSessionStatus, SessionIndexEntry, SessionPersistence,
     SessionPersistenceError, SessionRegistration,
-};
-#[allow(unused_imports)]
-pub use workspace_manifest::{
-    EditorDescriptor, LeafNode, PaneDirection, PaneNode, SplitNode, TerminalDescriptor,
-    WorkspaceManifest, WorkspaceManifestError, WorkspaceManifestService, WriteOutcome,
-    WORKSPACE_MANIFEST_SCHEMA_VERSION,
 };
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { PersistedWorkspaceTabKind } from '@/lib/workspace-tab-kinds'
 import type { PaneDirection } from '@/types/workspace.types'
 
@@ -54,6 +55,15 @@ interface PersistedDiffTabRef {
   staged: boolean
 }
 
+interface PersistedCommitDiffTabRef {
+  type: 'commit-diff'
+  id: string
+  cwd: string
+  commit: string
+  path: string
+  oldPath?: string
+}
+
 export type PersistedTabRef =
   | PersistedEditorTabRef
   | PersistedTerminalTabRef
@@ -62,6 +72,7 @@ export type PersistedTabRef =
   | PersistedAgentChatTabRef
   | PersistedGitHistoryTabRef
   | PersistedDiffTabRef
+  | PersistedCommitDiffTabRef
 
 // Compile-time check: the persisted ref union must cover exactly the kinds the
 // traits table declares as persisted (a mismatch makes this assignment error).
@@ -109,7 +120,7 @@ export interface PersistedEditorState {
 }
 
 export function editorStateKey(projectId: string): string {
-  return `editor-state/${projectId}`
+  return PersistenceKeys.workspace(projectId)
 }
 
 function normalizePath(path: string): string {

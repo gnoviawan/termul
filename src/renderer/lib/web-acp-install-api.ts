@@ -1,7 +1,8 @@
 /**
  * Fetch-based HTTP impl of the ACP install facade (CAP-6 / Story 9).
  *
- * Mirrors the desktop Tauri command impl over the HTTP route registered in
+ * Mirrors the desktop impl (`desktop-acp-install-api.ts`, the `install_acp_agent`
+ * request over the Tauri channel carrier) over the HTTP route registered in
  * `src-tauri/src/web/install_api.rs`. Transport/parse failures map to
  * `IpcResult { success: false, code: 'NETWORK_ERROR' }` so the renderer never
  * sees a thrown exception from the network layer.

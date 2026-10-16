@@ -76,6 +76,11 @@ async function loadLanguage(lang: string): Promise<Extension | null> {
         extension = html()
         break
       }
+      case 'astro': {
+        const { astro } = await import('@/lib/codemirror-lang-astro')
+        extension = astro()
+        break
+      }
       case 'markdown': {
         const { markdown } = await import('@codemirror/lang-markdown')
         extension = markdown()
@@ -102,7 +107,13 @@ async function loadLanguage(lang: string): Promise<Extension | null> {
       default:
         return null
     }
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    void logFrontendError({
+      level: 'warn',
+      source: 'use-codemirror.loadLanguage',
+      message: `syntax language failed to load lang=${lang} (${message})`
+    })
     return null
   }
 

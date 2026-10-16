@@ -28,6 +28,18 @@ export type WorkspaceTab =
       staged: boolean
     }
   | {
+      /** Read-only diff of one file at one commit (Git History): the file at
+       * `commit` (full hash) against the commit's first parent. The id is
+       * `commitDiffTabId(cwd, commit, path)`. */
+      type: 'commit-diff'
+      id: string
+      cwd: string
+      commit: string
+      path: string
+      /** A renamed file's path before the commit. */
+      oldPath?: string
+    }
+  | {
       /** OpenPencil canvas tab (singleton per project — AD-7): the id is a
        * deterministic function of the projectId, so repeat opens focus the
        * existing tab and a doc switch re-binds `docPath` in place. */
@@ -72,7 +84,7 @@ export interface ProjectWorkspace {
   /**
    * Pane id of the dedicated agent-browser pane (spec-acp-browser-automation-v2
    * CAP-3). Runtime-only state, never part of the persisted workspace
-   * manifest; re-validated against the pane tree on every open.
+   * record; re-validated against the pane tree on every open.
    */
   agentBrowserPaneId: string | null
 }
@@ -122,7 +134,12 @@ export interface WorkspaceState extends ProjectWorkspace {
   setActivePane: (paneId: string) => void
   togglePaneFullscreen: (paneId: string) => void
   clearFullscreenPane: () => void
-  updatePaneSizes: (splitId: string, sizes: number[]) => void
+  /**
+   * Resize a split. `projectId` targets that project's tree (a parked one
+   * lands in `parkedTrees`) so a hidden-but-mounted host never writes into the
+   * visible tree; omitted = the active tree.
+   */
+  updatePaneSizes: (splitId: string, sizes: number[], projectId?: string) => void
   collapsePane: (paneId: string) => void
   reorderTabsInPane: (paneId: string, orderedIds: string[]) => void
 
@@ -164,6 +181,14 @@ export interface WorkspaceState extends ProjectWorkspace {
    * Open (or activate) the Git History tab for `cwd`, same reuse semantics.
    */
   addGitHistoryTab: (cwd: string, targetPaneId?: string) => void
+  /** Open (or focus) the read-only diff of one file at a commit. */
+  addCommitDiffTab: (
+    cwd: string,
+    hash: string,
+    path: string,
+    oldPath?: string,
+    targetPaneId?: string
+  ) => void
   /**
    * Open (or focus) the Diff tab for one file side. Identity is the canonical
    * `(cwd, path, staged)` triple (`diffTabId`); a repeat open focuses the

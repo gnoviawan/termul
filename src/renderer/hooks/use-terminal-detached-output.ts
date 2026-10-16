@@ -5,8 +5,6 @@ import { MAX_TRANSCRIPT_CHARS, useTerminalStore } from '@/stores/terminal-store'
 
 const IS_DEV = import.meta.env.DEV
 
-const textDecoder = new TextDecoder()
-
 /**
  * Schedule a flush callback; returns a cancel fn.
  *
@@ -22,6 +20,18 @@ const textDecoder = new TextDecoder()
  * per-callback store writes and defeating the coalescing entirely.
  */
 const FLUSH_BACKSTOP_MS = 250
+
+/**
+ * How long an exited pty's buffer waits for its terminal record. A record can
+ * legitimately arrive long after the exit: restore seeds a preserved pty's
+ * exit from its attach snapshot, then registers every terminal only after its
+ * serial attach loop (one step per terminal, each bounded by a 30s spawn
+ * timeout). Five minutes covers ten timed-out steps.
+ */
+const EXITED_PTY_GRACE_MS = 5 * 60_000
+
+/** Exited ptyIds remembered so late chunks never re-create a decoder. */
+const MAX_REMEMBERED_EXITS = 1024
 
 function scheduleFlush(callback: () => void): () => void {
   const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(callback) : null
@@ -71,6 +81,7 @@ interface PendingBuffer {
    * would lose data the pre-coalescing code captured synchronously.
    */
   capturedDetached: boolean
+  dropTimer: ReturnType<typeof setTimeout> | null
 }
 
 /**
@@ -99,6 +110,20 @@ function pushChunk(buffer: PendingBuffer, chunk: string): void {
     buffer.chunks[0] = buffer.chunks[0].slice(excess)
     buffer.totalChars = MAX_TRANSCRIPT_CHARS
   }
+}
+
+/** Synchronous drain of the mounted hook's coalescing buffers; null when unmounted. */
+let flushDetachedOutputHandle: (() => void) | null = null
+
+/**
+ * Append every buffered detached chunk to the store transcript right now
+ * instead of on the next frame. A remounting renderer calls this before it
+ * reads the transcript: otherwise chunks captured while it was detached would
+ * land in the transcript after it attached, and be replayed on a later remount
+ * behind newer output. No-op when the hook is not mounted.
+ */
+export function flushDetachedOutputNow(): void {
+  flushDetachedOutputHandle?.()
 }
 
 /**
@@ -138,7 +163,34 @@ function pushChunk(buffer: PendingBuffer, chunk: string): void {
 export function useTerminalDetachedOutput(): void {
   useEffect(() => {
     const pendingBuffers = new Map<string, PendingBuffer>()
+    const decoders = new Map<string, TextDecoder>()
+    const exited = new Set<string>()
     let cancelFlush: (() => void) | null = null
+
+    const dropBuffer = (ptyId: string): void => {
+      const buffer = pendingBuffers.get(ptyId)
+      if (buffer?.dropTimer) clearTimeout(buffer.dropTimer)
+      pendingBuffers.delete(ptyId)
+    }
+
+    const dropIfStillUnregistered = (ptyId: string, buffer: PendingBuffer): void => {
+      buffer.dropTimer = null
+      if (useTerminalStore.getState().findTerminalByPtyId(ptyId)) return
+      pendingBuffers.delete(ptyId)
+      if (IS_DEV) {
+        console.debug(
+          `[DetachedOutput] Dropped ${buffer.totalChars} chars buffered for exited pty=${ptyId} that never got a terminal record`
+        )
+      }
+    }
+
+    const armExitedDrop = (ptyId: string, buffer: PendingBuffer): void => {
+      if (!exited.has(ptyId)) return
+      buffer.dropTimer ??= setTimeout(
+        () => dropIfStillUnregistered(ptyId, buffer),
+        EXITED_PTY_GRACE_MS
+      )
+    }
 
     const flushPending = (): void => {
       // First flush wins: drop this pair's remaining arm so the loser (a
@@ -154,9 +206,7 @@ export function useTerminalDetachedOutput(): void {
       for (const [ptyId, buffer] of pendingBuffers) {
         const terminal = store.findTerminalByPtyId(ptyId)
         if (!terminal) {
-          // Store record still not available — keep buffering. Delivery is
-          // retried when the next chunk arrives (the original
-          // pendingDetachedBuffer semantics), so no timer loop is needed.
+          armExitedDrop(ptyId, buffer)
           continue
         }
 
@@ -164,12 +214,12 @@ export function useTerminalDetachedOutput(): void {
           // Pure pre-store data for a terminal with a live renderer: xterm has
           // been displaying this stream since before the store record existed,
           // so the buffer is redundant — drop it rather than double-capture.
-          pendingBuffers.delete(ptyId)
+          dropBuffer(ptyId)
           continue
         }
 
         const joined = buffer.chunks.join('')
-        pendingBuffers.delete(ptyId)
+        dropBuffer(ptyId)
 
         store.appendTranscript(ptyId, joined)
 
@@ -188,15 +238,9 @@ export function useTerminalDetachedOutput(): void {
     // on every store change delivers those buffers as soon as the record
     // appears — no new chunk required.
     const unsubscribeStore = useTerminalStore.subscribe(flushPending)
+    flushDetachedOutputHandle = flushPending
 
-    const unsubscribe = terminalApi.onData((ptyId: string, data: Uint8Array) => {
-      if (!data || data.length === 0) {
-        return
-      }
-
-      // Decode binary data to string for transcript operations
-      const dataStr = textDecoder.decode(data)
-
+    const capture = (ptyId: string, dataStr: string): void => {
       const store = useTerminalStore.getState()
       const terminal = store.findTerminalByPtyId(ptyId)
 
@@ -207,16 +251,15 @@ export function useTerminalDetachedOutput(): void {
             `[DetachedOutput] Buffering data for unknown PTY pty=${ptyId.slice(0, 12)} len=${dataStr.length}`
           )
         }
-        const buffer = pendingBuffers.get(ptyId)
-        if (buffer) {
-          pushChunk(buffer, dataStr)
-        } else {
+        let buffer = pendingBuffers.get(ptyId)
+        if (!buffer) {
           // Create via pushChunk so the very first chunk is cap-checked and
           // clipped (a lone oversized chunk must not bypass the bound).
-          const buffer: PendingBuffer = { chunks: [], totalChars: 0, capturedDetached: false }
+          buffer = { chunks: [], totalChars: 0, capturedDetached: false, dropTimer: null }
           pendingBuffers.set(ptyId, buffer)
-          pushChunk(buffer, dataStr)
         }
+        pushChunk(buffer, dataStr)
+        armExitedDrop(ptyId, buffer)
         return
       }
 
@@ -232,7 +275,7 @@ export function useTerminalDetachedOutput(): void {
         // while detached is left alone: it still flushes this frame.
         const buffer = pendingBuffers.get(ptyId)
         if (buffer && !buffer.capturedDetached) {
-          pendingBuffers.delete(ptyId)
+          dropBuffer(ptyId)
         }
         return
       }
@@ -244,13 +287,49 @@ export function useTerminalDetachedOutput(): void {
       } else {
         // Create via pushChunk so the very first chunk is cap-checked and
         // clipped (a lone oversized chunk must not bypass the bound).
-        const buffer: PendingBuffer = { chunks: [], totalChars: 0, capturedDetached: true }
+        const buffer: PendingBuffer = {
+          chunks: [],
+          totalChars: 0,
+          capturedDetached: true,
+          dropTimer: null
+        }
         pendingBuffers.set(ptyId, buffer)
         pushChunk(buffer, dataStr)
       }
       if (!cancelFlush) {
         cancelFlush = scheduleFlush(flushPending)
       }
+    }
+
+    const unsubscribe = terminalApi.onData((ptyId: string, data: Uint8Array) => {
+      if (!data || data.length === 0) {
+        return
+      }
+      if (exited.has(ptyId)) {
+        // Desktop sends the exit before the reader's final batch.
+        capture(ptyId, new TextDecoder().decode(data))
+        return
+      }
+      let decoder = decoders.get(ptyId)
+      if (!decoder) {
+        decoder = new TextDecoder()
+        decoders.set(ptyId, decoder)
+      }
+      const dataStr = decoder.decode(data, { stream: true })
+      if (dataStr) capture(ptyId, dataStr)
+    })
+
+    const unsubscribeExit = terminalApi.onExit((ptyId: string) => {
+      exited.delete(ptyId)
+      exited.add(ptyId)
+      if (exited.size > MAX_REMEMBERED_EXITS) {
+        exited.delete(exited.values().next().value as string)
+      }
+      const tail = decoders.get(ptyId)?.decode()
+      decoders.delete(ptyId)
+      if (tail) capture(ptyId, tail)
+      const buffer = pendingBuffers.get(ptyId)
+      if (buffer) armExitedDrop(ptyId, buffer)
     })
 
     return () => {
@@ -274,9 +353,12 @@ export function useTerminalDetachedOutput(): void {
           message: `Unmount flush failed while draining buffered PTY output: ${String(err)}`
         })
       }
-      pendingBuffers.clear()
+      for (const ptyId of [...pendingBuffers.keys()]) dropBuffer(ptyId)
+      decoders.clear()
+      if (flushDetachedOutputHandle === flushPending) flushDetachedOutputHandle = null
       unsubscribeStore()
       unsubscribe()
+      unsubscribeExit()
     }
   }, [])
 }

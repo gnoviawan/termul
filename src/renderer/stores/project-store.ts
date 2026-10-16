@@ -1,9 +1,28 @@
+import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import { unpinProjectSessionPayloads } from '@/lib/acp-history-persistence'
+import { writeActiveProject } from '@/lib/active-project'
+import { logFrontendError } from '@/lib/log-api'
+import { clientFieldsOf, forgetProjectPrefs, rememberProjectPrefs } from '@/lib/project-prefs'
+import {
+  type CascadeOptions,
+  ProjectBusyError,
+  projectRegistryApi
+} from '@/lib/project-registry-api'
 import { clearChatRoute } from '@/lib/router-navigate'
 import { randomUUID } from '@/lib/uuid'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
+import { useProjectBusyStore } from './project-busy-store'
+
+/** How long a new project may take to come back through the `projects` watch before it is selected anyway. */
+const LISTED_TIMEOUT_MS = 5000
+
+/**
+ * What `updateProject` takes. The registry owns `isArchived` and `isDefault`
+ * (changed only by their own commands); `name`, `color` and `path` go to the
+ * host, everything else is a client-only pref saved on this device.
+ */
+export type ProjectUpdates = Partial<Omit<Project, 'id' | 'isArchived' | 'isDefault'>>
 
 export interface ProjectState {
   // State
@@ -14,19 +33,36 @@ export interface ProjectState {
   isWorktreeOperationLocked: boolean
 
   // Actions
+  /** This device's own choice: writes the device `active-project` key and nothing on the host. */
   selectProject: (id: string) => void
+  /**
+   * Registers the project with the host, waits for the `projects` watch to list
+   * it, then selects it. Rejects when the host refuses the registration.
+   */
   addProject: (
     name: string,
     color: ProjectColor,
     path?: string,
     defaultShell?: string,
     envVars?: EnvVariable[]
-  ) => Project
-  updateProject: (id: string, updates: Partial<Project>) => void
-  deleteProject: (id: string) => void
-  archiveProject: (id: string) => void
-  restoreProject: (id: string) => void
+  ) => Promise<Project>
+  /**
+   * `name`/`color`/`path` go to the host (the watch delivers the result; moving
+   * the root of a busy project waits for the user in the busy dialog); the rest
+   * is saved on this device.
+   */
+  updateProject: (id: string, updates: ProjectUpdates) => void
+  /**
+   * Ask the host to remove the project. A project with live chats or terminals
+   * is refused; the user then decides in the busy dialog, which resends with
+   * `cascade: true` only after they agree.
+   */
+  deleteProject: (id: string, options?: CascadeOptions) => Promise<void>
+  /** Like `deleteProject`, for archiving. */
+  archiveProject: (id: string, options?: CascadeOptions) => Promise<void>
+  restoreProject: (id: string) => Promise<void>
   reorderProjects: (activeProjectIds: string[]) => void
+  /** The projects-watch feed only: replaces the whole list. */
   setProjects: (projects: Project[], activeProjectId?: string, groups?: ProjectGroup[]) => void
   /** Reconciler only (AD-3): other writers go through `reconcileProjectWorktrees`. */
   addWorktree: (projectId: string, worktree: Worktree) => void
@@ -43,6 +79,46 @@ export interface ProjectState {
   reorderGroups: (groupIds: string[]) => void
   reorderProjectInGroup: (groupId: string, projectIds: string[]) => void
   updateGroup: (id: string, updates: Partial<Omit<ProjectGroup, 'id'>>) => void
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** Park a busy refusal in the busy store, where the user decides whether the host may stop what is bound. */
+function requestBusyConfirmation(
+  kind: 'delete' | 'archive' | 'move',
+  projectId: string,
+  project: Project | undefined,
+  busy: ProjectBusyError,
+  resend: () => Promise<void>
+): void {
+  useProjectBusyStore.getState().request({
+    kind,
+    projectId,
+    projectName: project?.name ?? 'This project',
+    sessions: busy.sessions.length,
+    terminals: busy.terminals.length,
+    resend
+  })
+}
+
+/** Resolves `true` once the `projects` watch lists `projectId`, `false` after {@link LISTED_TIMEOUT_MS}. */
+function untilListed(projectId: string): Promise<boolean> {
+  const listed = (): boolean => useProjectStore.getState().projects.some((p) => p.id === projectId)
+  if (listed()) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const unsubscribe = useProjectStore.subscribe(() => {
+      if (!listed()) return
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(true)
+    })
+    const timer = setTimeout(() => {
+      unsubscribe()
+      resolve(false)
+    }, LISTED_TIMEOUT_MS)
+  })
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -67,22 +143,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projects: state.projects.map((p) => ({ ...p, isActive: p.id === id }))
     }))
     if (prev !== id) {
-      // Bound the payload cache: the switched-away project's sessions stop
-      // holding pins (their cache entries fall under the inactive budget;
-      // scroll-up refetches from the host — lossless).
-      unpinProjectSessionPayloads(prev)
+      writeActiveProject(id)
       clearChatRoute()
     }
   },
 
-  addProject: (
+  addProject: async (
     name: string,
     color: ProjectColor,
     path?: string,
     defaultShell?: string,
     envVars?: EnvVariable[]
-  ): Project => {
-    const prev = get().activeProjectId
+  ): Promise<Project> => {
     const newProject: Project = {
       id: randomUUID(),
       name,
@@ -95,62 +167,98 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       // `useProjectGitBranch` auto-detects the actual HEAD branch on project
       // activation; the manual GitBranchPicker switch still updates it.
     }
-    set((state) => ({
-      projects: [...state.projects, newProject],
-      activeProjectId: newProject.id
-    }))
-    if (prev !== newProject.id) {
-      // Same payload-cache bound as `selectProject`: creating a project
-      // switches the active one away, so the previous project's pinned
-      // sessions must stop holding pin slots.
-      unpinProjectSessionPayloads(prev)
-      clearChatRoute()
+    // Remembered first: the watch state that lists the project can land before
+    // the reply does, and must find the shell and env vars waiting.
+    rememberProjectPrefs(newProject.id, clientFieldsOf(newProject))
+    try {
+      await projectRegistryApi.add({ id: newProject.id, name, path: path ?? '', color })
+    } catch (error) {
+      await forgetProjectPrefs(newProject.id, { keepSecrets: true })
+      throw error
     }
-    return newProject
+    if (!(await untilListed(newProject.id))) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'project-store.addProject',
+        message: `project ${newProject.id} was registered but the projects watch did not list it within ${LISTED_TIMEOUT_MS}ms`
+      })
+    }
+    get().selectProject(newProject.id)
+    return get().projects.find((p) => p.id === newProject.id) ?? newProject
   },
 
-  updateProject: (id: string, updates: Partial<Project>): void => {
+  updateProject: (id: string, updates: ProjectUpdates): void => {
+    const { name, color, path, ...clientUpdates } = updates
+    if (Object.keys(clientUpdates).length > 0) {
+      set((state) => ({
+        projects: state.projects.map((p) => (p.id === id ? { ...p, ...clientUpdates } : p))
+      }))
+    }
+    const current = get().projects.find((p) => p.id === id)
+    const root = path?.trim()
+    const patch = {
+      ...(name !== undefined && name !== current?.name ? { name } : {}),
+      ...(color !== undefined && color !== current?.color ? { color } : {}),
+      ...(root && root !== current?.path ? { path: root } : {})
+    }
+    if (Object.keys(patch).length === 0) return
+    const send = (options?: CascadeOptions): Promise<void> =>
+      projectRegistryApi.update(id, patch, options).catch((error: unknown) => {
+        if (error instanceof ProjectBusyError) {
+          requestBusyConfirmation('move', id, current, error, () => send({ cascade: true }))
+        } else {
+          toast.error(`Could not update the project: ${describe(error)}`)
+        }
+      })
+    void send()
+  },
+
+  deleteProject: async (id: string, options?: CascadeOptions): Promise<void> => {
+    const project = get().projects.find((p) => p.id === id)
+    try {
+      await projectRegistryApi.remove(id, options)
+    } catch (error) {
+      if (error instanceof ProjectBusyError) {
+        requestBusyConfirmation('delete', id, project, error, () =>
+          get().deleteProject(id, { cascade: true })
+        )
+      } else {
+        toast.error(`Could not delete the project: ${describe(error)}`)
+      }
+      return
+    }
+    // The host dropped it; what this device kept for it goes too. The watch
+    // state that follows takes the project out of the list.
     set((state) => ({
-      projects: state.projects.map((p) => (p.id === id ? { ...p, ...updates } : p))
+      groups: state.groups.map((g) => ({
+        ...g,
+        projectIds: g.projectIds.filter((pid) => pid !== id)
+      }))
     }))
+    await forgetProjectPrefs(id)
   },
 
-  deleteProject: (id: string): void => {
-    const { projects, activeProjectId, groups } = get()
-    const remaining = projects.filter((p) => p.id !== id)
-
-    const updatedGroups = groups.map((g) => ({
-      ...g,
-      projectIds: g.projectIds.filter((pid) => pid !== id)
-    }))
-
-    const wasActive = activeProjectId === id
-    const nextActiveProjectId =
-      wasActive && remaining.length > 0 ? remaining[0].id : wasActive ? '' : activeProjectId
-    set({
-      projects: remaining,
-      groups: updatedGroups,
-      activeProjectId: nextActiveProjectId
-    })
-    if (wasActive && nextActiveProjectId !== activeProjectId) {
-      // Same payload-cache bound as `selectProject`: deleting the active
-      // project switches to another, so the deleted project's pinned
-      // sessions must stop holding pin slots.
-      unpinProjectSessionPayloads(activeProjectId)
-      clearChatRoute()
+  archiveProject: async (id: string, options?: CascadeOptions): Promise<void> => {
+    const project = get().projects.find((p) => p.id === id)
+    try {
+      await projectRegistryApi.archive(id, options)
+    } catch (error) {
+      if (error instanceof ProjectBusyError) {
+        requestBusyConfirmation('archive', id, project, error, () =>
+          get().archiveProject(id, { cascade: true })
+        )
+      } else {
+        toast.error(`Could not archive the project: ${describe(error)}`)
+      }
     }
   },
 
-  archiveProject: (id: string): void => {
-    set((state) => ({
-      projects: state.projects.map((p) => (p.id === id ? { ...p, isArchived: true } : p))
-    }))
-  },
-
-  restoreProject: (id: string): void => {
-    set((state) => ({
-      projects: state.projects.map((p) => (p.id === id ? { ...p, isArchived: false } : p))
-    }))
+  restoreProject: async (id: string): Promise<void> => {
+    try {
+      await projectRegistryApi.restore(id)
+    } catch (error) {
+      toast.error(`Could not restore the project: ${describe(error)}`)
+    }
   },
 
   reorderProjects: (activeProjectIds: string[]): void => {
@@ -217,25 +325,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   removeGroup: (id: string, deleteProjects: boolean): void => {
-    const { groups, projects, activeProjectId } = get()
+    const { groups } = get()
     const groupToRemove = groups.find((g) => g.id === id)
     if (!groupToRemove) return
 
-    let updatedProjects = projects
+    set({ groups: groups.filter((g) => g.id !== id) })
+    // The group's projects are the host's to remove: each one asks, and a busy
+    // one waits for the user's answer like any other delete.
     if (deleteProjects) {
-      updatedProjects = projects.filter((p) => !groupToRemove.projectIds.includes(p.id))
+      for (const projectId of groupToRemove.projectIds) {
+        void get().deleteProject(projectId)
+      }
     }
-
-    const nextActiveProjectId =
-      deleteProjects && !updatedProjects.some((p) => p.id === activeProjectId)
-        ? (updatedProjects[0]?.id ?? '')
-        : activeProjectId
-
-    set({
-      groups: groups.filter((g) => g.id !== id),
-      projects: updatedProjects,
-      activeProjectId: nextActiveProjectId
-    })
   },
 
   renameGroup: (id: string, newName: string): void => {

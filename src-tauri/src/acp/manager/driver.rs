@@ -1,3 +1,4 @@
+use super::exit::announced_reason;
 use super::*;
 use crate::acp::agent_process::TreeKillAgent;
 
@@ -19,8 +20,9 @@ pub(super) fn run_agent(
     init_tx: oneshot::Sender<Result<InitOutcome, String>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
     reaped: Arc<AtomicBool>,
-    killed: Arc<AtomicBool>,
+    exit: Arc<ExitSignal>,
     start_error: Arc<Mutex<Option<String>>>,
+    stderr_ring: Arc<StderrRing>,
     persistence: Option<Arc<SessionPersistence>>,
 ) {
     warn_if_pidfd_reaper();
@@ -47,6 +49,8 @@ pub(super) fn run_agent(
     };
 
     let profile = AgentRuntimeProfile::resolve(&config);
+    let agent_kind = agent_kind(&config).to_string();
+    let agent_command = config.command.clone();
     let result = runtime.block_on(drive_connection(
         config,
         sinks.clone(),
@@ -58,6 +62,7 @@ pub(super) fn run_agent(
         driver_state.clone(),
         persistence.clone(),
         profile,
+        stderr_ring.clone(),
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -123,16 +128,16 @@ pub(super) fn run_agent(
         reaped.store(true, Ordering::Release);
         map.remove(&agent_id);
     }
-    // Only surface lifecycle events for an agent the renderer actually saw, and
-    // never for an intentional kill (L4): a kill we initiated is silent, so the
-    // renderer doesn't see a "disconnected" it didn't cause.
-    let intentional_kill = killed.load(Ordering::Acquire);
+    // Only surface lifecycle events for an agent the renderer actually saw.
+    // A kill, reap or crash is announced to every sink with its reason; only
+    // process shutdown (`kill_all`) stays silent.
+    let exit_reason = announced_reason(exit.get());
 
     // If the agent never finished initializing, the connection error IS the
     // start-failure reason (e.g. the subprocess could not be spawned). Record it
     // BEFORE the lifecycle gate below so the awaiting `spawn` caller can surface
     // the real error instead of the generic "did not initialize" message. This
-    // must run regardless of `was_spawned`/`intentional_kill` (those gate only
+    // must run regardless of `was_spawned`/the exit reason (those gate only
     // the renderer-facing lifecycle events).
     if !was_spawned {
         if let Err(detail) = &result {
@@ -201,11 +206,53 @@ pub(super) fn run_agent(
         );
     }
 
-    if was_spawned && !intentional_kill {
+    if let (true, Some(reason)) = (was_spawned, exit_reason) {
+        if reason == AgentExitReason::Crashed {
+            if let Err(detail) = result {
+                // The crash log names the agent kind, the command basename and
+                // the stderr tail; arguments and environment never reach it.
+                let logged = if profile.mask_failure_details {
+                    "connection failed (details withheld)"
+                } else {
+                    detail.message.as_str()
+                };
+                log_agent_failure(
+                    "agent crashed",
+                    &agent_kind,
+                    &agent_command,
+                    logged,
+                    &stderr_ring,
+                );
+                // Story 1.9 FR26: emit the typed `AgentCrashed` event BEFORE
+                // `agent_error` (back-compat) + the session/agent close events.
+                // The renderer distinguishes "crash" (→ `status: 'error'` +
+                // manual restart) from a clean disconnect. Outstanding turn
+                // oneshots fail with this.
+                if profile.mask_failure_details {
+                    // The renderer gets the generic message (agents may echo env
+                    // values); the host log keeps the specific detail.
+                    log::warn!("[acp] Factory Droid connection failed: {}", detail.message);
+                }
+                // Masking hides details: drop the structured code/data too.
+                let detail = if profile.mask_failure_details {
+                    detail.masked("Factory Droid connection failed")
+                } else {
+                    detail
+                };
+                let crashed = detail.clone().into_agent_crashed(agent_id.clone(), None);
+                events::fan_out(&sinks, None, events::EVENT_AGENT_CRASHED, &crashed);
+
+                let event = detail.into_agent_error(agent_id.clone(), None);
+                // Teardown error is agent-level (no session) → sid = None.
+                events::fan_out(&sinks, None, events::EVENT_AGENT_ERROR, &event);
+            }
+        }
+
         for session in active_sessions {
             let event = SessionClosedEvent {
                 agent_id: agent_id.clone(),
                 session_id: SessionId::new(session),
+                reason,
             };
             events::fan_out(
                 &sinks,
@@ -215,39 +262,16 @@ pub(super) fn run_agent(
             );
         }
 
-        if let Err(detail) = result {
-            // Story 1.9 FR26: emit the typed `AgentCrashed` event BEFORE
-            // `agent_error` (back-compat) + `agent_disconnected`. The renderer
-            // distinguishes "crash" (→ `status: 'error'` + manual restart) from
-            // a clean disconnect. Outstanding turn oneshots fail with this.
-            if profile.mask_failure_details {
-                // The renderer gets the generic message (agents may echo env
-                // values); the host log keeps the specific detail.
-                log::warn!("[acp] Factory Droid connection failed: {}", detail.message);
-            }
-            // Masking hides details: drop the structured code/data too.
-            let detail = if profile.mask_failure_details {
-                detail.masked("Factory Droid connection failed")
-            } else {
-                detail
-            };
-            let crashed = detail.clone().into_agent_crashed(agent_id.clone(), None);
-            events::fan_out(&sinks, None, events::EVENT_AGENT_CRASHED, &crashed);
-
-            let event = detail.into_agent_error(agent_id.clone(), None);
-            // Teardown error is agent-level (no session) → sid = None.
-            events::fan_out(&sinks, None, events::EVENT_AGENT_ERROR, &event);
-        }
-
-        let event = AgentDisconnectedEvent { agent_id };
+        let event = AgentDisconnectedEvent { agent_id, reason };
         // Agent-level lifecycle event → sid = None.
         events::fan_out(&sinks, None, events::EVENT_AGENT_DISCONNECTED, &event);
     }
 }
 
-/// Handle an inbound `session/update` notification from the agent: nudge the
-/// active turn's idle deadline, apply the story-3 replay-window suppression,
-/// bind tool calls, apply the AD-8 title gate, then fan out to the sinks.
+/// Handle an inbound `session/update` notification from the agent: drop a
+/// repeated command list, nudge the active turn's idle deadline, apply the
+/// story-3 replay-window suppression, bind tool calls, apply the AD-8 title
+/// gate, then fan out to the sinks.
 ///
 /// Extracted from the connection-builder closure so the routing logic can be
 /// unit-tested without a live connection (cf. `gate_load_session`).
@@ -259,6 +283,20 @@ pub(super) async fn handle_session_notification(
     notification: agent_client_protocol::schema::v1::SessionNotification,
 ) -> Result<(), agent_client_protocol::Error> {
     let session_id = notification.session_id.0.to_string();
+    // A command list that repeats the last one fanned out for the session
+    // (same set, any order) is dropped here, before the idle nudge and before
+    // the relay allocates a seq: no live event, no durable record, no seq
+    // hole. Devin re-sends its unchanged list every ~15 s.
+    if let agent_client_protocol::schema::v1::SessionUpdate::AvailableCommandsUpdate(update) =
+        &notification.update
+    {
+        if state
+            .lock()
+            .is_repeated_commands_update(&session_id, &update.available_commands)
+        {
+            return Ok(());
+        }
+    }
     // Any inbound session/update is agent activity — nudge the active turn's
     // idle deadline so a streaming turn never hits the idle timeout.
     // Best-effort: a no-op when no turn is active for this session. Admission
@@ -375,6 +413,7 @@ pub(super) async fn drive_connection(
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
     profile: AgentRuntimeProfile,
+    stderr_ring: Arc<StderrRing>,
 ) -> Result<(), events::AcpErrorDetail> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -422,6 +461,7 @@ pub(super) async fn drive_connection(
     let agent = TreeKillAgent::new(config.to_mcp_server(shim_dir.as_deref())).with_debug(
         move |line: &str, direction: LineDirection| match direction {
             LineDirection::Stderr => {
+                stderr_ring.push(line);
                 if redact_output {
                     log::debug!("[acp] {debug_agent_id} stderr ({} bytes)", line.len());
                 } else {
@@ -932,6 +972,7 @@ pub(super) async fn drive_connection(
                 allow_terminal,
                 persistence,
                 profile,
+                loop_terminals.clone(),
             )
             .await;
             // Driver thread is winding down — kill any live terminal children so

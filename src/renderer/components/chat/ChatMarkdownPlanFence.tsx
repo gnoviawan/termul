@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import type { CustomRendererProps } from 'streamdown'
 
 import type { PlanEntry } from '@/lib/acp-api'
@@ -21,8 +21,6 @@ import { PlanPanel } from './PlanPanel'
  * independently logs the malformed fence and leaves `plans[sessionId]` empty.
  */
 export function TermulPlanRenderer({ code, isIncomplete }: CustomRendererProps): React.JSX.Element {
-  const loggedRef = useRef<string | null>(null)
-
   // Parse the fence JSON. An incomplete fence on a non-streaming message is a
   // truncated historical payload (not a stream-in-progress); skip parsing.
   let parsed: PlanEntry[] | null = null
@@ -36,24 +34,22 @@ export function TermulPlanRenderer({ code, isIncomplete }: CustomRendererProps):
             typeof entry === 'object' &&
             typeof (entry as PlanEntry).content === 'string'
         )
-        if (parsed.length === 0) parsed = null
       }
     } catch {
       parsed = null
     }
   }
 
-  // Log malformed snapshots once per fence content (not on every re-render).
+  const isMalformed = !isIncomplete && parsed === null
+
   useEffect(() => {
-    if (!isIncomplete && parsed === null && loggedRef.current !== code) {
-      loggedRef.current = code
-      void logFrontendError({
-        level: 'warn',
-        source: 'planSnapshotRenderer',
-        message: 'Malformed termul-plan fence rendered as fallback'
-      })
-    }
-  }, [parsed, code, isIncomplete])
+    if (!isMalformed) return
+    void logFrontendError({
+      level: 'warn',
+      source: 'planSnapshotRenderer',
+      message: 'Malformed termul-plan fence rendered as fallback'
+    })
+  }, [isMalformed])
 
   // An incomplete fence on a non-streaming message is a truncated historical
   // payload (not a stream-in-progress). It will not receive later chunks.

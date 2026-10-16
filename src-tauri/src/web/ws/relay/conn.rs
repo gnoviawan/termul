@@ -6,6 +6,8 @@
 //! validated. Request tasks share only the [`Subscriptions`] (short,
 //! never-awaited locks) and the cloneable [`HandlerEnv`].
 
+use std::sync::OnceLock;
+
 use crate::web::presence::PresenceGuard;
 
 use super::super::*;
@@ -88,8 +90,9 @@ impl Subscriptions {
 pub(in crate::web::ws) struct ConnState {
     /// Set once by a successful `authenticate`.
     pub(in crate::web::ws) authed: bool,
-    /// The validated `authenticate` identity (AD-4).
-    pub(in crate::web::ws) identity: Option<ClientIdentity>,
+    /// The validated `authenticate` identity (AD-4). Shared with every
+    /// request task through [`HandlerEnv`]; set once, by `authenticate`.
+    pub(in crate::web::ws) identity: Arc<OnceLock<ClientIdentity>>,
     /// Capabilities resolved at `authenticate`, plus the connection's id.
     pub(in crate::web::ws) access: ConnectionAccess,
     /// Registered subscriptions, shared with request tasks and the cleanup.
@@ -103,7 +106,7 @@ impl ConnState {
     pub(in crate::web::ws) fn new(access: ConnectionAccess, subscriptions: Arc<Subscriptions>) -> Self {
         Self {
             authed: false,
-            identity: None,
+            identity: Arc::new(OnceLock::new()),
             access,
             subscriptions,
             presence: None,
@@ -126,12 +129,17 @@ pub(in crate::web::ws) struct HandlerEnv {
     pub(in crate::web::ws) acp: Arc<AcpManager>,
     pub(in crate::web::ws) relay: Arc<WsRelaySink>,
     pub(in crate::web::ws) registry: Arc<ProjectRegistry>,
-    pub(in crate::web::ws) registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    pub(in crate::web::ws) projects_file: Option<Arc<PathBuf>>,
+    pub(in crate::web::ws) pty: Arc<PtyManager>,
     pub(in crate::web::ws) history_mode: HistoryMode,
     pub(in crate::web::ws) acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     pub(in crate::web::ws) acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     pub(in crate::web::ws) store: Option<Arc<WebStore>>,
+    /// The connection's authenticated identity; empty until `authenticate`
+    /// succeeds (request tasks only run after it).
+    pub(in crate::web::ws) identity: Arc<OnceLock<ClientIdentity>>,
+    /// The carrier the connection arrived on (the desktop's `store_*` requests
+    /// claim the pending plugin-store import).
+    pub(in crate::web::ws) carrier: Carrier,
     pub(in crate::web::ws) web_auth: Option<Arc<WebAuth>>,
     /// This connection's outbound queue.
     pub(in crate::web::ws) out_tx: OutboundSender,
@@ -150,12 +158,13 @@ impl HandlerEnv {
             acp: Arc::clone(&state.acp),
             relay: Arc::clone(&state.relay),
             registry: Arc::clone(&state.registry),
-            registry_persistence: state.registry_persistence.clone(),
-            projects_file: state.projects_file.clone(),
+            pty: Arc::clone(&state.pty),
             history_mode: state.history_mode,
             acp_catalog: state.acp_catalog.clone(),
             acp_install: state.acp_install.clone(),
             store: state.store.clone(),
+            identity: Arc::clone(&conn.identity),
+            carrier: conn.access.carrier(),
             web_auth: state.web_auth.clone(),
             out_tx,
             subscriptions: Arc::clone(&conn.subscriptions),
@@ -199,7 +208,7 @@ pub(in crate::web::ws) async fn dispatch_connection_text(
         &request.type_,
         &request.payload,
         &conn.access,
-        conn.identity.as_ref(),
+        conn.identity.get(),
     ) {
         return env.out_tx.reply(reply).await;
     }
@@ -324,19 +333,14 @@ fn pre_auth_reply(request: &WsRequest, conn: &mut ConnState, env: &HandlerEnv) -
     // and the device joins presence.
     conn.access.grant();
     conn.presence = Some(env.relay.presence().register(&validated, conn.access.carrier()));
-    conn.identity = Some(validated);
+    // First authenticate wins; the connection is authed from here on.
+    let _ = conn.identity.set(validated);
     conn.authed = true;
-    let reconnect_grace = env
-        .relay
-        .rendezvous()
-        .map_or(DEFAULT_PERMISSION_RECONNECT_GRACE, |rendezvous| {
-            rendezvous.disconnect_grace()
-        });
     WsReply::ok(
         id,
         Some(json!({
             "historyMode": env.history_mode,
-            "runtimePolicy": RuntimePolicy::resolved(reconnect_grace),
+            "runtimePolicy": RuntimePolicy::resolved(),
             "protocolVersion": WS_PROTOCOL_VERSION,
         })),
     )

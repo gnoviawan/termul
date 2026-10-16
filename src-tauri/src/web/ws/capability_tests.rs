@@ -8,6 +8,7 @@ use super::tests::{
     ws_read_frame, ws_test_app_state, ws_write_frame,
 };
 use super::*;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 const MUTATIONS: &[&str] = &[
@@ -85,8 +86,8 @@ fn view_only_connection_keeps_reads_ping_and_subscribe() {
         ("list_persisted_sessions", json!({})),
         ("store_read", json!({ "key": "settings/theme" })),
         ("subscribe", json!({ "sessionId": "missing" })),
-        ("watch_project", json!({ "projectId": "missing" })),
-        ("unwatch_project", json!({ "projectId": "missing" })),
+        ("watch", json!({ "watch": "fs", "scope": "missing" })),
+        ("unwatch", json!({ "watch": "fs", "scope": "missing" })),
     ] {
         let mut authed = true;
         let reply = handle_sync_with_access(

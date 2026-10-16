@@ -22,6 +22,7 @@ import {
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 import { useTerminalColorTheme } from '@/hooks/use-terminal-color-theme'
+import { flushDetachedOutputNow } from '@/hooks/use-terminal-detached-output'
 import { useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
 import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { terminalApi } from '@/lib/api'
@@ -30,7 +31,6 @@ import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-pat
 import { logFrontendError } from '@/lib/log-api'
 import { isMac } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import {
   getOrCreateProjectContinuityCorrelation,
   recordTerminalContinuityEvent
@@ -49,12 +49,14 @@ import {
 } from '@/stores/app-settings-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
-import { useActiveProject } from '@/stores/project-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { useProjectPaneContext } from '@/stores/workspace-store/pane-context'
 import type { TerminalModes, TerminalSpawnOptions } from '../../../shared/types/ipc.types'
 import {
   buildRehydrateSequences,
   captureScrollPosition,
+  clearScrollPosition,
   registerTerminal,
   restoreScrollback,
   restoreScrollPosition,
@@ -108,6 +110,34 @@ export interface ConnectedTerminalProps {
   isVisible?: boolean
 }
 
+/**
+ * Snapshot the DEC private modes a cached xterm currently holds, as the
+ * `TerminalModes` that `buildRehydrateSequences` replays. Read before
+ * `terminal.reset()` wipes them, so a trimmed missed-output tail lands in the
+ * same alt-screen/paste/cursor/mouse state the app left the terminal in.
+ * xterm's public `modes` does not expose the mouse encoding (1006/1016), so
+ * only the tracking mode itself is restored; a full tail re-emits the rest.
+ */
+function snapshotXtermModes(terminal: Terminal): TerminalModes {
+  const { modes } = terminal
+  const mouseTracking: TerminalModes['mouseTracking'] =
+    modes.mouseTrackingMode === 'drag'
+      ? 'drag'
+      : modes.mouseTrackingMode === 'any'
+        ? 'any'
+        : modes.mouseTrackingMode === 'none'
+          ? null
+          : // xterm 'vt200' (DEC 1000) and 'x10' (DEC 9) both map to the
+            // registry's 'x10', which replays DEC 1000.
+            'x10'
+  return {
+    alternateScreen: terminal.buffer.active.type === 'alternate',
+    bracketedPaste: modes.bracketedPasteMode,
+    applicationCursor: modes.applicationCursorKeysMode,
+    mouseTracking
+  }
+}
+
 function ConnectedTerminalComponent({
   terminalId: externalTerminalId,
   storeTerminalId,
@@ -154,7 +184,14 @@ function ConnectedTerminalComponent({
   const isMobileWebShell = useMobileWebShell()
   const effectiveRendererPreference: 'auto' | 'webgl' | 'dom' =
     isMobileWebShell && rendererPreference === 'auto' ? 'dom' : rendererPreference
-  const activeProject = useActiveProject()
+  // The project this terminal's tree belongs to: a hidden ProjectTreeHost keeps
+  // its own project (not the visible one) for the spawn root path.
+  const hostProjectId = useProjectPaneContext()?.projectId
+  // Selects the path (a string), so a hidden terminal does not render again
+  // when a project switch rebuilds the project objects.
+  const treeProjectPath = useProjectStore(
+    (state) => state.projects.find((p) => p.id === (hostProjectId || state.activeProjectId))?.path
+  )
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   // Story 10 (F1/F10): terminal-channel health — drives the non-blocking
   // reconnect/disconnected overlay. Stays 'connected' on Tauri desktop (the
@@ -187,8 +224,8 @@ function ConnectedTerminalComponent({
   // recovery, visibility restore) read fresh state without re-subscribing.
   const isMobileWebShellRef = useRef(isMobileWebShell)
   isMobileWebShellRef.current = isMobileWebShell
-  const activeProjectPathRef = useRef<string | undefined>(activeProject?.path)
-  activeProjectPathRef.current = activeProject?.path
+  const activeProjectPathRef = useRef<string | undefined>(treeProjectPath)
+  activeProjectPathRef.current = treeProjectPath
   const shortcutsRef = useRef(shortcuts)
   shortcutsRef.current = shortcuts
   const cleanupDataListenerRef = useRef<(() => void) | null>(null)
@@ -878,8 +915,10 @@ function ConnectedTerminalComponent({
         hasPtyId: !!ptyIdRef.current
       })
 
-      // Fit to get real dimensions BEFORE spawning
-      performFit(true)
+      // Fit to get real dimensions BEFORE spawning. A restored cached xterm
+      // skips this: the output it missed while detached must be parsed at the
+      // size it was produced first, so its fit runs after that write (#1123).
+      if (!cachedTerminal) performFit(true)
       const spawnCols = terminal.cols || 80
       const spawnRows = terminal.rows || 24
 
@@ -896,6 +935,7 @@ function ConnectedTerminalComponent({
         }
       } else if (isTerminalPendingPtyAssignment(externalTerminalId)) {
         devLog(`SKIP autoSpawn: terminal ${externalTerminalId} pending PTY assignment from restore`)
+        if (cachedTerminal) performFit(true)
         return
       }
 
@@ -926,7 +966,6 @@ function ConnectedTerminalComponent({
             // Update ref immediately so listener can start processing data
             ptyIdRef.current = result.data.id
             useTerminalStore.getState().setRendererAttached(result.data.id, true)
-            void addRendererRef(result.data.id, instanceIdRef.current)
             // If tab was visible before PTY was ready, flush deferred fit+resize now
             if (needsResizeOnReadyRef.current) {
               needsResizeOnReadyRef.current = false
@@ -1071,118 +1110,197 @@ function ConnectedTerminalComponent({
         ptyIdRef.current = externalTerminalId
         // Renderer-attached tracking is handled by the externalTerminalId effect
         // above (with proper lifecycle cleanup). The effect also calls
-        // setRendererAttached, so we avoid duplicating it here. The backend ref
-        // (addRendererRef) is still registered here since it is async and not
-        // managed by the effect's lifecycle.
-        void addRendererRef(externalTerminalId, instanceIdRef.current)
+        // setRendererAttached, so we avoid duplicating it here.
         registerTerminal(externalTerminalId, terminal)
+        // Drain detached chunks still waiting for their coalescing frame, so the
+        // transcript read below holds everything this renderer missed, in
+        // order, and nothing lands in it after this remount (#1123).
+        flushDetachedOutputNow()
         const terminalStoreState = useTerminalStore.getState()
         const transcript = terminalStoreState.peekTranscript(externalTerminalId)
-        const transcriptLooksPartial =
-          transcript.includes('\u001b[?1049h') || transcript.includes('\u001b[?47h')
-        recordReplayEvent(
-          'restore-replay-attempted',
-          {
-            mode: transcript ? 'transcript' : initialScrollback?.length ? 'scrollback' : 'none',
-            transcriptLength: transcript.length,
-            initialScrollbackLineCount: initialScrollback?.length ?? 0,
-            source: 'external-terminal',
-            alternateScreenDetected: transcriptLooksPartial
-          },
-          storeTerminalId,
-          externalTerminalId
-        )
-        try {
-          if (cachedTerminal) {
-            // Cached terminal already has full state — skip transcript/scrollback replay.
-            // Still consume the transcript to prevent unbounded growth.
-            if (transcript) {
-              terminalStoreState.consumeTranscript(externalTerminalId)
-            }
-            recordReplayEvent(
-              'restore-replay-skipped',
-              {
-                reason: 'cached-terminal',
-                source: 'external-terminal'
-              },
-              storeTerminalId,
-              externalTerminalId
-            )
-          } else if (transcript) {
-            if (transcriptLooksPartial) {
-              // R3: replay the full captured DEC mode set, not just alt-screen.
-              terminal.write(buildRehydrateSequences(initialModesRef.current))
-              terminal.write(transcript)
-              terminal.write(PARTIAL_RESTORE_NOTE)
-            } else {
-              terminal.write(buildRehydrateSequences(initialModesRef.current))
-              terminal.write(transcript)
-            }
-            terminalStoreState.consumeTranscript(externalTerminalId)
-            recordReplayEvent(
-              'restore-replay-succeeded',
-              {
-                mode: 'transcript',
-                transcriptLength: transcript.length,
-                source: 'external-terminal',
-                fullFidelity: !transcriptLooksPartial,
-                restoreLimitation: transcriptLooksPartial
-                  ? 'alternate-screen-or-in-place-redraw'
-                  : undefined
-              },
-              storeTerminalId,
-              externalTerminalId
-            )
-          } else if (initialScrollback && initialScrollback.length > 0) {
-            restoreScrollback(terminal, initialScrollback, initialModes)
-            recordReplayEvent(
-              'restore-replay-succeeded',
-              {
-                mode: 'scrollback',
-                initialScrollbackLineCount: initialScrollback.length,
-                // R3: whether DEC mode rehydrate sequences were emitted.
-                modesReplayed: Boolean(initialModes),
-                source: 'external-terminal'
-              },
-              storeTerminalId,
-              externalTerminalId
-            )
-          } else {
-            recordReplayEvent(
-              'restore-replay-skipped',
-              {
-                reason: 'no-persisted-history',
-                source: 'external-terminal'
-              },
-              storeTerminalId,
-              externalTerminalId
-            )
-          }
-        } catch (error) {
-          const replayError = error instanceof Error ? error.message : String(error)
+        let cachedDeltaWritten = false
+        if (cachedTerminal) {
+          // Restored cached xterm (#1123 / #795): write exactly the bytes it
+          // missed while detached, in order, and nothing else, then refit.
+          // Write-then-fit matters: xterm's resize() flushes pending writes
+          // synchronously, so the delta parses at the size the PTY produced
+          // it and only then reflows to the new container.
+          const transcriptTrimmed =
+            terminalStoreState.findTerminalByPtyId(externalTerminalId)?.transcriptTrimmed === true
           recordReplayEvent(
-            'restore-replay-failed',
+            'restore-replay-attempted',
             {
-              mode: transcript ? 'transcript' : initialScrollback?.length ? 'scrollback' : 'none',
-              error: replayError,
-              source: 'external-terminal'
+              mode: transcript ? 'transcript' : 'none',
+              transcriptLength: transcript.length,
+              transcriptTrimmed,
+              source: 'cached-terminal'
             },
             storeTerminalId,
             externalTerminalId
           )
-          console.error('[Terminal Replay Failed]', replayError)
-          if (onErrorRef.current) onErrorRef.current(replayError)
+          try {
+            if (transcript) {
+              if (transcriptTrimmed) {
+                // The delta lost its head, so it no longer continues the screen
+                // this xterm holds; stacking the tail on it reproduces #795's
+                // overlap. Rebuild the way a fresh mount does: modes snapshotted
+                // before the reset wipes them, then the tail. No restore note:
+                // injected bytes shift a live TUI's cursor math.
+                const modes = snapshotXtermModes(terminal)
+                terminal.reset()
+                terminal.write(buildRehydrateSequences(modes))
+              }
+              terminal.write(transcript)
+              cachedDeltaWritten = true
+              // Consumes the transcript and clears the trimmed flag together.
+              terminalStoreState.consumeTranscript(externalTerminalId)
+              recordReplayEvent(
+                'restore-replay-succeeded',
+                {
+                  mode: 'transcript',
+                  transcriptLength: transcript.length,
+                  source: 'cached-terminal',
+                  fullFidelity: !transcriptTrimmed,
+                  restoreLimitation: transcriptTrimmed ? 'transcript-trimmed' : undefined
+                },
+                storeTerminalId,
+                externalTerminalId
+              )
+            } else {
+              // A trim that left nothing still sets the flag; clear it so the
+              // next detach's complete delta is not treated as headless.
+              if (transcriptTrimmed) terminalStoreState.consumeTranscript(externalTerminalId)
+              recordReplayEvent(
+                'restore-replay-skipped',
+                {
+                  reason: 'no-missed-output',
+                  source: 'cached-terminal'
+                },
+                storeTerminalId,
+                externalTerminalId
+              )
+            }
+          } catch (error) {
+            // The transcript is kept, so a later remount can still replay it.
+            const replayError = error instanceof Error ? error.message : String(error)
+            recordReplayEvent(
+              'restore-replay-failed',
+              {
+                mode: 'transcript',
+                error: replayError,
+                source: 'cached-terminal'
+              },
+              storeTerminalId,
+              externalTerminalId
+            )
+            console.error('[Terminal Replay Failed]', replayError)
+            if (onErrorRef.current) onErrorRef.current(replayError)
+          }
+          performFit(true)
+        } else {
+          const transcriptLooksPartial =
+            transcript.includes('\u001b[?1049h') || transcript.includes('\u001b[?47h')
+          recordReplayEvent(
+            'restore-replay-attempted',
+            {
+              mode: transcript ? 'transcript' : initialScrollback?.length ? 'scrollback' : 'none',
+              transcriptLength: transcript.length,
+              initialScrollbackLineCount: initialScrollback?.length ?? 0,
+              source: 'external-terminal',
+              alternateScreenDetected: transcriptLooksPartial
+            },
+            storeTerminalId,
+            externalTerminalId
+          )
+          try {
+            if (transcript) {
+              if (transcriptLooksPartial) {
+                // R3: replay the full captured DEC mode set, not just alt-screen.
+                terminal.write(buildRehydrateSequences(initialModesRef.current))
+                terminal.write(transcript)
+                terminal.write(PARTIAL_RESTORE_NOTE)
+              } else {
+                terminal.write(buildRehydrateSequences(initialModesRef.current))
+                terminal.write(transcript)
+              }
+              terminalStoreState.consumeTranscript(externalTerminalId)
+              recordReplayEvent(
+                'restore-replay-succeeded',
+                {
+                  mode: 'transcript',
+                  transcriptLength: transcript.length,
+                  source: 'external-terminal',
+                  fullFidelity: !transcriptLooksPartial,
+                  restoreLimitation: transcriptLooksPartial
+                    ? 'alternate-screen-or-in-place-redraw'
+                    : undefined
+                },
+                storeTerminalId,
+                externalTerminalId
+              )
+            } else if (initialScrollback && initialScrollback.length > 0) {
+              restoreScrollback(terminal, initialScrollback, initialModes)
+              recordReplayEvent(
+                'restore-replay-succeeded',
+                {
+                  mode: 'scrollback',
+                  initialScrollbackLineCount: initialScrollback.length,
+                  // R3: whether DEC mode rehydrate sequences were emitted.
+                  modesReplayed: Boolean(initialModes),
+                  source: 'external-terminal'
+                },
+                storeTerminalId,
+                externalTerminalId
+              )
+            } else {
+              recordReplayEvent(
+                'restore-replay-skipped',
+                {
+                  reason: 'no-persisted-history',
+                  source: 'external-terminal'
+                },
+                storeTerminalId,
+                externalTerminalId
+              )
+            }
+          } catch (error) {
+            const replayError = error instanceof Error ? error.message : String(error)
+            recordReplayEvent(
+              'restore-replay-failed',
+              {
+                mode: transcript ? 'transcript' : initialScrollback?.length ? 'scrollback' : 'none',
+                error: replayError,
+                source: 'external-terminal'
+              },
+              storeTerminalId,
+              externalTerminalId
+            )
+            console.error('[Terminal Replay Failed]', replayError)
+            if (onErrorRef.current) onErrorRef.current(replayError)
+          }
         }
         // Write one-time info line if project env vars were applied
-        // (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars)
-        if (memoizedSpawnOptions?.env && Object.keys(memoizedSpawnOptions.env).length > 0) {
+        // (env should be passed via spawnOptions by the caller if this terminal was spawned with env vars).
+        // Never into a restored cached terminal: it already showed the line,
+        // and injected bytes shift a live TUI's cursor math (#795).
+        if (
+          !cachedTerminal &&
+          memoizedSpawnOptions?.env &&
+          Object.keys(memoizedSpawnOptions.env).length > 0
+        ) {
           const envCount = Object.keys(memoizedSpawnOptions.env).length
           terminal.write(
             `\x1b[36m\r\n[Project env: ${envCount} variable${envCount !== 1 ? 's' : ''} applied]\x1b[0m\r\n`
           )
         }
-        // Restore scroll position if cached from previous pane
-        restoreScrollPosition(externalTerminalId, terminal)
+        // Restore scroll position if cached from previous pane. Not after a
+        // cached delta write: the delta grew the buffer, so the pre-detach
+        // viewportY would pin the viewport above the new output.
+        if (cachedDeltaWritten) {
+          clearScrollPosition(externalTerminalId)
+        } else {
+          restoreScrollPosition(externalTerminalId, terminal)
+        }
         if (onBoundToStoreTerminalRef.current) {
           onBoundToStoreTerminalRef.current(externalTerminalId)
         }
@@ -1203,7 +1321,6 @@ function ConnectedTerminalComponent({
       if (terminalId && terminalRef.current) {
         captureScrollPosition(terminalId)
         useTerminalStore.getState().setRendererAttached(terminalId, false)
-        void removeRendererRef(terminalId, instanceId)
       }
 
       // Unregister terminal from registry
@@ -1498,7 +1615,6 @@ function ConnectedTerminalComponent({
           if (result.success) {
             ptyIdRef.current = result.data.id
             useTerminalStore.getState().setRendererAttached(result.data.id, true)
-            void addRendererRef(result.data.id, instanceIdRef.current)
             registerTerminal(result.data.id, terminal)
             const transcript = useTerminalStore.getState().peekTranscript(result.data.id)
             if (transcript) {
@@ -1523,8 +1639,9 @@ function ConnectedTerminalComponent({
           spawnInFlightRef.current = false
         }
       } else {
-        void addRendererRef(externalTerminalId, instanceIdRef.current)
         registerTerminal(externalTerminalId, terminal)
+        // Drain buffered detached chunks before the read (#1123), as initTerminal does.
+        flushDetachedOutputNow()
         const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId)
         if (transcript) {
           // R3: replay captured modes before the (possibly trimmed) transcript.
@@ -1542,7 +1659,6 @@ function ConnectedTerminalComponent({
       if (tId && terminalRef.current) {
         captureScrollPosition(tId)
         if (!externalTerminalId) useTerminalStore.getState().setRendererAttached(tId, false)
-        void removeRendererRef(tId, instanceId)
       }
       if (ptyIdRef.current) unregisterTerminal(ptyIdRef.current)
       else if (externalTerminalId) unregisterTerminal(externalTerminalId)
@@ -1608,7 +1724,6 @@ function ConnectedTerminalComponent({
       const newPtyId = result.data.id
       ptyIdRef.current = newPtyId
       registerTerminal(newPtyId, terminal)
-      void addRendererRef(newPtyId, instanceIdRef.current)
       useTerminalStore.getState().setRendererAttached(newPtyId, true)
       if (result.data.claim) {
         useTerminalStore.getState().setTerminalClaim(newPtyId, result.data.claim)
@@ -1771,18 +1886,25 @@ function ConnectedTerminalComponent({
             >
               <AgentConnectionLamp
                 connected={false}
-                reconnecting={terminalChannel !== 'disconnected'}
+                reconnecting={
+                  terminalChannel !== 'disconnected' && terminalChannel !== 'host-offline'
+                }
+                hostOffline={terminalChannel === 'host-offline'}
                 decorative
                 size={8}
               />
               <span>
                 {terminalChannel === 'disconnected'
                   ? 'Disconnected'
-                  : terminalChannel === 'reconnecting'
+                  : terminalChannel === 'host-offline'
                     ? ptyIdRef.current && isWebTerminalBufferable(ptyIdRef.current)
-                      ? 'Reconnecting — input buffered'
-                      : 'Reconnecting…'
-                    : 'Connecting…'}
+                      ? 'Host offline — input buffered'
+                      : 'Host offline'
+                    : terminalChannel === 'reconnecting'
+                      ? ptyIdRef.current && isWebTerminalBufferable(ptyIdRef.current)
+                        ? 'Reconnecting — input buffered'
+                        : 'Reconnecting…'
+                      : 'Connecting…'}
               </span>
             </div>
           )}

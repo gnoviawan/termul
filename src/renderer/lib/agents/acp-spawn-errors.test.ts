@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AuthMethod } from '@/lib/acp-api'
+import { AcpTransportError } from '@/lib/acp-transport/types'
 import {
   AGENT_AUTH_REQUIRED_CODE,
   AmbiguousAuthError,
@@ -8,6 +9,9 @@ import {
   isAgentAuthRequiredError,
   isAmbiguousAuthError,
   isDefiniteSpawnRejection,
+  PROVIDER_ERROR_LABELS,
+  PROVIDER_ERROR_MESSAGES,
+  providerCodeOf,
   SETUP_ERROR_LABELS
 } from './acp-spawn-errors'
 
@@ -24,6 +28,32 @@ describe('formatAcpSpawnError', () => {
     expect(formatAcpSpawnError('program not found', { command: 'uvx' })).toMatch(/Install uv/)
     expect(formatAcpSpawnError('command not found', { command: 'cursor-agent' })).toMatch(
       /"cursor-agent"/
+    )
+  })
+
+  it('keeps a resolver error that names a different binary verbatim', () => {
+    // Managed claude-acp spawns `node`, but a failed *pre-spawn* probe of the
+    // system claude.cmd names the shim — rewriting it against `node` would
+    // blame the wrong binary.
+    const raw =
+      'program not found or not executable: C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd'
+    expect(formatAcpSpawnError(raw, { command: 'node' })).toBe(raw)
+    const result = classifySetupError(raw, { command: 'node' })
+    expect(result.category).toBe('spawn')
+    expect(result.detail).toBe(raw)
+
+    // The bare-name variant — e.g. the claude CLI probe failing to find
+    // `claude` on PATH — names a different program than the spawned `node`.
+    const bare = 'program not found on PATH: claude'
+    expect(formatAcpSpawnError(bare, { command: 'node' })).toBe(bare)
+  })
+
+  it('still rewrites a resolver failure that names the command itself', () => {
+    expect(formatAcpSpawnError('program not found on PATH: node', { command: 'node' })).toBe(
+      'Could not start "node". Check that the binary exists and is on your PATH.'
+    )
+    expect(formatAcpSpawnError('spawn C:\\tools\\node.exe ENOENT', { command: 'node' })).toBe(
+      'Could not start "node". Check that the binary exists and is on your PATH.'
     )
   })
 })
@@ -69,6 +99,52 @@ describe('classifySetupError order and categories (P4)', () => {
     const raw = 'Error: spawn npx ENOENT'
     const result = classifySetupError(raw)
     expect(result.category).toBe('spawn')
+  })
+
+  it.each([
+    'provider_quota_exceeded',
+    'provider_session_limit',
+    'provider_request_rejected'
+  ] as const)('classifies the host code %s as provider whatever the wording', (code) => {
+    // Wording that the heuristics would read as transport / auth / timeout.
+    for (const wording of [
+      'connection limit: authentication token quota timed out',
+      'You have hit your limit',
+      ''
+    ]) {
+      const result = classifySetupError(new AcpTransportError(code, wording))
+      expect(result.category).toBe('provider')
+      expect(result.providerCode).toBe(code)
+      expect(result.label).toBe(PROVIDER_ERROR_LABELS[code])
+      expect(result.detail).toContain(PROVIDER_ERROR_MESSAGES[code])
+      if (wording) expect(result.detail).toContain(wording)
+    }
+  })
+
+  it('classifies a serialized { code, message } provider failure', () => {
+    const result = classifySetupError({
+      code: 'provider_session_limit',
+      message: 'resets 8:20pm'
+    })
+    expect(result.category).toBe('provider')
+    expect(result.detail).toBe(`${PROVIDER_ERROR_MESSAGES.provider_session_limit} (resets 8:20pm)`)
+  })
+
+  it('keeps auth and definite spawn rejections ahead of a provider code', () => {
+    expect(
+      classifySetupError(new AcpTransportError('agent_auth_required', 'sign in')).category
+    ).toBe('auth')
+    expect(classifySetupError(new AcpTransportError('agent_unavailable', 'quota')).category).toBe(
+      'spawn'
+    )
+  })
+
+  it('reads provider wording without a host code through the old heuristics only', () => {
+    // No code: nothing new is guessed from wording; it falls to the old paths.
+    expect(classifySetupError('You have reached your usage limit').category).toBe('unknown')
+    expect(providerCodeOf('provider_quota_exceeded')).toBeUndefined()
+    expect(providerCodeOf({ code: 'rate_limited' })).toBeUndefined()
+    expect(providerCodeOf({ code: 'provider_quota_exceeded' })).toBe('provider_quota_exceeded')
   })
 
   it('classifies transport failures (destroyed stream, refused, reset)', () => {

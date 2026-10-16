@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Check, ChevronDown, Plus, Terminal } from '@/components/icons'
+import { Check, ChevronDown, GitBranch, Plus, Terminal } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   ContextMenu,
@@ -13,7 +13,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import { Spinner } from '@/components/ui/spinner'
 import { WriteGate } from '@/components/ui/write-gate'
-import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { activeWorktreeOf, OUTSIDE_PROJECT_ROOT_REASON } from '@/lib/active-worktree'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
@@ -55,7 +54,6 @@ export function WorkspaceSwitcher({ project }: WorkspaceSwitcherProps): React.JS
   const pick = useWorktreePick(project.id)
   const picked = activeWorktreeOf(project, pick)
   const label = picked ? worktreeLabel(picked) : WORKSPACE_ROW_FALLBACK_LABEL
-  useNativeWebviewOcclusion(open)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -63,11 +61,16 @@ export function WorkspaceSwitcher({ project }: WorkspaceSwitcherProps): React.JS
         <Button
           variant="ghost"
           size="sm"
-          className="-ml-2 h-8 max-w-[190px] gap-1.5 px-2 hover:bg-secondary"
+          // A button, not a section label: a resting wash and the branch in its
+          // own case (branch names are case-sensitive).
+          className="-ml-2 mr-1 h-7 min-w-0 flex-1 justify-start gap-1.5 bg-foreground/[0.03] px-2 text-xs font-medium text-foreground hover:bg-foreground/[0.06] data-[state=open]:bg-foreground/[0.06]"
           title={picked ? picked.path : 'Switch working copy'}
         >
-          <span className="label-panel truncate">{label}</span>
-          <ChevronDown size={12} className="shrink-0 opacity-50" aria-hidden="true" />
+          {picked?.branch && (
+            <GitBranch size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+          )}
+          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+          <ChevronDown size={12} className="shrink-0 text-muted-foreground" aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent

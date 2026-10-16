@@ -23,26 +23,3 @@ export function panelRevealMotion(
       : { width: 0, opacity: 0, transition: { duration: 0.15, ease: EASE_OUT } }
   }
 }
-
-/**
- * Enter/exit for the web-only slim edge toggles that replace a hidden
- * sidebar/explorer. They live in the same AnimatePresence as the panel, so
- * they mount the moment the panel starts collapsing — hold them width-0 and
- * transparent for the panel's 150ms exit so the toggle never briefly
- * double-occupies then jitters.
- */
-export function edgeToggleMotion(
-  reducedMotion: boolean
-): Pick<HTMLMotionProps<'div'>, 'initial' | 'animate' | 'exit'> {
-  return {
-    initial: reducedMotion ? false : { width: 0, opacity: 0 },
-    animate: {
-      width: 'auto',
-      opacity: 1,
-      transition: reducedMotion ? { duration: 0 } : { duration: 0.1, delay: 0.15, ease: EASE_OUT }
-    },
-    exit: reducedMotion
-      ? { opacity: 0, transition: { duration: 0 } }
-      : { width: 0, opacity: 0, transition: { duration: 0.1, ease: EASE_OUT } }
-  }
-}

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MentionMatch } from '@/components/chat/mention-menu-model'
+import { STORE_VALUE_MAX_BYTES, storedValueBytes } from '@/lib/persistence-trim'
 import {
-  ACP_MENTION_RECENTS_KEY,
   compositeKey,
   fromStoredRecent,
   loadMentionRecents,
@@ -40,7 +40,7 @@ describe('mention recents — pure helpers', () => {
 
   it('mentionRecentsKey encodes the partition safely', () => {
     expect(mentionRecentsKey('p1', '/work')).toBe(
-      `${ACP_MENTION_RECENTS_KEY}/${encodeURIComponent('p1\u0000/work')}`
+      `acp/mention-recents/${encodeURIComponent('p1\u0000/work')}`
     )
   })
 
@@ -160,5 +160,35 @@ describe('mention recents — persistence', () => {
     const values = mockPersistence.write.mock.calls.map((c) => c[1])
     expect(values[0]).toEqual([{ relPath: 'a.ts', name: 'a.ts', ignored: false }])
     expect(values[1]).toEqual([{ relPath: 'b.ts', name: 'b.ts', ignored: false }])
+  })
+
+  describe('value cap', () => {
+    // Each recent stores its path twice (relPath and name): twenty of these are about
+    // 320 KB, over the 256 KiB cap.
+    const longRecents = (count: number): MentionMatch[] =>
+      Array.from({ length: count }, (_, i) => match(`${i}-${'x'.repeat(8_000)}`))
+
+    it('saves recents that fit the cap untouched', async () => {
+      const recents = longRecents(10)
+      await saveMentionRecents('p1', '/work', recents)
+      const [, value] = mockPersistence.write.mock.calls[0]
+      expect(value).toHaveLength(10)
+    })
+
+    it('drops the oldest recents (the end of the list) that do not fit', async () => {
+      const recents = longRecents(MENTION_RECENTS_CAP)
+      expect(storedValueBytes(recents.map(toStoredRecent))).toBeGreaterThan(STORE_VALUE_MAX_BYTES)
+
+      await saveMentionRecents('p1', '/work', recents)
+
+      const [, value] = mockPersistence.write.mock.calls[0]
+      expect(storedValueBytes(value)).toBeLessThanOrEqual(STORE_VALUE_MAX_BYTES)
+      expect(value.length).toBeLessThan(MENTION_RECENTS_CAP)
+      // The newest recents (the front of the list) are the ones kept.
+      expect(value).toEqual(recents.slice(0, value.length).map(toStoredRecent))
+      // One more would not have fit.
+      const oneMore = recents.slice(0, value.length + 1).map(toStoredRecent)
+      expect(storedValueBytes(oneMore)).toBeGreaterThan(STORE_VALUE_MAX_BYTES)
+    })
   })
 })

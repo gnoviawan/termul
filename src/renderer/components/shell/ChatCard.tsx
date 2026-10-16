@@ -1,4 +1,5 @@
 import { ChatEntryIcon } from '@/components/chat/ChatHistoryEntryRow'
+import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import { Columns2, Copy, FolderOpen, GitBranch, Terminal, Trash2 } from '@/components/icons'
 import {
   ChatRowTrail,
@@ -37,8 +38,8 @@ export interface ChatCardProps {
 }
 
 /**
- * One chat in the Side panel Chats list: agent icon, model and the single
- * status slot on line 1, the title on line 2, the branch on line 3. The status
+ * One chat in the Side panel Chats list: the title and the single status slot
+ * on line 1, the agent icon, model and branch on line 2. The status
  * comes from the same signals and unread store as the chat tab, so the two
  * always agree.
  */
@@ -64,21 +65,20 @@ export function ChatCard({
 
   const liveState: ProjectChatLiveState = signals.needsAttention
     ? 'needs-you'
-    : signals.turnBusy || signals.closing
+    : signals.turnBusy
       ? 'running'
-      : signals.liveSession && unread
+      : signals.realChat && unread
         ? 'done'
         : 'idle'
   const statusWord = STATUS_WORD[liveState]
 
-  const liveModels = signals.session?.models
-  const liveModel = liveModels
-    ? (liveModels.availableModels.find((m) => m.modelId === liveModels.currentModelId)?.name ??
-      liveModels.currentModelId)
-    : null
+  // Same precedence as the composer: the model config option, then the native
+  // model list. `session.models` alone stays on the session/new value.
+  const liveModel = sessionModelSnapshot(signals.session)?.modelName ?? null
   const modelLine = liveModel || modelLineOf(card)
 
   const hasCwd = Boolean(entry.cwd)
+  const closed = entry.status === 'closed'
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -86,19 +86,13 @@ export function ChatCard({
           draggable
           onDragStart={(e) => startChatDrag(entry.id, e)}
           className={cn(
-            'group relative flex w-full items-center rounded-md pr-1 transition-colors duration-150 ease-out',
-            isActive ? 'bg-foreground/[0.05]' : 'hover:bg-foreground/[0.03]',
-            entry.status === 'closed' && 'opacity-60'
+            'group relative flex w-full items-center rounded-lg pr-1 transition-colors duration-150 ease-out',
+            // Selected is the keycap, the same "you are here" surface as the
+            // Rail's active project (docs/design/colors.md).
+            isActive ? 'keycap' : 'hover:bg-foreground/[0.03]'
           )}
           data-active={isActive ? 'true' : undefined}
         >
-          {isActive && (
-            <span
-              aria-hidden="true"
-              data-testid="chat-card-active-marker"
-              className="absolute -left-1.25 top-1/2 h-4 w-0.75 -translate-y-1/2 rounded-full bg-foreground"
-            />
-          )}
           <button
             type="button"
             data-chat-card-index={index}
@@ -106,26 +100,45 @@ export function ChatCard({
             title={entry.title}
             aria-label={statusWord ? `${entry.title}, ${statusWord}` : entry.title}
             aria-current={isActive ? 'true' : undefined}
-            className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md py-1.5 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg py-1.5 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
-            <span className="flex min-w-0 items-center gap-2 text-2xs text-muted-foreground">
-              <ChatEntryIcon
-                agentId={entry.agentId}
-                agentConfigId={entry.agentConfigId}
-                agents={entry.agents}
-              />
-              <span className="min-w-0 flex-1 truncate">{modelLine}</span>
+            {/* Line 1 names the chat, line 2 is its metadata. */}
+            <span className="flex min-w-0 items-center gap-2">
+              <span
+                className={cn(
+                  'min-w-0 flex-1 truncate text-xs font-medium',
+                  closed ? 'text-muted-foreground' : 'text-foreground'
+                )}
+              >
+                {entry.title}
+              </span>
               {entry.status === 'error' && (
                 <span className="shrink-0 rounded-full bg-destructive/10 px-1.5 text-3xs text-destructive">
                   Failed
                 </span>
               )}
-              <ChatRowTrail liveState={liveState} lastActivityAt={entry.lastActivityAt} />
+              <ChatRowTrail
+                liveState={liveState}
+                lastActivityAt={entry.lastActivityAt}
+                closed={closed}
+              />
             </span>
-            <span className="truncate text-xs font-medium text-foreground">{entry.title}</span>
-            <span className="flex min-h-4 min-w-0 items-center gap-1 text-2xs text-muted-foreground">
-              {branch !== '' && <GitBranch size={12} aria-hidden="true" className="shrink-0" />}
-              <span className="min-w-0 truncate">{branch}</span>
+            <span className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
+              <ChatEntryIcon
+                agentId={entry.agentId}
+                agentConfigId={entry.agentConfigId}
+                agents={entry.agents}
+              />
+              <span className="min-w-0 shrink truncate">{modelLine}</span>
+              {branch !== '' && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <GitBranch size={12} aria-hidden="true" className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate" title={branch}>
+                    {branch}
+                  </span>
+                </>
+              )}
             </span>
           </button>
           <button

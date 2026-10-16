@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { trimTerminalLayout } from '@/lib/persistence-trim'
 import { recordTerminalContinuityEvent } from '@/lib/terminal-continuity-instrumentation'
 import type { Terminal } from '@/types/project'
 import type {
@@ -236,9 +237,10 @@ export function useTerminalAutoSave(): void {
       // NOTE: syncScrollbackToStore is already called in saveTerminalLayout
       // before writing to disk, so we skip it here to avoid double writes.
 
-      // Use debounced write via API
+      // Use debounced write via API. Output beyond the host's value cap is
+      // trimmed oldest-first; the newest scrollback and transcript survive.
       persistenceApi
-        .writeDebounced(PersistenceKeys.terminals(projectId), layout)
+        .writeDebounced(PersistenceKeys.terminals(projectId), trimTerminalLayout(layout))
         .catch((err: unknown) => {
           console.error('Failed to auto-save terminal layout:', err)
         })
@@ -320,7 +322,12 @@ export async function saveTerminalLayout(
   // the xterm instance is disposed, avoiding state loss when switching projects.
   syncScrollbackToStore(layout.terminals)
 
-  const result = await persistenceApi.write(PersistenceKeys.terminals(projectId), layout)
+  // The in-memory store above keeps the full output; only the saved copy is
+  // trimmed to the host's value cap (oldest output first).
+  const result = await persistenceApi.write(
+    PersistenceKeys.terminals(projectId),
+    trimTerminalLayout(layout)
+  )
 
   if (!result.success) {
     console.error('Failed to save terminal layout:', result.error)

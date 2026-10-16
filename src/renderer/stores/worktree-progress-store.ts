@@ -17,7 +17,7 @@
  * duration of one create call.
  */
 
-import type { WorktreeProgressEvent } from '@shared/types/ipc.types'
+import type { WorktreeProgressEvent } from '@shared/types/worktree.types'
 import { create } from 'zustand'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'

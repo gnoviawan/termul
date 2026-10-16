@@ -54,6 +54,14 @@ vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
   return { ...original, isTauriContext: mockIsTauriContext }
 })
 
+// #1123: the remount drains the detached-output coalescing buffers before it
+// reads the transcript.
+const mockFlushDetachedOutputNow = vi.hoisted(() => vi.fn())
+vi.mock('@/hooks/use-terminal-detached-output', async (importOriginal) => {
+  const original = await importOriginal<Record<string, unknown>>()
+  return { ...original, flushDetachedOutputNow: mockFlushDetachedOutputNow }
+})
+
 // Story 10: the write-failure path emits a durable per-episode log.
 const mockLogFrontendError = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
@@ -85,6 +93,7 @@ const mockTerminalInstance = {
   paste: vi.fn(),
   write: vi.fn(),
   clear: vi.fn(),
+  reset: vi.fn(),
   focus: vi.fn(),
   refresh: vi.fn(),
   scrollToLine: vi.fn(),
@@ -92,8 +101,15 @@ const mockTerminalInstance = {
   cols: 80,
   rows: 24,
   options: {} as Record<string, unknown>,
+  // #1123: DEC modes a cached xterm holds, snapshotted before a trimmed-delta reset.
+  modes: {
+    applicationCursorKeysMode: false,
+    bracketedPasteMode: false,
+    mouseTrackingMode: 'none' as 'none' | 'x10' | 'vt200' | 'drag' | 'any'
+  },
   buffer: {
     active: {
+      type: 'normal' as 'normal' | 'alternate',
       getLine: vi.fn((index: number) => ({
         translateToString: () => (index === 0 ? 'missing.ts src/renderer/App.tsx' : '')
       }))
@@ -156,6 +172,7 @@ vi.mock('@xterm/xterm', () => ({
     paste = mockTerminalInstance.paste
     write = mockTerminalInstance.write
     clear = mockTerminalInstance.clear
+    reset = mockTerminalInstance.reset
     focus = mockTerminalInstance.focus
     refresh = mockTerminalInstance.refresh
     scrollToLine = mockTerminalInstance.scrollToLine
@@ -202,7 +219,18 @@ vi.mock('@/lib/file-path-links', async (importOriginal) => {
 })
 
 vi.mock('@/stores/project-store', () => ({
-  useActiveProject: vi.fn(() => ({ path: '/project-root' })),
+  useProjectStore: vi.fn(
+    (
+      selector: (state: {
+        projects: Array<{ id: string; path: string }>
+        activeProjectId: string
+      }) => unknown
+    ) =>
+      selector({
+        projects: [{ id: 'project-a', path: '/project-root' }],
+        activeProjectId: 'project-a'
+      })
+  ),
   useProjects: vi.fn(() => []),
   useActiveProjectId: vi.fn(() => 'project-a')
 }))
@@ -261,8 +289,14 @@ Object.defineProperty(window, 'api', {
 
 import { clipboardApi, systemApi, terminalApi } from '@/lib/api'
 import { openFilePathFromTerminal } from '@/lib/file-path-links'
-import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import {
+  captureScrollPosition,
+  clearScrollPosition,
+  getCachedScrollPosition,
+  registerTerminal,
+  unregisterTerminal
+} from '../../utils/terminal-registry'
 import { ConnectedTerminal } from './ConnectedTerminal'
 import { cacheTerminal, clearTerminalCache } from './terminal-cache'
 
@@ -346,7 +380,6 @@ const mockTerminalStoreState = {
   clearTerminalPtyId: vi.fn(),
   truncateHiddenTerminalBuffers: vi.fn(),
   getTerminalCount: vi.fn(() => 0),
-  isTerminalLimitReached: vi.fn(() => false),
   cleanupProjectTerminals: vi.fn()
 }
 
@@ -355,11 +388,6 @@ vi.mock('@/stores/terminal-store', () => ({
     vi.fn((selector) => selector(mockTerminalStoreState)),
     { getState: () => mockTerminalStoreState }
   )
-}))
-
-vi.mock('@/lib/tauri-terminal-api', () => ({
-  addRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),
-  removeRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined })
 }))
 
 describe('ConnectedTerminal', () => {
@@ -556,23 +584,6 @@ describe('ConnectedTerminal', () => {
     })
   })
 
-  it('should register and unregister renderer refs for external terminalId', async () => {
-    const { unmount } = render(<ConnectedTerminal terminalId="external-123" />)
-
-    await vi.waitFor(() => {
-      expect(addRendererRef).toHaveBeenCalledWith('external-123', expect.stringMatching(/^conn-/))
-    })
-
-    unmount()
-
-    await vi.waitFor(() => {
-      expect(removeRendererRef).toHaveBeenCalledWith(
-        'external-123',
-        expect.stringMatching(/^conn-/)
-      )
-    })
-  })
-
   it.skip('should clean up terminal listeners on unmount without creating extra registrations', async () => {
     const { unmount } = render(<ConnectedTerminal />)
 
@@ -586,7 +597,6 @@ describe('ConnectedTerminal', () => {
     unmount()
 
     expect(mockTerminalInstance.dispose).toHaveBeenCalledTimes(1)
-    expect(removeRendererRef).toHaveBeenCalledWith('terminal-123', expect.stringMatching(/^conn-/))
     expect(vi.mocked(terminalApi).onData).toHaveBeenCalledTimes(1)
     expect(vi.mocked(terminalApi).onExit).toHaveBeenCalledTimes(1)
   })
@@ -3128,6 +3138,353 @@ describe('ConnectedTerminal', () => {
           restoreLimitation: 'alternate-screen-or-in-place-redraw'
         }
       })
+    })
+  })
+
+  describe('cached terminal missed-output replay (#1123 / #795)', () => {
+    const CACHED_PTY = 'cached-pty-1123'
+    const writes = (): unknown[] => mockTerminalInstance.write.mock.calls.map((call) => call[0])
+    const replayEvent = (name: string): unknown =>
+      mockRecordTerminalContinuityEvent.mock.calls
+        .map((call) => call[0] as { name: string; ptyId?: string; details?: unknown })
+        .find((event) => event.name === name && event.ptyId === CACHED_PTY)
+
+    const renderCached = (props: Partial<React.ComponentProps<typeof ConnectedTerminal>> = {}) => {
+      cacheTerminal(CACHED_PTY, mockTerminalInstance as unknown as Terminal)
+      return render(
+        <ConnectedTerminal
+          terminalId={CACHED_PTY}
+          storeTerminalId="store-1123"
+          autoSpawn={false}
+          spawnOptions={{ projectId: 'project-a' }}
+          {...props}
+        />
+      )
+    }
+
+    beforeEach(() => {
+      clearTerminalCache()
+      mockFlushDetachedOutputNow.mockReset()
+      mockTerminalInstance.write.mockReset()
+      mockTerminalInstance.reset.mockReset()
+      mockFitAddonInstance.fit.mockReset()
+      mockTerminalInstance.modes.applicationCursorKeysMode = false
+      mockTerminalInstance.modes.bracketedPasteMode = false
+      mockTerminalInstance.modes.mouseTrackingMode = 'none'
+      mockTerminalInstance.buffer.active.type = 'normal'
+    })
+
+    afterEach(() => {
+      clearTerminalCache()
+      mockTerminalInstance.cols = 80
+      mockTerminalInstance.write.mockReset()
+      mockTerminalInstance.reset.mockReset()
+      mockFitAddonInstance.fit.mockReset()
+      mockTerminalInstance.modes.applicationCursorKeysMode = false
+      mockTerminalInstance.modes.bracketedPasteMode = false
+      mockTerminalInstance.modes.mouseTrackingMode = 'none'
+      mockTerminalInstance.buffer.active.type = 'normal'
+    })
+
+    it('writes the missed delta once, consumes the transcript, then fits', async () => {
+      const delta = 'tick 1\r\ntick 2\r\nDONE\r\n'
+      mockTerminalStoreState.peekTranscript.mockReturnValue(delta)
+
+      renderCached()
+
+      await vi.waitFor(() => {
+        expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+      })
+      // Exactly the delta, nothing else: no rehydrate prefix, no restore note.
+      expect(writes()).toEqual([delta])
+      expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledTimes(1)
+      expect(mockTerminalInstance.reset).not.toHaveBeenCalled()
+      // The fit runs only after the delta is written.
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+      expect(mockFitAddonInstance.fit.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockTerminalInstance.write.mock.invocationCallOrder[0]
+      )
+      expect(replayEvent('restore-replay-succeeded')).toEqual(
+        expect.objectContaining({
+          terminalId: 'store-1123',
+          details: {
+            mode: 'transcript',
+            transcriptLength: delta.length,
+            source: 'cached-terminal',
+            fullFidelity: true,
+            restoreLimitation: undefined
+          }
+        })
+      )
+    })
+
+    it('records a failure and keeps the transcript when the delta write throws', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      const onError = vi.fn()
+      mockTerminalStoreState.peekTranscript.mockReturnValue('missed bytes')
+      mockTerminalInstance.write.mockImplementationOnce(() => {
+        throw new Error('write failed')
+      })
+
+      renderCached({ onError })
+
+      await vi.waitFor(() => {
+        expect(replayEvent('restore-replay-failed')).toEqual(
+          expect.objectContaining({
+            details: { mode: 'transcript', error: 'write failed', source: 'cached-terminal' }
+          })
+        )
+      })
+      expect(mockTerminalStoreState.consumeTranscript).not.toHaveBeenCalled()
+      expect(replayEvent('restore-replay-succeeded')).toBeUndefined()
+      expect(onError).toHaveBeenCalledWith('write failed')
+      // The terminal still fits to its new container.
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+      consoleErrorSpy.mockRestore()
+    })
+
+    it('writes nothing and only fits when nothing was missed', async () => {
+      mockTerminalStoreState.peekTranscript.mockReturnValue('')
+
+      renderCached()
+
+      await vi.waitFor(() => {
+        expect(replayEvent('restore-replay-skipped')).toEqual(
+          expect.objectContaining({
+            details: { reason: 'no-missed-output', source: 'cached-terminal' }
+          })
+        )
+      })
+      expect(mockTerminalInstance.write).not.toHaveBeenCalled()
+      expect(mockTerminalInstance.reset).not.toHaveBeenCalled()
+      expect(mockTerminalStoreState.consumeTranscript).not.toHaveBeenCalled()
+      expect(mockFitAddonInstance.fit).toHaveBeenCalled()
+    })
+
+    it('clears a trimmed flag left with an empty transcript without writing', async () => {
+      mockTerminalStoreState.peekTranscript.mockReturnValue('')
+      mockTerminalStoreState.findTerminalByPtyId.mockReturnValue({
+        id: 'store-1123',
+        ptyId: CACHED_PTY,
+        transcriptTrimmed: true
+      })
+
+      renderCached()
+
+      await vi.waitFor(() => {
+        expect(replayEvent('restore-replay-skipped')).toBeDefined()
+      })
+      expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+      expect(mockTerminalInstance.write).not.toHaveBeenCalled()
+      expect(mockTerminalInstance.reset).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['vt200', '\x1b[?1000h'],
+      ['x10', '\x1b[?1000h'],
+      ['drag', '\x1b[?1002h'],
+      ['any', '\x1b[?1003h']
+    ] as const)('resets and rehydrates modes snapshotted before the reset when the delta was trimmed (mouse %s)', async (mouseTrackingMode, mouseSequence) => {
+      const tail = 'tail of a trimmed delta\r\n'
+      mockTerminalStoreState.peekTranscript.mockReturnValue(tail)
+      mockTerminalStoreState.findTerminalByPtyId.mockReturnValue({
+        cwd: '/terminal-cwd',
+        transcriptTrimmed: true
+      })
+      // The app left the xterm in alt-screen with bracketed paste, app-cursor
+      // keys, and mouse tracking.
+      mockTerminalInstance.buffer.active.type = 'alternate'
+      mockTerminalInstance.modes.bracketedPasteMode = true
+      mockTerminalInstance.modes.applicationCursorKeysMode = true
+      mockTerminalInstance.modes.mouseTrackingMode = mouseTrackingMode
+      // reset() wipes those modes, as xterm's does.
+      mockTerminalInstance.reset.mockImplementation(() => {
+        mockTerminalInstance.buffer.active.type = 'normal'
+        mockTerminalInstance.modes.bracketedPasteMode = false
+        mockTerminalInstance.modes.applicationCursorKeysMode = false
+        mockTerminalInstance.modes.mouseTrackingMode = 'none'
+      })
+
+      renderCached()
+
+      await vi.waitFor(() => {
+        expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+      })
+      expect(mockTerminalInstance.reset).toHaveBeenCalledTimes(1)
+      expect(mockTerminalInstance.reset.mock.invocationCallOrder[0]).toBeLessThan(
+        mockTerminalInstance.write.mock.invocationCallOrder[0]
+      )
+      // Pre-reset modes, then the tail. No restore note.
+      expect(writes()).toEqual([`\x1b[0m\x1b[?1049h\x1b[?2004h\x1b[?1h${mouseSequence}`, tail])
+      expect(writes().some((data) => String(data).includes('Restore note'))).toBe(false)
+      expect(mockFitAddonInstance.fit.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockTerminalInstance.write.mock.invocationCallOrder[1]
+      )
+      expect(replayEvent('restore-replay-succeeded')).toEqual(
+        expect.objectContaining({
+          details: {
+            mode: 'transcript',
+            transcriptLength: tail.length,
+            source: 'cached-terminal',
+            fullFidelity: false,
+            restoreLimitation: 'transcript-trimmed'
+          }
+        })
+      )
+    })
+
+    it('keeps a trimmed transcript when its replay write throws', async () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      mockTerminalStoreState.peekTranscript.mockReturnValue('trimmed tail')
+      mockTerminalStoreState.findTerminalByPtyId.mockReturnValue({
+        cwd: '/terminal-cwd',
+        transcriptTrimmed: true
+      })
+      mockTerminalInstance.write.mockImplementation((data: unknown) => {
+        if (data === 'trimmed tail') throw new Error('write failed')
+      })
+
+      renderCached()
+
+      await vi.waitFor(() => {
+        expect(replayEvent('restore-replay-failed')).toEqual(
+          expect.objectContaining({
+            details: { mode: 'transcript', error: 'write failed', source: 'cached-terminal' }
+          })
+        )
+      })
+      expect(mockTerminalStoreState.consumeTranscript).not.toHaveBeenCalled()
+      consoleErrorSpy.mockRestore()
+    })
+
+    it('drains a late coalesced detached chunk into the delta before reading the transcript', async () => {
+      // The chunk is still in the detached hook's coalescing buffer at remount;
+      // only the synchronous flush moves it into the transcript.
+      let transcript = 'tick 1\r\n'
+      mockFlushDetachedOutputNow.mockImplementation(() => {
+        transcript += 'late chunk\r\n'
+      })
+      mockTerminalStoreState.peekTranscript.mockImplementation(() => transcript)
+      mockTerminalStoreState.consumeTranscript.mockImplementation(() => {
+        const consumed = transcript
+        transcript = ''
+        return consumed
+      })
+
+      renderCached()
+
+      await vi.waitFor(() => {
+        expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+      })
+      expect(mockFlushDetachedOutputNow).toHaveBeenCalledTimes(1)
+      expect(mockFlushDetachedOutputNow.mock.invocationCallOrder[0]).toBeLessThan(
+        mockTerminalStoreState.peekTranscript.mock.invocationCallOrder[0]
+      )
+      expect(writes()).toEqual(['tick 1\r\nlate chunk\r\n'])
+      // Nothing is left behind to be replayed out of order on a later remount.
+      expect(transcript).toBe('')
+    })
+
+    it('flushes the detached buffers before the transcript read on a fresh external mount too', async () => {
+      render(<ConnectedTerminal terminalId="fresh-pty-1123" autoSpawn={false} />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalStoreState.peekTranscript).toHaveBeenCalledWith('fresh-pty-1123')
+      })
+      expect(mockFlushDetachedOutputNow).toHaveBeenCalled()
+      expect(mockFlushDetachedOutputNow.mock.invocationCallOrder[0]).toBeLessThan(
+        mockTerminalStoreState.peekTranscript.mock.invocationCallOrder[0]
+      )
+    })
+
+    it('parses the delta at the cached size before resizing to the new container', async () => {
+      // Cached at 120 cols; the new container fits 200.
+      mockTerminalInstance.cols = 120
+      mockFitAddonInstance.fit.mockImplementation(() => {
+        mockTerminalInstance.cols = 200
+      })
+      const colsAtWrite: number[] = []
+      mockTerminalInstance.write.mockImplementation(() => {
+        colsAtWrite.push(mockTerminalInstance.cols)
+      })
+      mockTerminalStoreState.peekTranscript.mockReturnValue('frame drawn at 120 cols')
+
+      renderCached()
+
+      await vi.waitFor(() => {
+        expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+      })
+      expect(writes()).toEqual(['frame drawn at 120 cols'])
+      expect(colsAtWrite).toEqual([120])
+      expect(mockTerminalInstance.cols).toBe(200)
+    })
+
+    describe('scroll position', () => {
+      const activeBuffer = mockTerminalInstance.buffer.active as { viewportY?: number }
+
+      beforeEach(() => {
+        // Seed the pre-detach viewportY the unmount path captures.
+        activeBuffer.viewportY = 5
+        registerTerminal(CACHED_PTY, mockTerminalInstance as unknown as Terminal)
+        captureScrollPosition(CACHED_PTY)
+        unregisterTerminal(CACHED_PTY)
+        mockTerminalInstance.scrollToLine.mockClear()
+      })
+
+      afterEach(() => {
+        delete activeBuffer.viewportY
+        clearScrollPosition(CACHED_PTY)
+      })
+
+      it('drops the stale scroll position instead of restoring it after a delta write', async () => {
+        mockTerminalStoreState.peekTranscript.mockReturnValue('missed\r\n')
+
+        renderCached()
+
+        await vi.waitFor(() => {
+          expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+        })
+        expect(mockTerminalInstance.scrollToLine).not.toHaveBeenCalled()
+        expect(getCachedScrollPosition(CACHED_PTY)).toBeUndefined()
+      })
+
+      it('drops the stale scroll position after a trimmed delta write', async () => {
+        mockTerminalStoreState.peekTranscript.mockReturnValue('trimmed tail\r\n')
+        mockTerminalStoreState.findTerminalByPtyId.mockReturnValue({
+          cwd: '/terminal-cwd',
+          transcriptTrimmed: true
+        })
+
+        renderCached()
+
+        await vi.waitFor(() => {
+          expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+        })
+        expect(mockTerminalInstance.scrollToLine).not.toHaveBeenCalled()
+        expect(getCachedScrollPosition(CACHED_PTY)).toBeUndefined()
+      })
+
+      it('still restores the scroll position when nothing was missed', async () => {
+        mockTerminalStoreState.peekTranscript.mockReturnValue('')
+
+        renderCached()
+
+        await vi.waitFor(() => {
+          expect(mockTerminalInstance.scrollToLine).toHaveBeenCalledWith(5)
+        })
+      })
+    })
+
+    it('writes no project env line into a restored cached terminal', async () => {
+      mockTerminalStoreState.peekTranscript.mockReturnValue('missed\r\n')
+
+      renderCached({ spawnOptions: { projectId: 'project-a', env: { API_KEY: 'x', MODE: 'y' } } })
+
+      await vi.waitFor(() => {
+        expect(mockTerminalStoreState.consumeTranscript).toHaveBeenCalledWith(CACHED_PTY)
+      })
+      expect(writes()).toEqual(['missed\r\n'])
+      expect(writes().some((data) => String(data).includes('Project env'))).toBe(false)
     })
   })
 

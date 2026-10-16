@@ -1,10 +1,5 @@
 //! ACP module integration tests.
 //!
-//! The end-to-end handshake test requires a real ACP agent binary and a live
-//! Tauri `AppHandle`, neither of which is available in a headless `cargo test`
-//! run. It is therefore gated behind `#[ignore]` and documents how to drive a
-//! real agent manually.
-//!
 //! Unit tests for capability gating, event serialization, config conversion,
 //! and filesystem handlers live alongside their modules (`manager`, `events`,
 //! `config`, `client`).
@@ -50,24 +45,6 @@ fn signal_reaper_cfg_is_set_for_repo_root_and_package_builds() {
         cfg!(async_process_force_signal_backend),
         "this build did not pass async_process_force_signal_backend to rustc"
     );
-}
-
-/// End-to-end smoke test against a real ACP agent.
-///
-/// This is ignored by default because it needs:
-///   1. A locally installed ACP agent (e.g. `npx @zed-industries/claude-code-acp`
-///      or `gemini --experimental-acp`).
-///   2. A running Tauri application context to provide an `AppHandle`.
-///
-/// To exercise the full spawn → initialize → new_session → prompt →
-/// `acp:prompt_complete` path, wire an `AcpManager` to a test `AppHandle`
-/// inside a Tauri integration harness and remove the `#[ignore]`.
-#[test]
-#[ignore = "requires a real ACP agent binary and a live Tauri AppHandle"]
-fn end_to_end_prompt_turn_against_real_agent() {
-    // Intentionally a no-op placeholder. See the doc comment above for the
-    // manual harness steps. Kept as a discoverable, named test so the gated
-    // integration path is visible in `cargo test acp -- --ignored`.
 }
 
 #[cfg(test)]

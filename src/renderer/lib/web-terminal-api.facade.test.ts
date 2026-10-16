@@ -23,6 +23,8 @@ class FakeWS {
   onerror: ((ev: Event) => void) | null = null
   onclose: ((ev: CloseEvent) => void) | null = null
   sent: string[] = []
+  /** When set, `spawn` requests answer with this failure instead of success. */
+  static spawnRefusal: { error: string; code: string } | null = null
 
   constructor(public url: string) {
     FakeWS.instances.push(this)
@@ -35,6 +37,10 @@ class FakeWS {
   send(data: string): void {
     this.sent.push(data)
     const req = JSON.parse(data) as { id: string; type: string; payload: Record<string, unknown> }
+    if (req.type === 'spawn' && FakeWS.spawnRefusal) {
+      this.reply({ id: req.id, success: false, ...FakeWS.spawnRefusal })
+      return
+    }
     if (req.type === 'spawn') {
       this.reply({
         id: req.id,
@@ -72,6 +78,7 @@ class FakeWS {
 }
 
 afterEach(() => {
+  FakeWS.spawnRefusal = null
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
@@ -101,5 +108,34 @@ describe('createWebTerminalApi write delegation (Story 10)', () => {
       (frame) => (JSON.parse(frame) as { type: string }).type === 'write'
     )
     expect(writeFrames).toHaveLength(0)
+  })
+})
+
+describe('createWebTerminalApi spawn refused by a host terminal cap', () => {
+  it('surfaces the TERMINAL_LIMIT code and message verbatim and attaches nothing', async () => {
+    // A fresh client: the one an earlier test spawned through would re-attach
+    // its own terminal on this socket.
+    vi.resetModules()
+    vi.stubGlobal('WebSocket', FakeWS)
+    FakeWS.instances = []
+    FakeWS.spawnRefusal = {
+      error: 'Terminal limit reached (10 per project, 30 total): this project is at its limit',
+      code: 'TERMINAL_LIMIT'
+    }
+    const { createWebTerminalApi } = await import('./web-terminal-api')
+    const api = createWebTerminalApi()
+
+    const result = await api.spawn({ projectId: 'p1', cols: 80, rows: 24 })
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Terminal limit reached (10 per project, 30 total): this project is at its limit',
+      code: 'TERMINAL_LIMIT'
+    })
+    const types = FakeWS.instances.flatMap((socket) =>
+      socket.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)
+    )
+    expect(types).not.toContain('attach')
+    expect(types).not.toContain('kill')
   })
 })

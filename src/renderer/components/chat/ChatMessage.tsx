@@ -19,6 +19,7 @@ import {
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { CommandChip } from './CommandChip'
 import { AgentProse } from './chat-agent-prose'
 import {
   blockData,
@@ -58,14 +59,14 @@ function blocksToText(blocks: ContentBlock[]): string {
 
 /**
  * Render a user message's text, swapping inline skill, file, AND command
- * tokens for read-only `SkillChip`/`FileChip` pills. Skill (`\uE000..\uE001`),
- * command (`\uE004..\uE005`), and file (`\uE006..\uE007`) tokens use distinct
- * sentinel pairs, so each walk leaves the other tokens in its text segments.
- * We parse skill segments first, then walk each text segment for command
- * tokens, then each command text segment for file tokens — all pill types
- * render at their correct positions when inline together. A command token
- * renders as a `SkillChip` with the name prefixed by `/` (same visual source
- * of truth as the composer's `CommandPill` NodeView). Plain text (no tokens)
+ * tokens for read-only `SkillChip`/`CommandChip`/`FileChip` pills. Skill
+ * (`\uE000..\uE001`), command (`\uE004..\uE005`), and file (`\uE006..\uE007`)
+ * tokens use distinct sentinel pairs, so each walk leaves the other tokens in
+ * its text segments. We parse skill segments first, then walk each text
+ * segment for command tokens, then each command text segment for file tokens
+ * — all pill types render at their correct positions when inline together. A
+ * command token renders as a `CommandChip` (terminal icon, muted `/name`),
+ * the same chip as the composer's `CommandPill`. Plain text (no tokens)
  * renders verbatim with `whitespace-pre-wrap` to preserve the original
  * spacing. `MessageActions` still receives the sanitized copy text (tokens →
  * readable text) while edit keeps the raw token text so the composer
@@ -126,14 +127,14 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
     }
   }
   return (
-    <BubbleContent className="whitespace-pre-wrap break-words">
+    <BubbleContent className="whitespace-pre-wrap">
       {!hasPills && flat.length === 0
         ? text
         : flat.map((seg, i) =>
             seg.kind === 'skill' ? (
               <SkillChip key={`skill-${i}`} name={seg.name} />
             ) : seg.kind === 'command' ? (
-              <SkillChip key={`command-${i}`} name={`/${seg.name}`} />
+              <CommandChip key={`command-${i}`} name={seg.name} />
             ) : seg.kind === 'file' ? (
               <FileChip key={`file-${i}`} name={seg.display} kind={seg.dir ? 'dir' : 'file'} />
             ) : (

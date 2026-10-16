@@ -1,29 +1,40 @@
-import { TerminalSquare, X } from '@/components/icons'
+import { TerminalSquare } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface CommandChipProps {
+  /** Command name without the leading slash. The chip renders `/name`. */
   name: string
-  onRemove: () => void
   className?: string
 }
 
-/** Shows the active slash command above a prompt input as a chip. */
-export function CommandChip({ name, onRemove, className }: CommandChipProps): React.JSX.Element {
+/**
+ * Muted inline chip for a slash command. Sibling of `SkillChip` and `FileChip`
+ * — same inline metrics (`inline-flex items-center align-baseline leading-none
+ * h-[1.1em]`, `font-medium`, `max-w-[40ch] truncate`) so the chip stays on one
+ * line and flush with the surrounding text.
+ *
+ * A command is a prefix, not a skill mention. It uses the terminal icon and
+ * `text-muted-foreground`, with the name shown as `/name`. A skill keeps
+ * `Sparkles` and `text-primary`. No background, border, or horizontal padding.
+ *
+ * Always non-interactive. Backspace removes the pill in the composer. The
+ * timeline chip is static. Callers (`CommandPillNode`, `ChatMessage`) pass the
+ * bare command name.
+ */
+export function CommandChip({ name, className }: CommandChipProps): React.JSX.Element {
+  const label = `/${name}`
   return (
-    <div className={cn('flex items-start gap-2 border-b border-border/40 px-4 py-1.5', className)}>
-      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
-        <TerminalSquare size={12} className="shrink-0" />
-        <span className="font-medium text-foreground break-words">/{name}</span>
+    <span
+      className={cn(
+        'inline-flex h-[1.1em] max-w-full items-center gap-1 align-baseline leading-none',
+        'text-inherit font-medium text-muted-foreground',
+        className
+      )}
+    >
+      <TerminalSquare size={12} className="shrink-0" aria-hidden="true" />
+      <span className="max-w-[40ch] truncate" title={label}>
+        {label}
       </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="relative ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground @[400px]:size-10"
-        aria-label={`Remove /${name} command`}
-        title="Remove command"
-      >
-        <X size={12} />
-      </button>
-    </div>
+    </span>
   )
 }

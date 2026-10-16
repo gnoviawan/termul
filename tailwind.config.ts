@@ -45,6 +45,8 @@ export default {
         'diff-modified': 'oklch(var(--diff-modified) / <alpha-value>)',
         'diff-added': 'oklch(var(--diff-added) / <alpha-value>)',
         overlay: 'oklch(var(--overlay) / <alpha-value>)',
+        'row-hover': 'var(--row-hover)',
+        'row-hover-solid': 'var(--row-hover-solid)',
         warning: {
           DEFAULT: 'oklch(var(--warning) / <alpha-value>)',
           foreground: 'oklch(var(--warning-foreground) / <alpha-value>)'

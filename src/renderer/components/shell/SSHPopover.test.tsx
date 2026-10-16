@@ -4,6 +4,7 @@ import {
   resetNativeWebviewOcclusionForTests,
   useNativeWebviewOccluded
 } from '@/hooks/use-native-webview-occlusion'
+import { useSSHStore } from '@/stores/ssh-store'
 import { SSHPopover } from './SSHPopover'
 
 const { tauriRef, panelRef } = vi.hoisted(() => ({
@@ -43,20 +44,26 @@ vi.mock('@/components/ssh/SSHPanel', () => ({
     )
   }
 }))
-vi.mock('@/components/ssh/SSHProfileForm', () => ({
-  SSHProfileForm: ({ onClose }: { onClose: () => void }) => (
-    <div role="dialog" aria-label="profile form">
-      <button type="button" onClick={onClose}>
-        close-form
-      </button>
-    </div>
-  )
+vi.mock('@/components/ssh/SSHHostEditor', () => ({
+  SSHHostEditor: ({
+    open,
+    onOpenChange
+  }: {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+  }) =>
+    open ? (
+      <div role="dialog" aria-label="profile form">
+        <button type="button" onClick={() => onOpenChange(false)}>
+          close-form
+        </button>
+      </div>
+    ) : null
 }))
-vi.mock('@/stores/ssh-store', () => ({
-  useSSHConnections: () => [],
+vi.mock('@/stores/ssh-store', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   useSSHActions: () => ({
     loadProfiles: vi.fn(),
-    disconnect: vi.fn(),
     deleteProfile: vi.fn(),
     selectProfile: vi.fn()
   })
@@ -90,6 +97,26 @@ describe('SSHPopover', () => {
   afterEach(() => {
     cleanup()
     resetNativeWebviewOcclusionForTests()
+    useSSHStore.setState({ sessions: [] })
+  })
+
+  it('shows a live dot and says how many hosts are connected', () => {
+    renderPopover()
+    expect(screen.queryByTestId('rail-ssh-connected-dot')).toBeNull()
+    cleanup()
+
+    useSSHStore.setState({
+      sessions: [
+        { id: 's1', status: 'connected' },
+        { id: 's2', status: 'connecting' }
+      ] as never
+    })
+    renderPopover()
+    expect(screen.getByTestId('rail-ssh-connected-dot')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'SSH hosts' })).toHaveAttribute(
+      'aria-description',
+      '1 connected'
+    )
   })
 
   it('renders nothing on web', () => {

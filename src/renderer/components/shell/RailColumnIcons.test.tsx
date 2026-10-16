@@ -51,7 +51,7 @@ beforeEach(() => {
   resetShellLayoutStoreForTests()
   useShellLayoutStore.setState({ status: 'unavailable' })
   useGitStatusStore.setState({ statuses: {} })
-  useSSHStore.setState({ activeProfileId: null })
+  useSSHStore.setState({ workspaceOpen: false })
   vi.spyOn(appSettingsHooks, 'useUpdatePanelVisibility').mockReturnValue(updatePanelVisibility)
 })
 
@@ -105,8 +105,8 @@ describe('RailColumnIcons', () => {
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('disk full'))
   })
 
-  it('never writes the tab while an SSH profile is active, but still shows the column', () => {
-    useSSHStore.setState({ activeProfileId: 'ssh-1' })
+  it('never writes the tab while the SSH workspace is open, but still shows the column', () => {
+    useSSHStore.setState({ workspaceOpen: true })
     useShellLayoutStore.setState({ sidePanelVisible: false })
     renderIcons()
     fireEvent.click(button('Changes'))

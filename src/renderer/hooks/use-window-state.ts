@@ -12,6 +12,7 @@ import {
   type Monitor,
   primaryMonitor
 } from '@/lib/tauri-window'
+import { hasAppCloseOwner } from '@/lib/tauri-window-api'
 
 const DEFAULT_WIDTH = 1200
 const DEFAULT_HEIGHT = 800
@@ -220,7 +221,16 @@ export function useWindowState(): boolean {
     const registerListeners = (): Array<() => void> => {
       const movedUnlisten = window.onMoved(() => void persistWindowState())
       const resizedUnlisten = window.onResized(() => void persistWindowState())
-      const closeRequestedUnlisten = window.onCloseRequested(() => void persistWindowState(true))
+      // Persist only; never decide the close. Tauri destroys the window for
+      // every close listener that does not prevent its own event, which would
+      // override the app-close owner: quit (killing agents) instead of hiding
+      // to the tray on Linux/macOS, and skip the unsaved-files prompt on
+      // Windows (issue #1146). With no owner mounted (error fallback, unknown
+      // route) the default destroy stays, so the window can still close.
+      const closeRequestedUnlisten = window.onCloseRequested((event) => {
+        if (hasAppCloseOwner()) event.preventDefault()
+        void persistWindowState(true)
+      })
 
       return [
         () => cleanupTauriListener(movedUnlisten),

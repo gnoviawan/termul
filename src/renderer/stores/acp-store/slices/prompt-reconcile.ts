@@ -26,7 +26,7 @@ import {
 } from '@/lib/command-engine'
 import { dropRecordKey } from '../helpers'
 import { useAcpStore } from '../index'
-import { activeWirePromptTurns, claimPromptTurnEnd } from '../shared-state'
+import { activeWirePromptTurns, claimPromptTurnEnd, echoedWirePromptTurns } from '../shared-state'
 import type { PromptCommandState } from '../types'
 
 export interface PromptReconcileHandlers {
@@ -103,6 +103,7 @@ export function abandonPendingPrompt(
   if (!turnId) return false
   claimPromptTurnEnd(turnId)
   if (activeWirePromptTurns.get(sessionId) === turnId) activeWirePromptTurns.delete(sessionId)
+  if (echoedWirePromptTurns.get(sessionId) === turnId) echoedWirePromptTurns.delete(sessionId)
   return true
 }
 

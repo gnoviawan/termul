@@ -400,7 +400,7 @@ describe('acp-store', () => {
               message: 'agent crashed'
             })
           } else {
-            store._onAgentDisconnected({ agentId: 'agent-1' })
+            store._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
           }
           return new Promise<string>(() => {})
         }
@@ -588,6 +588,7 @@ describe('acp-store', () => {
       useAcpStore.getState().sessions.s1.configOptions.find((option) => option.id === 'model')
         ?.currentValue
     ).toBe('gpt-6-luna')
+    expect(useAcpStore.getState().sessions.s1.models?.currentModelId).toBe('gpt-6-luna')
   })
 
   // Story 5.3 (AC3): transportReconnecting flag is additive state — verify

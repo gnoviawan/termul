@@ -3,21 +3,15 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile approval edge states E2E (spec-mobile-approval-edge-states): a
  * phone-sized browser drives REAL agent chats through the web client's mobile
- * shell and checks the four edge states jsdom cannot see end to end.
+ * shell and checks the edge states jsdom cannot see end to end.
  *
  * - L-10: a pending elicitation reads "Needs you" (drawer row, header pill,
  *   shell region), exactly like a permission does.
- * - L-09: a permission that was pending when the control socket dropped and
- *   then leaves the store unanswered raises a persistent notice line and one
- *   announcement. The socket is dropped with `routeWebSocket`, the way the
- *   a11y-floor suite drops it; the server's own denial (after its 60s grace)
- *   is not waited for: the page only ever sees the request leave with the
- *   turn's end, and that is the signal the feature reads.
  * - L-11: a required boolean elicitation field left untouched submits Off.
  * - L-12: an approval that mounts in a hidden chat gets its 400ms tap guard
  *   and its heading focus when that chat is opened.
@@ -77,9 +71,6 @@ const LONG = '[DURATION:90]'
 const GUARD_CLEARED_MS = 450
 /** Longest chat title the app keeps whole (`deriveTitle`). */
 const TITLE_LIMIT = 48
-/** What the fake agent's `[ASK:permission]` request is for (the tool row title). */
-const TOOL = 'npm test -- auth'
-const DENIAL = `Permission for ${TOOL} was denied because this device disconnected. Ask the agent to retry.`
 
 interface Project {
   id: string
@@ -115,7 +106,7 @@ async function registerProject(): Promise<Project> {
 /** Boot the web client on `project` (its empty-pane launcher is what shows). */
 async function boot(page: Page, project: Project): Promise<void> {
   await wsRequest(E2E_BASE_URL, 'store_write', {
-    key: 'web-active-project',
+    key: storeKey('active-project'),
     value: { _version: 1, data: project.id }
   })
   await page.goto(`${E2E_BASE_URL}/#token=${E2E_TOKEN}`)
@@ -264,14 +255,6 @@ function requestHeading(page: Page): Locator {
   return page.getByRole('heading', { level: 2, name: 'Request from the agent' })
 }
 
-/**
- * The notice line in the chat (`ChatErrorNotice`). The shell region carries the
- * same words for assistive tech, so the line is looked up inside `main`.
- */
-function noticeLine(page: Page): Locator {
-  return page.getByRole('main').getByText(DENIAL, { exact: true })
-}
-
 function permissionPrompt(page: Page): Locator {
   return page.getByRole('region', { name: 'Approval needed' })
 }
@@ -314,47 +297,6 @@ function trackFrontendLogs(page: Page): () => string[] {
   return () => posted
 }
 
-interface Wire {
-  /** Close the control socket now and refuse every reconnect until `restore`. */
-  drop: () => Promise<void>
-  /** Let the next reconnect attempt through to the real server. */
-  restore: () => void
-}
-
-/**
- * Put the page's control socket (`/ws`) under test control: while down, every
- * connection attempt is closed on arrival, so the loss holds until `restore`.
- * Everything else passes through to the real server. Install before `boot`.
- */
-async function installWire(page: Page): Promise<Wire> {
-  let down = false
-  const live: Array<{ close: () => Promise<void> }> = []
-  await page.routeWebSocket(/:\d+\/ws$/, (client) => {
-    if (down) {
-      void client.close()
-      return
-    }
-    const server = client.connectToServer()
-    client.onMessage((message) => server.send(message))
-    server.onMessage((message) => client.send(message))
-    live.push({
-      close: async () => {
-        await client.close()
-        await server.close()
-      }
-    })
-  })
-  return {
-    drop: async () => {
-      down = true
-      for (const socket of live.splice(0)) await socket.close().catch(() => {})
-    },
-    restore: () => {
-      down = false
-    }
-  }
-}
-
 /**
  * The chat on screen is streaming. Chats started within a second of each other
  * have been seen to leave the next launcher's Start doing nothing, so a test that
@@ -362,20 +304,6 @@ async function installWire(page: Page): Promise<Wire> {
  */
 async function expectStreaming(page: Page): Promise<void> {
   await expect(page.locator('[data-chat-tab-state="visible"]')).toContainText('chunk-1')
-}
-
-/**
- * Drop the control socket and bring it back while an approval is pending:
- * resolves once the shell has announced the loss and the recovery. The chat on
- * screen has to be streaming first: a socket dropped while a chat is still being
- * created takes that creation down with it, which is not what is under test.
- */
-async function loseAndRegainConnection(page: Page, wire: Wire): Promise<void> {
-  await expectStreaming(page)
-  await wire.drop()
-  await expect(liveRegion(page)).toHaveText('Reconnecting…')
-  wire.restore()
-  await expect(liveRegion(page)).toHaveText('Connected', { timeout: 30_000 })
 }
 
 // ---------------------------------------------------------------------------
@@ -607,144 +535,6 @@ test('an elicitation that mounted in a hidden chat takes heading focus when the 
   await openChatFromDrawer(page, background)
   await expect(requestHeading(page)).toBeVisible()
   await expect.poll(focused).toContain(HEADING)
-})
-
-// ---------------------------------------------------------------------------
-// L-09: a permission denied because this device disconnected
-// ---------------------------------------------------------------------------
-
-test('a permission that left unanswered after a connection loss shows one notice line, announced once, with no Retry', async ({
-  page
-}) => {
-  const logs = trackFrontendLogs(page)
-  const wire = await installWire(page)
-  const project = await registerProject()
-  await boot(page, project)
-  const announced = await trackAnnouncements(page)
-
-  // The turn ends 12s after the prompt is accepted, with the request still
-  // unanswered: that is the end the notice reads.
-  await startChat(page, `[ASK:permission] [DURATION:12] denied`)
-  await expect(permissionPrompt(page)).toBeVisible()
-  await loseAndRegainConnection(page, wire)
-
-  const notice = noticeLine(page)
-  await expect(notice).toBeVisible({ timeout: 40_000 })
-  // One persistent line with only a Dismiss control: the agent has to ask again.
-  const line = notice.locator('xpath=..')
-  await expect(line.getByRole('button')).toHaveCount(1)
-  await expect(line.getByRole('button', { name: 'Dismiss error' })).toBeVisible()
-  await expect(line.getByRole('button', { name: /retry/i })).toHaveCount(0)
-
-  // The shell region said the same words once; the turn's end did not replace them.
-  await expect.poll(announced).toContain(DENIAL)
-  await announceBarrier(page)
-  const history = await announced()
-  expect(history.filter((text) => text === DENIAL)).toHaveLength(1)
-  expect(history).not.toContain('Turn finished')
-  await expect(notice).toBeVisible()
-
-  // The log carries ids only, never the tool text.
-  const denialLogs = logs().filter((body) => body.includes('acp.permissionDeniedByDisconnect'))
-  expect(denialLogs).toHaveLength(1)
-  expect(denialLogs[0]).not.toContain(TOOL)
-})
-
-test('the notice line clears when the next turn starts, without a second announcement', async ({
-  page
-}) => {
-  const wire = await installWire(page)
-  const project = await registerProject()
-  await boot(page, project)
-  const announced = await trackAnnouncements(page)
-
-  await startChat(page, `[ASK:permission] [DURATION:12] then next`)
-  await expect(permissionPrompt(page)).toBeVisible()
-  await loseAndRegainConnection(page, wire)
-  const notice = noticeLine(page)
-  await expect(notice).toBeVisible({ timeout: 40_000 })
-
-  // The user sends the next prompt from the composer.
-  const editor = composerCard(page).getByRole('textbox')
-  await editor.tap()
-  await page.keyboard.insertText('next turn [DURATION:4]')
-  await page.keyboard.press('Enter')
-
-  await expect(notice).toBeHidden()
-  // Its own end is announced as usual, and the denial is not repeated.
-  await expect(liveRegion(page)).toHaveText('Turn finished', { timeout: 30_000 })
-  expect((await announced()).filter((text) => text === DENIAL)).toHaveLength(1)
-  await expect(notice).toBeHidden()
-})
-
-test('answering the permission after the connection came back raises no notice', async ({
-  page
-}) => {
-  const wire = await installWire(page)
-  const project = await registerProject()
-  await boot(page, project)
-  const announced = await trackAnnouncements(page)
-
-  await startChat(page, `[ASK:permission] [DURATION:25] answered`)
-  const prompt = permissionPrompt(page)
-  await expect(prompt).toBeVisible()
-  await loseAndRegainConnection(page, wire)
-
-  // The user answers: that is the user's call, not a denial.
-  await expect(prompt).toBeVisible()
-  await prompt.getByRole('button', { name: 'Allow once' }).tap()
-  await expect(prompt).toBeHidden()
-  await expect.poll(() => answeredCount(page, 'permission allow-once')).toBe(1)
-
-  // The turn then ends on its own: the end of the turn is announced, a denial is not.
-  await expect(liveRegion(page)).toHaveText('Turn finished', { timeout: 45_000 })
-  await announceBarrier(page)
-  const history = await announced()
-  expect(history.filter((text) => text.includes('was denied'))).toHaveLength(0)
-  await expect(noticeLine(page)).toHaveCount(0)
-})
-
-test("another chat's denied permission is stored silently and shows its line when that chat is opened", async ({
-  page
-}) => {
-  const wire = await installWire(page)
-  const project = await registerProject()
-  await boot(page, project)
-  const announced = await trackAnnouncements(page)
-
-  // The first chat holds an unanswered permission while the second is on screen.
-  const background = `[ASK:permission] [DURATION:30] background`
-  await startChat(page, background)
-  await expect(permissionPrompt(page)).toBeVisible()
-  await startChat(page, `${LONG} foreground`, { viaNewChat: true })
-  await loseAndRegainConnection(page, wire)
-
-  // The first chat's turn ends with the request unanswered: its drawer row stops
-  // reading Needs you.
-  const drawer = await openDrawer(page)
-  await expect(chatRow(drawer, background)).not.toHaveAccessibleName(/Needs you/, {
-    timeout: 60_000
-  })
-  await page.keyboard.press('Escape')
-  await expect(drawer).toBeHidden()
-
-  // Nothing was said about it: it is not the chat on screen.
-  await announceBarrier(page)
-  expect((await announced()).filter((text) => text.includes('was denied'))).toHaveLength(0)
-  // (Its line is already in the hidden chat, just not on screen.)
-  await expect(noticeLine(page)).toBeHidden()
-
-  // Opening that chat shows the line, without announcing it now.
-  await openChatFromDrawer(page, background)
-  const notice = noticeLine(page)
-  await expect(notice).toBeVisible()
-  // Only the foreground chat's title has "foreground" in it: one match.
-  await announceBarrier(page, { query: 'foreground', count: '1 chat matches' })
-  expect((await announced()).filter((text) => text.includes('was denied'))).toHaveLength(0)
-
-  // Dismiss hides it.
-  await page.getByRole('button', { name: 'Dismiss error' }).tap()
-  await expect(notice).toBeHidden()
 })
 
 // ---------------------------------------------------------------------------

@@ -188,7 +188,7 @@
     "recharts": "^2.15.4",
     "shiki": "^3.23.0",
     "sonner": "^1.7.4",
-    "streamdown": "2.5.0",
+    "streamdown": "2.7.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
     "tauri-pty": "^0.1",

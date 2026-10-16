@@ -192,7 +192,10 @@ async fn start_host() -> StartedHost {
     let data_dir = tempfile::tempdir().expect("scratch data dir");
     let data = crate::remote::host::SharedLiveData {
         store: Arc::new(
-            crate::web::store::WebStore::open(data_dir.path().join("store.json"))
+            crate::web::store::WebStore::open(
+                data_dir.path().join("store.json"),
+                crate::web::store::StorePolicy::default(),
+            )
                 .expect("open the scratch store"),
         ),
         data_dir: data_dir.path().to_path_buf(),
@@ -207,7 +210,6 @@ async fn start_host() -> StartedHost {
             RemoteBindMode::Localhost,
             false,
             &data,
-            None,
             None,
             None,
         )

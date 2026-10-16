@@ -3,6 +3,7 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import * as React from 'react'
 import { CHAT_ROW_ICON } from '@/components/chat/chat-layout'
 import { X } from '@/components/icons'
+import { NativeWebviewOccluder } from '@/hooks/use-native-webview-occlusion'
 
 import { cn } from '@/lib/utils'
 
@@ -73,6 +74,7 @@ const SheetContent = React.forwardRef<
       className={cn(sheetVariants({ side }), className)}
       {...props}
     >
+      <NativeWebviewOccluder />
       {children}
       {/* The box is the touch target (28px, 44px on coarse pointers) and the 16px
           glyph stays where it was (24px from the corner): right-2.5/top-2.5 and

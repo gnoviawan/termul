@@ -1,4 +1,5 @@
 import { defineConfig, devices } from 'playwright/test'
+import { E2E_BASE_URL, E2E_DEVICE_ID } from './helpers'
 
 /**
  * E2E tests for the termul-server web client (long-running agent survival
@@ -20,8 +21,18 @@ import { defineConfig, devices } from 'playwright/test'
  * chat that already streamed, double-launching prompts). Flakiness must be
  * fixed deterministically, not retried away.
  */
-const port = Number(process.env.E2E_PORT ?? 8188)
-const baseURL = `http://127.0.0.1:${port}`
+const baseURL = E2E_BASE_URL
+
+/**
+ * Every browser context (the test fixtures and `browser.newContext()` alike)
+ * starts with the suite's fixed `deviceId`, so the device-scoped store keys a
+ * spec seeds through the WS helpers are the ones the page reads. A spec that
+ * needs a second device overrides `termul.deviceId` with an init script.
+ */
+const storageState = {
+  cookies: [],
+  origins: [{ origin: baseURL, localStorage: [{ name: 'termul.deviceId', value: E2E_DEVICE_ID }] }]
+}
 
 export default defineConfig({
   globalSetup: './global-setup',
@@ -40,6 +51,7 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   use: {
     baseURL,
+    storageState,
     trace: 'retain-on-failure',
     viewport: { width: 1440, height: 900 },
     colorScheme: 'dark',

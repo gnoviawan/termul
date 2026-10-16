@@ -4,6 +4,7 @@ type MarkdownNode = {
   type: string
   url?: string
   alt?: string | null
+  identifier?: string
   children?: MarkdownNode[]
 }
 
@@ -17,29 +18,51 @@ export function termulImageTag(url: string, alt: string): string {
   return `<termul-image data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"></termul-image>`
 }
 
-function transformChildren(node: MarkdownNode): void {
+/** The first definition wins, per CommonMark. */
+function collectDefinitions(node: MarkdownNode, definitions: Map<string, string>): void {
+  if (
+    node.type === 'definition' &&
+    node.identifier !== undefined &&
+    node.url !== undefined &&
+    !definitions.has(node.identifier)
+  ) {
+    definitions.set(node.identifier, node.url)
+  }
+  for (const child of node.children ?? []) collectDefinitions(child, definitions)
+}
+
+function imageUrl(node: MarkdownNode, definitions: Map<string, string>): string | undefined {
+  if (node.type === 'image') return node.url
+  if (node.type === 'imageReference' && node.identifier !== undefined) {
+    return definitions.get(node.identifier)
+  }
+  return undefined
+}
+
+function transformChildren(node: MarkdownNode, definitions: Map<string, string>): void {
   if (!node.children) return
   node.children = node.children.flatMap((child) => {
     // `url !== undefined` also rewrites empty destinations (`![]()`), which
     // would otherwise render `[Image blocked: ]` on the default pipeline.
-    if (child.type === 'image' && child.url !== undefined && !isHttpUrl(child.url)) {
-      return [{ type: 'html', value: termulImageTag(child.url, child.alt ?? '') }]
+    const url = imageUrl(child, definitions)
+    if (url !== undefined && !isHttpUrl(url)) {
+      return [{ type: 'html', value: termulImageTag(url, child.alt ?? '') }]
     }
-    transformChildren(child)
+    transformChildren(child, definitions)
     return [child]
   })
 }
 
 /**
- * Streamdown remark plugin that rewrites non-`https?` markdown images into
- * `<termul-image data-url data-alt>` raw-HTML nodes. The custom element
- * survives `rehype-sanitize` (registered via the `allowedTags` prop) so
- * `data:`/`file:`/relative images no longer become `[Image blocked: …]`.
- * Walks every parent (lists, quotes, links, table cells), not just paragraphs.
+ * Streamdown's `rehype-harden` turns non-`https?` images into
+ * `[Image blocked: …]`; `<termul-image>` survives `rehype-sanitize` because it
+ * is registered via the `allowedTags` prop.
  */
 export function remarkTermulImages(): (tree: MarkdownNode) => void {
   return (tree) => {
-    transformChildren(tree)
+    const definitions = new Map<string, string>()
+    collectDefinitions(tree, definitions)
+    transformChildren(tree, definitions)
   }
 }
 

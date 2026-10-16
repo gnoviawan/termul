@@ -1,8 +1,9 @@
 use super::{validate_project_path, IpcResult};
 use crate::acp::destructive_guard::{ensure_no_active_turn_in_checkout, start_ref_rewrites_tree};
 use crate::acp::AcpManager;
-use crate::trackers::git_tracker::{DiffStatError, GitDiffStat};
+use crate::trackers::git_tracker::{CommitDetailError, GitCommitDetail, GitCommitFileDiff};
 use crate::trackers::git_tracker::{CommitFailure, CommitStamp};
+use crate::trackers::git_tracker::{DiffStatError, GitDiffStat};
 use crate::trackers::{GitCommit, GitStatusDetail};
 use crate::web::command_ledger::{
     fingerprint_of, no_entity, run_domain, run_domain_released, DomainRan, PRECONDITION_FAILED_PREFIX,
@@ -17,7 +18,11 @@ use tauri::State;
 /// Get git status for a repository
 #[tauri::command]
 pub async fn git_get_status(cwd: String) -> Result<Vec<GitStatusDetail>, String> {
-    crate::trackers::git_tracker::git_get_status_detail(&cwd).map_err(|e: String| e)
+    // Git runs off the async workers (as `web/git_api.rs` does): an all-repo
+    // refresh must not starve IPC, ACP and the WS relay.
+    tokio::task::spawn_blocking(move || crate::trackers::git_tracker::git_get_status_detail(&cwd))
+        .await
+        .map_err(|e| format!("git status task failed: {e}"))?
 }
 
 /// Get git diff for a file. `staged` selects the index-vs-HEAD diff
@@ -28,8 +33,12 @@ pub async fn git_get_diff(
     path: String,
     staged: Option<bool>,
 ) -> Result<String, String> {
-    crate::trackers::git_tracker::git_get_diff(&cwd, &path, staged.unwrap_or(false))
-        .map_err(|e: String| e)
+    let staged = staged.unwrap_or(false);
+    tokio::task::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_get_diff(&cwd, &path, staged)
+    })
+    .await
+    .map_err(|e| format!("git diff task failed: {e}"))?
 }
 
 /// Working-tree `+added -removed` line stat for the repository at `cwd`
@@ -58,13 +67,19 @@ pub async fn git_get_diff_stat(cwd: String) -> Result<IpcResult<GitDiffStat>, St
 /// Stage a single file (`git add`).
 #[tauri::command]
 pub async fn git_stage(cwd: String, path: String) -> Result<(), String> {
-    crate::trackers::git_tracker::git_stage_file(&cwd, &path).map_err(|e: String| e)
+    tokio::task::spawn_blocking(move || crate::trackers::git_tracker::git_stage_file(&cwd, &path))
+        .await
+        .map_err(|e| format!("git stage task failed: {e}"))?
 }
 
 /// Unstage a single file (`git restore --staged`).
 #[tauri::command]
 pub async fn git_unstage(cwd: String, path: String) -> Result<(), String> {
-    crate::trackers::git_tracker::git_unstage_file(&cwd, &path).map_err(|e: String| e)
+    tokio::task::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_unstage_file(&cwd, &path)
+    })
+    .await
+    .map_err(|e| format!("git unstage task failed: {e}"))?
 }
 
 /// Stage a single hunk. `hunk_patch` is a unified-diff fragment
@@ -81,7 +96,11 @@ pub async fn git_stage_hunk(
     // The fingerprint names the file, never the patch.
     let print = fingerprint_of("git_stage_hunk", &[("cwd", &cwd), ("path", &path)]);
     run_domain(relay.ledger(), "git_stage_hunk", command_id, print, no_entity(), async move {
-        crate::trackers::git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch)
+        tokio::task::spawn_blocking(move || {
+            crate::trackers::git_tracker::git_stage_hunk(&cwd, &path, &hunk_patch)
+        })
+        .await
+        .map_err(|e| format!("git stage hunk task failed: {e}"))?
     })
     .await
 }
@@ -103,7 +122,13 @@ pub async fn git_unstage_hunk(
         command_id,
         print,
         no_entity(),
-        async move { crate::trackers::git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch) },
+        async move {
+            tokio::task::spawn_blocking(move || {
+                crate::trackers::git_tracker::git_unstage_hunk(&cwd, &path, &hunk_patch)
+            })
+            .await
+            .map_err(|e| format!("git unstage hunk task failed: {e}"))?
+        },
     )
     .await
 }
@@ -119,17 +144,99 @@ pub async fn git_discard(
 ) -> Result<(), String> {
     let print = fingerprint_of("git_discard", &[("cwd", &cwd), ("path", &path)]);
     run_domain(relay.ledger(), "git_discard", command_id, print, no_entity(), async move {
-        crate::trackers::git_tracker::git_discard_file(&cwd, &path).map_err(|e: String| e)
+        tokio::task::spawn_blocking(move || {
+            crate::trackers::git_tracker::git_discard_file(&cwd, &path)
+        })
+        .await
+        .map_err(|e| format!("git discard task failed: {e}"))?
     })
     .await
 }
 
 /// Read commit history for the repository at `cwd` as structured rows for the
 /// history/graph view. `limit` caps the number of commits (clamped backend-side;
-/// defaults to 200). Read-only.
+/// defaults to 200); `all` walks every ref instead of `HEAD`. Read-only; git runs
+/// off the async runtime and the cwd is validated like the other history reads.
 #[tauri::command]
-pub async fn git_get_log(cwd: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
-    crate::trackers::git_tracker::git_get_log(&cwd, limit).map_err(|e: String| e)
+pub async fn git_get_log(
+    cwd: String,
+    limit: Option<u32>,
+    all: Option<bool>,
+) -> Result<Vec<GitCommit>, String> {
+    let cwd = match validate_project_path(&cwd) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(e) => {
+            log::warn!("[git_get_log] invalid cwd: {e}");
+            return Err(e);
+        }
+    };
+    let all = all.unwrap_or(false);
+    tokio::task::spawn_blocking(move || crate::trackers::git_tracker::git_get_log(&cwd, limit, all))
+        .await
+        .map_err(|e| format!("git log task failed: {e}"))?
+}
+
+/// Message, author email, parents and changed files of one commit for the
+/// Git History detail pane. Read-only; the same shared function backs
+/// `POST /git/commit-detail`. A hash that is not 4–64 hex characters is refused
+/// before git runs (`INVALID_COMMIT_HASH`).
+#[tauri::command]
+pub async fn git_get_commit_detail(
+    cwd: String,
+    hash: String,
+) -> Result<IpcResult<GitCommitDetail>, String> {
+    let cwd = match validate_project_path(&cwd) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(e) => {
+            log::warn!("[git_get_commit_detail] invalid cwd: {e}");
+            return Ok(IpcResult::error(e, "PATH_VALIDATION_FAILED"));
+        }
+    };
+    let result: Result<GitCommitDetail, CommitDetailError> =
+        tokio::task::spawn_blocking(move || {
+            crate::trackers::git_tracker::git_get_commit_detail(&cwd, &hash)
+        })
+        .await
+        .map_err(|e| format!("git commit detail task failed: {e}"))?;
+    Ok(match result {
+        Ok(detail) => IpcResult::success(detail),
+        Err(e) => IpcResult::error(e.to_string(), e.code()),
+    })
+}
+
+/// Unified diff of one file in a commit against its first parent, for the
+/// read-only commit Diff tab. Same shared function as
+/// `POST /git/commit-file-diff`. `old_path` is a rename's source path. A diff
+/// over the size cap comes back as `{ diff: "", tooLarge: true }`.
+#[tauri::command]
+pub async fn git_get_commit_file_diff(
+    cwd: String,
+    hash: String,
+    path: String,
+    old_path: Option<String>,
+) -> Result<IpcResult<GitCommitFileDiff>, String> {
+    let cwd = match validate_project_path(&cwd) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(e) => {
+            log::warn!("[git_get_commit_file_diff] invalid cwd: {e}");
+            return Ok(IpcResult::error(e, "PATH_VALIDATION_FAILED"));
+        }
+    };
+    let result: Result<GitCommitFileDiff, CommitDetailError> =
+        tokio::task::spawn_blocking(move || {
+            crate::trackers::git_tracker::git_get_commit_file_diff(
+                &cwd,
+                &hash,
+                &path,
+                old_path.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| format!("git commit file diff task failed: {e}"))?;
+    Ok(match result {
+        Ok(diff) => IpcResult::success(diff),
+        Err(e) => IpcResult::error(e.to_string(), e.code()),
+    })
 }
 
 /// Create a commit from the staged index. `amend` rewrites HEAD instead of
@@ -221,7 +328,11 @@ pub async fn git_push(cwd: String) -> Result<(), String> {
 pub async fn git_get_commit_context(
     cwd: String,
 ) -> Result<crate::trackers::git_tracker::GitCommitContext, String> {
-    crate::trackers::git_tracker::git_get_commit_context(&cwd).map_err(|e: String| e)
+    tokio::task::spawn_blocking(move || {
+        crate::trackers::git_tracker::git_get_commit_context(&cwd)
+    })
+    .await
+    .map_err(|e| format!("git commit context task failed: {e}"))?
 }
 
 #[tauri::command]

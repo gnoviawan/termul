@@ -374,8 +374,15 @@ export const createPaneSlice: StateCreator<WorkspaceState, [], [], PaneSliceStat
     set({ fullscreenPaneId: null })
   },
 
-  updatePaneSizes: (splitId: string, sizes: number[]): void => {
-    const { root } = get()
+  updatePaneSizes: (splitId: string, sizes: number[], projectId?: string): void => {
+    const state = get()
+    const parked =
+      projectId !== undefined && projectId !== state.activeProjectId
+        ? state.parkedTrees[projectId]
+        : undefined
+    // A named project that is neither active nor parked has no tree to resize.
+    if (projectId !== undefined && projectId !== state.activeProjectId && !parked) return
+    const root = parked ? parked.root : state.root
     const node = findPaneById(root, splitId)
     if (node?.type !== 'split') return
 
@@ -389,6 +396,11 @@ export const createPaneSlice: StateCreator<WorkspaceState, [], [], PaneSliceStat
 
     const updatedSplit: SplitNode = { ...node, sizes }
     const newRoot = replaceNode(root, splitId, updatedSplit)
+    if (parked && projectId !== undefined) {
+      // A hidden tree's resize lands in its parked slot, never the visible tree.
+      set({ parkedTrees: { ...state.parkedTrees, [projectId]: { ...parked, root: newRoot } } })
+      return
+    }
     set({ root: newRoot })
   },
 

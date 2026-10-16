@@ -11,7 +11,7 @@ import { openerApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { PendingElicitation } from '@/stores/acp-store'
 import { useAcpStore } from '@/stores/acp-store'
-import { CHAT_GUTTER_X } from './chat-layout'
+import { CHAT_GUTTER_X, QUESTION_PANEL_SHADOW } from './chat-layout'
 import { ElicitationQuestions } from './ElicitationQuestions'
 import { questionShape } from './elicitation-shape'
 
@@ -189,7 +189,7 @@ export function ElicitationPrompt({
         className={cn(
           'mx-auto w-full max-w-3xl rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
           'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
-          !questionShaped && 'px-3.5 py-3 sm:px-4'
+          questionShaped ? QUESTION_PANEL_SHADOW : 'px-3.5 py-3 sm:px-4'
         )}
       >
         {questionShaped ? (

@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { startChatPanelDetach } from '@/lib/chat-panel-detach'
 import { projectSwitch } from '@/lib/project-switch/coordinator'
 import { useProjectSwitchStatus } from '@/lib/project-switch/status-store'
 import { createProjectSwitchDeps, dropTreesOfDeletedProjects } from '@/lib/project-switch/wiring'
@@ -24,6 +25,9 @@ export function useEditorPersistence(projectId: string): void {
   // Bind the coordinator for the workspace's lifetime. Unbinding disposes it:
   // anything still hydrating is dropped and never commits.
   useEffect(() => projectSwitch.bind(createProjectSwitchDeps()), [])
+
+  // Release a chat's payload pin once it is in no tab (any project) and idle.
+  useEffect(() => startChatPanelDetach(), [])
 
   // The project store is the user's intent; the coordinator makes it visible.
   // A repeat of the same pick (effect re-run) is a no-op or joins an open.

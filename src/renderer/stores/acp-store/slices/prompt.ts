@@ -6,6 +6,11 @@ import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import {
+  alignSessionModelProjection,
+  withSessionModelOnIndex
+} from '@/components/chat/chat-input-bar-config'
+import {
+  type AgentId,
   acpApi,
   type ContentBlock,
   type ElicitationField,
@@ -37,6 +42,7 @@ import {
   dropQuestionsForSession,
   dropRecordKey,
   finalizeStreaming,
+  isAuthRetriableSessionError,
   lastErrorAfterStop,
   mergeAgentConfigOptions,
   newId,
@@ -47,15 +53,10 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
-  forgetTrackedPermission,
-  forgetTrackedPermissionsForSession,
-  retrackPermission,
-  retrackStillPending
-} from '../permission-denial'
-import {
   activeWirePromptTurns,
   claimPromptTurnEnd,
   commitMessageCollectors,
+  echoedWirePromptTurns,
   inFlightPromotions,
   isHistoryCoveredEvent,
   nextSeq,
@@ -67,6 +68,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpSession, AcpState, ChatMessage, TurnEndSetter } from '../types'
+import { reauthenticateOnDemand, withAuthRetry } from './agent'
 import {
   abandonPendingPrompt,
   beginPromptReconcile,
@@ -158,6 +160,7 @@ function scheduleTurnEnd(
       })
       if (closedTurn) {
         activeWirePromptTurns.delete(sessionId)
+        echoedWirePromptTurns.delete(sessionId)
         clearPromptReconcile(sessionId)
         const state = useAcpStore.getState()
         if (state.sessions[sessionId] && state.sessionIndex.some((e) => e.id === sessionId)) {
@@ -198,6 +201,7 @@ function scheduleTurnEnd(
     // the write can't resurrect a removed index entry.
     if (closedTurn) {
       activeWirePromptTurns.delete(sessionId)
+      echoedWirePromptTurns.delete(sessionId)
       clearPromptReconcile(sessionId)
       const state = useAcpStore.getState()
       if (state.sessions[sessionId] && state.sessionIndex.some((e) => e.id === sessionId)) {
@@ -269,7 +273,9 @@ export async function runPromptTurn(
     // repoints `agentId` at the resolved live agent, dispatching would hit the
     // old (possibly dead) agent with `unknown agent`. Queue here; the open's
     // finally flushes once agentId is repointed and the transcript installed.
-    if ((sessionTurnBusy(current) || s.openingHistoryIds[sessionId]) && !skipUserAppend) {
+    const isUnboundLaunchPlaceholder = !current.agentId
+    const awaitingAgent = s.openingHistoryIds[sessionId] || isUnboundLaunchPlaceholder
+    if ((sessionTurnBusy(current) || awaitingAgent) && !skipUserAppend) {
       enqueued = true
       if (queuedOrigin) {
         return {
@@ -326,7 +332,13 @@ export async function runPromptTurn(
           return {
             sessions: {
               ...s.sessions,
-              [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+              [sessionId]: {
+                ...current,
+                activeTurn: true,
+                openTurnId,
+                latestPromptTurnId: turnId,
+                lastError: null
+              }
             }
           }
         }
@@ -349,7 +361,13 @@ export async function runPromptTurn(
           },
           sessions: {
             ...s.sessions,
-            [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+            [sessionId]: {
+              ...current,
+              activeTurn: true,
+              openTurnId,
+              latestPromptTurnId: turnId,
+              lastError: null
+            }
           }
         }
       }
@@ -362,7 +380,13 @@ export async function runPromptTurn(
         },
         sessions: {
           ...s.sessions,
-          [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+          [sessionId]: {
+            ...current,
+            activeTurn: true,
+            openTurnId,
+            latestPromptTurnId: turnId,
+            lastError: null
+          }
         }
       }
     }
@@ -382,7 +406,13 @@ export async function runPromptTurn(
       },
       sessions: {
         ...s.sessions,
-        [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+        [sessionId]: {
+          ...current,
+          activeTurn: true,
+          openTurnId,
+          latestPromptTurnId: turnId,
+          lastError: null
+        }
       }
     }
   })
@@ -425,6 +455,7 @@ export async function runPromptTurn(
   const failTurn = (err: unknown): void => {
     settleCommand(turnId, 'rejected')
     activeWirePromptTurns.delete(sessionId)
+    echoedWirePromptTurns.delete(sessionId)
     clearPromptReconcile(sessionId)
     const agentDead = isAgentDeadError(err)
     set((s) => {
@@ -446,6 +477,7 @@ export async function runPromptTurn(
   }
 
   persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
+  let dispatchedAgentId: AgentId | null = null
   try {
     // The command reply resolves the COMMAND only (`settleDispatch`); the turn
     // ends from the durable `prompt_complete` via `_onPromptComplete`.
@@ -486,11 +518,13 @@ export async function runPromptTurn(
       await pendingPromotion
       if (promoteSlowTimer) clearTimeout(promoteSlowTimer)
     }
+    dispatchedAgentId = liveSession.agentId
     settleDispatch(await dispatch(liveSession, turnId))
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
       settleCommand(turnId, 'rejected')
       activeWirePromptTurns.delete(sessionId)
+      echoedWirePromptTurns.delete(sessionId)
       // The empty-display dispatch has no optimistic user message to strip;
       // recover the wire blocks into the queue under the turn id so the
       // summary-only handoff is not lost when the new session is busy.
@@ -515,12 +549,14 @@ export async function runPromptTurn(
       return
     }
     // AD-6: losing the transport before the reply leaves the outcome UNKNOWN
-    // — the host may or may not hold this turn, whether or not its
-    // `user_prompt` echo already landed. The command becomes pending-reconcile:
-    // the turn stays open ("Waiting to confirm", no error banner) and the SAME
-    // turn id is resent once the transport recovers; the host answers with a
-    // receipt or the stop reason. Only a definite server rejection fails the
-    // turn, and Retry of a failed turn is a new intent with a new id.
+    // unless this turn's `user_prompt` echo already landed — the host
+    // sequences that echo on acceptance, so the command is then accepted and
+    // the resubscribed socket carries the rest of the turn. Otherwise the
+    // command becomes pending-reconcile: the turn stays open ("Waiting to
+    // confirm", no error banner) and the SAME turn id is resent once the
+    // transport recovers; the host answers with a receipt or the stop reason.
+    // Only a definite server rejection fails the turn, and Retry of a failed
+    // turn is a new intent with a new id.
     if (isOutcomeUncertainError(err)) {
       // The turn may have ended while the dispatch was in flight (stop reason /
       // terminator landed, Stop pressed, or a queued prompt already started
@@ -531,6 +567,17 @@ export async function runPromptTurn(
         activeWirePromptTurns.get(sessionId) !== turnId
       ) {
         settleCommand(turnId, 'accepted')
+        return
+      }
+      // The echo for this turn already arrived: the host accepted it, and the
+      // turn view ends only from its durable `prompt_complete`.
+      if (echoedWirePromptTurns.get(sessionId) === turnId) {
+        settleCommand(turnId, 'accepted')
+        void logFrontendError({
+          level: 'info',
+          source: 'acp-store.promptReceipt',
+          message: `Prompt turn ${turnId} on session ${sessionId} lost its reply after its user_prompt echo; accepted, awaiting its prompt_complete`
+        })
         return
       }
       beginPromptReconcile(sessionId, {
@@ -548,8 +595,55 @@ export async function runPromptTurn(
       return
     }
     failTurn(err)
+    // The agent may have run part of the turn before its token expired, so a
+    // resend could repeat its tool calls.
+    if (dispatchedAgentId && isAuthRetriableSessionError(err)) {
+      await reauthenticateWithoutResendingPrompt(set, get, sessionId, dispatchedAgentId, turnId)
+    }
     throw err
   }
+}
+
+const PROMPT_REAUTHENTICATED_MESSAGE =
+  'Signed in to the agent again. Select Retry to send your message.'
+
+async function reauthenticateWithoutResendingPrompt(
+  set: TurnEndSetter,
+  get: () => AcpState,
+  sessionId: SessionId,
+  agentId: AgentId,
+  failedTurnId: string
+): Promise<void> {
+  let signedIn = false
+  let lastError: string
+  try {
+    signedIn = await reauthenticateOnDemand(get, agentId, 'session/prompt', 'text')
+    if (!signedIn) return
+    lastError = PROMPT_REAUTHENTICATED_MESSAGE
+  } catch (authErr) {
+    lastError = authErr instanceof Error ? authErr.message : String(authErr)
+  }
+  set((s) => {
+    const current = s.sessions[sessionId]
+    // A newer turn opened since the failed one: this result is stale.
+    if (
+      current?.agentId !== agentId ||
+      current.activeTurn ||
+      current.latestPromptTurnId !== failedTurnId
+    )
+      return {}
+    const revive = signedIn && current.status === 'error'
+    return {
+      agentStatus:
+        signedIn && s.agentStatus[agentId] === 'error'
+          ? { ...s.agentStatus, [agentId]: 'connected' }
+          : s.agentStatus,
+      sessions: {
+        ...s.sessions,
+        [sessionId]: { ...current, lastError, ...(revive ? { status: 'active' } : {}) }
+      }
+    }
+  })
 }
 
 type PromptSliceState = Pick<
@@ -580,7 +674,7 @@ type PromptSliceState = Pick<
 >
 
 /** The host's stable `already_resolved` reply: the approval/question ticket was
- *  resolved by another connection, a timeout or a disconnect deny. */
+ *  answered by another connection or released when its turn, session or agent ended. */
 function isAlreadyResolved(err: unknown): boolean {
   return err instanceof AcpTransportError && err.code === WS_ERROR_CODES.ALREADY_RESOLVED
 }
@@ -636,8 +730,6 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
     if (!session?.activeTurn) return
-    // Stop is a user action: a permission it abandons is not a disconnect denial.
-    const forgotten = forgetTrackedPermissionsForSession(sessionId)
     // A prompt still waiting to be confirmed may never have reached the host:
     // Stop abandons the command (no more same-id resends — a late resend must
     // not start a turn the user cancelled) and ends the local turn view itself,
@@ -656,8 +748,6 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.cancelPrompt(session.agentId, sessionId)
     } catch (err) {
-      // The cancel never landed, so the permission is still the server's to deny.
-      retrackStillPending(forgotten, get().pendingPermissions)
       if (!abandonedPending) throw err
       void logFrontendError({
         level: 'warn',
@@ -691,7 +781,12 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    if (session.status === 'closed') throw new Error('session is closed')
+    if (session.status === 'closed') {
+      // A history reopen (e.g. a stopped chat's automatic resume) is in
+      // flight: leave the item queued — the open's finally flushes it.
+      if (get().openingHistoryIds[sessionId]) return
+      throw new Error('session is closed')
+    }
 
     set((s) => ({
       promptQueues: {
@@ -703,13 +798,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
     try {
       if (sessionTurnBusy(session)) {
-        const forgotten = forgetTrackedPermissionsForSession(sessionId)
-        try {
-          await acpApi.cancelPrompt(session.agentId, sessionId)
-        } catch (err) {
-          retrackStillPending(forgotten, get().pendingPermissions)
-          throw err
-        }
+        await acpApi.cancelPrompt(session.agentId, sessionId)
         await waitForTurnClear(sessionId, get, useAcpStore.subscribe)
       }
       await runPromptTurn(
@@ -746,7 +835,13 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   setConfigOption: async (sessionId, configId, valueId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
+    const response = await withAuthRetry(
+      get,
+      session.agentId,
+      'session/set_config_option',
+      'text',
+      () => acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
+    )
     // Factory Droid acknowledges successful changes with `{}` (no snapshot).
     // Preserve the known option list and update only the selected value.
     // The response snapshot can also re-assert creation defaults for OTHER
@@ -776,11 +871,18 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         creationEchoLogged = { ...creationEchoLogged }
         for (const optionId of preservedEchoOptionIds) creationEchoLogged[optionId] = true
       }
+      const draft: AcpSession = {
+        ...current,
+        configOptions: updated,
+        creationEchoLogged
+      }
+      const session = alignSessionModelProjection(draft)
       return {
         sessions: {
           ...s.sessions,
-          [sessionId]: { ...current, configOptions: updated, creationEchoLogged }
-        }
+          [sessionId]: session
+        },
+        sessionIndex: withSessionModelOnIndex(s.sessionIndex, sessionId, session)
       }
     })
     for (const optionId of preservedEchoOptionIds) {
@@ -804,7 +906,9 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   setMode: async (sessionId, modeId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    await acpApi.setMode(session.agentId, sessionId, modeId)
+    await withAuthRetry(get, session.agentId, 'session/set_mode', 'text', () =>
+      acpApi.setMode(session.agentId, sessionId, modeId)
+    )
     set((s) => {
       const current = s.sessions[sessionId]
       if (!current?.modes) return {}
@@ -828,27 +932,30 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   setModel: async (sessionId, modelId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    await acpApi.setModel(session.agentId, sessionId, modelId)
+    await withAuthRetry(get, session.agentId, 'session/set_model', 'text', () =>
+      acpApi.setModel(session.agentId, sessionId, modelId)
+    )
     set((s) => {
       const current = s.sessions[sessionId]
       if (!current) return {}
+      // The chat picker prefers the model-category config option over
+      // the legacy `models` projection. Keep both in sync so applying a
+      // launcher selection cannot leave the composer showing the
+      // session/new default.
+      const draft: AcpSession = {
+        ...current,
+        models: current.models ? { ...current.models, currentModelId: modelId } : current.models,
+        configOptions: current.configOptions.map((option) =>
+          option.category === 'model' ? { ...option, currentValue: modelId } : option
+        )
+      }
+      const session = alignSessionModelProjection(draft)
       return {
         sessions: {
           ...s.sessions,
-          [sessionId]: {
-            ...current,
-            // The chat picker prefers the model-category config option over
-            // the legacy `models` projection. Keep both in sync so applying a
-            // launcher selection cannot leave the composer showing the
-            // session/new default.
-            models: current.models
-              ? { ...current.models, currentModelId: modelId }
-              : current.models,
-            configOptions: current.configOptions.map((option) =>
-              option.category === 'model' ? { ...option, currentValue: modelId } : option
-            )
-          }
-        }
+          [sessionId]: session
+        },
+        sessionIndex: withSessionModelOnIndex(s.sessionIndex, sessionId, session)
       }
     })
     cacheOptionsFromSession(set, get, sessionId)
@@ -861,8 +968,6 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   respondPermission: async (requestId, optionId) => {
     const pending = get().pendingPermissions[requestId]
     if (!pending) return
-    // The user is answering: leaving the store is not a disconnect denial.
-    const tracked = forgetTrackedPermission(requestId)
     // Optimistically remove so a rapid double-click can't fire a second backend
     // call for the same request (which would error as 'unknown request').
     set((s) => {
@@ -873,14 +978,12 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.respondPermission(pending.agentId, requestId, optionId)
     } catch (err) {
-      // Another connection (or a timeout) already resolved this ticket: the
-      // request is gone for good, so restoring it would resurrect a modal
-      // nobody can answer. Mirrors the desktop command's idempotent resolve.
+      // Another connection already answered this ticket, or its turn or session
+      // ended: the request is gone for good, so restoring it would resurrect a
+      // modal nobody can answer. Mirrors the desktop command's idempotent resolve.
       if (isAlreadyResolved(err)) return
-      // Restore the entry so the user can retry, then track it again (after the
-      // restore, so the restore is not read as the request vanishing).
+      // Restore the entry so the user can retry.
       set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
-      if (tracked) retrackPermission(requestId, tracked)
       throw err
     }
   },
@@ -1117,15 +1220,16 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         }
       }
     })
-    // Update the in-memory payload cache so a same-session rehydrate (switching
-    // away and back, or any path that re-runs `loadSessionPayload`) finds the
-    // fence. Since CAP-2 host-owned history, `persistSession` only updates the
-    // session-index projection — the durable message wire shape is owned by the
-    // Rust host, and the renderer's `messages` is a projection. Without this
-    // cache update, the snapshot fence would be lost the moment the live
-    // projection is re-fetched. Cross-restart durability requires a host-side
-    // synthetic record (renegotiate the spec's "Never: no Rust-side persistence"
-    // rule if needed).
+    // Update the in-memory payload cache so a later full read in this app
+    // session (`loadSessionPayload`, e.g. desktop scroll-up) finds the fence. A
+    // reopen drops this cached copy but keeps its fences and merges them into
+    // the host tail by message id. Since CAP-2 host-owned history,
+    // `persistSession` only updates the session-index projection — the durable
+    // message wire shape is owned by the Rust host, and the renderer's
+    // `messages` is a projection. Without this cache update, the snapshot fence
+    // would be lost the moment the live projection is re-fetched. Cross-restart
+    // durability requires a host-side synthetic record (renegotiate the spec's
+    // "Never: no Rust-side persistence" rule if needed).
     //
     // Only update the specific assistant message in the cache — the live window
     // (`get().messages[sessionId]`) may be trimmed (MAX_LIVE_WINDOW_MESSAGES),

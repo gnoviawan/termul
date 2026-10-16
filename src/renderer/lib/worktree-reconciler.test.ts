@@ -348,16 +348,16 @@ describe('reconcileProjectWorktrees', () => {
   })
 
   it('preserves project fields changed while the listing is pending', async () => {
-    seed({ name: 'Before' })
+    seed({ defaultShell: '/bin/bash' })
     const pending = deferredList()
     mocks.list.mockReturnValue(pending.promise)
 
     const run = reconcileProjectWorktrees('p1')
-    useProjectStore.getState().updateProject('p1', { name: 'After' })
+    useProjectStore.getState().updateProject('p1', { defaultShell: '/bin/zsh' })
     pending.resolve(ok(info(WT_A)))
     await run
 
-    expect(project().name).toBe('After')
+    expect(project().defaultShell).toBe('/bin/zsh')
     expect(project().worktrees).toHaveLength(1)
   })
 

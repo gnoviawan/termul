@@ -133,6 +133,9 @@ oauth2 = "5.0"
 # Regex and parsing
 regex = "1"
 lazy_static = "1.4"
+# SIMD newline / needle search for the host-start JSONL sweep (already in the
+# lock tree through serde_json and regex).
+memchr = "2"
 
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }

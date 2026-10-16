@@ -146,4 +146,45 @@ describe('workspace-store per-project trees', () => {
     expect((store().root as LeafNode).tabs).toEqual([])
     expect((store().parkedTrees.A.root as LeafNode).tabs).toHaveLength(1)
   })
+
+  describe('updatePaneSizes with a project id', () => {
+    function splitTree(splitId: string, left: string, right: string): ProjectWorkspace {
+      const a = leafWith(left, `t-${left}`)
+      const b = leafWith(right, `t-${right}`)
+      return treeOf({
+        type: 'split',
+        id: splitId,
+        direction: 'horizontal',
+        children: [a, b],
+        sizes: [50, 50]
+      } as unknown as LeafNode)
+    }
+
+    it('resizes a parked tree in place and leaves the visible tree untouched', () => {
+      store().activateProject('A', splitTree('split-a', 'a1', 'a2'))
+      store().activateProject('B', splitTree('split-b', 'b1', 'b2'))
+      const visibleRoot = store().root
+
+      store().updatePaneSizes('split-a', [30, 70], 'A')
+
+      const parkedRoot = store().parkedTrees.A.root
+      expect(parkedRoot.type === 'split' && parkedRoot.sizes).toEqual([30, 70])
+      expect(store().root).toBe(visibleRoot)
+    })
+
+    it('treats the active project id as the visible tree and ignores unknown projects', () => {
+      store().activateProject('A', splitTree('split-a', 'a1', 'a2'))
+      store().activateProject('B', splitTree('split-b', 'b1', 'b2'))
+
+      store().updatePaneSizes('split-b', [20, 80], 'B')
+      const visible = store().root
+      expect(visible.type === 'split' && visible.sizes).toEqual([20, 80])
+
+      const before = store().parkedTrees
+      store().updatePaneSizes('split-a', [10, 90], 'gone')
+      expect(store().parkedTrees).toBe(before)
+      const parkedA = store().parkedTrees.A.root
+      expect(parkedA.type === 'split' && parkedA.sizes).toEqual([50, 50])
+    })
+  })
 })

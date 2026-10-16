@@ -7,10 +7,16 @@ import type { PaneNode } from '@/types/workspace.types'
 import { WorkspaceMain } from './WorkspaceMain'
 
 vi.mock('@/components/ssh/SSHWorkspace', () => ({
-  SSHWorkspace: ({ topRow }: { topRow?: { dragRegion: boolean; windowControls: boolean } }) => (
+  SSHWorkspace: ({
+    topRow
+  }: {
+    topRow?: { dragRegion: boolean; windowControls: boolean; showSidePanel: boolean }
+  }) => (
     <div
       data-testid="ssh-workspace"
-      data-top-row={topRow ? `${topRow.dragRegion}/${topRow.windowControls}` : 'none'}
+      data-top-row={
+        topRow ? `${topRow.dragRegion}/${topRow.windowControls}/${topRow.showSidePanel}` : 'none'
+      }
     />
   )
 }))
@@ -37,9 +43,7 @@ function renderMain(mode: TopRowMode | null, platform: TopRowPlatform = desktop)
       activeProject={undefined}
       ssh={
         {
-          activeSSHProfile: { id: 's1' },
-          sshProfileWithPassword: { id: 's1' },
-          sshConn: {}
+          workspaceOpen: true
         } as never
       }
       setIsNewProjectModalOpen={vi.fn()}
@@ -68,9 +72,12 @@ describe('WorkspaceMain SSH header role', () => {
     expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute('data-top-row', 'none')
   })
 
-  it('hands the SSH header the drag region and controls when it owns the top row', async () => {
+  it('hands the SSH header the drag region, controls and Show side panel button when it owns the top row', async () => {
     renderMain('ssh')
-    expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute('data-top-row', 'true/true')
+    expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute(
+      'data-top-row',
+      'true/true/true'
+    )
   })
 
   it('hands it no controls on macOS and nothing on web', async () => {
@@ -79,13 +86,16 @@ describe('WorkspaceMain SSH header role', () => {
       windowControls: false,
       trafficLights: true
     })
-    expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute('data-top-row', 'true/false')
+    expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute(
+      'data-top-row',
+      'true/false/true'
+    )
     unmount()
 
     renderMain('ssh', { dragRegions: false, windowControls: false, trafficLights: false })
     expect(await screen.findByTestId('ssh-workspace')).toHaveAttribute(
       'data-top-row',
-      'false/false'
+      'false/false/true'
     )
   })
 

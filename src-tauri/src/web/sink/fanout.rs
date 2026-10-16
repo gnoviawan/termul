@@ -231,20 +231,9 @@ impl WsRelaySink {
         }
     }
 
-    /// Push an event to one client according to its tier. A full channel
-    /// drops a LOSSY event (a `gap` frame follows) and closes the connection
-    /// for any other tier; a gone peer unregisters the client from fan-out.
-    pub(super) fn enqueue(&self, client_id: ClientId, se: SequencedEvent, tier: ReliabilityTier) {
-        let dead_sids = {
-            let mut clients = self.clients.lock();
-            self.push_in(&mut clients, client_id, se, tier)
-        };
-        if let Some(sids) = dead_sids {
-            self.remove_client_from_session_subs(client_id, &sids);
-        }
-    }
-
-    /// [`Self::enqueue`] against an already-locked client map. Returns the
+    /// Push an event to one client according to its tier, against the locked
+    /// client map: a full channel drops a LOSSY event (a `gap` frame follows) and
+    /// closes the connection for any other tier. Returns the
     /// removed client's sessions when the peer is gone or overflowed (the
     /// caller then clears the reverse index, after releasing `clients`).
     fn push_in(
@@ -352,6 +341,7 @@ impl WsRelaySink {
                 }
             }
         }
+        self.release_session_tickets(sid);
         self.turn_watermark.forget_session(sid);
         self.restore_gates.lock().remove(sid);
         self.replay_gates.lock().await.remove(sid);
@@ -411,6 +401,13 @@ impl EventSink for WsRelaySink {
                         return;
                     }
                 }
+                // The turn is over or the session is gone: the driver already
+                // cancelled its parked approvals, so release the relay tickets
+                // (and the session's queue slot) before the next turn can raise
+                // a new one.
+                if matches!(type_, "prompt_complete" | "session_closed") {
+                    self.release_session_tickets(sid);
+                }
                 // Session-scoped: assign seq, persist, append and fan out in
                 // one critical section.
                 self.publish(sid, type_, event.payload.clone(), tier);
@@ -419,25 +416,26 @@ impl EventSink for WsRelaySink {
                 }
             }
             None => {
-                // Agent roster events go to the `agents` watch. The rest of
-                // the agent-level events (`browser_open_request`,
-                // `worktree_branch_renamed`) are still seq=0, sid=null events
-                // outside every session log, delivered to ALL connected
-                // clients with ≥1 session.
-                if !self.route_agent_event(type_, &event.payload) {
-                    let se = SequencedEvent::new(None, 0, type_, event.payload.clone());
-                    let targets: Vec<ClientId> = self.clients.lock().keys().copied().collect();
-                    for client_id in targets {
-                        self.enqueue(client_id, se.clone(), tier);
+                // The agent is gone: every ticket it owned is unanswerable.
+                if matches!(type_, "agent_disconnected" | "agent_crashed") {
+                    if let Some(agent_id) = event.payload.get("agentId").and_then(Value::as_str) {
+                        self.release_agent_tickets(&crate::acp::AgentId(agent_id.to_string()));
                     }
+                }
+                // Agent-level events (no session) go to a watch; nothing leaves
+                // the relay as a `seq = 0` event.
+                if !self.route_agent_event(type_, &event.payload) {
+                    warn!(
+                        "[relay] dropped agent-level event `{type_}`: no watch carries it and the relay sends no seq = 0 event"
+                    );
                 }
             }
         }
 
         // Story 1.7: snapshot `permission_request` events into the server-side
         // rendezvous (if attached). The ticket holds the immutable args (the
-        // `options` array) for TOCTOU re-validation + arms the bounded timeout.
-        // Runs only on the server path (desktop leaves the rendezvous unset).
+        // `options` array) for TOCTOU re-validation. It has no timeout: it
+        // lives until it is answered or its session ends.
         if type_ == "permission_request" {
             if let Some(rdz) = self.rendezvous() {
                 // Extract the correlation fields from the camelCase payload.
@@ -480,8 +478,8 @@ impl EventSink for WsRelaySink {
         }
         // Issue #411: snapshot `question_request` events into the server-side
         // question rendezvous (if attached). The ticket holds the immutable
-        // args (the `options` array) for TOCTOU re-validation + arms the
-        // bounded timeout. Runs only on the server path.
+        // args (the `options` array) for TOCTOU re-validation. Like a
+        // permission ticket it has no timeout.
         if type_ == "question_request" {
             if let Some(rdz) = self.question_rendezvous() {
                 let payload = &event.payload;

@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
+import type { ProjectUpdates } from '@/stores/project-store'
 import type { Project, ProjectColor } from '@/types/project'
 
 export interface ProjectSettingsDialogProps {
@@ -15,7 +16,7 @@ export interface ProjectSettingsDialogProps {
   projectId: string | null
   projects: Project[]
   availableShells: DetectedShells | null
-  onUpdateProject: (id: string, updates: Partial<Project>) => void
+  onUpdateProject: (id: string, updates: ProjectUpdates) => void
   onClose: () => void
 }
 

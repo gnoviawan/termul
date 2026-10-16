@@ -10,6 +10,7 @@
 
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { persistenceApi } from '@/lib/api'
+import { LEGACY_PROJECTS_KEY } from '@/lib/legacy-project-import'
 import {
   clampToBounds,
   defaultShellLayoutRecord,
@@ -18,7 +19,6 @@ import {
 } from '@/lib/shell-layout-record'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { normalizePath } from '@/lib/working-copy'
-import { APP_SETTINGS_KEY } from '@/types/settings'
 
 export const LEGACY_EXPLORER_WIDTH_KEY = 'termul:file-explorer-width'
 export const LEGACY_SSH_HEIGHT_KEY = 'termul-ssh-panel-height'
@@ -132,8 +132,8 @@ async function readRaw(key: string): Promise<unknown> {
  */
 export async function readLegacyShellLayoutSources(): Promise<LegacyShellLayoutSources> {
   const [appSettings, projects] = await Promise.all([
-    readRaw(APP_SETTINGS_KEY),
-    isTauriContext() ? readRaw(PersistenceKeys.projects) : Promise.resolve(null)
+    readRaw(PersistenceKeys.appSettings),
+    isTauriContext() ? readRaw(LEGACY_PROJECTS_KEY) : Promise.resolve(null)
   ])
   return {
     appSettings,

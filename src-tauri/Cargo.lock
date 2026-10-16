@@ -6832,6 +6832,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
+ "memchr",
  "minisign-verify",
  "notify",
  "notify-rust",

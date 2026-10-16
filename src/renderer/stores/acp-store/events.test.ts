@@ -97,8 +97,10 @@ vi.mock('@/stores/workspace-store', () => {
   }
   return {
     getAllLeafPanes,
+    getAllTreeRoots: (state: { root: PaneNodeLike }) => [state.root],
     findPaneContainingTab,
     agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+    getAgentChatSessionIdsInAllTrees: () => new Set<string>(),
     useWorkspaceStore: {
       getState: () => ({
         addAgentChatTab: addAgentChatTabSpy,
@@ -428,15 +430,42 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessionIndex).toEqual([])
   })
 
-  it('agent_disconnected marks the agent error and closes its sessions', () => {
+  it('agent_disconnected(crashed) marks the agent error and closes its sessions', () => {
     seedSession('s1', 'agent-1')
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
-  it('agent_disconnected preserves a content session transcript instead of blanking', () => {
+  it.each([
+    'killed',
+    'reaped',
+    'closed'
+  ] as const)('agent_disconnected(%s) drops the agent like a local kill instead of marking it error', (reason) => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState({
+      agents: { 'agent-1': {} as never },
+      agentStatus: { 'agent-1': 'connected' },
+      configToLiveAgent: { 'cfg-1': 'agent-1', 'cfg-2': 'agent-2' }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason })
+    const state = useAcpStore.getState()
+    expect(state.agents['agent-1']).toBeUndefined()
+    expect(state.agentStatus['agent-1']).toBeUndefined()
+    expect(state.configToLiveAgent).toEqual({ 'cfg-2': 'agent-2' })
+    expect(state.sessions['s1'].status).toBe('closed')
+
+    // Idempotent: a second delivery (kill reply + event) changes nothing.
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason })
+    expect(useAcpStore.getState().agentStatus['agent-1']).toBeUndefined()
+    expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+  })
+
+  it.each([
+    'crashed',
+    'reaped'
+  ] as const)('agent_disconnected(%s) preserves a content session transcript instead of blanking', (reason) => {
     seedSession('s1', 'agent-1', false)
     useAcpStore.setState({
       messages: {
@@ -452,7 +481,7 @@ describe('acp-store', () => {
         ]
       }
     })
-    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason })
     const state = useAcpStore.getState()
     // The session record survives (not deleted) and its transcript is kept in
     // memory so the pane shows history + "disconnected" — not a blank chat.
@@ -517,7 +546,9 @@ describe('acp-store', () => {
         }
       }
     })
-    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     expect(useAcpStore.getState().sessions['s2'].status).toBe('active')
   })
@@ -569,7 +600,7 @@ describe('acp-store', () => {
       toolCall: { toolCallId: 'tc-1' },
       options: []
     })
-    store._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    store._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
     expect(useAcpStore.getState().pendingPermissions['req-1']).toBeUndefined()
 
     store._onPermissionRequest({
@@ -579,7 +610,7 @@ describe('acp-store', () => {
       toolCall: { toolCallId: 'tc-2' },
       options: []
     })
-    store._onAgentDisconnected({ agentId: 'agent-1' })
+    store._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(useAcpStore.getState().pendingPermissions['req-2']).toBeUndefined()
   })
 
@@ -641,11 +672,11 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().pendingQuestions['q-1']).toBeUndefined()
 
     seed('q-2')
-    store._onSessionClosed({ agentId: 'agent-1', sessionId: 's1' })
+    store._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
     expect(useAcpStore.getState().pendingQuestions['q-2']).toBeUndefined()
 
     seed('q-3')
-    store._onAgentDisconnected({ agentId: 'agent-1' })
+    store._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
     expect(useAcpStore.getState().pendingQuestions['q-3']).toBeUndefined()
   })
 
@@ -1141,6 +1172,26 @@ describe('acp-store', () => {
     expect(usage?.baselineUsed).toBe(53_000)
     expect(usage?.cost).toEqual({ amount: 0.045, currency: 'USD' })
     expect(usage?.source).toBe('reported')
+  })
+
+  it('_onUsageUpdate keeps the latest Claude rate limit across updates without one', () => {
+    seedSession('s1', 'agent-1')
+    const rateLimit = {
+      status: 'allowed_warning',
+      resetsAt: 1_760_360_399,
+      kind: 'five_hour',
+      percent: 83,
+      overageInUse: false
+    }
+    const update = { agentId: 'agent-1', sessionId: 's1', size: 200_000 }
+    useAcpStore.getState()._onUsageUpdate({ ...update, used: 50_000, rateLimit })
+    useAcpStore.getState()._onUsageUpdate({ ...update, used: 60_000 })
+    const usage = useAcpStore.getState().sessionUsage.s1
+    expect(usage?.used).toBe(60_000)
+    expect(usage?.rateLimit).toEqual(rateLimit)
+    const rejected = { ...rateLimit, status: 'rejected', percent: 100 }
+    useAcpStore.getState()._onUsageUpdate({ ...update, used: 61_000, rateLimit: rejected })
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toEqual(rejected)
   })
 
   it('_onUsageUpdate ignores zero cost placeholders', () => {

@@ -397,12 +397,15 @@ pub fn emit_session_update(
                 amount: c.amount,
                 currency: c.currency,
             });
+            let rate_limit =
+                crate::acp::claude_accounts::usage::claude_rate_limit(update.meta.as_ref());
             let event = UsageUpdateEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 used: update.used,
                 size: update.size,
                 cost,
+                rate_limit,
             };
             events::fan_out(
                 sinks,

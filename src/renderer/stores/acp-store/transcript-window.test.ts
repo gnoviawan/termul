@@ -97,8 +97,10 @@ vi.mock('@/stores/workspace-store', () => {
   }
   return {
     getAllLeafPanes,
+    getAllTreeRoots: (state: { root: PaneNodeLike }) => [state.root],
     findPaneContainingTab,
     agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+    getAgentChatSessionIdsInAllTrees: () => new Set<string>(),
     useWorkspaceStore: {
       getState: () => ({
         addAgentChatTab: addAgentChatTabSpy,
@@ -241,7 +243,9 @@ describe('acp-store transcript eviction (WebView memory)', () => {
 
   it('_onSessionClosed drops transcript maps after persist', () => {
     seedTranscript('sess-closed')
-    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-closed' })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 'sess-closed', reason: 'closed' })
     const st = useAcpStore.getState()
     expect(st.sessions['sess-closed']?.status).toBe('closed')
     expect(st.messages['sess-closed']).toBeUndefined()

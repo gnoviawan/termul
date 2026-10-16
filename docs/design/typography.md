@@ -11,8 +11,8 @@ Never `text-[Npx]`. Use the scale below. `tabular-nums` on every value that chan
 | `text-base` | 16px | Every text field on a coarse pointer, through `pointer-coarse:text-base` (`Input` is `text-base md:text-sm pointer-coarse:text-base`) |
 | `text-sm` | 14px | Body copy, labels, default `Button` |
 | `text-xs` | 12px | Captions, helper lines, dense controls |
-| `text-2xs` | 11px | Path chips, compact mono labels |
-| `text-3xs` | 10px | Status badges (`SSHStatusBadge`), settings footnotes |
+| `text-2xs` | 11px | Path chips, compact mono labels, SSH status words (`SSHHostStateWord`) |
+| `text-3xs` | 10px | Status badges, settings footnotes |
 | `text-4xs` | 9px | Git ref chips (`GitHistoryPanel` `RefChip`) |
 
 Never go below `text-4xs` (9px).
@@ -39,8 +39,6 @@ Is it the main sentence on the surface?
 ## Correct
 
 ```tsx
-// SSHStatusBadge — text-3xs + semantic status
-<span className="inline-flex items-center px-1.5 py-0.5 rounded text-3xs font-medium bg-warning/20 text-warning">
-  Connecting
-</span>
+// SSHHostStateWord (ssh-host-status.tsx) — text-2xs + semantic status
+<span className="text-2xs tabular-nums text-warning">Needs input</span>
 ```

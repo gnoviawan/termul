@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { logFrontendError } from '@/lib/log-api'
-import { releaseFocusNotOwnedBy } from '@/lib/release-foreign-focus'
+import { releaseFocusNotOfProject } from '@/lib/release-stale-focus'
 import { useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -47,7 +47,7 @@ function requestMostRecentChat(projectId: string): string | null {
 /**
  * The one project-switch routine behind the project sheet and the mobile
  * command palette. Switching is client-only: it changes this client's active
- * project (the persisted `web-active-project` choice) and nothing on the host —
+ * project (the persisted `active-project` choice) and nothing on the host —
  * no request is sent, so sessions and PTYs, here and on every other device,
  * are untouched. Chats are bound to their project by the host when they are
  * created (`create_session.projectId`).
@@ -68,10 +68,10 @@ export function useProjectSwitch(source: string): ProjectSwitch {
         const { projects, activeProjectId, selectProject } = useProjectStore.getState()
         const project = projects.find((candidate) => candidate.id === projectId)
         if (!project || project.isArchived || projectId === activeProjectId) return 'ignored'
-        // The focus pointers still name the PREVIOUS project's chat: clear
-        // them so a later manifest write cannot inherit that session on the
-        // target project.
-        releaseFocusNotOwnedBy(projectId)
+        // The focus pointers may still name the PREVIOUS project's chat (or an
+        // unassigned one): clear them so a later manifest write cannot
+        // inherit that session on the target project.
+        releaseFocusNotOfProject(projectId)
         const restored = requestMostRecentChat(projectId)
         selectProject(projectId)
         void logFrontendError({

@@ -1,4 +1,5 @@
-//! Tauri event payloads emitted by the ACP backend to the renderer.
+//! Event payloads emitted by the ACP backend. They fan out through the event
+//! sinks; the WS relay serves them to the renderer and to browsers.
 //!
 //! Every payload derives `Serialize + Clone` and uses `#[serde(rename_all =
 //! "camelCase")]` so the wire shape matches the renderer contract. Schema
@@ -22,8 +23,8 @@ use serde::{Deserialize, Serialize};
 /// events::EVENT_*, &payload)` — the `events::` namespace is preserved, the
 /// `app` parameter is gone.
 ///
-/// The ONLY place that still calls `AppHandle::emit` for `acp:*` events is
-/// `crate::web::TauriEventSink::emit` (the desktop's sink). See AC7.
+/// No code under `src-tauri/src/acp/` calls `AppHandle::emit` for `acp:*`
+/// events: every one goes through the sinks. See AC7.
 pub(crate) use crate::web::fan_out;
 
 /// A single selectable model advertised by an ACP agent.
@@ -145,8 +146,8 @@ pub const EVENT_PERMISSION_REQUEST: &str = "acp:permission_request";
 ///
 /// The renderer shows a morphing `AskUserQuestion` panel (choice cards,
 /// checkboxes, approval buttons) instead of a free-text prompt; the user's
-/// answer flows back via `acp_answer_question` (desktop) or `answer_question`
-/// (web), mirroring the permission machinery exactly-once.
+/// answer flows back via the `answer_question` request, mirroring the
+/// permission machinery exactly-once.
 pub const EVENT_QUESTION_REQUEST: &str = "acp:question_request";
 /// Event name: the agent requested structured user input (elicitation).
 pub const EVENT_ELICITATION_REQUEST: &str = "acp:elicitation_request";
@@ -349,7 +350,7 @@ pub struct ConfigOptionsUpdateEvent {
 pub struct PermissionRequestEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
-    /// Correlation id used by `acp_respond_permission` to route the user's choice
+    /// Correlation id used by `respond_permission` to route the user's choice
     /// back to the waiting agent request.
     pub request_id: String,
     pub tool_call: ToolCallUpdate,
@@ -767,12 +768,15 @@ impl AcpErrorDetail {
         agent_id: AgentId,
         session_id: Option<SessionId>,
     ) -> AgentErrorEvent {
+        let provider_code = crate::acp::provider_errors::classify_provider_error(&self)
+            .map(crate::acp::provider_errors::ProviderErrorKind::code);
         AgentErrorEvent {
             agent_id,
             session_id,
             message: self.message,
             code: self.code,
             data: self.data,
+            provider_code,
         }
     }
 
@@ -815,6 +819,12 @@ pub struct AgentErrorEvent {
     /// structured here); absent on the wire when the error carried none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+    /// Stable provider failure code (`provider_quota_exceeded`,
+    /// `provider_session_limit` or `provider_request_rejected`) when the error
+    /// classifies as an upstream provider failure; absent otherwise. Consumers
+    /// key on this instead of parsing `message`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_code: Option<&'static str>,
 }
 
 /// `acp:agent_crashed` (Story 1.9 FR26)
@@ -841,22 +851,43 @@ pub struct AgentCrashedEvent {
     pub data: Option<serde_json::Value>,
 }
 
+/// Why an agent (or one of its sessions) ended. Additive on the wire so every
+/// viewer can tell a deliberate stop from a crash.
+///
+/// `closed` is used only for an explicit `close_session`; the other three
+/// describe agent-level endings. Process shutdown stays silent and has no
+/// reason.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentExitReason {
+    /// An explicit kill from a client.
+    Killed,
+    /// The idle reaper stopped the agent after its quiet window.
+    Reaped,
+    /// The agent process or its connection died on its own.
+    Crashed,
+    /// A single session was closed explicitly; the agent keeps running.
+    Closed,
+}
+
 /// `acp:agent_disconnected`
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDisconnectedEvent {
     pub agent_id: AgentId,
+    pub reason: AgentExitReason,
 }
 
 /// `acp:session_closed`
 ///
-/// Emitted when a session ends — either via an explicit close or because the
-/// owning agent disconnected/crashed while the session was active.
+/// Emitted when a session ends — via an explicit close, or because the owning
+/// agent was killed, reaped or crashed while the session was active.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionClosedEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
+    pub reason: AgentExitReason,
 }
 
 /// OpenCode compaction marker carried on `session_info_update` `_meta`.
@@ -1061,13 +1092,15 @@ pub struct UsageUpdateEvent {
     pub size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<UsageCostEvent>,
+    /// Claude plan rate-limit state, when the Claude ACP adapter sends it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<crate::acp::claude_accounts::usage::ClaudeRateLimit>,
 }
 
 // Story 1.1 (AC7): the legacy `events::emit(app, event, payload)` free function
 // was REMOVED. All emission now goes through [`fan_out`] against the
-// dispatcher's `Vec<Arc<dyn EventSink>>`. The `AppHandle`-aware path lives
-// exclusively in `crate::web::TauriEventSink::emit` (the desktop's sink), so no
-// new `app.emit("acp:..")` call sites may be introduced outside that sink.
+// dispatcher's `Vec<Arc<dyn EventSink>>`, so no `app.emit("acp:..")` call
+// site may be introduced for these events.
 
 #[cfg(test)]
 mod tests;

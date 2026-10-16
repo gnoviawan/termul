@@ -1,7 +1,6 @@
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
-import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 
@@ -15,12 +14,11 @@ import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
  * (`useShellUnreadTracker`, from `WorkspaceLayout`), because chat tabs and
  * Recents rows unmount (closed drawer, inactive tab, project switch) while a
  * turn finishes. A flag never clears because its session left the live set or
- * the project switched; it clears only on view here or on deletion
+ * the project switched; it clears on view here, on a read on another surface
+ * (the store's shared last-read marker, `useChatReadMarker`) or on deletion
  * (`deleteHistorySession`). Only live, non-ephemeral sessions are tracked:
  * closed/error sessions can carry stale turn flags and warm-pool sessions are
  * not chats, so a turn that ends because the session closed never banks a dot.
- * `closing` wins the slot, so a turn that ends during a close never banks one
- * either.
  */
 export function useAgentChatUnreadTracker(activeSessionIds: readonly string[]): void {
   // The `?? {}` guard keeps suites that mock the acp-store as a partial shape
@@ -36,8 +34,8 @@ export function useAgentChatUnreadTracker(activeSessionIds: readonly string[]): 
       return busy
     })
   )
-  const closingSessionIds = useAgentChatLifetimeStore((state) => state.closingSessionIds)
   const previousBusy = useRef<Record<string, boolean>>({})
+  const seenAtTurnStart = useRef<Record<string, number>>({})
 
   // Callers pass a fresh array every render; a joined key keeps the effect from
   // re-running unless the set of ids actually changed.
@@ -50,13 +48,16 @@ export function useAgentChatUnreadTracker(activeSessionIds: readonly string[]): 
   useLayoutEffect(() => {
     const previous = previousBusy.current
     previousBusy.current = busyBySession
-    const { markUnread, clearUnread } = useAgentChatUnreadStore.getState()
+    const { markUnread, clearUnread, seenTurnEndSeq } = useAgentChatUnreadStore.getState()
     for (const [sessionId, busy] of Object.entries(busyBySession)) {
+      if (busy && previous[sessionId] !== true) {
+        seenAtTurnStart.current[sessionId] = seenTurnEndSeq[sessionId] ?? 0
+      }
       const turnFinished = previous[sessionId] === true && !busy
-      if (turnFinished && !activeSet.has(sessionId) && !closingSessionIds[sessionId]) {
-        markUnread(sessionId)
+      if (turnFinished && !activeSet.has(sessionId)) {
+        markUnread(sessionId, seenAtTurnStart.current[sessionId])
       }
     }
     for (const sessionId of activeSet) clearUnread(sessionId)
-  }, [busyBySession, activeSet, closingSessionIds])
+  }, [busyBySession, activeSet])
 }

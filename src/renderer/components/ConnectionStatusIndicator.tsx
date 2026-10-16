@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   type ConnectionChannelState,
+  retryHostOffline,
   useConnectionStatusStore
 } from '@/stores/connection-status-store'
 
@@ -13,8 +14,14 @@ const SEVERITY: Record<ConnectionChannelState, number> = {
   connected: 0,
   connecting: 1,
   reconnecting: 2,
-  disconnected: 3
+  disconnected: 3,
+  'host-offline': 4
 }
+
+/** Visible and announced strings of the `host-offline` state. */
+export const HOST_OFFLINE_SUMMARY = 'Host offline'
+export const HOST_OFFLINE_RETRY_LABEL = 'Retry'
+export const HOST_OFFLINE_TOOLTIP = 'Host offline. Select to retry.'
 
 /**
  * The connected summary of the labelled (drawer footer) indicator: "Connected ·
@@ -55,10 +62,15 @@ export function ConnectionStatusIndicator({
 
   const worst =
     SEVERITY[controlChannel] >= SEVERITY[terminalChannel] ? controlChannel : terminalChannel
+  const hostOffline = worst === 'host-offline'
   const degraded: string[] = []
   if (controlChannel !== 'connected') degraded.push(`Control channel: ${controlChannel}`)
   if (terminalChannel !== 'connected') degraded.push(`Terminal channel: ${terminalChannel}`)
-  const summary = degraded.length > 0 ? degraded.join('; ') : 'Connected'
+  const summary = hostOffline
+    ? HOST_OFFLINE_SUMMARY
+    : degraded.length > 0
+      ? degraded.join('; ')
+      : 'Connected'
 
   if (showLabel) {
     // Degraded text is unchanged; only the connected reading names the host.
@@ -73,10 +85,20 @@ export function ConnectionStatusIndicator({
         <AgentConnectionLamp
           connected={worst === 'connected'}
           reconnecting={worst === 'connecting' || worst === 'reconnecting'}
+          hostOffline={hostOffline}
           decorative
           size={8}
         />
         <span className="min-w-0 break-words">{labelSummary}</span>
+        {hostOffline && (
+          <button
+            type="button"
+            onClick={retryHostOffline}
+            className="shrink-0 rounded-sm px-1 text-2xs font-medium text-foreground underline underline-offset-2 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {HOST_OFFLINE_RETRY_LABEL}
+          </button>
+        )}
       </span>
     )
   }
@@ -96,18 +118,24 @@ export function ConnectionStatusIndicator({
     >
       <Tooltip>
         <TooltipTrigger asChild>
-          <button type="button" aria-label={summary} className={STATUS_BAR_HIT_TARGET}>
+          <button
+            type="button"
+            aria-label={hostOffline ? HOST_OFFLINE_TOOLTIP : summary}
+            onClick={hostOffline ? retryHostOffline : undefined}
+            className={STATUS_BAR_HIT_TARGET}
+          >
             <span className={STATUS_BAR_HIT_GLYPH}>
               <AgentConnectionLamp
                 connected={worst === 'connected'}
                 reconnecting={worst === 'connecting' || worst === 'reconnecting'}
+                hostOffline={hostOffline}
                 decorative
                 size={8}
               />
             </span>
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top">{summary}</TooltipContent>
+        <TooltipContent side="top">{hostOffline ? HOST_OFFLINE_TOOLTIP : summary}</TooltipContent>
       </Tooltip>
     </span>
   )

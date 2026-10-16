@@ -86,8 +86,8 @@ describe('ElicitationQuestions (GH-935)', () => {
     renderPanel()
     expect(screen.getByTestId('elicitation-question-q0')).toBeInTheDocument()
     // Stepper chrome: Question label + pager counter; q1 not mounted yet.
-    expect(screen.getByText('Question')).toBeInTheDocument()
-    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Agent questions')).toBeInTheDocument()
+    expect(screen.getByText('Question 1 of 2')).toBeInTheDocument()
     expect(screen.queryByTestId('elicitation-question-q1')).not.toBeInTheDocument()
     // The question text (description) is the heading; the short title names
     // the option group (sr-only legend) instead of a visible eyebrow.
@@ -104,14 +104,14 @@ describe('ElicitationQuestions (GH-935)', () => {
     const next = screen.getByRole('button', { name: 'Next question' })
     expect(prev).toBeDisabled()
     fireEvent.click(next)
-    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
     expect(screen.getByTestId('elicitation-question-q1')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Logging/ }))
     fireEvent.click(prev)
-    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 1 of 2')).toBeInTheDocument()
     // Pick Red — single-select auto-advances back to q1, which kept its toggle.
     fireEvent.click(screen.getByRole('button', { name: /Red/ }))
-    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Logging/ })).toHaveAttribute('aria-pressed', 'true')
   })
 
@@ -135,8 +135,8 @@ describe('ElicitationQuestions (GH-935)', () => {
     })
     expect(next).toBeEnabled()
     fireEvent.click(next)
-    expect(screen.getByText('2 of 2')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Submit/ })).toBeDisabled()
   })
 
   it('option rows are borderless', () => {
@@ -149,18 +149,18 @@ describe('ElicitationQuestions (GH-935)', () => {
     const { onSubmit } = renderPanel()
     // Picking a single-select option auto-advances to the next question.
     fireEvent.click(screen.getByRole('button', { name: /Red/ }))
-    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Logging/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({ q0: 'Red', q1: ['Logging'] })
   })
 
   it('Skip leaves the current question unanswered and advances; Submit sends the rest', () => {
     const { onSubmit } = renderPanel()
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
-    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Logging/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({ q1: ['Logging'] })
   })
 
@@ -174,7 +174,7 @@ describe('ElicitationQuestions (GH-935)', () => {
   it('Skip on the last question submits the remaining answers', () => {
     const { onSubmit } = renderPanel()
     fireEvent.click(screen.getByRole('button', { name: /Red/ }))
-    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
     expect(onSubmit).toHaveBeenCalledWith({ q0: 'Red' })
   })
@@ -186,7 +186,7 @@ describe('ElicitationQuestions (GH-935)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Previous question' }))
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
     fireEvent.click(screen.getByRole('button', { name: /Tracing/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({ q1: ['Tracing'] })
   })
 
@@ -198,7 +198,7 @@ describe('ElicitationQuestions (GH-935)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Logging/ }))
     expect(screen.getByRole('button', { name: /Logging/ })).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(screen.getByRole('button', { name: /Logging/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({ q1: ['Tracing', 'Logging'] })
   })
 
@@ -217,7 +217,7 @@ describe('ElicitationQuestions (GH-935)', () => {
     fireEvent.change(screen.getByLabelText('Other answer for Color'), {
       target: { value: 'Chartreuse' }
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({ q0: 'Chartreuse' })
   })
 
@@ -228,7 +228,7 @@ describe('ElicitationQuestions (GH-935)', () => {
     fireEvent.change(screen.getByLabelText('Other answer for Features'), {
       target: { value: 'My custom feature' }
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({
       q0: 'Blue',
       q1: ['Logging', 'My custom feature']
@@ -255,7 +255,7 @@ describe('ElicitationQuestions (GH-935)', () => {
     const { onSubmit } = renderPanel({ fields: [pending.fields[0], optionalQ1] })
     fireEvent.click(screen.getByRole('button', { name: /Red/ }))
     // Untouched q1: Submit is disabled, Skip on the last step submits.
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Submit/ })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
     const answers = onSubmit.mock.calls[0][0] as Record<string, string | string[]>
     expect(answers).toEqual({ q0: 'Red' })
@@ -276,7 +276,7 @@ describe('ElicitationQuestions (GH-935)', () => {
     expect(red).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(red)
     expect(red).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Submit/ })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
     expect(onSubmit).toHaveBeenCalledWith({})
   })
@@ -288,7 +288,7 @@ describe('ElicitationQuestions (GH-935)', () => {
     fireEvent.change(screen.getByLabelText('Other answer for Features'), {
       target: { value: 'Logging' }
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({ q0: 'Blue', q1: ['Logging'] })
   })
 
@@ -300,7 +300,7 @@ describe('ElicitationQuestions (GH-935)', () => {
       target: { value: '   ' }
     })
     expect(red).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(onSubmit).toHaveBeenCalledWith({ q0: 'Red' })
   })
 
@@ -327,6 +327,82 @@ describe('ElicitationQuestions (GH-935)', () => {
   })
 })
 
+describe('ElicitationQuestions panel v2', () => {
+  it('shows a trailing "(Recommended)" as a badge and still submits the option value', () => {
+    const { onSubmit } = renderPanel({
+      fields: [
+        {
+          ...pending.fields[0],
+          options: [{ value: 'Red', label: 'Red (Recommended)', description: 'Use the red color' }]
+        }
+      ]
+    })
+    const red = screen.getByRole('button', { name: /Red/ })
+    expect(red).toHaveTextContent('Recommended')
+    expect(screen.queryByText('Red (Recommended)')).not.toBeInTheDocument()
+    fireEvent.click(red)
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
+    expect(onSubmit).toHaveBeenCalledWith({ q0: 'Red' })
+  })
+
+  it('↑/↓ move focus between the option rows and the Other field', () => {
+    renderPanel()
+    const red = screen.getByRole('button', { name: /Red/ })
+    const blue = screen.getByRole('button', { name: /Blue/ })
+    const other = screen.getByLabelText('Other answer for Color')
+    red.focus()
+    fireEvent.keyDown(red, { key: 'ArrowDown' })
+    expect(blue).toHaveFocus()
+    fireEvent.keyDown(blue, { key: 'ArrowDown' })
+    expect(other).toHaveFocus()
+    // ↓ stays in the field; ↑ goes back to the last option.
+    fireEvent.keyDown(other, { key: 'ArrowDown' })
+    expect(other).toHaveFocus()
+    fireEvent.keyDown(other, { key: 'ArrowUp' })
+    expect(blue).toHaveFocus()
+  })
+
+  it('the number after the last option focuses the Other field', () => {
+    renderPanel()
+    fireEvent.keyDown(screen.getByRole('heading'), { key: '3' })
+    expect(screen.getByLabelText('Other answer for Color')).toHaveFocus()
+  })
+
+  it('minimize collapses to one bar with Resume, and Resume restores the step', () => {
+    const { onCancel } = renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: /Red/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize questions' }))
+    const resume = screen.getByRole('button', { name: /Resume/ })
+    expect(resume).toHaveFocus()
+    expect(screen.queryByRole('button', { name: /Logging/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Which features should I enable?' })).toBeVisible()
+    fireEvent.click(resume)
+    expect(screen.getByRole('button', { name: 'Minimize questions' })).toHaveFocus()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('Escape still cancels while minimized', () => {
+    const { onCancel } = renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize questions' }))
+    fireEvent.keyDown(screen.getByRole('button', { name: /Resume/ }), { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts answers on Submit and shows the selection and skip status', () => {
+    renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    expect(screen.getByText('1 skipped')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Logging/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Tracing/ }))
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Submit 1 answer' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Previous question' }))
+    fireEvent.click(screen.getByRole('button', { name: /Red/ }))
+    expect(screen.getByRole('button', { name: 'Submit 2 answers' })).toBeEnabled()
+  })
+})
+
 describe('ElicitationPrompt question mode (GH-935)', () => {
   beforeEach(() => {
     mockRespond.mockReset().mockResolvedValue(undefined)
@@ -336,13 +412,13 @@ describe('ElicitationPrompt question mode (GH-935)', () => {
     render(<ElicitationPrompt request={pending} />)
     expect(screen.getByTestId('elicitation-questions')).toBeInTheDocument()
     // Stepper chrome on the composer-surface card.
-    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 1 of 2')).toBeInTheDocument()
     const card = screen.getByTestId('elicitation-prompt').firstElementChild
     expect(card).toHaveClass('border-border/60', 'bg-card', 'rounded-2xl')
     fireEvent.click(screen.getByRole('button', { name: /Red/ }))
     fireEvent.click(screen.getByRole('button', { name: /Logging/ }))
     fireEvent.click(screen.getByRole('button', { name: /Tracing/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(mockRespond).toHaveBeenCalledWith('el-1', 'accept', {
       q0: 'Red',
       q1: ['Logging', 'Tracing']
@@ -387,12 +463,12 @@ describe('ElicitationPrompt question mode (GH-935)', () => {
       ]
     }
     render(<ElicitationPrompt request={generic} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(mockRespond).not.toHaveBeenCalled()
     const checkboxes = screen.getAllByRole('checkbox')
     fireEvent.click(checkboxes[0])
     fireEvent.click(checkboxes[1])
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(mockRespond).toHaveBeenCalledWith('el-1', 'accept', {
       q1: ['Logging', 'Tracing']
     })
@@ -456,7 +532,7 @@ describe('ElicitationPrompt `<name>_custom` companions', () => {
   it('renders the stepper (not the generic form) with an Other row per question', () => {
     render(<ElicitationPrompt request={withCompanions} />)
     expect(screen.getByTestId('elicitation-questions')).toBeInTheDocument()
-    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(screen.getByText('Question 1 of 2')).toBeInTheDocument()
     expect(screen.queryByText('Request from the agent')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Other answer for Color')).toBeInTheDocument()
   })
@@ -468,7 +544,7 @@ describe('ElicitationPrompt `<name>_custom` companions', () => {
     fireEvent.change(screen.getByLabelText('Other answer for Features'), {
       target: { value: 'Metrics' }
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/ }))
     expect(mockRespond).toHaveBeenCalledWith('el-1', 'accept', {
       question_0: 'Red',
       question_1: ['Logging'],

@@ -99,7 +99,9 @@ vi.mock('@/stores/workspace-store', () => {
     getAllLeafPanes,
     findPaneContainingTab,
     agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+    getAgentChatSessionIdsInAllTrees: () => new Set<string>(),
     useWorkspaceStore: {
+      subscribe: () => () => {},
       getState: () => ({
         addAgentChatTab: addAgentChatTabSpy,
         removeTab: workspaceStateRef.current.removeTab,
@@ -152,7 +154,7 @@ import {
   type AcpTransport,
   AcpTransportError
 } from '@/lib/acp-transport'
-import { commandToken, skillToken } from '@/lib/skill-tokens'
+import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import {
   _flushCoalescedForTesting,
   _installTransportRecoveryForTesting,
@@ -163,6 +165,7 @@ import {
   initAcpEventListeners,
   useAcpStore
 } from '@/stores/acp-store'
+import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
 
 describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () => {
@@ -179,7 +182,9 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
   type TestMessage = {
     id: string
     role: 'user' | 'agent' | 'thought'
-    blocks: Array<{ type: 'text'; text: string }>
+    blocks: Array<
+      { type: 'text'; text: string } | { type: 'resource_link'; uri: string; name: string }
+    >
     streaming: boolean
     timestamp: number
     seq: number
@@ -196,7 +201,12 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     }
   }
 
-  function seedServerPayload(id: string, messages: TestMessage[], lastSeq: number): void {
+  function seedServerPayload(
+    id: string,
+    messages: TestMessage[],
+    lastSeq: number,
+    commands?: Array<{ name: string; description: string }>
+  ): void {
     setCachedSessionPayload(id, {
       metadata: {
         id,
@@ -210,7 +220,8 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
         lastSeq,
         status: 'closed'
       },
-      messages: messages as never
+      messages: messages as never,
+      ...(commands ? { commands } : {})
     })
   }
 
@@ -228,6 +239,46 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
       dispose: vi.fn()
     } as unknown as AcpTransport)
   }
+
+  it('restores the slash commands a reopened payload carries', async () => {
+    seedServerPayload('s-cmds', [msg('turn:t1', 'user', 'hi', 3)], 3, [
+      { name: 'review', description: 'Review the diff' }
+    ])
+    seedServerTransport()
+
+    await useAcpStore.getState().openHistorySession('s-cmds')
+
+    expect(useAcpStore.getState().commands['s-cmds']).toEqual([
+      { name: 'review', description: 'Review the diff' }
+    ])
+  })
+
+  it('restores the newest slash commands from a recovery snapshot', async () => {
+    seedSession('s-rec-cmds', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-cmds',
+      watermark: 4,
+      events: [
+        {
+          sid: 's-rec-cmds',
+          seq: 1,
+          type: 'commands_update',
+          payload: { availableCommands: [{ name: 'init', description: 'Init' }] }
+        },
+        { sid: 's-rec-cmds', seq: 2, type: 'user_prompt', payload: { turnId: 't', content: [] } },
+        {
+          sid: 's-rec-cmds',
+          seq: 3,
+          type: 'commands_update',
+          payload: { availableCommands: [{ name: 'review', description: 'Review' }] }
+        }
+      ]
+    } as never)
+
+    expect(useAcpStore.getState().commands['s-rec-cmds']).toEqual([
+      { name: 'review', description: 'Review' }
+    ])
+  })
 
   it('renders the leading agent greeting and hides the empty synthetic turn', async () => {
     // Leading agent text is a real session update. An empty user bubble and
@@ -278,6 +329,19 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
       type: 'text',
       text: `${commandToken('compact')} ${skillToken('git-worktree')} and then`
     })
+  })
+
+  it('normalizes a persisted file mention to a file pill', async () => {
+    const link = { type: 'resource_link' as const, uri: 'file:///w/src/auth.ts', name: 'auth.ts' }
+    const record = msg('turn:t1', 'user', 'check (auth.ts)', 10)
+    record.blocks.push(link)
+    seedServerPayload('s-file', [record], 10)
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-file')
+    expect(useAcpStore.getState().messages['s-file'][0].blocks).toEqual([
+      { type: 'text', text: `check ${fileToken('auth.ts', '/w/src/auth.ts')}` },
+      link
+    ])
   })
 
   it('passes plain persisted user text through verbatim (no framing)', async () => {
@@ -760,6 +824,24 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     )
     _flushCoalescedForTesting()
     expect(useAcpStore.getState().messages['s-rec']).toEqual(messages)
+  })
+
+  it('records the seq of a turn end recovered from a snapshot as seen (cross-surface unread)', async () => {
+    seedSession('s-rec-end', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-end',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-end',
+          seq: 14,
+          type: 'prompt_complete',
+          payload: { sessionId: 's-rec-end', stopReason: 'end_turn', turnId: 't-gone' }
+        }
+      ]
+    })
+
+    expect(useAgentChatUnreadStore.getState().seenTurnEndSeq['s-rec-end']).toBe(14)
   })
 
   it('normalizes wire user_prompt + user-role chunks in the recovery fold (chip parity)', async () => {

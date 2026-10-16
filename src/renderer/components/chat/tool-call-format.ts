@@ -414,6 +414,22 @@ export function diffLineCounts(diff: Pick<DiffContent, 'oldText' | 'newText'>): 
   return { added, removed }
 }
 
+/**
+ * Position of the first added/removed row in `lines`: its row `index`, and
+ * the 1-based `line` where that change sits in the new file. A removal sits
+ * just after the last new-file line seen before it. Null when nothing changed.
+ */
+export function firstChange(lines: DiffLine[]): { index: number; line: number } | null {
+  let lastNewLine = 0
+  for (let index = 0; index < lines.length; index++) {
+    const row = lines[index]
+    if (row.type === 'added') return { index, line: row.newLine ?? lastNewLine + 1 }
+    if (row.type === 'removed') return { index, line: lastNewLine + 1 }
+    if (row.newLine) lastNewLine = row.newLine
+  }
+  return null
+}
+
 /** True if an option kind rejects (declines) the operation. */
 export function isRejectOption(option: PermissionOption): boolean {
   return option.kind === 'reject_once' || option.kind === 'reject_always'

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { Locator, Page } from 'playwright/test'
 import { chromium, expect, request, test } from 'playwright/test'
-import { E2E_BASE_URL, E2E_TOKEN, wsRequest } from './helpers'
+import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
 
 /**
  * Mobile text-field zoom E2E (spec-mobile-text-field-zoom): iOS Safari zooms
@@ -37,7 +37,7 @@ test.use({ channel: browserChannel })
 test.setTimeout(240_000)
 
 /** Server store key holding the web client's last selected project (issue #855). */
-const ACTIVE_PROJECT_KEY = 'web-active-project'
+const ACTIVE_PROJECT_KEY = storeKey('active-project')
 
 /** The store outlives this file: put back the selection the suites before it left. */
 let activeProjectBefore: unknown = null

@@ -17,7 +17,6 @@ describe('resolveMaterialIconKey', () => {
     expect(
       resolve({
         name: 'package.json',
-        extension: 'json',
         isDirectory: false,
         isExpanded: false,
         depth: 0
@@ -29,7 +28,6 @@ describe('resolveMaterialIconKey', () => {
     expect(
       resolve({
         name: 'app.ts',
-        extension: 'ts',
         isDirectory: false,
         isExpanded: false,
         depth: 1
@@ -37,11 +35,22 @@ describe('resolveMaterialIconKey', () => {
     ).toBe('typescript')
   })
 
+  it.each([
+    ['foo.test.ts', 'test-ts'],
+    ['foo.d.ts', 'typescript-def'],
+    ['foo.spec.tsx', 'test-jsx'],
+    ['FOO.TEST.TS', 'test-ts'],
+    ['a.b.c.unknownext', 'file'],
+    ['.gitignore', 'git'],
+    ['foo.ts', 'typescript']
+  ])('resolves %s by its longest known dot-suffix', (name, expected) => {
+    expect(resolve({ name, isDirectory: false, isExpanded: false, depth: 1 })).toBe(expected)
+  })
+
   it('resolves README.md by file name', () => {
     expect(
       resolve({
         name: 'README.md',
-        extension: 'md',
         isDirectory: false,
         isExpanded: false,
         depth: 0
@@ -53,7 +62,6 @@ describe('resolveMaterialIconKey', () => {
     expect(
       resolve({
         name: 'src',
-        extension: null,
         isDirectory: true,
         isExpanded: false,
         depth: 0
@@ -65,7 +73,6 @@ describe('resolveMaterialIconKey', () => {
     expect(
       resolve({
         name: 'src',
-        extension: null,
         isDirectory: true,
         isExpanded: true,
         depth: 0
@@ -77,7 +84,6 @@ describe('resolveMaterialIconKey', () => {
     expect(
       resolve({
         name: '.github',
-        extension: null,
         isDirectory: true,
         isExpanded: false,
         depth: 0
@@ -89,7 +95,6 @@ describe('resolveMaterialIconKey', () => {
     expect(
       resolve({
         name: 'notes.xyz',
-        extension: 'xyz',
         isDirectory: false,
         isExpanded: false,
         depth: 2
@@ -101,7 +106,6 @@ describe('resolveMaterialIconKey', () => {
     expect(
       resolve({
         name: 'zz-unknown-folder-xyz',
-        extension: null,
         isDirectory: true,
         isExpanded: false,
         depth: 3
@@ -112,7 +116,6 @@ describe('resolveMaterialIconKey', () => {
   it('maps icon keys to bundled svg file names', () => {
     const iconKey = resolve({
       name: 'index.tsx',
-      extension: 'tsx',
       isDirectory: false,
       isExpanded: false,
       depth: 1

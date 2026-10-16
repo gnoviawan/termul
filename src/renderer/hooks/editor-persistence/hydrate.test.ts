@@ -1,17 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockRead, mockReadFile, mockFetchManifest } = vi.hoisted(() => ({
+const { mockRead, mockReadFile } = vi.hoisted(() => ({
   mockRead: vi.fn(),
-  mockReadFile: vi.fn(),
-  mockFetchManifest: vi.fn()
+  mockReadFile: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
   persistenceApi: { read: mockRead },
   filesystemApi: { readFile: mockReadFile }
-}))
-vi.mock('@/hooks/use-workspace-manifest-sync', () => ({
-  fetchManifestWorkspace: mockFetchManifest
 }))
 vi.mock('@/hooks/useTerminalAutoSave', () => ({ loadPersistedTerminals: vi.fn(async () => null) }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
@@ -42,7 +38,6 @@ function persistedState(file: Record<string, unknown>): { success: true; data: u
 describe('hydrateProject', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockFetchManifest.mockResolvedValue(null)
   })
 
   it('stages files off-store: a draft not older than disk is applied and view state restored', async () => {
@@ -88,16 +83,14 @@ describe('hydrateProject', () => {
     expect(staged.editorFiles.size).toBe(0)
   })
 
-  it('withTree:false stages editor state only and leaves the manifest alone', async () => {
+  it('withTree:false stages editor state only and no tree', async () => {
     mockRead.mockResolvedValue(persistedState(persistedFile()))
     mockReadFile.mockResolvedValue({ success: true, data: { content: 'disk', modifiedAt: 1 } })
 
     const staged = await hydrateProject('p1', () => true, { withTree: false })
 
     expect(staged.tree).toBeNull()
-    expect(staged.manifestRevision).toBeUndefined()
     expect(staged.editorFiles.size).toBe(1)
-    expect(mockFetchManifest).not.toHaveBeenCalled()
   })
 
   it('stops reading once it is no longer current', async () => {
@@ -106,6 +99,67 @@ describe('hydrateProject', () => {
     await hydrateProject('p1', () => false)
 
     expect(mockReadFile).not.toHaveBeenCalled()
-    expect(mockFetchManifest).not.toHaveBeenCalled()
+  })
+
+  it('stages a fresh workspace when nothing is stored for the project on this device', async () => {
+    mockRead.mockResolvedValue({ success: true, data: null })
+
+    const staged = await hydrateProject('p1', () => true)
+
+    expect(staged.editorFiles.size).toBe(0)
+    expect(staged.tree?.root).toMatchObject({ type: 'leaf', tabs: [] })
+    expect(mockReadFile).not.toHaveBeenCalled()
+  })
+
+  it('restores a saved split layout with its pane sizes and active pane', async () => {
+    const openFile = (filePath: string, viewMode: string): Record<string, unknown> =>
+      persistedFile({ filePath, viewMode, isDirty: false, draftContent: undefined })
+    mockRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [openFile('/w/a.ts', 'code'), openFile('/w/README.md', 'markdown')],
+        activeFilePath: '/w/README.md',
+        expandedDirs: [],
+        activeTabId: 'edit-/w/README.md',
+        paneLayout: {
+          type: 'split',
+          id: 's1',
+          direction: 'horizontal',
+          children: [
+            {
+              type: 'leaf',
+              id: 'l1',
+              tabs: [
+                { type: 'terminal', terminalId: 't1' },
+                { type: 'editor', filePath: '/w/a.ts' }
+              ],
+              activeTabId: 'edit-/w/a.ts'
+            },
+            {
+              type: 'leaf',
+              id: 'l2',
+              tabs: [{ type: 'editor', filePath: '/w/README.md' }],
+              activeTabId: 'edit-/w/README.md'
+            }
+          ],
+          sizes: [60, 40]
+        },
+        activePaneId: 'l2'
+      }
+    })
+    mockReadFile.mockResolvedValue({ success: true, data: { content: 'disk', modifiedAt: 1 } })
+
+    const staged = await hydrateProject('p1', () => true)
+
+    expect([...staged.editorFiles.keys()]).toEqual(['/w/a.ts', '/w/README.md'])
+    expect(staged.activeFilePath).toBe('/w/README.md')
+    expect(staged.tree?.activePaneId).toBe('l2')
+    const root = staged.tree?.root
+    if (root?.type !== 'split') throw new Error('expected the saved split')
+    expect(root.sizes).toEqual([60, 40])
+    // The terminal of another device is not live here, so its tab is dropped.
+    expect(
+      root.children.map((pane) => (pane.type === 'leaf' ? pane.tabs.map((t) => t.id) : []))
+    ).toEqual([['edit-/w/a.ts'], ['edit-/w/README.md']])
   })
 })

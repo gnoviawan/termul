@@ -13,11 +13,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 
 /// Temp dir removed on drop (panic-safe).
-struct TempDir {
+pub(super) struct TempDir {
     path: std::path::PathBuf,
 }
 impl TempDir {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -26,7 +26,7 @@ impl TempDir {
         std::fs::create_dir_all(&path).expect("create temp dir");
         Self { path }
     }
-    fn path(&self) -> &std::path::Path {
+    pub(super) fn path(&self) -> &std::path::Path {
         &self.path
     }
 }
@@ -36,7 +36,7 @@ impl Drop for TempDir {
     }
 }
 
-fn test_state(root: &std::path::Path) -> AppState {
+pub(super) fn test_state(root: &std::path::Path) -> AppState {
     let pty = test_pty_manager();
     AppState {
         acp: Arc::new(AcpManager::new(vec![])),
@@ -49,10 +49,7 @@ fn test_state(root: &std::path::Path) -> AppState {
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
             &root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         ),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: HistoryMode::LiveOnly,
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,
@@ -79,7 +76,7 @@ fn test_router(state: AppState) -> axum::Router {
         .with_state(state)
 }
 
-async fn body_as<T: serde::de::DeserializeOwned>(body: Body) -> IpcBody<T> {
+pub(super) async fn body_as<T: serde::de::DeserializeOwned>(body: Body) -> IpcBody<T> {
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
         .expect("read body");
@@ -535,7 +532,7 @@ async fn copy_include_files_returns_outcome_for_fresh_worktree() {
 // the runtime catch).
 
 /// Build the production `router()` with a test AppState rooted at `root`.
-fn production_router(root: &std::path::Path) -> axum::Router {
+pub(super) fn production_router(root: &std::path::Path) -> axum::Router {
     let pty = crate::web::test_pty_manager();
     let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     crate::web::router::router(
@@ -547,10 +544,7 @@ fn production_router(root: &std::path::Path) -> axum::Router {
         pty.exit_code_tracker(),
         Arc::new(WsRelaySink::new()),
         ProjectRegistry::seeded_for_test(&project_root),
-        None,
-        None,
         HistoryMode::LiveOnly,
-        None,
         None,
         None,
         None,

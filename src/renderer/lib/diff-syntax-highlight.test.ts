@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { getLanguageForFile, isParserReady, tokenizeLine } from './diff-syntax-highlight'
+import {
+  getLanguageForFile,
+  isParserReady,
+  tokenizeLine,
+  tokenizeLineAsync
+} from './diff-syntax-highlight'
 
 describe('getLanguageForFile', () => {
   it('maps .ts to typescript', () => {
@@ -46,6 +51,11 @@ describe('getLanguageForFile', () => {
     expect(getLanguageForFile('index.html')).toBe('html')
   })
 
+  it('maps .astro to astro', () => {
+    expect(getLanguageForFile('src/ContactAvatar.astro')).toBe('astro')
+    expect(getLanguageForFile('src\\components\\ContactAvatar.astro')).toBe('astro')
+  })
+
   it('returns empty string for unknown extension', () => {
     expect(getLanguageForFile('data.xyz')).toBe('')
   })
@@ -66,6 +76,14 @@ describe('tokenizeLine', () => {
 
   it('returns empty array for empty language', () => {
     expect(tokenizeLine('const x = 1', '')).toEqual([])
+  })
+
+  it('colors an Astro template line and a script line', async () => {
+    const template = await tokenizeLineAsync('<div class="box">', 'astro')
+    expect(template.some((span) => span.color.includes('#569cd6'))).toBe(true)
+    const script = await tokenizeLineAsync('import Icon from "./Icon.astro"', 'astro')
+    expect(script.some((span) => span.color.includes('#c586c0'))).toBe(true)
+    expect(script.some((span) => span.color.includes('#ce9178'))).toBe(true)
   })
 
   it('returns empty array when parser is not loaded', () => {

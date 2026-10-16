@@ -7,6 +7,7 @@ import {
   useNativeWebviewOccluded
 } from '@/hooks/use-native-webview-occlusion'
 import type { SSHWorkspaceState } from '@/layouts/workspace-layout/use-ssh-workspace'
+import { useProjectStore } from '@/stores/project-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
 import { ShellFrame, type ShellFrameProps } from './ShellFrame'
@@ -29,9 +30,6 @@ vi.mock('@/lib/platform', async () => {
 })
 
 vi.mock('@/components/ResizeEdges', () => ({ ResizeEdges: () => null }))
-vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
-  WorkspaceConflictBanner: () => <div data-testid="conflict-banner" />
-}))
 vi.mock('@/hooks/use-pane-dnd', () => ({
   PaneDndProvider: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="pane-dnd">{children}</div>
@@ -39,7 +37,6 @@ vi.mock('@/hooks/use-pane-dnd', () => ({
 }))
 const railProps: { current: ShellRailProps | null } = { current: null }
 vi.mock('@/components/shell/ShellRail', () => ({
-  COLLAPSED_WIDTH: 48,
   ShellRail: (props: ShellRailProps) => {
     railProps.current = props
     return <div data-testid="rail" />
@@ -116,6 +113,7 @@ describe('ShellFrame', () => {
     resetNativeWebviewOcclusionForTests()
     resetShellLayoutStoreForTests()
     useShellLayoutStore.setState({ status: 'unavailable' })
+    useProjectStore.setState({ projects: [] })
     useThemePickerStore.getState().close()
     railProps.current = null
     platformRef.tauri = true
@@ -144,7 +142,6 @@ describe('ShellFrame', () => {
     expect(dnd).toContainElement(sidePanel)
     expect(dnd).toContainElement(main)
     expect(dnd).not.toContainElement(rail)
-    expect(screen.getByTestId('conflict-banner')).toBeInTheDocument()
     expect(screen.getByTestId('app-modals')).toBeInTheDocument()
   })
 
@@ -255,6 +252,23 @@ describe('ShellFrame', () => {
       expect(dragRegions()).toHaveLength(0)
     })
 
+    it('runs the Rail full height beside the gutter: the gutter tops only the right column', () => {
+      renderFrame(withProject)
+      const rail = screen.getByTestId('rail')
+      const gutter = screen.getByTestId('top-gutter')
+      const row = screen.getByTestId('shell-row')
+
+      // The Rail is not under the gutter and not inside the padded row.
+      expect(rail.parentElement).not.toBe(gutter.parentElement)
+      expect(row).not.toContainElement(rail)
+      // The gutter and the row share the right column, beside the Rail.
+      expect(gutter.parentElement).toBe(row.parentElement)
+      expect(rail.parentElement).toBe(gutter.parentElement?.parentElement)
+      // `pl-2` is the 8px gap between the Rail and the Side panel.
+      expect(row).toHaveClass('pb-2', 'pr-2', 'pl-2')
+      expect(row).toContainElement(screen.getByTestId('side-panel'))
+    })
+
     it('renders the fallback bar with the controls when there is no project', () => {
       renderFrame()
       const bar = screen.getByTestId('top-row-fallback-bar')
@@ -278,6 +292,27 @@ describe('ShellFrame', () => {
 
       renderFrame(withProject, '/c/chat-1')
       expect(screen.queryByTestId('top-row-fallback-bar')).not.toBeInTheDocument()
+    })
+
+    it('puts the Show side panel button in the fallback bar while the panel is hidden', () => {
+      useProjectStore.setState({ projects: [oneProject] as never, activeProjectId: 'p1' })
+      useShellLayoutStore.setState({ sidePanelVisible: false })
+      const { unmount } = renderFrame(withProject, '/snapshots')
+      expect(screen.getByTestId('top-row-fallback-bar')).toContainElement(
+        screen.getByRole('button', { name: 'Show side panel' })
+      )
+      unmount()
+
+      useShellLayoutStore.setState({ sidePanelVisible: true })
+      renderFrame(withProject, '/snapshots')
+      expect(screen.queryByRole('button', { name: 'Show side panel' })).not.toBeInTheDocument()
+    })
+
+    it('leaves the Show side panel button to the pane tab bars in panes mode', () => {
+      useProjectStore.setState({ projects: [oneProject] as never, activeProjectId: 'p1' })
+      useShellLayoutStore.setState({ sidePanelVisible: false })
+      renderFrame(withProject)
+      expect(screen.queryByRole('button', { name: 'Show side panel' })).not.toBeInTheDocument()
     })
 
     it('leaves the controls to the pane tab bars in panes mode', () => {
@@ -307,6 +342,24 @@ describe('ShellFrame', () => {
       renderFrame()
       expect(screen.queryByTestId('window-controls')).not.toBeInTheDocument()
       expect(dragRegions()).toHaveLength(0)
+    })
+
+    it('starts the main card below the traffic lights only with the Rail collapsed on macOS', () => {
+      platformRef.mac = true
+      useShellLayoutStore.setState({ railExpanded: false })
+      const { unmount } = renderFrame(withProject)
+      expect(screen.getByRole('main')).toHaveStyle({ marginTop: '36px' })
+      unmount()
+
+      useShellLayoutStore.setState({ railExpanded: true })
+      const second = renderFrame(withProject)
+      expect(screen.getByRole('main').style.marginTop).toBe('')
+      second.unmount()
+
+      platformRef.mac = false
+      useShellLayoutStore.setState({ railExpanded: false })
+      renderFrame(withProject)
+      expect(screen.getByRole('main').style.marginTop).toBe('')
     })
 
     it('keeps workspaceMain mounted when the mode flips between fallback and panes', () => {

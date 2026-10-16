@@ -25,15 +25,9 @@ vi.mock('sonner', () => ({
   toast: { error: toastError, success: toastSuccess }
 }))
 
-// "Set as host default" goes through the web route on a browser client.
-vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/tauri-runtime')>()),
-  isTauriContext: () => false
-}))
-
-vi.mock('@/lib/web-server-api', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/web-server-api')>()),
-  webServerProjects: { setDefaultProject: mockSetDefaultProject }
+// "Set as host default" goes through the project registry facade on every surface.
+vi.mock('@/lib/project-registry-api', () => ({
+  projectRegistryApi: { setDefault: mockSetDefaultProject }
 }))
 
 const projects = [
@@ -341,8 +335,8 @@ describe('ProjectSwitcherDrawer', () => {
       }
     })
 
-    it('calls the default-project route once for that project and confirms it', async () => {
-      mockSetDefaultProject.mockResolvedValue({ success: true })
+    it('sets the default through the registry once for that project and confirms it', async () => {
+      mockSetDefaultProject.mockResolvedValue(undefined)
       const original = state.projects
       state.projects = sheetProjects.map((p) => ({ ...p })) as unknown as typeof state.projects
       try {
@@ -356,19 +350,20 @@ describe('ProjectSwitcherDrawer', () => {
         expect(mockSetDefaultProject).toHaveBeenCalledWith('p3')
         expect(toastSuccess).toHaveBeenCalledWith('"Gamma" is now the host default')
         expect(toastError).not.toHaveBeenCalled()
-        // The flags flip locally so the badge refreshes at once.
+        // The badge moves when the `projects` watch delivers the new default,
+        // not by a local flag flip.
         expect(
           (state.projects as unknown as Array<{ id: string; isDefault?: boolean }>)
             .filter((p) => p.isDefault)
             .map((p) => p.id)
-        ).toEqual(['p3'])
+        ).toEqual(['p1'])
       } finally {
         state.projects = original
       }
     })
 
     it('does not switch the session when the control is tapped', async () => {
-      mockSetDefaultProject.mockResolvedValue({ success: true })
+      mockSetDefaultProject.mockResolvedValue(undefined)
       const original = state.projects
       state.projects = sheetProjects.map((p) => ({ ...p })) as unknown as typeof state.projects
       try {
@@ -385,7 +380,7 @@ describe('ProjectSwitcherDrawer', () => {
     })
 
     it('reports a refused change without flipping the flags', async () => {
-      mockSetDefaultProject.mockResolvedValue({ success: false, error: 'NOT_FOUND' })
+      mockSetDefaultProject.mockRejectedValue(new Error('NOT_FOUND'))
       const original = state.projects
       state.projects = sheetProjects.map((p) => ({ ...p })) as unknown as typeof state.projects
       try {

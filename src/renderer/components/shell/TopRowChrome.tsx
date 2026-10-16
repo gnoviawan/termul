@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Copy, Minus, Square, X } from '@/components/icons'
-import { titlebarNoDragStyle } from '@/components/TitlebarPanelToggles'
+import { TRAFFIC_LIGHT_CLEARANCE_PX } from '@/components/shell/traffic-light-inset'
 import { windowApi } from '@/lib/api'
+
+/** Marks the controls non-draggable so they stay clickable inside a drag-region row. */
+const titlebarNoDragStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
 const windowControlClass =
   'h-full px-3 hover:bg-secondary/80 inline-flex items-center focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset cursor-pointer'
@@ -80,23 +83,20 @@ export function WindowControls({
 }
 
 /**
- * Spacer that clears the native macOS traffic lights (end near x=66). It is its
- * own drag handle. Renders nothing unless `trafficLights`. `widthPx` replaces
- * the default 80px when part of the clearance is already covered by a
- * neighbour (the collapsed Rail).
+ * Spacer that clears the native macOS traffic lights
+ * ({@link TRAFFIC_LIGHT_CLEARANCE_PX}). It is its own drag handle. Renders
+ * nothing unless `trafficLights`.
  */
 export function TrafficLightClearance({
-  trafficLights,
-  widthPx
+  trafficLights
 }: {
   trafficLights: boolean
-  widthPx?: number
 }): React.JSX.Element | null {
   if (!trafficLights) return null
   return (
     <div
-      className={widthPx === undefined ? 'w-[80px] shrink-0' : 'shrink-0'}
-      style={widthPx === undefined ? undefined : { width: widthPx }}
+      className="shrink-0"
+      style={{ width: TRAFFIC_LIGHT_CLEARANCE_PX }}
       data-testid="traffic-light-clearance"
       data-tauri-drag-region
     />

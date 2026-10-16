@@ -131,7 +131,9 @@ export function TitleBarShortcutsPopover({
           setOpen(!isOpen)
         }}
       >
-        <Keyboard size={16} />
+        {/* The keyboard body sits low in its 24px box (a cable runs to the
+            top): 1px up lines it up with the Palette glyph beside it. */}
+        <Keyboard size={16} className="-translate-y-px" />
       </button>
 
       <AnimatePresence onExitComplete={handleExitComplete}>

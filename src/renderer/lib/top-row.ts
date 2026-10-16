@@ -9,12 +9,19 @@ export type TopRowMode = 'panes' | 'ssh' | 'fallback'
 /** Who renders the window controls (Windows/Linux desktop). */
 export type TopRowControlsOwner = 'pane' | 'ssh-header' | 'fallback-bar'
 
+/** Who renders the Show side panel button while the Side panel is hidden. */
+export type TopRowShowPanelOwner = 'pane' | 'ssh-header' | 'fallback-bar'
+
 export interface TopRowRoles {
   /** Pane leaves whose tab bar touches the top edge of the main area. */
   topEdgeLeafIds: ReadonlySet<string>
   /** The top-edge leaf that is rightmost (it owns the controls in `pane` mode). */
   rightmostLeafId: string | null
+  /** The top-edge leaf that is leftmost (it owns the Show side panel button). */
+  leftmostLeafId: string | null
   controlsOwner: TopRowControlsOwner
+  /** Owner of the Show side panel button (the leftmost leaf's tab bar in `pane` mode). */
+  showPanelOwner: TopRowShowPanelOwner
 }
 
 export interface TopRowPlatform {
@@ -28,6 +35,8 @@ export interface TopRowPlatform {
 
 export interface PaneTopRowRole {
   topEdge: boolean
+  /** Leftmost top-edge pane: its tab bar starts where the Side panel edge was. */
+  leftEdge: boolean
   dragRegion: boolean
   windowControls: boolean
 }
@@ -58,9 +67,17 @@ export function getRightmostTopEdgeLeafId(root: PaneNode): string | null {
   return child ? getRightmostTopEdgeLeafId(child) : null
 }
 
+/** The leftmost top-edge leaf: the first child, whatever the split direction. */
+export function getLeftmostTopEdgeLeafId(root: PaneNode): string | null {
+  if (root.type === 'leaf') return root.id
+  const child = root.children[0]
+  return child ? getLeftmostTopEdgeLeafId(child) : null
+}
+
 /**
- * The single place that decides who owns the window controls. A fullscreen
- * pane is the whole tree. SSH and the fallback bar carry no pane roles.
+ * The single place that decides who owns the window controls and the Show
+ * side panel button. A fullscreen pane is the whole tree. SSH and the fallback
+ * bar carry no pane roles, so each renders the button in its own bar.
  */
 export function selectTopRowRoles({
   root,
@@ -72,16 +89,30 @@ export function selectTopRowRoles({
   mode: TopRowMode
 }): TopRowRoles {
   if (mode === 'ssh') {
-    return { topEdgeLeafIds: new Set(), rightmostLeafId: null, controlsOwner: 'ssh-header' }
+    return {
+      topEdgeLeafIds: new Set(),
+      rightmostLeafId: null,
+      leftmostLeafId: null,
+      controlsOwner: 'ssh-header',
+      showPanelOwner: 'ssh-header'
+    }
   }
   if (mode === 'fallback') {
-    return { topEdgeLeafIds: new Set(), rightmostLeafId: null, controlsOwner: 'fallback-bar' }
+    return {
+      topEdgeLeafIds: new Set(),
+      rightmostLeafId: null,
+      leftmostLeafId: null,
+      controlsOwner: 'fallback-bar',
+      showPanelOwner: 'fallback-bar'
+    }
   }
   const effective = resolveEffectiveRoot(root, fullscreenPaneId)
   return {
     topEdgeLeafIds: getTopEdgeLeafIds(effective),
     rightmostLeafId: getRightmostTopEdgeLeafId(effective),
-    controlsOwner: 'pane'
+    leftmostLeafId: getLeftmostTopEdgeLeafId(effective),
+    controlsOwner: 'pane',
+    showPanelOwner: 'pane'
   }
 }
 
@@ -110,6 +141,7 @@ export function paneTopRowRole(
   const topEdge = roles.topEdgeLeafIds.has(paneId)
   return {
     topEdge,
+    leftEdge: topEdge && roles.leftmostLeafId === paneId,
     dragRegion: topEdge && platform.dragRegions,
     windowControls:
       topEdge &&

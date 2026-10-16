@@ -11,6 +11,7 @@ import type {
   SessionModelState,
   SessionModeState
 } from '@/lib/acp-api'
+import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
 
 /** ACP semantic category for reasoning/thinking-depth config options. */
 export const THOUGHT_LEVEL_CATEGORY = 'thought_level'
@@ -186,6 +187,84 @@ export function resolveModelOption(
       }))
     }
   }
+}
+
+/** Id plus display name of the model a session is on right now. */
+export interface SessionModelSnapshot {
+  modelId: string
+  modelName: string
+}
+
+/**
+ * The model the composer shows for this session. A `model` config option wins
+ * over the native `models` projection, which stays at the session/new value
+ * until something copies the option across.
+ */
+export function sessionModelSnapshot(
+  session:
+    | {
+        models?: SessionModelState | null
+        configOptions?: readonly SessionConfigOption[] | null
+      }
+    | null
+    | undefined
+): SessionModelSnapshot | null {
+  if (!session) return null
+  const configModel =
+    session.configOptions?.find(
+      (option) =>
+        option.category === MODEL_CATEGORY &&
+        typeof option.currentValue === 'string' &&
+        option.currentValue.length > 0 &&
+        (option.options?.length ?? 0) > 0
+    ) ?? null
+  const resolved = resolveModelOption(configModel, session.models)
+  const current = resolved.option?.currentValue
+  if (typeof current !== 'string' || current.length === 0 || !resolved.option) return null
+  const named = flattenConfigOptionValues(resolved.option).find((entry) => entry.value === current)
+  const trimmed = named?.name.trim() ?? ''
+  return { modelId: current, modelName: trimmed.length > 0 ? trimmed : current }
+}
+
+/**
+ * Copy the displayed model onto `session.models` when that projection exists.
+ * Leaves a session with no native model list unchanged.
+ */
+export function alignSessionModelProjection<
+  T extends {
+    models?: SessionModelState | null
+    configOptions?: readonly SessionConfigOption[] | null
+  }
+>(session: T): T {
+  const snapshot = sessionModelSnapshot(session)
+  if (!snapshot || !session.models || session.models.currentModelId === snapshot.modelId) {
+    return session
+  }
+  return {
+    ...session,
+    models: { ...session.models, currentModelId: snapshot.modelId }
+  }
+}
+
+/**
+ * Write the displayed model onto one index row. Returns the same array when
+ * the row is missing or already current.
+ */
+export function withSessionModelOnIndex(
+  index: readonly SessionIndexEntry[],
+  sessionId: string,
+  session: Parameters<typeof sessionModelSnapshot>[0]
+): SessionIndexEntry[] {
+  const snapshot = sessionModelSnapshot(session)
+  if (!snapshot) return index as SessionIndexEntry[]
+  let changed = false
+  const next = index.map((entry) => {
+    if (entry.id !== sessionId) return entry
+    if (entry.modelId === snapshot.modelId && entry.modelName === snapshot.modelName) return entry
+    changed = true
+    return { ...entry, modelId: snapshot.modelId, modelName: snapshot.modelName }
+  })
+  return changed ? next : (index as SessionIndexEntry[])
 }
 
 /**

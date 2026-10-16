@@ -8,8 +8,8 @@
 //!
 //! The **envelope** fields (`sid`, `seq`, `type`, `payload`) are snake_case.
 //! The **payload** is the existing camelCase-serialized ACP event struct
-//! `Value` (byte-identical to what `TauriEventSink` emits today — `fan_out`
-//! serializes ONCE, fans out N). This module does NOT re-case payloads.
+//! `Value` (`fan_out` serializes ONCE, fans out N). This module does NOT
+//! re-case payloads.
 //!
 //! # OS vs human cap boundary (AC8)
 //!
@@ -33,10 +33,8 @@
 //! replay. Unknown request types return `err.code: "not_implemented"`.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
@@ -44,10 +42,11 @@ use axum::response::IntoResponse;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::acp::config::AgentConfig;
-use crate::acp::{AcpManager, FileProjectRegistry, SessionCreationContext};
+use crate::acp::provider_errors::ProviderErrorKind;
+use crate::acp::{AcpManager, SessionCreationContext};
 // Only the harness and the ws tests name these (through `super::*`).
 #[cfg(test)]
 use crate::acp::{AgentId, SessionId};
@@ -56,13 +55,15 @@ use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub}
 use crate::web::auth::WebAuth;
 use crate::web::capabilities::{Carrier, CapabilityPolicy};
 use crate::web::connection_runtime::ConnectionRuntime;
-use crate::web::permissions::DEFAULT_PERMISSION_RECONNECT_GRACE;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::sink::{ClientId, EventStream, ReplayResult, StreamItem, WsRelaySink};
 use crate::web::store::WebStore;
 
 mod access;
 mod agents;
+pub mod channel;
+mod chat_reads;
+mod claude_accounts;
 mod commands;
 mod dispatch;
 mod lifecycle;
@@ -79,6 +80,8 @@ mod watch;
 // for `tests.rs`' `use super::*` without widening visibility past `ws`.
 use access::*;
 use agents::*;
+use chat_reads::*;
+use claude_accounts::*;
 use commands::*;
 use dispatch::*;
 use lifecycle::*;
@@ -174,7 +177,7 @@ pub fn tier_of(type_: &str) -> ReliabilityTier {
 
 /// The `authenticate` protocol version this host speaks. Mirrors the TS
 /// `WS_PROTOCOL_VERSION`. Bump it on any wire-contract change (AD-15).
-pub const WS_PROTOCOL_VERSION: u32 = 6;
+pub const WS_PROTOCOL_VERSION: u32 = 7;
 
 /// Longest accepted `deviceId` / `clientInstanceId`, in bytes.
 pub const MAX_CLIENT_ID_LEN: usize = 128;
@@ -328,8 +331,25 @@ impl WsReply {
             err: Some(WsError {
                 code: code.as_str().to_string(),
                 message: message.into(),
+                details: None,
             }),
         }
+    }
+
+    /// Build a failure reply whose `err.details` carries structured context
+    /// (the `project_busy` entity list).
+    #[must_use]
+    pub fn err_with_details(
+        id: impl Into<String>,
+        code: WsErrorCode,
+        message: impl Into<String>,
+        details: Value,
+    ) -> Self {
+        let mut reply = Self::err(id, code, message);
+        if let Some(err) = reply.err.as_mut() {
+            err.details = Some(details);
+        }
+        reply
     }
 
     /// Build a failure reply with a raw (SCREAMING_SNAKE_CASE) code string.
@@ -355,6 +375,7 @@ impl WsReply {
             err: Some(WsError {
                 code: code.into(),
                 message: message.into(),
+                details: None,
             }),
         }
     }
@@ -367,6 +388,11 @@ pub struct WsError {
     pub code: String,
     /// Human-readable message.
     pub message: String,
+    /// Optional structured context for the code (additive): a `project_busy`
+    /// refusal lists the bound entities as
+    /// `{"sessions":[sessionId…],"terminals":[terminalId…]}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 /// The stable `err.code` machine strings (AC2). Mirrors the TS
@@ -398,8 +424,9 @@ pub enum WsErrorCode {
     /// `authenticate` carried a missing, empty or oversized `deviceId` /
     /// `clientInstanceId` (AD-4). The host never mints either id.
     InvalidClientIdentity,
-    /// Reserved: a host terminal cap (per project or global) refused a spawn.
-    /// Handler behavior lands with the host-owned lifecycle work.
+    /// A host terminal cap (per project or global) refused a spawn. The
+    /// terminal carriers (`/terminal/ws`, desktop `terminal_spawn`) answer it
+    /// as the SCREAMING form `TERMINAL_LIMIT`; this is the `/ws` spelling.
     TerminalLimit,
     /// Reserved: project remove/archive refused while sessions or PTYs bound
     /// to the project are live. Handler behavior lands with the project
@@ -411,21 +438,19 @@ pub enum WsErrorCode {
     /// Reserved: branch switch / worktree removal refused while a session
     /// with its cwd inside the target path has an active turn.
     DestructiveOpBlocked,
-    /// Reserved: the upstream provider refused the call for quota / usage
-    /// limits.
+    /// The upstream provider refused the call for quota / usage limits.
     ProviderQuotaExceeded,
-    /// Reserved: the upstream provider refused the call for a session limit.
+    /// The upstream provider refused the call for a session limit.
     ProviderSessionLimit,
-    /// Reserved: the upstream provider rejected the request with a 4xx class
-    /// error.
+    /// The upstream provider rejected the request with a 4xx class error.
     ProviderRequestRejected,
     /// The connection lacks the capability the request needs (view-only
     /// connection attempting a mutation outside `device/<deviceId>/`).
     Forbidden,
     /// `respond_permission` / `answer_question` named a ticket that was
-    /// already resolved (by this or another connection, a timeout or a
-    /// disconnect deny). Tombstones are bounded: an older ticket reads
-    /// `stale`.
+    /// already resolved (answered by this or another connection, or released
+    /// when its turn, session or agent ended). Tombstones are bounded: an
+    /// older ticket reads `stale`.
     AlreadyResolved,
     /// A spawn failed deterministically: the agent binary is missing, not
     /// installed, or cannot start (AD-5). Definite — never retried
@@ -526,7 +551,7 @@ pub fn map_prompt_error_code(err: &str) -> Option<WsErrorCode> {
 // ---------------------------------------------------------------------------
 
 /// Shared Axum state for the standalone server: the ACP manager + the live
-/// WS relay sink + the in-memory project registry (Epic-4 bridge). Typed
+/// WS relay sink + the host's durable project registry. Typed
 /// struct (preferred over tuple state past 2 fields).
 #[derive(Clone)]
 pub struct AppState {
@@ -540,38 +565,25 @@ pub struct AppState {
     pub exit_code_tracker: Arc<ExitCodeTracker>,
     /// The live WS relay sink (owns per-session logs + seq counters + subs).
     pub relay: Arc<WsRelaySink>,
-    /// In-memory, renderer-fed project registry — source for `GET /projects`
-    /// + default-project resolution. Empty on the standalone path.
+    /// The host's durable project registry — source for `GET /projects`,
+    /// default-project resolution and the fs/git boundary.
     pub registry: Arc<ProjectRegistry>,
-    /// Optional writable VPS file registry + configured path. Desktop shared-live
-    /// passes `None`, so switching there remains file-free.
-    pub registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
-    pub projects_file: Option<Arc<PathBuf>>,
     /// Deployment history provider exposed to authenticated browser clients.
     pub history_mode: HistoryMode,
-    /// Host-owned versioned workspace manifest service (CAP-5 / Story 5).
-    /// `None` when the desktop could not open `WorkspaceManifestService` at
-    /// startup (degraded fresh-only mode) — routes return `Ok(None)` /
-    /// idempotent success in that case. The web/remote client reads/writes a
-    /// project's manifest through the three `/workspace/*` routes in
-    /// `workspace_api.rs`; the desktop renderer uses the `workspace_manifest_*`
-    /// Tauri commands (same `IpcResult<T>` shape byte-for-byte).
-    pub workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     /// Host-owned ACP catalog service (CAP-6 / Story 8). `None` when the
     /// desktop could not open `AcpCatalogService` at startup (degraded mode —
     /// routes return `ACP_CATALOG_UNAVAILABLE`). The web/remote client reads
     /// the resolved catalog through `GET /acp/catalog` + WS
-    /// `list_acp_catalog`; the desktop renderer uses the `acp_list_catalog` +
-    /// `acp_set_catalog_opt_in` Tauri commands (same `IpcResult<T>` shape
-    /// byte-for-byte).
+    /// `list_acp_catalog`; the desktop renderer sends the same WS requests over
+    /// its channel carrier.
     pub acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     /// Host-owned verified-atomic ACP install service (CAP-6 / Story 9). `None`
     /// when the desktop could not open `AcpInstallService` at startup (degraded
     /// mode — the `install_acp_agent` handler returns
     /// `ACP_INSTALL_UNAVAILABLE`). The web/remote client installs a catalog
     /// agent through `POST /acp/install` (catalog_api sibling) + WS
-    /// `install_acp_agent`; the desktop renderer uses the `acp_install_agent`
-    /// Tauri command (same `IpcResult<T>` shape byte-for-byte).
+    /// `install_acp_agent`; the desktop renderer sends the same WS request over
+    /// its channel carrier.
     pub acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     /// Issue #613: server-side generic key-value store for web-client state
     /// (terminal layout, settings, editor state, command history, snapshots,
@@ -640,14 +652,13 @@ pub struct RuntimePolicy {
     /// is the **unlimited** sentinel — the client imposes no inactivity timer
     /// (the default). A non-zero value is the bounded inactivity window.
     pub prompt_inactivity_timeout_ms: u64,
-    pub permission_reconnect_grace_ms: u64,
     pub ping_interval_ms: u64,
     pub pong_timeout_ms: u64,
 }
 
 impl RuntimePolicy {
     #[must_use]
-    pub fn resolved(permission_reconnect_grace: Duration) -> Self {
+    pub fn resolved() -> Self {
         let turn_timeout = crate::acp::manager::resolved_turn_timeout(); // Option
         let turn_idle = crate::acp::manager::turn_idle_timeout(); // Option
                                                                   // `turn_timeout_ms`: 0 = unlimited (no hard cap) sentinel; otherwise
@@ -667,7 +678,6 @@ impl RuntimePolicy {
         Self {
             turn_timeout_ms,
             prompt_inactivity_timeout_ms,
-            permission_reconnect_grace_ms: permission_reconnect_grace.as_millis() as u64,
             ping_interval_ms: PING_INTERVAL.as_millis() as u64,
             pong_timeout_ms: PONG_TIMEOUT.as_millis() as u64,
         }
@@ -703,7 +713,9 @@ pub(super) fn elapsed_ms(epoch: tokio::time::Instant) -> u64 {
 /// manager boundary, or the bare default `"Authentication required"` message
 /// (exact match) for pre-collapsed paths — → `AgentAuthRequired` (Story 7);
 /// `"unknown agent: …"` / `"unknown permission request: …"` → `NotFound`;
-/// capability-gate failures (`"agent does not support …"`) → `Unsupported`.
+/// capability-gate failures (`"agent does not support …"`) → `Unsupported`;
+/// `"ACP_PROVIDER_*: …"` provider failures → `provider_quota_exceeded` /
+/// `provider_session_limit` / `provider_request_rejected`.
 /// Unrecognized errors fall back to `NotImplemented` (preserves the human
 /// message verbatim).
 pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
@@ -718,6 +730,16 @@ pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
             crate::acp::manager::SpawnFailure::InvalidAgentConfig => {
                 WsErrorCode::InvalidAgentConfig
             }
+        };
+        return WsReply::err(id, code, message.to_string());
+    }
+    // Upstream provider refusals: the stable code carries the verdict, so the
+    // message drops the manager's transport prefix.
+    if let Some((kind, message)) = crate::acp::provider_errors::split_provider_tag(&err) {
+        let code = match kind {
+            ProviderErrorKind::QuotaExceeded => WsErrorCode::ProviderQuotaExceeded,
+            ProviderErrorKind::SessionLimit => WsErrorCode::ProviderSessionLimit,
+            ProviderErrorKind::RequestRejected => WsErrorCode::ProviderRequestRejected,
         };
         return WsReply::err(id, code, message.to_string());
     }
@@ -760,6 +782,10 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
 mod capability_tests;
 #[cfg(test)]
 mod project_binding_tests;
+#[cfg(test)]
+mod project_command_tests;
+#[cfg(test)]
+mod provider_error_tests;
 #[cfg(test)]
 mod spawn_rejection_tests;
 #[cfg(test)]

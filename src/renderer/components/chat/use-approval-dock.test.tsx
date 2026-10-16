@@ -368,26 +368,32 @@ describe('question focus target', () => {
   const noOptions = (questionId: string): PendingQuestion =>
     ({ ...question(questionId), options: [] }) as PendingQuestion
 
-  it('names the first option, not the pager or Cancel that precede it in the stepper', () => {
+  it('names the first option, not the minimize or Cancel that precede it in the stepper', () => {
     const { container } = render(<AskUserQuestion question={question('q1')} />)
 
-    // The real QuestionStepper markup: previous, next and cancel come first.
+    // The real QuestionStepper markup: minimize and cancel come first.
     const order = Array.from(container.querySelectorAll('button')).map(
       (button) => button.getAttribute('aria-label') ?? button.textContent
     )
-    expect(order.slice(0, 3)).toEqual(['Previous question', 'Next question', 'Cancel'])
+    expect(order.slice(0, 2)).toEqual(['Minimize questions', 'Cancel'])
 
     const target = findQuestionFocusTarget(container)
     expect(target).toBe(screen.getByRole('button', { name: /Plan A/ }))
     expect(target).not.toBe(screen.getByRole('button', { name: 'Cancel' }))
   })
 
-  it('falls back to Cancel, the first enabled button, when the question has no options', () => {
+  it('falls back to Cancel, not the minimize before it, when the question has no options', () => {
     const { container } = render(<AskUserQuestion question={noOptions('q1')} />)
 
-    // The pager is disabled at "1 of 1", so Cancel is the first enabled button.
-    expect(screen.getByRole('button', { name: 'Previous question' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Minimize questions' })).toBeEnabled()
     expect(findQuestionFocusTarget(container)).toBe(screen.getByRole('button', { name: 'Cancel' }))
+  })
+
+  it('names Resume while the question is minimized', () => {
+    const { container } = render(<AskUserQuestion question={question('q1')} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize questions' }))
+    expect(findQuestionFocusTarget(container)).toBe(screen.getByRole('button', { name: /Resume/ }))
   })
 
   it('finds nothing when no question is open', () => {

@@ -20,6 +20,7 @@ fn metadata() -> SessionMetadata {
         tool_count: 0,
         last_seq: 0,
         fold_open_role: None,
+        fold_counted: false,
         discovered: false,
         worktree_path: Some("/work/project/.termul/worktrees/chat/abc123".to_string()),
         worktree_branch: Some("chat/abc123".to_string()),
@@ -30,6 +31,7 @@ fn metadata() -> SessionMetadata {
         command_id: None,
         log_epoch: None,
         head_ahead_of_durable: false,
+        sweep_checkpoint: None,
     }
 }
 
@@ -864,4 +866,13 @@ fn tool_call_summaries_skip_malformed_fields_and_always_serialize() {
     // both transports).
     let empty = serde_json::to_value(materialize_session_payload(&metadata(), &[])).unwrap();
     assert_eq!(empty["toolCalls"], json!([]));
+}
+
+#[test]
+fn payload_omits_commands_when_the_log_has_no_command_list() {
+    let payload = materialize_session_payload(&metadata(), &[user_prompt(1, Some("t1"), "hi")]);
+    assert!(serde_json::to_value(&payload)
+        .unwrap()
+        .as_object()
+        .is_some_and(|object| !object.contains_key("commands")));
 }

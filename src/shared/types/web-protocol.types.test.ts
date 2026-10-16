@@ -9,6 +9,8 @@ import {
   MAX_CLIENT_ID_LEN,
   MAX_COMMAND_ID_LEN,
   type ReliabilityTier,
+  type RemoveProjectPayload,
+  type UpdateProjectPayload,
   WS_COMMAND_CLASSES,
   WS_ERROR_CODES,
   WS_EVENT_TIERS,
@@ -30,8 +32,8 @@ import {
 import { WEB_TERMINAL_ERROR_CODES } from './web-terminal-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 26 event types including durable user prompts, host records, switch markers, worktree renames + delivery frames', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(26)
+  it('exports exactly 22 event types including durable user prompts, host records, switch markers + delivery frames', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(22)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -59,17 +61,20 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     // The nudges retired by the watch hub must not come back as seq-0 events.
     expect(WS_EVENT_TYPES).not.toContain('projects_changed')
     expect(WS_EVENT_TYPES).not.toContain('chat_history_changed')
-    // Headless ACP auth (spec-acp-terminal-auth): shim-captured auth URL.
-    expect(WS_EVENT_TYPES).toContain('browser_open_request')
+    // The relay sends no seq-0 event except `auth_required`: the agent-level
+    // events that belong to no session are watch deltas.
+    for (const retired of [
+      'browser_open_request',
+      'fs_changed',
+      'fs_watch_ended',
+      'worktree_branch_renamed'
+    ]) {
+      expect(WS_EVENT_TYPES).not.toContain(retired)
+    }
     // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker.
     expect(WS_EVENT_TYPES).toContain('agent_switch')
     // Host-authored durable title record (occupies a session-log seq).
     expect(WS_EVENT_TYPES).toContain('local_title_generated')
-    // #856: server-side FS watcher change push (agent-level broadcast).
-    expect(WS_EVENT_TYPES).toContain('fs_changed')
-    expect(WS_EVENT_TYPES).toContain('fs_watch_ended')
-    // Story 16 (CAP-5): host worktree branch rename (agent-level broadcast).
-    expect(WS_EVENT_TYPES).toContain('worktree_branch_renamed')
     // Delivery frames (no seq): gap after a LOSSY drop, host heartbeat.
     expect(WS_EVENT_TYPES).toContain('gap')
     expect(WS_EVENT_TYPES).toContain('heartbeat')
@@ -83,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 48 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(48)
+  it('exports exactly 51 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(51)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -139,17 +144,27 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'acp_deliver_auth_redirect',
       // CAP-2 (spec-in-chat-agent-switch): host-authored durable marker.
       'record_agent_switch',
-      // Per-project fs watch.
-      'watch_project',
-      'unwatch_project',
+      // A surface read a chat: move the shared last-read marker.
+      'mark_chat_read',
+      // Watches (projects, chat history, agents, fs, store, terminals).
+      'watch',
+      'unwatch',
       // Explicit host-default project change.
-      'set_default_project'
+      'set_default_project',
+      // Claude Accounts: view and choose.
+      'list_claude_accounts',
+      'list_claude_usage',
+      'set_default_claude_account',
+      'set_project_claude_account'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)
     }
     // create_session maps to acp_new_session, NOT acp_create_session.
     expect(WS_REQUEST_TYPES).toContain('create_session')
+    // `watch` / `unwatch` replaced the per-project fs watch requests.
+    expect(WS_REQUEST_TYPES).not.toContain('watch_project')
+    expect(WS_REQUEST_TYPES).not.toContain('unwatch_project')
   })
 
   it('event and request type namespaces are disjoint', () => {
@@ -210,7 +225,7 @@ describe('web-protocol.types — error codes (AC2)', () => {
 
 describe('web-protocol.types — versioned handshake contract (AD-15)', () => {
   it('pins the protocol version and client id length cap shared with the Rust host', () => {
-    expect(WS_PROTOCOL_VERSION).toBe(6)
+    expect(WS_PROTOCOL_VERSION).toBe(7)
     expect(MAX_CLIENT_ID_LEN).toBe(128)
   })
 
@@ -283,7 +298,6 @@ describe('web-protocol.types — reliability tier registry (AC5)', () => {
       'session_info_update',
       'usage_update',
       'auth_required',
-      'worktree_branch_renamed',
       'gap',
       'heartbeat'
     ]
@@ -389,10 +403,37 @@ describe('web-protocol.types — envelope shapes (AC2 + AC3)', () => {
     expect(err.err?.message).toContain('authenticate')
   })
 
-  it('WsError shape is { code, message }', () => {
+  it('WsError shape is { code, message } with optional details', () => {
     const e: WsError = { code: 'stale', message: 'cursor gap' }
     expect(e.code).toBe('stale')
     expect(e.message).toBe('cursor gap')
+    expect(e.details).toBeUndefined()
+  })
+
+  it('a project_busy WsError carries the bound entity ids in details', () => {
+    const e: WsError = {
+      code: 'project_busy',
+      message: "project 'p-1' has live sessions or terminals",
+      details: { sessions: ['s-1'], terminals: ['t-1', 't-2'] }
+    }
+    const reply: WsReply = { id: 'r1', ok: false, err: e }
+    expect(reply.ok === false && reply.err.details?.terminals).toEqual(['t-1', 't-2'])
+  })
+
+  it('remove_project / update_project payloads take an optional cascade', () => {
+    const remove: RemoveProjectPayload = { projectId: 'p-1', cascade: true }
+    const archive: UpdateProjectPayload = { projectId: 'p-1', isArchived: true, cascade: true }
+    expect(remove.cascade).toBe(true)
+    expect(archive.cascade).toBe(true)
+    expect(({ projectId: 'p-1' } satisfies RemoveProjectPayload).projectId).toBe('p-1')
+  })
+
+  it('update_project takes an optional path that moves the root, guarded by the same cascade', () => {
+    const move: UpdateProjectPayload = { projectId: 'p-1', path: '/work/new-root', cascade: true }
+    expect(move.path).toBe('/work/new-root')
+    expect(move.cascade).toBe(true)
+    const rename: UpdateProjectPayload = { projectId: 'p-1', name: 'x' }
+    expect(rename.path).toBeUndefined()
   })
 
   it('compile-time: WsEventType / WsRequestType / ReliabilityTier are string unions', () => {
@@ -444,13 +485,19 @@ describe('web-terminal-protocol.types — error codes', () => {
       'INVALID_CLIENT_IDENTITY',
       'INVALID_COMMAND_ID',
       'OUTCOME_UNKNOWN',
+      'PROJECT_BUSY',
       'PROTOCOL_VERSION_MISMATCH',
+      'TERMINAL_LIMIT',
       'UNAUTHORIZED'
     ])
   })
 
   it('FORBIDDEN is the SCREAMING form of the /ws `forbidden` code', () => {
     expect(WEB_TERMINAL_ERROR_CODES.FORBIDDEN.toLowerCase()).toBe(WS_ERROR_CODES.FORBIDDEN)
+  })
+
+  it('PROJECT_BUSY is the SCREAMING form of the /ws `project_busy` code', () => {
+    expect(WEB_TERMINAL_ERROR_CODES.PROJECT_BUSY.toLowerCase()).toBe(WS_ERROR_CODES.PROJECT_BUSY)
   })
 
   it('the command verdicts are the SCREAMING form of the /ws codes', () => {
@@ -462,6 +509,12 @@ describe('web-terminal-protocol.types — error codes', () => {
     )
     expect(WEB_TERMINAL_ERROR_CODES.INVALID_COMMAND_ID.toLowerCase()).toBe(
       WS_ERROR_CODES.INVALID_COMMAND_ID
+    )
+  })
+
+  it('TERMINAL_LIMIT is the SCREAMING form of the /ws `terminal_limit` code', () => {
+    expect(WEB_TERMINAL_ERROR_CODES.TERMINAL_LIMIT.toLowerCase()).toBe(
+      WS_ERROR_CODES.TERMINAL_LIMIT
     )
   })
 })

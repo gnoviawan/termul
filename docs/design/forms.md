@@ -9,7 +9,7 @@ Use primitives in `src/renderer/components/ui`. Wire `Label htmlFor` to the cont
 | `Switch` | `switch.tsx` | Boolean on/off. Label the state it turns on. |
 | `Select` | `select.tsx` | Exclusive pick from a known list. |
 
-`Checkbox`, `RadioGroup`, and `Form` exist under `ui/` and have **no** product call sites. Do not start a second boolean pattern — use `Switch`. Do not start a radio pattern — use `Select`. Do not add `react-hook-form` `Form` unless the task is to adopt that primitive across settings.
+`Checkbox`, `RadioGroup`, and `Form` exist under `ui/` and have **no** product call sites. Do not start a second boolean pattern — use `Switch`. Do not start a radio pattern — use `Select`. One exception: a pick-one list whose options carry live data to compare (Project Settings → Provider, where each account shows its usage) is a `role="listbox"` of `role="option"` rows with a `Check` on the chosen row, like menu rows, with arrow-key focus and Enter/Space to choose. Do not add `react-hook-form` `Form` unless the task is to adopt that primitive across settings.
 
 AppPreferences still has native `<select>` and custom toggle knobs. That is legacy. New settings use `Select` and `Switch` (`ContextBarSettingsPopover`, `CustomAgentDialog`).
 

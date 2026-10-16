@@ -17,6 +17,7 @@ import {
 import { ArrowUp, Trash2 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { cn } from '@/lib/utils'
 import type { QueuedPrompt } from '@/stores/acp-store'
 import { previewQueuedPrompt } from './prompt-queue-utils'
 
@@ -95,7 +96,15 @@ export function PromptQueuePanel({
   return (
     <Queue className="-mb-6">
       <QueueSection open={open} onOpenChange={setOpen}>
-        <QueueSectionTrigger className={isMobileShell ? 'min-h-11' : undefined}>
+        {/* Match the Changed files toggle: no press-scale, background-only press. */}
+        <QueueSectionTrigger
+          data-press-feedback="off"
+          className={cn(
+            'select-none text-xs hover:bg-secondary/60 hover:text-foreground active:bg-secondary/80',
+            'focus-visible:bg-secondary/60 focus-visible:outline-hidden forced-colors:focus-visible:-outline-offset-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+            isMobileShell && 'min-h-11'
+          )}
+        >
           <QueueSectionLabel count={items.length} label="Queued" className="tabular-nums" />
         </QueueSectionTrigger>
         <QueueSectionContent forceMount>
@@ -112,7 +121,9 @@ export function PromptQueuePanel({
                 return (
                   <QueueItem key={item.id}>
                     <div className="flex items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted">
-                      <QueueItemContent title={summary}>{summary}</QueueItemContent>
+                      <QueueItemContent title={summary} className="text-2xs">
+                        {summary}
+                      </QueueItemContent>
                       <QueueMessageActions
                         queueId={item.id}
                         onRemove={onRemove}
@@ -131,7 +142,9 @@ export function PromptQueuePanel({
                               className="outline outline-1 -outline-offset-1 outline-foreground/10"
                             />
                           ) : (
-                            <QueueItemFile key={attachment.id}>{attachment.filename}</QueueItemFile>
+                            <QueueItemFile key={attachment.id} className="text-2xs">
+                              {attachment.filename}
+                            </QueueItemFile>
                           )
                         )}
                       </QueueItemAttachment>

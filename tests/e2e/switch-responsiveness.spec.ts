@@ -22,6 +22,9 @@ test.setTimeout(120_000)
 
 test('project switch round-trips the streaming chat tab while a turn runs', async ({ page }) => {
   await openWorkspace(page)
+  // The device's active project outlives earlier suites (they pick their own
+  // projects): start from proj-a, which the round trip below comes back to.
+  await selectProject(page, 'proj-a')
   await launchChat(page, 'switch responsiveness alpha')
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })

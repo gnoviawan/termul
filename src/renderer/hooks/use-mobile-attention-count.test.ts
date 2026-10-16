@@ -1,11 +1,13 @@
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { RESUME_FAILED_PREFIX } from '@/stores/acp-store/helpers'
 import { useMobileAttentionCount } from './use-mobile-attention-count'
 
 interface TestSession {
   projectId: string
   agentId: string
   status: string
+  lastError?: string | null
 }
 
 const { signalsRef, storeRef, ephemeralRef } = vi.hoisted(() => ({
@@ -91,14 +93,23 @@ describe('useMobileAttentionCount', () => {
     expect(result.current).toBe(2)
   })
 
-  it('subtracts the active chat for a closed session or disconnected agent', () => {
-    seed({ counts: { p1: 2 }, active: { status: 'closed' } })
+  it('subtracts the active chat for a closed session that cannot resume or a disconnected agent', () => {
+    seed({
+      counts: { p1: 2 },
+      active: { status: 'closed', lastError: `${RESUME_FAILED_PREFIX}agent exited` }
+    })
     const closed = renderHook(() => useMobileAttentionCount('p1', 'active'))
     expect(closed.result.current).toBe(1)
 
     seed({ counts: { p1: 2 }, agentStatus: 'disconnected' })
     const disconnected = renderHook(() => useMobileAttentionCount('p1', 'active'))
     expect(disconnected.result.current).toBe(1)
+  })
+
+  it('keeps the count for a cleanly closed active chat: it resumes when the user types', () => {
+    seed({ counts: { p1: 2 }, active: { status: 'closed', lastError: null } })
+    const { result } = renderHook(() => useMobileAttentionCount('p1', 'active'))
+    expect(result.current).toBe(2)
   })
 
   it('keeps the count when the active chat does not need attention', () => {

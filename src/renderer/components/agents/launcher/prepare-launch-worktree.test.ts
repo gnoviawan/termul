@@ -90,6 +90,36 @@ describe('prepareLaunchWorktree: existing', () => {
   })
 })
 
+describe('prepareLaunchWorktree: collision retry', () => {
+  beforeEach(() => {
+    mocks.create.mockReset()
+    mocks.reconcile.mockReset()
+  })
+
+  it.each([
+    'WORKTREE_EXISTS',
+    'BRANCH_EXISTS',
+    'BRANCH_ALREADY_HAS_WORKTREE'
+  ])('retries once with a -2 suffix on %s', async (code) => {
+    mocks.create
+      .mockResolvedValueOnce({ success: false, error: 'collision', code })
+      .mockImplementationOnce(async ({ name, branch }: { name: string; branch: string }) => ({
+        success: true,
+        data: { name, branch, path: `/work/.termul/worktrees/${name}`, headCommit: '' }
+      }))
+    const result = await prepareLaunchWorktree({
+      isolationMode: 'worktree',
+      canUseWorktree: true,
+      baseBranch: 'main',
+      projectRoot: '/work',
+      projectId: 'p1'
+    })
+    const [first, retry] = mocks.create.mock.calls.map(([arg]) => arg as { branch: string })
+    expect(retry.branch).toBe(`${first.branch}-2`)
+    expect(result.worktreeBranch).toBe(`${first.branch}-2`)
+  })
+})
+
 describe('persistedIsolationMode', () => {
   it('persists an existing-worktree launch as the current checkout', () => {
     expect(persistedIsolationMode('existing')).toBe('current')

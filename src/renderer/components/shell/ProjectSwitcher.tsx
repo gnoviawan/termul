@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Check, Plus } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import { railButtonClass } from '@/components/shell/rail-button'
@@ -14,7 +13,6 @@ import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '@/components/ui/menu-styles
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { PopoverSearchBand } from '@/components/ui/popover-search-band'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
 
@@ -32,26 +30,34 @@ const SWITCHER_ITEM_CLASS = cn(
 interface ProjectSwitcherProps {
   projects: Project[]
   activeProject: Project | undefined
-  onSelectProject: (id: string) => void
+  /** Switches to the project and goes to the workspace (`useProjectRail`). */
+  openProject: (projectId: string) => void
   onNewProject: () => void
+  /** Content of the trigger button (an icon, or a count). */
+  trigger: React.ReactNode
+  /** Accessible name and tooltip of the trigger. */
+  label: string
+  /** The trigger takes the keycap "you are here" surface while closed. */
+  pressed: boolean
 }
 
 /**
- * Collapsed Rail's Project switcher: the active Project's icon opens a
- * popover with a search field, the open Projects and `New project`. Enter
- * switches (as the sidebar's `openProject`) and closes; Esc closes with focus
- * back on the icon (Radix restores it to the trigger).
+ * Collapsed Rail's Project switcher: a trigger button opens a popover with a
+ * search field, the open Projects and `New project`. Enter switches (as the
+ * sidebar's `openProject`) and closes; Esc closes with focus back on the
+ * trigger (Radix restores it).
  */
 export function ProjectSwitcher({
   projects,
   activeProject,
-  onSelectProject,
-  onNewProject
+  openProject,
+  onNewProject,
+  trigger,
+  label,
+  pressed
 }: ProjectSwitcherProps): React.JSX.Element {
-  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  useNativeWebviewOcclusion(open)
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -67,11 +73,8 @@ export function ProjectSwitcher({
 
   const selectProject = (projectId: string): void => {
     handleOpenChange(false)
-    onSelectProject(projectId)
-    navigate('/')
+    openProject(projectId)
   }
-
-  const label = activeProject ? `Switch project (${activeProject.name})` : 'Switch project'
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -80,19 +83,12 @@ export function ProjectSwitcher({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className={railButtonClass(open)}
+              className={railButtonClass(open || pressed)}
               aria-label={label}
               aria-haspopup="dialog"
               aria-expanded={open}
             >
-              {activeProject ? (
-                <ProjectIcon project={activeProject} size={20} />
-              ) : (
-                <span
-                  aria-hidden="true"
-                  className="size-5 rounded border border-dashed border-muted-foreground/60"
-                />
-              )}
+              {trigger}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>

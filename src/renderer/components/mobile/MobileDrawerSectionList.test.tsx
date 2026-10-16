@@ -11,7 +11,7 @@ const {
   browserTabsRef,
   mockNavigate,
   mockRemoveBrowserTab,
-  mockRequestCloseAgentChat
+  mockCloseAgentChat
 } = vi.hoisted(() => ({
   // Mutable workspace state so each test can seed the tab types it needs.
   workspaceRef: {
@@ -34,7 +34,7 @@ const {
   browserTabsRef: { current: new Map<string, unknown>() },
   mockNavigate: vi.fn(),
   mockRemoveBrowserTab: vi.fn(),
-  mockRequestCloseAgentChat: vi.fn()
+  mockCloseAgentChat: vi.fn()
 }))
 
 const { canvasRef, mockCloseCanvas, mockLogFrontendError } = vi.hoisted(() => ({
@@ -51,6 +51,13 @@ vi.mock('@/stores/canvas-store', () => ({
   )
 }))
 
+// MaterialFileIcon pulls in the app-settings store + an SVG resolver; stub it
+// with the inputs it resolves from.
+vi.mock('@/components/file-explorer/MaterialFileIcon', () => ({
+  MaterialFileIcon: ({ name }: { name: string }) => (
+    <span data-testid="file-icon" data-name={name} />
+  )
+}))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
 
 vi.mock('react-router-dom', async () => {
@@ -100,8 +107,8 @@ vi.mock('@/stores/browser-session-store', () => ({
   )
 }))
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 const onNavigate = vi.fn()
@@ -157,6 +164,13 @@ function seedAllTabTypes(): void {
       { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' },
       { type: 'git', id: 'git-/proj', cwd: '/proj' },
       { type: 'git-history', id: 'git-history-/proj', cwd: '/proj' },
+      {
+        type: 'commit-diff',
+        id: 'diff:c1',
+        cwd: '/proj',
+        commit: 'e44b917'.padEnd(40, '0'),
+        path: 'src/c.ts'
+      },
       { type: 'browser', id: 'browser-b1', browserTabId: 'b1' },
       { type: 'canvas', id: 'canvas-p1', projectId: 'p1', docPath: '/proj/docs/Plan.op' },
       CHAT_TAB
@@ -172,7 +186,7 @@ beforeEach(() => {
   onNavigate.mockReset()
   mockNavigate.mockReset()
   mockRemoveBrowserTab.mockReset()
-  mockRequestCloseAgentChat.mockReset()
+  mockCloseAgentChat.mockReset()
   mockCloseCanvas.mockReset().mockResolvedValue(undefined)
   mockLogFrontendError.mockReset()
   canvasRef.current = {}
@@ -286,7 +300,7 @@ describe('MobileDrawerSectionList editors', () => {
     renderList({ section: 'editors' })
 
     const group = screen.getByRole('group', { name: 'Editors' })
-    for (const label of ['a.ts', 'Git Changes', 'Example Site', 'Plan.op']) {
+    for (const label of ['a.ts', 'Git Changes', 'c.ts @ e44b917', 'Example Site', 'Plan.op']) {
       expect(within(group).getByRole('button', { name: label })).toHaveClass('min-h-11')
       expect(within(group).getByRole('button', { name: `Close ${label}` })).toHaveClass('size-11')
     }
@@ -299,6 +313,28 @@ describe('MobileDrawerSectionList editors', () => {
     renderList({ section: 'editors' })
 
     expect(screen.getByText('No open editors')).toBeInTheDocument()
+  })
+
+  it('gives an editor row its file-type icon, not a pencil', () => {
+    seedTabs([
+      { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' },
+      { type: 'editor', id: 'edit-/proj/Makefile', filePath: '/proj/Makefile' },
+      { type: 'editor', id: 'edit-/proj/.env', filePath: '/proj/.env' },
+      { type: 'editor', id: 'edit-/proj/types.d.ts', filePath: '/proj/types.d.ts' },
+      { type: 'editor', id: 'edit-C:\\proj\\Main.CS', filePath: 'C:\\proj\\Main.CS' }
+    ])
+    renderList({ section: 'editors' })
+
+    const icon = (name: string) =>
+      within(screen.getByRole('button', { name })).getByTestId('file-icon')
+    expect(icon('a.ts')).toHaveAttribute('data-name', 'a.ts')
+    expect(icon('Makefile')).toHaveAttribute('data-name', 'Makefile')
+    expect(icon('.env')).toHaveAttribute('data-name', '.env')
+    expect(icon('types.d.ts')).toHaveAttribute('data-name', 'types.d.ts')
+    expect(icon('Main.CS')).toHaveAttribute('data-name', 'Main.CS')
+    expect(
+      screen.getByRole('group', { name: 'Editors' }).querySelector('svg[data-termul-icon="Pencil"]')
+    ).not.toBeInTheDocument()
   })
 
   it('gives the canvas row a label and the Edit2 icon', () => {

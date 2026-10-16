@@ -78,6 +78,14 @@ describe('splitAddress', () => {
     expect(split).toMatchObject({ host: 'db.internal', username: 'ops' })
   })
 
+  it('unwraps a bracketed IPv6 address with or without a port', () => {
+    expect(splitAddress({ ...base, host: '[::1]' })).toMatchObject({ host: '::1' })
+    expect(splitAddress({ ...base, host: '[fe80::1]:2222' })).toMatchObject({
+      host: 'fe80::1',
+      port: '2222'
+    })
+  })
+
   it('keeps a port that was edited separately', () => {
     const values = { ...base, host: 'db.internal:2200', port: '2022' }
     expect(splitAddress(values, true)).toMatchObject({ host: 'db.internal', port: '2022' })

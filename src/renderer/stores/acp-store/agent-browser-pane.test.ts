@@ -109,9 +109,7 @@ describe('_onBrowserAgentTab open (CAP-3 dedicated agent browser pane)', () => {
     expect(browserPane.activeTabId).toBe('browser-agent-tab-1')
     expect(state.activePaneId).toBe('pane-chat')
 
-    const sessionTab = useBrowserSessionStore.getState().getTab('agent-tab-1')
-    expect(sessionTab?.url).toBe('https://example.com')
-    expect(sessionTab?.agentControlled).toBe(true)
+    expect(useBrowserSessionStore.getState().getTab('agent-tab-1')?.url).toBe('https://example.com')
   })
 
   it('a second session open reuses the dedicated pane with no additional split', () => {

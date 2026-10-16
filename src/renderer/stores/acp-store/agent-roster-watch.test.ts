@@ -22,7 +22,8 @@ function setup(held: { agents?: string[]; connected?: string[] } = {}) {
     _onAgentSpawned: vi.fn(),
     _onAgentCrashed: vi.fn(),
     _onAgentError: vi.fn(),
-    _onAgentDisconnected: vi.fn()
+    _onAgentDisconnected: vi.fn(),
+    _onBrowserOpenRequest: vi.fn()
   }
   let handlers: WatchHandlers<WsAgentSummary[], AgentsWatchDelta> | null = null
   const watches = {
@@ -46,24 +47,32 @@ describe('attachAgentRosterWatch', () => {
     handlers().onDelta?.({ event: 'agent_spawned', payload: { agentId: 'a1', capabilities } })
     handlers().onDelta?.({ event: 'agent_crashed', payload: { agentId: 'a1', message: 'died' } })
     handlers().onDelta?.({ event: 'agent_error', payload: { agentId: 'a1', message: 'oops' } })
-    handlers().onDelta?.({ event: 'agent_disconnected', payload: { agentId: 'a1' } })
+    handlers().onDelta?.({
+      event: 'agent_disconnected',
+      payload: { agentId: 'a1', reason: 'killed' }
+    })
 
     expect(state._onAgentSpawned).toHaveBeenCalledWith({ agentId: 'a1', capabilities })
     expect(state._onAgentCrashed).toHaveBeenCalledWith({ agentId: 'a1', message: 'died' })
     expect(state._onAgentError).toHaveBeenCalledWith({ agentId: 'a1', message: 'oops' })
-    expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'a1' })
+    expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'a1', reason: 'killed' })
     expect(toastError).toHaveBeenCalledWith('died')
     expect(toastError).toHaveBeenCalledWith('oops')
   })
 
-  it('disconnects a tracked agent the host removed, whatever its status, and skips one the store dropped', () => {
-    const { state, handlers } = setup({ agents: ['other', 'errored'], connected: ['other'] })
-    handlers().onDelta?.({ event: 'agent_removed', payload: { agentId: 'other' } })
-    handlers().onDelta?.({ event: 'agent_removed', payload: { agentId: 'errored' } })
-    handlers().onDelta?.({ event: 'agent_removed', payload: { agentId: 'mine' } })
-    expect(state._onAgentDisconnected).toHaveBeenCalledTimes(2)
-    expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'other' })
-    expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'errored' })
+  it('routes a browser_open_request delta to the dialog reducer, not the roster', () => {
+    const { state, handlers } = setup()
+    handlers().onDelta?.({
+      event: 'browser_open_request',
+      payload: { agentId: 'a1', url: 'https://auth.example/x' }
+    })
+
+    expect(state._onBrowserOpenRequest).toHaveBeenCalledWith({
+      agentId: 'a1',
+      url: 'https://auth.example/x'
+    })
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
+    expect(state._onAgentDisconnected).not.toHaveBeenCalled()
   })
 
   it('reconciles the full state: spawns the unknown, disconnects the connected agent the host dropped', () => {
@@ -76,7 +85,7 @@ describe('attachAgentRosterWatch', () => {
     expect(state._onAgentSpawned).toHaveBeenCalledTimes(1)
     expect(state._onAgentSpawned).toHaveBeenCalledWith({ agentId: 'new', capabilities })
     expect(state._onAgentDisconnected).toHaveBeenCalledTimes(1)
-    expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'gone' })
+    expect(state._onAgentDisconnected).toHaveBeenCalledWith({ agentId: 'gone', reason: 'killed' })
   })
 
   it('leaves an agent that already errored alone when the host no longer lists it', () => {

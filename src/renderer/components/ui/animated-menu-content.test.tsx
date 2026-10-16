@@ -1,7 +1,16 @@
 import { render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Popover, PopoverTrigger } from '@/components/ui/popover'
+import {
+  resetNativeWebviewOcclusionForTests,
+  useNativeWebviewOccluded
+} from '@/hooks/use-native-webview-occlusion'
 import { AnimatedMenuContent, menuMotion } from './animated-menu-content'
+
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tauri-runtime')>()),
+  isTauriContext: () => true
+}))
 
 if (typeof document.elementFromPoint !== 'function') {
   Object.defineProperty(document, 'elementFromPoint', {
@@ -15,6 +24,7 @@ afterEach(() => {
   for (const name of ['--duration-fast', '--duration-quick', '--scale-medium']) {
     document.documentElement.style.removeProperty(name)
   }
+  resetNativeWebviewOcclusionForTests()
 })
 
 describe('menuMotion (transitions.dev menu dropdown, on the motion tokens)', () => {
@@ -88,5 +98,27 @@ describe('AnimatedMenuContent', () => {
   it('renders nothing before the first open', () => {
     render(<Harness open={false} />)
     expect(screen.queryByText('Menu body')).toBeNull()
+  })
+
+  it('occludes native webviews while open and releases them once the close animation unmounts it', async () => {
+    const Occluded = (): React.JSX.Element => (
+      <span data-testid="occluded">{String(useNativeWebviewOccluded())}</span>
+    )
+    const { rerender } = render(
+      <>
+        <Harness open />
+        <Occluded />
+      </>
+    )
+    expect(screen.getByTestId('occluded').textContent).toBe('true')
+
+    rerender(
+      <>
+        <Harness open={false} />
+        <Occluded />
+      </>
+    )
+    await waitFor(() => expect(screen.queryByText('Menu body')).toBeNull())
+    expect(screen.getByTestId('occluded').textContent).toBe('false')
   })
 })

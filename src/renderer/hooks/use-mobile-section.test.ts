@@ -10,7 +10,8 @@ const tabs = [
   { type: 'git', id: 'git-1', cwd: '/p' },
   { type: 'browser', id: 'browser-1', browserTabId: 'b1' },
   { type: 'git-history', id: 'gh-1', cwd: '/p' },
-  { type: 'diff', id: 'diff:1', cwd: '/p', path: 'a.ts', staged: false }
+  { type: 'diff', id: 'diff:1', cwd: '/p', path: 'a.ts', staged: false },
+  { type: 'commit-diff', id: 'diff:2', cwd: '/p', commit: 'a'.repeat(40), path: 'a.ts' }
 ] as WorkspaceTab[]
 
 describe('sectionForTab', () => {
@@ -23,6 +24,7 @@ describe('sectionForTab', () => {
       'editors',
       'editors',
       null,
+      'editors',
       'editors'
     ])
     expect(sectionForTab(null)).toBeNull()

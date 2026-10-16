@@ -1,7 +1,6 @@
 /**
- * Observable state of the project-switch coordinator. The switch UI (PR-2)
- * renders `pending`/`failed`; this PR only owns the store and the failure
- * toast.
+ * Observable state of the project-switch coordinator. `ProjectSwitchIndicator`
+ * renders `pending`; this store also raises the failure toast.
  */
 
 import { toast } from 'sonner'

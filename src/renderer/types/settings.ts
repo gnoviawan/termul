@@ -17,9 +17,6 @@ export const DEFAULT_CONTEXT_BAR_SETTINGS: ContextBarSettings = {
   showExitCode: true
 }
 
-// Persistence key for context bar settings
-export const CONTEXT_BAR_SETTINGS_KEY = 'settings/context-bar'
-
 // Table of contents panel settings
 export interface TocSettings {
   isVisible: boolean
@@ -38,8 +35,6 @@ export const DEFAULT_TOC_SETTINGS: TocSettings = {
   width: 240
 }
 
-export const TOC_SETTINGS_KEY = 'settings/toc'
-
 export type TerminalUrlOpenMode = 'system' | 'termul'
 
 /** Which interface the remote terminal HTTP server binds to when started. */
@@ -54,9 +49,6 @@ export interface AppSettings {
   terminalScreenReaderMode: boolean // xterm screenReaderMode for new terminals (off by default)
   defaultShell: string
   defaultProjectColor: string // Default color for new projects (from PROJECT_COLORS)
-  maxTerminalsPerProject: number // Maximum terminals allowed per project
-  orphanDetectionEnabled: boolean // Enable automatic cleanup of inactive terminals
-  orphanDetectionTimeout: number | null // Timeout in ms, null = disabled
   confirmTerminalClose: boolean // Show a confirmation dialog before closing a terminal
   terminalUrlOpenMode: TerminalUrlOpenMode // Controls how Ctrl/Cmd+Click terminal URLs are opened
   /** Remote server bind: localhost (127.0.0.1) or all interfaces (0.0.0.0). */
@@ -86,6 +78,10 @@ export interface AppSettings {
    * env var / Rust default (60s). Set via App Preferences; pushed to the
    * Rust core. */
   acpSessionReopenTimeoutSecs: number | null
+  /** How long an idle agent chat stays open, in seconds. `null` follows
+   * `$TERMUL_AGENT_IDLE_REAP_SECS` or the 30-minute default. The env var
+   * wins over this value. */
+  agentIdleWindowSecs: number | null
   /**
    * OS/web notification when a terminal tab that was producing output for a
    * long stretch (typically an in-terminal AI harness) goes idle (GH-645).
@@ -123,24 +119,6 @@ export const FONT_FAMILY_OPTIONS = [
   { value: '"Source Code Pro", Menlo, monospace', label: 'Source Code Pro' },
   { value: '"JetBrains Mono", Menlo, monospace', label: 'JetBrains Mono' },
   { value: '"Fira Code", Menlo, monospace', label: 'Fira Code' }
-]
-
-// Max terminals per project options
-export const MAX_TERMINALS_OPTIONS = [
-  { value: 5, label: '5 terminals' },
-  { value: 10, label: '10 terminals' },
-  { value: 15, label: '15 terminals' },
-  { value: 20, label: '20 terminals' },
-  { value: 50, label: '50 terminals' }
-]
-
-// Orphan detection timeout options
-export const ORPHAN_TIMEOUT_OPTIONS = [
-  { value: 60000, label: '1 minute' },
-  { value: 300000, label: '5 minutes' },
-  { value: 600000, label: '10 minutes' },
-  { value: 1800000, label: '30 minutes' },
-  { value: 3600000, label: '1 hour' }
 ]
 
 // Editor auto-save delay options (GH-539)
@@ -191,7 +169,7 @@ export const ACP_TURN_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Environment/default (unlimited)' },
+  { value: null, label: 'No limit' },
   { value: 3600, label: '1 hour' },
   { value: 7200, label: '2 hours' },
   { value: 21600, label: '6 hours' },
@@ -205,7 +183,7 @@ export const ACP_TURN_IDLE_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Environment/default (unlimited)' },
+  { value: null, label: 'No limit' },
   { value: 300, label: '5 minutes' },
   { value: 600, label: '10 minutes' },
   { value: 900, label: '15 minutes' },
@@ -219,9 +197,8 @@ export const ACP_SESSION_NEW_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Environment/default (60 seconds)' },
+  { value: null, label: '1 minute' },
   { value: 30, label: '30 seconds' },
-  { value: 60, label: '1 minute' },
   { value: 120, label: '2 minutes' },
   { value: 300, label: '5 minutes' }
 ]
@@ -232,12 +209,39 @@ export const ACP_SESSION_REOPEN_TIMEOUT_OPTIONS: Array<{
   value: number | null
   label: string
 }> = [
-  { value: null, label: 'Environment/default (60 seconds)' },
+  { value: null, label: '1 minute' },
   { value: 30, label: '30 seconds' },
-  { value: 60, label: '1 minute' },
   { value: 120, label: '2 minutes' },
   { value: 300, label: '5 minutes' }
 ]
+
+/** How long an idle agent chat stays open. `null` = env var or 30 minutes. */
+export const AGENT_IDLE_WINDOW_OPTIONS: Array<{
+  value: number | null
+  label: string
+}> = [
+  { value: 900, label: '15 minutes' },
+  { value: null, label: '30 minutes' },
+  { value: 3600, label: '1 hour' },
+  { value: 7200, label: '2 hours' },
+  { value: 21600, label: '6 hours' },
+  { value: 86400, label: '24 hours' }
+]
+
+/** Plain label for a live idle-window reading (seconds). */
+export function formatAgentIdleWindow(secs: number): string {
+  const known = AGENT_IDLE_WINDOW_OPTIONS.find((option) => option.value === secs)
+  if (known?.label) return known.label
+  if (secs > 0 && secs % 3600 === 0) {
+    const hours = secs / 3600
+    return hours === 1 ? '1 hour' : `${hours} hours`
+  }
+  if (secs > 0 && secs % 60 === 0) {
+    const minutes = secs / 60
+    return minutes === 1 ? '1 minute' : `${minutes} minutes`
+  }
+  return secs === 1 ? '1 second' : `${secs} seconds`
+}
 
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -254,9 +258,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalScreenReaderMode: false,
   defaultShell: '',
   defaultProjectColor: 'blue',
-  maxTerminalsPerProject: 10,
-  orphanDetectionEnabled: true,
-  orphanDetectionTimeout: 600000, // 10 minutes
   confirmTerminalClose: true,
   terminalUrlOpenMode: 'system',
   remoteBindMode: 'localhost',
@@ -269,13 +270,11 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   acpTurnIdleTimeoutSecs: null,
   acpSessionNewTimeoutSecs: null,
   acpSessionReopenTimeoutSecs: null,
+  agentIdleWindowSecs: null,
   notifyOnTerminalIdle: true,
   notifyOnAgentChatTurnFinished: true,
   notifyOnAgentChatNeedsYou: true
 }
-
-// Persistence key for app settings
-export const APP_SETTINGS_KEY = 'settings/app'
 
 // Keyboard shortcut definition
 export interface KeyboardShortcut {
@@ -504,6 +503,3 @@ export function getDefaultKeyboardShortcuts(): KeyboardShortcutsConfig {
   }
   return webDefaults
 }
-
-// Persistence key for keyboard shortcuts
-export const KEYBOARD_SHORTCUTS_KEY = 'settings/keyboard-shortcuts'

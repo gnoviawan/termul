@@ -1,10 +1,10 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
-import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
+import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import {
-  resetAppSettingsPersistenceQueueForTests,
   useAppSettingsLoader,
   useResetAppSettings,
   useUpdateAppSetting,
@@ -16,52 +16,22 @@ const {
   mockPersistenceRead,
   mockPersistenceWrite,
   mockPersistenceWriteDebounced,
-  mockUpdateOrphanDetection,
   mockSetTurnTimeout,
   mockSetTurnIdleTimeout,
   mockSetSessionNewTimeout,
-  mockSetSessionReopenTimeout
+  mockSetSessionReopenTimeout,
+  mockSetAgentIdleWindow,
+  mockGetAgentIdleWindow
 } = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn(),
   mockPersistenceWrite: vi.fn(),
   mockPersistenceWriteDebounced: vi.fn(),
-  mockUpdateOrphanDetection: vi.fn(),
   mockSetTurnTimeout: vi.fn(),
   mockSetTurnIdleTimeout: vi.fn(),
   mockSetSessionNewTimeout: vi.fn(),
-  mockSetSessionReopenTimeout: vi.fn()
-}))
-
-// Story 5: the orphan-detection retry watches the terminal store for the
-// first ptyId assignment — mock the store with a controllable subscription.
-const { mockTerminalStoreSubscribe, mockSetTerminals, mockNotifyTerminalSubscribers } = vi.hoisted(
-  () => {
-    const listeners: Array<(state: { terminals: Array<{ ptyId?: string }> }) => void> = []
-    return {
-      mockTerminalStoreSubscribe: vi.fn((listener: () => void) => {
-        listeners.push(listener)
-        return () => {
-          const idx = listeners.indexOf(listener)
-          if (idx > -1) listeners.splice(idx, 1)
-        }
-      }),
-      mockSetTerminals: vi.fn(),
-      mockNotifyTerminalSubscribers: vi.fn(() => {
-        for (const listener of [...listeners]) listener({ terminals: [] })
-      })
-    }
-  }
-)
-
-const mockTerminalStoreState = {
-  terminals: [] as Array<{ ptyId?: string }>
-}
-
-vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: {
-    getState: vi.fn(() => mockTerminalStoreState),
-    subscribe: mockTerminalStoreSubscribe
-  }
+  mockSetSessionReopenTimeout: vi.fn(),
+  mockSetAgentIdleWindow: vi.fn(),
+  mockGetAgentIdleWindow: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -69,22 +39,20 @@ vi.mock('@/lib/api', () => ({
     setTurnTimeout: mockSetTurnTimeout,
     setTurnIdleTimeout: mockSetTurnIdleTimeout,
     setSessionNewTimeout: mockSetSessionNewTimeout,
-    setSessionReopenTimeout: mockSetSessionReopenTimeout
+    setSessionReopenTimeout: mockSetSessionReopenTimeout,
+    setAgentIdleWindow: mockSetAgentIdleWindow,
+    getAgentIdleWindow: mockGetAgentIdleWindow
   },
   persistenceApi: {
     read: mockPersistenceRead,
     write: mockPersistenceWrite,
     writeDebounced: mockPersistenceWriteDebounced
-  },
-  terminalApi: {
-    updateOrphanDetection: mockUpdateOrphanDetection
   }
 }))
 
 describe('use-app-settings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    resetAppSettingsPersistenceQueueForTests()
 
     useAppSettingsStore.setState({
       settings: { ...DEFAULT_APP_SETTINGS },
@@ -96,13 +64,12 @@ describe('use-app-settings', () => {
     mockPersistenceRead.mockResolvedValue({ success: true, data: null })
     mockPersistenceWrite.mockResolvedValue({ success: true, data: undefined })
     mockPersistenceWriteDebounced.mockResolvedValue({ success: true, data: undefined })
-    mockUpdateOrphanDetection.mockResolvedValue({ success: true, data: undefined })
-    mockTerminalStoreState.terminals = []
-    mockNotifyTerminalSubscribers.mockClear()
     mockSetTurnTimeout.mockResolvedValue(undefined)
     mockSetTurnIdleTimeout.mockResolvedValue(undefined)
     mockSetSessionNewTimeout.mockResolvedValue(undefined)
     mockSetSessionReopenTimeout.mockResolvedValue(undefined)
+    mockSetAgentIdleWindow.mockResolvedValue(undefined)
+    mockGetAgentIdleWindow.mockResolvedValue({ secs: 1800, source: 'default' })
   })
 
   it('does not push legacy AppSettings panel visibility into the shell layout on load', async () => {
@@ -143,11 +110,14 @@ describe('use-app-settings', () => {
         acpTurnIdleTimeoutSecs: 1800,
         acpSessionNewTimeoutSecs: 120,
         acpSessionReopenTimeoutSecs: 300,
+        agentIdleWindowSecs: 7200,
         // Stale key from an old settings blob (story 8 removed the warmup
         // machinery): the merge keeps it inert — nothing reads or pushes it.
         acpFirstPromptWarmupSecs: 0
       }
     })
+
+    mockGetAgentIdleWindow.mockResolvedValueOnce({ secs: 3600, source: 'setting' })
 
     renderHook(() => useAppSettingsLoader())
 
@@ -157,6 +127,9 @@ describe('use-app-settings', () => {
       expect(mockSetTurnIdleTimeout).toHaveBeenCalledWith(1800)
       expect(mockSetSessionNewTimeout).toHaveBeenCalledWith(120)
       expect(mockSetSessionReopenTimeout).toHaveBeenCalledWith(300)
+      // The browser reads the server window. It does not POST the saved value.
+      expect(mockSetAgentIdleWindow).not.toHaveBeenCalled()
+      expect(useAppSettingsStore.getState().settings.agentIdleWindowSecs).toBe(3600)
     })
   })
 
@@ -195,6 +168,46 @@ describe('use-app-settings', () => {
     })
   })
 
+  it('loads an old persisted per-project terminal limit and drops the retired key', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: { ...DEFAULT_APP_SETTINGS, maxTerminalsPerProject: 5 }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+    })
+    expect(useAppSettingsStore.getState().settings).toEqual(DEFAULT_APP_SETTINGS)
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+      PersistenceKeys.appSettings,
+      DEFAULT_APP_SETTINGS
+    )
+  })
+
+  it('loads old persisted orphan-detection keys and drops them', async () => {
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...DEFAULT_APP_SETTINGS,
+        orphanDetectionEnabled: false,
+        orphanDetectionTimeout: 60000
+      }
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+    })
+    expect(useAppSettingsStore.getState().settings).toEqual(DEFAULT_APP_SETTINGS)
+    expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
+      PersistenceKeys.appSettings,
+      DEFAULT_APP_SETTINGS
+    )
+  })
+
   it('persists normalized legacy light color theme settings', async () => {
     mockPersistenceRead.mockResolvedValueOnce({
       success: true,
@@ -209,7 +222,7 @@ describe('use-app-settings', () => {
 
     await waitFor(() => {
       expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-        APP_SETTINGS_KEY,
+        PersistenceKeys.appSettings,
         expect.objectContaining({ colorTheme: 'termul', appearanceMode: 'light' })
       )
     })
@@ -228,7 +241,7 @@ describe('use-app-settings', () => {
 
     await waitFor(() => {
       expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-        APP_SETTINGS_KEY,
+        PersistenceKeys.appSettings,
         expect.objectContaining({ appearanceMode: 'dark' })
       )
     })
@@ -247,7 +260,7 @@ describe('use-app-settings', () => {
 
     await waitFor(() => {
       expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-        APP_SETTINGS_KEY,
+        PersistenceKeys.appSettings,
         expect.objectContaining({ terminalRenderer: 'dom' })
       )
     })
@@ -265,9 +278,12 @@ describe('use-app-settings', () => {
     expect(layout.sidePanelVisible).toBe(false)
     expect(layout.sshSectionVisible).toBe(false)
     expect(useAppSettingsStore.getState().settings).toEqual(DEFAULT_APP_SETTINGS)
-    expect(mockPersistenceWrite).not.toHaveBeenCalledWith(APP_SETTINGS_KEY, expect.anything())
+    expect(mockPersistenceWrite).not.toHaveBeenCalledWith(
+      PersistenceKeys.appSettings,
+      expect.anything()
+    )
     expect(mockPersistenceWriteDebounced).not.toHaveBeenCalledWith(
-      APP_SETTINGS_KEY,
+      PersistenceKeys.appSettings,
       expect.anything()
     )
     // The shell-layout store persists through its own key (debounced).
@@ -305,7 +321,7 @@ describe('use-app-settings', () => {
 
     expect(useAppSettingsStore.getState().settings.terminalFontSize).toBe(16)
     expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-      APP_SETTINGS_KEY,
+      PersistenceKeys.appSettings,
       expect.objectContaining({ terminalFontSize: 16 })
     )
   })
@@ -380,7 +396,7 @@ describe('use-app-settings', () => {
       expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(true)
       expect(mockPersistenceWriteDebounced).toHaveBeenCalledTimes(1)
       // The whole settings object, not a patch: every other key rides along.
-      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(APP_SETTINGS_KEY, {
+      expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(PersistenceKeys.appSettings, {
         ...DEFAULT_APP_SETTINGS,
         terminalScreenReaderMode: true
       })
@@ -399,7 +415,7 @@ describe('use-app-settings', () => {
 
       expect(useAppSettingsStore.getState().settings.terminalScreenReaderMode).toBe(false)
       expect(mockPersistenceWrite).toHaveBeenCalledWith(
-        APP_SETTINGS_KEY,
+        PersistenceKeys.appSettings,
         expect.objectContaining({ terminalScreenReaderMode: false })
       )
     })
@@ -414,7 +430,7 @@ describe('use-app-settings', () => {
     expect(useAppSettingsStore.getState().settings.appearanceMode).toBe('light')
     expect(mockPersistenceWriteDebounced).toHaveBeenCalledTimes(1)
     expect(mockPersistenceWriteDebounced).toHaveBeenCalledWith(
-      APP_SETTINGS_KEY,
+      PersistenceKeys.appSettings,
       expect.objectContaining({ colorTheme: 'dracula', appearanceMode: 'light' })
     )
   })
@@ -434,7 +450,10 @@ describe('use-app-settings', () => {
     expect(layout.railExpanded).toBe(true)
     expect(layout.sidePanelVisible).toBe(true)
     expect(layout.sshSectionVisible).toBe(true)
-    expect(mockPersistenceWrite).toHaveBeenCalledWith(APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS)
+    expect(mockPersistenceWrite).toHaveBeenCalledWith(
+      PersistenceKeys.appSettings,
+      DEFAULT_APP_SETTINGS
+    )
   })
 
   it('clears all ACP timeout overrides in the backend when app settings are reset', async () => {
@@ -444,7 +463,8 @@ describe('use-app-settings', () => {
         acpTurnTimeoutSecs: 7200,
         acpTurnIdleTimeoutSecs: 1800,
         acpSessionNewTimeoutSecs: 120,
-        acpSessionReopenTimeoutSecs: 300
+        acpSessionReopenTimeoutSecs: 300,
+        agentIdleWindowSecs: 7200
       },
       isLoaded: true
     })
@@ -457,91 +477,6 @@ describe('use-app-settings', () => {
     expect(mockSetTurnIdleTimeout).toHaveBeenCalledWith(null)
     expect(mockSetSessionNewTimeout).toHaveBeenCalledWith(null)
     expect(mockSetSessionReopenTimeout).toHaveBeenCalledWith(null)
-  })
-
-  // Story 5 (preserved-PTY reattach): the immediate orphan-detection push
-  // now succeeds on authed connections, and an UNAUTHORIZED rejection
-  // (push raced the auth handshake) arms a ONE-SHOT post-attach retry.
-  it('keeps the immediate orphan-detection push on load', async () => {
-    renderHook(() => useAppSettingsLoader())
-
-    await waitFor(() => {
-      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
-    })
-    expect(mockUpdateOrphanDetection).toHaveBeenCalledWith(
-      DEFAULT_APP_SETTINGS.orphanDetectionEnabled,
-      DEFAULT_APP_SETTINGS.orphanDetectionTimeout
-    )
-    // Success: no retry subscription armed.
-    expect(mockTerminalStoreSubscribe).not.toHaveBeenCalled()
-  })
-
-  it('does not arm the retry when the push fails with a non-auth error', async () => {
-    mockUpdateOrphanDetection.mockResolvedValueOnce({
-      success: false,
-      error: 'write failed',
-      code: 'WRITE_FAILED'
-    })
-
-    renderHook(() => useAppSettingsLoader())
-
-    await waitFor(() => {
-      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
-    })
-    await Promise.resolve()
-    expect(mockTerminalStoreSubscribe).not.toHaveBeenCalled()
-  })
-
-  it('retries the orphan-detection push once after the first terminal attach on UNAUTHORIZED', async () => {
-    mockUpdateOrphanDetection
-      .mockResolvedValueOnce({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
-      .mockResolvedValue({ success: true, data: undefined })
-
-    renderHook(() => useAppSettingsLoader())
-
-    // The immediate push was refused; the retry is armed (subscribed to the
-    // terminal store) but has NOT fired yet — no terminal attached.
-    await waitFor(() => {
-      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
-      expect(mockTerminalStoreSubscribe).toHaveBeenCalledTimes(1)
-    })
-
-    // First terminal attaches (ptyId assigned) — the retry fires once.
-    mockTerminalStoreState.terminals = [{ ptyId: 'pty-1' }]
-    mockNotifyTerminalSubscribers()
-
-    await waitFor(() => {
-      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(2)
-    })
-    expect(mockUpdateOrphanDetection).toHaveBeenLastCalledWith(
-      DEFAULT_APP_SETTINGS.orphanDetectionEnabled,
-      DEFAULT_APP_SETTINGS.orphanDetectionTimeout
-    )
-
-    // One-shot: further store updates never re-trigger the push.
-    mockTerminalStoreState.terminals = [{ ptyId: 'pty-1' }, { ptyId: 'pty-2' }]
-    mockNotifyTerminalSubscribers()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(2)
-  })
-
-  it('does not fire the armed retry before any terminal attaches', async () => {
-    mockUpdateOrphanDetection
-      .mockResolvedValueOnce({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
-      .mockResolvedValue({ success: true, data: undefined })
-
-    renderHook(() => useAppSettingsLoader())
-
-    await waitFor(() => {
-      expect(mockTerminalStoreSubscribe).toHaveBeenCalledTimes(1)
-    })
-
-    // Store churn with no ptyId assigned: retry stays dormant.
-    mockTerminalStoreState.terminals = [{}, { name: 'pending' }]
-    mockNotifyTerminalSubscribers()
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
+    expect(mockSetAgentIdleWindow).toHaveBeenCalledWith(null)
   })
 })

@@ -134,7 +134,11 @@ fn gated_router(dir: &Path, allow_remote_writes: bool, shared_live_denied: bool)
     )
 }
 
-async fn factory_key_post(app: Router, peer: SocketAddr, body: &str) -> (StatusCode, serde_json::Value) {
+async fn factory_key_post(
+    app: Router,
+    peer: SocketAddr,
+    body: &str,
+) -> (StatusCode, serde_json::Value) {
     let response = app
         .oneshot(
             Request::builder()
@@ -152,7 +156,10 @@ async fn factory_key_post(app: Router, peer: SocketAddr, body: &str) -> (StatusC
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
 }
 
 /// D8-F2: an authenticated but non-loopback peer without the opt-in must be
@@ -257,6 +264,62 @@ async fn health_returns_capability_json_for_loopback_peer() {
         parsed["allowRemoteWrites"], true,
         "loopback peer must be admitted even without the opt-in (mirrors check_local_only)"
     );
+}
+
+#[tokio::test]
+async fn agent_idle_window_returns_the_ipc_envelope() {
+    let dir = TempDir::new("idle-window");
+    let resp = test_router_with_fixture(dir.path())
+        .oneshot(
+            Request::builder()
+                .uri("/host/agent-idle-window")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&body).expect("idle window body is JSON");
+    assert_eq!(parsed["success"], true);
+    assert!(parsed["data"]["secs"].as_u64().is_some_and(|secs| secs > 0));
+    let source = parsed["data"]["source"].as_str().expect("source");
+    assert!(
+        matches!(source, "default" | "setting" | "env" | "operator"),
+        "{source}"
+    );
+}
+
+#[tokio::test]
+async fn post_agent_idle_window_applies_a_settings_choice() {
+    let _guard = crate::web::agent_reaper::IDLE_WINDOW_TEST_LOCK.lock().await;
+    crate::web::agent_reaper::reset_agent_idle_window_for_tests();
+    crate::web::agent_reaper::install_agent_idle_baseline(1800, None);
+    let dir = TempDir::new("idle-window-set");
+    let resp = test_router_with_fixture(dir.path())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/host/agent-idle-window")
+                .header("content-type", "application/json")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::from(r#"{"secs":7200}"#))
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(parsed["data"]["secs"], 7200);
+    assert_eq!(parsed["data"]["source"], "setting");
+    crate::web::agent_reaper::reset_agent_idle_window_for_tests();
 }
 
 /// Non-loopback peer WITHOUT the opt-in → `allowRemoteWrites:false`. This
@@ -539,6 +602,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         assert!(!requires_token(public), "{public} must stay public");
     }
     for gated in [
+        "/host/agent-idle-window",
         "/projects",
         "/projects/default",
         "/projects/p-1",
@@ -552,7 +616,6 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/skills/x",
         "/log/frontend-error",
         "/shells",
-        "/workspace/p-1",
         "/acp/catalog",
         "/acp/install",
         "/worktree/list",
@@ -832,7 +895,10 @@ async fn canvas_routes_require_auth_when_gated() {
             Request::builder()
                 .method("POST")
                 .uri("/canvas/mcp")
-                .extension(axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .extension(axum::extract::ConnectInfo(SocketAddr::from((
+                    [127, 0, 0, 1],
+                    54321,
+                ))))
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))
                 .expect("build request"),
@@ -904,7 +970,10 @@ async fn canvas_routes_require_auth_when_gated() {
             Request::builder()
                 .method("POST")
                 .uri("/canvas/mcp")
-                .extension(axum::extract::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .extension(axum::extract::ConnectInfo(SocketAddr::from((
+                    [127, 0, 0, 1],
+                    54321,
+                ))))
                 .header("authorization", "Bearer t0ken")
                 .header("content-type", "application/json")
                 .body(Body::from("{}"))
@@ -1218,7 +1287,8 @@ async fn serve_origins(origins: OriginPolicy) -> (TempDir, u16, tokio::task::Joi
         let _ = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
-        ).await;
+        )
+        .await;
     });
     (dir, port, handle)
 }

@@ -14,7 +14,7 @@ const mockRemoveTab = vi.fn()
 const mockTogglePaneFullscreen = vi.fn()
 const mockCloseFileIfIdle = vi.fn(() => true)
 const mockRemoveBrowserTab = vi.fn()
-const mockRequestCloseAgentChat = vi.hoisted(() => vi.fn())
+const mockCloseAgentChat = vi.hoisted(() => vi.fn())
 
 // Story 8 (web honesty): the tab-bar globe button (New Browser Tab) is
 // desktop-only. Mutable ref defaults to desktop so the existing browser-tab
@@ -131,18 +131,6 @@ vi.mock('@/stores/acp-store', () => ({
   useSessionIndexTitle: () => 'Chat 1'
 }))
 
-// Mutable so tests can mark a session as already-closing.
-const mockAgentChatLifetimeState = vi.hoisted(() => ({
-  closingSessionIds: {} as Record<string, true>
-}))
-
-vi.mock('@/stores/agent-chat-lifetime-store', () => ({
-  useAgentChatLifetimeStore: vi.fn(
-    (selector: (state: typeof mockAgentChatLifetimeState) => unknown) =>
-      selector(mockAgentChatLifetimeState)
-  )
-}))
-
 vi.mock('@/stores/git-status-store', async (importOriginal) => ({
   selectChangedFileCount: (await importOriginal<typeof import('@/stores/git-status-store')>())
     .selectChangedFileCount,
@@ -165,8 +153,8 @@ vi.mock('@/stores/canvas-store', () => ({
   )
 }))
 
-vi.mock('@/hooks/use-agent-idle-shutdown', () => ({
-  requestCloseAgentChat: mockRequestCloseAgentChat
+vi.mock('@/lib/agent-chat-close', () => ({
+  closeAgentChat: mockCloseAgentChat
 }))
 
 vi.mock('@/lib/log-api', () => ({
@@ -233,106 +221,7 @@ vi.mock('@/lib/api', async () => {
   }
 })
 
-// Stub the Radix context-menu primitives. Every tab is wrapped in
-// `<TabContextMenu>`; the real primitives render via a portal + pointer-based
-// `onSelect` that is hard to drive from jsdom. This stateful stub opens the
-// menu on `contextmenu`, renders `<ContextMenuContent>` only while open
-// (so `findByText('Close Other Editors')` is singular even with multiple
-// editor tabs), closes on Escape, and wires `ContextMenuItem.onSelect` to a
-// click so the existing tab-menu tests assert the close callbacks without
-// the Radix portal/pointer plumbing.
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
-    open: false,
-    setOpen: () => {}
-  })
-  const ContextMenu = ({ children }: { children: React.ReactNode }) => {
-    const [open, setOpen] = React.useState(false)
-    React.useEffect(() => {
-      if (!open) return
-      const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') setOpen(false)
-      }
-      document.addEventListener('keydown', onKey)
-      return () => document.removeEventListener('keydown', onKey)
-    }, [open])
-    return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
-  }
-  const ContextMenuTrigger = ({
-    children,
-    asChild
-  }: {
-    children: React.ReactNode
-    asChild?: boolean
-  }) => {
-    const { setOpen } = React.useContext(MenuCtx)
-    const merged = (e: React.MouseEvent) => {
-      // F2: mirror Radix's composeEventHandlers({ checkForDefaultPrevented: true }) —
-      // if the child's onContextMenu already called preventDefault, do NOT open.
-      if (e.defaultPrevented) return
-      e.preventDefault()
-      setOpen(true)
-    }
-    if (asChild && React.isValidElement(children)) {
-      const child = children as React.ReactElement<{
-        onContextMenu?: (e: React.MouseEvent) => void
-      }>
-      return React.cloneElement(child, {
-        onContextMenu: (e: React.MouseEvent) => {
-          child.props.onContextMenu?.(e)
-          merged(e)
-        }
-      })
-    }
-    return <div onContextMenu={merged}>{children}</div>
-  }
-  const ContextMenuContent = ({
-    children,
-    className
-  }: {
-    children: React.ReactNode
-    className?: string
-  }) => {
-    const { open } = React.useContext(MenuCtx)
-    if (!open) return null
-    return (
-      <div role="menu" className={className}>
-        {children}
-      </div>
-    )
-  }
-  const ContextMenuItem = ({
-    children,
-    disabled,
-    onSelect,
-    variant
-  }: {
-    children: React.ReactNode
-    disabled?: boolean
-    onSelect?: () => void
-    variant?: 'default' | 'destructive'
-  }) => (
-    <div
-      role="menuitem"
-      data-disabled={disabled ? '' : undefined}
-      data-variant={variant}
-      onClick={() => {
-        if (!disabled) onSelect?.()
-      }}
-    >
-      {children}
-    </div>
-  )
-  const ContextMenuSeparator = () => <hr />
-  return {
-    ContextMenu,
-    ContextMenuTrigger,
-    ContextMenuContent,
-    ContextMenuItem,
-    ContextMenuSeparator
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 beforeEach(() => {
   mockSetActiveTab.mockReset()
@@ -343,11 +232,9 @@ beforeEach(() => {
   mockTogglePaneFullscreen.mockReset()
   mockCloseFileIfIdle.mockReset()
   mockRemoveBrowserTab.mockReset()
-  mockRequestCloseAgentChat.mockReset()
+  mockCloseAgentChat.mockReset()
   // Default: an idle chat closes immediately via the provided callback.
-  mockRequestCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) =>
-    closeTab()
-  )
+  mockCloseAgentChat.mockImplementation((_sessionId: string, closeTab: () => void) => closeTab())
   tauriRef.current = true
   mockWorkspaceStoreState.fullscreenPaneId = null
   mockCloseFileIfIdle.mockReturnValue(true)
@@ -358,7 +245,6 @@ beforeEach(() => {
   mockClearReorderPreview.mockReset()
   mockHandleTabReorder.mockReset()
   mockHandleDrop.mockReset()
-  mockAgentChatLifetimeState.closingSessionIds = {}
   mockUsePaneDnd.mockReset()
   mockUsePaneDnd.mockReturnValue({
     startTabDrag: mockStartTabDrag,
@@ -1047,6 +933,13 @@ describe('WorkspaceTabBar', () => {
       path: 'src/a.ts',
       staged: false
     }
+    const commitDiffTab: WorkspaceTab = {
+      type: 'commit-diff',
+      id: 'diff:def',
+      cwd: '/repo',
+      commit: 'e44b917'.padEnd(40, '0'),
+      path: 'src/a.ts'
+    }
 
     const TAB_LABEL: Array<{ kind: TabContextMenuKind; tab: WorkspaceTab; label: string }> = [
       { kind: 'terminal', tab: terminalTab, label: 'Terminal 1' },
@@ -1055,6 +948,7 @@ describe('WorkspaceTabBar', () => {
       { kind: 'git', tab: gitTab1, label: 'Git Changes' },
       { kind: 'git-history', tab: gitHistoryTab, label: 'Git History' },
       { kind: 'diff', tab: diffTab, label: 'a.ts' },
+      { kind: 'commit-diff', tab: commitDiffTab, label: 'a.ts @ e44b917' },
       // No ACP session is seeded; the tab labels itself from the mocked index
       // title.
       { kind: 'agent-chat', tab: agentChatTab, label: 'Chat 1' }
@@ -1318,25 +1212,6 @@ describe('WorkspaceTabBar', () => {
       fireEvent.click(screen.getByText('Close'))
       expect(onCloseTerminal).toHaveBeenCalledWith('term-1', 'tab-1')
     })
-
-    it('disables Close and excludes an agent-chat tab already closing from bulk targets', async () => {
-      mockAgentChatLifetimeState.closingSessionIds = { 'session-1': true }
-      const onCloseTabs = vi.fn()
-      const tabs: WorkspaceTab[] = [agentChatTab, gitTab1]
-
-      render(
-        <WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="ac-1" onCloseTabs={onCloseTabs} />
-      )
-      await flushShellEffect()
-
-      await openMenuOn('Chat 1')
-      expect(screen.getByText('Close')).toHaveAttribute('data-disabled')
-      expect(screen.getByText('Close Other Agent Chats')).toHaveAttribute('data-disabled')
-
-      // Close All Tabs still targets the remaining closable tab only.
-      fireEvent.click(screen.getByText('Close All Tabs'))
-      expect(onCloseTabs).toHaveBeenCalledWith([gitTab1])
-    })
   })
 
   describe('middle-click close', () => {
@@ -1466,7 +1341,7 @@ describe('WorkspaceTabBar', () => {
       expect(mockRemoveTab).toHaveBeenCalledWith('diff:abc')
     })
 
-    it('closes an agent-chat tab on middle click through requestCloseAgentChat', async () => {
+    it('closes an agent-chat tab on middle click through closeAgentChat', async () => {
       const { container } = render(
         <WorkspaceTabBar paneId="pane-a" tabs={[agentChatTab]} activeTabId="ac-1" />
       )
@@ -1474,7 +1349,7 @@ describe('WorkspaceTabBar', () => {
 
       middleClick(container.querySelector('[draggable="true"]') as HTMLElement)
 
-      expect(mockRequestCloseAgentChat).toHaveBeenCalledWith('session-1', expect.any(Function))
+      expect(mockCloseAgentChat).toHaveBeenCalledWith('session-1', expect.any(Function))
       expect(mockRemoveTab).toHaveBeenCalledWith('ac-1')
     })
 

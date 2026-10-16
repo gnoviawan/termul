@@ -270,6 +270,100 @@ function findSentRequest(
   return undefined
 }
 
+describe('WebTerminalClient host-offline (Close 1001)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function closeWith(client: WebTerminalClient, code: number): FakeWebSocket {
+    const sock = (client as unknown as ClientInternals).socket
+    sock.readyState = FakeWebSocket.CLOSED
+    sock.onclose?.(new CloseEvent('close', { code }))
+    return sock
+  }
+
+  it('with a live terminal reports host-offline, stops the backoff and reconnects when /health answers', async () => {
+    vi.useFakeTimers()
+    let healthy = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: healthy }) as Response)
+    )
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const states: string[] = []
+    client.setConnectionStateListener((state) => states.push(state))
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const oldSocket = internals.socket
+
+    closeWith(client, 1001)
+    expect(states.at(-1)).toBe('host-offline')
+    expect(internals.reconnectTimer).toBeNull()
+    await expect(client.connect()).rejects.toThrow(/offline/i)
+
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(internals.socket).toBeNull()
+
+    healthy = true
+    await vi.advanceTimersByTimeAsync(15_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(internals.socket).not.toBe(oldSocket)
+    expect(internals.socket?.readyState).toBe(FakeWebSocket.OPEN)
+    expect(findSentRequest(internals.socket, 'attach')?.payload).toMatchObject({
+      terminalId: 't1',
+      claim: 'claim-t1'
+    })
+    client.dispose()
+  })
+
+  it('probes the host at once when the network returns while it is offline', async () => {
+    vi.useFakeTimers()
+    let healthy = false
+    const fetchMock = vi.fn(async () => ({ ok: healthy }) as Response)
+    vi.stubGlobal('fetch', fetchMock)
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const oldSocket = internals.socket
+
+    closeWith(client, 1001)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    healthy = true
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(internals.socket).not.toBe(oldSocket)
+
+    client.dispose()
+    window.dispatchEvent(new Event('online'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('with no live terminal stays idle and connects lazily', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const states: string[] = []
+    client.setConnectionStateListener((state) => states.push(state))
+    await client.connect()
+    closeWith(client, 1001)
+    expect(states).not.toContain('host-offline')
+    client.dispose()
+  })
+})
+
 describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () => {
   afterEach(() => {
     restoreVisibility()

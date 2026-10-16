@@ -22,6 +22,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   getWebTerminalConnectionState,
+  retryWebTerminalHostOffline,
   setWebTerminalConnectionStateListener
 } from '@/lib/web-terminal-api'
 
@@ -70,6 +71,17 @@ function logChannelTransition(
     source: 'connection-status-store',
     message: `${channel} channel state: ${prev} → ${next}`
   })
+}
+
+/**
+ * User retry for the `host-offline` state: both channels ask the host's
+ * `GET /health` now and reconnect when it answers. A no-op on Tauri desktop and
+ * in any channel that is not `host-offline`.
+ */
+export function retryHostOffline(): void {
+  if (isTauriContext()) return
+  getAcpTransport().retryHostOffline?.()
+  retryWebTerminalHostOffline()
 }
 
 let wired = false

@@ -1,10 +1,10 @@
 //! Host-managed lifecycle for the Claude ACP adapter.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::atomic_file;
+use super::claude_accounts::{AccountResolution, ClaudeAccountStore};
 use super::config::resolve_runtime_executable;
 use super::credentials;
 
@@ -19,6 +19,14 @@ const AUTH_MODE_ACCOUNT: &str = "acp.claude-agent.auth-mode";
 /// or hosts without a working keychain cannot even launch `claude-code` mode.
 const AUTH_MODE_FILE_NAME: &str = "claude-auth-mode";
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
+const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
+
+mod accounts;
+mod cli;
+mod usage;
+
+use cli::{claude_cli_command, SystemClaudeRuntimeProbe};
+use usage::{ClaudeUsageProbe, SystemClaudeUsageProbe, UsageCache};
 
 /// Extract the major version from Node's canonical `vMAJOR.MINOR.PATCH` output.
 pub fn parse_node_major(output: &str) -> Option<u64> {
@@ -250,94 +258,12 @@ trait ClaudeCredentialStore: Send + Sync {
 #[async_trait::async_trait]
 trait ClaudeRuntimeProbe: Send + Sync {
     async fn ensure_supported(&self) -> Result<(), String>;
-    /// Whether the Claude CLI is signed in under `env`: the env the agent
-    /// process will be spawned with (project env such as `CLAUDE_CONFIG_DIR`
-    /// plus the agent config's own), so the preflight checks the same
-    /// profile the agent will use. `None` when the CLI is missing or the
-    /// probe is inconclusive.
+    /// Login state of the Claude CLI for one config directory (`None` = the
+    /// host's own Claude config directory).
     async fn cli_authentication_status(
         &self,
-        env: &HashMap<String, String>,
+        config_dir: Option<&Path>,
     ) -> Result<Option<bool>, String>;
-}
-
-struct SystemClaudeRuntimeProbe;
-
-#[async_trait::async_trait]
-impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
-    async fn ensure_supported(&self) -> Result<(), String> {
-        let path = super::config::runtime_resolution_path();
-        if resolve_runtime_executable("claude", &path).is_none() {
-            return Err(
-                "Claude Code CLI is not installed. Install it from Anthropic, then restart Termul."
-                    .to_string(),
-            );
-        }
-        if resolve_runtime_executable("node", &path).is_none() {
-            return Err(
-                "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul."
-                    .to_string(),
-            );
-        }
-        if !node_major_is_supported(probe_node_major_async().await) {
-            return Err(
-                "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul."
-                    .to_string(),
-            );
-        }
-        Ok(())
-    }
-
-    async fn cli_authentication_status(
-        &self,
-        env: &HashMap<String, String>,
-    ) -> Result<Option<bool>, String> {
-        let path = super::config::runtime_resolution_path();
-        let Some(cli_path) = resolve_runtime_executable("claude", &path) else {
-            return Ok(None);
-        };
-        log::info!(
-            "[acp-claude] checking Claude CLI auth status with {} agent env var(s){}",
-            env.len(),
-            if env.contains_key("CLAUDE_CONFIG_DIR") {
-                " (CLAUDE_CONFIG_DIR set)"
-            } else {
-                ""
-            }
-        );
-        let cli = crate::pty::manager::resolve_spawn_program(
-            cli_path
-                .to_str()
-                .ok_or_else(|| "Claude CLI path is not valid Unicode".to_string())?,
-        )?;
-        let mut command = tokio::process::Command::new(cli.program);
-        crate::process_util::hide_console(&mut command);
-        // The agent's env first, then the same PATH the agent resolves with
-        // (unless the env overrides it, as `to_mcp_server` honours too), and
-        // never the API key: `claude-code` mode strips it from the agent env
-        // as well.
-        command
-            .args(cli.prepend_args)
-            .args(["auth", "status"])
-            .envs(env);
-        if !env.contains_key("PATH") {
-            command.env("PATH", path);
-        }
-        command
-            .env_remove(ANTHROPIC_API_KEY_ENV)
-            .kill_on_drop(true)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let mut child = command
-            .spawn()
-            .map_err(|_| "could not check Claude CLI authentication".to_string())?;
-        let result = tokio::time::timeout(std::time::Duration::from_secs(10), child.wait()).await;
-        Ok(match result {
-            Ok(Ok(exit)) if exit.success() => Some(true),
-            Ok(Ok(exit)) if exit.code() == Some(1) => Some(false),
-            _ => None,
-        })
-    }
 }
 
 /// System keychain adapter over the shared ACP credentials plumbing. It
@@ -387,16 +313,34 @@ pub struct ClaudeAgentService {
     credentials: Arc<dyn ClaudeCredentialStore>,
     install_root: Option<PathBuf>,
     runtime_probe: Arc<dyn ClaudeRuntimeProbe>,
+    /// Claude Accounts of this host state dir; `None` without host state.
+    // Not named `accounts`: CodeQL treats that word as secret data.
+    profile_store: Option<Arc<ClaudeAccountStore>>,
+    usage_probe: Arc<dyn ClaudeUsageProbe>,
+    usage_cache: UsageCache,
+    /// Cancel handle of each running browser login, by Account id.
+    login_cancels: accounts::LoginCancels,
 }
 
 impl ClaudeAgentService {
     #[must_use]
     pub fn system(install_root: PathBuf) -> Self {
-        Self::new_with_runtime(
+        let store = install_root
+            .parent()
+            .zip(ClaudeAccountStore::host_shared_dir())
+            .map(|(state_dir, shared)| Arc::new(ClaudeAccountStore::new(state_dir, shared)));
+        if store.is_none() {
+            log::warn!(
+                "[claude-accounts] no home directory; only the built-in account is available"
+            );
+        }
+        let mut service = Self::new_with_runtime(
             Arc::new(SystemClaudeCredentialStore),
             Some(install_root),
             Arc::new(SystemClaudeRuntimeProbe),
-        )
+        );
+        service.profile_store = store;
+        service
     }
 
     #[must_use]
@@ -425,8 +369,14 @@ impl ClaudeAgentService {
     ) -> Self {
         Self {
             credentials,
+            usage_probe: Arc::new(SystemClaudeUsageProbe {
+                install_root: install_root.clone(),
+            }),
             install_root,
             runtime_probe,
+            profile_store: None,
+            usage_cache: UsageCache::default(),
+            login_cancels: parking_lot::Mutex::default(),
         }
     }
 
@@ -459,12 +409,7 @@ impl ClaudeAgentService {
         let path = super::config::runtime_resolution_path();
         status.cli_installed = resolve_runtime_executable("claude", &path).is_some();
         if status.cli_installed {
-            // Host-level status: no project is in scope, so the probe sees
-            // Termul's own environment.
-            status.cli_authenticated = self
-                .runtime_probe
-                .cli_authentication_status(&HashMap::new())
-                .await?;
+            status.cli_authenticated = self.runtime_probe.cli_authentication_status(None).await?;
         }
         Ok(status)
     }
@@ -472,6 +417,12 @@ impl ClaudeAgentService {
     /// Run Anthropic's interactive `claude auth login` in the caller's
     /// terminal. Termul never installs or updates the external Claude CLI.
     pub fn run_cli_login(&self) -> Result<(), String> {
+        self.run_cli_login_in(None)
+    }
+
+    /// [`run_cli_login`](Self::run_cli_login) for one Claude config directory
+    /// (`None` = the host's own).
+    fn run_cli_login_in(&self, config_dir: Option<&Path>) -> Result<(), String> {
         let path = super::config::runtime_resolution_path();
         let cli_path = resolve_runtime_executable("claude", &path)
             .ok_or_else(|| "Claude Code CLI is not installed or is not on PATH".to_string())?;
@@ -480,7 +431,11 @@ impl ClaudeAgentService {
                 .to_str()
                 .ok_or_else(|| "Claude CLI path is not valid Unicode".to_string())?,
         )?;
-        let status = std::process::Command::new(cli.program)
+        let mut command = std::process::Command::new(cli.program);
+        if let Some(dir) = config_dir {
+            command.env(CLAUDE_CONFIG_DIR_ENV, dir);
+        }
+        let status = command
             .args(cli.prepend_args)
             .args(["auth", "login"])
             .env("PATH", path)
@@ -669,6 +624,17 @@ impl ClaudeAgentService {
         &self,
         config: &mut crate::acp::config::AgentConfig,
     ) -> Result<bool, String> {
+        self.prepare_managed_config_for_project(config, None).await
+    }
+
+    /// [`prepare_managed_config`](Self::prepare_managed_config) for a spawn in
+    /// `project_id`: in Claude Code mode the agent runs with the config
+    /// directory of that Project's Account.
+    pub async fn prepare_managed_config_for_project(
+        &self,
+        config: &mut crate::acp::config::AgentConfig,
+        project_id: Option<&str>,
+    ) -> Result<bool, String> {
         if !self.is_managed_config(config) {
             // A config that claims the managed claude-acp identity but fails
             // verification is a security-relevant boundary — log it. Custom
@@ -687,20 +653,25 @@ impl ClaudeAgentService {
         }
         match self.auth_mode() {
             Ok(ClaudeAuthMode::ClaudeCode) => {
+                let account = self.resolve_account(project_id);
                 match self
                     .runtime_probe
-                    .cli_authentication_status(&config.env)
+                    .cli_authentication_status(account.config_dir.as_deref())
                     .await
                 {
                     Ok(Some(true)) => {}
                     Ok(status) => {
                         log::warn!(
-                            "[acp-claude] managed config rejected: Claude Code CLI not signed in (status={status:?})"
+                            "[acp-claude] managed config rejected: profile is not signed in (status={status:?})"
                         );
-                        return Err(
-                            "Claude Code CLI is not signed in. Run `claude auth login`, then retry."
+                        return Err(match account.config_dir {
+                            None => "Claude Code CLI is not signed in. Run `claude auth login`, then retry."
                                 .to_string(),
-                        );
+                            Some(_) => format!(
+                                "The Claude account \"{}\" is not signed in. Sign in to it in Settings → Provider, then retry.",
+                                account.account_name
+                            ),
+                        });
                     }
                     Err(error) => {
                         log::warn!("[acp-claude] managed config rejected: {error}");
@@ -708,6 +679,16 @@ impl ClaudeAgentService {
                     }
                 }
                 config.env.remove(ANTHROPIC_API_KEY_ENV);
+                if let Some(dir) = &account.config_dir {
+                    let dir = dir.to_str().ok_or_else(|| {
+                        log::warn!("[acp-claude] account config dir is not valid Unicode");
+                        "The Claude account folder path is not supported".to_string()
+                    })?;
+                    config
+                        .env
+                        .insert(CLAUDE_CONFIG_DIR_ENV.to_string(), dir.to_string());
+                }
+                log::info!("[acp-claude] managed config uses the project profile");
                 Ok(true)
             }
             Ok(ClaudeAuthMode::ApiKey) => match self.credentials.get(API_KEY_ACCOUNT) {

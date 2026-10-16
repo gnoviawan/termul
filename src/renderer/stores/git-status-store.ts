@@ -153,7 +153,10 @@ export interface GitStatusState {
   /** Status + commit context + (if watched) diff stat for one working copy.
    * Never rejects; failures land in `errors`. */
   refreshWorkingCopy: (cwd: string) => Promise<void>
-  /** `refreshWorkingCopy` for every tracked key. Never rejects. */
+  /** `refreshWorkingCopy` for every tracked key, at most
+   * `TRACKED_REFRESH_CONCURRENCY` at a time and each bounded by
+   * `TRACKED_REFRESH_TIMEOUT_MS`. A call during a run shares one trailing run
+   * and settles when it ends. Never rejects. */
   refreshTracked: () => Promise<void>
   /** Fetches one file side's diff. A failure always lands in `diffErrors`; by
    * default it also writes the empty sentinel and toasts (the Git panel's
@@ -299,8 +302,27 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
     ])
   },
 
-  refreshTracked: async () => {
-    await Promise.all(Object.values(get().paths).map((path) => get().refreshWorkingCopy(path)))
+  refreshTracked: () => {
+    // Coalesce: while a run is in flight, every further call shares one trailing
+    // run (which re-reads the tracked keys when it starts).
+    const control = trackedRefresh
+    if (control.trailing) return control.trailing
+    if (control.inFlight) {
+      const trailing: Promise<void> = control.inFlight
+        .then(() => {
+          if (control !== trackedRefresh) return
+          control.trailing = null
+          return startTrackedRun(get)
+        })
+        .catch((error: unknown) => {
+          // Never wedge: a rejected chain must not stay the shared trailing run.
+          if (control.trailing === trailing) control.trailing = null
+          logFailure('tracked refresh', 'trailing run', error)
+        })
+      control.trailing = trailing
+      return trailing
+    }
+    return startTrackedRun(get)
   },
 
   fetchCommitContext: async (cwd) => {
@@ -669,8 +691,110 @@ function clearDiffStatTrailing(key: string) {
   diffStatTrailing.delete(key)
 }
 
+/** Max `refreshWorkingCopy` calls one all-repo refresh keeps in flight; each
+ * spawns several git processes, so an unbounded fan-out over ~20 repos starves
+ * the host under memory pressure. */
+export const TRACKED_REFRESH_CONCURRENCY = 3
+
+/** A tracked key still refreshing after this long frees its pool slot (and is
+ * logged) so one stuck working copy cannot wedge every later all-repo refresh. */
+export const TRACKED_REFRESH_TIMEOUT_MS = 60_000
+
+interface TrackedRefreshControl {
+  inFlight: Promise<void> | null
+  trailing: Promise<void> | null
+  /** Keys whose timed-out refresh has not settled yet; skipped, not re-called.
+   * The value records whether this stuck episode's skip was already logged. */
+  stuck: Map<string, boolean>
+}
+
+/** The running all-repo refresh, the one trailing run queued behind it and the
+ * still-pending timed-out keys. Replaced (not mutated) on test reset so a stale
+ * callback is inert. */
+let trackedRefresh: TrackedRefreshControl = newTrackedRefreshControl()
+
+function newTrackedRefreshControl(): TrackedRefreshControl {
+  return { inFlight: null, trailing: null, stuck: new Map() }
+}
+
+function startTrackedRun(get: () => GitStatusState): Promise<void> {
+  const control = trackedRefresh
+  const run: Promise<void> = refreshPathsBounded(get, control)
+    .catch((error: unknown) => logFailure('tracked refresh', 'run', error))
+    .finally(() => {
+      if (control.inFlight === run) control.inFlight = null
+    })
+  control.inFlight = run
+  return run
+}
+
+/** `refreshWorkingCopy` for every tracked path through a pool of
+ * `TRACKED_REFRESH_CONCURRENCY` workers. Never rejects. */
+async function refreshPathsBounded(
+  get: () => GitStatusState,
+  control: TrackedRefreshControl
+): Promise<void> {
+  const paths = Object.values(get().paths)
+  let next = 0
+  const worker = async () => {
+    while (next < paths.length) {
+      await refreshTrackedPath(get, control, paths[next++])
+    }
+  }
+  const workers = Math.min(TRACKED_REFRESH_CONCURRENCY, paths.length)
+  await Promise.all(Array.from({ length: workers }, worker))
+}
+
+/** One tracked key, raced against `TRACKED_REFRESH_TIMEOUT_MS`. Never rejects;
+ * a failure, timeout or skip is logged. A timed-out refresh keeps running in
+ * the background (its request tokens still order its writes); until it
+ * settles the key is skipped instead of piling up another refresh. */
+async function refreshTrackedPath(
+  get: () => GitStatusState,
+  control: TrackedRefreshControl,
+  path: string
+): Promise<void> {
+  const key = normalizePath(path)
+  const skipLogged = control.stuck.get(key)
+  if (skipLogged !== undefined) {
+    if (!skipLogged) {
+      // Once per stuck episode; later skips stay silent until it settles.
+      control.stuck.set(key, true)
+      void logFrontendError({
+        level: 'warn',
+        message: `[git-status] tracked refresh skipped for ${key}: previous refresh still pending`,
+        source: 'git-status-store'
+      })
+    }
+    return
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<true>((resolve) => {
+    timer = setTimeout(() => resolve(true), TRACKED_REFRESH_TIMEOUT_MS)
+  })
+  try {
+    const refresh = get().refreshWorkingCopy(path)
+    const refreshed = refresh.then(() => false as const)
+    if (await Promise.race([refreshed, timedOut])) {
+      control.stuck.set(key, false)
+      const release = () => control.stuck.delete(key)
+      refresh.then(release, release)
+      logFailure(
+        'tracked refresh',
+        key,
+        new Error(`timed out after ${TRACKED_REFRESH_TIMEOUT_MS} ms`)
+      )
+    }
+  } catch (error) {
+    logFailure('tracked refresh', key, error)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Test-only: drop watcher/throttle/token metadata and any pending timer. */
 export function resetGitStatusStoreControlForTests(): void {
+  trackedRefresh = newTrackedRefreshControl()
   for (const key of [...diffStatTrailing.keys()]) clearDiffStatTrailing(key)
   diffStatWatchers.clear()
   diffStatLastFetch.clear()

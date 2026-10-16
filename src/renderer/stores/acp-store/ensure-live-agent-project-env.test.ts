@@ -5,10 +5,13 @@ vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: vi.fn(() => false) }))
 
 import { seedProjectStore } from '@/lib/test-utils/store'
 import type { Project } from '@/types/project'
+import { agentReuseKey } from '../acp-reuse-keys'
 import { _resetDefiniteSpawnRejectionsForTesting, ensureLiveAgent } from './shared-state'
 import type { AcpState } from './types'
 
 type Config = AcpState['agentConfigs'][number]
+
+const WORK_KEY = agentReuseKey('cfg-1', '/work/app', 'proj-1')
 
 function makeStore(config: Partial<Config> = {}) {
   const state = {
@@ -131,13 +134,13 @@ describe('ensureLiveAgent — project environment variables (#1118)', () => {
     expect(spawnedEnv(state.spawnAgent, 1)).toEqual({
       CLAUDE_CONFIG_DIR: '/home/me/.claude-personal'
     })
-    expect(state.configToLiveAgent['cfg-1\0/work/app']).toBe('agent-2')
+    expect(state.configToLiveAgent[WORK_KEY]).toBe('agent-2')
   })
 
   it('keeps reusing a live agent it did not spawn itself (no recorded launch)', async () => {
     seedProjectStore([project()])
     const { state, get, set } = makeStore()
-    state.configToLiveAgent['cfg-1\0/work/app'] = 'agent-host'
+    state.configToLiveAgent[WORK_KEY] = 'agent-host'
     state.agentStatus['agent-host'] = 'connected'
 
     expect(await ensureLiveAgent(get, set, 'cfg-1', '/work/app')).toBe('agent-host')

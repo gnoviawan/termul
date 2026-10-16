@@ -123,40 +123,40 @@ describe('ChangesPanel', () => {
     expect(addDiffTab).toHaveBeenCalledWith('/work', 'src/two.ts', false)
   })
 
-  it('stacks branch + Stash, commit box with Push, filter, Change list, Stash list, then the Graph', () => {
+  it('stacks branch + Stash, commit box with Push, filter, Change list, Stash list, then the History row', () => {
     render(<ChangesPanel cwd="/work" isVisible />)
 
     const order = [
       screen.getByRole('button', { name: 'Stash changes' }),
       screen.getByLabelText('Commit summary'),
       screen.getByRole('button', { name: /Push 1/ }),
-      screen.getByPlaceholderText('Filter changes...'),
-      screen.getByText(/^Changes \(/),
-      screen.getByText(/^Stashes \(/),
-      screen.getByRole('region', { name: 'Git graph' })
+      screen.getByPlaceholderText('Filter changes'),
+      screen.getByText('Changes', { selector: '.label-panel' }),
+      screen.getByText('Stashes', { selector: '.label-panel' }),
+      screen.getByRole('button', { name: 'Open History in the main panel' })
     ]
     for (let i = 1; i < order.length; i++) {
       expect(follows(order[i - 1], order[i])).toBe(true)
     }
-    // The Diff column of the Git tab is not mounted.
+    // The Diff column of the Git tab and the docked graph are not mounted.
     expect(screen.queryByText('Select a file to see changes')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Git graph' })).toBeNull()
   })
 
-  it('scrolls the upper region on its own, apart from the Graph', () => {
+  it('scrolls the upper region on its own, apart from the History row', () => {
     render(<ChangesPanel cwd="/work" isVisible />)
 
-    const upper = screen.getByPlaceholderText('Filter changes...').closest('.overflow-y-auto')
+    const upper = screen.getByPlaceholderText('Filter changes').closest('.overflow-y-auto')
     expect(upper).not.toBeNull()
-    const graph = screen.getByRole('region', { name: 'Git graph' })
-    expect(upper).not.toContainElement(graph)
-    expect(graph.className).toContain('max-h-[60%]')
+    const history = screen.getByRole('button', { name: 'Open History in the main panel' })
+    expect(upper).not.toContainElement(history)
   })
 
   it('filters the Change list from the filter field', () => {
     render(<ChangesPanel cwd="/work" isVisible />)
 
     expect(screen.getByText('one.ts')).toBeInTheDocument()
-    fireEvent.change(screen.getByPlaceholderText('Filter changes...'), {
+    fireEvent.change(screen.getByPlaceholderText('Filter changes'), {
       target: { value: 'two' }
     })
     expect(screen.queryByText('one.ts')).toBeNull()

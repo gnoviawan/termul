@@ -1,5 +1,4 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
-import { useState } from 'react'
 import { Edit2, Globe, MessageSquare, Plus, Terminal as TerminalIcon } from '@/components/icons'
 import {
   DropdownMenu,
@@ -9,7 +8,6 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { openProjectCanvas } from '@/lib/open-project-canvas'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
@@ -30,8 +28,7 @@ interface NewTabMenuProps {
 /**
  * Revamp tab bar `+` menu: one trigger for New chat, New terminal (per
  * detected shell), New browser tab (desktop only) and Open canvas. Radix owns
- * keyboard, Esc and focus return; native browser webviews are hidden while it
- * is open through the shared occlusion registry.
+ * keyboard, Esc and focus return.
  */
 export function NewTabMenu({
   paneId,
@@ -39,15 +36,13 @@ export function NewTabMenu({
   onAddBrowserTab,
   defaultShell
 }: NewTabMenuProps): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  useNativeWebviewOcclusion(open)
   const { loading, sortedShells } = useAvailableShells(defaultShell)
   const project = useActiveProject()
   const projectPath = project?.path
   const projectId = project?.id
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"

@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { persistenceApi } from '@/lib/api'
+import { STORE_VALUE_MAX_BYTES, storedValueBytes } from '@/lib/persistence-trim'
 import {
   isTerminalRestoreInProgress,
   saveTerminalLayout,
@@ -15,7 +17,10 @@ import type { TerminalModes } from '@shared/types/ipc.types'
 import { resetTerminalStore } from '@/lib/test-utils/store'
 import { mockPersistedTerminal, mockTerminal } from '@/lib/test-utils/terminal'
 import type { Terminal } from '@/types/project'
-import type { PersistedTerminal } from '../../shared/types/persistence.types'
+import type {
+  PersistedTerminal,
+  PersistedTerminalLayout
+} from '../../shared/types/persistence.types'
 import { useTerminalStore } from '../stores/terminal-store'
 import { extractScrollback, getTerminalModes } from '../utils/terminal-registry'
 
@@ -353,6 +358,63 @@ describe('useTerminalAutoSave', () => {
           extractedScrollbackLineCount: 2,
           persistedScrollbackLineCount: 2
         }
+      })
+    })
+
+    describe('value cap', () => {
+      const transcriptOf = (lines: number): string =>
+        Array.from(
+          { length: lines },
+          (_, i) => `out-${String(i).padStart(6, '0')} ${'.'.repeat(80)}\n`
+        ).join('')
+
+      afterEach(() => {
+        vi.restoreAllMocks()
+      })
+
+      function seedTerminalWithTranscript(transcript: string): string {
+        const store = useTerminalStore.getState()
+        const terminal = store.addTerminal('Terminal 1', 'proj-1', 'bash')
+        store.setTerminalPtyId(terminal.id, 'pty-1')
+        useTerminalStore.setState((state) => ({
+          terminals: state.terminals.map((t) => (t.id === terminal.id ? { ...t, transcript } : t))
+        }))
+        return terminal.id
+      }
+
+      it('writes a layout under the cap as it is', async () => {
+        const write = vi
+          .spyOn(persistenceApi, 'write')
+          .mockResolvedValue({ success: true, data: undefined })
+        const transcript = transcriptOf(100)
+        seedTerminalWithTranscript(transcript)
+
+        await saveTerminalLayout('proj-1')
+
+        const layout = write.mock.calls[0][1] as PersistedTerminalLayout
+        expect(layout.terminals[0].transcript).toBe(transcript)
+      })
+
+      it('trims the oldest output of a layout over the cap and keeps the newest', async () => {
+        const write = vi
+          .spyOn(persistenceApi, 'write')
+          .mockResolvedValue({ success: true, data: undefined })
+        const transcript = transcriptOf(5000) // ~450 KB
+        const id = seedTerminalWithTranscript(transcript)
+
+        await saveTerminalLayout('proj-1')
+
+        const [key, value] = write.mock.calls[0]
+        expect(key).toBe('terminals/proj-1')
+        const layout = value as PersistedTerminalLayout
+        expect(storedValueBytes(layout)).toBeLessThanOrEqual(STORE_VALUE_MAX_BYTES)
+        const saved = layout.terminals[0].transcript ?? ''
+        expect(saved.length).toBeGreaterThan(0)
+        expect(saved.length).toBeLessThan(transcript.length)
+        expect(transcript.endsWith(saved)).toBe(true)
+        // The in-memory transcript keeps everything: only the saved copy is cut.
+        const live = useTerminalStore.getState().terminals.find((t) => t.id === id)
+        expect(live?.transcript).toBe(transcript)
       })
     })
   })

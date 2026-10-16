@@ -64,12 +64,9 @@ fn host_with(root: &Path, relay: WsRelaySink) -> AppState {
         pty,
         relay: Arc::new(relay),
         registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(root),
-        registry_persistence: None,
-        projects_file: None,
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
         pending_oauth_flows: Arc::new(parking_lot::RwLock::new(Default::default())),
         oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
         store: None,
@@ -112,7 +109,6 @@ fn app(state: AppState) -> Router {
         .route("/git/stash-drop", post(git_api::stash_drop))
         .route("/git/stage-hunk", post(crate::web::git_hunk_api::stage_hunk))
         .route("/git/unstage-hunk", post(crate::web::git_hunk_api::unstage_hunk))
-        .route("/workspace/{projectId}/write", post(crate::web::workspace_api::write))
         .route(
             "/worktree/rename-branch",
             post(crate::web::worktree_rename_api::rename_branch),
@@ -278,25 +274,6 @@ async fn a_lost_reply_to_a_rename_is_answered_with_the_original_outcome() {
     // A ledgered route refuses a request without a commandId, before it runs.
     let bare = send_unstamped(&app, "POST", "/fs/rename", body).await;
     assert_eq!(code(&bare), "INVALID_COMMAND_ID");
-}
-
-#[tokio::test]
-async fn a_workspace_write_without_a_command_id_is_refused() {
-    let dir = TempDir::new("workspace-bare");
-    let mut state = host(dir.path());
-    state.workspace_manifest = Some(
-        crate::acp::WorkspaceManifestService::open(dir.path().join("manifests"))
-            .await
-            .expect("open manifest store"),
-    );
-    let app = app(state);
-    let body = json!({
-        "basedRevision": null,
-        "manifest": { "projectId": "p1", "revision": 0, "updatedAt": 0 },
-    });
-
-    let bare = send_unstamped(&app, "POST", "/workspace/p1/write", body).await;
-    assert_eq!(code(&bare), "INVALID_COMMAND_ID", "{}", bare.text);
 }
 
 #[tokio::test]
@@ -891,7 +868,7 @@ async fn every_ledgered_domain_kind_refuses_a_request_without_a_command_id() {
         "fs_write", "fs_rename", "fs_copy", "git_commit", "git_discard", "git_stash_save",
         "git_stash_apply", "git_stash_pop", "git_stash_drop", "git_stage_hunk",
         "git_unstage_hunk", "git_create_branch", "worktree_create", "worktree_rename_branch",
-        "workspace_write", "install_acp_agent",
+        "install_acp_agent",
     ];
     let ledger = Arc::new(CommandLedger::new(RETENTION));
     let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));

@@ -79,6 +79,9 @@ export function splitAddress(values: HostFormValues, portEdited = false): HostFo
   if (portMatch) {
     host = portMatch[1]
     if (!portEdited) port = portMatch[2]
+  } else if (host.startsWith('[') && host.endsWith(']')) {
+    // A bracketed IPv6 address without a port: store the bare address.
+    host = host.slice(1, -1)
   }
   return { ...values, host, username, port }
 }

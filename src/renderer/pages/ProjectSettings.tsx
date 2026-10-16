@@ -1,9 +1,11 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { Fragment, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   ChevronDown,
   Info,
+  KeyRound,
   KeySquare,
   Link2,
   Plus,
@@ -16,6 +18,7 @@ import {
   X
 } from '@/components/icons'
 import { NewProjectModal } from '@/components/NewProjectModal'
+import { ProjectProviderSettings } from '@/components/settings/provider/ProjectProviderSettings'
 import {
   type SettingsCategory,
   SettingsLayout,
@@ -23,14 +26,17 @@ import {
 } from '@/components/settings/SettingsLayout'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import { Button } from '@/components/ui/button'
-import { FIELD_FOCUS_CLASS, FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { FOCUS_RING_CLASS, PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
+import { useProjectClaudeAccountDraft } from '@/hooks/use-project-claude-account-draft'
 import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { mergeEnvVars, parseEnvFile, resolveProjectEnvPath } from '@/lib/env-parser'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { cn } from '@/lib/utils'
+import { applyProjectClaudeAccount } from '@/stores/claude-account-switch'
 import {
   useActiveProject,
   useActiveProjectId,
@@ -45,10 +51,17 @@ const PROJECT_SETTINGS_CATEGORIES: SettingsCategory[] = [
   { id: 'env-vars', label: 'Environment Variables', icon: <KeySquare size={16} /> },
   { id: 'shell', label: 'Shell Settings', icon: <TerminalSquare size={16} /> },
   { id: 'symlinks', label: 'Worktree Symlinks', icon: <Link2 size={16} /> },
+  { id: 'provider', label: 'Provider', icon: <KeyRound size={16} /> },
   { id: 'emergency', label: 'Emergency Mode', icon: <ShieldAlert size={16} /> }
 ]
 
 const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  {
+    categoryId: 'provider',
+    label: 'Claude account',
+    description: 'Choose the Claude account that chats in this project use.',
+    keywords: ['provider', 'account', 'claude', 'work', 'personal', 'switch']
+  },
   {
     categoryId: 'general',
     label: 'Project Name',
@@ -114,9 +127,11 @@ const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 export function ProjectSettingsModal() {
   const isOpen = useSettingsModalStore((state) => state.view === 'project')
   const close = useSettingsModalStore((state) => state.close)
+  const openAppSettings = useSettingsModalStore((state) => state.openApp)
   const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
   const activeProject = useActiveProject()
+  const claudeAccountDraft = useProjectClaudeAccountDraft(activeProject?.id, { enabled: isOpen })
   const activeProjectId = useActiveProjectId()
   const { addProject, updateProject } = useProjectActions()
 
@@ -253,6 +268,17 @@ export function ProjectSettingsModal() {
         defaultShell: shell,
         symlinkDirs: normalizedSymlinkDirs
       })
+      const projectId = activeProject.id
+      void claudeAccountDraft
+        .save()
+        .then((changed) => {
+          if (changed) void applyProjectClaudeAccount(projectId)
+        })
+        .catch((err) => {
+          toast.error(
+            `Could not save the Claude account: ${err instanceof Error ? err.message : String(err)}`
+          )
+        })
       setEnvVars(normalizedEnvVars)
       setSymlinkDirs(normalizedSymlinkDirs)
       setHasChanges(false)
@@ -410,7 +436,15 @@ export function ProjectSettingsModal() {
                 <Info size={14} className="mr-2 text-warning" />
                 <span className="opacity-80">You have unsaved changes</span>
               </span>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setHasChanges(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  claudeAccountDraft.reset()
+                  setHasChanges(false)
+                }}
+              >
                 Discard
               </Button>
               <Button type="button" size="sm" onClick={handleSave}>
@@ -423,6 +457,7 @@ export function ProjectSettingsModal() {
       >
         {/* Content */}
         <SettingsLayout
+          title="Project settings"
           categories={PROJECT_SETTINGS_CATEGORIES}
           searchIndex={PROJECT_SETTINGS_SEARCH_INDEX}
         >
@@ -447,7 +482,7 @@ export function ProjectSettingsModal() {
                       setProjectName(e.target.value)
                       setHasChanges(true)
                     }}
-                    className={`w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm pointer-coarse:text-base text-foreground transition-colors ${FIELD_FOCUS_CLASS}`}
+                    className={cn(PANEL_FIELD_CLASS, 'w-full rounded-md px-3 py-2 text-sm')}
                   />
                 </div>
 
@@ -463,7 +498,10 @@ export function ProjectSettingsModal() {
                         setRootPath(e.target.value)
                         setHasChanges(true)
                       }}
-                      className={`flex-1 bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm pointer-coarse:text-base text-foreground font-mono ${FIELD_FOCUS_CLASS}`}
+                      className={cn(
+                        PANEL_FIELD_CLASS,
+                        'flex-1 rounded-md px-3 py-2 font-mono text-sm'
+                      )}
                     />
                     <button
                       onClick={async () => {
@@ -623,7 +661,10 @@ export function ProjectSettingsModal() {
                           setShell(e.target.value)
                           setHasChanges(true)
                         }}
-                        className={`w-full appearance-none bg-secondary/50 border border-border rounded-md pl-3 pr-10 py-2 text-sm pointer-coarse:text-base text-foreground cursor-pointer shadow-sm ${FIELD_FOCUS_CLASS}`}
+                        className={cn(
+                          PANEL_FIELD_CLASS,
+                          'w-full cursor-pointer appearance-none rounded-md py-2 pl-3 pr-10 text-sm'
+                        )}
                       >
                         {availableShells?.available && availableShells.available.length > 0 ? (
                           availableShells.available.map((s) => (
@@ -693,7 +734,10 @@ export function ProjectSettingsModal() {
                           value={dir}
                           onChange={(e) => updateSymlinkDir(index, e.target.value)}
                           placeholder="e.g. node_modules"
-                          className={`flex-1 bg-secondary/50 border border-border rounded px-2 py-1 text-sm pointer-coarse:text-base font-mono text-foreground placeholder-muted-foreground ${FIELD_FOCUS_CLASS}`}
+                          className={cn(
+                            PANEL_FIELD_CLASS,
+                            'flex-1 rounded px-2 py-1 font-mono text-sm'
+                          )}
                         />
                         <button
                           onClick={() => removeSymlinkDir(index)}
@@ -705,6 +749,31 @@ export function ProjectSettingsModal() {
                     ))
                   )}
                 </div>
+              </div>
+            </div>
+          </SettingsSection>
+
+          {/* Provider Section */}
+          <SettingsSection id="provider">
+            <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+              <div className="w-full pt-1 md:w-1/3">
+                <h2 className="text-lg font-medium text-foreground">Provider</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Choose the account that this project&apos;s agent chats use.
+                </p>
+              </div>
+              <div className="w-full md:w-2/3">
+                <ProjectProviderSettings
+                  claude={claudeAccountDraft}
+                  onChange={() => setHasChanges(true)}
+                  onManageAccounts={() => {
+                    if (hasChanges) {
+                      toast.warning('Save or discard your changes first.')
+                      return
+                    }
+                    openAppSettings()
+                  }}
+                />
               </div>
             </div>
           </SettingsSection>
@@ -729,17 +798,11 @@ export function ProjectSettingsModal() {
                         Bypass non-essential prompts during worktree operations.
                       </p>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={skipConfirmations}
-                        onChange={(e) => {
-                          setSkipConfirmations(e.target.checked)
-                        }}
-                      />
-                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary-fill after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
-                    </label>
+                    <Switch
+                      aria-label="Skip Confirmation Dialogs"
+                      checked={skipConfirmations}
+                      onCheckedChange={setSkipConfirmations}
+                    />
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
@@ -750,17 +813,11 @@ export function ProjectSettingsModal() {
                         Use default symlink settings when creating worktrees.
                       </p>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={skipGitignoreSelection}
-                        onChange={(e) => {
-                          setSkipGitignoreSelection(e.target.checked)
-                        }}
-                      />
-                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary-fill after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
-                    </label>
+                    <Switch
+                      aria-label="Skip .gitignore Selection"
+                      checked={skipGitignoreSelection}
+                      onCheckedChange={setSkipGitignoreSelection}
+                    />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1">
@@ -773,7 +830,10 @@ export function ProjectSettingsModal() {
                         setDefaultBranchPrefix(e.target.value)
                       }}
                       placeholder="feature/"
-                      className={`w-full bg-secondary/50 border border-border rounded-md px-3 py-2 text-sm pointer-coarse:text-base font-mono text-foreground ${FIELD_FOCUS_CLASS}`}
+                      className={cn(
+                        PANEL_FIELD_CLASS,
+                        'w-full rounded-md px-3 py-2 font-mono text-sm'
+                      )}
                     />
                     <p className="text-xs text-muted-foreground mt-1">
                       Prefix for new branch naming (e.g. "feature/", "hotfix/").

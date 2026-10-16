@@ -209,216 +209,6 @@ function resetState(): void {
   seed({ commits: makeCommits() })
 }
 
-describe('GitHistoryPanel desktop shell (characterization)', () => {
-  beforeEach(() => {
-    resetState()
-    mobileRef.current = false
-  })
-
-  it('renders 30px single-line rows in the original column order', () => {
-    renderPanel()
-    const commits = makeCommits()
-
-    for (const commit of commits) {
-      const row = rowFor(commit)
-      expect(row.style.height).toBe('30px')
-      expect(row.className).toBe(
-        'flex items-center gap-3 pr-3 border-b border-border/40 hover:bg-secondary/40 transition-colors'
-      )
-      expect(row.children).toHaveLength(5)
-      const [refs, subject, author, time, hash] = Array.from(row.children) as HTMLElement[]
-
-      // Order: refs, subject, author, relative time, short hash.
-      expect(refs.className).toBe('flex items-center gap-1.5 shrink-0')
-      expect(refs.children).toHaveLength(commit.refs.length)
-      expect(subject.textContent).toBe(commit.subject)
-      expect(subject.className).toBe('text-xs text-foreground truncate flex-1 min-w-0')
-      expect(author.textContent).toBe(commit.author)
-      expect(author.className).toBe(
-        'text-3xs text-muted-foreground truncate max-w-[120px] shrink-0'
-      )
-      expect(time.className).toBe(
-        'text-3xs tabular-nums text-muted-foreground/70 shrink-0 w-10 text-right'
-      )
-      expect(hash.textContent).toBe(commit.shortHash)
-      expect(hash.className).toBe('font-mono text-3xs text-muted-foreground/60 shrink-0 w-14')
-    }
-
-    expect(Array.from(rowFor(commits[0]).children).map((el) => el.textContent)).toEqual([
-      'mainorigin/main',
-      'Merge branch feature/login',
-      'Ada Lovelace',
-      '1h',
-      MERGE
-    ])
-  })
-
-  it('keeps the w-44 text-xs filter and the h-8 w-8 refresh in the header', () => {
-    renderPanel()
-
-    const filter = screen.getByLabelText('Filter commits')
-    expect(filter.getAttribute('type')).toBe('text')
-    expect(filter.getAttribute('placeholder')).toBe('Filter commits...')
-    expect(filter.className).toContain('w-44')
-    expect(filter.className).toContain('text-xs')
-    expect(filter.className).not.toContain('h-11')
-    expect(filter.className).not.toContain('text-base')
-
-    const refresh = screen.getByRole('button', { name: 'Refresh history' })
-    expect(refresh.className).toContain('h-8 w-8')
-    expect(refresh.className).not.toContain('h-11')
-    expect(refresh.getAttribute('title')).toBe('Refresh history')
-    expect(screen.getByText('Git History')).toBeInTheDocument()
-  })
-
-  it('calls refreshLog(cwd) on refresh click and disables the button with a spinner while loading', () => {
-    // Never resolves, so the store stays in its loading state for the assertions.
-    getLog.mockReturnValue(new Promise(() => {}))
-    renderPanel()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh history' }))
-    expect(getLog).toHaveBeenCalledTimes(1)
-    expect(getLog.mock.calls[0][0]).toBe(CWD)
-
-    // The click set loading in the store; the button now reflects it.
-    const refresh = screen.getByRole('button', { name: 'Refresh history' })
-    expect(refresh).toBeDisabled()
-    expect(refresh.querySelector('.tm-comet')).not.toBeNull()
-  })
-
-  it('draws the lane graph with 20 + 16 * lanes by 30 * rows and a 30px row pitch', () => {
-    const { container } = renderPanel()
-
-    const svg = graphSvg(container)
-    expect(svg).not.toBeNull()
-    // Two lanes, four rows.
-    expect(svg?.getAttribute('width')).toBe(String(20 + 16 * 2))
-    expect(svg?.getAttribute('height')).toBe(String(30 * 4))
-
-    const circles = Array.from(svg?.querySelectorAll('circle') ?? [])
-    expect(
-      circles.map((c) => [c.getAttribute('cx'), c.getAttribute('cy'), c.getAttribute('r')])
-    ).toEqual([
-      ['10', '15', '4'],
-      ['10', '45', '4'],
-      ['26', '75', '4'],
-      ['10', '105', '4']
-    ])
-
-    // Lane 1 -> lane 0 bend (feature B to the base) is a curve between row pitches.
-    const paths = Array.from(svg?.querySelectorAll('path') ?? []).map((p) => p.getAttribute('d'))
-    expect(paths).toContain('M 26 75 C 26 90, 10 90, 10 105')
-    expect(paths).toContain('M 10 15 L 10 45')
-
-    // Edge and node paint (moved into the shared LaneGraph, so pinned here).
-    expectLanePaint(svg as SVGSVGElement, {
-      toLaneOne: 'M 10 15 C 10 45, 26 45, 26 75',
-      toLaneZero: 'M 26 75 C 26 90, 10 90, 10 105',
-      straight: 'M 10 15 L 10 45'
-    })
-
-    // Rows are offset right by the graph width.
-    expect(rowFor(makeCommits()[0]).parentElement?.style.paddingLeft).toBe('52px')
-  })
-
-  it('runs an edge to the bottom of the graph when the parent is outside the fetched window', () => {
-    seed({ commits: makeTruncated() })
-    const { container } = renderPanel()
-
-    const svg = graphSvg(container)
-    expect(svg?.getAttribute('height')).toBe(String(30 * 2))
-    const paths = Array.from(svg?.querySelectorAll('path') ?? []).map((p) => p.getAttribute('d'))
-    expect(paths).toEqual(['M 10 15 L 10 45', 'M 10 45 L 10 60'])
-  })
-
-  it('wraps the list in the Radix ScrollArea', () => {
-    const { container } = renderPanel()
-
-    expect(container.querySelector('[data-radix-scroll-area-viewport]')).not.toBeNull()
-  })
-
-  it('floors the graph at one lane (max(1, laneCount))', () => {
-    // One commit, one lane: width = 20 + 16 * 1, height = 30 * 1.
-    const [only] = makeCommits().slice(3)
-    seed({ commits: [only] })
-    const { container } = renderPanel()
-
-    const svg = graphSvg(container)
-    expect(svg?.getAttribute('width')).toBe('36')
-    expect(svg?.getAttribute('height')).toBe('30')
-  })
-
-  it('hides the graph and drops the row offset while filtering, matching subject, author, hash and refs', () => {
-    const { container } = renderPanel()
-    const commits = makeCommits()
-    const filter = screen.getByLabelText('Filter commits')
-
-    const expectOnly = (visible: GitCommit[]): void => {
-      for (const commit of commits) {
-        const query = screen.queryByTitle(`${commit.shortHash} — ${commit.subject}`)
-        if (visible.includes(commit)) expect(query).not.toBeNull()
-        else expect(query).toBeNull()
-      }
-    }
-
-    fireEvent.change(filter, { target: { value: 'grace' } })
-    expect(graphSvg(container)).toBeNull()
-    expectOnly([commits[1]])
-    expect(rowFor(commits[1]).parentElement?.style.paddingLeft).toBe('')
-
-    fireEvent.change(filter, { target: { value: 'typo' } })
-    expectOnly([commits[2]])
-
-    fireEvent.change(filter, { target: { value: FEATURE_B } })
-    expectOnly([commits[2]])
-
-    fireEvent.change(filter, { target: { value: fullHash(BASE) } })
-    expectOnly([commits[3]])
-
-    fireEvent.change(filter, { target: { value: 'v1.0.0' } })
-    expectOnly([commits[1]])
-
-    fireEvent.change(filter, { target: { value: 'ada' } })
-    expectOnly([commits[0], commits[3]])
-
-    fireEvent.change(filter, { target: { value: '' } })
-    expect(graphSvg(container)).not.toBeNull()
-  })
-
-  it('shows the verbatim no-match message', () => {
-    renderPanel()
-
-    fireEvent.change(screen.getByLabelText('Filter commits'), { target: { value: 'zzz' } })
-    expect(screen.getByText('No commits match "zzz"')).toBeInTheDocument()
-  })
-
-  it('shows the loading line before the first load resolves', () => {
-    seed({ loading: true })
-    render(<GitHistoryPanel cwd={CWD} isVisible={false} />)
-
-    const loading = screen.getByText('Loading history...')
-    // Fills the area under the header and centres the line.
-    expect(loading.className).toBe('flex-1 flex items-center justify-center text-muted-foreground')
-    expect(getLog).not.toHaveBeenCalled()
-  })
-
-  it('keeps the EmptyState strings with and without a store error', () => {
-    seed({ commits: [] })
-    const { unmount } = renderPanel()
-    expect(screen.getByText('No commit history')).toBeInTheDocument()
-    expect(
-      screen.getByText('There are no commits to show yet. Make your first commit to see it here.')
-    ).toBeInTheDocument()
-    unmount()
-
-    seed({ commits: [], error: 'boom' })
-    renderPanel()
-    expect(
-      screen.getByText('This folder may not be a Git repository, or git is unavailable.')
-    ).toBeInTheDocument()
-  })
-})
-
 describe('GitHistoryPanel mobile shell', () => {
   beforeEach(() => {
     resetState()
@@ -509,7 +299,7 @@ describe('GitHistoryPanel mobile shell', () => {
     expect(paths).toEqual(['M 8 22 L 8 66', 'M 8 66 L 8 88'])
   })
 
-  it('keeps a six-lane graph at 88px (116px on the desktop geometry)', () => {
+  it('keeps a six-lane graph at 88px (120px on the desktop geometry)', () => {
     seed({ commits: makeOctopus() })
     const mobile = renderPanel()
     expect(graphSvg(mobile.container)?.getAttribute('width')).toBe('88')
@@ -518,7 +308,7 @@ describe('GitHistoryPanel mobile shell', () => {
 
     mobileRef.current = false
     const desktop = renderPanel()
-    expect(graphSvg(desktop.container)?.getAttribute('width')).toBe('116')
+    expect(graphSvg(desktop.container)?.getAttribute('width')).toBe('120')
   })
 
   // Matrix: No refs.
@@ -651,39 +441,21 @@ describe('GitHistoryPanel mobile shell', () => {
     expect(rowFor(commits[0]).parentElement?.className ?? '').not.toContain('pl-3')
   })
 
-  it('shows the same filtered subset as the desktop shell for every matcher', () => {
-    const queries = [
-      'grace',
-      'typo',
-      FEATURE_B,
-      fullHash(BASE),
-      'v1.0.0',
-      'origin/main',
-      'ada',
-      'ZZZ'
-    ]
-
-    for (const query of queries) {
-      mobileRef.current = true
-      const mobile = renderPanel()
-      fireEvent.change(screen.getByLabelText('Filter commits'), { target: { value: query } })
-      const mobileTitles = visibleTitles(mobile.container)
-      mobile.unmount()
-
-      mobileRef.current = false
-      const desktop = renderPanel()
-      fireEvent.change(screen.getByLabelText('Filter commits'), { target: { value: query } })
-      const desktopTitles = visibleTitles(desktop.container)
-      desktop.unmount()
-
-      expect(mobileTitles).toEqual(desktopTitles)
-    }
-  })
-
   it('shows the verbatim no-match message when nothing matches', () => {
     renderPanel()
 
     fireEvent.change(screen.getByLabelText('Filter commits'), { target: { value: 'zzz' } })
+    expect(screen.getByText('No commits match "zzz"')).toBeInTheDocument()
+  })
+
+  it('trims the query like the desktop filter does', () => {
+    const { container } = renderPanel()
+    const commits = makeCommits()
+
+    fireEvent.change(screen.getByLabelText('Filter commits'), { target: { value: '  Grace ' } })
+    expect(visibleTitles(container)).toEqual([`${commits[1].shortHash} — ${commits[1].subject}`])
+
+    fireEvent.change(screen.getByLabelText('Filter commits'), { target: { value: ' zzz ' } })
     expect(screen.getByText('No commits match "zzz"')).toBeInTheDocument()
   })
 
@@ -805,24 +577,10 @@ describe('GitHistoryPanel mobile shell', () => {
     expect(getLog.mock.calls[0][0]).toBe(CWD)
   })
 
-  it('keeps the query and the data when the shell flips between phone and desktop layouts', () => {
-    const { container, rerender } = renderPanel()
-    fireEvent.change(screen.getByLabelText('Filter commits'), { target: { value: 'grace' } })
-    expect(screen.getByLabelText('Filter commits').className).toContain('h-11')
-
-    // All hooks sit above the early return, so flipping the layout is safe.
+  it('renders the desktop GitHistoryView when the shell is not the phone', () => {
     mobileRef.current = false
-    rerender(<GitHistoryPanel cwd={CWD} isVisible />)
-    const desktopFilter = screen.getByLabelText('Filter commits') as HTMLInputElement
-    expect(desktopFilter.className).toContain('w-44')
-    expect(desktopFilter.value).toBe('grace')
-    expect(visibleTitles(container)).toHaveLength(1)
-    expect(container.querySelector('[data-radix-scroll-area-viewport]')).not.toBeNull()
-
-    mobileRef.current = true
-    rerender(<GitHistoryPanel cwd={CWD} isVisible />)
-    expect((screen.getByLabelText('Filter commits') as HTMLInputElement).value).toBe('grace')
-    expect(container.querySelector('[data-radix-scroll-area-viewport]')).toBeNull()
-    expect(getLog).not.toHaveBeenCalled()
+    renderPanel()
+    expect(screen.getByRole('listbox', { name: 'Commits' })).toBeInTheDocument()
+    expect(screen.queryByText('Git History')).toBeNull()
   })
 })

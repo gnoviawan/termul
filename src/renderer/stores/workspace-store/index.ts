@@ -34,6 +34,7 @@ export {
   agentChatTabId,
   buildProjectWorkspace,
   canvasTabId,
+  commitDiffTabId,
   createProjectWorkspace,
   diffTabId,
   findPaneById,

@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
-import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { PANEL_FIELD_CLASS, QUIET_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { WriteGate, WriteGateReason } from '@/components/ui/write-gate'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { cn } from '@/lib/utils'
@@ -83,7 +83,7 @@ export function CommitComposer({
             type="text"
             aria-label="Commit summary"
             placeholder={amend ? 'Update commit message' : 'Summary (required)'}
-            className={`w-full bg-secondary/50 border-none rounded-md py-2.5 pl-3 pr-12 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
+            className={cn(PANEL_FIELD_CLASS, 'h-11 w-full pl-2.5 pr-12 disabled:opacity-50')}
             value={summary}
             onChange={(e) => onSummaryChange(e.target.value)}
             disabled={isCommitting || isGenerating}
@@ -103,10 +103,11 @@ export function CommitComposer({
             onClick={() => void onGenerateMessage()}
             disabled={!canGenerate}
             className={cn(
-              'absolute right-1.5 top-1/2 -translate-y-1/2 flex size-8 items-center justify-center rounded-md',
-              // 32px visual + hit-slop after:-inset-1.5 → ~48×48 tap.
-              "relative after:absolute after:-inset-1.5 after:content-['']",
-              'text-muted-foreground hover:text-foreground hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed',
+              QUIET_ICON_BUTTON_CLASS,
+              // Pinned inside the summary field. `absolute` also anchors the
+              // hit-slop: 32px visual + after:-inset-1.5 → ~48×48 tap.
+              "absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 after:absolute after:-inset-1.5 after:content-['']",
+              'disabled:opacity-40 disabled:cursor-not-allowed',
               isGenerating && 'animate-pulse text-primary'
             )}
           >
@@ -117,7 +118,7 @@ export function CommitComposer({
           aria-label="Commit description"
           placeholder="Description (optional)"
           rows={3}
-          className={`w-full resize-none bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
+          className={cn(PANEL_FIELD_CLASS, 'w-full resize-none px-2.5 py-1.5 disabled:opacity-50')}
           value={description}
           onChange={(e) => onDescriptionChange(e.target.value)}
           disabled={isCommitting || isGenerating}
@@ -137,7 +138,7 @@ export function CommitComposer({
         >
           <input
             type="checkbox"
-            className="size-4 accent-primary"
+            className="size-4 accent-foreground"
             checked={amend}
             onChange={onToggleAmend}
             disabled={!commitContext?.hasHead || isCommitting || isGenerating}
@@ -239,7 +240,7 @@ export function CommitComposer({
         type="text"
         aria-label="Commit summary"
         placeholder={amend ? 'Update commit message' : 'Summary (required)'}
-        className={`w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
+        className={cn(PANEL_FIELD_CLASS, 'h-8 w-full px-2.5 disabled:opacity-50')}
         value={summary}
         onChange={(e) => onSummaryChange(e.target.value)}
         disabled={isCommitting || isGenerating}
@@ -248,7 +249,7 @@ export function CommitComposer({
         aria-label="Commit description"
         placeholder="Description (optional)"
         rows={3}
-        className={`w-full resize-none bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs pointer-coarse:text-base ${FOCUS_RING_CLASS}`}
+        className={cn(PANEL_FIELD_CLASS, 'w-full resize-none px-2.5 py-1.5 disabled:opacity-50')}
         value={description}
         onChange={(e) => onDescriptionChange(e.target.value)}
         disabled={isCommitting || isGenerating}
@@ -257,7 +258,7 @@ export function CommitComposer({
         type="button"
         variant="outline"
         size="sm"
-        className="w-full h-8 text-xs gap-2"
+        className="w-full h-8 rounded-lg text-xs gap-2"
         onClick={() => void onGenerateMessage()}
         disabled={!canGenerate}
         title={
@@ -286,7 +287,7 @@ export function CommitComposer({
       >
         <input
           type="checkbox"
-          className="h-3 w-3 accent-primary"
+          className="h-3 w-3 accent-foreground"
           checked={amend}
           onChange={onToggleAmend}
           disabled={!commitContext?.hasHead || isCommitting || isGenerating}
@@ -297,7 +298,7 @@ export function CommitComposer({
         <Button
           variant="default"
           size="sm"
-          className="w-full h-8 text-xs gap-2"
+          className="w-full h-8 rounded-lg text-xs gap-2"
           onClick={onCommit}
           disabled={!canCommit || !admitted}
           title={
@@ -322,7 +323,7 @@ export function CommitComposer({
         <Button
           variant="outline"
           size="sm"
-          className="w-full h-8 text-xs gap-2"
+          className="w-full h-8 rounded-lg text-xs gap-2"
           onClick={onPush}
           disabled={!canPush}
           title={

@@ -11,14 +11,14 @@
  *   fragment flow does (localStorage + session cache via
  *   `setWebAuthToken`) and re-probes: invalid token → `invalid` + stays
  *   `unauthorized`; valid token → `ok`;
- * - the projects loader stays parked (no fetch, no premature `isLoaded`)
- *   while gated out, and runs once the gate flips `ok`.
+ * - the project registry hook stays parked (no watch, no premature `isLoaded`)
+ *   while gated out, and subscribes once the gate flips `ok`.
  */
 
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebTokenGateScreen } from '@/components/WebTokenGateScreen'
-import { useProjectsLoader } from '@/hooks/use-projects-persistence'
+import { useProjectRegistry } from '@/hooks/use-project-registry'
 import {
   _resetWebAuthGateForTesting,
   checkWebAuthGate,
@@ -281,29 +281,29 @@ describe('WebTokenGateScreen (component)', () => {
   })
 })
 
-describe('useProjectsLoader gating (#854 bootstrap continuation)', () => {
-  const { mockList, mockOnEvent, mockPersistenceRead } = vi.hoisted(() => ({
-    mockList: vi.fn(),
-    mockOnEvent: vi.fn(),
+describe('useProjectRegistry gating (#854 bootstrap continuation)', () => {
+  const { mockSubscribe, mockPersistenceRead } = vi.hoisted(() => ({
+    mockSubscribe: vi.fn(),
     mockPersistenceRead: vi.fn()
   }))
 
-  vi.mock('@/lib/web-server-api', () => ({
-    webServerProjects: { list: mockList }
-  }))
-
   vi.mock('@/lib/acp-transport', () => ({
-    getAcpTransport: () => ({ onEvent: mockOnEvent })
+    getAcpTransport: () => ({ watches: { subscribe: mockSubscribe } })
   }))
 
   vi.mock('@/lib/api', () => ({
-    persistenceApi: { read: mockPersistenceRead, write: vi.fn() },
+    persistenceApi: { read: mockPersistenceRead, write: vi.fn(), writeDebounced: vi.fn() },
     secureStorageApi: { getSecret: vi.fn(), setSecret: vi.fn(), deleteSecret: vi.fn() },
-    syncProjects: vi.fn(),
     terminalApi: {},
     worktreeApi: {},
     filesystemApi: {}
   }))
+
+  /** Hand the watch a full state, as the host does on subscribe. */
+  function deliverState(list: unknown): void {
+    const handlers = mockSubscribe.mock.calls[0][1] as { onState: (state: unknown) => void }
+    act(() => handlers.onState(list))
+  }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -311,8 +311,8 @@ describe('useProjectsLoader gating (#854 bootstrap continuation)', () => {
     clearWebAuthToken()
     window.localStorage.clear()
     useProjectStore.setState({ projects: [], activeProjectId: '', isLoaded: false })
-    mockPersistenceRead.mockResolvedValue({ success: false })
-    mockOnEvent.mockReturnValue(() => {})
+    mockPersistenceRead.mockResolvedValue({ success: false, code: 'KEY_NOT_FOUND', error: 'none' })
+    mockSubscribe.mockReturnValue(() => {})
   })
 
   afterEach(() => {
@@ -321,48 +321,41 @@ describe('useProjectsLoader gating (#854 bootstrap continuation)', () => {
     window.localStorage.clear()
   })
 
-  it('does not fetch the project mirror (or flip isLoaded) while the gate is unauthorized', async () => {
+  it('does not watch the projects (or flip isLoaded) while the gate is unauthorized', async () => {
     fetchMock.mockResolvedValueOnce(unauthorized())
     checkWebAuthGate()
     await waitFor(() => expect(getWebAuthGateState().status).toBe('unauthorized'))
 
-    const { unmount } = renderHook(() => useProjectsLoader())
-    // Give any (wrongly scheduled) fetch a chance to fire.
+    const { unmount } = renderHook(() => useProjectRegistry())
+    // Give any (wrongly scheduled) subscription a chance to happen.
     await act(async () => {
       await Promise.resolve()
     })
 
-    expect(mockList).not.toHaveBeenCalled()
+    expect(mockSubscribe).not.toHaveBeenCalled()
     expect(useProjectStore.getState().isLoaded).toBe(false)
     unmount()
   })
 
-  it('fetches and flips isLoaded once the gate resolves ok after a token submission', async () => {
+  it('watches and flips isLoaded once the gate resolves ok after a token submission', async () => {
     fetchMock.mockResolvedValueOnce(unauthorized())
     checkWebAuthGate()
     await waitFor(() => expect(getWebAuthGateState().status).toBe('unauthorized'))
 
-    mockList.mockResolvedValue({
-      success: true,
-      data: { projects: [], defaultProjectId: null }
-    })
-    renderHook(() => useProjectsLoader())
+    renderHook(() => useProjectRegistry())
     await act(async () => {
       await Promise.resolve()
     })
-    expect(mockList).not.toHaveBeenCalled()
+    expect(mockSubscribe).not.toHaveBeenCalled()
 
-    // Valid token submitted → gate flips ok → the loader (re)runs.
+    // Valid token submitted → gate flips ok → the hook (re)runs.
     fetchMock.mockResolvedValueOnce(jsonResponse(projectsPayload))
     await act(async () => {
       await submitWebAuthToken('good-token')
     })
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-    })
 
-    await waitFor(() => expect(mockList).toHaveBeenCalled())
+    await waitFor(() => expect(mockSubscribe).toHaveBeenCalled())
+    deliverState({ projects: [], defaultProjectId: null })
     await waitFor(() => expect(useProjectStore.getState().isLoaded).toBe(true))
   })
 
@@ -371,12 +364,9 @@ describe('useProjectsLoader gating (#854 bootstrap continuation)', () => {
     checkWebAuthGate()
     await waitFor(() => expect(getWebAuthGateState().status).toBe('ok'))
 
-    mockList.mockResolvedValue({
-      success: true,
-      data: { projects: [], defaultProjectId: null }
-    })
-    renderHook(() => useProjectsLoader())
-    await waitFor(() => expect(mockList).toHaveBeenCalled())
+    renderHook(() => useProjectRegistry())
+    await waitFor(() => expect(mockSubscribe).toHaveBeenCalled())
+    deliverState({ projects: [], defaultProjectId: null })
     await waitFor(() => expect(useProjectStore.getState().isLoaded).toBe(true))
   })
 })

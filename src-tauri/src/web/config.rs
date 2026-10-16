@@ -22,18 +22,27 @@ fn trimmed_env_path(key: &str) -> Option<PathBuf> {
     })
 }
 
-/// Default idle-agent reap window in seconds (15 min) — the value the
-/// standalone server used before the window became a [`ServerConfig`] field.
-pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 900;
+/// Default idle-agent reap window in seconds (30 min). The one definition the
+/// standalone server and the desktop host both read; no client holds a copy.
+pub const DEFAULT_AGENT_IDLE_WINDOW_SECS: u64 = 1800;
+/// Default per-project terminal cap. The host enforces it on every spawn
+/// carrier; the global cap of 30 is fixed in the PTY manager.
+pub const DEFAULT_MAX_TERMINALS_PER_PROJECT: usize = 10;
 /// Default reliable-queue overflow tolerance per client.
 pub const DEFAULT_OVERFLOW_TOLERANCE: usize = 15;
 /// Default command-receipt retention in seconds (10 min).
 pub const DEFAULT_RECEIPT_RETENTION_SECS: u64 = 600;
+/// Default age after which an unseen, absent device's store partition is
+/// garbage collected: 90 days.
+pub const DEFAULT_PARTITION_GC_AGE_SECS: u64 = 90 * 24 * 60 * 60;
+/// Default per-device store partition byte budget: 16 MiB.
+pub const DEFAULT_PARTITION_BYTE_BUDGET: u64 = 16 * 1024 * 1024;
 /// Longest command-receipt retention the host honors (7 days); a larger
 /// `--receipt-retention-secs` is clamped to it at startup.
 pub const MAX_RECEIPT_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 const AGENT_IDLE_WINDOW_ENV: &str = "TERMUL_AGENT_IDLE_REAP_SECS";
+const MAX_TERMINALS_PER_PROJECT_ENV: &str = "TERMUL_MAX_TERMINALS_PER_PROJECT";
 const PARTITION_GC_AGE_ENV: &str = "TERMUL_PARTITION_GC_AGE_SECS";
 const PARTITION_BYTE_BUDGET_ENV: &str = "TERMUL_PARTITION_BYTE_BUDGET";
 
@@ -74,6 +83,64 @@ where
             None
         }
     }
+}
+
+/// The idle-agent window for the desktop host, which has no CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DesktopAgentIdleWindow {
+    pub secs: u64,
+    /// `true` when `$TERMUL_AGENT_IDLE_REAP_SECS` supplied `secs`. That value
+    /// stays locked: App Preferences cannot move the live window.
+    pub from_env: bool,
+}
+
+/// Lock label for a server baseline. `None` when Settings may change it.
+#[must_use]
+pub fn server_agent_idle_window_lock(cfg: &ServerConfig) -> Option<&'static str> {
+    if !cfg.agent_idle_window_locked {
+        return None;
+    }
+    let from_env = desktop_agent_idle_window_secs();
+    if from_env.from_env && from_env.secs == cfg.agent_idle_window_secs {
+        Some("env")
+    } else {
+        Some("operator")
+    }
+}
+
+/// `$TERMUL_AGENT_IDLE_REAP_SECS` → [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (1800).
+/// An invalid env value is ignored with a logged warning.
+#[must_use]
+pub fn desktop_agent_idle_window_secs() -> DesktopAgentIdleWindow {
+    let mut warnings = Vec::new();
+    let from_env = positive_env::<u64>(AGENT_IDLE_WINDOW_ENV, &mut warnings);
+    for warning in warnings {
+        log::warn!(target: "termul::web::agent_reaper", "{warning}");
+    }
+    match from_env {
+        Some(secs) => DesktopAgentIdleWindow {
+            secs,
+            from_env: true,
+        },
+        None => DesktopAgentIdleWindow {
+            secs: DEFAULT_AGENT_IDLE_WINDOW_SECS,
+            from_env: false,
+        },
+    }
+}
+
+/// The per-project terminal cap for the desktop host, which has no CLI:
+/// `$TERMUL_MAX_TERMINALS_PER_PROJECT` → [`DEFAULT_MAX_TERMINALS_PER_PROJECT`].
+/// An invalid env value is ignored with a logged warning.
+#[must_use]
+pub fn desktop_max_terminals_per_project() -> usize {
+    let mut warnings = Vec::new();
+    let value = positive_env::<usize>(MAX_TERMINALS_PER_PROJECT_ENV, &mut warnings)
+        .unwrap_or(DEFAULT_MAX_TERMINALS_PER_PROJECT);
+    for warning in warnings {
+        log::warn!("{warning}");
+    }
+    value
 }
 
 /// Next CLI token as a flag's value, or the shared `missing value` error.
@@ -223,51 +290,30 @@ pub fn default_projects_file() -> Option<PathBuf> {
     None
 }
 
-/// Resolve the default seed root registered as the one project when the
-/// registry is empty. The `/fs/*` routes are intentionally unconfined
-/// (ADR-007); the operation routes are bounded by the registry via
-/// `git_api::ensure_within_project_boundary`.
-///
-/// Prefers `$TERMUL_PROJECT_ROOT` when set; otherwise falls back to the
-/// current user's home directory (`$HOME` on Unix, `%USERPROFILE%` on
-/// Windows). The fallback is intentionally permissive enough to allow
-/// ordinary project-creation flows under the user's own account — tightening
-/// to a per-project subtree is left to the host application or a future
-/// per-request override.
-///
-/// `None` is returned only when no home directory is discoverable and the
-/// env var is unset; callers should treat that as a fatal startup error.
-pub fn default_project_root() -> Option<PathBuf> {
-    if let Ok(env_root) = std::env::var("TERMUL_PROJECT_ROOT") {
-        let trimmed = env_root.trim();
-        if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
-        }
-    }
-    // `dirs` is not in the dep tree; resolve the home dir via std-only env
-    // vars (HOME on Unix, USERPROFILE on Windows). This avoids pulling in a
-    // new crate just for one call site.
-    #[cfg(unix)]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-    #[cfg(not(any(unix, windows)))]
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    home
+/// Environment fallback of the removed `--project-root` flag. Like the flag it
+/// only seeds one project while the registry is empty, and it queues the same
+/// startup warning.
+pub const PROJECT_ROOT_ENV: &str = "TERMUL_PROJECT_ROOT";
+
+/// The startup warning for the removed `--project-root` option (or its
+/// `$TERMUL_PROJECT_ROOT` fallback): there is no single host project root any
+/// more; the value only seeds one in-memory project while the registry has no
+/// usable project. `source` names where the value came from.
+fn project_root_warning(source: &str) -> String {
+    format!(
+        "{source} is a removed option: it only seeds one project while the project registry \
+         is empty; add projects to the registry instead and remove it from the launch command"
+    )
 }
 
 /// Validate a raw project-root path and return its canonical absolute form.
 ///
-/// Used at every entry point that constructs a `ServerConfig::project_root`
-/// (the `from_args` `--project-root` flag, the desktop shared-live host's
-/// `default_project_root()` fallback, the standalone `termul-server`
-/// binary) so the seeded project (and the registry-only boundary in
-/// `git_api::ensure_within_project_boundary`) can rely on `project_root`
-/// being a real, accessible directory rather than a path string that only
-/// resolves correctly at the first request. The `/fs/*` browse/read routes
-/// are intentionally broader (no boundary — ADR-007).
+/// Used where a `ServerConfig::seed_project_root` is constructed (the
+/// removed `--project-root` flag and its `$TERMUL_PROJECT_ROOT` fallback) so
+/// the seeded project can rely on being a real, accessible directory rather
+/// than a path string that only resolves correctly at the first request. The
+/// `/fs/*` browse/read routes are intentionally broader (no boundary —
+/// ADR-007).
 ///
 /// Rejects:
 /// - Paths that do not exist or are not accessible (canonicalize fails).
@@ -342,44 +388,54 @@ pub struct ServerConfig {
     pub event_log_capacity: usize,
     /// Idle window (seconds) after which the host reaps an idle agent.
     /// `--agent-idle-window-secs` → `$TERMUL_AGENT_IDLE_REAP_SECS` →
-    /// [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (900, the pre-existing server
-    /// value). The desktop host reads the same default const.
+    /// [`DEFAULT_AGENT_IDLE_WINDOW_SECS`] (1800). The desktop host reads the
+    /// same env var and default through [`desktop_agent_idle_window_secs`].
     pub agent_idle_window_secs: u64,
+    /// `true` when a flag or `$TERMUL_AGENT_IDLE_REAP_SECS` fixed the window.
+    /// Settings can change the live window only when this is `false`.
+    pub agent_idle_window_locked: bool,
     /// Outbound-queue overflow tolerance per client: consecutive failed
     /// enqueues before a peer that stopped draining is closed.
     /// `--overflow-tolerance` → [`DEFAULT_OVERFLOW_TOLERANCE`] (15). Read by
     /// `serve_router` into the connection runtime every `/ws` socket uses.
     pub overflow_tolerance: usize,
+    /// Per-project terminal cap enforced by the PTY manager on every spawn.
+    /// `--max-terminals-per-project` → `$TERMUL_MAX_TERMINALS_PER_PROJECT` →
+    /// [`DEFAULT_MAX_TERMINALS_PER_PROJECT`] (10). The desktop host reads the
+    /// same env var and default through [`desktop_max_terminals_per_project`].
+    pub max_terminals_per_project: usize,
     /// How long the command ledger keeps a command's outcome, in seconds
     /// (bare command ids are kept six times as long).
     /// `--receipt-retention-secs` → [`DEFAULT_RECEIPT_RETENTION_SECS`] (600).
     /// `termul-server` builds its ledger from it; the desktop shared-live host
     /// uses the default.
     pub receipt_retention_secs: u64,
-    /// Age (seconds) after which an unused per-device partition is garbage
-    /// collected. `None` (unset) until the device-state work picks a value;
-    /// `--partition-gc-age-secs` → `$TERMUL_PARTITION_GC_AGE_SECS`.
-    pub partition_gc_age_secs: Option<u64>,
-    /// Per-device partition byte budget. `None` (unset) until the
-    /// device-state work picks a value; `--partition-byte-budget` →
-    /// `$TERMUL_PARTITION_BYTE_BUDGET`. Reserved: no runtime code reads it
-    /// yet.
-    pub partition_byte_budget: Option<u64>,
+    /// Age (seconds) after which an unused per-device store partition is
+    /// garbage collected. `--partition-gc-age-secs` →
+    /// `$TERMUL_PARTITION_GC_AGE_SECS` → [`DEFAULT_PARTITION_GC_AGE_SECS`]
+    /// (90 days). Read by the host's [`crate::web::store::StorePolicy`].
+    pub partition_gc_age_secs: u64,
+    /// Per-device store partition byte budget. `--partition-byte-budget` →
+    /// `$TERMUL_PARTITION_BYTE_BUDGET` → [`DEFAULT_PARTITION_BYTE_BUDGET`]
+    /// (16 MiB). A write that would push a partition past it is refused
+    /// `STORE_PARTITION_FULL`.
+    pub partition_byte_budget: u64,
     /// Startup warnings gathered while parsing: removed flags that are still
     /// accepted and ignored, and invalid tunable env values that were
     /// ignored. Tracing is initialised after parsing, so
     /// `server_main` emits each with `tracing::warn!` right after
     /// `init_tracing`. Empty for programmatic constructions.
     pub deprecation_warnings: Vec<String>,
-    /// Seed root: when the project registry is empty at startup, one project
-    /// is registered at this path (see
-    /// `ProjectRegistry::seed_root_if_no_usable_project`) so the registry-only boundary
-    /// (`git_api::ensure_within_project_boundary`) does not reject everything.
-    /// It is NOT a boundary by itself — a non-empty registry ignores it. The
-    /// `/fs/*` browse/read routes are intentionally not confined (ADR-007
-    /// breadth policy). Defaults to the user's home directory when unset (see
-    /// [`default_project_root`]).
-    pub project_root: PathBuf,
+    /// Seed root from the removed `--project-root` flag (or
+    /// `$TERMUL_PROJECT_ROOT`): when the project registry has no usable
+    /// project at startup, one in-memory project is registered at this path
+    /// (see `ProjectRegistry::seed_root_if_no_usable_project`) so the
+    /// registry-only boundary (`git_api::ensure_within_project_boundary`) does
+    /// not reject everything. It is NOT a boundary and NOT a host project root:
+    /// a registry with a usable project ignores it, and `None` (the default,
+    /// and always on the desktop host) seeds nothing. Projects are added to
+    /// the registry through the project commands.
+    pub seed_project_root: Option<PathBuf>,
     /// Server-owned VFS-roots registry file (VPS mode, Story 4.1). The
     /// standalone `termul-server` binary loads this at startup and seeds the
     /// in-memory [`crate::web::project_registry::ProjectRegistry`] from it.
@@ -402,14 +458,6 @@ pub struct ServerConfig {
     /// was passed → the platform state dir (issue #839 / #879). Desktop
     /// shared-live uses `None` and does not consult this resolver.
     pub sessions_dir: Option<PathBuf>,
-    /// CAP-5 / Story 5: workspace-manifests root override. `None` means
-    /// "use `<service_account_state_dir>/workspace-manifests`" — the
-    /// standalone binary resolves this in `server_main.rs` so the
-    /// `ServerConfig` struct itself stays free of the service-account-state
-    /// path resolution (the desktop shared-live path never reads this field;
-    /// it constructs its own `WorkspaceManifestService` under
-    /// `<app_data_dir>/workspace-manifests`).
-    pub workspace_manifests_dir: Option<PathBuf>,
     /// CAP-6 / Story 8: acp-catalog root override. `None` means "use
     /// `<service_account_state_dir>/acp-catalog`" — the standalone binary
     /// resolves this in `server_main.rs`. The desktop shared-live path never
@@ -425,9 +473,9 @@ pub struct ServerConfig {
     pub store_file: Option<PathBuf>,
     /// Operator opt-in: admit non-loopback peers on the loopback-guarded
     /// write routes (`/fs/*` writes, `/git/*` writes, `/worktree/*` writes,
-    /// `/workspace/*` write+delete, `/log/frontend-error`,
-    /// `/projects/default`, `/acp/install`). Default `false` keeps the
-    /// CWE-306 loopback guard on for any `0.0.0.0` bind. Only the standalone
+    /// `/log/frontend-error`, `/projects/default`, `/acp/install`). Default
+    /// `false` keeps the CWE-306 loopback guard on for any `0.0.0.0` bind.
+    /// Only the standalone
     /// `termul-server` honors `--allow-remote-writes` /
     /// `TERMUL_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
     /// always sets this `false` (LAN clients remain view-only for
@@ -480,17 +528,16 @@ impl ServerConfig {
     }
 
     /// The platform service-account state directory. Used by the standalone
-    /// `termul-server` binary to resolve a default workspace-manifests root
-    /// (`<state dir>/workspace-manifests`) when `--workspace-manifests-dir` is
-    /// absent. Mirrors the per-platform branches of
+    /// `termul-server` binary to resolve the default roots of its durable
+    /// stores (`<state dir>/acp-catalog`, `<state dir>/store.json`, …).
+    /// Mirrors the per-platform branches of
     /// [`default_sessions_dir`]'s parent dir so the two durable stores live
     /// side-by-side under the same service-account state tree.
     ///
     /// Falls back to `std::env::temp_dir()` when no platform state dir is
     /// discoverable — the standalone binary then surfaces a startup warning
-    /// (the workspace manifests would land in the OS temp dir, which survives
-    /// the process but not a reboot). Used as the default base for
-    /// `WorkspaceManifestService::open` in `server_main.rs`.
+    /// (the stores would land in the OS temp dir, which survives
+    /// the process but not a reboot).
     ///
     /// Patch 15: empty env var values (`XDG_STATE_HOME=""`, `HOME=""`,
     /// `LOCALAPPDATA=""`) are filtered out so the manifests do not land in a
@@ -547,6 +594,7 @@ impl ServerConfig {
         let mut event_log_capacity: usize = 4096;
         let mut agent_idle_window_secs: Option<u64> = None;
         let mut overflow_tolerance: usize = DEFAULT_OVERFLOW_TOLERANCE;
+        let mut max_terminals_per_project: Option<usize> = None;
         let mut receipt_retention_secs: u64 = DEFAULT_RECEIPT_RETENTION_SECS;
         // The last requested value above the cap; the clamp warning is queued
         // after parsing so a repeated flag cannot leave a stale warning.
@@ -554,12 +602,9 @@ impl ServerConfig {
         let mut partition_gc_age_secs: Option<u64> = None;
         let mut partition_byte_budget: Option<u64> = None;
         let mut deprecation_warnings: Vec<String> = Vec::new();
-        // PR-S4: when `--project-root` is absent, fall back to the env var or
-        // the user's home directory via `default_project_root()`. The
-        // resolved value is run through `resolve_and_validate_project_root`
-        // (below, after the match block) so a misconfigured environment
-        // fails fast at startup rather than leaking through to the
-        // boundary check.
+        // The removed `--project-root` flag: still parsed (AD-18, one minor
+        // release) and validated, but it only seeds one project while the
+        // registry is empty. There is no default (no `$HOME` seed).
         let mut project_root: Option<PathBuf> = None;
         // Story 4.1: the VFS-roots registry file. Parsed but NOT validated
         // against the filesystem here (a missing file loads as an empty
@@ -569,14 +614,8 @@ impl ServerConfig {
         // the HOME/XDG platform default (`default_projects_file`).
         let mut projects_file: Option<PathBuf> = None;
         let mut sessions_dir: Option<PathBuf> = None;
-        // CAP-5 / Story 5: workspace-manifests root override. `None` means
-        // "resolve <state dir>/workspace-manifests at startup" in
-        // `server_main.rs`. Parsed but NOT validated against the filesystem
-        // here (the service creates the directory if missing; a present
-        // non-directory fails loudly at `WorkspaceManifestService::open`).
-        let mut workspace_manifests_dir: Option<PathBuf> = None;
-        // CAP-6 / Story 8: acp-catalog root override. Same pattern as
-        // `workspace_manifests_dir` — `None` means resolve at startup.
+        // CAP-6 / Story 8: acp-catalog root override. `None` means resolve
+        // `<state dir>/acp-catalog` at startup.
         let mut acp_catalog_dir: Option<PathBuf> = None;
         // Issue #613: server-side generic key-value store file override.
         // `None` means resolve `<service_account_state_dir>/store.json` at
@@ -585,7 +624,7 @@ impl ServerConfig {
         // Explicit service-account state dir override (`--state-dir`); `None`
         // keeps the env-based resolution in `service_account_state_dir`.
         let mut state_dir: Option<PathBuf> = None;
-        // Operator opt-in for non-loopback fs/git/workspace write peers
+        // Operator opt-in for non-loopback fs/git write peers
         // (CWE-306 guard relaxation). CLI flag wins over env; an
         // unset/invalid env var stays `false` (lenient — no fatal startup).
         let mut allow_remote_writes = false;
@@ -650,6 +689,13 @@ impl ServerConfig {
                     agent_idle_window_secs =
                         Some(parse_positive::<u64>("--agent-idle-window-secs", value.as_ref())?);
                 }
+                "--max-terminals-per-project" => {
+                    let value = require_value(&mut iter, "--max-terminals-per-project")?;
+                    max_terminals_per_project = Some(parse_positive::<usize>(
+                        "--max-terminals-per-project",
+                        value.as_ref(),
+                    )?);
+                }
                 "--overflow-tolerance" => {
                     let value = require_value(&mut iter, "--overflow-tolerance")?;
                     overflow_tolerance =
@@ -681,7 +727,9 @@ impl ServerConfig {
                 // non-numeric or missing value must not abort startup. One
                 // warning each is queued for `server_main` to emit once
                 // tracing is initialised.
-                "--permission-timeout" | "--permission-reconnect-grace" => {
+                "--permission-timeout"
+                | "--permission-reconnect-grace"
+                | "--workspace-manifests-dir" => {
                     let value = take_removed_flag_value(&mut iter);
                     deprecation_warnings.push(removed_flag_warning(arg, value.as_deref()));
                 }
@@ -706,6 +754,7 @@ impl ServerConfig {
                     // so the boundary check is stable.
                     let validated = resolve_and_validate_project_root(Path::new(trimmed))
                         .map_err(ParseCliError::Message)?;
+                    deprecation_warnings.push(project_root_warning("--project-root"));
                     project_root = Some(validated);
                 }
                 "--sessions-dir" => {
@@ -719,18 +768,6 @@ impl ServerConfig {
                         ));
                     }
                     sessions_dir = Some(PathBuf::from(trimmed));
-                }
-                "--workspace-manifests-dir" => {
-                    let value = iter.next().ok_or_else(|| {
-                        ParseCliError::Message("missing value for --workspace-manifests-dir".into())
-                    })?;
-                    let trimmed = value.as_ref().trim();
-                    if trimmed.is_empty() {
-                        return Err(ParseCliError::Message(
-                            "invalid --workspace-manifests-dir '': must be a non-empty path".into(),
-                        ));
-                    }
-                    workspace_manifests_dir = Some(PathBuf::from(trimmed));
                 }
                 "--acp-catalog-dir" => {
                     let value = iter.next().ok_or_else(|| {
@@ -822,23 +859,22 @@ impl ServerConfig {
             }
         }
 
-        let project_root = match project_root {
-            Some(p) => p,
-            None => {
-                let raw = default_project_root().ok_or_else(|| {
-                    ParseCliError::Message(
-                        "could not determine project root: \
-                         set --project-root, $TERMUL_PROJECT_ROOT, or $HOME"
-                            .into(),
+        let seed_project_root = match project_root {
+            Some(validated) => Some(validated),
+            None => match std::env::var(PROJECT_ROOT_ENV)
+                .ok()
+                .map(|raw| raw.trim().to_string())
+                .filter(|raw| !raw.is_empty())
+            {
+                Some(raw) => {
+                    deprecation_warnings.push(project_root_warning("$TERMUL_PROJECT_ROOT"));
+                    Some(
+                        resolve_and_validate_project_root(Path::new(&raw))
+                            .map_err(ParseCliError::Message)?,
                     )
-                })?;
-                // Validate the env-var / $HOME fallback the same way we
-                // validate an explicit --project-root: it must exist and
-                // be a directory. A misconfigured $HOME (deleted account,
-                // broken symlink, etc.) now fails fast at startup instead
-                // of leaking through and confusing the boundary check.
-                resolve_and_validate_project_root(&raw).map_err(ParseCliError::Message)?
-            }
+                }
+                None => None,
+            },
         };
 
         // Story 4.1 / issue #839 / #879: resolve the projects registry file.
@@ -933,28 +969,43 @@ impl ServerConfig {
         // Tunables: `--flag` wins, then the env var (where one exists), then
         // the shared `DEFAULT_*` const. An invalid env value is ignored with
         // a startup warning; an invalid flag value already failed above.
+        let agent_idle_from_flag = agent_idle_window_secs.is_some();
+        let agent_idle_from_env = if agent_idle_from_flag {
+            None
+        } else {
+            positive_env::<u64>(AGENT_IDLE_WINDOW_ENV, &mut deprecation_warnings)
+        };
+        let agent_idle_window_locked = agent_idle_from_flag || agent_idle_from_env.is_some();
         let agent_idle_window_secs = agent_idle_window_secs
-            .or_else(|| positive_env::<u64>(AGENT_IDLE_WINDOW_ENV, &mut deprecation_warnings))
+            .or(agent_idle_from_env)
             .unwrap_or(DEFAULT_AGENT_IDLE_WINDOW_SECS);
+        let max_terminals_per_project = max_terminals_per_project
+            .or_else(|| {
+                positive_env::<usize>(MAX_TERMINALS_PER_PROJECT_ENV, &mut deprecation_warnings)
+            })
+            .unwrap_or(DEFAULT_MAX_TERMINALS_PER_PROJECT);
         let partition_gc_age_secs = partition_gc_age_secs
-            .or_else(|| positive_env::<u64>(PARTITION_GC_AGE_ENV, &mut deprecation_warnings));
+            .or_else(|| positive_env::<u64>(PARTITION_GC_AGE_ENV, &mut deprecation_warnings))
+            .unwrap_or(DEFAULT_PARTITION_GC_AGE_SECS);
         let partition_byte_budget = partition_byte_budget
-            .or_else(|| positive_env::<u64>(PARTITION_BYTE_BUDGET_ENV, &mut deprecation_warnings));
+            .or_else(|| positive_env::<u64>(PARTITION_BYTE_BUDGET_ENV, &mut deprecation_warnings))
+            .unwrap_or(DEFAULT_PARTITION_BYTE_BUDGET);
 
         Ok(Self {
             host,
             port,
             event_log_capacity,
             agent_idle_window_secs,
+            agent_idle_window_locked,
             overflow_tolerance,
+            max_terminals_per_project,
             receipt_retention_secs,
             partition_gc_age_secs,
             partition_byte_budget,
             deprecation_warnings,
-            project_root,
+            seed_project_root,
             projects_file,
             sessions_dir: Some(sessions_dir),
-            workspace_manifests_dir,
             acp_catalog_dir,
             store_file,
             state_dir,

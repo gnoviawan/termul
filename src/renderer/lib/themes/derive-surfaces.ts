@@ -29,6 +29,8 @@ export function deriveSurfaces(
     secondary: lightenHex(palette.neutral, 0.08),
     muted: lightenHex(palette.neutral, 0.11),
     border: lightenHex(palette.neutral, 0.14),
-    sidebar: mixHex(palette.neutral, '#000000', 0.04)
+    // A visible step above the canvas, like the default dark ramp, so the
+    // Rail (sidebar) reads apart from the Side panel (background).
+    sidebar: lightenHex(palette.neutral, 0.04)
   }
 }

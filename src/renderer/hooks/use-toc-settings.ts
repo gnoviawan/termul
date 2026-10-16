@@ -1,11 +1,15 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { useSharedKeySync } from '@/lib/shared-key-sync'
 import { useTocSettingsStore } from '@/stores/toc-settings-store'
 import type { TocSettings } from '@/types/settings'
-import { DEFAULT_TOC_SETTINGS, TOC_SETTINGS_KEY } from '@/types/settings'
+import { DEFAULT_TOC_SETTINGS } from '@/types/settings'
 
 let loadPromise: Promise<void> | null = null
 let hasSubscribedToPersistence = false
+/** True while a change from another device is applied: it must not be saved again. */
+let applyingRemoteChange = false
 
 async function initializeTocSettings(
   setSettings: (settings: TocSettings) => void,
@@ -13,7 +17,7 @@ async function initializeTocSettings(
   setLoadFailed: (failed: boolean) => void
 ): Promise<void> {
   try {
-    const result = await persistenceApi.read<TocSettings>(TOC_SETTINGS_KEY)
+    const result = await persistenceApi.read<TocSettings>(PersistenceKeys.tocSettings)
 
     if (result.success && result.data) {
       setSettings({
@@ -45,14 +49,25 @@ export function useTocSettings(): void {
   const setLoaded = useTocSettingsStore((state) => state.setLoaded)
   const setLoadFailed = useTocSettingsStore((state) => state.setLoadFailed)
 
+  // A change another device or tab saved: show it without a reload.
+  useSharedKeySync<TocSettings>(PersistenceKeys.tocSettings, (change) => {
+    if (!change.exists || !change.data) return
+    applyingRemoteChange = true
+    try {
+      setSettings({ ...DEFAULT_TOC_SETTINGS, ...change.data })
+    } finally {
+      applyingRemoteChange = false
+    }
+  })
+
   useEffect(() => {
     if (!hasSubscribedToPersistence) {
       useTocSettingsStore.subscribe((state) => {
-        if (!state.isLoaded || state.loadFailed) {
+        if (!state.isLoaded || state.loadFailed || applyingRemoteChange) {
           return
         }
 
-        void persistenceApi.writeDebounced(TOC_SETTINGS_KEY, state.settings)
+        void persistenceApi.writeDebounced(PersistenceKeys.tocSettings, state.settings)
       })
 
       hasSubscribedToPersistence = true

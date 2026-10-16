@@ -4,10 +4,11 @@ import { logFrontendError } from '@/lib/log-api'
 const PROMPT_SELECTOR = '[data-approval-prompt]'
 const COMPOSER_SELECTOR = '[data-chat-composer="true"]'
 const QUESTION_PROMPT_SELECTOR = '[data-approval-prompt^="question:"]'
-// The stepper's pager and × buttons precede the options, so name the options
-// first (`aria-pressed` toggles) and fall back to the first enabled button
-// (× Cancel) for a question with no options.
+// The stepper's pager, minimize and × buttons precede the options, so name the
+// options first (`aria-pressed` toggles), then × Cancel for a question with no
+// options, then the first enabled button (Resume on a minimized panel).
 const QUESTION_FIRST_OPTION_SELECTOR = `${QUESTION_PROMPT_SELECTOR} button[aria-pressed]`
+const QUESTION_CANCEL_SELECTOR = `${QUESTION_PROMPT_SELECTOR} button[data-question-cancel]`
 const QUESTION_FIRST_BUTTON_SELECTOR = `${QUESTION_PROMPT_SELECTOR} button:not(:disabled)`
 // Chat tabs stay mounted while hidden (PaneContent), so a question can sit in a
 // pane the user is not looking at; only the visible one counts.
@@ -15,14 +16,16 @@ const VISIBLE_CHAT_TAB_SELECTOR = '[data-chat-tab-state="visible"]'
 
 /**
  * The control to focus in an open question inside `root`: its first option
- * (`aria-pressed` toggle), else its first enabled button (× Cancel) for a
- * question with no options. Never just the first button: the stepper renders
- * its pager and × before the options. Null when no question is open.
+ * (`aria-pressed` toggle), else its × Cancel for a question with no options,
+ * else its first enabled button (Resume while minimized). Never just the first
+ * button: the stepper renders its pager, minimize and × before the options.
+ * Null when no question is open.
  */
 export function findQuestionFocusTarget(root: ParentNode | null | undefined): HTMLElement | null {
   if (!root) return null
   return (
     root.querySelector<HTMLElement>(QUESTION_FIRST_OPTION_SELECTOR) ??
+    root.querySelector<HTMLElement>(QUESTION_CANCEL_SELECTOR) ??
     root.querySelector<HTMLElement>(QUESTION_FIRST_BUTTON_SELECTOR)
   )
 }
