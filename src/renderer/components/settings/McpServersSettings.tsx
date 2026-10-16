@@ -496,8 +496,8 @@ export function McpServersSettings(): React.JSX.Element {
         <p className="font-medium text-foreground">Experimental MCP-over-ACP</p>
         <p className="mt-1">
           Agents may advertise an experimental <code>mcpCapabilities.acp</code> capability. Termul
-          retains that capability for diagnostics, but no native ACP transport can be configured
-          until Termul has an in-process MCP server handler.
+          does not read it, and no native ACP transport can be configured until Termul has an
+          in-process MCP server handler.
         </p>
       </div>
 
