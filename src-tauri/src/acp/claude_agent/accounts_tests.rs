@@ -138,6 +138,71 @@ async fn a_signed_out_project_account_names_the_account() {
     assert!(!config.env.contains_key("CLAUDE_CONFIG_DIR"));
 }
 
+fn with_env_config_dir(entrypoint: &Path, dir: &str) -> AgentConfig {
+    let mut config = managed(entrypoint);
+    config
+        .env
+        .insert("CLAUDE_CONFIG_DIR".to_string(), dir.to_string());
+    config
+}
+
+#[tokio::test]
+async fn a_project_env_config_dir_on_the_builtin_account_is_the_one_probed() {
+    let h = host(|_| None);
+    let mut config = with_env_config_dir(&h.entrypoint, "/home/me/.claude-work");
+    assert!(h
+        .service
+        .prepare_managed_config_for_project(&mut config, Some("office"))
+        .await
+        .unwrap());
+    assert_eq!(
+        config.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+        Some("/home/me/.claude-work")
+    );
+    assert_eq!(
+        h.runtime.probed.lock().as_slice(),
+        &[Some(PathBuf::from("/home/me/.claude-work"))]
+    );
+}
+
+#[tokio::test]
+async fn a_project_env_config_dir_overrides_the_project_account() {
+    let h = host(|_| None);
+    let work = h.accounts.add("Work").unwrap();
+    h.accounts
+        .set_project_account("office", Some(&work.id))
+        .unwrap();
+    let mut config = with_env_config_dir(&h.entrypoint, "/home/me/.claude-work");
+    assert!(h
+        .service
+        .prepare_managed_config_for_project(&mut config, Some("office"))
+        .await
+        .unwrap());
+    assert_eq!(
+        config.env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+        Some("/home/me/.claude-work")
+    );
+    assert_eq!(
+        h.runtime.probed.lock().as_slice(),
+        &[Some(PathBuf::from("/home/me/.claude-work"))]
+    );
+}
+
+#[tokio::test]
+async fn a_signed_out_project_env_config_dir_names_the_project_env() {
+    let h = host(|_| Some(PathBuf::from("/home/me/.claude-work")));
+    let mut config = with_env_config_dir(&h.entrypoint, "/home/me/.claude-work");
+    let error = h
+        .service
+        .prepare_managed_config_for_project(&mut config, Some("office"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "The Claude profile set by CLAUDE_CONFIG_DIR in the project environment is not signed in. Run `claude auth login` with that CLAUDE_CONFIG_DIR, then retry."
+    );
+}
+
 #[tokio::test]
 async fn the_snapshot_reports_the_login_state_of_each_account() {
     let h = host(|accounts| {

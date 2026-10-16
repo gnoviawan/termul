@@ -5,7 +5,8 @@ vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: vi.fn(() => false) }))
 
 import { seedProjectStore } from '@/lib/test-utils/store'
 import type { Project } from '@/types/project'
-import { agentReuseKey } from '../acp-reuse-keys'
+import { agentReuseKey, detachedReuseKey } from '../acp-reuse-keys'
+import { ephemeralSessionIds } from './ephemeral-ids'
 import { _resetDefiniteSpawnRejectionsForTesting, ensureLiveAgent } from './shared-state'
 import type { AcpState } from './types'
 
@@ -28,7 +29,7 @@ function makeStore(config: Partial<Config> = {}) {
     ],
     configToLiveAgent: {} as Record<string, string>,
     agentStatus: {} as Record<string, string>,
-    sessions: {},
+    sessions: {} as Record<string, { id: string; agentId: string; status: string }>,
     warmingConfigs: {},
     spawnAgent: vi.fn(),
     killAgent: vi.fn(async () => {})
@@ -115,14 +116,13 @@ describe('ensureLiveAgent — project environment variables (#1118)', () => {
     expect(spawnedEnv(state.spawnAgent)).toEqual({ FOO: 'bar' })
   })
 
-  it('replaces a warm agent whose project env changed instead of reusing it', async () => {
+  it('gives the next chat a fresh agent when the project env changed and leaves the old one running', async () => {
     seedProjectStore([project()])
     const { state, get, set } = makeStore()
     state.spawnAgent.mockResolvedValueOnce('agent-1').mockResolvedValueOnce('agent-2')
 
     expect(await ensureLiveAgent(get, set, 'cfg-1', '/work/app')).toBe('agent-1')
     state.agentStatus['agent-1'] = 'connected'
-    // Unchanged env: the warm agent is reused.
     expect(await ensureLiveAgent(get, set, 'cfg-1', '/work/app')).toBe('agent-1')
     expect(state.spawnAgent).toHaveBeenCalledTimes(1)
 
@@ -130,11 +130,67 @@ describe('ensureLiveAgent — project environment variables (#1118)', () => {
       project({ envVars: [{ key: 'CLAUDE_CONFIG_DIR', value: '/home/me/.claude-personal' }] })
     ])
     expect(await ensureLiveAgent(get, set, 'cfg-1', '/work/app')).toBe('agent-2')
-    expect(state.killAgent).toHaveBeenCalledWith('agent-1')
     expect(spawnedEnv(state.spawnAgent, 1)).toEqual({
       CLAUDE_CONFIG_DIR: '/home/me/.claude-personal'
     })
     expect(state.configToLiveAgent[WORK_KEY]).toBe('agent-2')
+    // A session/new on agent-1 may still be in flight with no session in view.
+    expect(state.killAgent).not.toHaveBeenCalled()
+    expect(state.configToLiveAgent[detachedReuseKey(WORK_KEY, 'agent-1')]).toBe('agent-1')
+  })
+
+  it('does not stop a commit message generation running on the stale agent', async () => {
+    seedProjectStore([project()])
+    const { state, get, set } = makeStore()
+    state.spawnAgent.mockResolvedValueOnce('agent-1').mockResolvedValueOnce('agent-2')
+    expect(await ensureLiveAgent(get, set, 'cfg-1', '/work/app')).toBe('agent-1')
+    state.agentStatus['agent-1'] = 'connected'
+    state.sessions = { 'commit-msg': { id: 'commit-msg', agentId: 'agent-1', status: 'active' } }
+    ephemeralSessionIds.add('commit-msg')
+
+    try {
+      seedProjectStore([
+        project({ envVars: [{ key: 'CLAUDE_CONFIG_DIR', value: '/home/me/.claude-personal' }] })
+      ])
+      expect(await ensureLiveAgent(get, set, 'cfg-1', '/work/app')).toBe('agent-2')
+      expect(state.killAgent).not.toHaveBeenCalled()
+      expect(state.configToLiveAgent[detachedReuseKey(WORK_KEY, 'agent-1')]).toBe('agent-1')
+    } finally {
+      ephemeralSessionIds.delete('commit-msg')
+    }
+  })
+
+  it('takes the env, the Account and the reuse key from the explicit project', async () => {
+    seedProjectStore([
+      project(),
+      project({
+        id: 'proj-2',
+        path: '/other',
+        envVars: [{ key: 'CLAUDE_CONFIG_DIR', value: '/home/me/.claude-other', enabled: true }]
+      })
+    ])
+    const { state, get, set } = makeStore()
+    state.spawnAgent.mockResolvedValue('agent-1')
+
+    await ensureLiveAgent(get, set, 'cfg-1', '/work/app', { projectId: 'proj-2' })
+    expect(spawnedEnv(state.spawnAgent)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-other' })
+    expect(state.spawnAgent.mock.calls[0]?.[1]).toBe('proj-2')
+    expect(state.configToLiveAgent[agentReuseKey('cfg-1', '/work/app', 'proj-2')]).toBe('agent-1')
+  })
+
+  it('gives a worktree outside the project root the project Account and reuse key', async () => {
+    seedProjectStore([
+      project({
+        worktrees: [{ id: 'wt', name: 'wt', branch: 'b', path: '/tmp/wt', createdAt: '' }]
+      })
+    ])
+    const { state, get, set } = makeStore()
+    state.spawnAgent.mockResolvedValue('agent-1')
+
+    await ensureLiveAgent(get, set, 'cfg-1', '/tmp/wt')
+    expect(spawnedEnv(state.spawnAgent)).toEqual({ CLAUDE_CONFIG_DIR: '/home/me/.claude-work' })
+    expect(state.spawnAgent.mock.calls[0]?.[1]).toBe('proj-1')
+    expect(state.configToLiveAgent[agentReuseKey('cfg-1', '/tmp/wt', 'proj-1')]).toBe('agent-1')
   })
 
   it('keeps reusing a live agent it did not spawn itself (no recorded launch)', async () => {
