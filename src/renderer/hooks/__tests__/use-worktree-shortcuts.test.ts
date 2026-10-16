@@ -5,7 +5,7 @@ import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import type { Project, Worktree } from '@/types/project'
-import { useWorktreeShortcuts } from '../use-worktree-shortcuts'
+import { useWorktreeShortcuts, WORKTREE_EVENTS } from '../use-worktree-shortcuts'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(async () => {}) }))
 
@@ -177,5 +177,41 @@ describe('useWorktreeShortcuts: default bindings', () => {
 
     next()
     expect(pick()).toBe('e:/p/.termul/worktrees/a')
+  })
+})
+
+describe('useWorktreeShortcuts: create worktree (issue #1184)', () => {
+  beforeEach(() => {
+    useKeyboardShortcutsStore.getState().resetAllShortcuts()
+  })
+
+  it('the Create Worktree binding opens the create flow for the active project', () => {
+    const received: unknown[] = []
+    const listener = (event: Event): void => {
+      received.push((event as CustomEvent).detail)
+    }
+    window.addEventListener(WORKTREE_EVENTS.OPEN_CREATE_MODAL, listener)
+    renderHook(() => useWorktreeShortcuts())
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'n',
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: true,
+        cancelable: true
+      })
+    )
+
+    window.removeEventListener(WORKTREE_EVENTS.OPEN_CREATE_MODAL, listener)
+    expect(received).toEqual([{ projectId: 'p1' }])
+  })
+
+  it('has no merge, sync or archive shortcut: their dialogs do not exist', () => {
+    const ids = Object.keys(useKeyboardShortcutsStore.getState().shortcuts)
+    expect(ids).not.toContain('worktreeMergeToMain')
+    expect(ids).not.toContain('worktreeSyncMain')
+    expect(ids).not.toContain('worktreeArchive')
+    expect(Object.keys(WORKTREE_EVENTS).sort()).toEqual(['OPEN_CREATE_MODAL', 'OPEN_TERMINAL'])
   })
 })

@@ -424,24 +424,6 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     description: 'Spawn a new terminal in the active worktree',
     defaultKey: 'ctrl+shift+alt+t'
   },
-  worktreeMergeToMain: {
-    id: 'worktreeMergeToMain',
-    label: 'Merge Worktree to Main',
-    description: 'Start merge workflow: worktree branch to main',
-    defaultKey: 'ctrl+shift+m'
-  },
-  worktreeSyncMain: {
-    id: 'worktreeSyncMain',
-    label: 'Sync Main into Worktree',
-    description: 'Start merge workflow: main into worktree branch',
-    defaultKey: 'ctrl+shift+alt+s'
-  },
-  worktreeArchive: {
-    id: 'worktreeArchive',
-    label: 'Archive Active Worktree',
-    description: 'Archive the current active worktree',
-    defaultKey: 'ctrl+shift+a'
-  },
   worktreeSwitchRoot: {
     id: 'worktreeSwitchRoot',
     label: 'Switch to Project Root',
