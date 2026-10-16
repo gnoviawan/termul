@@ -19,10 +19,11 @@
  * and `browser_consent_respond` rejects non-`main` callers.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { BROWSER_CONSENT_TITLE, browserConsentSummary } from '@/components/browser/consent-intent'
 import { ShieldAlert } from '@/components/icons'
 import { useAgentDisplayName } from '@/hooks/use-agent-display-name'
+import { useInterfaceOverlayOpen } from '@/hooks/use-native-webview-occlusion'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
@@ -39,6 +40,7 @@ export function BrowserConsentStrip({
   const pending = useAcpStore((s) => s.pendingBrowserConsents)
   const respond = useAcpStore((s) => s.respondBrowserConsent)
   const activeTab = useActiveTab()
+  const overlayOpen = useInterfaceOverlayOpen()
   const register = useConsentStripHost((s) => s.register)
   const unregister = useConsentStripHost((s) => s.unregister)
   const [respondedId, setRespondedId] = useState<string | null>(null)
@@ -54,7 +56,10 @@ export function BrowserConsentStrip({
   const first = Object.values(pending ?? {})[0]
   const agentName = useAgentDisplayName(first?.agentId)
   const hosting =
-    isTauriContext() && activeTab?.type === 'browser' && activeTab.browserTabId === browserTabId
+    isTauriContext() &&
+    !overlayOpen &&
+    activeTab?.type === 'browser' &&
+    activeTab.browserTabId === browserTabId
 
   // Boundary log (durable): once per request, record that the in-pane strip
   // owns this consent decision rather than the in-chat card fallbacks.
@@ -84,10 +89,7 @@ export function BrowserConsentStrip({
   const responded = respondedId === first.requestId
 
   return (
-    <div
-      className="flex shrink-0 items-center gap-2 border-l-2 border-warning border-b border-border bg-card px-3 py-1.5"
-      role="alert"
-    >
+    <AlertOnceStripFrame key={first.requestId} requestId={first.requestId}>
       <ShieldAlert size={14} className="shrink-0 text-warning" />
       <div className="min-w-0 flex-1 text-2xs">
         <span className="font-medium text-foreground">{BROWSER_CONSENT_TITLE}</span>{' '}
@@ -117,6 +119,31 @@ export function BrowserConsentStrip({
       >
         Allow for this session
       </button>
+    </AlertOnceStripFrame>
+  )
+}
+
+function AlertOnceStripFrame({
+  requestId,
+  children
+}: {
+  requestId: string
+  children: ReactNode
+}): React.JSX.Element {
+  const [isFirstMountForRequest] = useState(
+    () => !useConsentStripHost.getState().announcedRequestIds.has(requestId)
+  )
+  const markAnnounced = useConsentStripHost((s) => s.markAnnounced)
+  useEffect(() => markAnnounced(requestId), [requestId, markAnnounced])
+
+  return (
+    <div
+      className="flex shrink-0 items-center gap-2 border-l-2 border-warning border-b border-border bg-card px-3 py-1.5"
+      {...(isFirstMountForRequest
+        ? { role: 'alert' }
+        : { role: 'region', 'aria-label': BROWSER_CONSENT_TITLE })}
+    >
+      {children}
     </div>
   )
 }

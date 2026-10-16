@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Trash2 } from '@/components/icons'
 import { MarqueeText } from '@/components/ui/marquee-text'
-import { formatRelativeTimeFromMs } from '@/lib/git-time'
+import { formatRelativeTimeFromMs } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
 import { useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
 import { AgentGlyph } from './AgentGlyph'

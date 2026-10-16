@@ -37,63 +37,7 @@ vi.mock('./SSHHostEditor', () => ({
     open ? <div data-testid="ssh-host-editor" data-profile-id={profile?.id ?? ''} /> : null
 }))
 
-// Stub the Radix context-menu primitives: open on `contextmenu` (unless the
-// child prevented it), render items as buttons, close on select.
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
-    open: false,
-    setOpen: () => {}
-  })
-  return {
-    ContextMenu: ({ children }: { children: React.ReactNode }) => {
-      const [open, setOpen] = React.useState(false)
-      return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
-    },
-    ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => {
-      const { setOpen } = React.useContext(MenuCtx)
-      const child = children as React.ReactElement<{
-        onContextMenu?: (e: React.MouseEvent) => void
-      }>
-      return React.cloneElement(child, {
-        onContextMenu: (e: React.MouseEvent) => {
-          child.props.onContextMenu?.(e)
-          if (e.defaultPrevented) return
-          e.preventDefault()
-          setOpen(true)
-        }
-      })
-    },
-    ContextMenuContent: ({ children }: { children: React.ReactNode }) => {
-      const { open } = React.useContext(MenuCtx)
-      return open ? <div>{children}</div> : null
-    },
-    ContextMenuItem: ({
-      children,
-      onSelect,
-      variant
-    }: {
-      children: React.ReactNode
-      onSelect?: () => void
-      variant?: 'default' | 'destructive'
-    }) => {
-      const { setOpen } = React.useContext(MenuCtx)
-      return (
-        <button
-          type="button"
-          data-variant={variant}
-          onClick={() => {
-            onSelect?.()
-            setOpen(false)
-          }}
-        >
-          {children}
-        </button>
-      )
-    },
-    ContextMenuSeparator: () => <hr />
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 const profile: SSHProfile = {
   id: 'p1',
@@ -211,10 +155,10 @@ describe('SSHPanel context menu', () => {
   it('offers Connect, Edit, Duplicate and a destructive Delete', () => {
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Duplicate' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute(
+    expect(screen.getByRole('menuitem', { name: 'Connect' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Duplicate' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute(
       'data-variant',
       'destructive'
     )
@@ -225,7 +169,7 @@ describe('SSHPanel context menu', () => {
     const onConnect = vi.fn()
     render(<SSHPanel onConnect={onConnect} />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Open another session' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open another session' }))
     expect(onConnect).toHaveBeenCalledWith('p1')
   })
 
@@ -233,15 +177,15 @@ describe('SSHPanel context menu', () => {
     tauriRef.current = false
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    expect(screen.queryByRole('button', { name: 'Connect' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Connect' })).toBeNull()
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
   })
 
   it('opens the editor for the host', () => {
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
     expect(screen.getByTestId('ssh-host-editor')).toHaveAttribute('data-profile-id', 'p1')
   })
 
@@ -252,7 +196,7 @@ describe('SSHPanel context menu', () => {
     })
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }))
     await waitFor(() =>
       expect(toastMock.success).toHaveBeenCalledWith('Duplicated as “prod-box (copy)”')
     )
@@ -270,7 +214,7 @@ describe('SSHPanel delete', () => {
     })
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     expect(screen.getByText(/Its 2 sessions will be closed/)).toBeInTheDocument()
   })
 
@@ -278,7 +222,7 @@ describe('SSHPanel delete', () => {
     useSSHStore.setState({ sessions: [liveSession()] })
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
 
     expect(screen.getByText(/Its session will be closed/)).toBeInTheDocument()
     expect(sshApi.deleteProfile).not.toHaveBeenCalled()
@@ -293,7 +237,7 @@ describe('SSHPanel delete', () => {
   it('cancel leaves everything as it was', () => {
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(sshApi.deleteProfile).not.toHaveBeenCalled()
     expect(useSSHStore.getState().profiles).toHaveLength(1)
@@ -304,7 +248,7 @@ describe('SSHPanel delete', () => {
     useSSHStore.setState({ sessions: [liveSession()] })
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(toastMock.error).toHaveBeenCalled())
     expect(sshApi.closeSession).not.toHaveBeenCalled()
@@ -315,7 +259,7 @@ describe('SSHPanel delete', () => {
     sshApi.deleteProfile.mockResolvedValue({ success: false, error: 'locked', code: 'X' })
     render(<SSHPanel />)
     fireEvent.contextMenu(screen.getByText('prod-box'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     await waitFor(() =>
       expect(toastMock.error).toHaveBeenCalledWith('Could not delete “prod-box”. Try again.')

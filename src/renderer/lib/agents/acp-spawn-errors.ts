@@ -21,6 +21,25 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
   const message = definiteSpawnRejectionMessage(raw)
   if (!ENOENT_PATTERN.test(message)) return message
 
+  // Resolver-level failures already name the file they could not prepare
+  // after the last colon (e.g. `program not found or not executable:
+  // C:\…\npm\claude.cmd`). When that file is not the spawned command —
+  // managed `claude-acp` runs `node` while its *pre-spawn CLI probe* is the
+  // piece that failed — rewriting against `config.command` would blame the
+  // wrong binary, so the resolver's own wording stays.
+  const lastColon = message.lastIndexOf(': ')
+  if (lastColon >= 0) {
+    const namedPath = message
+      .slice(lastColon + 2)
+      .trim()
+      .replace(/^"|"$/g, '')
+    const namedBase = namedPath.split(/[\\/]/).filter(Boolean).pop()
+    const commandBase = config?.command?.split(/[\\/]/).pop()
+    if (namedBase && commandBase && namedBase.toLowerCase() !== commandBase.toLowerCase()) {
+      return message
+    }
+  }
+
   if (config?.command === 'npx') {
     return 'Could not run npx. Install Node.js and ensure npx is on your PATH, then try again.'
   }

@@ -832,6 +832,7 @@ describe('MobileChatShell', () => {
         'Command palette',
         'New terminal',
         'Project settings',
+        'Reload this chat',
         'Close chat'
       ])
       expect(screen.getByRole('button', { name: 'Close chat' }).className).toContain(
@@ -896,7 +897,12 @@ describe('MobileChatShell', () => {
       })
       await openHeaderSheet()
 
-      expect(sheetRows()).toEqual(['New terminal', 'Project settings', 'Close chat'])
+      expect(sheetRows()).toEqual([
+        'New terminal',
+        'Project settings',
+        'Reload this chat',
+        'Close chat'
+      ])
     })
 
     it('omits Git changes when the project has no path', async () => {
@@ -908,6 +914,7 @@ describe('MobileChatShell', () => {
         'Command palette',
         'New terminal',
         'Project settings',
+        'Reload this chat',
         'Close chat'
       ])
     })
@@ -926,7 +933,7 @@ describe('MobileChatShell', () => {
       renderShell()
       await openHeaderSheet()
 
-      expect(sheetRows()).toEqual(['Files', 'Close chat'])
+      expect(sheetRows()).toEqual(['Files', 'Reload this chat', 'Close chat'])
     })
 
     it('omits Close chat for a non-chat tab', async () => {

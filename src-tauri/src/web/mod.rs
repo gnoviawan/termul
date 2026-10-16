@@ -24,6 +24,7 @@ pub mod auth;
 pub mod canvas_api;
 pub mod capabilities;
 pub mod catalog_api;
+pub mod chat_reads;
 pub mod command_ledger;
 pub mod config;
 pub mod connection_runtime;
@@ -47,6 +48,7 @@ pub mod projects_api;
 pub mod prompt_turn;
 #[cfg(test)]
 mod prompt_turn_tests;
+pub mod route_deadline;
 pub mod router;
 pub mod search_api;
 pub mod sink;

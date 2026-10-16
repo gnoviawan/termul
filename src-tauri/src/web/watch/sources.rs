@@ -26,6 +26,9 @@
 //! - `terminals` (scope = project id): state and delta = `{terminals:
 //!   [{terminalId, projectId, cwd, attached}]}`, the project's terminals
 //!   (detached ones included), without claim credentials.
+//! - `chat_reads`: state = `{marks: {sessionId: seq}}`, the shared last-read
+//!   marker of every chat a surface has read; a delta is `{sessionId, seq}`,
+//!   the marker of one session as it stands after a `mark_chat_read`.
 
 use std::sync::Arc;
 
@@ -98,6 +101,20 @@ pub fn publish_chat_history(relay: &WsRelaySink, changed: &[&str]) {
 pub fn publish_agent_event(relay: &WsRelaySink, type_: &str, payload: &Value) {
     relay.watches().publish(WatchKind::Agents, "", || {
         json!({ "event": type_, "payload": payload })
+    });
+}
+
+/// Full state of the `chat_reads` watch.
+#[must_use]
+pub fn chat_reads_state(relay: &WsRelaySink) -> Value {
+    json!({ "marks": relay.chat_reads().snapshot() })
+}
+
+/// The last-read marker of `session_id` moved: send every `chat_reads`
+/// subscriber the marker as it stands.
+pub fn publish_chat_read(relay: &WsRelaySink, session_id: &str) {
+    relay.watches().publish(WatchKind::ChatReads, "", || {
+        json!({ "sessionId": session_id, "seq": relay.chat_reads().seq(session_id) })
     });
 }
 

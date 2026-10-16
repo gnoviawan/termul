@@ -220,8 +220,21 @@ pub(super) struct FoldTailScan {
     /// A candidate line did not probe: the fold is unknown.
     pub(super) unreadable: bool,
     pub(super) bytes_read: u64,
-    /// Seq of the last line when it is newline-terminated and probes.
-    pub(super) last_seq: Option<u64>,
+    pub(super) last_line: Option<LastLine>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LastLine {
+    pub(super) seq: u64,
+    pub(super) terminated: bool,
+}
+
+impl FoldTailScan {
+    pub(super) fn open_turn(&self) -> Option<Option<&Value>> {
+        self.records.iter().rev().fold(None, |pending, record| {
+            open_turn_step(pending, &record.type_, record.payload.turn_id.as_ref())
+        })
+    }
 }
 
 /// One backward pass over `file[floor..end)` collecting the records the
@@ -240,7 +253,7 @@ pub(super) fn scan_fold_tail(
         records: Vec::new(),
         unreadable: false,
         bytes_read: 0,
-        last_seq: None,
+        last_line: None,
     };
     let mut last_line = true;
     scan.bytes_read = scan_lines_backward(file, end, floor, |line, terminated| {
@@ -252,8 +265,11 @@ pub(super) fn scan_fold_tail(
             return ControlFlow::Continue(());
         }
         let probe = probe_record(line, session_id);
-        if is_last && terminated {
-            scan.last_seq = probe.as_ref().map(|probe| probe.seq);
+        if is_last {
+            scan.last_line = probe.as_ref().map(|probe| LastLine {
+                seq: probe.seq,
+                terminated,
+            });
         }
         if !candidate {
             return ControlFlow::Continue(());
@@ -277,23 +293,59 @@ pub(super) fn scan_fold_tail(
     Ok(scan)
 }
 
-/// Lightweight corruption check: read the first line of a JSONL file and
-/// verify it probes as a record with the expected schema version and session
-/// id. Returns `true` for empty files or valid first records, `false` only
-/// when the first line is non-empty and unparseable or mismatches. This
-/// catches fully-corrupt files without loading all records.
-pub(super) fn jsonl_first_record_is_valid(path: &Path, expected_session_id: &str) -> bool {
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return true, // missing file is handled by `ensure_log_exists`
+static COMMANDS_UPDATE_NEEDLE: LazyLock<memmem::Finder<'static>> =
+    LazyLock::new(|| memmem::Finder::new(b"\"type\":\"commands_update\""));
+
+/// The `availableCommands` of the newest `commands_update` in `path`, the
+/// value `materialize_session_payload` folds from a full replay. One backward
+/// pass that parses only lines naming that type and stops at the first that
+/// is one.
+pub(super) fn newest_command_list(path: &Path, session_id: &str) -> io::Result<Option<Value>> {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
     };
-    use std::io::BufRead;
-    let reader = std::io::BufReader::new(file);
-    match reader.lines().next() {
-        Some(Ok(line)) if !line.trim().is_empty() => {
-            probe_record(line.as_bytes(), expected_session_id).is_some()
+    let end = file.metadata()?.len();
+    let mut commands = None;
+    scan_lines_backward(&mut file, end, 0, |line, terminated| {
+        if !terminated || COMMANDS_UPDATE_NEEDLE.find(line).is_none() {
+            return ControlFlow::Continue(());
         }
-        _ => true, // empty file or no lines — not corrupt
+        match serde_json::from_slice::<PersistedEventRecord>(line) {
+            Ok(record)
+                if record.schema_version == SESSION_SCHEMA_VERSION
+                    && record.session_id == session_id
+                    && record.type_ == "commands_update" =>
+            {
+                commands = record.payload.get("availableCommands").cloned();
+                ControlFlow::Break(())
+            }
+            _ => ControlFlow::Continue(()),
+        }
+    })?;
+    Ok(commands)
+}
+
+pub(super) fn jsonl_first_record_is_valid(path: &Path, expected_session_id: &str) -> bool {
+    use std::io::BufRead;
+    let Ok(file) = fs::File::open(path) else {
+        return true;
+    };
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return true,
+            Ok(_) => {}
+        }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if !line.is_empty() {
+            return probe_record(&line, expected_session_id).is_some();
+        }
     }
 }
 
@@ -702,8 +754,7 @@ pub(super) fn jsonl_tail_seq(path: &Path, session_id: &str) -> Option<u64> {
 /// totals the catalog metadata must agree with after intruders are
 /// removed.
 pub(super) struct SalvageCounts {
-    pub(super) message_count: u64,
-    pub(super) tool_count: u64,
+    pub(super) fold: FoldCounts,
     pub(super) last_seq: u64,
     /// Quarantined lines — for the heal log; the bytes live in the
     /// `.corrupt-*.bak` sidecar.
@@ -791,13 +842,43 @@ fn scan_seq_intruders(bytes: &[u8], session_id: &str) -> Option<SeqIntruderScan>
     Some(scan)
 }
 
-/// Unlocked pre-check for the read-path salvage: `true` only when every
-/// scanned log is salvageable AND at least one holds an intruder — i.e. a
-/// locked [`salvage_session_dir`] pass could actually rewrite something.
-/// Unsalvageable content (`None` from [`scan_seq_intruders`]) and clean
-/// logs both return `false`, so permanently-corrupt sessions never reach
-/// for the catalog lock on every failed read.
-pub(super) fn has_seq_intruders(dir: &Path, session_id: &str) -> Result<bool> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LogStamps {
+    messages: Option<FileStamp>,
+    tool_calls: Option<FileStamp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: std::time::SystemTime,
+}
+
+pub(super) fn log_stamps(dir: &Path) -> io::Result<LogStamps> {
+    let stamp = |name: &str| match fs::metadata(dir.join(name)) {
+        Ok(metadata) => Ok(Some(FileStamp {
+            len: metadata.len(),
+            modified: metadata.modified()?,
+        })),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    Ok(LogStamps {
+        messages: stamp(MESSAGES_FILE)?,
+        tool_calls: stamp(TOOL_CALLS_FILE)?,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SalvageProbe {
+    Clean,
+    Intruders,
+    Unsalvageable,
+}
+
+pub(super) fn probe_seq_intruders(dir: &Path, session_id: &str) -> Result<SalvageProbe> {
+    let mut kept_seqs = std::collections::HashSet::new();
+    let mut intruders = false;
     for name in [MESSAGES_FILE, TOOL_CALLS_FILE] {
         let path = dir.join(name);
         let bytes = match fs::read(&path) {
@@ -808,13 +889,23 @@ pub(super) fn has_seq_intruders(dir: &Path, session_id: &str) -> Result<bool> {
         if bytes.is_empty() {
             continue;
         }
-        match scan_seq_intruders(&bytes, session_id) {
-            None => return Ok(false),
-            Some(scan) if !scan.intruders.is_empty() => return Ok(true),
-            _ => {}
+        let Some(scan) = scan_seq_intruders(&bytes, session_id) else {
+            return Ok(SalvageProbe::Unsalvageable);
+        };
+        if !scan
+            .kept_records
+            .iter()
+            .all(|record| kept_seqs.insert(record.seq))
+        {
+            return Ok(SalvageProbe::Unsalvageable);
         }
+        intruders |= !scan.intruders.is_empty();
     }
-    Ok(false)
+    Ok(if intruders {
+        SalvageProbe::Intruders
+    } else {
+        SalvageProbe::Clean
+    })
 }
 
 /// Single file-order salvage pass over a session directory's JSONL logs.
@@ -826,14 +917,7 @@ pub(super) fn has_seq_intruders(dir: &Path, session_id: &str) -> Result<bool> {
 /// both cases no file was rewritten.
 pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option<SalvageCounts>> {
     let mut staged: Vec<(PathBuf, Vec<u8>, Vec<u8>)> = Vec::new();
-    let mut counts = SalvageCounts {
-        message_count: 0,
-        tool_count: 0,
-        last_seq: 0,
-        intruder_lines: 0,
-    };
-    // Issue #844c: fold state for the seq-ordered recount below.
-    let mut fold_state = FoldState::default();
+    let mut intruder_lines = 0;
     // Kept records across BOTH files, collected then sorted by seq (the
     // fold's chunk-run rules depend on global seq order, not per-file order).
     let mut all_records: Vec<PersistedEventRecord> = Vec::new();
@@ -868,33 +952,20 @@ pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option
         if !salvageable {
             break;
         }
-        counts.intruder_lines += scan.intruder_lines;
+        intruder_lines += scan.intruder_lines;
         if !scan.intruders.is_empty() {
             staged.push((path, scan.kept, scan.intruders));
         }
     }
-    // Issue #844c: recount under the materializer's fold rules in GLOBAL seq
-    // order (chunk-run coalescing crosses the two JSONL files' boundary).
-    all_records.sort_by_key(|record| record.seq);
-    for record in &all_records {
-        if is_tool_event(&record.type_) {
-            counts.tool_count += 1;
-            // A tool call closes the open chunk run (fold boundary).
-            if record.type_ == "tool_call" {
-                fold_state.open_role = None;
-            }
-        } else {
-            let (next, opens_message) = fold_step(fold_state, &record.type_, &record.payload);
-            fold_state = next;
-            if opens_message {
-                counts.message_count += 1;
-            }
-        }
-        counts.last_seq = counts.last_seq.max(record.seq);
-    }
     if !salvageable || staged.is_empty() {
         return Ok(None);
     }
+    let fold = fold_counts(&mut all_records);
+    let counts = SalvageCounts {
+        fold,
+        last_seq: all_records.last().map_or(0, |record| record.seq),
+        intruder_lines,
+    };
     // Quarantine every intruder BEFORE any rewrite: a backup failure must
     // never leave a partially-rewritten log without its `.corrupt-*.bak`.
     for (path, _, intruders) in &staged {

@@ -1,6 +1,7 @@
 import type {
   GitStatus,
   IpcResult,
+  PreservedTerminalEntry,
   RotatedClaim,
   SpawnedTerminal,
   TerminalApi,
@@ -18,6 +19,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invokeIpcCommand } from './acp-transport/tauri-verdicts'
 import { entityKeyOf } from './ipc/http'
 import { invokeIpc } from './ipc/tauri'
+import { logFrontendError } from './log-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 import { terminalCursorEpoch } from './terminal-cursor'
 
@@ -55,6 +57,7 @@ type SharedListenerEntry<T> = {
 const IPC_COMMANDS = {
   SPAWN: 'terminal_spawn',
   ATTACH: 'terminal_attach',
+  LIST_PRESERVED: 'terminal_list_preserved',
   ROTATE_CLAIM: 'terminal_rotate_claim',
   REVOKE_CLAIM: 'terminal_revoke_claim',
   WRITE: 'terminal_write',
@@ -459,14 +462,25 @@ export function createTauriTerminalApi(): TerminalApi {
 
     attach,
 
+    async listPreserved(projectId: string): Promise<IpcResult<PreservedTerminalEntry[]>> {
+      const result = await invokeIpc<PreservedTerminalEntry[]>(IPC_COMMANDS.LIST_PRESERVED, {
+        projectId
+      })
+      if (!result.success) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'TauriTerminalAPI.listPreserved',
+          message: `list preserved terminals failed (${result.code ?? 'UNKNOWN'})`
+        })
+      }
+      return result
+    },
+
     /**
      * CAP-3: possession-based rotation — the returned credential replaces the
      * presented one atomically.
      */
     async rotateClaim(terminalId: string, claim: string): Promise<IpcResult<RotatedClaim>> {
-      // A replay after a lost reply is `OUTCOME_UNKNOWN` (the new credential was
-      // never kept host-side); the desktop has no `list_preserved`, so the
-      // failure stands and the caller falls back to a fresh spawn.
       return invokeIpcCommand<RotatedClaim>(
         IPC_COMMANDS.ROTATE_CLAIM,
         { terminalId, claim },

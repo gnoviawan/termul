@@ -118,3 +118,35 @@ fn backups_are_never_group_or_world_accessible() {
     }
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn stale_temp_matches_only_old_temps_of_the_named_target() {
+    let dir = temp_dir("stale-temp");
+    let target = dir.join("sessions.json");
+    let temp = temp_path(&target);
+    let other_target = temp_path(&dir.join("metadata.json"));
+    let backup = dir.join("sessions.json.corrupt-1-0.bak");
+    for path in [&temp, &other_target, &backup] {
+        fs::write(path, b"{}").unwrap();
+    }
+    let hour = Duration::from_secs(60 * 60);
+    assert!(!is_stale_temp(&temp, "sessions.json", hour), "fresh temp");
+    let two_hours_ago = SystemTime::now() - 2 * hour;
+    for path in [&temp, &other_target, &backup] {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(two_hours_ago)
+            .unwrap();
+    }
+    assert!(is_stale_temp(&temp, "sessions.json", hour));
+    assert!(!is_stale_temp(&other_target, "sessions.json", hour));
+    assert!(!is_stale_temp(&backup, "sessions.json", hour));
+    assert!(!is_stale_temp(
+        &dir.join("sessions.json.12.ab.tmp"),
+        "sessions.json",
+        hour
+    ));
+    let _ = fs::remove_dir_all(dir);
+}

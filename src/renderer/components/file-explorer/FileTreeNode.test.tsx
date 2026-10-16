@@ -10,54 +10,7 @@ vi.mock('@/hooks/use-pane-dnd', () => ({
   })
 }))
 
-// Stub the Radix context-menu primitives with the stateful F2 pattern: the
-// trigger opens on `contextmenu` (only if the child's onContextMenu did not
-// call preventDefault — mirrors Radix's checkForDefaultPrevented), content
-// renders only while open, Escape closes.
-vi.mock('@/components/ui/context-menu', async () => {
-  const React = await import('react')
-  const MenuCtx = React.createContext<{ open: boolean; setOpen: (o: boolean) => void }>({
-    open: false,
-    setOpen: () => {}
-  })
-  return {
-    ContextMenu: ({ children }: { children: React.ReactNode }) => {
-      const [open, setOpen] = React.useState(false)
-      return <MenuCtx.Provider value={{ open, setOpen }}>{children}</MenuCtx.Provider>
-    },
-    ContextMenuTrigger: ({
-      children,
-      asChild
-    }: {
-      children: React.ReactNode
-      asChild?: boolean
-    }) => {
-      const { setOpen } = React.useContext(MenuCtx)
-      const merged = (e: React.MouseEvent) => {
-        if (e.defaultPrevented) return
-        e.preventDefault()
-        setOpen(true)
-      }
-      if (asChild && React.isValidElement(children)) {
-        const child = children as React.ReactElement<{
-          onContextMenu?: (e: React.MouseEvent) => void
-        }>
-        return React.cloneElement(child, {
-          onContextMenu: (e: React.MouseEvent) => {
-            child.props.onContextMenu?.(e)
-            merged(e)
-          }
-        })
-      }
-      return <div onContextMenu={merged}>{children}</div>
-    },
-    ContextMenuContent: ({ children }: { children: React.ReactNode }) => {
-      const { open } = React.useContext(MenuCtx)
-      if (!open) return null
-      return <div>{children}</div>
-    }
-  }
-})
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
 
 describe('FileTreeNode', () => {
   it('keeps long names on the truncate path without forcing the row wider', () => {

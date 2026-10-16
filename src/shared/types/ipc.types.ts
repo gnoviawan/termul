@@ -425,18 +425,14 @@ export interface TerminalApi {
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
   /**
-   * Story 5 (preserved-PTY reattach): enumerate the server-preserved
-   * terminals of a project on an AUTHED connection, each with metadata and
-   * a freshly issued claim (the pre-reload claim is invalidated by the
-   * re-issue). Web transport only — the desktop API never implements this
-   * (desktop restore owns its PTYs in-process); callers must treat an
-   * unimplemented/failed result as "nothing preserved" and fall back to
-   * spawn.
+   * Story 5 (preserved-PTY reattach): enumerate the host-preserved
+   * terminals of a project, each with metadata and a freshly issued claim
+   * (the pre-reload claim is invalidated by the re-issue). Callers treat a
+   * failed result as "nothing preserved" and fall back to spawn.
    */
-  listPreserved?: (projectId: string) => Promise<IpcResult<PreservedTerminalEntry[]>>
+  listPreserved: (projectId: string) => Promise<IpcResult<PreservedTerminalEntry[]>>
 }
 
-/** One preserved terminal as returned by the web `list_preserved` op. */
 export interface PreservedTerminalEntry {
   id: string
   shell: string
@@ -504,69 +500,6 @@ export const IpcErrorCodes = {
 } as const
 
 export type IpcErrorCode = (typeof IpcErrorCodes)[keyof typeof IpcErrorCodes]
-
-// ============================================================================
-// Worktree Types
-// ============================================================================
-
-export interface WorktreeInfo {
-  name: string
-  branch: string
-  path: string
-  headCommit: string
-  /**
-   * Web `/worktree/list` only: the worktree is outside the registered project
-   * folder (listed but not actionable, AD-9). Absent on desktop.
-   */
-  outsideProjectRoot?: boolean
-}
-
-export interface BranchInfo {
-  name: string
-  isRemote: boolean
-  isCurrent: boolean
-  upstream?: string | null
-  hasOtherWorktree: boolean
-}
-
-export interface DirtyStatus {
-  modified: number
-  staged: number
-  untracked: number
-  hasChanges: boolean
-}
-
-export interface RemoveResult {
-  worktreePath: string
-  success: boolean
-  error?: string | null
-}
-
-export interface GitignoreDir {
-  dirName: string
-  exists: boolean
-}
-
-export interface SymlinkResult {
-  path: string
-  target: string
-  status: 'created' | 'skipped' | 'failed'
-  reason?: string
-}
-
-/** Live line emitted while `git worktree add` runs. `line` is a git
- * stderr line; sentinels `preparing`/`done`/`termul:error: <msg>` carry
- * phase boundaries. The error sentinel is `termul:`-namespaced because real
- * git stderr lines can legitimately start with `error:`/`fatal:` mid-run —
- * those are ordinary log lines, never the terminator. `progressId` is the
- * renderer-generated correlation id so concurrent launches and cross-window
- * events cannot cross-talk. On web the create response is an NDJSON stream
- * that terminates via its `result` frame (an `IpcResult`), not a
- * `done`/`termul:error:` line. */
-export interface WorktreeProgressEvent {
-  progressId: string
-  line: string
-}
 
 // Dialog API for file/directory selection
 export interface DialogApi {

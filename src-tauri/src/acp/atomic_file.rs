@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Atomically replace `path` with `bytes` using a same-directory temp file.
 ///
@@ -245,6 +245,36 @@ fn temp_path(path: &Path) -> PathBuf {
         std::process::id(),
         unique_suffix()
     ))
+}
+
+/// Whether `path` is a temp file [`replace`] or [`create_new`] made for a
+/// target named `target_name`, last written more than `max_age` ago.
+pub fn is_stale_temp(path: &Path, target_name: &str, max_age: Duration) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| is_temp_name(name, target_name))
+        && fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > max_age)
+}
+
+fn is_temp_name(file_name: &str, target_name: &str) -> bool {
+    let Some(stamp) = file_name
+        .strip_prefix(target_name)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let mut parts = stamp.split('.');
+    let mut numeric = || {
+        parts
+            .next()
+            .is_some_and(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    };
+    numeric() && numeric() && parts.next().is_none()
 }
 
 fn unique_suffix() -> u128 {

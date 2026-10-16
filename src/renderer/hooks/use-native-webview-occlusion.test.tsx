@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   resetNativeWebviewOcclusionForTests,
+  useInterfaceOverlayOpen,
   useNativeWebviewOccluded,
   useNativeWebviewOcclusion
 } from './use-native-webview-occlusion'
@@ -56,6 +57,24 @@ describe('useNativeWebviewOcclusion', () => {
     expect(observer.result.current).toBe(true)
     act(() => occluder.unmount())
     expect(observer.result.current).toBe(false)
+  })
+
+  it('hides webviews for a docked occluder without reporting an interface overlay', () => {
+    const occluded = renderHook(() => useNativeWebviewOccluded())
+    const overlayOpen = renderHook(() => useInterfaceOverlayOpen())
+    const docked = renderHook(() => useNativeWebviewOcclusion(true, 'docked'))
+    expect(occluded.result.current).toBe(true)
+    expect(overlayOpen.result.current).toBe(false)
+
+    const overlay = renderHook(() => useNativeWebviewOcclusion(true))
+    expect(overlayOpen.result.current).toBe(true)
+
+    overlay.unmount()
+    expect(overlayOpen.result.current).toBe(false)
+    expect(occluded.result.current).toBe(true)
+
+    docked.unmount()
+    expect(occluded.result.current).toBe(false)
   })
 
   it('does nothing outside Tauri', () => {

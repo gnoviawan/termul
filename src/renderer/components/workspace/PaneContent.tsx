@@ -132,6 +132,8 @@ export function PaneContent({
   // Only the visible project has a visible tab: a hidden tree's panels stay
   // mounted but see `isVisible=false` (no focus, fit, stream renders or webview).
   const visibleTabId = isActiveProject ? activeTab?.id : undefined
+  const launcherCoversPane = agentLauncherPaneId === pane.id
+  const visibleBrowserTabId = launcherCoversPane ? undefined : visibleTabId
   const activeTerminalIdInPane = activeTab?.type === 'terminal' ? activeTab.terminalId : null
   const panePreviewPosition =
     previewTarget?.paneId === pane.id && !isFullscreenPane ? previewTarget.position : null
@@ -437,7 +439,7 @@ export function PaneContent({
             {pane.tabs
               .filter((t): t is WorkspaceTab & { type: 'browser' } => t.type === 'browser')
               .map((tab) => {
-                const isVisible = visibleTabId === tab.id
+                const isVisible = visibleBrowserTabId === tab.id
                 return (
                   <div
                     key={tab.id}

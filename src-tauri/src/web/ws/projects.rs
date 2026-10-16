@@ -213,9 +213,7 @@ fn project_host(env: &HandlerEnv) -> ProjectHost<'_> {
 /// bound entity list in `err.details`).
 fn project_error_reply(id: String, error: &ProjectCommandError) -> WsReply {
     match error.details() {
-        Some(details) => {
-            WsReply::err_with_details(id, error.ws_code(), error.message(), details)
-        }
+        Some(details) => WsReply::err_with_details(id, error.ws_code(), error.message(), details),
         None => WsReply::err(id, error.ws_code(), error.message()),
     }
 }
@@ -360,6 +358,10 @@ pub(super) struct LoadResumeSessionPayload {
     pub(super) cwd: String,
     #[serde(default)]
     pub(super) additional_directories: Vec<String>,
+    /// Absent: reopen without a client MCP list (history open, Resume chat).
+    /// Present, including `[]`: connect these servers and the host plan server.
+    #[serde(default)]
+    pub(super) mcp_servers: Option<Vec<agent_client_protocol::schema::v1::McpServer>>,
 }
 
 pub(super) async fn handle_load_session(
@@ -383,6 +385,7 @@ pub(super) async fn handle_load_session(
             parsed.session_id,
             parsed.cwd,
             parsed.additional_directories,
+            parsed.mcp_servers,
         )
         .await
     {

@@ -75,3 +75,66 @@ async fn running_count_counts_only_commands_that_are_still_running() {
     assert_eq!(count, 0, "a killed command stops counting");
     registry.release_all();
 }
+
+#[cfg(windows)]
+async fn launcher_terminal(
+    registry: &mut TerminalRegistry,
+    pid_file: std::path::PathBuf,
+) -> (TerminalId, u32) {
+    use crate::process_util::test_support::{
+        grandchild_launcher_script, powershell_args, read_pid_file,
+    };
+
+    let id = registry
+        .create(
+            "powershell.exe",
+            &powershell_args(&grandchild_launcher_script(&pid_file)),
+            &[],
+            None,
+            None,
+        )
+        .expect("spawn launcher");
+    let grandchild = tokio::task::spawn_blocking(move || read_pid_file(&pid_file))
+        .await
+        .expect("pid reader");
+    (id, grandchild)
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn kill_takes_down_the_command_tree() {
+    use crate::process_util::test_support::{is_alive, wait_for_exit, KillOnFail, EXIT_TIMEOUT};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut registry = TerminalRegistry::new();
+    let (id, grandchild) = launcher_terminal(&mut registry, dir.path().join("pid")).await;
+    let _cleanup = KillOnFail(grandchild);
+    assert!(is_alive(grandchild), "grandchild runs before the kill");
+
+    registry.kill(&id).expect("kill");
+
+    assert!(
+        wait_for_exit(grandchild, EXIT_TIMEOUT),
+        "grandchild {grandchild} survived terminal/kill"
+    );
+    registry.release_all();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn release_takes_down_the_command_tree() {
+    use crate::process_util::test_support::{is_alive, wait_for_exit, KillOnFail, EXIT_TIMEOUT};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut registry = TerminalRegistry::new();
+    let (id, grandchild) = launcher_terminal(&mut registry, dir.path().join("pid")).await;
+    let _cleanup = KillOnFail(grandchild);
+    assert!(is_alive(grandchild), "grandchild runs before the release");
+
+    registry.release(&id).expect("release");
+
+    assert!(
+        wait_for_exit(grandchild, EXIT_TIMEOUT),
+        "grandchild {grandchild} survived terminal/release"
+    );
+}

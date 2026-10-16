@@ -76,11 +76,6 @@ function splitFilePath(
   return { fileName, folderPath }
 }
 
-function extensionOf(fileName: string): string | null {
-  const dotIndex = fileName.lastIndexOf('.')
-  return dotIndex > 0 ? fileName.slice(dotIndex + 1) : null
-}
-
 function HighlightedLine({ text, query }: { text: string; query: string }): React.JSX.Element {
   const trimmed = query.trim()
   if (!trimmed) return <>{text}</>
@@ -144,7 +139,6 @@ function SearchFileRow({
       </span>
       <MaterialFileIcon
         name={fileName}
-        extension={extensionOf(fileName)}
         isDirectory={false}
         isExpanded={false}
         depth={0}

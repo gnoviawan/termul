@@ -9,6 +9,7 @@ import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
+import { useReloadChat } from '@/hooks/use-reload-chat'
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot'
 import type {
   AvailableCommand,
@@ -199,6 +200,7 @@ export function ChatInputBar({
   // list). The badge degrades to the read-only count pill when the registry is
   // empty. Reuses `setMcpServerEnabled` (optimistic + rollback) — no new
   // persistence path. The probe reflects Termul's own client connection.
+  const chatReload = useReloadChat(session.id)
   const mcpServers = useAcpStore((s) => s.mcpServers)
   const setMcpServerEnabled = useAcpStore((s) => s.setMcpServerEnabled)
   const mcpProbeStatus = useAcpStore((s) => s.mcpProbeStatus)
@@ -391,9 +393,8 @@ export function ChatInputBar({
         )
       } else if (hasCommand) {
         // Command pill present (no skills, files, or attachments): the wire
-        // carries the `/<name> ` prefix; the display keeps the raw token text
-        // so the timeline renders the command chip. Wire stays byte-identical
-        // to the pre-token plain-text path (`wireTrimmed`).
+        // keeps `/<name>` where the user typed it. The display keeps the raw
+        // token in that same place so the timeline renders the command chip.
         onSendBlocks(
           wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],
           displayTrimmed ? [{ type: 'text', text: displayTrimmed }] : []
@@ -567,7 +568,11 @@ export function ChatInputBar({
     tools: mcpTools,
     onLoadTools: (id: string) => {
       void loadMcpTools(id)
-    }
+    },
+    onReloadChat: chatReload.reload,
+    reloadDisabled: chatReload.disabled,
+    reloadDisabledReason: chatReload.reason,
+    reloading: chatReload.reloading
   }
   const mcpBadge = <McpBadge {...mcpListProps} />
   const composerAddHandle = useMemo(

@@ -12,10 +12,9 @@ import {
   acpApi,
   acpRecordAgentSwitch,
   type ContentBlock,
-  type SessionId,
-  type ToolCall
+  type SessionId
 } from '@/lib/acp-api'
-import { type AgentSwitchRecord, maxPayloadSeq } from '@/lib/acp-history-persistence'
+import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
@@ -26,10 +25,12 @@ import {
   detachOldAgentForSwitch,
   killSpawnedAgentIfUnused,
   MAX_LIVE_TOOL_CALLS,
+  type SwitchMarkerFacts,
   setSwitchRejection,
   spliceSwitchTranscript,
   switchBlockedReason,
-  trimLiveToolCalls
+  trimLiveToolCalls,
+  withSwitchMarker
 } from '../helpers'
 import {
   ensureLiveAgent,
@@ -39,7 +40,7 @@ import {
   nextSeq,
   persistComposerOptions
 } from '../shared-state'
-import type { AcpState, ChatMessage } from '../types'
+import type { AcpState } from '../types'
 import { runPromptTurn } from './prompt'
 import { flushCoalescedSync, trimLiveWindow } from './transcript'
 
@@ -364,11 +365,19 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
         // violates the no-orphan-state invariant every other writer honors.
         // A host that ever answers createSession with the SOURCE id would
         // self-splice into a feedback loop — refuse that too.
-        if (targetId === sessionId || !pre.sessions[targetId]) {
+        const skipReason =
+          targetId === sessionId
+            ? 'equals source session'
+            : !pre.sessions[targetId]
+              ? 'no longer exists'
+              : !(targetId in pre.messages)
+                ? 'transcript was torn down'
+                : null
+        if (skipReason) {
           void logFrontendError({
             level: 'warn',
             source: 'acp.switchAgent.splice',
-            message: `Live switch splice skipped: target ${targetId} ${targetId === sessionId ? 'equals source session' : 'no longer exists'}`
+            message: `Live switch splice skipped: target ${targetId} ${skipReason}`
           })
           return
         }
@@ -385,19 +394,20 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
           t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'failed' }
         )
         const sourceSwitches = pre.agentSwitches[sessionId] ?? []
-        const installedSwitches = sourceSwitches.some((sw) => sw.newSessionId === targetId)
-          ? sourceSwitches
-          : [
-              ...sourceSwitches,
-              fabricatedSwitchRecord(sourceMessages, sourceToolCalls, sourceSwitches, targetId)
-            ]
+        const marker: SwitchMarkerFacts = {
+          fromConfigId: oldConfigId ?? '',
+          toConfigId,
+          newSessionId: targetId,
+          summaryText: handoff.summaryText,
+          timestamp: Date.now()
+        }
+        const band = withSwitchMarker(
+          { messages: sourceMessages, toolCalls: sourceToolCalls, switches: sourceSwitches },
+          marker
+        )
         const spliced = spliceSwitchTranscript(
           sessionId,
-          {
-            messages: sourceMessages,
-            toolCalls: sourceToolCalls,
-            switches: installedSwitches
-          },
+          band,
           pre.messages[targetId] ?? [],
           pre.toolCalls[targetId] ?? [],
           targetSwitches
@@ -423,46 +433,12 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
         // Record the target→source link so an in-session wholesale reinstall
         // on the target (crash retry, direct history open, resume) can
         // re-splice the band — see `respliceLiveSwitchTarget`.
-        liveSwitchSources.set(targetId, sessionId)
+        liveSwitchSources.set(targetId, { sourceId: sessionId, marker })
         void logFrontendError({
           level: 'info',
           source: 'acp.switchAgent.splice',
-          message: `Spliced pre-switch transcript of session ${sessionId} into ${targetId}: ${sourceMessages.length} message(s), ${sourceToolCalls.length} tool call(s), ${installedSwitches.length - sourceSwitches.length === 1 ? 'fabricated switch marker' : 'real switch marker'}`
+          message: `Spliced pre-switch transcript of session ${sessionId} into ${targetId}: ${sourceMessages.length} message(s), ${sourceToolCalls.length} tool call(s), ${band.switches === sourceSwitches ? 'real switch marker' : 'fabricated switch marker'}`
         })
-      }
-
-      /**
-       * Marker for the live projection when the real record isn't on the
-       * old session yet (durable write pending/failed or the event hasn't
-       * arrived). Field parity with the host-written record (`newSessionId`
-       * is what `resolveSwitchRedirect`/`_onAgentSwitch` dedup match on);
-       * `seq` is the band top so the splice places it between old and new.
-       */
-      const fabricatedSwitchRecord = (
-        bandMessages: ChatMessage[],
-        bandToolCalls: ToolCall[],
-        bandSwitches: AgentSwitchRecord[],
-        targetId: SessionId
-      ): AgentSwitchRecord => {
-        const bandTop =
-          maxPayloadSeq({
-            messages: bandMessages,
-            toolCalls: bandToolCalls,
-            switches: bandSwitches
-          }) + 1
-        return {
-          // `switch:fabricated:` — visibly NOT the host-written `switch:seq-*`
-          // shape so no dedup/inspect path can mistake the projection for a
-          // durable record (the host's real seq may differ: writer seqs cover
-          // every record kind, not just renderer-visible ones).
-          id: `switch:fabricated:${bandTop}`,
-          fromConfigId: oldConfigId ?? '',
-          toConfigId,
-          newSessionId: targetId,
-          summaryText: handoff.summaryText,
-          timestamp: Date.now(),
-          seq: bandTop
-        }
       }
 
       let newAgentId: AgentId | null = null

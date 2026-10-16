@@ -147,7 +147,6 @@ function FileRow({
   const dir = dirName(file.path, cwd)
   // A separators-only path ('/') has no basename — show the path itself.
   const label = baseName(file.path) || file.path
-  const dot = label.lastIndexOf('.')
   const hasCounts = file.added > 0 || file.removed > 0
 
   return (
@@ -168,14 +167,7 @@ function FileRow({
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
       )}
     >
-      <MaterialFileIcon
-        name={label}
-        extension={dot > 0 ? label.slice(dot) : null}
-        isDirectory={false}
-        isExpanded={false}
-        depth={0}
-        size={14}
-      />
+      <MaterialFileIcon name={label} isDirectory={false} isExpanded={false} depth={0} size={14} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-2xs font-medium leading-tight">{label}</span>
         {dir && <span className="block truncate text-4xs leading-tight opacity-50">{dir}</span>}

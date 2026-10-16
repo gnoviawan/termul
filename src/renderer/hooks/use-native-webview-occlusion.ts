@@ -10,7 +10,14 @@ import { isTauriContext } from '@/lib/tauri-runtime'
  * webviews whose pane shows them.
  */
 
-let occlusionCount = 0
+/**
+ * `overlay` covers the interface (dialogs, menus, modal pickers), so DOM
+ * surfaces under it are unreachable too. `docked` sits beside the interface
+ * and only needs the webviews out of its way.
+ */
+export type NativeWebviewOccluderKind = 'overlay' | 'docked'
+
+const occluderCounts: Record<NativeWebviewOccluderKind, number> = { overlay: 0, docked: 0 }
 const listeners = new Set<() => void>()
 
 function emit(): void {
@@ -24,21 +31,28 @@ function subscribe(listener: () => void): () => void {
   }
 }
 
-function getSnapshot(): boolean {
-  return occlusionCount > 0
+function isOccluded(): boolean {
+  return occluderCounts.overlay + occluderCounts.docked > 0
+}
+
+function isOverlayOpen(): boolean {
+  return occluderCounts.overlay > 0
 }
 
 /** Registers the caller as an occluder while `open` is true. No-op outside Tauri. */
-export function useNativeWebviewOcclusion(open: boolean): void {
+export function useNativeWebviewOcclusion(
+  open: boolean,
+  kind: NativeWebviewOccluderKind = 'overlay'
+): void {
   useEffect(() => {
     if (!open || !isTauriContext()) return
-    occlusionCount += 1
+    occluderCounts[kind] += 1
     emit()
     return () => {
-      occlusionCount = Math.max(0, occlusionCount - 1)
+      occluderCounts[kind] = Math.max(0, occluderCounts[kind] - 1)
       emit()
     }
-  }, [open])
+  }, [open, kind])
 }
 
 /**
@@ -51,13 +65,19 @@ export function NativeWebviewOccluder(): null {
   return null
 }
 
-/** True while at least one occluder is open. */
+/** True while at least one occluder of either kind is open. */
 export function useNativeWebviewOccluded(): boolean {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  return useSyncExternalStore(subscribe, isOccluded, isOccluded)
+}
+
+/** True while an `overlay` occluder covers the interface. */
+export function useInterfaceOverlayOpen(): boolean {
+  return useSyncExternalStore(subscribe, isOverlayOpen, isOverlayOpen)
 }
 
 /** @internal Test-only: drop every registered occluder. */
 export function resetNativeWebviewOcclusionForTests(): void {
-  occlusionCount = 0
+  occluderCounts.overlay = 0
+  occluderCounts.docked = 0
   emit()
 }

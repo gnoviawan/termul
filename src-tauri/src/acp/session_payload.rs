@@ -178,6 +178,10 @@ pub struct MaterializedSessionPayload {
     /// none) — legacy sessions recorded before the summary fields existed
     /// materialize an empty array.
     pub tool_calls: Vec<MaterializedToolCallSummary>,
+    /// The session's last known `availableCommands` list (the newest
+    /// `commands_update`). Absent when the host knows of none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Value>,
 }
 
 /// Materialize the renderer-shaped payload for one session from its durable
@@ -236,7 +240,18 @@ pub fn materialize_session_payload(
         messages,
         switches,
         tool_calls,
+        commands: last_command_list(records),
     }
+}
+
+#[must_use]
+fn last_command_list(records: &[PersistedEventRecord]) -> Option<Value> {
+    records
+        .iter()
+        .rev()
+        .find(|record| record.type_ == "commands_update")
+        .and_then(|record| record.payload.get("availableCommands"))
+        .cloned()
 }
 
 /// Partially-folded summary state for one `toolCallId`.

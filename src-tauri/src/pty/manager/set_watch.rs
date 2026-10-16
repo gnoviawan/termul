@@ -1,6 +1,6 @@
 //! The terminal-set hook behind the `terminals` watch: the manager tells one
 //! observer whenever the set of terminals of a project changes (spawn, kill,
-//! reap, or a terminal gaining its first / losing its last web attachment),
+//! reap, or a terminal gaining its first / losing its last live attachment),
 //! and reports the set without claim credentials.
 
 use super::*;
@@ -66,7 +66,7 @@ impl PtyManager {
                 terminal_id: instance.id.clone(),
                 project_id: project_id.to_string(),
                 cwd: instance.cwd.clone(),
-                attached: instance.has_web_attachment(),
+                attached: instance.has_live_attachment(),
             })
             .collect();
         entries.sort_by(|a, b| a.terminal_id.cmp(&b.terminal_id));

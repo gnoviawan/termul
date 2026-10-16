@@ -5,7 +5,7 @@ import { useWorktreeReconciler } from './use-worktree-reconciler'
 const mocks = vi.hoisted(() => ({
   reconcile: vi.fn(),
   ensureSymlinks: vi.fn(),
-  isTauri: { value: true },
+  admitsWrites: { value: true },
   project: {
     id: 'proj-1',
     name: 'Test',
@@ -28,7 +28,7 @@ vi.mock('@/lib/worktree-api', () => ({
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({
-  isTauriContext: () => mocks.isTauri.value
+  serverAdmitsRemoteWrites: () => mocks.admitsWrites.value
 }))
 
 vi.mock('@/stores/project-store', () => ({
@@ -41,7 +41,7 @@ describe('useWorktreeReconciler', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers()
-    mocks.isTauri.value = true
+    mocks.admitsWrites.value = true
     mocks.project.isGitRepo = true
     mocks.project.symlinkDirs = undefined
     mocks.reconcile.mockResolvedValue('unchanged')
@@ -66,8 +66,8 @@ describe('useWorktreeReconciler', () => {
     expect(mocks.reconcile).toHaveBeenCalledTimes(2)
   })
 
-  it('runs on web too (no isTauriContext early return) without touching symlinks', async () => {
-    mocks.isTauri.value = false
+  it('reconciles but leaves symlinks alone on a server that refuses this client writes', async () => {
+    mocks.admitsWrites.value = false
     mocks.project.symlinkDirs = ['node_modules']
     renderHook(() => useWorktreeReconciler('proj-1'))
     await vi.advanceTimersByTimeAsync(0)
@@ -78,7 +78,7 @@ describe('useWorktreeReconciler', () => {
     expect(mocks.ensureSymlinks).not.toHaveBeenCalled()
   })
 
-  it('ensures symlinks for each stored worktree on desktop after reconciling', async () => {
+  it('ensures symlinks for each stored worktree after reconciling', async () => {
     mocks.project.symlinkDirs = ['node_modules']
     renderHook(() => useWorktreeReconciler('proj-1'))
     await vi.advanceTimersByTimeAsync(0)

@@ -62,7 +62,7 @@ impl PtyManager {
             output_log_bytes: Arc::new(AtomicUsize::new(0)),
             next_output_seq: Arc::new(AtomicU64::new(0)),
             log_epoch: uuid::Uuid::new_v4().to_string(),
-            web_attachments: Arc::new(AtomicUsize::new(0)),
+            live_attachments: Arc::new(AtomicUsize::new(0)),
             web_size_owner: Arc::new(RwLock::new(None)),
             resizer: Some(resizer),
             exited: AtomicBool::new(false),

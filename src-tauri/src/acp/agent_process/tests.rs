@@ -13,11 +13,11 @@ use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
 use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
 
 use super::TreeKillAgent;
+use crate::process_util::test_support::{is_alive, wait_for_exit, KillOnFail, EXIT_TIMEOUT};
 use crate::process_util::{hide_console, KillOnCloseJob};
 
 const PID_PREFIX: &str = "CHILD_PID=";
 const PID_TIMEOUT: Duration = Duration::from_secs(30);
-const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn fake_agent_args(tail: &str) -> Vec<String> {
     fake_agent_args_after("", tail)
@@ -64,71 +64,6 @@ fn fake_agent(tail: &str) -> (TreeKillAgent, tokio::sync::mpsc::UnboundedReceive
         }
     });
     (agent, pid_rx)
-}
-
-/// Open `pid` for `SYNCHRONIZE`. `Ok(None)` only when the OS reports the PID
-/// does not exist (`ERROR_INVALID_PARAMETER`); any other failure (e.g. access
-/// denied) is an error, never "gone", so a test cannot pass by accident.
-fn open_process(pid: u32) -> std::io::Result<Option<winapi::um::winnt::HANDLE>> {
-    use winapi::shared::winerror::ERROR_INVALID_PARAMETER;
-    use winapi::um::processthreadsapi::OpenProcess;
-    use winapi::um::winnt::SYNCHRONIZE;
-
-    // SAFETY: plain Win32 call; the caller closes a returned handle.
-    let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
-    if !handle.is_null() {
-        return Ok(Some(handle));
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
-        Ok(None)
-    } else {
-        Err(error)
-    }
-}
-
-/// Wait up to `timeout` for `pid` to exit; `Ok(true)` once it is gone.
-fn try_wait_for_exit(pid: u32, timeout: Duration) -> std::io::Result<bool> {
-    use winapi::um::handleapi::CloseHandle;
-    use winapi::um::synchapi::WaitForSingleObject;
-    use winapi::um::winbase::WAIT_OBJECT_0;
-
-    let Some(handle) = open_process(pid)? else {
-        return Ok(true);
-    };
-    let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
-    // SAFETY: `handle` is a live process handle, closed before returning.
-    unsafe {
-        let exited = WaitForSingleObject(handle, millis) == WAIT_OBJECT_0;
-        CloseHandle(handle);
-        Ok(exited)
-    }
-}
-
-/// True while `pid` names a running process.
-fn is_alive(pid: u32) -> bool {
-    !try_wait_for_exit(pid, Duration::ZERO)
-        .unwrap_or_else(|error| panic!("cannot query process {pid}: {error}"))
-}
-
-/// Wait up to `timeout` for `pid` to exit; true once it is gone.
-fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
-    try_wait_for_exit(pid, timeout)
-        .unwrap_or_else(|error| panic!("cannot query process {pid}: {error}"))
-}
-
-/// Best-effort cleanup so a failing assertion never leaks a 60s `ping`.
-/// Never panics (it runs during unwinding).
-struct KillOnFail(u32);
-
-impl Drop for KillOnFail {
-    fn drop(&mut self) {
-        if matches!(try_wait_for_exit(self.0, Duration::ZERO), Ok(false)) {
-            let mut command = std::process::Command::new("taskkill");
-            hide_console(&mut command);
-            let _ = command.args(["/F", "/PID", &self.0.to_string()]).output();
-        }
-    }
 }
 
 #[tokio::test]

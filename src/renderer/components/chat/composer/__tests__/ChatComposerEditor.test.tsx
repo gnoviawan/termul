@@ -326,8 +326,8 @@ describe('docToDisplayText round-trip (patches 7 + 11)', () => {
   })
 })
 
-describe('ChatComposerEditor command prefix', () => {
-  it('moves text typed in front of a command pill to after the pill', async () => {
+describe('ChatComposerEditor command position', () => {
+  it('keeps text typed in front of a command pill in front of the pill', async () => {
     const token = commandToken('compact')
     function Host() {
       const [value, setValue] = useState(`${token} hello`)
@@ -346,10 +346,9 @@ describe('ChatComposerEditor command prefix', () => {
     })
 
     await waitFor(() => {
-      expect(getComposerValue()).toBe(`${token} Z hello`)
+      expect(getComposerValue()).toBe(`Z${token} hello`)
     })
     const caret = docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
-    // The caret stays after the typed Z, which now sits just after the pill.
-    expect(caret).toBe(token.length + 2)
+    expect(caret).toBe(1)
   })
 })

@@ -13,6 +13,7 @@ import type {
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
+  type ChatReadMark,
   type HistoryMode,
   type PersistedSessionSummary,
   type ProjectBusyDetails,
@@ -88,6 +89,19 @@ export interface CommandCallOptions {
   commandId?: string
   /** Called with the host's `visible_at` session seq when the reply carries one. */
   onVisibleAt?: (visibleAt: number) => void
+}
+
+/**
+ * Options for `session/load` and `session/resume`.
+ * `mcpServers` is set only by Reload this chat. It stays on this bag so a
+ * normal reopen still passes command options as the fifth argument.
+ */
+export type ReopenCallOptions = CommandCallOptions & {
+  /**
+   * Present only for a reload. An empty array still asks the host to attach
+   * the plan server. Omitted keeps a normal history reopen.
+   */
+  mcpServers?: McpServer[]
 }
 
 /** `visible_at` is a session seq; anything else on the wire is ignored. */
@@ -266,14 +280,14 @@ export interface AcpTransport {
     sessionId: SessionId,
     cwd: string,
     additionalDirectories?: string[],
-    options?: CommandCallOptions
+    options?: ReopenCallOptions
   ): Promise<SessionReopenOutcome>
   resumeSession(
     agentId: AgentId,
     sessionId: SessionId,
     cwd: string,
     additionalDirectories?: string[],
-    options?: CommandCallOptions
+    options?: ReopenCallOptions
   ): Promise<SessionReopenOutcome>
   deleteAgentSession(
     agentId: AgentId,
@@ -420,6 +434,12 @@ export interface AcpTransport {
    * `/ws` over its Channel too.
    */
   readonly watches?: WatchClient
+  /**
+   * Tell the host this surface read `sessionId` up to `seq` (the newest turn
+   * end it showed). Resolves to the shared marker as it stands; every
+   * `chat_reads` watcher hears when it moves. WS: `mark_chat_read`.
+   */
+  markChatRead?(sessionId: SessionId, seq: number): Promise<ChatReadMark>
   historyMode?(): HistoryMode | 'tauri_store'
   listPersistedSessions?(): Promise<PersistedSessionSummary[]>
   openPersistedSession?(sessionId: SessionId, lastSeq?: number): Promise<void>

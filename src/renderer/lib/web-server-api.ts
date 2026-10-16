@@ -17,10 +17,8 @@
  * the web auth gate's 401 UNAUTHORIZED) keeps the server-provided code/message.
  */
 import type {
-  BranchInfo,
   DetectedShells,
   DirectoryEntry,
-  DirtyStatus,
   FileInfo,
   GitCommit,
   GitCommitContext,
@@ -30,15 +28,23 @@ import type {
   GitStashInfo,
   GitStatusDetail,
   IpcResult,
-  ProjectIcon,
-  WorktreeInfo,
-  WorktreeProgressEvent
+  ProjectIcon
 } from '@shared/types/ipc.types'
 import {
   COMMAND_ID_HEADER,
   type FsWriteExpected,
   type HashedFileContent
 } from '@shared/types/ipc.types'
+import type {
+  BaseBranchInfo,
+  BranchInfo,
+  DirtyStatus,
+  GitignoreDir,
+  IncludeCopyResult,
+  SymlinkResult,
+  WorktreeInfo,
+  WorktreeProgressEvent
+} from '@shared/types/worktree.types'
 import {
   bodyToResult,
   getJson,
@@ -54,7 +60,6 @@ import {
 import { logFrontendError } from './log-api'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { authHeader } from './web-auth-token'
-import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
 /**
  * POST JSON and read an `application/x-ndjson` response stream. Each line is
@@ -463,6 +468,16 @@ export const webServerSkills = {
   }
 }
 
+const SERVER_LOG_FIELD_CHARS = 4096
+
+function truncateCodePoints(value: string, max: number): string {
+  return value.length <= max ? value : Array.from(value).slice(0, max).join('')
+}
+
+function capLogField(value: string): string {
+  return truncateCodePoints(value, SERVER_LOG_FIELD_CHARS + 1)
+}
+
 /**
  * Frontend error forwarding routed to `termul-server` (`POST /log/frontend-error`).
  * CAP-2 parity: mirrors the desktop `log_frontend_error` Tauri command. Returns
@@ -478,10 +493,11 @@ export const webServerLog = {
   }): Promise<void> {
     const res = await postJson<void>('/log/frontend-error', {
       level: payload.level ?? 'error',
-      message: payload.message,
-      source: payload.source ?? 'renderer',
-      stack: payload.stack ?? null,
-      componentStack: payload.componentStack ?? null
+      message: capLogField(payload.message),
+      source: capLogField(payload.source ?? 'renderer'),
+      stack: payload.stack === undefined ? null : capLogField(payload.stack),
+      componentStack:
+        payload.componentStack === undefined ? null : capLogField(payload.componentStack)
     })
     if (!res.success) throw new Error(res.error)
   }
@@ -593,8 +609,7 @@ export const webServerMcpProbe = {
  * parity: each method mirrors a desktop `#[tauri::command] worktree_*` handler
  * and returns the SAME `IpcResult<T>` contract (the renderer facade
  * `worktree-api.ts` branches `isTauriContext()` between `invoke(...)` and these
- * HTTP impls). Only the 7 launch-flow routes ship here; the 8 advanced ops
- * stay `WEB_UNSUPPORTED` on web (deferred — see deferred-work.md).
+ * HTTP impls).
  */
 export const webServerWorktree = {
   async list(projectPath: string): Promise<IpcResult<WorktreeInfo[]>> {
@@ -682,6 +697,34 @@ export const webServerWorktree = {
     return postJson<IncludeCopyResult>('/worktree/copy-include-files', {
       projectPath,
       worktreePath
+    })
+  },
+
+  async parseGitignore(projectPath: string): Promise<IpcResult<GitignoreDir[]>> {
+    return postJson<GitignoreDir[]>('/worktree/parse-gitignore', { projectPath })
+  },
+
+  async createSymlinks(
+    projectPath: string,
+    worktreePath: string,
+    symlinkDirs: string[]
+  ): Promise<IpcResult<SymlinkResult[]>> {
+    return postJson<SymlinkResult[]>('/worktree/create-symlinks', {
+      projectPath,
+      worktreePath,
+      symlinkDirs
+    })
+  },
+
+  async ensureSymlinks(
+    projectPath: string,
+    worktreePath: string,
+    symlinkDirs: string[]
+  ): Promise<IpcResult<SymlinkResult[]>> {
+    return postJson<SymlinkResult[]>('/worktree/ensure-symlinks', {
+      projectPath,
+      worktreePath,
+      symlinkDirs
     })
   }
 }

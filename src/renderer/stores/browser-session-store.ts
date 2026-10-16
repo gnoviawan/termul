@@ -7,8 +7,9 @@ export interface BrowserTab {
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
-  /** True while an ACP session drives this tab via the `browser` tool —
-   *  shows the Agent badge; closing the tab revokes control host-side. */
+  /** Mirrors the host's `browser_tab_create` result: true while an ACP
+   *  session drives this tab via the `browser` tool. Shows the Agent badge;
+   *  closing the tab revokes control host-side. */
   agentControlled?: boolean
 }
 

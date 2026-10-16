@@ -202,7 +202,9 @@ pub fn device_store_prefix(device_id: &str) -> Option<String> {
 /// What a `/ws` request type needs from the connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Requirement {
-    /// Reads, ping, subscribe: any authenticated connection.
+    /// Reads, ping, subscribe and a chat read (`mark_chat_read` moves only
+    /// the shared unread marker a viewer clears by reading): any
+    /// authenticated connection.
     View,
     /// `store_write` / `store_delete`: view-only connections only for keys
     /// under their own `device/<deviceId>/` prefix.
@@ -236,7 +238,8 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "list_acp_catalog"
         | "list_claude_accounts"
         | "list_claude_usage"
-        | "store_read" => Requirement::View,
+        | "store_read"
+        | "mark_chat_read" => Requirement::View,
         "store_write" | "store_delete" => Requirement::DeviceStore,
         _ => Requirement::Write,
     }

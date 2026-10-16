@@ -18,6 +18,7 @@ import {
   type AcpAuthenticateReply,
   type AcpRuntimePolicy,
   type AddProjectPayload,
+  type ChatReadMark,
   type DeleteSessionPayload,
   type HistoryMode,
   type PersistedSessionSummary,
@@ -80,6 +81,7 @@ import {
   COMMAND_IN_PROGRESS_CODE,
   type CommandCallOptions,
   parseVisibleAt,
+  type ReopenCallOptions,
   type SessionCursor
 } from './types'
 import { WatchClient } from './watch-client'
@@ -1133,18 +1135,22 @@ export class WsAcpTransport implements AcpTransport {
     sessionId: SessionId,
     cwd: string,
     additionalDirectories?: string[],
-    options?: CommandCallOptions
+    options?: ReopenCallOptions
   ): Promise<SessionReopenOutcome> {
+    const { mcpServers, ...call } = options ?? {}
     const outcome = await this.request<SessionReopenOutcome>(
       'load_session',
       {
         agentId,
         sessionId,
         cwd,
-        ...(additionalDirectories?.length ? { additionalDirectories } : {})
+        ...(additionalDirectories?.length ? { additionalDirectories } : {}),
+        // Present only for a reload. An empty array still asks the host to
+        // attach the plan server. Omitted keeps a normal history reopen.
+        ...(mcpServers ? { mcpServers } : {})
       },
       undefined,
-      options
+      call
     )
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
@@ -1155,18 +1161,20 @@ export class WsAcpTransport implements AcpTransport {
     sessionId: SessionId,
     cwd: string,
     additionalDirectories?: string[],
-    options?: CommandCallOptions
+    options?: ReopenCallOptions
   ): Promise<SessionReopenOutcome> {
+    const { mcpServers, ...call } = options ?? {}
     const outcome = await this.request<SessionReopenOutcome>(
       'resume_session',
       {
         agentId,
         sessionId,
         cwd,
-        ...(additionalDirectories?.length ? { additionalDirectories } : {})
+        ...(additionalDirectories?.length ? { additionalDirectories } : {}),
+        ...(mcpServers ? { mcpServers } : {})
       },
       undefined,
-      options
+      call
     )
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
@@ -1222,6 +1230,10 @@ export class WsAcpTransport implements AcpTransport {
     options?: CommandCallOptions
   ): Promise<void> {
     await this.request('record_agent_switch', { sessionId, ...record }, undefined, options)
+  }
+
+  async markChatRead(sessionId: SessionId, seq: number): Promise<ChatReadMark> {
+    return this.request<ChatReadMark>('mark_chat_read', { sessionId, seq })
   }
 
   async sendPrompt(

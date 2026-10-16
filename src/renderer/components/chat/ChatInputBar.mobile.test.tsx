@@ -911,7 +911,10 @@ describe('mobile composer: MCP servers in the sheet', () => {
     expect(within(sheet).getByText('Disconnected')).toBeInTheDocument()
     expect(within(sheet).getByRole('switch', { name: 'Disable github' })).toBeInTheDocument()
     expect(within(sheet).getByRole('switch', { name: 'Disable playwright' })).toBeInTheDocument()
-    expect(within(sheet).getByText('Takes effect on the next chat.')).toBeInTheDocument()
+    expect(
+      within(sheet).getByText('This chat still uses the previous servers.')
+    ).toBeInTheDocument()
+    expect(within(sheet).getByRole('button', { name: 'Reload this chat' })).toBeInTheDocument()
     // The sheet scrolls, so the list drops the popover's nested 300px scroller.
     const list = within(sheet).getAllByRole('list')[0]
     expect(list).not.toHaveClass('max-h-[300px]')
@@ -950,6 +953,7 @@ describe('mobile composer: MCP servers in the sheet', () => {
     expect(within(sheet).getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument()
     expect(within(sheet).getByText('No servers attached yet.')).toBeInTheDocument()
     expect(within(sheet).queryByRole('listitem')).not.toBeInTheDocument()
+    expect(within(sheet).getByRole('button', { name: 'Reload this chat' })).toBeInTheDocument()
     expect(within(sheet).queryByText('Takes effect on the next chat.')).not.toBeInTheDocument()
   })
 })

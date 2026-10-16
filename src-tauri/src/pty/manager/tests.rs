@@ -307,6 +307,105 @@ fn parse_npm_cmd_shim_rewrites_npm_launcher_with_set_indirection() {
 
 #[cfg(target_os = "windows")]
 #[test]
+fn parse_npm_cmd_shim_resolves_native_binary_shim() {
+    // Anthropic's native Claude Code package ships a .cmd that invokes the
+    // bundled PE image directly — one quoted path, no interpreter/script
+    // pair:
+    //   "%dp0%\node_modules\@anthropic-ai\claude-code\bin\claude.exe"   %*
+    let dir = std::env::temp_dir().join("termul-test-native-bin-shim");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("node_modules\\@anthropic-ai\\claude-code\\bin")).unwrap();
+    std::fs::write(
+        dir.join("node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"),
+        b"MZ",
+    )
+    .unwrap();
+
+    let shim_path = dir.join("claude.cmd");
+    let shim_content =
+        "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+            SETLOCAL\r\nCALL :find_dp0\r\n\r\n\
+            \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
+    std::fs::write(&shim_path, shim_content).unwrap();
+
+    let resolved = parse_npm_cmd_shim(shim_path.to_str().unwrap())
+        .expect("native-binary .cmd shim should resolve");
+    assert!(
+        resolved.program.ends_with("claude.exe"),
+        "expected the bundled claude.exe, got: {}",
+        resolved.program
+    );
+    assert!(
+        resolved.prepend_args.is_empty(),
+        "native-binary shim must not prepend args, got: {:?}",
+        resolved.prepend_args
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn resolve_spawn_program_rewrites_native_binary_cmd_shim() {
+    // The same single-quote form through the public resolver entrypoint
+    // (explicit path), the way `claude_cli_command` hands the shim over.
+    let dir = std::env::temp_dir().join("termul-test-resolve-native-bin-shim");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("node_modules\\pkg\\bin")).unwrap();
+    std::fs::write(dir.join("node_modules\\pkg\\bin\\tool.exe"), b"MZ").unwrap();
+
+    let shim_path = dir.join("tool.cmd");
+    let shim_content = "@ECHO off\r\n\"%dp0%\\node_modules\\pkg\\bin\\tool.exe\"   %*\r\n";
+    std::fs::write(&shim_path, shim_content).unwrap();
+
+    let resolved = resolve_spawn_program(shim_path.to_str().unwrap())
+        .expect("native-binary .cmd shim should resolve");
+    assert!(
+        resolved.program.ends_with("tool.exe"),
+        "expected tool.exe, got: {}",
+        resolved.program
+    );
+    assert!(
+        resolved.prepend_args.is_empty(),
+        "native-binary shim must not prepend args, got: {:?}",
+        resolved.prepend_args
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn parse_npm_cmd_shim_rejects_single_quote_non_pe_and_flagged_forms() {
+    let dir = std::env::temp_dir().join("termul-test-native-bin-reject");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("tool.exe"), b"MZ").unwrap();
+    std::fs::write(dir.join("tool.js"), b"").unwrap();
+
+    // A quoted *script* alone is not a spawnable image — must not be
+    // mistaken for the native-binary form.
+    let script_shim = dir.join("script.cmd");
+    std::fs::write(&script_shim, "\"%dp0%\\tool.js\" %*\r\n").unwrap();
+    assert!(
+        parse_npm_cmd_shim(script_shim.to_str().unwrap()).is_none(),
+        "a quoted script with no interpreter must not resolve"
+    );
+
+    // `"%dp0%\tool.exe" --flag %*` carries a literal argv token that a
+    // rewritten spawn would silently drop — refuse rather than misparse.
+    let flagged_shim = dir.join("flagged.cmd");
+    std::fs::write(&flagged_shim, "\"%dp0%\\tool.exe\" --service %*\r\n").unwrap();
+    assert!(
+        parse_npm_cmd_shim(flagged_shim.to_str().unwrap()).is_none(),
+        "a bare-exe line with literal flags must not resolve"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
 fn parse_powershell_cmd_shim_rewrites_cursor_agent_style() {
     let dir = std::env::temp_dir().join("termul-test-ps-shim");
     let _ = std::fs::remove_dir_all(&dir);
@@ -862,7 +961,7 @@ async fn replayed_spawn_finds_the_stamped_pty_and_issues_a_fresh_claim() {
     assert!(manager.find_by_command_id("cmd-other").is_none());
 
     // A viewer is attached: the replay's claim is shared, the viewer's stays valid.
-    found.add_web_attachment();
+    found.add_live_attachment();
     let replay = manager
         .replay_spawn("cmd-spawn-1", Some("p"))
         .expect("replayed spawn");
@@ -874,7 +973,7 @@ async fn replayed_spawn_finds_the_stamped_pty_and_issues_a_fresh_claim() {
 
     // Nobody attached (e.g. a concurrent resend before the first client
     // attaches): the first reply's claim must keep working too.
-    found.remove_web_attachment();
+    found.remove_live_attachment();
     let again = manager
         .replay_spawn("cmd-spawn-1", Some("p"))
         .expect("replayed spawn");
@@ -966,11 +1065,11 @@ async fn terminal_set_observer_hears_each_change_of_the_project_once() {
     assert!(manager.terminal_set("other").is_empty());
 
     let instance = manager.get(&spawned.info.id).expect("instance");
-    instance.add_web_attachment();
-    instance.add_web_attachment(); // a second viewer does not change the set
+    instance.add_live_attachment();
+    instance.add_live_attachment(); // a second viewer does not change the set
     assert!(manager.terminal_set("proj-x")[0].attached);
-    instance.remove_web_attachment();
-    instance.remove_web_attachment();
+    instance.remove_live_attachment();
+    instance.remove_live_attachment();
     assert!(!manager.terminal_set("proj-x")[0].attached);
     manager.force_kill(&spawned.info.id).await.unwrap();
     manager.force_kill(&loose.info.id).await.unwrap();

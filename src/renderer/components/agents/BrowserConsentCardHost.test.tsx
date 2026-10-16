@@ -11,21 +11,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BrowserConsentRequestEvent } from '@/lib/acp-api'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 
-const { mockRespond, mockTabHide, mockTabShow, acpState, workspaceState, runtimeState } =
-  vi.hoisted(() => ({
-    mockRespond: vi.fn(),
-    mockTabHide: vi.fn(async () => {}),
-    mockTabShow: vi.fn(async () => {}),
-    acpState: {
-      pendingBrowserConsents: {} as Record<string, BrowserConsentRequestEvent>,
-      configToLiveAgent: {} as Record<string, string>,
-      agentConfigs: [] as Array<{ id: string; name?: string }>
-    },
-    workspaceState: {
-      activeTab: undefined as WorkspaceTab | undefined
-    },
-    runtimeState: { tauri: true }
-  }))
+const { mockRespond, acpState, workspaceState, runtimeState } = vi.hoisted(() => ({
+  mockRespond: vi.fn(),
+  acpState: {
+    pendingBrowserConsents: {} as Record<string, BrowserConsentRequestEvent>,
+    configToLiveAgent: {} as Record<string, string>,
+    agentConfigs: [] as Array<{ id: string; name?: string }>
+  },
+  workspaceState: {
+    activeTab: undefined as WorkspaceTab | undefined
+  },
+  runtimeState: { tauri: true }
+}))
 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => runtimeState.tauri
@@ -46,15 +43,16 @@ vi.mock('@/stores/workspace-store', () => ({
   useActiveTab: () => workspaceState.activeTab
 }))
 
-vi.mock('@/lib/browser-api', () => ({
-  browserTabHide: mockTabHide,
-  browserTabShow: mockTabShow
-}))
-
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn(async () => {})
 }))
 
+import { BrowserConsentStrip } from '@/components/browser/BrowserConsentStrip'
+import {
+  NativeWebviewOccluder,
+  resetNativeWebviewOcclusionForTests,
+  useNativeWebviewOccluded
+} from '@/hooks/use-native-webview-occlusion'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useConsentStripHost } from '@/stores/browser-consent-strip-store'
 import { BrowserConsentCardHost } from './BrowserConsentCardHost'
@@ -79,18 +77,23 @@ function browserTab(id = TAB_ID): WorkspaceTab {
 
 beforeEach(() => {
   mockRespond.mockReset()
-  mockTabHide.mockReset()
-  mockTabShow.mockReset()
   acpState.pendingBrowserConsents = {}
   acpState.configToLiveAgent = {}
   acpState.agentConfigs = []
   workspaceState.activeTab = undefined
   runtimeState.tauri = true
   useConsentCardHost.setState({ hostedSessionIds: new Set() })
-  useConsentStripHost.setState({ mountedBrowserTabIds: new Set() })
+  useConsentStripHost.setState({ mountedBrowserTabIds: new Set(), announcedRequestIds: new Set() })
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  resetNativeWebviewOcclusionForTests()
+})
+
+function OcclusionProbe(): React.JSX.Element {
+  return <span data-testid="occlusion">{useNativeWebviewOccluded() ? 'occluded' : 'clear'}</span>
+}
 
 describe('BrowserConsentCardHost (root fallback)', () => {
   it('renders a fallback card for a pending consent with no hosted chat card', () => {
@@ -146,22 +149,66 @@ describe('BrowserConsentCardHost (root fallback)', () => {
     expect(mockRespond).toHaveBeenCalledWith('req-1', true)
   })
 
-  it('hides the focused browser webview while a fallback card is showing', () => {
+  it('keeps every browser webview out of the way while a fallback card is showing', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
-    workspaceState.activeTab = browserTab()
-    render(<BrowserConsentCardHost />)
-    expect(mockTabHide).toHaveBeenCalledWith(TAB_ID)
-    expect(mockTabShow).not.toHaveBeenCalled()
+    render(
+      <>
+        <BrowserConsentCardHost />
+        <OcclusionProbe />
+      </>
+    )
+    expect(screen.getByTestId('occlusion')).toHaveTextContent('occluded')
   })
 
-  it('restores a hidden webview once no fallback card is showing', () => {
+  it('releases the webviews once no fallback card is showing', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
-    workspaceState.activeTab = browserTab()
-    const { rerender } = render(<BrowserConsentCardHost />)
-    expect(mockTabHide).toHaveBeenCalledWith(TAB_ID)
+    const Page = (): React.JSX.Element => (
+      <>
+        <BrowserConsentCardHost />
+        <OcclusionProbe />
+      </>
+    )
+    const { rerender } = render(<Page />)
 
     acpState.pendingBrowserConsents = {}
-    rerender(<BrowserConsentCardHost />)
-    expect(mockTabShow).toHaveBeenCalledWith(TAB_ID)
+    rerender(<Page />)
+
+    expect(screen.getByTestId('occlusion')).toHaveTextContent('clear')
+  })
+})
+
+describe('BrowserConsentCardHost while an overlay covers the interface', () => {
+  it('takes over a consent the strip was hosting', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    workspaceState.activeTab = browserTab()
+    const Page = ({ overlay }: { overlay: boolean }): React.JSX.Element => (
+      <>
+        <BrowserConsentStrip browserTabId={TAB_ID} />
+        <BrowserConsentCardHost />
+        {overlay && <NativeWebviewOccluder />}
+      </>
+    )
+    const { rerender } = render(<Page overlay={false} />)
+    expect(screen.queryByTestId('browser-consent-card-host')).not.toBeInTheDocument()
+
+    rerender(<Page overlay />)
+    expect(screen.getByTestId('browser-consent-card-host')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Allow for this session' })).toHaveLength(1)
+
+    rerender(<Page overlay={false} />)
+    expect(screen.queryByTestId('browser-consent-card-host')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Allow for this session' })).toHaveLength(1)
+  })
+
+  it('takes over a consent a chat panel card was hosting', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    useConsentCardHost.setState({ hostedSessionIds: new Set(['sess-1']) })
+    render(
+      <>
+        <BrowserConsentCardHost />
+        <NativeWebviewOccluder />
+      </>
+    )
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
   })
 })

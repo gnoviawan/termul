@@ -21,7 +21,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::web::acp_api;
-use crate::web::auth::WebAuth;
+use crate::web::auth::{BearerVerified, WebAuth};
 
 use crate::acp::{
     AcpCatalogService, AcpInstallService, AcpManager,
@@ -45,6 +45,7 @@ use crate::web::origin::{self, OriginPolicy};
 use crate::web::project_icon_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
+use crate::web::route_deadline;
 use crate::web::search_api;
 use crate::web::sink::WsRelaySink;
 use crate::web::skills_api;
@@ -282,8 +283,7 @@ pub fn router(
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))
         // Frontend error forwarding (CAP-2): `POST /log/frontend-error`.
-        // Loopback-only (enforced inside the handler).
-        .route("/log/frontend-error", post(log_api::frontend_error))
+        .route("/log/frontend-error", log_api::route())
         .route("/shells", get(fs_api::shells))
         // ACP catalog web routes (CAP-6: Web & Mobile 1:1 Parity). Each
         // mirrors a desktop `#[tauri::command] acp_*_catalog` handler; see
@@ -307,11 +307,7 @@ pub fn router(
         // Worktree web routes (CAP — Web worktree parity). Each mirrors a
         // desktop `#[tauri::command] worktree_*` handler; see
         // `web/worktree_api.rs`. Registered AHEAD of the static fallback so the
-        // SPA mount cannot shadow them. Write routes (`create`/`remove`/
-        // `copy-include-files`/`rename-branch`) are loopback-guarded inside the handler; read
-        // routes (`list`/`branches`/`check-dirty`/`resolve-base-branch`)
-        // enforce containment only. Only the 7 launch-flow routes ship here;
-        // the 8 advanced ops are deferred (see deferred-work.md).
+        // SPA mount cannot shadow them.
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))
         .route("/worktree/remove", post(worktree_api::remove))
@@ -328,6 +324,18 @@ pub fn router(
         .route(
             "/worktree/rename-branch",
             post(worktree_rename_api::rename_branch),
+        )
+        .route(
+            "/worktree/parse-gitignore",
+            post(worktree_api::parse_gitignore),
+        )
+        .route(
+            "/worktree/create-symlinks",
+            post(worktree_api::create_symlinks),
+        )
+        .route(
+            "/worktree/ensure-symlinks",
+            post(worktree_api::ensure_symlinks),
         );
     let mut r = r
         // Canvas web routes (OpenPencil canvas mode, CAP-5): open/close/
@@ -368,6 +376,7 @@ pub fn router(
     // layer marks them `no-cache, must-revalidate`; on the embedded path it
     // writes the same value the embed already sets (idempotent).
     r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    r = r.layer(middleware::from_fn(route_deadline::bound));
     // #857: gzip responses when `Accept-Encoding` allows (cold load 3.66 MB →
     // ~1 MB) + pin Vite-hashed `/assets/*` immutable for a year on the disk
     // `ServeDir` path (the embedded path already sets the same value in
@@ -500,13 +509,20 @@ fn presented_token(request: &Request) -> Option<String> {
 /// Axum middleware enforcing the web auth gate on gated API routes. The 401
 /// body mirrors the `IpcBody` failure shape (`{success, error, code}`) the
 /// renderer's REST helpers parse; the token is never logged or echoed.
-async fn web_auth_gate(State(auth): State<Arc<WebAuth>>, request: Request, next: Next) -> Response {
+async fn web_auth_gate(
+    State(auth): State<Arc<WebAuth>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     if !requires_token(request.uri().path()) {
         return next.run(request).await;
     }
     let presented = presented_token(&request);
     match presented {
-        Some(token) if auth.accepts(&token) => next.run(request).await,
+        Some(token) if auth.accepts(&token) => {
+            request.extensions_mut().insert(BearerVerified);
+            next.run(request).await
+        }
         _ => {
             tracing::warn!(
                 target: "termul::web::router",
@@ -601,7 +617,7 @@ pub fn router_with_static(
         .route("/search/cancel", post(search_api::cancel))
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))
-        .route("/log/frontend-error", post(log_api::frontend_error))
+        .route("/log/frontend-error", log_api::route())
         .route("/shells", get(fs_api::shells))
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
@@ -649,6 +665,7 @@ pub fn router_with_static(
     // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
     // so the disk-served bundle doesn't stall SW updates (same layer).
     let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    let r = r.layer(middleware::from_fn(route_deadline::bound));
     // #857 parity with `router`: gzip + immutable hashed-asset caching on the
     // disk-served static bundle.
     let r = r

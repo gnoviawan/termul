@@ -55,7 +55,9 @@ import {
   handoffOnlyTurnIds,
   historySeqWatermarks,
   isHistoryCoveredEvent,
+  isHistoryCoveredToolEvent,
   liveSwitchSources,
+  liveTurnReplaySeq,
   MAX_COMMIT_MESSAGE_RESPONSE_CHARS,
   MAX_TERMINAL_ASSIST_RESPONSE_CHARS,
   nextSeq,
@@ -677,8 +679,8 @@ export function dropSessionBookkeeping(
   // Live-switch source links die with either endpoint: the target's entry
   // outright, and any entry pointing at the dropped session as source.
   liveSwitchSources.delete(sessionId)
-  for (const [target, source] of liveSwitchSources) {
-    if (source === sessionId) liveSwitchSources.delete(target)
+  for (const [target, link] of liveSwitchSources) {
+    if (link.sourceId === sessionId) liveSwitchSources.delete(target)
   }
 }
 
@@ -1342,8 +1344,10 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       rejectTerminalAssistCollector(e.sessionId, 'The ACP agent attempted to use a tool')
       return
     }
-    // CAP-3 replay contract: drop events the installed payload already covers.
-    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // CAP-3 replay contract: drop events the installed payload already covers,
+    // unless the open turn's attach replay re-delivers them in full.
+    if (isHistoryCoveredToolEvent(e.sessionId, eventSeq)) return
+    const replaySeq = liveTurnReplaySeq(e.sessionId, eventSeq)
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
     const apply = (s: AcpState): Partial<AcpState> => {
@@ -1351,6 +1355,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
       // can interleave tool calls with messages on one chronological timeline.
+      // A replayed card keeps its server seq, which places it among the
+      // payload's messages instead of below them.
       // CAP-2/F-2: clamp rawOutput/title/content/rawInput/locations on the
       // initial call. Codex terminal chunks are accumulated first, then the
       // same bound applies so a long shell stream cannot bypass it.
@@ -1362,7 +1368,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         ...e.toolCall,
         ...stream,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
-        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
+        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : (replaySeq ?? nextSeq())
       })
       // Dropped entirely: even the structural subset exceeds the live bound
       // (the agent-sent toolCallId/kind/status alone is oversized).
@@ -1410,8 +1416,9 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
 
   _onToolCallUpdate: (e, eventSeq) => {
     // CAP-3 replay contract: drop events the installed payload already covers
-    // (the restored card already reflects the persisted update).
-    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // (the restored card already reflects the persisted update), unless the
+    // open turn's attach replay re-delivers them in full.
+    if (isHistoryCoveredToolEvent(e.sessionId, eventSeq)) return
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
     const apply = (s: AcpState): Partial<AcpState> => {

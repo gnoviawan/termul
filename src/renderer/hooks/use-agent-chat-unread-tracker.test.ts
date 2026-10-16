@@ -50,8 +50,21 @@ function renderTracker(activeSessionIds: readonly string[]) {
 beforeEach(() => {
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatUnreadStore.setState({ unread: {} })
+  useAgentChatUnreadStore.setState({
+    unread: {},
+    unreadSince: {},
+    seenTurnEndSeq: {},
+    sharedReadSeq: {}
+  })
 })
+
+function turnEnd(sessionId: string, seq: number): void {
+  act(() => useAgentChatUnreadStore.getState().noteTurnEnd(sessionId, seq))
+}
+
+function readElsewhere(sessionId: string, seq: number): void {
+  act(() => useAgentChatUnreadStore.getState().setReadMark(sessionId, seq))
+}
 
 describe('useAgentChatUnreadTracker', () => {
   it('marks a background chat unread when its turn finishes (busy to idle)', () => {
@@ -246,5 +259,51 @@ describe('useAgentChatUnreadTracker', () => {
 
     expect(() => renderTracker(['a'])).not.toThrow()
     expect(unreadIds()).toEqual([])
+  })
+
+  it('clears a dot when another surface reads the turn end that raised it', () => {
+    seedChat('a')
+    seedChat('b')
+    renderTracker(['a'])
+    setTurn('b', true)
+    turnEnd('b', 12)
+    setTurn('b', false)
+    expect(unreadIds()).toEqual(['b'])
+
+    readElsewhere('b', 12)
+
+    expect(unreadIds()).toEqual([])
+  })
+
+  it('keeps a dot whose turn ended with no turn end seen here, when an older read is swept again', () => {
+    seedChat('a')
+    seedChat('b')
+    turnEnd('b', 10)
+    readElsewhere('b', 10)
+    renderTracker(['a'])
+    setTurn('b', true)
+    setTurn('b', false)
+    expect(unreadIds()).toEqual(['b'])
+
+    turnEnd('a', 11)
+    act(() => useAgentChatUnreadStore.getState().setReadMarks({ b: 10 }))
+
+    expect(unreadIds()).toEqual(['b'])
+  })
+
+  it('keeps a dot when a second background turn ends with no turn end and the first is read elsewhere', () => {
+    seedChat('a')
+    seedChat('b')
+    renderTracker(['a'])
+    setTurn('b', true)
+    turnEnd('b', 10)
+    setTurn('b', false)
+    setTurn('b', true)
+    setTurn('b', false)
+    expect(unreadIds()).toEqual(['b'])
+
+    readElsewhere('b', 10)
+
+    expect(unreadIds()).toEqual(['b'])
   })
 })

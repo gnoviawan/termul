@@ -75,6 +75,15 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     expect(onToggle).toHaveBeenCalledWith('s2', true)
   })
 
+  it('offers Reload this chat when the host can reload', () => {
+    const onReloadChat = vi.fn()
+    render(<McpBadge count={1} servers={servers} onToggle={vi.fn()} onReloadChat={onReloadChat} />)
+    openPopover()
+    expect(screen.getByText('This chat still uses the previous servers.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reload this chat' }))
+    expect(onReloadChat).toHaveBeenCalledOnce()
+  })
+
   it('discloses that server changes take effect on the next chat', () => {
     render(<McpBadge count={1} servers={servers} onToggle={vi.fn()} />)
     openPopover()

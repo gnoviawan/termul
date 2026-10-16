@@ -9,19 +9,18 @@ import type {
   SessionConfigOption,
   SessionModeState
 } from '@/lib/acp-api'
-import { placeCommandTokenAtStart } from '@/lib/command-prefix'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
 import {
-  commandToken,
   extractCommandNames,
   extractSkillNames,
+  insertCommandToken,
   insertSkillToken,
   isFolderTokenPath,
   parseFileSegments,
+  replaceCommandTokensInline,
   replaceFileTokensInline,
-  SKILL_TOKEN_START,
-  stripAllCommandTokens
+  SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
 import { attachmentToBlock, guessMimeType } from './chat-attachments'
@@ -78,12 +77,11 @@ import type { ComposerMentions } from './use-composer-mentions'
  * Slash commands (e.g. `/compact`) splice an inline `commandPill` Tiptap atom
  * into the value (`\uE004<name>\uE005` sentinel) instead of setting a detached
  * `activeCommand` state + rendering `<CommandChip>` on top of the composer.
- * The wire builder extracts the command name via `extractCommandNames(value)`
- * and prefixes `/<name> ` to the wire payload (byte-identical to the old
- * `activeCommand` path). The token is stripped from `wireText` (the skill wire
- * framer receives the de-commanded text). Single-command invariant:
- * `insertCommandToken` rejects a second command token if one already exists
- * (matching today's single-`activeCommand` semantics).
+ * The pill stays where the user typed it: start, middle, or end of the
+ * sentence, the same way a skill pill stays in place. The wire replaces the
+ * token with `/<name>` at that position. It is not moved to the front.
+ * Single-command invariant: `insertCommandToken` rejects a second command
+ * token if one already exists.
  */
 export interface UseChatComposerArgs {
   value: string
@@ -289,16 +287,14 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         return
       }
       if (item.kind === 'command') {
-        // A command is a prefix. Remove the `/`-filter at the caret and place
-        // the token at the start of the draft, so the composer matches the
-        // `/name` wire text before Enter. One command per draft: a second pick
-        // leaves the value unchanged and tells the user why.
+        // Splice the command token where the `/` filter is, same as a skill.
+        // One command per draft: a second pick leaves the value unchanged.
         const editor = editorRef.current
         const caret = composerStringCaret(editor, value.length)
         const trigger = findSlashTrigger(value, caret)
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
-        const result = placeCommandTokenAtStart(value, insertAt, item.name, deleteBefore)
+        const result = insertCommandToken(value, insertAt, item.name, deleteBefore)
         if (!result.inserted) {
           editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
           toast.error('This message already has a command.')
@@ -367,24 +363,20 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
   )
 
   const buildPromptParts = useCallback((): ChatPromptParts => {
-    // Extract ALL command tokens (send-time guard). A corrupted/pasted value
-    // could carry 2+ `\uE004…\uE005` tokens (paste bypasses the single-command
-    // invariant enforced at insert time). The first name sources the
-    // `/<name> ` wire prefix; ALL tokens are stripped from `wireText` so no
-    // sentinel leaks to the agent (extras are silently dropped — graceful
-    // degradation, never a crash).
+    // Command tokens stay where the user typed them. The wire replaces each
+    // token with `/<name>` in place so no sentinel leaks. A pasted second
+    // token is kept in its sentence position too (insert still rejects a
+    // second pick).
     const commandNames = extractCommandNames(value)
     const commandName = commandNames[0] ?? null
-    const valueDecommanded = commandNames.length > 0 ? stripAllCommandTokens(value) : value
-    // Extract the inline skill tokens carried in the (de-commanded) value and
-    // resolve each name to its SKILL.md path. Paths come from `skillPathsRef`
-    // (captured at pick time) first, then fall back to the currently-available
-    // skills list — so editing + re-sending a chip message (where the ref is
-    // empty because paths aren't persisted with the message) still resolves
-    // paths from the live skills list. A skill surfaced without a path in
-    // either (e.g. a future web skill with no parity route) blocks the send —
-    // HALT with a clear error so the user can remove the chip.
-    const skillNames = extractSkillNames(valueDecommanded)
+    const valueWithCommandText = replaceCommandTokensInline(value)
+    // Extract the inline skill tokens and resolve each name to its SKILL.md
+    // path. Paths come from `skillPathsRef` (captured at pick time) first,
+    // then fall back to the currently-available skills list — so editing +
+    // re-sending a chip message (where the ref is empty because paths aren't
+    // persisted with the message) still resolves paths from the live skills
+    // list. A skill surfaced without a path in either blocks the send.
+    const skillNames = extractSkillNames(value)
     const resolvedSkills = skillNames.map((name) => ({
       name,
       path: skillPathsRef.current[name] ?? skills.find((s) => s.name === name)?.path ?? ''
@@ -399,7 +391,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     // the timeline renders inline file pills; the wire text replaces each
     // token with `(display)` so the agent sees a readable reference alongside
     // the `resource_link` block carrying the real path.
-    const fileSegments = parseFileSegments(valueDecommanded)
+    const fileSegments = parseFileSegments(valueWithCommandText)
     const fileBlocks: ContentBlock[] = []
     const seenPaths = new Set<string>()
     for (const seg of fileSegments) {
@@ -420,16 +412,13 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     // Replace file tokens with `(display)` for the wire user-text portion
     // (mirrors `replaceSkillTokensInline` for skills). Applied BEFORE the
     // skill framer so the skill framing header wraps the de-filed text.
-    const valueDefiled = replaceFileTokensInline(valueDecommanded)
+    const valueDefiled = replaceFileTokensInline(valueWithCommandText)
     const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
-    const displayText = valueDecommanded
-    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
-    // Display keeps the raw `\uE004<name>\uE005` token (mirroring skill/file
-    // tokens) so the timeline renders a command chip; the wire stays
-    // byte-identical (`/<name> ` prefix + de-commanded text).
-    const displayWithCommand = commandName
-      ? `${commandToken(commandName)}${displayText.length > 0 ? ` ${displayText}` : ''}`
-      : displayText
+    // Display keeps every pill token where the user typed it. Wire text is
+    // the same sentence with command tokens already replaced by `/<name>`.
+    const displayText = value
+    const wireWithCommand = wireText
+    const displayWithCommand = displayText
     return {
       skills: resolvedSkills,
       hasSkills,

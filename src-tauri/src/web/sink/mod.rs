@@ -184,6 +184,7 @@ pub struct WsRelaySink {
     /// Authenticated connections per `deviceId`, shared by `/ws` and
     /// `/terminal/ws` (both reach the relay through `AppState.relay`).
     presence: Arc<crate::web::presence::PresenceRegistry>,
+    chat_reads: crate::web::chat_reads::ChatReads,
 }
 
 /// Where a session's log stands at a point under the seq lock: the identity
@@ -255,6 +256,7 @@ impl WsRelaySink {
                 ),
             )),
             presence: Arc::new(crate::web::presence::PresenceRegistry::new()),
+            chat_reads: crate::web::chat_reads::ChatReads::default(),
         }
     }
 
@@ -282,6 +284,12 @@ impl WsRelaySink {
     #[must_use]
     pub fn watches(&self) -> &Arc<crate::web::watch::WatchHub> {
         &self.watches
+    }
+
+    /// The shared last-read markers of the agent chats.
+    #[must_use]
+    pub fn chat_reads(&self) -> &crate::web::chat_reads::ChatReads {
+        &self.chat_reads
     }
 
     /// Device presence registry (connections per `deviceId`).

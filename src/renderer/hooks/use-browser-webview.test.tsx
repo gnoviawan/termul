@@ -79,7 +79,7 @@ describe('useBrowserWebview bounds updates', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(LOGICAL_RECT)
     vi.mocked(browserTabCreate).mockResolvedValue({
       success: true,
-      data: { id: 'browser-1', url: 'https://example.com', title: '' }
+      data: { id: 'browser-1', url: 'https://example.com', title: '', agentControlled: false }
     })
     vi.mocked(browserTabDestroy).mockResolvedValue({ success: true, data: undefined })
     vi.mocked(browserTabResize).mockResolvedValue({ success: true, data: undefined })
@@ -326,5 +326,54 @@ describe('useBrowserWebview bounds updates', () => {
     occluder.unmount()
     view.unmount()
     resetNativeWebviewOcclusionForTests()
+  })
+})
+
+describe('useBrowserWebview agent control', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(LOGICAL_RECT)
+    vi.mocked(browserTabDestroy).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(browserTabResize).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(browserTabShow).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(browserTabHide).mockResolvedValue({ success: true, data: undefined })
+    useBrowserSessionStore.getState().createTab('browser-1', 'https://example.com')
+  })
+
+  afterEach(() => {
+    useBrowserSessionStore.getState().removeTab('browser-1')
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function createResolves(agentControlled: boolean): void {
+    vi.mocked(browserTabCreate).mockResolvedValue({
+      success: true,
+      data: { id: 'browser-1', url: 'https://example.com', title: '', agentControlled }
+    })
+  }
+
+  it('clears a stale Agent flag when the host did not claim the created webview', async () => {
+    useBrowserSessionStore.getState().setAgentControlled('browser-1', true)
+    createResolves(false)
+
+    const view = render(<BrowserWebviewHarness />)
+
+    await waitFor(() =>
+      expect(useBrowserSessionStore.getState().getTab('browser-1')?.agentControlled).toBe(false)
+    )
+    view.unmount()
+  })
+
+  it('flags the tab once the host claims the created webview for an agent', async () => {
+    createResolves(true)
+
+    const view = render(<BrowserWebviewHarness />)
+
+    await waitFor(() =>
+      expect(useBrowserSessionStore.getState().getTab('browser-1')?.agentControlled).toBe(true)
+    )
+    view.unmount()
   })
 })

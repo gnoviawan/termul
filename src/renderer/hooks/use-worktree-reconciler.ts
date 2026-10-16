@@ -3,12 +3,11 @@
  *
  * Thin trigger over the single-flight reconciler (`lib/worktree-reconciler.ts`,
  * the only writer of `project.worktrees`): runs on mount and on a 60-second
- * interval, on desktop and web alike. Desktop additionally ensures the
- * configured symlink dirs exist in each stored worktree.
+ * interval, on desktop and web alike.
  */
 
 import { useCallback, useEffect, useRef } from 'react'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { serverAdmitsRemoteWrites } from '@/lib/tauri-runtime'
 import { worktreeApi } from '@/lib/worktree-api'
 import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
 import { useProjectStore } from '@/stores/project-store'
@@ -27,8 +26,7 @@ export function useWorktreeReconciler(projectId: string) {
     try {
       await reconcileProjectWorktrees(projectId)
 
-      // Symlink ensure is desktop-only. Read the post-reconcile store state.
-      if (!isTauriContext()) return
+      if (!serverAdmitsRemoteWrites()) return
       const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
       const symlinkDirs = project?.symlinkDirs
       if (!project?.isGitRepo || !project.path || !symlinkDirs || symlinkDirs.length === 0) return

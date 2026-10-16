@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 50 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(50)
+  it('exports exactly 51 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(51)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -144,6 +144,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'acp_deliver_auth_redirect',
       // CAP-2 (spec-in-chat-agent-switch): host-authored durable marker.
       'record_agent_switch',
+      // A surface read a chat: move the shared last-read marker.
+      'mark_chat_read',
       // Watches (projects, chat history, agents, fs, store, terminals).
       'watch',
       'unwatch',

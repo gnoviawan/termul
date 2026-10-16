@@ -1,10 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { closeAgentChat } from '@/lib/agent-chat-close'
 import { returnToWorkspaceRoute } from '@/lib/workspace-route'
-import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import { useCanvasStore } from '@/stores/canvas-store'
+import { closeWorkspaceTab } from '@/lib/workspace-tab-close'
 import { getAllLeafPanes, useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
 
 /** A workspace tab with the leaf pane that holds it. */
@@ -96,59 +93,21 @@ export function useMobileTabActions({
     [paneTabs, pathname, navigate]
   )
 
-  // Close routing per tab type — mirror of the (hidden) WorkspaceTabBar
-  // close semantics so mobile never silently bypasses a guard:
-  //   editor → dirty guard (threaded from WorkspaceLayout)
-  //   terminal → existing confirm flow (threaded as onCloseTerminal)
-  //   browser → session-tab teardown + tab removal
-  //   canvas → daemon eviction (closeCanvas) + tab removal
-  //   git / git-history / diff / agent-chat → plain removeTab
   const closePaneTab = useCallback(
-    (tab: WorkspaceTab): boolean => {
-      if (tab.type === 'editor') {
-        if (onCloseEditorTab) return onCloseEditorTab(tab.filePath)
-        // No guard threaded: fall back to direct close (still not silent
-        // data loss in practice — the editor auto-save policy owns unsaved
-        // content; the guard path is the wired default).
-        useWorkspaceStore.getState().removeTab(tab.id)
-        return false
-      }
-      if (tab.type === 'terminal') {
-        return onCloseTerminal?.(tab.terminalId, tab.id) ?? false
-      }
-      if (tab.type === 'browser') {
-        useBrowserSessionStore.getState().removeTab(tab.browserTabId)
-        useWorkspaceStore.getState().removeTab(tab.id)
-        return false
-      }
-      if (tab.type === 'agent-chat') {
-        closeAgentChat(tab.sessionId, () => {
-          useWorkspaceStore.getState().removeTab(tab.id)
-        })
-        return false
-      }
-      if (tab.type === 'canvas') {
-        // Canvas disposal, as the desktop tab bar does it: the daemon is evicted
-        // (daemon lifetime = canvas lifetime) and this is the only teardown path.
-        void useCanvasStore.getState().closeCanvas(tab.projectId)
-        useWorkspaceStore.getState().removeTab(tab.id)
-        return false
-      }
-      if (
-        tab.type === 'git' ||
-        tab.type === 'git-history' ||
-        tab.type === 'diff' ||
-        tab.type === 'commit-diff'
-      ) {
-        useWorkspaceStore.getState().removeTab(tab.id)
-        return false
-      }
-      // Exhaustiveness guard: `tab` is `never` here. An unrecognised kind is
-      // still removed so a close never leaves a stuck tab behind.
-      reportUnknownTabKind(tab, 'useMobileTabActions.closePaneTab', 'closed without teardown')
-      useWorkspaceStore.getState().removeTab((tab as WorkspaceTab).id)
-      return false
-    },
+    (tab: WorkspaceTab): boolean =>
+      closeWorkspaceTab(
+        tab,
+        {
+          terminal: (terminalTab) =>
+            onCloseTerminal?.(terminalTab.terminalId, terminalTab.id) ?? false,
+          editor: (editorTab) => {
+            if (onCloseEditorTab) return onCloseEditorTab(editorTab.filePath)
+            useWorkspaceStore.getState().removeTab(editorTab.id)
+            return false
+          }
+        },
+        'useMobileTabActions.closePaneTab'
+      ),
     [onCloseTerminal, onCloseEditorTab]
   )
 

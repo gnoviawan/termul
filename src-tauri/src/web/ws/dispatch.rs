@@ -136,6 +136,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // connection close, or project archive/remove.
         "watch" => handle_watch(id, &req.payload, env),
         "unwatch" => handle_unwatch(id, &req.payload, env),
+        "mark_chat_read" => handle_mark_chat_read(id, &req.payload, relay),
         // Project registry commands — one command service shared with the
         // HTTP routes and the desktop (`web::project_registry::commands`):
         // each validates, persists to the durable registry, then notifies.

@@ -242,7 +242,7 @@ where
 }
 
 /// Teardown of one `/terminal/ws` connection, run on drop: aborts the lifecycle
-/// event task and ends every attachment (each releases its `web_attachments`
+/// event task and ends every attachment (each releases its `live_attachments`
 /// count exactly once). PTYs themselves are preserved.
 struct SessionTeardown {
     ctx: ConnectionContext,
@@ -258,7 +258,7 @@ impl Drop for SessionTeardown {
 }
 
 /// A live output-forwarding attachment: the forwarder task plus the one-shot
-/// release of its `web_attachments` count. Every path that ends an attachment
+/// release of its `live_attachments` count. Every path that ends an attachment
 /// (forwarder exit, re-attach replacement, detach/rotate/revoke, connection
 /// cleanup) goes through [`AttachmentRelease::release`], so the count is
 /// decremented exactly once per attach — never twice for a forwarder that
@@ -285,13 +285,13 @@ impl AttachmentRelease {
     fn release(&self, pty: &PtyManager, terminal_id: &str) {
         if !self.0.swap(true, Ordering::AcqRel) {
             if let Some(instance) = pty.get(terminal_id) {
-                instance.remove_web_attachment();
+                instance.remove_live_attachment();
             }
         }
     }
 }
 
-/// Owns a freshly taken `web_attachments` count between `add_web_attachment`
+/// Owns a freshly taken `live_attachments` count between `add_live_attachment`
 /// and the moment the forwarder's [`Attachment`] is registered. Dropping it
 /// while still armed (early error return, failed replay send, or the
 /// connection task being cancelled mid-`await`) releases the count through the
@@ -521,7 +521,7 @@ async fn handle(
                 // the count never touches zero mid-swap (a zero would let
                 // another connection's `list_preserved` reissue the claim and
                 // invalidate the generation this new forwarder holds).
-                instance.add_web_attachment();
+                instance.add_live_attachment();
                 // The count taken above is owned by this guard until the
                 // forwarder's `Attachment` is registered: an early return, a
                 // failed reply send, or this connection task being cancelled
@@ -717,45 +717,7 @@ async fn handle(
                     project_id,
                     preserved.len()
                 );
-                let entries: Vec<Value> = preserved
-                    .into_iter()
-                    .map(|entry| {
-                        // #851a: every entry now carries ownership info —
-                        // `hasLiveAttachment` tells the renderer another
-                        // device already holds a live attachment, and the
-                        // shared claim lets THIS connection attach to the
-                        // SAME PTY (previously a live attachment meant an
-                        // empty claim + a silent duplicate spawn per device).
-                        // An empty claim (shared issuance refused — revoked
-                        // record) is still omitted entirely so the renderer's
-                        // "claim present" check cannot treat an empty string
-                        // as an attachable credential; the caller falls back
-                        // to spawn for it.
-                        if entry.claim.is_empty() {
-                            json!({
-                                "id": entry.info.id,
-                                "shell": entry.info.shell,
-                                "cwd": entry.info.cwd,
-                                "pid": entry.info.pid,
-                                "cols": entry.info.cols,
-                                "rows": entry.info.rows,
-                                "hasLiveAttachment": entry.live_attachment,
-                            })
-                        } else {
-                            json!({
-                                "id": entry.info.id,
-                                "shell": entry.info.shell,
-                                "cwd": entry.info.cwd,
-                                "pid": entry.info.pid,
-                                "cols": entry.info.cols,
-                                "rows": entry.info.rows,
-                                "claim": entry.claim,
-                                "hasLiveAttachment": entry.live_attachment,
-                            })
-                        }
-                    })
-                    .collect();
-                Ok(json!({ "projectId": project_id, "terminals": entries }))
+                Ok(json!({ "projectId": project_id, "terminals": preserved }))
             }
             _ => Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string())),
         },

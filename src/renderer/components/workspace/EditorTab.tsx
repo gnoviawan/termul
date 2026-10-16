@@ -11,13 +11,6 @@ function getBasename(filePath: string): string {
   return parts[parts.length - 1] || filePath
 }
 
-function getExtname(filePath: string): string {
-  const name = getBasename(filePath)
-  const dotIndex = name.lastIndexOf('.')
-  if (dotIndex <= 0) return ''
-  return name.slice(dotIndex)
-}
-
 export interface EditorTabProps extends TabInlineProps {
   tab: { type: 'editor'; id: string; filePath: string }
   bulkMenu: TabBulkMenuProps
@@ -42,7 +35,6 @@ export function EditorTab({
   onDrop
 }: EditorTabProps): React.JSX.Element {
   const fileName = getBasename(tab.filePath)
-  const ext = getExtname(tab.filePath).slice(1) || null
 
   const { isDirty, operationStatus } = useEditorStore(
     useShallow((state) => {
@@ -89,7 +81,6 @@ export function EditorTab({
         icon={
           <MaterialFileIcon
             name={fileName}
-            extension={ext}
             isDirectory={false}
             isExpanded={false}
             depth={0}

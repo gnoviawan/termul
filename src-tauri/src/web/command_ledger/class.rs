@@ -167,6 +167,7 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
         "record_agent_switch",
         CommandClass::command(Replay::Payload),
     ),
+    ("mark_chat_read", CommandClass::idempotent()),
     ("watch", CommandClass::read()),
     ("unwatch", CommandClass::read()),
 ];
