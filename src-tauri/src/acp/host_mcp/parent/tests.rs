@@ -1396,6 +1396,7 @@ fn cleared_idle_signal_is_not_called_by_a_later_ask_user() {
 
 #[test]
 fn ask_idle_heartbeat_is_a_third_of_the_idle_timeout_within_bounds() {
+    use super::ask::ask_idle_heartbeat;
     use std::time::Duration;
     assert_eq!(ask_idle_heartbeat(None), Duration::from_secs(30));
     assert_eq!(
