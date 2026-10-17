@@ -1,4 +1,5 @@
 import { type CSSProperties, Fragment, useEffect, useState } from 'react'
+import { useSyntaxThemeId } from '@/hooks/use-syntax-theme-id'
 import { type DiffTokenLine, highlightDiffText } from '@/lib/diff-highlight'
 import { cn } from '@/lib/utils'
 
@@ -34,18 +35,19 @@ export function CodeTokens({ tokens }: { tokens: DiffTokenLine }): React.JSX.Ele
  */
 function useHighlightedLines(code: string, language: string): DiffTokenLine[] | null {
   const [lines, setLines] = useState<DiffTokenLine[] | null>(null)
+  const themeId = useSyntaxThemeId()
 
   useEffect(() => {
     let cancelled = false
     setLines(null)
     if (language === 'plaintext') return
-    void highlightDiffText(code, language).then((result) => {
+    void highlightDiffText(code, language, themeId).then((result) => {
       if (!cancelled) setLines(result)
     })
     return () => {
       cancelled = true
     }
-  }, [code, language])
+  }, [code, language, themeId])
 
   return lines
 }

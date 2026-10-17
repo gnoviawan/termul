@@ -80,10 +80,10 @@ describe('tokenizeLine', () => {
 
   it('colors an Astro template line and a script line', async () => {
     const template = await tokenizeLineAsync('<div class="box">', 'astro')
-    expect(template.some((span) => span.color.includes('#569cd6'))).toBe(true)
+    expect(template.some((span) => span.color.includes('#a9a1f4'))).toBe(true)
     const script = await tokenizeLineAsync('import Icon from "./Icon.astro"', 'astro')
-    expect(script.some((span) => span.color.includes('#c586c0'))).toBe(true)
-    expect(script.some((span) => span.color.includes('#ce9178'))).toBe(true)
+    expect(script.some((span) => span.color.includes('#95d0cd'))).toBe(true)
+    expect(script.some((span) => span.color.includes('#d898d8'))).toBe(true)
   })
 
   it('returns empty array when parser is not loaded', () => {
@@ -91,6 +91,22 @@ describe('tokenizeLine', () => {
     const result = tokenizeLine('const x = 1', 'typescript')
     // Without preloading, should return empty (no crash)
     expect(result).toEqual([])
+  })
+})
+
+describe('function declaration color', () => {
+  it('paints a function name as a function, and a const binding as a declaration', async () => {
+    const fn = 'function AgentIcon() {}'
+    const fnSpans = await tokenizeLineAsync(fn, 'typescript')
+    const fnName = fnSpans.find((span) => fn.slice(span.start, span.end) === 'AgentIcon')
+    expect(fnName?.color.toLowerCase()).toContain('#e6b387')
+
+    const binding = 'const AgentIcon = 1'
+    const bindingSpans = await tokenizeLineAsync(binding, 'typescript')
+    const bindingName = bindingSpans.find(
+      (span) => binding.slice(span.start, span.end) === 'AgentIcon'
+    )
+    expect(bindingName?.color.toLowerCase()).toContain('#a9a1f4')
   })
 })
 

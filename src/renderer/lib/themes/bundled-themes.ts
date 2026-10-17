@@ -1,5 +1,6 @@
 import { BUNDLED_LIGHT_COLOR_THEMES } from './bundled-light-themes'
 import { TERMUL_DARK_CHROME } from './termul-dark-chrome'
+import { TERMUL_DARK_SYNTAX } from './termul-syntax'
 import type { ColorThemeDefinition } from './types'
 
 export interface ColorThemeFamily {
@@ -11,7 +12,7 @@ export interface ColorThemeFamily {
 
 /** Built-in dark appearance themes (OpenCode palette-compatible). */
 const BUNDLED_DARK_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
-  // syntax: VS Code Dark+ (Termul default editor)
+  // syntax: bright Termul palette (see termul-syntax.ts)
   termul: {
     id: 'termul',
     name: 'Termul',
@@ -29,16 +30,7 @@ const BUNDLED_DARK_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
         info: '#38bdf8'
       },
       chrome: TERMUL_DARK_CHROME,
-      overrides: {
-        'syntax-comment': '#6a9955',
-        'syntax-keyword': '#c586c0',
-        'syntax-string': '#ce9178',
-        'syntax-type': '#4ec9b0',
-        'syntax-constant': '#b5cea8',
-        'syntax-variable': '#9cdcfe',
-        'syntax-property': '#9cdcfe',
-        'syntax-function': '#dcdcaa'
-      }
+      overrides: TERMUL_DARK_SYNTAX
     }
   },
   // syntax: opencode cursor + vscode fallback

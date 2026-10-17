@@ -27,7 +27,9 @@ import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { syntaxShikiPair } from '@/lib/themes/syntax-shiki'
 import { cn } from '@/lib/utils'
+import { useColorTheme } from '@/stores/app-settings-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 import { guessMimeType, uint8ToBase64 } from './chat-attachments'
 import { chatCodePlugin } from './chat-code-plugin'
@@ -57,8 +59,8 @@ const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
 }
 
 /**
- * Shiki syntax-highlighting for fenced code blocks. Themes track the app's
- * light/dark mode via Streamdown's dual-theme output (github-light/dark).
+ * Shiki syntax-highlighting for fenced code blocks. The theme pair matches
+ * the active color theme (light twin, then dark twin).
  */
 const CODE_PLUGIN = chatCodePlugin
 /** Live Mermaid diagram rendering for ```mermaid fences. */
@@ -339,6 +341,8 @@ export function AgentProse({
   // Streamdown commits at 10 Hz trailing-edge while streaming; the turn-end
   // render commits the exact final text immediately.
   const text = useThrottledStreamingText(rawText, streaming)
+  const colorTheme = useColorTheme()
+  const shikiTheme = useMemo(() => syntaxShikiPair(colorTheme), [colorTheme])
   const [externalUrl, setExternalUrl] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const components = useMemo<Components>(() => {
@@ -431,7 +435,7 @@ export function AgentProse({
         components={components}
         lineNumbers={false}
         linkSafety={LINK_SAFETY}
-        shikiTheme={['github-light', 'github-dark']}
+        shikiTheme={shikiTheme}
       >
         {text}
       </Streamdown>
