@@ -1445,8 +1445,9 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         ...stamped,
         // A live event turns a restored summary into a real timeline card.
         restoredSummary: undefined,
-        timestamp: list[idx].timestamp,
-        seq: list[idx].seq
+        // A legacy record without ordering stamps adopts the live ones.
+        timestamp: list[idx].timestamp ?? stamped.timestamp,
+        seq: list[idx].seq ?? stamped.seq
       })
       if (!merged) return {}
       const next = [...list]
@@ -1488,7 +1489,11 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const merged = clampLiveToolCallFields(e.sessionId, {
         ...list[idx],
         ...clampedUpdate,
-        restoredSummary: undefined
+        restoredSummary: undefined,
+        // A legacy record without ordering stamps adopts live ones, so it
+        // still sorts and splits turns like every live-ingested call.
+        timestamp: list[idx].timestamp ?? Date.now(),
+        seq: list[idx].seq ?? nextSeq()
       })
       if (!merged) return {}
       const next = [...list]

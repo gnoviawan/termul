@@ -34,8 +34,11 @@ function isAfterBoundary(toolCall: ToolCall, boundary: TurnBoundary): boolean {
   if (typeof toolCall.timestamp === 'number' && typeof boundary.timestamp === 'number') {
     return toolCall.timestamp > boundary.timestamp
   }
-  // No comparable stamp: keep the call rather than hide a live subagent.
-  return true
+  // An unstamped boundary cannot split turns, so it does not hide anything.
+  if (typeof boundary.seq !== 'number' && typeof boundary.timestamp !== 'number') return true
+  // Live ingest always stamps seq + timestamp (and backfills them on a legacy
+  // record), so a call that still cannot be compared is old history.
+  return false
 }
 
 /**

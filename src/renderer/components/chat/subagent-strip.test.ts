@@ -55,6 +55,18 @@ describe('selectCurrentTurnSubagents', () => {
   it('skips restored summaries', () => {
     expect(selectCurrentTurnSubagents([sub({ restoredSummary: true })], null)).toEqual([])
   })
+
+  it('drops an unstamped call once a stamped boundary splits the turns', () => {
+    // Live ingest always stamps, so an unstamped call is old history.
+    const legacy = sub({ toolCallId: 'legacy', seq: undefined, timestamp: undefined })
+    expect(selectCurrentTurnSubagents([legacy], { seq: 5, timestamp: 50 })).toEqual([])
+  })
+
+  it('keeps an unstamped call when the boundary itself has no stamps', () => {
+    const legacy = sub({ toolCallId: 'legacy', seq: undefined, timestamp: undefined })
+    const picked = selectCurrentTurnSubagents([legacy], {})
+    expect(picked.map((t) => t.toolCallId)).toEqual(['legacy'])
+  })
 })
 
 describe('subagentStatus and counts', () => {
