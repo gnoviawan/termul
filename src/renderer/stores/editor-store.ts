@@ -438,9 +438,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     for (const hold of renamesInFlight) {
       if (!isAtOrUnder(path, hold.from)) continue
       return hold.outcome.then((renamed) =>
-        get().saveFile(
-          renamed ? `${hold.to}${forwardSlashes(path).slice(hold.from.length)}` : path
-        )
+        get().saveFile(renamed ? `${hold.to}${forwardSlashes(path).slice(hold.from.length)}` : path)
       )
     }
 
