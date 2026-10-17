@@ -59,6 +59,7 @@ import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 import { PromptReconcileNotice } from './PromptReconcileNotice'
+import { SubagentStrip } from './SubagentStrip'
 import { useApprovalDock } from './use-approval-dock'
 import { AUTO_RESUME_FAILED_REASON, useIdleStopAutoResume } from './use-idle-stop-auto-resume'
 
@@ -992,6 +993,14 @@ export function AgentChatPanel({
               </div>
             </div>
           )}
+          <SubagentStrip
+            toolCalls={toolCalls}
+            messages={messages}
+            turnActive={session.activeTurn}
+            filePathContext={filePathContext}
+            forceCollapsed={compactDock || (isMobileShell && osk.isOskOpen)}
+            isVisible={isVisible}
+          />
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}

@@ -67,6 +67,7 @@ import {
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
+import { withSubagentUsage } from '../subagent-usage'
 import type {
   AcpSession,
   AcpState,
@@ -545,6 +546,10 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
     reduced.locations = next.locations
   }
   if (next.rawOutput !== undefined) reduced.rawOutput = next.rawOutput
+  // Three scalars from the ingest extractor: tiny and bounded.
+  if (next.subagentUsage !== undefined && serializedLength(next.subagentUsage) <= 256) {
+    reduced.subagentUsage = next.subagentUsage
+  }
   if (
     typeof next.terminalOutput === 'string' &&
     next.terminalOutput.length <= MAX_LIVE_TOOL_CALL_FIELD_CHARS
@@ -1408,7 +1413,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       )
       const stream = boundTerminalStream(applyTerminalStream(prior, e.toolCall))
       const stamped = clampLiveToolCallFields(e.sessionId, {
-        ...e.toolCall,
+        ...withSubagentUsage(e.toolCall),
         ...stream,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
         seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : (replaySeq ?? nextSeq())
@@ -1474,7 +1479,10 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // the WebView heap. Then clamp the merged call: successive updates
       // carrying different fields would otherwise accumulate past the bound.
       const stream = boundTerminalStream(applyTerminalStream(list[idx], e.update))
-      const clampedUpdate = clampLiveToolCallFields(e.sessionId, { ...e.update, ...stream })
+      const clampedUpdate = clampLiveToolCallFields(e.sessionId, {
+        ...withSubagentUsage(e.update),
+        ...stream
+      })
       if (!clampedUpdate) return {}
       // A live update turns a restored summary into a real timeline card.
       const merged = clampLiveToolCallFields(e.sessionId, {

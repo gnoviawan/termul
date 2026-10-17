@@ -24,7 +24,7 @@ export interface ToolCallSummary {
   diffStat?: { added: number; removed: number } | null
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
 
@@ -225,6 +225,15 @@ export function readableOutput(value: unknown): string {
 /** True while the call has not settled; the label then reads in the present tense. */
 export function isToolCallRunning(toolCall: ToolCall): boolean {
   return toolCall.status === 'pending' || toolCall.status === 'in_progress'
+}
+
+/**
+ * A subagent dispatch is still running while it is pending/in_progress, or
+ * while it has no status yet and its parent turn is active (the adapter
+ * sends the dispatch before any status update).
+ */
+export function isSubagentRunning(toolCall: ToolCall, parentTurnActive: boolean): boolean {
+  return isToolCallRunning(toolCall) || (parentTurnActive && toolCall.status == null)
 }
 
 function runningVerbForKind(kind: ToolKind | undefined): string {
