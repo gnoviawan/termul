@@ -1119,3 +1119,27 @@ fn agent_error_carries_provider_code_only_for_provider_failures() {
         .get("providerCode")
         .is_none());
 }
+
+/// Issue #362: the schema's `McpCapabilities.acp` exists only behind the
+/// `unstable_mcp_over_acp` feature, which Termul does not enable. An agent that
+/// advertises it is parsed with the flag dropped, so `acp:agent_spawned`
+/// (whose `capabilities` is this type) never carries it and the renderer cannot "retain it for diagnostics". If this fails
+/// after enabling the feature, update the Experimental MCP-over-ACP notice in
+/// `McpServersSettings.tsx` and the renderer capability types.
+#[test]
+fn mcp_capabilities_acp_is_dropped_without_the_schema_feature() {
+    let advertised: AgentCapabilities = serde_json::from_value(serde_json::json!({
+        "mcpCapabilities": { "http": true, "sse": false, "acp": true }
+    }))
+    .expect("capabilities with an acp flag still parse");
+
+    // `AgentSpawnedEvent.capabilities` is this exact type, serialized as-is.
+    let wire = serde_json::to_value(&advertised).expect("capabilities serialize");
+
+    let mcp = &wire["mcpCapabilities"];
+    assert_eq!(mcp["http"], true, "the supported flags survive: {mcp}");
+    assert!(
+        mcp.get("acp").is_none(),
+        "acp must not reach the renderer while the schema feature is off: {mcp}"
+    );
+}

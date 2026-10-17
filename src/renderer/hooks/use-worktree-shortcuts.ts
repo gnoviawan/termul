@@ -6,21 +6,18 @@
  * at the workspace level where project context is available.
  *
  * Supported shortcuts:
- * - worktreeCreate: Open NewWorktreeModal
+ * - worktreeCreate: Dispatch `OPEN_CREATE_MODAL`; `WorktreeCreateModalHost` opens
+ *   `NewWorktreeModal` for the active project
  * - worktreeSwitchNext: Cycle to next worktree
  * - worktreeSwitchPrev: Cycle to previous worktree
  * - worktreeSwitchRoot: Switch to project root
- * - worktreeMergeToMain: Open merge preview
- * - worktreeArchive: Archive active worktree
  * - worktreeOpenTerminal: Dispatch `OPEN_TERMINAL`; `useTabOpeners` handles it by opening a
  *   terminal at the active working copy (it never writes the switcher pick)
- * - worktreeSyncMain: Sync main into worktree (future)
  */
 
 import { useEffect } from 'react'
 import { activeWorktreeOf } from '@/lib/active-worktree'
 import { normalizePath } from '@/lib/working-copy'
-import { getActiveWorktreeForProject } from '@/lib/worktree-context'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
@@ -29,8 +26,6 @@ import type { Project, Worktree } from '@/types/project'
 // Event name constants for cross-component communication
 export const WORKTREE_EVENTS = {
   OPEN_CREATE_MODAL: 'worktree:open-create-modal',
-  OPEN_MERGE_DIALOG: 'worktree:open-merge-dialog',
-  OPEN_ARCHIVE_DIALOG: 'worktree:open-archive-dialog',
   OPEN_TERMINAL: 'worktree:open-terminal'
 } as const
 
@@ -122,57 +117,10 @@ export function useWorktreeShortcuts(): void {
         return
       }
 
-      // Merge to main — open merge dialog via custom event
-      if (matchesShortcut(e, getActiveKey('worktreeMergeToMain'))) {
-        e.preventDefault()
-        e.stopPropagation()
-        const activeWt = getActiveWorktreeForProject(activeProjectId)
-        if (activeWt) {
-          dispatchWorktreeEvent(WORKTREE_EVENTS.OPEN_MERGE_DIALOG, {
-            worktreePath: activeWt.path,
-            projectPath: project.path,
-            sourceBranch: activeWt.branch,
-            projectName: project.name,
-            targetBranch: 'main'
-          })
-        }
-        return
-      }
-
-      // Archive active worktree — open archive/removal dialog via custom event
-      if (matchesShortcut(e, getActiveKey('worktreeArchive'))) {
-        e.preventDefault()
-        e.stopPropagation()
-        const activeWt = getActiveWorktreeForProject(activeProjectId)
-        if (activeWt) {
-          dispatchWorktreeEvent(WORKTREE_EVENTS.OPEN_ARCHIVE_DIALOG, {
-            worktree: activeWt,
-            projectId: activeProjectId
-          })
-        }
-        return
-      }
-
       // Open a terminal at the active working copy (handled by useTabOpeners)
       if (matchesShortcut(e, getActiveKey('worktreeOpenTerminal'))) {
         e.preventDefault()
         dispatchWorktreeEvent(WORKTREE_EVENTS.OPEN_TERMINAL, { projectId: activeProjectId })
-        return
-      }
-
-      // Sync main into worktree (future)
-      if (matchesShortcut(e, getActiveKey('worktreeSyncMain'))) {
-        e.preventDefault()
-        const activeWt = getActiveWorktreeForProject(activeProjectId)
-        if (activeWt) {
-          dispatchWorktreeEvent(WORKTREE_EVENTS.OPEN_MERGE_DIALOG, {
-            worktreePath: activeWt.path,
-            projectPath: project.path,
-            sourceBranch: 'main',
-            projectName: project.name,
-            targetBranch: activeWt.branch
-          })
-        }
         return
       }
     }

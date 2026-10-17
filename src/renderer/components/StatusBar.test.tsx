@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { normalizePath, type WorkingCopy } from '@/lib/working-copy'
 import { useAcpStore } from '@/stores/acp-store'
@@ -548,7 +549,10 @@ describe('StatusBar', () => {
     })
 
     it('reflects a degraded channel (control reconnecting)', () => {
+      vi.useFakeTimers()
       useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS)
+      vi.useRealTimers()
       renderWithProviders(<StatusBar project={mockProject} />)
       expect(
         screen.getByRole('status', { name: 'Control channel: reconnecting' })

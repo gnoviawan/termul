@@ -247,8 +247,7 @@ export interface ComposerAttachments {
 
 /**
  * Shared composer attachment engine for the Agent Chat input and the new-thread
- * launcher. Encodes the hybrid transport from
- * docs/adr/0001-agent-chat-file-attachment-transport.md: OS picker -> path
+ * launcher. Encodes the hybrid attachment transport: OS picker -> path
  * `resource_link` (images read inline when capable); drag/paste -> inline
  * base64 image or embedded text resource, gated by capability.
  */

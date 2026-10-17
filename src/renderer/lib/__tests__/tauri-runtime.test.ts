@@ -27,6 +27,7 @@ import {
   getServerCapabilitySnapshot,
   primeServerCapability,
   serverAdmitsRemoteWrites,
+  serverPathsCaseInsensitive,
   subscribeServerCapability
 } from '../tauri-runtime'
 
@@ -198,6 +199,7 @@ describe('server write-admission capability cache (web branch)', () => {
     const snapshot = getServerCapabilitySnapshot()()
     expect(snapshot).toEqual({
       admitted: true,
+      caseInsensitivePaths: true,
       inFlight: false,
       resolved: true,
       retryTimer: null,
@@ -229,10 +231,72 @@ describe('server write-admission capability cache (desktop branch)', () => {
     const snapshot = getServerCapabilitySnapshot()()
     expect(snapshot).toEqual({
       admitted: true,
+      caseInsensitivePaths: true,
       inFlight: false,
       resolved: true,
       retryTimer: null,
       retryCount: 0
     })
+  })
+})
+
+describe('host path case sensitivity from /health (web branch)', () => {
+  beforeEach(() => {
+    __resetServerCapabilityCache()
+    mockFetch.mockReset()
+    setTauriContext(false)
+  })
+
+  afterEach(() => {
+    __resetServerCapabilityCache()
+    setTauriContext(false)
+  })
+
+  it('folds case until /health resolves (the #638 behavior)', () => {
+    expect(serverPathsCaseInsensitive()).toBe(true)
+  })
+
+  it('compares exactly when /health reports caseInsensitivePaths:false', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({ status: 'ok', allowRemoteWrites: true, caseInsensitivePaths: false })
+    )
+    primeServerCapability()
+    await flushMicrotasks()
+    expect(serverPathsCaseInsensitive()).toBe(false)
+    expect(getServerCapabilitySnapshot()().caseInsensitivePaths).toBe(false)
+  })
+
+  it('folds case when /health reports caseInsensitivePaths:true', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({ status: 'ok', allowRemoteWrites: false, caseInsensitivePaths: true })
+    )
+    primeServerCapability()
+    await flushMicrotasks()
+    expect(serverPathsCaseInsensitive()).toBe(true)
+  })
+
+  it('keeps folding case when the field is missing or the fetch fails', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ status: 'ok', allowRemoteWrites: true }))
+    primeServerCapability()
+    await flushMicrotasks()
+    expect(serverPathsCaseInsensitive()).toBe(true)
+
+    __resetServerCapabilityCache()
+    mockFetch.mockRejectedValue(new Error('offline'))
+    primeServerCapability()
+    await flushMicrotasks()
+    expect(serverPathsCaseInsensitive()).toBe(true)
+  })
+
+  it('notifies subscribers when the flag flips to false', async () => {
+    const listener = vi.fn()
+    subscribeServerCapability(listener)
+    mockFetch.mockResolvedValue(
+      jsonResponse({ status: 'ok', allowRemoteWrites: true, caseInsensitivePaths: false })
+    )
+    primeServerCapability()
+    await flushMicrotasks()
+    expect(listener).toHaveBeenCalled()
+    expect(serverPathsCaseInsensitive()).toBe(false)
   })
 })

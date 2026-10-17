@@ -22,11 +22,7 @@ import {
   resolveSyntaxColors
 } from '@/lib/themes'
 
-const EDITOR_FONT_LOADS = [
-  '13px "Ioskeley Mono"',
-  'italic 13px "Ioskeley Mono"',
-  '700 13px "Ioskeley Mono"'
-] as const
+const EDITOR_FONT_LOADS = ['400 0.8125rem "Paper Mono"', '700 0.8125rem "Paper Mono"'] as const
 
 /** Load the editor faces before the first measure so the caret matches the real width. */
 async function loadEditorFont(): Promise<void> {
@@ -38,7 +34,7 @@ async function loadEditorFont(): Promise<void> {
     void logFrontendError({
       level: 'warn',
       source: 'use-codemirror.font',
-      message: `Ioskeley Mono failed to load — editor uses the fallback stack (${message})`
+      message: `Paper Mono failed to load — editor uses the monospace fallback (${message})`
     })
   }
 }

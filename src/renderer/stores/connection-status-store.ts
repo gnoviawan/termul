@@ -7,9 +7,8 @@
  * - `terminalChannel`: the `/terminal/ws` channel (fed by
  *   `WebTerminalClient.setConnectionStateListener`).
  *
- * Consumers: the StatusBar `ConnectionStatusIndicator` (worst-of rollup),
- * `ConnectedTerminal` (per-terminal reconnect overlay), and `FileExplorer`
- * (root-load retry on control-channel recovery).
+ * UI reads {@link useShownConnectionStore}; safety and recovery logic reads
+ * the raw channels.
  *
  * Web-only: `wireConnectionStatusTracking()` is a no-op on Tauri desktop
  * (both transports there are direct IPC), so the channels stay at their
@@ -17,6 +16,7 @@
  */
 
 import { create } from 'zustand'
+import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 import { type AcpConnectionState, getAcpTransport } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -53,6 +53,44 @@ export const useConnectionStatusStore = create<ConnectionStatusState>((set) => (
       return { terminalChannel }
     })
 }))
+
+type ShownChannels = Pick<ConnectionStatusState, 'controlChannel' | 'terminalChannel'>
+
+export const useShownConnectionStore = create<ShownChannels>(() => ({
+  controlChannel: useConnectionStatusStore.getState().controlChannel,
+  terminalChannel: useConnectionStatusStore.getState().terminalChannel
+}))
+
+const graceTimers: Record<keyof ShownChannels, ReturnType<typeof setTimeout> | null> = {
+  controlChannel: null,
+  terminalChannel: null
+}
+
+function showChannel(channel: keyof ShownChannels, next: ConnectionChannelState): void {
+  const pending = graceTimers[channel]
+  if (pending !== null) clearTimeout(pending)
+  graceTimers[channel] = null
+  const shown = useShownConnectionStore.getState()[channel]
+  const healthy = shown === 'connected' || shown === 'connecting'
+  if (next !== 'reconnecting' || !healthy) {
+    useShownConnectionStore.setState({ [channel]: next })
+    return
+  }
+  graceTimers[channel] = setTimeout(() => {
+    graceTimers[channel] = null
+    useShownConnectionStore.setState({ [channel]: next })
+  }, RECONNECT_GRACE_MS)
+}
+
+useConnectionStatusStore.subscribe((state, prev) => {
+  if (state.controlChannel !== prev.controlChannel) {
+    showChannel('controlChannel', state.controlChannel)
+  }
+  if (state.terminalChannel !== prev.terminalChannel) {
+    showChannel('terminalChannel', state.terminalChannel)
+  }
+})
+
 /**
  * Durable boundary log for each channel state transition. `disconnected` is
  * a failure (the channel gave up); every other transition is a boundary

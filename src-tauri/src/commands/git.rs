@@ -724,29 +724,5 @@ pub(crate) async fn branch_switch_guarded(
     .map_err(|e| format!("git branch switch task failed: {e}"))?
 }
 
-#[tauri::command]
-pub async fn git_branch_create(cwd: String, name: String) -> Result<(), String> {
-    let validated = validate_project_path(&cwd)?;
-    let validated_str = validated
-        .to_str()
-        .ok_or_else(|| "Path contains invalid UTF-8".to_string())?
-        .to_string();
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let output = crate::trackers::git_tracker::GitTracker::run_git_command(
-            &validated_str,
-            &["checkout", "-b", &name],
-        )
-        .ok_or_else(|| "Failed to run git checkout -b".to_string())?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("git branch create task failed: {e}"))?
-}
-
 #[cfg(test)]
 mod guard_tests;

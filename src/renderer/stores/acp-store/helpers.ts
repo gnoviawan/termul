@@ -5,6 +5,7 @@
  */
 
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
+import { flattenConfigOptionValues } from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
@@ -1316,9 +1317,7 @@ export function mergeAgentConfigOptions(
       typeof prior.currentValue === 'boolean' || typeof option.currentValue === 'boolean'
     if (
       !booleanOption &&
-      !(option.options ?? []).some(
-        (entry) => typeof entry.value === 'string' && entry.value === priorComparable
-      )
+      !flattenConfigOptionValues(option).some((entry) => entry.value === priorComparable)
     ) {
       return option
     }

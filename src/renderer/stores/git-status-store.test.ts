@@ -46,7 +46,7 @@ vi.mock('@/lib/git-api', () => ({
     stashDrop: vi.fn(),
     branchList: vi.fn(),
     branchSwitch: vi.fn(),
-    branchCreate: vi.fn()
+    createBranch: vi.fn()
   }
 }))
 
@@ -79,7 +79,7 @@ const { gitApi } = gitApiModule as unknown as {
     stashDrop: ReturnType<typeof vi.fn>
     branchList: ReturnType<typeof vi.fn>
     branchSwitch: ReturnType<typeof vi.fn>
-    branchCreate: ReturnType<typeof vi.fn>
+    createBranch: ReturnType<typeof vi.fn>
   }
 }
 
@@ -448,7 +448,7 @@ describe('git-status-store stash and branch actions', () => {
   it('branchCreate creates branch, resets selectedFile, and refreshes', async () => {
     useGitStatusStore.setState({ selectedFile: 'somefile.ts' })
     await useGitStatusStore.getState().branchCreate(CWD, 'feature/new')
-    expect(gitApi.branchCreate).toHaveBeenCalledWith(CWD, 'feature/new')
+    expect(gitApi.createBranch).toHaveBeenCalledWith(CWD, 'feature/new')
     expect(useGitStatusStore.getState().selectedFile).toBeNull()
     expect(gitApi.getStatus).toHaveBeenCalledWith(CWD)
     expect(gitApi.branchList).toHaveBeenCalledWith(CWD)
@@ -988,7 +988,7 @@ describe('git-status-store write block for unresolved working copies', () => {
     ['stashPop', (s: any) => s.stashPop(GONE, 0), 'stashPop'],
     ['stashDrop', (s: any) => s.stashDrop(GONE, 0), 'stashDrop'],
     ['branchSwitch', (s: any) => s.branchSwitch(GONE, 'x'), 'branchSwitch'],
-    ['branchCreate', (s: any) => s.branchCreate(GONE, 'x'), 'branchCreate']
+    ['branchCreate', (s: any) => s.branchCreate(GONE, 'x'), 'createBranch']
   ])('%s throws and makes no git call', async (_name, run, apiCall) => {
     await expect(run(useGitStatusStore.getState())).rejects.toThrow(/no longer available/)
     expect((gitApi as Record<string, ReturnType<typeof vi.fn>>)[apiCall]).not.toHaveBeenCalled()

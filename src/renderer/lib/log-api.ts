@@ -75,7 +75,7 @@ function describeError(value: unknown): { message: string; stack?: string } {
     return { message: value }
   }
   try {
-    return { message: JSON.stringify(value) }
+    return { message: JSON.stringify(value) ?? String(value) }
   } catch {
     return { message: String(value) }
   }

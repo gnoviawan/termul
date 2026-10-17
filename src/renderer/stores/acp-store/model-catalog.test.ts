@@ -51,6 +51,30 @@ describe('model catalog persistence', () => {
     expect(catalog?.models).toBeNull()
   })
 
+  it('saves the models inside grouped select options', () => {
+    const catalog = modelCatalogFromOptions({
+      models: null,
+      configOptions: [
+        {
+          ...MODEL_OPTION,
+          currentValue: 'gemini-flash',
+          options: [
+            { value: 'gemini-flash', name: 'Gemini Flash' },
+            {
+              group: 'anthropic',
+              name: 'Anthropic',
+              options: [{ value: 'claude-sonnet', name: 'Claude Sonnet' }]
+            }
+          ]
+        }
+      ]
+    })
+    expect(catalog?.modelOption?.options).toEqual([
+      { value: 'gemini-flash', name: 'Gemini Flash', description: null },
+      { value: 'claude-sonnet', name: 'Claude Sonnet', description: null }
+    ])
+  })
+
   it('returns null when the entry has no model list', () => {
     expect(modelCatalogFromOptions({ models: null, configOptions: [] })).toBeNull()
   })

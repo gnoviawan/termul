@@ -601,23 +601,6 @@ describe('gitApi (web vs desktop branch)', () => {
     })
   })
 
-  // ---- branchCreate ----
-  it('branchCreate: web → POST /git/branch-create', async () => {
-    await expectWebCall(
-      () => gitApi.branchCreate(CWD, 'feature'),
-      '/git/branch-create',
-      'POST',
-      { cwd: CWD, name: 'feature' },
-      { success: true }
-    )
-  })
-  it('branchCreate: desktop → invoke("git_branch_create")', async () => {
-    await expectDesktopCall(() => gitApi.branchCreate(CWD, 'feature'), 'git_branch_create', {
-      cwd: CWD,
-      name: 'feature'
-    })
-  })
-
   // ---- getProjectIcon (spec-project-icon) ----
   it('getProjectIcon: web → POST /project/icon', async () => {
     await expectWebCall(

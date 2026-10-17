@@ -120,6 +120,30 @@ describe('model catalogs', () => {
     expect(catalog).toMatchObject({ id: 'model', source: 'config', currentValue: 'x' })
   })
 
+  it('lists the models inside grouped select options', () => {
+    const catalog = catalogFromSessionState(models, [
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'gemini-flash',
+        options: [
+          { value: 'gemini-flash', name: 'Gemini Flash' },
+          {
+            group: 'anthropic',
+            name: 'Anthropic',
+            options: [{ value: 'claude-sonnet', name: 'Claude Sonnet', description: 'Balanced' }]
+          }
+        ]
+      }
+    ])
+    expect(catalog?.options).toEqual([
+      { value: 'gemini-flash', name: 'Gemini Flash', description: null },
+      { value: 'claude-sonnet', name: 'Claude Sonnet', description: 'Balanced' }
+    ])
+  })
+
   it('falls back to the native model state', () => {
     expect(catalogFromSessionState(models, [])).toEqual({
       id: 'model',

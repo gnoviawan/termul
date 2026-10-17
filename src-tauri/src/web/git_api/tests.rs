@@ -84,7 +84,6 @@ fn test_router(state: AppState) -> axum::Router {
         .route("/git/stash-drop", post(stash_drop))
         .route("/git/branch-list", get(branch_list))
         .route("/git/branch-switch", post(branch_switch))
-        .route("/git/branch-create", post(branch_create))
         .with_state(state)
 }
 
@@ -588,11 +587,9 @@ async fn branch_switch_remote_tracking_creates_local_tracking_branch() {
     );
 }
 
-/// F-008 regression: `POST /git/branch-create` must actually create and
-/// check out the branch. The previous `["checkout", "-b", "--", name]`
-/// consumed `--` as the branch name — the route could never succeed.
+/// `POST /git/create-branch` must actually create and check out the branch.
 #[tokio::test]
-async fn branch_create_actually_creates_and_switches() {
+async fn create_branch_actually_creates_and_switches() {
     if git_missing() {
         return;
     }
@@ -605,15 +602,15 @@ async fn branch_create_actually_creates_and_switches() {
     let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
     let resp = post_json(
         state,
-        "/git/branch-create",
-        &serde_json::json!({ "cwd": repo.to_string_lossy(), "name": "newbr" }),
+        "/git/create-branch",
+        &serde_json::json!({ "cwd": repo.to_string_lossy(), "branch": "newbr" }),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: IpcBody<()> = body_as(resp.into_body()).await;
     assert!(
         body.success,
-        "branch-create should succeed: {:?}",
+        "create-branch should succeed: {:?}",
         body.error
     );
     let head =
@@ -740,23 +737,6 @@ async fn idle_or_sibling_sessions_do_not_block_a_branch_switch() {
     );
     assert_eq!(head_branch(&repo), original);
     let _ = std::fs::remove_dir_all(sibling);
-}
-
-#[tokio::test]
-async fn branch_create_is_not_a_destructive_op() {
-    if git_missing() {
-        return;
-    }
-    let repo = repo_with_feature_branch("guard-create");
-    let state = state_with_session(&repo, repo.clone(), true);
-    let resp = post_json(
-        state,
-        "/git/branch-create",
-        &serde_json::json!({ "cwd": repo.to_string_lossy(), "name": "topic" }),
-    )
-    .await;
-    let body: IpcBody<()> = body_as(resp.into_body()).await;
-    assert!(body.success, "{:?}", body.error);
 }
 
 #[tokio::test]

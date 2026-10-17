@@ -3744,6 +3744,39 @@ describe('composer option fidelity', () => {
       )
     })
 
+    it('_onConfigOptionsUpdate preserves a grouped model pick against a creation-default echo', () => {
+      const groupedModel = (currentValue: string) => ({
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select' as const,
+        currentValue,
+        options: [
+          { value: 'gemini-flash', name: 'Gemini Flash' },
+          {
+            group: 'anthropic',
+            name: 'Anthropic',
+            options: [{ value: 'claude-sonnet', name: 'Claude Sonnet' }]
+          }
+        ]
+      })
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [groupedModel('claude-sonnet')],
+        creationOptionDefaults: { configValues: { model: 'gemini-flash' } }
+      })
+
+      useAcpStore.getState()._onConfigOptionsUpdate({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        configOptions: [groupedModel('gemini-flash')]
+      })
+      const options = useAcpStore.getState().sessions['s1'].configOptions
+      expect(options.find((o) => o.id === 'model')?.currentValue).toBe('claude-sonnet')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.configOptionEchoPreserved', level: 'warn' })
+      )
+    })
+
     it('setConfigOption response snapshots cannot re-assert creation defaults on moved-off options', async () => {
       seedOptionsSession('s1', 'agent-1', {
         configOptions: [

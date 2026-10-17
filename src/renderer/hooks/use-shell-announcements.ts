@@ -11,7 +11,7 @@ import {
 } from '@/lib/shell-announcements'
 import { type AcpState, isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
-import { useConnectionStatusStore } from '@/stores/connection-status-store'
+import { useShownConnectionStore } from '@/stores/connection-status-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
@@ -86,12 +86,6 @@ function acpSlicesUnchanged(next: AcpState, prev: AcpState): boolean {
 /**
  * Feed the mobile shell live region.
  *
- * Registers the region with the announcer store, then diffs consecutive
- * `useAcpStore` and `useConnectionStatusStore` states in zustand `subscribe`
- * listeners (not React renders, so it costs nothing per streamed chunk and
- * sees values that are set and cleared within one tick). Both stores are
- * read once on mount as a silent baseline.
- *
  * Renderer-only and derived entirely from stores, so desktop shared-live
  * remote clients and standalone `termul-server` web clients behave the same.
  * Mount it once, from `MobileChatShell` only.
@@ -126,13 +120,13 @@ export function useShellAnnouncements(): void {
     }
 
     evaluateAcp(useAcpStore.getState())
-    evaluateConnection(useConnectionStatusStore.getState())
+    evaluateConnection(useShownConnectionStore.getState())
 
     const unsubscribeAcp = useAcpStore.subscribe((state, prev) => {
       if (acpSlicesUnchanged(state, prev)) return
       evaluateAcp(state)
     })
-    const unsubscribeConnection = useConnectionStatusStore.subscribe((state, prev) => {
+    const unsubscribeConnection = useShownConnectionStore.subscribe((state, prev) => {
       if (
         state.controlChannel === prev.controlChannel &&
         state.terminalChannel === prev.terminalChannel

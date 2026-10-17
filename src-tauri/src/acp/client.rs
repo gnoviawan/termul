@@ -1,12 +1,12 @@
 //! ACP `Client`-role behavior: capability advertisement, inbound request
-//! handling (permission, filesystem), session-update fan-out, and terminal
-//! stubs.
+//! handling (permission, filesystem), and session-update fan-out. Terminal
+//! handlers are registered in `manager/driver.rs` and backed by `terminal.rs`.
 //!
-//! In `agent-client-protocol` 0.12 there is no `Client` *trait* to implement;
-//! instead the client role is expressed by registering handler closures on a
+//! `agent-client-protocol` has no `Client` *trait* to implement; instead the
+//! client role is expressed by registering handler closures on a
 //! `Client.builder()` and driving it via `connect_with`. The functions here are
 //! the reusable bodies those closures call, kept separate from the connection
-//! wiring in `manager.rs` so they can be unit-tested in isolation.
+//! wiring in `manager/` so they can be unit-tested in isolation.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;

@@ -6,7 +6,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   type ConnectionChannelState,
   retryHostOffline,
-  useConnectionStatusStore
+  useShownConnectionStore
 } from '@/stores/connection-status-store'
 
 /** Rollup severity — higher wins when the two channels disagree. */
@@ -53,8 +53,8 @@ interface ConnectionStatusIndicatorProps {
 export function ConnectionStatusIndicator({
   showLabel = false
 }: ConnectionStatusIndicatorProps): ReactNode {
-  const controlChannel = useConnectionStatusStore((state) => state.controlChannel)
-  const terminalChannel = useConnectionStatusStore((state) => state.terminalChannel)
+  const controlChannel = useShownConnectionStore((state) => state.controlChannel)
+  const terminalChannel = useShownConnectionStore((state) => state.terminalChannel)
 
   // Desktop: no WS channels — render nothing. (Hook order is safe: both
   // subscriptions run before this early return.)

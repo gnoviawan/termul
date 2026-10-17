@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 import { logFrontendError } from '@/lib/log-api'
 import { mockProject, seedProjectStore } from '@/lib/test-utils/store'
 import {
@@ -71,6 +72,12 @@ function permission(requestId: string, sessionId: string): Record<string, unknow
   return {
     [requestId]: { requestId, agentId: 'agent-1', sessionId, options: [], toolCall: null }
   }
+}
+
+function spyAnnounce(): ReturnType<typeof vi.fn<(text: string) => void>> {
+  const announce = vi.fn<(text: string) => void>(realAnnounce)
+  useShellAnnouncerStore.setState({ announce })
+  return announce
 }
 
 function region(): string {
@@ -609,6 +616,9 @@ describe('useShellAnnouncements', () => {
       act(() => {
         useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
       })
+      act(() => {
+        vi.advanceTimersByTime(RECONNECT_GRACE_MS)
+      })
       settle()
       expect(region()).toBe('Reconnecting…')
 
@@ -623,6 +633,51 @@ describe('useShellAnnouncements', () => {
       })
       settle()
       expect(region()).toBe('Connected')
+    })
+
+    it('is silent for a 500 ms reconnect, including the paired Connected', () => {
+      const announce = spyAnnounce()
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
+      })
+      act(() => {
+        vi.advanceTimersByTime(500)
+      })
+      act(() => {
+        useConnectionStatusStore.setState({ controlChannel: 'connected' })
+      })
+      act(() => {
+        vi.advanceTimersByTime(RECONNECT_GRACE_MS * 2)
+      })
+      expect(region()).toBe('')
+      expect(announce).not.toHaveBeenCalled()
+    })
+
+    it('announces Reconnecting after the grace period of a 2 s outage, then Connected', () => {
+      const announce = spyAnnounce()
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+      })
+      act(() => {
+        vi.advanceTimersByTime(RECONNECT_GRACE_MS - 1)
+      })
+      expect(announce).not.toHaveBeenCalled()
+
+      act(() => {
+        vi.advanceTimersByTime(1)
+      })
+      settle()
+      expect(region()).toBe('Reconnecting…')
+
+      act(() => {
+        vi.advanceTimersByTime(2000 - RECONNECT_GRACE_MS - ANNOUNCE_DELAY_MS)
+        useConnectionStatusStore.setState({ terminalChannel: 'connected' })
+      })
+      settle()
+      expect(region()).toBe('Connected')
+      expect(announce.mock.calls).toEqual([['Reconnecting…'], ['Connected']])
     })
 
     it('announces terminal channel loss and recovery', () => {

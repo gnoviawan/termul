@@ -413,6 +413,27 @@ describe('ChatMessage', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
+  it('falls back to the image icon for a persisted image link with a malformed file URI', () => {
+    const message: ChatMessageType = {
+      id: 'user-bad-uri',
+      role: 'user',
+      blocks: [
+        { type: 'resource_link', uri: 'file:///%', name: 'broken.png', mimeType: 'image/png' }
+      ],
+      streaming: false,
+      timestamp: 0
+    }
+
+    const { container } = render(
+      <TooltipProvider>
+        <ChatMessage message={message} />
+      </TooltipProvider>
+    )
+
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('svg[data-termul-icon="ImageIcon"]')).not.toBeNull()
+  })
+
   describe('user message with inline skill chips', () => {
     function userMessage(text: string): ChatMessageType {
       return {

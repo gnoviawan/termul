@@ -185,6 +185,30 @@ describe('BrowserConsentStrip', () => {
   })
 })
 
+describe('BrowserConsentStrip failed respond', () => {
+  it('re-enables both buttons when the store restores the request after a failed respond', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    workspaceState.activeTab = browserTab()
+    mockRespond.mockImplementation(() => {
+      acpState.pendingBrowserConsents = {}
+    })
+    const { rerender } = render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow for this session' }))
+    rerender(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(screen.queryByRole('button', { name: 'Allow for this session' })).not.toBeInTheDocument()
+
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    rerender(<BrowserConsentStrip browserTabId={TAB_ID} />)
+
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    expect(mockRespond).toHaveBeenLastCalledWith('req-1', false)
+    expect(mockRespond).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('BrowserConsentStrip announcement', () => {
   it('announces a request once, so remounting the strip for it stays quiet', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }

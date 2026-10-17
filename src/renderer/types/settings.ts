@@ -1,4 +1,6 @@
-﻿// Context bar visibility settings
+﻿import { MONO_STACK } from '@/lib/font-stacks'
+
+// Context bar visibility settings
 export interface ContextBarSettings {
   showProjectName: boolean
   showGitBranch: boolean
@@ -42,6 +44,7 @@ export type RemoteBindMode = 'localhost' | 'all'
 
 // Application-wide settings
 export interface AppSettings {
+  /** Persisted for old profiles. The terminal ignores this and uses Paper Mono. */
   terminalFontFamily: string
   terminalFontSize: number
   terminalBufferSize: number // Scrollback buffer size in lines
@@ -108,17 +111,6 @@ export const BUFFER_SIZE_OPTIONS = [
   { value: 10000, label: '10,000 lines' },
   { value: 25000, label: '25,000 lines' },
   { value: 50000, label: '50,000 lines' }
-]
-
-// Font family options for terminal
-export const FONT_FAMILY_OPTIONS = [
-  { value: 'Menlo, Monaco, "Courier New", monospace', label: 'Menlo' },
-  { value: 'Monaco, Menlo, "Courier New", monospace', label: 'Monaco' },
-  { value: 'Consolas, "Courier New", monospace', label: 'Consolas' },
-  { value: '"Courier New", Courier, monospace', label: 'Courier New' },
-  { value: '"Source Code Pro", Menlo, monospace', label: 'Source Code Pro' },
-  { value: '"JetBrains Mono", Menlo, monospace', label: 'JetBrains Mono' },
-  { value: '"Fira Code", Menlo, monospace', label: 'Fira Code' }
 ]
 
 // Editor auto-save delay options (GH-539)
@@ -245,13 +237,9 @@ export function formatAgentIdleWindow(secs: number): string {
 
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
-  // Terminal font default — the same JetBrains Mono Variable stack as
-  // DEFAULT_TERMINAL_OPTIONS.fontFamily in terminal-config.ts (the canonical
-  // stack). The bundled webfont exists on mobile browsers (CAP-9), unlike the
-  // old Menlo/Monaco/Courier stack which silently fell back to a generic
-  // system monospace there.
-  terminalFontFamily:
-    '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace',
+  // Kept so old profiles still parse. The terminal always renders MONO_STACK
+  // and does not read this value.
+  terminalFontFamily: MONO_STACK,
   terminalFontSize: 14,
   terminalBufferSize: 10000,
   terminalRenderer: 'auto',
@@ -423,24 +411,6 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
     label: 'Open Terminal in Worktree',
     description: 'Spawn a new terminal in the active worktree',
     defaultKey: 'ctrl+shift+alt+t'
-  },
-  worktreeMergeToMain: {
-    id: 'worktreeMergeToMain',
-    label: 'Merge Worktree to Main',
-    description: 'Start merge workflow: worktree branch to main',
-    defaultKey: 'ctrl+shift+m'
-  },
-  worktreeSyncMain: {
-    id: 'worktreeSyncMain',
-    label: 'Sync Main into Worktree',
-    description: 'Start merge workflow: main into worktree branch',
-    defaultKey: 'ctrl+shift+alt+s'
-  },
-  worktreeArchive: {
-    id: 'worktreeArchive',
-    label: 'Archive Active Worktree',
-    description: 'Archive the current active worktree',
-    defaultKey: 'ctrl+shift+a'
   },
   worktreeSwitchRoot: {
     id: 'worktreeSwitchRoot',

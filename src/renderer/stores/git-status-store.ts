@@ -563,7 +563,7 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
 
   branchCreate: async (cwd, name) => {
     assertWritable(cwd)
-    await gitApi.branchCreate(cwd, name)
+    await gitApi.createBranch(cwd, name)
     set({ selectedFile: null })
     await refreshAfterMutation(get, cwd)
     await updateStoresWithBranch(cwd, name)

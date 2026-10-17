@@ -474,7 +474,7 @@ export interface AcpState {
   /** ACP agent-plan entries per session (`session/update` plan, full replace). */
   plans: Record<SessionId, PlanEntry[]>
   commands: Record<SessionId, AvailableCommand[]>
-  pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
+  pendingPermissions: Record<string, PendingPermission> // keyed by requestId
   pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
   pendingElicitations: Record<string, PendingElicitation>
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
@@ -564,7 +564,7 @@ export interface AcpState {
   closeSession: (sessionId: SessionId) => Promise<void>
   setActiveSession: (sessionId: SessionId | null) => void
 
-  // Actions — configured agents (P4)
+  // Actions — configured agents
   loadAgentConfigs: () => Promise<void>
   saveAgentConfig: (config: StoredAgentConfig) => Promise<void>
   /**
@@ -697,7 +697,7 @@ export interface AcpState {
     exitCode: number | null
   ) => Promise<string>
 
-  // Actions — chat history (P5)
+  // Actions — chat history
   loadSessionIndex: () => Promise<void>
   /**
    * Merge a host-pushed full index (the `chat_history` watch state) into the
@@ -756,7 +756,7 @@ export interface AcpState {
     projectId: string
   ) => Promise<void>
 
-  // Actions — MCP server registry (P6)
+  // Actions — MCP server registry
   loadMcpServers: () => Promise<void>
   saveMcpServer: (server: StoredMcpServer) => Promise<void>
   /**
@@ -880,7 +880,7 @@ export interface AcpState {
     }
   ) => Promise<void>
 
-  // Actions — config (P2 drives the UI; method available now)
+  // Actions — config
   setConfigOption: (
     sessionId: SessionId,
     configId: string,
@@ -889,7 +889,7 @@ export interface AcpState {
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
   setModel: (sessionId: SessionId, modelId: string) => Promise<void>
 
-  // Actions — permission (P3 drives the UI; method available now)
+  // Actions — permission
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
 
   // Actions — structured questions (issue #411)

@@ -416,11 +416,6 @@ export const webServerGit = {
   async branchSwitch(cwd: string, name: string): Promise<void> {
     const res = await postJson<void>('/git/branch-switch', { cwd, name })
     if (!res.success) throw new Error(res.error)
-  },
-
-  async branchCreate(cwd: string, name: string): Promise<void> {
-    const res = await postJson<void>('/git/branch-create', { cwd, name })
-    if (!res.success) throw new Error(res.error)
   }
 }
 

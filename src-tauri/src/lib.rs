@@ -1933,7 +1933,6 @@ pub fn run() {
             commands::git_stash_drop,
             commands::git_branch_list,
             commands::git_branch_switch,
-            commands::git_branch_create,
             // Project icon resolution (local file scan → git-remote fetch)
             commands::project_icon_resolve,
             // Secure storage commands

@@ -387,7 +387,6 @@ export interface GitApi {
   stashDrop: (cwd: string, index: number) => Promise<void>
   branchList: (cwd: string) => Promise<string[]>
   branchSwitch: (cwd: string, name: string) => Promise<void>
-  branchCreate: (cwd: string, name: string) => Promise<void>
 }
 
 // Terminal API exposed via preload

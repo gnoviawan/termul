@@ -37,8 +37,6 @@ import { installGlobalErrorForwarding } from './lib/log-api'
 // resolved and emitted as local build assets.
 import '@fontsource-variable/inter/index.css'
 import '@fontsource-variable/inter/wght-italic.css'
-import '@fontsource-variable/jetbrains-mono/index.css'
-import '@fontsource-variable/jetbrains-mono/wght-italic.css'
 import { registerServiceWorker } from './lib/pwa-register'
 // Streamdown keyframes load first. index.css then overrides sd-blurIn
 // so the chat stream resolves through a 1px blur.

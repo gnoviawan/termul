@@ -29,6 +29,7 @@ export function isTauriContext(): boolean {
  */
 type ServerCapabilityState = {
   admitted: boolean
+  caseInsensitivePaths: boolean
   inFlight: boolean
   resolved: boolean
   /** Bounded backoff retry timer (cleared on success/reset). `null` when no
@@ -38,8 +39,14 @@ type ServerCapabilityState = {
   /** Retry attempt count (bounded — caps the backoff). */
   retryCount: number
 }
+type HealthBody = {
+  status?: unknown
+  allowRemoteWrites?: unknown
+  caseInsensitivePaths?: unknown
+}
 let serverCapability: ServerCapabilityState = {
   admitted: false,
+  caseInsensitivePaths: true,
   inFlight: false,
   resolved: false,
   retryTimer: null,
@@ -75,6 +82,12 @@ export function serverAdmitsRemoteWrites(): boolean {
   return serverCapability.admitted
 }
 
+/** True iff the host filesystem folds path case, per `/health`; `true` until
+ * the probe resolves. */
+export function serverPathsCaseInsensitive(): boolean {
+  return serverCapability.caseInsensitivePaths
+}
+
 /** Prime the remote-write admission cache from `GET /health`. No-op on desktop
  * (always local → writes admitted). Idempotent while a fetch is in-flight; if
  * the last attempt failed (not resolved or resolved false), a later call retries
@@ -86,6 +99,7 @@ export function primeServerCapability(): void {
     clearRetryTimer()
     serverCapability = {
       admitted: true,
+      caseInsensitivePaths: true,
       inFlight: false,
       resolved: true,
       retryTimer: null,
@@ -108,7 +122,7 @@ export function primeServerCapability(): void {
   }
   notifyServerCapabilitySubscribers()
   void fetch(`${window.location.origin}/health`, { method: 'GET' })
-    .then((res): Promise<{ status?: unknown; allowRemoteWrites?: unknown } | null> => {
+    .then((res): Promise<HealthBody | null> => {
       // Trust only a 2xx JSON body with status === "ok" — a misconfigured
       // gateway returning 200 with a JSON-shaped error body must not be
       // treated as admitting writes. Return null on rejection paths; the
@@ -121,15 +135,17 @@ export function primeServerCapability(): void {
         })
         return Promise.resolve(null)
       }
-      return res.json() as Promise<{ status?: unknown; allowRemoteWrites?: unknown }>
+      return res.json() as Promise<HealthBody>
     })
     .then((body) => {
       const statusOk = body?.status === 'ok'
       const admitted = statusOk && body?.allowRemoteWrites === true
+      const caseInsensitivePaths = body?.caseInsensitivePaths !== false
       if (admitted) {
         clearRetryTimer()
         serverCapability = {
           admitted: true,
+          caseInsensitivePaths,
           inFlight: false,
           resolved: true,
           retryTimer: null,
@@ -141,6 +157,7 @@ export function primeServerCapability(): void {
         clearRetryTimer()
         serverCapability = {
           admitted: false,
+          caseInsensitivePaths,
           inFlight: false,
           resolved: true,
           retryTimer: null,
@@ -157,6 +174,7 @@ export function primeServerCapability(): void {
         clearRetryTimer()
         serverCapability = {
           admitted: false,
+          caseInsensitivePaths: true,
           inFlight: false,
           resolved: true,
           retryTimer: null,
@@ -177,6 +195,7 @@ export function primeServerCapability(): void {
       const nextCount = serverCapability.retryCount + 1
       serverCapability = {
         admitted: false,
+        caseInsensitivePaths: true,
         inFlight: false,
         resolved: false,
         retryTimer: scheduleRetry(nextCount),
@@ -209,6 +228,7 @@ export function __resetServerCapabilityCache(): void {
   clearRetryTimer()
   serverCapability = {
     admitted: false,
+    caseInsensitivePaths: true,
     inFlight: false,
     resolved: false,
     retryTimer: null,

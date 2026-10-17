@@ -56,28 +56,20 @@ function pathIdentity(path: string): string {
   return normalized === '/' ? normalized : normalized.replace(/\/+$/, '')
 }
 
-/** Case-insensitive comparison form of a path: `pathIdentity` lowercased.
- * Routed through every within-root comparison (`isWithinRoot`, `parentOf`,
- * `isAtRoot`, `navigateBack`) so a casing discrepancy between the stored
- * `rootPath` (config casing, e.g. `e:/proj`) and server-canonicalized entry
- * paths (on-disk casing, e.g. `E:/proj/...`) no longer clamps back
- * navigation to root. Never feeds the stored `currentPath` or any display
- * string — those keep the case-preserving `normalizePath` output. */
-export function comparePath(path: string): string {
-  return pathIdentity(path).toLowerCase()
+/** Comparison form of a path: `pathIdentity`, lowercased when `caseInsensitive`. */
+export function comparePath(path: string, caseInsensitive: boolean): string {
+  const identity = pathIdentity(path)
+  return caseInsensitive ? identity.toLowerCase() : identity
 }
 
 export function joinPath(parent: string, name: string): string {
   return `${normalizePath(parent).replace(/\/$/, '')}/${name}`
 }
 
-export function isWithinRoot(path: string, root: string): boolean {
-  const p = comparePath(path)
-  const r = comparePath(root)
+export function isWithinRoot(path: string, root: string, caseInsensitive: boolean): boolean {
+  const p = comparePath(path, caseInsensitive)
+  const r = comparePath(root, caseInsensitive)
   if (p === r) return true
-  // Drive roots (`c:/`, lowercased from `C:/`) and posix `/` prefix any
-  // child without a trailing separator, so check `startsWith(r)` directly
-  // for those.
   if (r === '/' || /^[A-Za-z]:\/$/.test(r)) return p.startsWith(r)
   return p.startsWith(`${r}/`)
 }
@@ -93,9 +85,15 @@ export interface FolderCrumb {
  * `parentOf` / `navigateBack` reach. Both inputs are `normalizePath` output. */
 export function buildFolderCrumbs(
   root: string,
-  current: string
+  current: string,
+  caseInsensitive: boolean
 ): { ancestors: FolderCrumb[]; currentLabel: string } | null {
-  if (comparePath(current) === comparePath(root) || !isWithinRoot(current, root)) return null
+  if (
+    comparePath(current, caseInsensitive) === comparePath(root, caseInsensitive) ||
+    !isWithinRoot(current, root, caseInsensitive)
+  ) {
+    return null
+  }
   // Roots ending in a separator (`/`, `C:/`) already include it.
   const prefixLength = root.endsWith('/') ? root.length : root.length + 1
   const parts = current.slice(prefixLength).split('/').filter(Boolean)
@@ -119,10 +117,11 @@ export function buildFolderCrumbs(
 export function resolveBreadcrumbTarget(
   path: string,
   rootPath: string | null,
-  currentPath: string | null
+  currentPath: string | null,
+  caseInsensitive: boolean
 ): string | null {
   const target = normalizePath(path)
-  if (!rootPath || !isWithinRoot(target, rootPath)) {
+  if (!rootPath || !isWithinRoot(target, rootPath, caseInsensitive)) {
     void logFrontendError({
       level: 'warn',
       source: 'MobileFileExplorer.navigateTo',
@@ -132,6 +131,11 @@ export function resolveBreadcrumbTarget(
     })
     return null
   }
-  if (currentPath && comparePath(currentPath) === comparePath(target)) return null
+  if (
+    currentPath &&
+    comparePath(currentPath, caseInsensitive) === comparePath(target, caseInsensitive)
+  ) {
+    return null
+  }
   return target
 }

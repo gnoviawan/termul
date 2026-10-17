@@ -1,5 +1,6 @@
 import type { Config } from 'tailwindcss'
 import tailwindcssAnimate from 'tailwindcss-animate'
+import { MONO_FONT_FAMILY, SANS_FONT_FAMILY } from './src/renderer/lib/font-stacks'
 
 export default {
   darkMode: 'class',
@@ -113,43 +114,16 @@ export default {
         }
       },
       fontSize: {
-        // Sub-xs scale. Tailwind's default fontSize stops at `xs` (12px),
-        // which forced ad-hoc `text-[Npx]` values for captions / badges /
-        // micro-labels across the renderer. These three size-only tokens
-        // fill that gap. Size-only (no [size, lineHeight] tuple) on purpose
-        // so existing `leading-*` and inherited line-heights are preserved.
-        '2xs': '0.6875rem', // 11px
-        '3xs': '0.625rem', // 10px
-        '4xs': '0.5625rem' // 9px
+        // 12px floor for dense chrome (badges, chips, path labels). Three role
+        // names share one size so existing call sites stay put. Size-only
+        // (no [size, lineHeight] tuple) so existing `leading-*` still wins.
+        '2xs': '0.75rem', // 12px
+        '3xs': '0.75rem', // 12px
+        '4xs': '0.75rem' // 12px
       },
       fontFamily: {
-        // Variable Inter (bundled). Fall through to native UI fonts so we still
-        // look right if the bundled font fails to load. Ubuntu/Cantarell are
-        // the actual GNOME UI fonts on Linux.
-        sans: [
-          '"Inter Variable"',
-          'Inter',
-          '"SF Pro Text"',
-          '"Segoe UI"',
-          'Ubuntu',
-          'Cantarell',
-          'system-ui',
-          '-apple-system',
-          'BlinkMacSystemFont',
-          'sans-serif'
-        ],
-        mono: [
-          '"JetBrains Mono Variable"',
-          '"JetBrains Mono"',
-          '"Cascadia Code"',
-          '"SF Mono"',
-          'Menlo',
-          'Consolas',
-          '"Ubuntu Mono"',
-          '"DejaVu Sans Mono"',
-          '"Liberation Mono"',
-          'monospace'
-        ]
+        sans: [...SANS_FONT_FAMILY],
+        mono: [...MONO_FONT_FAMILY]
       },
       borderRadius: {
         lg: 'var(--radius)',

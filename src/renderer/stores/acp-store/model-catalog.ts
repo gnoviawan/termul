@@ -1,4 +1,5 @@
 import { type PersistedModelCatalog, PersistenceKeys } from '@shared/types/persistence.types'
+import { catalogModels } from '@/components/chat/agent-model-selector/selector-model'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import type { AgentOptionsCacheEntry } from './types'
@@ -37,11 +38,7 @@ export function modelCatalogFromOptions(
           id: option.id,
           name: option.name,
           currentValue: option.currentValue,
-          options: (option.options ?? []).flatMap((o) =>
-            typeof o.value === 'string'
-              ? [{ value: o.value, name: o.name, description: o.description ?? null }]
-              : []
-          )
+          options: catalogModels(option)
         }
       : null
   if (!modelOption && !models) return null

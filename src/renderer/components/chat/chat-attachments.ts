@@ -8,8 +8,6 @@ import type { ContentBlock } from '@/lib/acp-api'
  * - `image`      — browser File bytes -> ACP `image` block (base64).
  * - `file-ref`   — a real filesystem path (OS picker) -> ACP `resource_link`.
  * - `file-embed` — browser File text (drag/paste, no path) -> embedded `resource`.
- *
- * See docs/adr/0001-agent-chat-file-attachment-transport.md.
  */
 export type PendingAttachment =
   | {

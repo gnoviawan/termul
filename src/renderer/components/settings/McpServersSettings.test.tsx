@@ -55,6 +55,16 @@ describe('McpServersSettings', () => {
     seedStore()
   })
 
+  it('does not claim to retain the experimental acp capability (issue #362)', () => {
+    // The Rust schema is built without `unstable_mcp_over_acp`, so an agent's
+    // `mcpCapabilities.acp` is dropped on parse (pinned in the Rust events
+    // tests). The notice must say Termul does not read it.
+    render(<McpServersSettings />)
+    const notice = screen.getByText('Experimental MCP-over-ACP').closest('div')
+    expect(notice).toHaveTextContent('does not read it')
+    expect(notice).not.toHaveTextContent('retains')
+  })
+
   it('adds a bare server object through the JSON editor with a fresh id', async () => {
     render(<McpServersSettings />)
     openAddDialog()

@@ -267,7 +267,6 @@ pub fn router(
         .route("/git/stash-drop", post(git_api::stash_drop))
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
-        .route("/git/branch-create", post(git_api::branch_create))
         .route("/git/diff-stat", post(git_diff_stat_api::get_diff_stat))
         // Project icon resolution (spec-project-icon). Mirrors the desktop
         // `project_icon_resolve` command — same shared resolver, read-route
@@ -608,7 +607,6 @@ pub fn router_with_static(
         .route("/git/stash-drop", post(git_api::stash_drop))
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
-        .route("/git/branch-create", post(git_api::branch_create))
         .route("/git/diff-stat", post(git_diff_stat_api::get_diff_stat))
         .route("/project/icon", post(project_icon_api::resolve_icon))
         .route("/search/rg-info", get(search_api::rg_info))
@@ -733,9 +731,14 @@ async fn health_check(
         Json(HealthBody {
             status: "ok",
             allow_remote_writes: allow,
+            case_insensitive_paths: PATHS_CASE_INSENSITIVE_BY_TARGET,
         }),
     )
 }
+
+/// The source of truth for the web client's path case rule (#641). A per-volume
+/// probe would need a path, and `/health` is host-wide.
+const PATHS_CASE_INSENSITIVE_BY_TARGET: bool = cfg!(any(windows, target_os = "macos"));
 
 /// `GET /health` response body.
 #[derive(Serialize)]
@@ -743,6 +746,7 @@ async fn health_check(
 struct HealthBody {
     status: &'static str,
     allow_remote_writes: bool,
+    case_insensitive_paths: bool,
 }
 
 /// `GET /host/agent-idle-window` — the live idle-chat window. Same `IpcResult`

@@ -322,5 +322,32 @@ describe('pending-launcher-options', () => {
 
       expect(overlaid.configOptions[0]?.currentValue).toBe('m1')
     })
+
+    it('paints pending.modelId onto a model inside a grouped select option', () => {
+      const overlaid = overlayPendingLauncherOptions({
+        models: null,
+        modes: null,
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            category: 'model',
+            type: 'select',
+            currentValue: 'gemini-flash',
+            options: [
+              { value: 'gemini-flash', name: 'Gemini Flash' },
+              {
+                group: 'anthropic',
+                name: 'Anthropic',
+                options: [{ value: 'claude-sonnet', name: 'Claude Sonnet' }]
+              }
+            ]
+          }
+        ],
+        pending: { modelId: 'claude-sonnet', configValues: {} }
+      })
+
+      expect(overlaid.configOptions[0]?.currentValue).toBe('claude-sonnet')
+    })
   })
 })

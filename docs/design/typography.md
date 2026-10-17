@@ -1,6 +1,8 @@
 # Typography
 
-`body` is `font-sans` (`Inter Variable`, then system UI). Code-ish UI is `font-mono` (JetBrains Mono Variable). The code editor loads **Ioskeley Mono** via `@font-face` in `index.css` — do not substitute `font-mono` there. Terminal glyphs come from xterm font settings, not these stacks.
+`body` is `font-sans` (**Inter Variable**, then `sans-serif`). Code, the editor, and the terminal are `font-mono` (**Paper Mono**, then `monospace`). Both files are bundled. There is no font picker. A saved `terminalFontFamily` is ignored.
+
+UI chrome stays at 14px (`text-sm`). Termul is a dense tool, so body copy is not 16px. Long-form markdown stays at `1rem`. Touch text fields stay at 16px.
 
 Never `text-[Npx]`. Use the scale below. `tabular-nums` on every value that changes (counts, times, revisions).
 
@@ -11,11 +13,11 @@ Never `text-[Npx]`. Use the scale below. `tabular-nums` on every value that chan
 | `text-base` | 16px | Every text field on a coarse pointer, through `pointer-coarse:text-base` (`Input` is `text-base md:text-sm pointer-coarse:text-base`) |
 | `text-sm` | 14px | Body copy, labels, default `Button` |
 | `text-xs` | 12px | Captions, helper lines, dense controls |
-| `text-2xs` | 11px | Path chips, compact mono labels, SSH status words (`SSHHostStateWord`) |
-| `text-3xs` | 10px | Status badges, settings footnotes |
-| `text-4xs` | 9px | Git ref chips (`GitHistoryPanel` `RefChip`) |
+| `text-2xs` | 12px | Path chips, compact mono labels, SSH status words (`SSHHostStateWord`) |
+| `text-3xs` | 12px | Status badges, settings footnotes |
+| `text-4xs` | 12px | Git ref chips (`GitHistoryPanel` `RefChip`) |
 
-Never go below `text-4xs` (9px).
+Never go below 12px. `text-2xs`, `text-3xs`, and `text-4xs` share that size. Weight and color carry the difference. Paper Mono has no italic, so comments and emphasis stay upright.
 
 ## Text fields are 16px on touch
 
@@ -26,8 +28,8 @@ Is it the main sentence on the surface?
  ├── Yes → text-sm (text-foreground)
  └── No
       ├── Helper under a label → text-xs text-muted-foreground
-      ├── Badge / chip in a 16–20px row → text-3xs
-      └── Git ref / micro chip → text-4xs
+      ├── Badge / chip in a 16–20px row → text-3xs (12px)
+      └── Git ref / micro chip → text-4xs (12px)
 ```
 
 ## Incorrect

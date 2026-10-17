@@ -177,6 +177,31 @@ describe('installGlobalErrorForwarding', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['undefined', undefined, 'undefined'],
+    ['a symbol', Symbol('gone'), 'Symbol(gone)']
+  ])('desktop: logs a rejection whose reason is %s as its string form', (_label, reason, message) => {
+    mockIsTauriContext.mockReturnValue(true)
+    rejectionHandler({ reason })
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'log_frontend_error',
+      expect.objectContaining({ source: 'unhandledrejection', message })
+    )
+  })
+
+  it.each([
+    ['undefined', undefined, 'undefined'],
+    ['a symbol', Symbol('gone'), 'Symbol(gone)']
+  ])('web: logs a rejection whose reason is %s as its string form', (_label, reason, message) => {
+    mockIsTauriContext.mockReturnValue(false)
+    rejectionHandler({ reason })
+
+    expect(mockFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'unhandledrejection', message })
+    )
+  })
+
   it('skips resource-load failures (no error object, empty message)', () => {
     mockIsTauriContext.mockReturnValue(true)
     errorHandler({ error: null, message: '' })

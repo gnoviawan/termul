@@ -247,17 +247,22 @@ function signatureOf(projects: Project[], groups: ProjectGroup[], order: string[
   })
 }
 
+/** A failed save releases its own claim only: a newer save may have claimed since. */
+function releaseSignature(signature: string): void {
+  if (lastSignature === signature) lastSignature = ''
+}
+
 /**
- * Write the prefs record for the current store state. Skips the write when
- * nothing a pref covers changed since the last one (the store replaces its
- * project objects on every watch frame). Secret values go to secure storage;
- * a failed secure-storage write aborts the whole save and throws.
+ * Build the record for the store state, or `null` when nothing a pref covers
+ * changed since the last save (the store replaces its project objects on
+ * every watch frame). Secret values go to secure storage; a failed
+ * secure-storage write aborts the whole save and throws.
  */
-export async function persistProjectPrefs(
+async function prepareRecord(
   projects: Project[],
   groups: ProjectGroup[],
   previousProjects: Project[]
-): Promise<void> {
+): Promise<{ signature: string; record: ProjectPrefsRecord } | null> {
   const previousById = new Map(previousProjects.map((p) => [p.id, p]))
   for (const project of projects) {
     known.set(project.id, clientFieldsOf(project))
@@ -265,7 +270,7 @@ export async function persistProjectPrefs(
   const listed = new Set(projects.map((p) => p.id))
   const order = [...projects.map((p) => p.id), ...layout.order.filter((id) => !listed.has(id))]
   const signature = signatureOf(projects, groups, order)
-  if (signature === lastSignature) return
+  if (signature === lastSignature) return null
   // Claimed up front so a burst of store changes saves once; a failure
   // releases it so the same state is tried again.
   lastSignature = signature
@@ -297,14 +302,40 @@ export async function persistProjectPrefs(
       order,
       updatedAt: new Date().toISOString()
     }
-    const written = await persistenceApi.writeDebounced(PersistenceKeys.projectPrefs, record)
-    if (!written.success) {
-      throw new Error(`project prefs write failed: ${written.error ?? 'unknown error'}`)
-    }
+    return { signature, record }
   } catch (error) {
-    lastSignature = ''
+    releaseSignature(signature)
     throw error
   }
+}
+
+async function writeRecord(signature: string, record: ProjectPrefsRecord): Promise<void> {
+  const written = await persistenceApi.writeDebounced(PersistenceKeys.projectPrefs, record)
+  if (!written.success) {
+    releaseSignature(signature)
+    throw new Error(`project prefs write failed: ${written.error ?? 'unknown error'}`)
+  }
+}
+
+let preparing: Promise<unknown> = Promise.resolve()
+
+/**
+ * Write the prefs record for the current store state. Skips the write when
+ * nothing a pref covers changed since the last one; a failed save throws.
+ *
+ * Records are prepared one at a time: preparing awaits secure storage on the
+ * desktop, and a later save that overtook an earlier one there would have its
+ * newer layout replaced by the older one at the debounced write. The write
+ * itself is not serialized, so a burst of saves still collapses into one.
+ */
+export function persistProjectPrefs(
+  projects: Project[],
+  groups: ProjectGroup[],
+  previousProjects: Project[]
+): Promise<void> {
+  const prepared = preparing.then(() => prepareRecord(projects, groups, previousProjects))
+  preparing = prepared.catch(() => undefined)
+  return prepared.then((save) => (save ? writeRecord(save.signature, save.record) : undefined))
 }
 
 /**

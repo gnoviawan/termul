@@ -60,24 +60,46 @@ describe('normalizePath', () => {
 
 describe('isWithinRoot and comparePath with verbatim entries', () => {
   it('finds a verbatim entry within a plain drive root', () => {
-    expect(isWithinRoot('//?/C:/proj/src/lib', 'C:/proj')).toBe(true)
-    expect(isWithinRoot('//?/C:/proj', 'C:/proj')).toBe(true)
-    expect(isWithinRoot('//?/C:/proj-two/src', 'C:/proj')).toBe(false)
+    expect(isWithinRoot('//?/C:/proj/src/lib', 'C:/proj', true)).toBe(true)
+    expect(isWithinRoot('//?/C:/proj', 'C:/proj', true)).toBe(true)
+    expect(isWithinRoot('//?/C:/proj-two/src', 'C:/proj', true)).toBe(false)
   })
 
   it('finds a verbatim UNC entry within a plain UNC root', () => {
-    expect(isWithinRoot('//?/UNC/srv/share/p/a', '//srv/share/p')).toBe(true)
-    expect(isWithinRoot('//?/UNC/srv/other/p/a', '//srv/share/p')).toBe(false)
+    expect(isWithinRoot('//?/UNC/srv/share/p/a', '//srv/share/p', true)).toBe(true)
+    expect(isWithinRoot('//?/UNC/srv/other/p/a', '//srv/share/p', true)).toBe(false)
   })
 
   it('compares case-insensitively across the prefix', () => {
-    expect(comparePath('//?/C:/Proj/Src')).toBe(comparePath('c:/proj/src'))
+    expect(comparePath('//?/C:/Proj/Src', true)).toBe('c:/proj/src')
+    expect(comparePath('//?/C:/Proj/Src', true)).toBe(comparePath('c:/proj/src', true))
   })
 
   it('still treats plain paths as before', () => {
-    expect(isWithinRoot('/proj/sub', '/proj')).toBe(true)
-    expect(isWithinRoot('/proj-two', '/proj')).toBe(false)
-    expect(isWithinRoot('C:/proj/src', 'c:/proj')).toBe(true)
+    expect(isWithinRoot('/proj/sub', '/proj', true)).toBe(true)
+    expect(isWithinRoot('/proj-two', '/proj', true)).toBe(false)
+    expect(isWithinRoot('C:/proj/src', 'c:/proj', true)).toBe(true)
+  })
+})
+
+describe('isWithinRoot and comparePath on a case-sensitive host (#641)', () => {
+  it('rejects a differently cased path outside the root', () => {
+    expect(isWithinRoot('/work/repo/child', '/Work/Repo', false)).toBe(false)
+    expect(isWithinRoot('/work/repo', '/Work/Repo', false)).toBe(false)
+  })
+
+  it('still accepts the same path on a case-insensitive host', () => {
+    expect(isWithinRoot('/work/repo/child', '/Work/Repo', true)).toBe(true)
+  })
+
+  it('accepts an exactly cased child and keeps the casing in comparePath', () => {
+    expect(isWithinRoot('/Work/Repo/child', '/Work/Repo', false)).toBe(true)
+    expect(comparePath('/Work/Repo/', false)).toBe('/Work/Repo')
+  })
+
+  it('keeps a drive root case-sensitive when the host says so', () => {
+    expect(isWithinRoot('c:/proj/src', 'C:/proj', false)).toBe(false)
+    expect(isWithinRoot('C:/proj/src', 'C:/proj', false)).toBe(true)
   })
 })
 
@@ -97,7 +119,7 @@ describe('buildFolderCrumbs for a Windows-hosted termul-server', () => {
     const root = normalizePath('C:/proj')
     const current = normalizePath('//?/C:/proj/src/lib')
 
-    expect(buildFolderCrumbs(root, current)).toEqual({
+    expect(buildFolderCrumbs(root, current, true)).toEqual({
       ancestors: [
         { label: 'proj', path: 'C:/proj' },
         { label: 'src', path: 'C:/proj/src' }
@@ -111,18 +133,20 @@ describe('buildFolderCrumbs for a Windows-hosted termul-server', () => {
     const current = normalizePath('//?/UNC/srv/share/p')
 
     expect(current).toBe('//srv/share/p')
-    expect(buildFolderCrumbs(root, current)).toEqual({
+    expect(buildFolderCrumbs(root, current, true)).toEqual({
       ancestors: [{ label: 'share', path: '//srv/share' }],
       currentLabel: 'p'
     })
   })
 
   it('is null at the root even when the entry is verbatim', () => {
-    expect(buildFolderCrumbs(normalizePath('C:/proj'), normalizePath('//?/C:/proj'))).toBeNull()
+    expect(
+      buildFolderCrumbs(normalizePath('C:/proj'), normalizePath('//?/C:/proj'), true)
+    ).toBeNull()
   })
 
   it('keeps plain paths exactly as before', () => {
-    expect(buildFolderCrumbs('/proj', '/proj/src/lib')).toEqual({
+    expect(buildFolderCrumbs('/proj', '/proj/src/lib', false)).toEqual({
       ancestors: [
         { label: 'proj', path: '/proj' },
         { label: 'src', path: '/proj/src' }
@@ -138,19 +162,28 @@ describe('resolveBreadcrumbTarget with verbatim paths', () => {
   })
 
   it('accepts a verbatim ancestor under a plain root and returns it normalized', () => {
-    expect(resolveBreadcrumbTarget('//?/C:/proj/src', 'C:/proj', 'C:/proj/src/lib')).toBe(
+    expect(resolveBreadcrumbTarget('//?/C:/proj/src', 'C:/proj', 'C:/proj/src/lib', true)).toBe(
       'C:/proj/src'
     )
     expect(logFrontendError).not.toHaveBeenCalled()
   })
 
   it('stays silent on a tap on the folder already shown', () => {
-    expect(resolveBreadcrumbTarget('//?/C:/proj/src', 'C:/proj', '//?/C:/proj/src')).toBeNull()
+    expect(
+      resolveBreadcrumbTarget('//?/C:/proj/src', 'C:/proj', '//?/C:/proj/src', true)
+    ).toBeNull()
     expect(logFrontendError).not.toHaveBeenCalled()
   })
 
   it('still rejects a verbatim target outside the root, with a warning', () => {
-    expect(resolveBreadcrumbTarget('//?/C:/other', 'C:/proj', 'C:/proj/src')).toBeNull()
+    expect(resolveBreadcrumbTarget('//?/C:/other', 'C:/proj', 'C:/proj/src', true)).toBeNull()
+    expect(logFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
+  })
+
+  it('rejects a differently cased target on a case-sensitive host, with a warning', () => {
+    expect(
+      resolveBreadcrumbTarget('/work/repo', '/Work/Repo', '/Work/Repo/child', false)
+    ).toBeNull()
     expect(logFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
   })
 })

@@ -32,7 +32,6 @@ import {
   useNotifyOnAgentChatTurnFinished,
   useNotifyOnTerminalIdle,
   useTerminalBufferSize,
-  useTerminalFontFamily,
   useTerminalFontSize,
   useTerminalRenderer,
   useTerminalScreenReaderMode,
@@ -65,7 +64,6 @@ export function AppPreferencesModal(): React.JSX.Element {
   const isOpen = useSettingsModalStore((state) => state.view === 'app')
   const close = useSettingsModalStore((state) => state.close)
   const isAurUpdater = isAurUpdateMode()
-  const fontFamily = useTerminalFontFamily()
   const fontSize = useTerminalFontSize()
   const uiZoomLevel = useUiZoomLevel()
   const bufferSize = useTerminalBufferSize()
@@ -127,10 +125,6 @@ export function AppPreferencesModal(): React.JSX.Element {
     }
     void loadShells()
   }, [])
-
-  const handleFontFamilyChange = (value: string) => {
-    updateSetting('terminalFontFamily', value)
-  }
 
   const handleFontSizeChange = (value: number) => {
     updateSetting('terminalFontSize', value)
@@ -289,13 +283,11 @@ export function AppPreferencesModal(): React.JSX.Element {
         >
           {/* Terminal Appearance Section */}
           <AppearanceSection
-            fontFamily={fontFamily}
             fontSize={fontSize}
             uiZoomLevel={uiZoomLevel}
             bufferSize={bufferSize}
             terminalRenderer={terminalRenderer}
             screenReaderMode={terminalScreenReaderMode}
-            handleFontFamilyChange={handleFontFamilyChange}
             handleFontSizeChange={handleFontSizeChange}
             handleUiZoomChange={handleUiZoomChange}
             handleUiZoomReset={handleUiZoomReset}

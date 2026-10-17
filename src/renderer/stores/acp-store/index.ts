@@ -5,9 +5,9 @@
  * All backend access goes through `@/lib/acp-api`. Backend events are wired into
  * this store exactly once via `initAcpEventListeners()` (called at app mount).
  *
- * P1 scope: text conversations. `toolCalls`, `plans`, `commands`,
- * `pendingPermissions`, and config/mode state are tracked here; tool, plan,
- * permission, and slash-command UI render them when present.
+ * `toolCalls`, `plans`, `commands`, `pendingPermissions`, and config/mode
+ * state are tracked here; tool, plan, permission, and slash-command UI render
+ * them when present.
  *
  * ## Architecture D6 reconciliation (Story 1.5)
  *

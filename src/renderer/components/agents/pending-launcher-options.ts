@@ -1,5 +1,6 @@
 import {
   filterDuplicateModeConfigOptions,
+  flattenConfigOptionValues,
   isUsableConfigOption,
   MODEL_CATEGORY,
   partitionConfigOptions,
@@ -115,7 +116,7 @@ export function overlayPendingLauncherOptions(input: {
           const fromModel =
             option.category === MODEL_CATEGORY &&
             pending.modelId != null &&
-            option.options?.some((entry) => entry.value === pending.modelId)
+            flattenConfigOptionValues(option).some((entry) => entry.value === pending.modelId)
               ? pending.modelId
               : undefined
           const next = fromConfig ?? fromModel

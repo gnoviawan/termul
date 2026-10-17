@@ -14,7 +14,7 @@ export interface WorktreeShortcut {
   /** Platform-specific overrides */
   macBinding?: string
   /** Category for Command Palette grouping */
-  category: 'create' | 'navigate' | 'modify' | 'merge'
+  category: 'create' | 'navigate'
 }
 
 /** All worktree keyboard shortcuts */
@@ -58,30 +58,6 @@ export const WORKTREE_SHORTCUTS: WorktreeShortcut[] = [
     defaultBinding: 'Ctrl+Shift+T',
     macBinding: 'Cmd+Shift+T',
     category: 'navigate'
-  },
-  {
-    id: 'worktree.archive',
-    label: 'Archive Active Worktree',
-    description: 'Archive the current active worktree',
-    defaultBinding: 'Ctrl+Shift+A',
-    macBinding: 'Cmd+Shift+A',
-    category: 'modify'
-  },
-  {
-    id: 'worktree.merge-to-main',
-    label: 'Merge Worktree to Main',
-    description: 'Start merge workflow: worktree branch → main',
-    defaultBinding: 'Ctrl+Shift+M',
-    macBinding: 'Cmd+Shift+M',
-    category: 'merge'
-  },
-  {
-    id: 'worktree.sync-from-main',
-    label: 'Sync Main into Worktree',
-    description: 'Start merge workflow: main → worktree branch',
-    defaultBinding: 'Ctrl+Shift+S',
-    macBinding: 'Cmd+Shift+S',
-    category: 'merge'
   }
 ]
 

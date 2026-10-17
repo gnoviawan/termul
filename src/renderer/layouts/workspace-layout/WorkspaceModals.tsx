@@ -11,6 +11,7 @@ import {
   WorkspaceCloseDialogs,
   type WorkspaceCloseDialogsProps
 } from '@/layouts/workspace-layout/WorkspaceCloseDialogs'
+import { WorktreeCreateModalHost } from '@/layouts/workspace-layout/WorktreeCreateModalHost'
 import { useSettingsModalView } from '@/stores/settings-modal-store'
 import { useThemePickerOpen } from '@/stores/theme-picker-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -118,6 +119,8 @@ export function WorkspaceModals({
       />
 
       <ProjectBusyDialog />
+
+      <WorktreeCreateModalHost />
 
       {isThemePickerOpen && (
         <Suspense fallback={null}>

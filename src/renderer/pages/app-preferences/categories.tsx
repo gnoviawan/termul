@@ -40,12 +40,6 @@ export const APP_PREF_CATEGORIES: SettingsCategory[] = isTauriContext()
 const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     categoryId: 'appearance',
-    label: 'Font Family',
-    description: 'Choose a monospace font for terminal text.',
-    keywords: ['typeface', 'monospace']
-  },
-  {
-    categoryId: 'appearance',
     label: 'Font Size',
     description: 'Adjust terminal text size.',
     keywords: ['text size', 'zoom']

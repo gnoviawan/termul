@@ -43,7 +43,6 @@ export function BrowserConsentStrip({
   const overlayOpen = useInterfaceOverlayOpen()
   const register = useConsentStripHost((s) => s.register)
   const unregister = useConsentStripHost((s) => s.unregister)
-  const [respondedId, setRespondedId] = useState<string | null>(null)
   const loggedRequestRef = useRef<string | null>(null)
 
   // Mounted == a live host for this pane's prompt — registered even while no
@@ -82,11 +81,9 @@ export function BrowserConsentStrip({
   // panel can show it). Other visible browser panes in a split never
   // duplicate it. Phase-1 consent is granted by the desktop host only —
   // remote clients never see a prompt; the host auto-denies on timeout.
+  // Double-click guard lives in the store: responding drops the pending entry
+  // (unmounting these buttons) and a failed send restores it for a retry.
   if (!hosting || !first) return null
-
-  // One response per request — a deny re-prompt produces a NEW requestId, so
-  // the guard keys on the id rather than a once-ever flag.
-  const responded = respondedId === first.requestId
 
   return (
     <AlertOnceStripFrame key={first.requestId} requestId={first.requestId}>
@@ -99,23 +96,15 @@ export function BrowserConsentStrip({
       </div>
       <button
         type="button"
-        disabled={responded}
-        onClick={() => {
-          setRespondedId(first.requestId)
-          respond(first.requestId, false)
-        }}
-        className="shrink-0 rounded px-2.5 py-1 text-2xs font-medium text-muted-foreground ring-offset-background transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+        onClick={() => respond(first.requestId, false)}
+        className="shrink-0 rounded px-2.5 py-1 text-2xs font-medium text-muted-foreground ring-offset-background transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         Deny
       </button>
       <button
         type="button"
-        disabled={responded}
-        onClick={() => {
-          setRespondedId(first.requestId)
-          respond(first.requestId, true)
-        }}
-        className="shrink-0 rounded bg-destructive-fill px-2.5 py-1 text-2xs font-medium text-destructive-foreground ring-offset-background transition-colors hover:bg-destructive-fill/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+        onClick={() => respond(first.requestId, true)}
+        className="shrink-0 rounded bg-destructive-fill px-2.5 py-1 text-2xs font-medium text-destructive-foreground ring-offset-background transition-colors hover:bg-destructive-fill/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         Allow for this session
       </button>

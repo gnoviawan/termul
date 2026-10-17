@@ -1,7 +1,11 @@
 import { useCallback, useId, useRef, useState } from 'react'
 import { AgentGlyph } from '@/components/chat/AgentGlyph'
 import { ComposerPill } from '@/components/chat/ComposerPill'
-import { isFastModeEnabled, oppositeFastModeValue } from '@/components/chat/chat-input-bar-config'
+import {
+  flattenConfigOptionValues,
+  isFastModeEnabled,
+  oppositeFastModeValue
+} from '@/components/chat/chat-input-bar-config'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { X } from '@/components/icons'
 import { AnimatedMenuContent } from '@/components/ui/animated-menu-content'
@@ -159,12 +163,16 @@ export function AgentModelSelector({
   const effortSelect = useOptimisticSelect(selectValue(thoughtLevel?.currentValue), selectEffort)
   const fastSelect = useOptimisticSelect(selectValue(fastMode?.currentValue), selectFast)
 
-  const modelName = (modelOption?.options ?? []).find(
-    (option) => option.value === modelSelect.displayValue
-  )?.name
-  const effortName = (thoughtLevel?.options ?? []).find(
-    (option) => option.value === effortSelect.displayValue
-  )?.name
+  const modelName = modelOption
+    ? flattenConfigOptionValues(modelOption).find(
+        (option) => option.value === modelSelect.displayValue
+      )?.name
+    : undefined
+  const effortName = thoughtLevel
+    ? flattenConfigOptionValues(thoughtLevel).find(
+        (option) => option.value === effortSelect.displayValue
+      )?.name
+    : undefined
   const fastOn = fastMode ? isFastModeEnabled(fastMode, fastSelect.displayValue) : false
   const fastNext = fastMode ? oppositeFastModeValue(fastMode, fastSelect.displayValue) : null
   const visibleUsage = shouldShowSessionUsage(usage, messages)

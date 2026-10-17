@@ -2,6 +2,7 @@ import type { PersistedModelCatalog } from '@shared/types/persistence.types'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption, SessionModelState } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import { flattenConfigOptionValues } from '../chat-input-bar-config'
 
 /** Tabs shown in the agent track before the rest go behind "More". */
 export const MAX_VISIBLE_AGENT_TABS = 4
@@ -27,14 +28,12 @@ export interface ModelCatalog {
   currentValue: string | null
 }
 
-/** Catalog entries of a config option: only the ones with a string value
- * (boolean options carry none; groups are not model rows). */
 export function catalogModels(option: SessionConfigOption): CatalogModel[] {
-  return (option.options ?? []).flatMap((entry) =>
-    typeof entry.value === 'string'
-      ? [{ value: entry.value, name: entry.name, description: entry.description ?? null }]
-      : []
-  )
+  return flattenConfigOptionValues(option).map(({ value, name, description }) => ({
+    value,
+    name,
+    description: description ?? null
+  }))
 }
 
 export function catalogFromSessionState(

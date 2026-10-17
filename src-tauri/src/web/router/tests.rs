@@ -264,6 +264,11 @@ async fn health_returns_capability_json_for_loopback_peer() {
         parsed["allowRemoteWrites"], true,
         "loopback peer must be admitted even without the opt-in (mirrors check_local_only)"
     );
+    assert_eq!(
+        parsed["caseInsensitivePaths"],
+        cfg!(any(windows, target_os = "macos")),
+        "the host reports whether its filesystem folds path case (#641)"
+    );
 }
 
 #[tokio::test]

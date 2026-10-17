@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 
 /**
- * Grace period before a transient connection state (the transport
- * "Reconnecting…" overlay, the AD-6 "Waiting to confirm" pill) is shown. A
+ * Grace period before a transient connection state is shown. A
  * reconnect on returning to the tab usually settles in about 300 ms; a real
  * outage still shows within a second.
  */

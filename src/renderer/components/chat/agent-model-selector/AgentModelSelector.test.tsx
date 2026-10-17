@@ -504,6 +504,43 @@ describe('AgentModelSelector panel', () => {
     })
   })
 
+  it('lists, finds, and names a model inside a grouped select option', () => {
+    renderSelector({
+      modelOption: {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'gemini-flash',
+        options: [
+          { value: 'gemini-flash', name: 'Gemini Flash' },
+          {
+            group: 'anthropic',
+            name: 'Anthropic',
+            options: [{ value: 'claude-sonnet', name: 'Claude Sonnet' }]
+          }
+        ]
+      }
+    })
+    open()
+
+    const list = screen.getByTestId('selector-list')
+    expect(within(list).getByRole('button', { name: 'Gemini Flash' })).toBeInTheDocument()
+    expect(within(list).getByRole('button', { name: 'Claude Sonnet' })).toBeInTheDocument()
+
+    const pill = screen.getByTestId('agent-model-selector-trigger')
+    expect(pill).toHaveTextContent('Gemini Flash')
+    fireEvent.click(within(list).getByRole('button', { name: 'Claude Sonnet' }))
+    expect(pill).toHaveTextContent('Claude Sonnet')
+
+    fireEvent.change(screen.getByLabelText('Search models and agents'), {
+      target: { value: 'claude' }
+    })
+    const results = screen.getByTestId('selector-list')
+    expect(within(results).getByRole('button', { name: /Claude Sonnet/ })).toBeInTheDocument()
+    expect(within(results).queryByRole('button', { name: /Gemini Flash/ })).not.toBeInTheDocument()
+  })
+
   it('opens with the shared dropdown motion (same as the mode menu)', () => {
     renderSelector()
     open()

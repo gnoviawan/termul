@@ -2,12 +2,12 @@ import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { Label } from '@/components/ui/label'
 import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { Switch } from '@/components/ui/switch'
+import { MONO_STACK } from '@/lib/font-stacks'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import {
   type AppSettings,
   BUFFER_SIZE_OPTIONS,
-  FONT_FAMILY_OPTIONS,
   TERMINAL_RENDERER_OPTIONS,
   UI_ZOOM_DEFAULT,
   UI_ZOOM_MAX,
@@ -16,13 +16,11 @@ import {
 } from '@/types/settings'
 
 interface AppearanceSectionProps {
-  fontFamily: string
   fontSize: number
   uiZoomLevel: number
   bufferSize: number
   terminalRenderer: AppSettings['terminalRenderer']
   screenReaderMode: boolean
-  handleFontFamilyChange: (value: string) => void
   handleFontSizeChange: (value: number) => void
   handleUiZoomChange: (value: number) => void
   handleUiZoomReset: () => void
@@ -32,13 +30,11 @@ interface AppearanceSectionProps {
 }
 
 export function AppearanceSection({
-  fontFamily,
   fontSize,
   uiZoomLevel,
   bufferSize,
   terminalRenderer,
   screenReaderMode,
-  handleFontFamilyChange,
   handleFontSizeChange,
   handleUiZoomChange,
   handleUiZoomReset,
@@ -91,27 +87,6 @@ export function AppearanceSection({
                 : // Web (#858): Ctrl+=/-/0 are the browser zoom keys — the
                   // web defaults bind Alt+=/-/0 instead.
                   'Zoom the entire interface (50–300%). Also adjustable with Alt+=, Alt+-, Alt+0.'}
-            </p>
-          </div>
-
-          {/* Font Family */}
-          <div>
-            <label className="block text-sm font-medium text-secondary-foreground mb-2">
-              Font Family
-            </label>
-            <select
-              value={fontFamily}
-              onChange={(e) => handleFontFamilyChange(e.target.value)}
-              className={cn(PANEL_FIELD_CLASS, 'w-full px-3 py-2 text-sm')}
-            >
-              {FONT_FAMILY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground mt-1">
-              Choose a monospace font for terminal text.
             </p>
           </div>
 
@@ -208,7 +183,7 @@ export function AppearanceSection({
             <div
               className="bg-terminal-bg border border-border rounded-md p-4 text-terminal-fg"
               style={{
-                fontFamily: fontFamily,
+                fontFamily: MONO_STACK,
                 fontSize: `${fontSize}px`,
                 lineHeight: 1.2
               }}

@@ -228,10 +228,5 @@ export const gitApi = {
   branchSwitch: (cwd: string, name: string) =>
     isTauriContext()
       ? invoke<void>('git_branch_switch', { cwd, name })
-      : webServerGit.branchSwitch(cwd, name),
-
-  branchCreate: (cwd: string, name: string) =>
-    isTauriContext()
-      ? invoke<void>('git_branch_create', { cwd, name })
-      : webServerGit.branchCreate(cwd, name)
+      : webServerGit.branchSwitch(cwd, name)
 }

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { type ComponentProps, type MutableRefObject, useEffect, useRef, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AskUserQuestion } from '@/components/chat/AskUserQuestion'
+import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 import { logFrontendError } from '@/lib/log-api'
 import { _resetSheetFocusReturnForTests, recordSheetOpener } from '@/lib/sheet-focus-return'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
@@ -826,7 +827,10 @@ describe('MobileShellDrawer footer', () => {
   })
 
   it('names the degraded channel and warns', async () => {
+    vi.useFakeTimers()
     useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
+    vi.advanceTimersByTime(RECONNECT_GRACE_MS)
+    vi.useRealTimers()
     const { dialog } = await openDrawer()
 
     const status = within(dialog).getByRole('status')

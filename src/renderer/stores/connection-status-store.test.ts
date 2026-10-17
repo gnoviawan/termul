@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 
 /**
  * Story 10: connection-status store — web-only wiring of the two WS channel
@@ -31,6 +32,7 @@ vi.mock('@/lib/web-terminal-api', () => ({
 import {
   _resetConnectionStatusWiringForTests,
   useConnectionStatusStore,
+  useShownConnectionStore,
   wireConnectionStatusTracking
 } from './connection-status-store'
 
@@ -119,6 +121,82 @@ describe('connection-status-store', () => {
     it('does not log when the state is unchanged', () => {
       useConnectionStatusStore.getState().setTerminalChannel('connected')
       expect(mocks.logFrontendError).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('shown channel state', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+      useConnectionStatusStore.getState().setControlChannel('connected')
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    function shown(): { controlChannel: string; terminalChannel: string } {
+      const { controlChannel, terminalChannel } = useShownConnectionStore.getState()
+      return { controlChannel, terminalChannel }
+    }
+
+    it('keeps showing connected through a reconnect shorter than the grace period', () => {
+      useConnectionStatusStore.getState().setControlChannel('reconnecting')
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS - 1)
+      expect(shown()).toEqual({ controlChannel: 'connected', terminalChannel: 'connected' })
+
+      useConnectionStatusStore.getState().setControlChannel('connected')
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS * 2)
+      expect(shown()).toEqual({ controlChannel: 'connected', terminalChannel: 'connected' })
+    })
+
+    it('shows reconnecting once it lasts the grace period, per channel', () => {
+      useConnectionStatusStore.getState().setTerminalChannel('reconnecting')
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS)
+      expect(shown()).toEqual({ controlChannel: 'connected', terminalChannel: 'reconnecting' })
+    })
+
+    it('does not restart the grace on a repeated reconnecting write', () => {
+      useConnectionStatusStore.getState().setControlChannel('reconnecting')
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS - 1)
+      useConnectionStatusStore.getState().setControlChannel('reconnecting')
+      vi.advanceTimersByTime(1)
+      expect(shown().controlChannel).toBe('reconnecting')
+    })
+
+    it.each([
+      'disconnected',
+      'host-offline',
+      'connecting'
+    ] as const)('shows %s at once, even in the middle of a grace period', (state) => {
+      useConnectionStatusStore.getState().setControlChannel('reconnecting')
+      useConnectionStatusStore.getState().setControlChannel(state)
+      expect(shown().controlChannel).toBe(state)
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS)
+      expect(shown().controlChannel).toBe(state)
+    })
+
+    it.each([
+      'host-offline',
+      'disconnected'
+    ] as const)('shows reconnecting at once when recovery starts from %s', (state) => {
+      useConnectionStatusStore.getState().setControlChannel(state)
+      useConnectionStatusStore.getState().setControlChannel('reconnecting')
+      expect(shown().controlChannel).toBe('reconnecting')
+    })
+
+    it('graces a reconnect that starts during the boot connect', () => {
+      _resetConnectionStatusWiringForTests()
+      useConnectionStatusStore.getState().setControlChannel('reconnecting')
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS - 1)
+      expect(shown().controlChannel).toBe('connecting')
+      vi.advanceTimersByTime(1)
+      expect(shown().controlChannel).toBe('reconnecting')
+    })
+
+    it('resets to the initial state and drops a pending grace timer', () => {
+      useConnectionStatusStore.getState().setControlChannel('reconnecting')
+      _resetConnectionStatusWiringForTests()
+      vi.advanceTimersByTime(RECONNECT_GRACE_MS)
+      expect(shown()).toEqual({ controlChannel: 'connecting', terminalChannel: 'connected' })
     })
   })
 

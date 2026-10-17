@@ -8,6 +8,7 @@ impl WorktreeManager {
         worktree_path: &str,
         target_branch: &str,
     ) -> Result<MergePreview, WorktreeError> {
+        ensure_valid_branch_name(target_branch, worktree_path)?;
         let current_branch = Self::get_current_branch(worktree_path)?;
 
         // Try accurate detection first
@@ -17,6 +18,7 @@ impl WorktreeManager {
                 "--no-commit",
                 "--no-ff",
                 "--dry-run",
+                "--",
                 target_branch,
             ],
             Some(worktree_path),
@@ -76,7 +78,8 @@ impl WorktreeManager {
         worktree_path: &str,
         target_branch: &str,
     ) -> Result<String, WorktreeError> {
-        let (stdout, _) = run_git(&["merge", target_branch], Some(worktree_path))
+        ensure_valid_branch_name(target_branch, worktree_path)?;
+        let (stdout, _) = run_git(&["merge", "--", target_branch], Some(worktree_path))
             .map_err(|_| WorktreeError::MergeFailed)?;
         Ok(stdout.trim().to_string())
     }

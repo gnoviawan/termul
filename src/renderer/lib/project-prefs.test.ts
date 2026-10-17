@@ -63,6 +63,10 @@ function lastRecord(): ProjectPrefsRecord {
   return persistence.written[persistence.written.length - 1]
 }
 
+function letPendingSavesRun(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   persistence.record = null
@@ -256,6 +260,31 @@ describe('persistProjectPrefs', () => {
     await persistProjectPrefs(projects, [], [])
 
     expect(persistence.written).toHaveLength(1)
+  })
+
+  it('writes the records in call order when an earlier save is still storing a secret', async () => {
+    let releaseFirst: () => void = () => {}
+    mockApi.secureStorageApi.setSecret.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirst = () => resolve({ success: true, data: undefined })
+        })
+    )
+    const withSecret = project('a', {
+      envVars: [{ key: 'TOKEN', value: 'hunter2', isSecret: true }]
+    })
+
+    const first = persistProjectPrefs([withSecret], [], [])
+    const second = persistProjectPrefs(
+      [withSecret],
+      [{ id: 'g', name: 'Group', projectIds: ['a'] }],
+      [withSecret]
+    )
+    await letPendingSavesRun()
+    releaseFirst()
+    await Promise.all([first, second])
+
+    expect(lastRecord().groups.map((g) => g.id)).toEqual(['g'])
   })
 })
 

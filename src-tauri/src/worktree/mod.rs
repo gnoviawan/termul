@@ -50,4 +50,7 @@ mod create_validation_tests;
 mod launch_registry_tests;
 
 #[cfg(test)]
+mod merge_tests;
+
+#[cfg(test)]
 mod rename_tests;

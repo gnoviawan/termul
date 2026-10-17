@@ -8,9 +8,9 @@
  * | Mobile + explicit webgl   | WebGL attempted (explicit intent honored)           |
  * | Desktop default (auto)    | WebGL loads exactly as before (no behavior change)  |
  * | Canvas migration          | persisted 'canvas' → 'dom' (existing behavior)      |
- * | Font default              | JetBrains Mono Variable stack (bundled, CAP-9)      |
+ * | Font default              | Paper Mono stack (bundled)                          |
  * | Mobile padding            | px-1.5 (not px-4) on the mobile web shell          |
- * | Existing stored font      | untouched (custom fontFamily passed through)       |
+ * | Existing stored font      | ignored; terminal always uses Paper Mono           |
  *
  * Renderer plumbing notes:
  * - DEFAULT terminalRenderer is now 'auto' (settings.ts). The mobile web
@@ -21,6 +21,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MONO_STACK } from '@/lib/font-stacks'
 
 // Hoisted mutable refs — read by module mocks, set per test.
 const { mobileRef, rendererRef, tauriRef, fontRef, screenReaderRef } = vi.hoisted(() => ({
@@ -440,16 +441,15 @@ describe('ConnectedTerminal container padding (story 2)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Matrix row 5: font default = bundled JetBrains Mono Variable stack
-// Matrix row 7: existing stored font preserved
+// Matrix row 5: font default = bundled Paper Mono stack
+// Matrix row 7: a stored family is ignored
 // ---------------------------------------------------------------------------
 
 describe('terminal font defaults (story 2 typography)', () => {
-  it('DEFAULT_APP_SETTINGS.terminalFontFamily is the bundled JetBrains Mono stack', () => {
+  it('DEFAULT_APP_SETTINGS.terminalFontFamily is the bundled Paper Mono stack', () => {
     // The settings default must match the canonical stack in
-    // terminal-config.ts (terminal-config.ts:17-18), so a fresh profile
-    // resolves to the bundled webfont that exists on mobile (CAP-9).
-    expect(DEFAULT_APP_SETTINGS.terminalFontFamily).toContain('JetBrains Mono Variable')
+    // terminal-config.ts, so a fresh profile stores the bundled webfont.
+    expect(DEFAULT_APP_SETTINGS.terminalFontFamily).toBe(MONO_STACK)
     expect(DEFAULT_APP_SETTINGS.terminalFontFamily).toBe(DEFAULT_TERMINAL_OPTIONS.fontFamily)
   })
 
@@ -465,14 +465,13 @@ describe('terminal font defaults (story 2 typography)', () => {
     )
   })
 
-  it('existing stored font preference is passed through to the Terminal options', () => {
+  it('a stored font preference does not reach the Terminal options', () => {
     fontRef.current = 'Fira Code, monospace'
 
     render(React.createElement(ConnectedTerminal))
 
-    // The user's persisted font reaches the xterm constructor verbatim.
     expect(terminalConstructorOptions).toMatchObject({
-      fontFamily: 'Fira Code, monospace'
+      fontFamily: MONO_STACK
     })
   })
 

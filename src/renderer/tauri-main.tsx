@@ -4,8 +4,6 @@ import TauriApp from './TauriApp'
 // resolved and emitted as local build assets.
 import '@fontsource-variable/inter/index.css'
 import '@fontsource-variable/inter/wght-italic.css'
-import '@fontsource-variable/jetbrains-mono/index.css'
-import '@fontsource-variable/jetbrains-mono/wght-italic.css'
 import 'streamdown/styles.css'
 import './index.css'
 
