@@ -13,7 +13,7 @@ import { renderContentItem } from './ToolCallCard'
 import {
   describeToolCall,
   firstString,
-  isToolCallRunning,
+  isSubagentRunning,
   readableOutput
 } from './tool-call-summary'
 
@@ -43,7 +43,7 @@ export function SubagentDetailsDialog({
   const taskPrompt = firstString(input, ['prompt'])
   const activityKind = firstString(input, ['activityKind', 'activity_kind'])
   const reduced = useReducedMotion() ?? false
-  const running = isToolCallRunning(toolCall) || (parentTurnActive && toolCall.status == null)
+  const running = isSubagentRunning(toolCall, parentTurnActive)
   const taskStatus = running
     ? 'Running'
     : toolCall.status === 'completed'

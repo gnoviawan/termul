@@ -4,6 +4,7 @@ import {
   baseName,
   describeToolCall,
   isSubagentCall,
+  isSubagentRunning,
   readableOutput,
   summarizeToolActivity,
   toolCallPath
@@ -397,5 +398,25 @@ describe('toolCallPath', () => {
   it('returns undefined when no path source is available', () => {
     expect(toolCallPath(call({ kind: 'edit', rawInput: { command: 'ls' } }))).toBeUndefined()
     expect(toolCallPath(call({ kind: 'edit' }))).toBeUndefined()
+  })
+})
+
+describe('isSubagentRunning', () => {
+  it('is running for pending and in_progress only while the parent turn is active', () => {
+    expect(isSubagentRunning(call({ status: 'pending' }), true)).toBe(true)
+    expect(isSubagentRunning(call({ status: 'in_progress' }), true)).toBe(true)
+    // A cancelled or crashed turn can leave the dispatch in flight forever.
+    expect(isSubagentRunning(call({ status: 'pending' }), false)).toBe(false)
+    expect(isSubagentRunning(call({ status: 'in_progress' }), false)).toBe(false)
+  })
+
+  it('treats a missing status as running only while the parent turn is active', () => {
+    expect(isSubagentRunning(call({}), true)).toBe(true)
+    expect(isSubagentRunning(call({ status: undefined }), false)).toBe(false)
+  })
+
+  it('is not running once completed or failed, even in an active turn', () => {
+    expect(isSubagentRunning(call({ status: 'completed' }), true)).toBe(false)
+    expect(isSubagentRunning(call({ status: 'failed' }), true)).toBe(false)
   })
 })

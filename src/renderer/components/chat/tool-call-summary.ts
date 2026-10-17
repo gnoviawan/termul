@@ -24,7 +24,7 @@ export interface ToolCallSummary {
   diffStat?: { added: number; removed: number } | null
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
 
@@ -225,6 +225,16 @@ export function readableOutput(value: unknown): string {
 /** True while the call has not settled; the label then reads in the present tense. */
 export function isToolCallRunning(toolCall: ToolCall): boolean {
   return toolCall.status === 'pending' || toolCall.status === 'in_progress'
+}
+
+/**
+ * A subagent dispatch runs only while its parent turn is active: it is
+ * pending/in_progress, or has no status yet (the adapter sends the dispatch
+ * before any status update). A cancelled or crashed turn can leave a dispatch
+ * pending forever, so an ended turn never counts it as running.
+ */
+export function isSubagentRunning(toolCall: ToolCall, parentTurnActive: boolean): boolean {
+  return parentTurnActive && (isToolCallRunning(toolCall) || toolCall.status == null)
 }
 
 function runningVerbForKind(kind: ToolKind | undefined): string {

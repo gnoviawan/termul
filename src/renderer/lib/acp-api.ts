@@ -207,6 +207,9 @@ export interface ToolCall {
   /** True for a restored durable file-change summary (payload `toolCalls`):
    * feeds the Changed files panel but never renders as a timeline card. */
   restoredSummary?: boolean
+  /** Subagent usage scalars lifted from `_meta.claudeCode.toolResponse` at ingest
+   * (the next update replaces `_meta`, so the store keeps just these). */
+  subagentUsage?: { totalTokens?: number; totalDurationMs?: number; totalToolUseCount?: number }
   [k: string]: unknown
 }
 

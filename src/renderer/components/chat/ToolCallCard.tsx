@@ -36,6 +36,7 @@ import {
   describeToolCall,
   firstString,
   isSubagentCall,
+  isSubagentRunning,
   isToolCallRunning,
   READABLE_TEXT_KEYS,
   readableOutput,
@@ -277,8 +278,9 @@ function ToolCallCardComponent({
   const durationMs = endedAt != null && startedAt != null ? endedAt - startedAt : null
 
   const { verb, primary, detail, diffStat } = describeToolCall(toolCall)
-  const running =
-    isToolCallRunning(toolCall) || (isSubagent && parentTurnActive && toolCall.status == null)
+  const running = isSubagent
+    ? isSubagentRunning(toolCall, parentTurnActive)
+    : isToolCallRunning(toolCall)
   const language = readLanguage(toolCall)
   const label = `${verb} ${primary}`.trim()
 
