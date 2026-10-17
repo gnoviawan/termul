@@ -273,21 +273,42 @@ impl ConfigDirSource {
 /// The `CLAUDE_CONFIG_DIR` a managed Claude agent runs with, and so the one
 /// its auth preflight must check: the agent env's own value over the linked
 /// Account dir. `None` is the host's own dir. A blank env value counts as
-/// unset.
+/// unset. The preflight probe and the agent run with different working
+/// directories, so an env value that cannot resolve to an absolute path is
+/// ignored in favor of the next source.
 fn effective_config_dir(
     env: &std::collections::HashMap<String, String>,
     linked_dir: Option<&Path>,
+    home: Option<&Path>,
 ) -> (Option<PathBuf>, ConfigDirSource) {
-    if let Some(dir) = env
+    if let Some(value) = env
         .get(CLAUDE_CONFIG_DIR_ENV)
         .filter(|dir| !dir.trim().is_empty())
     {
-        return (Some(PathBuf::from(dir)), ConfigDirSource::ProjectEnv);
+        match absolute_config_dir(value, home) {
+            Some(dir) => return (Some(dir), ConfigDirSource::ProjectEnv),
+            None => log::warn!(
+                "[acp-claude] the project env CLAUDE_CONFIG_DIR is not an absolute path and was ignored"
+            ),
+        }
     }
     match linked_dir {
         Some(dir) => (Some(dir.to_path_buf()), ConfigDirSource::Linked),
         None => (None, ConfigDirSource::Host),
     }
+}
+
+/// Expand a leading `~` to `home`, then keep the result only when absolute.
+fn absolute_config_dir(value: &str, home: Option<&Path>) -> Option<PathBuf> {
+    let is_separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
+    let path = match value.strip_prefix('~') {
+        Some("") => home?.to_path_buf(),
+        Some(rest) if rest.starts_with(is_separator) => {
+            home?.join(rest.trim_start_matches(is_separator))
+        }
+        _ => PathBuf::from(value),
+    };
+    path.is_absolute().then_some(path)
 }
 
 /// Secret-store interface used by the Claude lifecycle module.
@@ -696,8 +717,11 @@ impl ClaudeAgentService {
         match self.auth_mode() {
             Ok(ClaudeAuthMode::ClaudeCode) => {
                 let account = self.resolve_account(project_id);
-                let (config_dir, source) =
-                    effective_config_dir(&config.env, account.config_dir.as_deref());
+                let (config_dir, source) = effective_config_dir(
+                    &config.env,
+                    account.config_dir.as_deref(),
+                    ClaudeAccountStore::host_home_dir().as_deref(),
+                );
                 if source == ConfigDirSource::ProjectEnv && account.config_dir.is_some() {
                     log::info!(
                         "[acp-claude] the project env CLAUDE_CONFIG_DIR overrides the project's linked Claude profile"

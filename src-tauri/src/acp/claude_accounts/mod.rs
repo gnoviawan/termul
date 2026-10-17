@@ -148,9 +148,15 @@ impl ClaudeAccountStore {
         if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
             return Some(PathBuf::from(dir));
         }
-        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-            .filter(|v| !v.is_empty())?;
-        Some(PathBuf::from(home).join(".claude"))
+        Some(Self::host_home_dir()?.join(".claude"))
+    }
+
+    /// The host user's home directory.
+    #[must_use]
+    pub fn host_home_dir() -> Option<PathBuf> {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
     }
 
     /// Secret-free Account list. `signed_in` is `None`; callers that need the
