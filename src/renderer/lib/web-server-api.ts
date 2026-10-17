@@ -129,6 +129,38 @@ async function postNdjsonStream<T>(
 }
 
 /**
+ * Bound one web/remote fs request. A blackholed server (TCP open, no reply)
+ * leaves the fetch pending forever. For `/fs/write` that strands the editor's
+ * per-file save lock (`savesInFlight` in editor-store), which a rename or
+ * paste of that file waits on (#1363). For `/fs/read` the save's
+ * uncertain-outcome verify read would hang the same way. 30s is generous for
+ * a same-origin fs call. The abort surfaces as a NETWORK_ERROR the caller
+ * renders as a failure, and the durable boundary log records the timeout
+ * itself (operation + bound, never the requested path).
+ */
+const WEB_FS_REQUEST_TIMEOUT_MS = 30_000
+
+async function boundedFsRequest<T>(
+  operation: string,
+  send: (signal: AbortSignal) => Promise<IpcResult<T>>
+): Promise<IpcResult<T>> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => {
+    void logFrontendError({
+      level: 'warn',
+      source: `webServerFilesystem.${operation}`,
+      message: `${operation} timed out after ${WEB_FS_REQUEST_TIMEOUT_MS}ms (NETWORK_ERROR)`
+    })
+    controller.abort(new Error(`${operation} timed out`))
+  }, WEB_FS_REQUEST_TIMEOUT_MS)
+  try {
+    return await send(controller.signal)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
  * Filesystem ops routed to `termul-server` (`/fs/*`). The methods project
  * creation, file editing, and file inspection touch are implemented. Streaming
  * search (`/search/ws`) and directory watching (server-side `notify` + event
@@ -142,7 +174,9 @@ export const webServerFilesystem = {
 
   /** Creates (or truncates) the file, like the desktop `writeTextFile`; no precondition. */
   async createFile(filePath: string, content = ''): Promise<IpcResult<void>> {
-    return postJson<void>('/fs/write', { path: filePath, content })
+    return boundedFsRequest('createFile', (signal) =>
+      postJson<void>('/fs/write', { path: filePath, content }, signal)
+    )
   },
 
   /**
@@ -155,43 +189,33 @@ export const webServerFilesystem = {
     content: string,
     options?: { expected?: FsWriteExpected }
   ): Promise<IpcResult<void>> {
-    return postJson<void>('/fs/write', {
-      path: filePath,
-      content,
-      ...(options?.expected ? { expected: options.expected } : {})
-    })
+    return boundedFsRequest('writeFile', (signal) =>
+      postJson<void>(
+        '/fs/write',
+        {
+          path: filePath,
+          content,
+          ...(options?.expected ? { expected: options.expected } : {})
+        },
+        signal
+      )
+    )
   },
 
   async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
     const encoded = encodeURIComponent(dirPath)
-    // Story 10 (F11): bound the read. A blackholed server (TCP open, no
-    // response) otherwise leaves this fetch pending forever — the Explorer's
-    // `finally` never runs and the panel strands on "Loading…" until a full
-    // reload. 30s is generous for a same-origin directory listing; on expiry
-    // the abort reason surfaces as a NETWORK_ERROR the store renders as a
-    // retryable rootLoadError.
-    const controller = new AbortController()
-    const timer = setTimeout(() => {
-      // Durable boundary log for the timeout event itself — the operation +
-      // the 30s bound + the code the abort surfaces as. The requested
-      // directory path is deliberately NOT logged (sensitive path data).
-      void logFrontendError({
-        level: 'warn',
-        source: 'webServerFilesystem.readDirectory',
-        message: 'readDirectory timed out after 30000ms (NETWORK_ERROR)'
-      })
-      controller.abort(new Error('Directory read timed out'))
-    }, 30_000)
-    try {
-      return await getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`, controller.signal)
-    } finally {
-      clearTimeout(timer)
-    }
+    // Story 10 (F11): bound the read. The NETWORK_ERROR the abort surfaces as
+    // renders in the store as a retryable rootLoadError.
+    return boundedFsRequest('readDirectory', (signal) =>
+      getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`, signal)
+    )
   },
 
   async readFile(filePath: string): Promise<IpcResult<HashedFileContent>> {
     const encoded = encodeURIComponent(filePath)
-    return getJson<HashedFileContent>(`/fs/read?path=${encoded}`)
+    return boundedFsRequest('readFile', (signal) =>
+      getJson<HashedFileContent>(`/fs/read?path=${encoded}`, signal)
+    )
   },
 
   async getFileInfo(filePath: string): Promise<IpcResult<FileInfo>> {

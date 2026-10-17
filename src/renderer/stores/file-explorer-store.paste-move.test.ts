@@ -15,6 +15,7 @@ vi.mock('@/lib/api', () => ({ filesystemApi: mockApi }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
 import { cancelAllAutoSaves } from '@/lib/editor-auto-save'
+import { logFrontendError } from '@/lib/log-api'
 import { type EditorFileState, useEditorStore } from '@/stores/editor-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { getAllLeafPanes } from '@/stores/workspace-store/tree'
@@ -117,15 +118,21 @@ describe('moving an open file with cut and paste', () => {
     ])
   })
 
-  it('leaves the open file alone when the move fails', async () => {
+  it('leaves the open file alone when the move fails and boundary-logs it', async () => {
     mockApi.renameFile.mockResolvedValue({ success: false, error: 'exists' })
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(logFrontendError).mockClear()
     openFile('/project/src/a.ts', 'unsaved edit', 'on disk')
 
     await cutAndPaste(['/project/src/a.ts'], '/project/lib')
 
     expect([...useEditorStore.getState().openFiles.keys()]).toEqual(['/project/src/a.ts'])
     expect(editorTabIds()).toEqual([editorTabId('/project/src/a.ts')])
+    // Per AGENTS.md the failure routes through logFrontendError, not console.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'file-explorer-store.paste' })
+    )
+    expect(consoleSpy).not.toHaveBeenCalledWith('Failed to move:', expect.anything())
   })
 
   describe('racing a save', () => {
