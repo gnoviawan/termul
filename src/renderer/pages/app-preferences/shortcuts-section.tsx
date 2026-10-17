@@ -26,8 +26,8 @@ export function ShortcutsSection({
 }: ShortcutsSectionProps): React.JSX.Element {
   return (
     <SettingsSection id="shortcuts">
-      <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
-        <div className="w-full pt-1 md:w-1/3">
+      <div className="grid grid-cols-1 items-start gap-6 border-b border-border pb-6 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="w-full pt-1">
           <div className="flex items-center gap-2">
             <Keyboard size={18} className="text-primary" />
             <h2 className="text-lg font-medium text-foreground">Keyboard Shortcuts</h2>
@@ -43,7 +43,7 @@ export function ShortcutsSection({
             Reset all shortcuts
           </button>
         </div>
-        <div className="w-full space-y-4 md:w-full md:w-2/3">
+        <div className="w-full space-y-4">
           {Object.values(shortcuts)
             .filter((shortcut) => isTauriContext() || !DESKTOP_ONLY_SHORTCUT_IDS[shortcut.id])
             .map((shortcut) => (

@@ -128,15 +128,19 @@ export function AiAgentsSection({
 
   return (
     <SettingsSection id="ai-agents">
-      <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
-        <div className="w-full pt-1 md:w-1/3">
-          <div className="flex items-center gap-2">
-            <Bot size={18} className="text-primary" />
-            <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">See which agents are ready.</p>
-        </div>
-        <div className="w-full space-y-4 md:w-2/3">
+      <div className="space-y-4 border-b border-border pb-6">
+        <div className="w-full space-y-4">
+          <AcpAgentsSettings
+            header={
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Bot size={18} className="text-primary" />
+                  <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">See which agents are ready.</p>
+              </div>
+            }
+          />
           <TimeoutSelect
             id="agent-idle-window"
             label="Close idle chats after"
@@ -202,7 +206,6 @@ export function AiAgentsSection({
               <p className="mt-2">Set on the server.</p>
             </div>
           )}
-          <AcpAgentsSettings />
         </div>
       </div>
     </SettingsSection>
