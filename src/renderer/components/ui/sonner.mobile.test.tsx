@@ -4,6 +4,7 @@ import { act, render, waitFor } from '@testing-library/react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOCK_CLEARANCE_VAR } from '@/hooks/use-dock-clearance'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { Toaster } from './sonner'
 
 const { mobileRef, sonnerPropsRef } = vi.hoisted(() => ({
@@ -44,10 +45,14 @@ describe('Sonner Toaster mobile expansion + offset', () => {
   beforeEach(() => {
     mobileRef.current = false
     sonnerPropsRef.current = null
+    useSettingsModalStore.setState({ view: null })
   })
 
   afterEach(() => {
     mobileRef.current = false
+    act(() => {
+      useSettingsModalStore.setState({ view: null })
+    })
   })
 
   it('expands the stack and lifts both offsets 12px above the measured dock on mobile', () => {
@@ -72,7 +77,19 @@ describe('Sonner Toaster mobile expansion + offset', () => {
 
     const props = sonnerPropsRef.current!
     expect(props.expand).toBe(false)
-    expect(props.offset).toBe(20)
+    expect(props.offset).toEqual({ bottom: 20, right: 8 })
+    expect(props.mobileOffset).toBeUndefined()
+  })
+
+  it('lifts the desktop stack clear of the bar while a settings modal is open', () => {
+    act(() => {
+      useSettingsModalStore.setState({ view: 'app' })
+    })
+    render(<Toaster />)
+
+    const props = sonnerPropsRef.current!
+    expect(props.expand).toBe(false)
+    expect(props.offset).toEqual({ bottom: 44, right: 8 })
     expect(props.mobileOffset).toBeUndefined()
   })
 

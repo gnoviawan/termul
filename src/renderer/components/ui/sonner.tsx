@@ -3,6 +3,7 @@ import 'sonner/dist/styles.css'
 import { DOCK_CLEARANCE_VAR } from '@/hooks/use-dock-clearance'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useAppearanceMode } from '@/stores/app-settings-store'
+import { useSettingsModalView } from '@/stores/settings-modal-store'
 import './sonner.css'
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
@@ -35,6 +36,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // (expand=true) and lift the offset clear of the measured dock and key bar;
   // desktop keeps the collapsed hover-expand pile byte-identical.
   const isMobileWebShell = useMobileWebShell()
+  const settingsOpen = useSettingsModalView() !== null
 
   return (
     <Sonner
@@ -52,7 +54,9 @@ const Toaster = ({ ...props }: ToasterProps) => {
       // only above 600px and `mobileOffset` (default 16px) at 600px and below,
       // so both are set. The object form moves only the bottom edge; a number or
       // string would also set left and right and squeeze the toast.
-      offset={isMobileWebShell ? MOBILE_TOAST_OFFSET : 20}
+      // Desktop: right edge is a consistent 8px, and bottom lifts from 20 to 44
+      // while a settings modal is open so the stack clears the footer bar.
+      offset={isMobileWebShell ? MOBILE_TOAST_OFFSET : { bottom: settingsOpen ? 44 : 20, right: 8 }}
       mobileOffset={isMobileWebShell ? MOBILE_TOAST_OFFSET : undefined}
       // Default 4s is fine for success; errors deserve a touch longer
       // because they usually need reading. Per-call duration on toast()
