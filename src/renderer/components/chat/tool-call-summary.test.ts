@@ -402,9 +402,12 @@ describe('toolCallPath', () => {
 })
 
 describe('isSubagentRunning', () => {
-  it('is running for pending and in_progress regardless of the turn', () => {
-    expect(isSubagentRunning(call({ status: 'pending' }), false)).toBe(true)
-    expect(isSubagentRunning(call({ status: 'in_progress' }), false)).toBe(true)
+  it('is running for pending and in_progress only while the parent turn is active', () => {
+    expect(isSubagentRunning(call({ status: 'pending' }), true)).toBe(true)
+    expect(isSubagentRunning(call({ status: 'in_progress' }), true)).toBe(true)
+    // A cancelled or crashed turn can leave the dispatch in flight forever.
+    expect(isSubagentRunning(call({ status: 'pending' }), false)).toBe(false)
+    expect(isSubagentRunning(call({ status: 'in_progress' }), false)).toBe(false)
   })
 
   it('treats a missing status as running only while the parent turn is active', () => {

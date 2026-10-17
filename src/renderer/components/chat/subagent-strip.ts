@@ -4,7 +4,13 @@
  * duration. No React/store dependency, so it is directly unit-testable.
  */
 import type { ToolCall } from '@/lib/acp-api'
-import { asRecord, firstString, isSubagentCall, isSubagentRunning } from './tool-call-summary'
+import {
+  asRecord,
+  firstString,
+  isSubagentCall,
+  isSubagentRunning,
+  isToolCallRunning
+} from './tool-call-summary'
 
 /** `stopped`: still pending/in_progress after the turn ended (cancel or crash). Counts as failed. */
 export type SubagentStatus = 'running' | 'done' | 'failed' | 'stopped'
@@ -49,7 +55,8 @@ export function selectCurrentTurnSubagents(
 }
 
 export function subagentStatus(toolCall: ToolCall, turnActive: boolean): SubagentStatus {
-  if (isSubagentRunning(toolCall, turnActive)) return turnActive ? 'running' : 'stopped'
+  if (isSubagentRunning(toolCall, turnActive)) return 'running'
+  if (isToolCallRunning(toolCall)) return 'stopped'
   return toolCall.status === 'failed' ? 'failed' : 'done'
 }
 

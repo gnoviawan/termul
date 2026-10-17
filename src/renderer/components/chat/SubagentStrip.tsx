@@ -127,7 +127,9 @@ export function SubagentStrip({
   // its call leaves the current turn (the live object wins while listed).
   const lastSelected = useRef<ToolCall | null>(null)
   const live = selectedId ? subagents.find((tc) => tc.toolCallId === selectedId) : undefined
-  if (live) lastSelected.current = live
+  useEffect(() => {
+    if (live) lastSelected.current = live
+  }, [live])
   const selected = selectedId ? (live ?? lastSelected.current) : null
   const summaryParts = (['running', 'done', 'failed'] as const).filter((key) => counts[key] > 0)
   const liveSummary = summaryParts.map((key) => `${counts[key]} ${STATUS_LABEL[key]}`).join(', ')
