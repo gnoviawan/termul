@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Conformance form</title>
+</head>
+<body>
+<main>
+<h1>Conformance form</h1>
+<form id="f" onsubmit="return false">
+<label for="name">Name</label>
+<input id="name" name="name" type="text" aria-label="Name">
+<button id="submit" type="button">Submit</button>
+</form>
+<p id="result">Result: none</p>
+<a id="next" href="/form-done.html">Next page</a>
+</main>
+<script>
+var clicks = 0;
+document.getElementById('submit').addEventListener('click', function (e) {
+  clicks += 1;
+  var value = document.getElementById('name').value;
+  document.getElementById('result').textContent =
+    'Result: submitted [' + value + '] clicks=' + clicks + ' trusted=' + e.isTrusted;
+});
+</script>
+</body>
+</html>
