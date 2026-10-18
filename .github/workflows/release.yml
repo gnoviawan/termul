@@ -275,10 +275,10 @@ jobs:
         shell: bash
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
-      # Tauri staples the .app seconds after notarytool reports Accepted and
-      # ignores the stapler's exit status, so a ticket that is not yet
-      # retrievable ships an unstapled .app inside the DMG and updater archive
-      # (#1388). Shadow xcrun so `stapler staple` retries and logs its output.
+      # Tauri ignores the stapler's exit status, so a transient CloudKit failure
+      # (macos-15-intel has dropped the connection with NSURLErrorDomain -1005)
+      # ships an unstapled .app inside the DMG and updater archive (#1388).
+      # Shadow xcrun so `stapler staple` retries and logs its output.
       - name: Retry stapler staple during the macOS build
         if: startsWith(matrix.platform, 'macos-')
         shell: bash
