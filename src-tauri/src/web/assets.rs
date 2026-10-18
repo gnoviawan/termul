@@ -328,5 +328,152 @@ fn opaque_tags(list: &str) -> impl Iterator<Item = &str> {
     })
 }
 
+/// Embedded figcraft web bundle (spine AD-24), fetched by
+/// `scripts/canvas/fetch-figcraft-bundle.mjs` into `canvas/bundle/` before a
+/// release build and served under `/canvas/<id>/` by
+/// [`crate::canvas::static_server`]. Same mechanism as [`Assets`], so the
+/// desktop binary and `termul-server` carry one copy each with no Tauri
+/// resources. `#[allow_missing]` keeps dev/CI compiling without the fetch;
+/// requests then get the typed [`CODE_BUNDLE_MISSING`] response.
+#[derive(rust_embed::Embed)]
+#[folder = "../canvas/bundle/"]
+#[allow_missing = true]
+pub struct CanvasBundle;
+
+/// Stable error code for a request that reaches a build with no bundle.
+pub const CODE_BUNDLE_MISSING: &str = "BUNDLE_MISSING";
+
+/// Dev-only directory override for the bundle. Compiled out of release
+/// builds, which read the embedded set only (spine AD-22).
+#[cfg(debug_assertions)]
+pub const CANVAS_BUNDLE_DIR_ENV: &str = "TERMUL_FIGCRAFT_BUNDLE";
+
+struct BundleFile {
+    mime: &'static str,
+    data: Cow<'static, [u8]>,
+    opaque: String,
+}
+
+fn bundle_dir_override() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var_os(CANVAS_BUNDLE_DIR_ENV)
+            .map(PathBuf::from)
+            .filter(|dir| !dir.as_os_str().is_empty())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
+fn bundle_mime(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json",
+        Some("txt" | "md") => "text/plain; charset=utf-8",
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        _ => "application/octet-stream",
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn read_bundle_file(path: &str) -> Option<BundleFile> {
+    use sha2::Digest as _;
+    if path
+        .split('/')
+        .any(|part| matches!(part, ".." | "." | "") || part.contains(['\\', ':']))
+    {
+        return None;
+    }
+    if let Some(dir) = bundle_dir_override() {
+        let data = std::fs::read(dir.join(path)).ok()?;
+        return Some(BundleFile {
+            mime: bundle_mime(path),
+            opaque: hex(&sha2::Sha256::digest(&data)),
+            data: Cow::Owned(data),
+        });
+    }
+    let file = CanvasBundle::get(path)?;
+    Some(BundleFile {
+        mime: bundle_mime(path),
+        opaque: hex(&file.metadata.sha256_hash()),
+        data: file.data,
+    })
+}
+
+/// Whether the active bundle source (the dev override directory, else the
+/// embedded set) holds an `index.html`.
+pub fn canvas_bundle_available() -> bool {
+    read_bundle_file(INDEX_HTML).is_some()
+}
+
+/// Typed 503 for a request that reaches a build without the bundle.
+pub fn canvas_bundle_missing_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        axum::Json(serde_json::json!({
+            "success": false,
+            "error": "the figcraft canvas bundle is not available in this build",
+            "code": CODE_BUNDLE_MISSING,
+        })),
+    )
+        .into_response()
+}
+
+/// Serve `path` (relative to the bundle root; empty means `index.html`) from
+/// the bundle. GET and HEAD only. Every response is `private, no-cache` with
+/// a content-hash `ETag`: the bundle sits behind a per-canvas credential, so
+/// it must revalidate rather than be replayed from a shared cache.
+pub fn canvas_bundle_response(method: &Method, path: &str, request: &HeaderMap) -> Response {
+    if !matches!(*method, Method::GET | Method::HEAD) {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    let path = if path.is_empty() { INDEX_HTML } else { path };
+    let Some(file) = read_bundle_file(path) else {
+        return (StatusCode::NOT_FOUND, "404 Not Found").into_response();
+    };
+    let opaque = format!("\"{}\"", file.opaque);
+    let mut response = if if_none_match_names(request, &opaque) {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        let body = if *method == Method::HEAD {
+            Body::empty()
+        } else {
+            Body::from(file.data)
+        };
+        (
+            [(header::CONTENT_TYPE, HeaderValue::from_static(file.mime))],
+            body,
+        )
+            .into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    if let Ok(etag) = HeaderValue::from_str(&format!("W/{opaque}")) {
+        headers.insert(header::ETAG, etag);
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests;

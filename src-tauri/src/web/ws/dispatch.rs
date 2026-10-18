@@ -137,6 +137,11 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "watch" => handle_watch(id, &req.payload, env),
         "unwatch" => handle_unwatch(id, &req.payload, env),
         "mark_chat_read" => handle_mark_chat_read(id, &req.payload, relay),
+        // The canvas gateway's renderer leg (`canvas.rs`): mounts this
+        // connection holds and its answers to forwarded canvas calls.
+        "canvas_mount" => handle_canvas_mount(id, &req.payload, env),
+        "canvas_unmount" => handle_canvas_unmount(id, &req.payload, env),
+        "canvas_reply" => handle_canvas_reply(id, &req.payload, env),
         // Project registry commands — one command service shared with the
         // HTTP routes and the desktop (`web::project_registry::commands`):
         // each validates, persists to the durable registry, then notifies.

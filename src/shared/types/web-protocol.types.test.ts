@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 51 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(52)
+  it('exports exactly 55 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(55)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -156,7 +156,11 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'list_claude_accounts',
       'list_claude_usage',
       'set_default_claude_account',
-      'set_project_claude_account'
+      'set_project_claude_account',
+      // The canvas gateway's renderer leg.
+      'canvas_mount',
+      'canvas_unmount',
+      'canvas_reply'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)

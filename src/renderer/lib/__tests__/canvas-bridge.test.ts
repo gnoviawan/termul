@@ -1,445 +1,328 @@
 /**
- * Canvas bridge tests (OpenPencil canvas mode, task 22 + review round).
- *
- * Pins the `op_editor_core::bridge_protocol` wire contract verbatim: the
- * codec builders/events round-trip with the exact `op-bridge/*` /
- * `op-shell/*` type strings and camelCase fields, the postMessage adapter
- * enforces the source + origin lock (an unparseable origin locks the bridge
- * entirely), the init retry loop follows the 500ms / 20 /
- * reset-on-`listening` cadence and reports `onInitFailed` when the budget is
- * exhausted, and the `op-shell/save` / `op-shell/copy` control messages
- * reach their callbacks (while business payloads embedding "op-shell/" text
- * are never misclassified, and `op-shell/open-external` is ignored).
+ * The host side of figcraft's control protocol (spine AD-25), driven the way
+ * the editor iframe drives it: object envelopes posted from the iframe's
+ * `contentWindow` at the canvas origin.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import { logFrontendError } from '@/lib/log-api'
 
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
 
 import {
-  BRIDGE_EDITOR_MESSAGES,
-  BRIDGE_HOST_MESSAGES,
-  BRIDGE_INIT_MAX_TRIES,
-  BRIDGE_INIT_RETRY_MS,
-  buildInitMessage,
-  buildLocaleMessage,
-  buildResolveConflictMessage,
-  buildSaveCommittedMessage,
-  buildSnapshotMessage,
-  buildThemeMessage,
+  answerGatewayCall,
+  asJsonText,
+  buildCanvasEmbedUrl,
+  type CanvasBridge,
   type CanvasBridgeEvent,
-  createCanvasBridge,
-  isShellSaveRequest,
-  originOfEmbedUrl,
-  parseBridgeEvent,
-  parseShellCopyText,
-  SHELL_CONTROL_MESSAGES,
-  toSupportedBridgeLocale
+  canvasOriginOf,
+  createCanvasBridge
 } from '../canvas-bridge'
 
-const IFRAME_ORIGIN = 'http://127.0.0.1:5199'
+const CANVAS_ORIGIN = 'http://127.0.0.1:5199'
+const MOUNT_SEQ = 7
 
-interface FakeIframe {
-  element: HTMLIFrameElement
-  postMessage: ReturnType<typeof vi.fn>
+interface FakeEditor {
+  iframe: HTMLIFrameElement
+  posted: ReturnType<typeof vi.fn>
+  send(data: unknown, from?: { origin?: string; source?: unknown }): void
+  ready(): void
+  lastRequest(): { id: number; method: string; params: string; mountSeq: number }
 }
 
-function fakeIframe(): FakeIframe {
-  const postMessage = vi.fn()
-  const contentWindow = { postMessage } as unknown as Window
-  const element = { contentWindow } as unknown as HTMLIFrameElement
-  return { element, postMessage }
+function fakeEditor(): FakeEditor {
+  const posted = vi.fn()
+  const contentWindow = { postMessage: posted } as unknown as Window
+  const iframe = { contentWindow } as unknown as HTMLIFrameElement
+  const send: FakeEditor['send'] = (data, from = {}) => {
+    const event = new MessageEvent('message', { data })
+    Object.defineProperty(event, 'origin', { value: from.origin ?? CANVAS_ORIGIN })
+    Object.defineProperty(event, 'source', {
+      value: 'source' in from ? from.source : contentWindow
+    })
+    window.dispatchEvent(event)
+  }
+  return {
+    iframe,
+    posted,
+    send,
+    ready: () => send({ method: 'event.ready', params: '{}', mountSeq: MOUNT_SEQ }),
+    lastRequest: () => posted.mock.calls.at(-1)?.[0]
+  }
 }
 
-function dispatchFromIframe(
-  iframe: FakeIframe,
-  data: string,
-  origin: string = IFRAME_ORIGIN
-): void {
-  const event = new MessageEvent('message', { data })
-  Object.defineProperty(event, 'origin', { value: origin })
-  Object.defineProperty(event, 'source', { value: iframe.element.contentWindow })
-  window.dispatchEvent(event)
-}
-
-function parsePosted(raw: unknown): Record<string, unknown> {
-  return JSON.parse(raw as string) as Record<string, unknown>
-}
-
-describe('canvas-bridge codec (host → editor builders)', () => {
-  it('builds every host message with the verbatim op-bridge/* type string', () => {
-    expect(parsePosted(buildInitMessage('t0k')).type).toBe(BRIDGE_HOST_MESSAGES.INIT)
-    expect(parsePosted(buildThemeMessage('dark')).type).toBe(BRIDGE_HOST_MESSAGES.THEME)
-    expect(parsePosted(buildLocaleMessage('en-US')).type).toBe(BRIDGE_HOST_MESSAGES.LOCALE)
-    expect(parsePosted(buildSaveCommittedMessage(3, 41)).type).toBe(
-      BRIDGE_HOST_MESSAGES.SAVE_COMMITTED
-    )
-    expect(parsePosted(buildResolveConflictMessage('use-local', 'r1')).type).toBe(
-      BRIDGE_HOST_MESSAGES.RESOLVE_CONFLICT
-    )
-    expect(parsePosted(buildSnapshotMessage('save', 'r2')).type).toBe(BRIDGE_HOST_MESSAGES.SNAPSHOT)
-  })
-
-  it('init carries token + optional mcpUrl with camelCase field names', () => {
-    expect(parsePosted(buildInitMessage('t0k'))).toEqual({
-      type: 'op-bridge/init',
-      token: 't0k'
-    })
-    expect(parsePosted(buildInitMessage('t0k', 'http://127.0.0.1:9/canvas/mcp'))).toEqual({
-      type: 'op-bridge/init',
-      token: 't0k',
-      mcpUrl: 'http://127.0.0.1:9/canvas/mcp'
-    })
-  })
-
-  it('theme / locale / save-committed / resolve-conflict payload shapes are exact', () => {
-    expect(parsePosted(buildThemeMessage('light'))).toEqual({
-      type: 'op-bridge/theme',
-      colorScheme: 'light'
-    })
-    expect(parsePosted(buildLocaleMessage('zh-CN'))).toEqual({
-      type: 'op-bridge/locale',
-      locale: 'zh-CN'
-    })
-    expect(parsePosted(buildSaveCommittedMessage(3, 41))).toEqual({
-      type: 'op-bridge/save-committed',
-      generation: 3,
-      revision: 41
-    })
-    expect(parsePosted(buildResolveConflictMessage('accept-remote', 'r1'))).toEqual({
-      type: 'op-bridge/resolve-conflict',
-      mode: 'accept-remote',
-      requestId: 'r1'
-    })
-  })
-})
-
-describe('canvas-bridge codec (editor → host event parsing)', () => {
-  it('parses every editor event with the verbatim type string and camelCase fields', () => {
-    expect(parseBridgeEvent('{"type":"op-bridge/listening"}')).toEqual({ type: 'listening' })
-    expect(parseBridgeEvent('{"type":"op-bridge/ready","generation":2,"revision":17}')).toEqual({
-      type: 'ready',
-      generation: 2,
-      revision: 17
-    })
+describe('buildCanvasEmbedUrl', () => {
+  it('builds the AD-22 kiosk URL with the host origin and mount sequence', () => {
     expect(
-      parseBridgeEvent(
-        '{"type":"op-bridge/dirty-changed","generation":3,"revision":18,"dirty":true}'
+      buildCanvasEmbedUrl(
+        { baseUrl: 'http://127.0.0.1:5199', canvasId: 'cv0123456789abcdef', canvasToken: 'ab12' },
+        'http://tauri.localhost',
+        3
       )
-    ).toEqual({ type: 'dirty-changed', generation: 3, revision: 18, dirty: true })
+    ).toBe(
+      'http://127.0.0.1:5199/canvas/cv0123456789abcdef/?embed=kiosk&ct=ab12&ho=http%3A%2F%2Ftauri.localhost&ms=3'
+    )
+  })
+
+  it('stays path-relative on the web client, where the base is empty', () => {
     expect(
-      parseBridgeEvent(
-        '{"type":"op-bridge/sync-conflict","generation":3,"revision":18,"serverVersion":19}'
+      buildCanvasEmbedUrl(
+        { baseUrl: '', canvasId: 'cv1', canvasToken: 'ff' },
+        'https://termul.example',
+        1
       )
-    ).toEqual({ type: 'sync-conflict', generation: 3, revision: 18, serverVersion: 19 })
-    expect(parseBridgeEvent('{"type":"op-bridge/conflict-resolved","requestId":"r1"}')).toEqual({
-      type: 'conflict-resolved',
-      requestId: 'r1'
-    })
-  })
-
-  it('foreign postMessage traffic is ignored, never an error', () => {
-    expect(parseBridgeEvent('{"type":"react-devtools"}')).toBeNull()
-    expect(parseBridgeEvent('not json at all')).toBeNull()
-    expect(parseBridgeEvent({ type: 'op-bridge/ready' })).toBeNull()
-    expect(parseBridgeEvent(null)).toBeNull()
-    // Malformed bridge events (missing/typed fields) are dropped too.
-    expect(parseBridgeEvent('{"type":"op-bridge/ready","generation":"2","revision":17}')).toBeNull()
-    expect(
-      parseBridgeEvent('{"type":"op-bridge/dirty-changed","generation":3,"revision":18}')
-    ).toBeNull()
+    ).toBe('/canvas/cv1/?embed=kiosk&ct=ff&ho=https%3A%2F%2Ftermul.example&ms=1')
   })
 })
 
-describe('canvas-bridge shell control classification', () => {
-  it('op-shell/save and op-shell/copy are recognized by their top-level type', () => {
-    expect(isShellSaveRequest('{"type":"op-shell/save"}')).toBe(true)
-    expect(isShellSaveRequest('{"type":"op-bridge/ready","generation":0,"revision":0}')).toBe(false)
-    expect(parseShellCopyText('{"type":"op-shell/copy","text":"copied!"}')).toBe('copied!')
-    expect(parseShellCopyText('{"type":"op-shell/copy","text":42}')).toBeUndefined()
-    expect(parseShellCopyText('{"type":"op-shell/save"}')).toBeUndefined()
-  })
-
-  it('a business payload embedding op-shell/ text is never misclassified', () => {
-    const snapshot = JSON.stringify({
-      type: 'op-bridge/snapshot-result',
-      requestId: 'r1',
-      docJson: '{"note":"mentions op-shell/save inline"}',
-      generation: 1,
-      revision: 1
-    })
-    expect(isShellSaveRequest(snapshot)).toBe(false)
-    expect(parseShellCopyText(snapshot)).toBeUndefined()
-    expect(parseBridgeEvent(snapshot)?.type).toBe('snapshot-result')
+describe('canvasOriginOf', () => {
+  it('is the loopback origin on desktop and the page origin on the web', () => {
+    expect(canvasOriginOf('http://127.0.0.1:5199')).toBe(CANVAS_ORIGIN)
+    expect(canvasOriginOf('')).toBe(window.location.origin)
   })
 })
 
-describe('canvas-bridge helpers', () => {
-  it('originOfEmbedUrl resolves absolute loopback and relative web embed URLs', () => {
-    expect(originOfEmbedUrl('http://127.0.0.1:5199/?embed=vscode')).toBe('http://127.0.0.1:5199')
-    expect(originOfEmbedUrl('/canvas/cv0/?embed=vscode&ct=abc')).toBe(window.location.origin)
-  })
+describe('createCanvasBridge', () => {
+  let editor: FakeEditor
+  let events: CanvasBridgeEvent[]
+  let bridge: CanvasBridge
 
-  it('toSupportedBridgeLocale maps the host locale onto the codec-accepted set', () => {
-    expect(toSupportedBridgeLocale('zh')).toBe('zh-CN')
-    expect(toSupportedBridgeLocale('zh-TW')).toBe('zh-CN')
-    expect(toSupportedBridgeLocale('en-GB')).toBe('en-US')
-    expect(toSupportedBridgeLocale('fr')).toBe('en-US')
-  })
-})
-
-describe('canvas-bridge postMessage adapter', () => {
   beforeEach(() => {
-    vi.useFakeTimers()
+    editor = fakeEditor()
+    events = []
+    bridge = createCanvasBridge({
+      iframe: editor.iframe,
+      canvasOrigin: CANVAS_ORIGIN,
+      mountSeq: MOUNT_SEQ,
+      onEvent: (event) => events.push(event)
+    })
   })
 
   afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  function createBridge(iframe: FakeIframe, onEvent: (event: CanvasBridgeEvent) => void = vi.fn()) {
-    return createCanvasBridge({
-      iframe: iframe.element,
-      iframeOrigin: IFRAME_ORIGIN,
-      token: 't0k',
-      mcpUrl: 'http://127.0.0.1:9/canvas/mcp',
-      onEvent,
-      onShellSave: vi.fn(),
-      onShellCopy: vi.fn()
-    })
-  }
-
-  it('posts init immediately with the token + mcpUrl and the iframe origin as targetOrigin', () => {
-    const iframe = fakeIframe()
-    const bridge = createBridge(iframe)
-    expect(iframe.postMessage).toHaveBeenCalledTimes(1)
-    const [json, targetOrigin] = iframe.postMessage.mock.calls[0] as [string, string]
-    expect(parsePosted(json)).toEqual({
-      type: 'op-bridge/init',
-      token: 't0k',
-      mcpUrl: 'http://127.0.0.1:9/canvas/mcp'
-    })
-    expect(targetOrigin).toBe(IFRAME_ORIGIN)
     bridge.dispose()
   })
 
-  it('retries init every 500ms and stops after the 20-try cap', () => {
-    const iframe = fakeIframe()
-    const bridge = createBridge(iframe)
-    expect(iframe.postMessage).toHaveBeenCalledTimes(1)
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS)
-    expect(iframe.postMessage).toHaveBeenCalledTimes(2)
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS * (BRIDGE_INIT_MAX_TRIES + 5))
-    expect(iframe.postMessage).toHaveBeenCalledTimes(BRIDGE_INIT_MAX_TRIES)
-    bridge.dispose()
+  it('holds calls until event.ready, then posts them with increasing ids to the canvas origin', async () => {
+    const first = bridge.call('document.inspect')
+    const second = bridge.call('engine.commands')
+    expect(editor.posted).not.toHaveBeenCalled()
+
+    editor.ready()
+    expect(events).toEqual([{ method: 'event.ready' }])
+    expect(editor.posted.mock.calls).toEqual([
+      [{ id: 1, method: 'document.inspect', params: '{}', mountSeq: MOUNT_SEQ }, CANVAS_ORIGIN],
+      [{ id: 2, method: 'engine.commands', params: '{}', mountSeq: MOUNT_SEQ }, CANVAS_ORIGIN]
+    ])
+
+    editor.send({ id: 2, ok: true, result: '[]', mountSeq: MOUNT_SEQ })
+    editor.send({ id: 1, ok: true, result: '{"pages":[]}', mountSeq: MOUNT_SEQ })
+    await expect(first).resolves.toEqual({ ok: true, result: '{"pages":[]}' })
+    await expect(second).resolves.toEqual({ ok: true, result: '[]' })
+
+    void bridge.call('node.get', asJsonText('{"id":1}'))
+    expect(editor.lastRequest().id).toBe(3)
   })
 
-  it('reports onInitFailed (once) when the retry budget is exhausted without listening/ready', () => {
-    const iframe = fakeIframe()
-    const onInitFailed = vi.fn()
-    const bridge = createCanvasBridge({
-      iframe: iframe.element,
-      iframeOrigin: IFRAME_ORIGIN,
-      token: 't0k',
-      onEvent: vi.fn(),
-      onShellSave: vi.fn(),
-      onShellCopy: vi.fn(),
-      onInitFailed
-    })
-    expect(onInitFailed).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS * (BRIDGE_INIT_MAX_TRIES + 5))
-    expect(onInitFailed).toHaveBeenCalledTimes(1)
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'canvas-bridge.init', level: 'warn' })
-    )
-    // Latched: a second exhaustion window does not re-report.
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS * (BRIDGE_INIT_MAX_TRIES + 5))
-    expect(onInitFailed).toHaveBeenCalledTimes(1)
-    bridge.dispose()
+  it('forwards params and results as untouched JSON text, so 64-bit node ids survive', async () => {
+    editor.ready()
+    const params = '{"command":"object.setName","params":{"id":18446744073709551615,"name":"x"}}'
+    const reply = bridge.call('engine.execute', asJsonText(params))
+
+    const request = editor.lastRequest()
+    expect(request.params).toBe(params)
+
+    const result = '{"id":18446744073709551615,"parent":9007199254740993}'
+    editor.send({ id: request.id, ok: true, result, mountSeq: MOUNT_SEQ })
+    const resolved = await reply
+    expect(resolved).toEqual({ ok: true, result })
+    expect(resolved.ok && resolved.result.includes('18446744073709551615')).toBe(true)
   })
 
-  it('an unparseable origin locks the bridge: no init post, every inbound message is foreign', () => {
-    const iframe = fakeIframe()
-    const onEvent = vi.fn()
-    const onShellSave = vi.fn()
-    const bridge = createCanvasBridge({
-      iframe: iframe.element,
-      iframeOrigin: '',
-      token: 't0k',
-      onEvent,
-      onShellSave,
-      onShellCopy: vi.fn()
+  it('accepts only the iframe window at the canvas origin', async () => {
+    editor.ready()
+    const reply = bridge.call('document.inspect')
+    const { id } = editor.lastRequest()
+    const forged = { id, ok: true, result: '"forged"', mountSeq: MOUNT_SEQ }
+
+    editor.send(forged, { origin: 'http://evil.example' })
+    editor.send(forged, { source: window })
+    editor.send(forged, { source: null })
+    editor.send({ id, ok: true, result: '"real"', mountSeq: MOUNT_SEQ })
+
+    await expect(reply).resolves.toEqual({ ok: true, result: '"real"' })
+  })
+
+  it('drops replies and events stamped with another mountSeq', async () => {
+    editor.ready()
+    const reply = bridge.call('document.inspect')
+    const { id } = editor.lastRequest()
+    let settled = false
+    void reply.then(() => {
+      settled = true
     })
 
-    // No outbound post (an empty targetOrigin would throw) and a one-time
-    // origin-lock log.
-    expect(iframe.postMessage).not.toHaveBeenCalled()
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'canvas-bridge.origin', level: 'warn' })
-    )
+    editor.send({ id, ok: true, result: '"stale"', mountSeq: MOUNT_SEQ - 1 })
+    editor.send({ method: 'event.crashed', params: '{"reason":"old"}', mountSeq: MOUNT_SEQ - 1 })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(events).toEqual([{ method: 'event.ready' }])
 
-    // Even a message carrying the empty origin (and the right source) is
-    // foreign — nothing may pass without a valid origin check.
-    const event = new MessageEvent('message', { data: '{"type":"op-shell/save"}' })
-    Object.defineProperty(event, 'origin', { value: '' })
-    Object.defineProperty(event, 'source', { value: iframe.element.contentWindow })
-    window.dispatchEvent(event)
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS * 30)
-    expect(onEvent).not.toHaveBeenCalled()
-    expect(onShellSave).not.toHaveBeenCalled()
-    expect(iframe.postMessage).not.toHaveBeenCalled()
-    bridge.dispose()
+    editor.send({ id, ok: true, result: '"current"', mountSeq: MOUNT_SEQ })
+    await expect(reply).resolves.toEqual({ ok: true, result: '"current"' })
   })
 
-  it('op-shell/open-external is ignored with a single info log (URL never logged)', () => {
-    const iframe = fakeIframe()
-    const onEvent = vi.fn()
-    const bridge = createBridge(iframe, onEvent)
-    vi.mocked(logFrontendError).mockClear()
-
-    dispatchFromIframe(iframe, '{"type":"op-shell/open-external","url":"https://auth.example/x"}')
-    dispatchFromIframe(iframe, '{"type":"op-shell/open-external","url":"https://auth.example/y"}')
-
-    expect(onEvent).not.toHaveBeenCalled()
-    expect(logFrontendError).toHaveBeenCalledTimes(1)
-    expect(logFrontendError).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'canvas-bridge.shell', level: 'info' })
-    )
-    const logged = JSON.stringify(vi.mocked(logFrontendError).mock.calls[0])
-    expect(logged).not.toContain('auth.example')
-    bridge.dispose()
-  })
-
-  it('listening resets the retry budget and re-posts init at once', () => {
-    const iframe = fakeIframe()
-    const onEvent = vi.fn()
-    const bridge = createBridge(iframe, onEvent)
-    // Burn the whole retry budget.
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS * (BRIDGE_INIT_MAX_TRIES + 5))
-    expect(iframe.postMessage).toHaveBeenCalledTimes(BRIDGE_INIT_MAX_TRIES)
-    // A late listening announcement restarts the loop.
-    dispatchFromIframe(iframe, '{"type":"op-bridge/listening"}')
-    expect(iframe.postMessage).toHaveBeenCalledTimes(BRIDGE_INIT_MAX_TRIES + 1)
-    expect(onEvent).toHaveBeenCalledWith({ type: 'listening' })
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS)
-    expect(iframe.postMessage).toHaveBeenCalledTimes(BRIDGE_INIT_MAX_TRIES + 2)
-    bridge.dispose()
-  })
-
-  it('ready stops the retry loop', () => {
-    const iframe = fakeIframe()
-    const bridge = createBridge(iframe)
-    dispatchFromIframe(iframe, '{"type":"op-bridge/ready","generation":2,"revision":17}')
-    const posts = iframe.postMessage.mock.calls.length
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS * 10)
-    expect(iframe.postMessage).toHaveBeenCalledTimes(posts)
-    bridge.dispose()
-  })
-
-  it('ignores messages from a foreign origin or a foreign source', () => {
-    const iframe = fakeIframe()
-    const onEvent = vi.fn()
-    const bridge = createBridge(iframe, onEvent)
-    // Foreign origin.
-    dispatchFromIframe(
-      iframe,
-      '{"type":"op-bridge/ready","generation":2,"revision":17}',
-      'http://evil.example'
-    )
-    // Foreign source (same origin, different window).
-    const foreign = new MessageEvent('message', {
-      data: '{"type":"op-bridge/ready","generation":2,"revision":17}'
-    })
-    Object.defineProperty(foreign, 'origin', { value: IFRAME_ORIGIN })
-    Object.defineProperty(foreign, 'source', { value: { postMessage: vi.fn() } })
-    window.dispatchEvent(foreign)
-    expect(onEvent).not.toHaveBeenCalled()
-    bridge.dispose()
-  })
-
-  it('routes editor events to onEvent and stops retrying after ready', () => {
-    const iframe = fakeIframe()
-    const onEvent = vi.fn()
-    const bridge = createBridge(iframe, onEvent)
-    dispatchFromIframe(iframe, '{"type":"op-bridge/ready","generation":2,"revision":17}')
-    dispatchFromIframe(
-      iframe,
-      '{"type":"op-bridge/dirty-changed","generation":3,"revision":18,"dirty":true}'
-    )
-    expect(onEvent).toHaveBeenCalledWith({ type: 'ready', generation: 2, revision: 17 })
-    expect(onEvent).toHaveBeenCalledWith({
-      type: 'dirty-changed',
-      generation: 3,
-      revision: 18,
-      dirty: true
-    })
-    bridge.dispose()
-  })
-
-  it('op-shell/save and op-shell/copy reach their callbacks', () => {
-    const iframe = fakeIframe()
-    const onShellSave = vi.fn()
-    const onShellCopy = vi.fn()
-    const bridge = createCanvasBridge({
-      iframe: iframe.element,
-      iframeOrigin: IFRAME_ORIGIN,
-      token: 't0k',
-      onEvent: vi.fn(),
-      onShellSave,
-      onShellCopy
-    })
-    dispatchFromIframe(iframe, '{"type":"op-shell/save"}')
-    dispatchFromIframe(iframe, '{"type":"op-shell/copy","text":"design tokens"}')
-    expect(onShellSave).toHaveBeenCalledTimes(1)
-    expect(onShellCopy).toHaveBeenCalledWith('design tokens')
-    bridge.dispose()
-  })
-
-  it('outbound host messages post with the explicit iframe origin', () => {
-    const iframe = fakeIframe()
-    const bridge = createBridge(iframe)
-    iframe.postMessage.mockClear()
-    bridge.sendTheme('dark')
-    bridge.sendLocale('zh-CN')
-    bridge.sendSaveCommitted(3, 41)
-    bridge.sendResolveConflict('use-local', 'r1')
-    expect(iframe.postMessage).toHaveBeenCalledTimes(4)
-    for (const call of iframe.postMessage.mock.calls) {
-      expect(call[1]).toBe(IFRAME_ORIGIN)
+  it('answers UNKNOWN_METHOD locally for methods outside the protocol', async () => {
+    editor.ready()
+    for (const method of ['event.ready', 'app.quit', 'window.close', 'bogus', 'engine.']) {
+      await expect(bridge.call(method)).resolves.toEqual({
+        ok: false,
+        error: { code: 'UNKNOWN_METHOD', message: `unknown method ${method}` }
+      })
     }
-    expect(parsePosted(iframe.postMessage.mock.calls[0][0])).toEqual({
-      type: 'op-bridge/theme',
-      colorScheme: 'dark'
+    expect(editor.posted).not.toHaveBeenCalled()
+  })
+
+  it('passes typed editor errors through and maps unknown codes to ENGINE_ERROR', async () => {
+    editor.ready()
+    const hidden = bridge.call('ui.inspect')
+    editor.send({
+      id: editor.lastRequest().id,
+      ok: false,
+      error: { code: 'CANVAS_HIDDEN', message: 'off screen' },
+      mountSeq: MOUNT_SEQ
     })
-    expect(parsePosted(iframe.postMessage.mock.calls[2][0])).toEqual({
-      type: 'op-bridge/save-committed',
-      generation: 3,
-      revision: 41
+    await expect(hidden).resolves.toEqual({
+      ok: false,
+      error: { code: 'CANVAS_HIDDEN', message: 'off screen' }
     })
+
+    const odd = bridge.call('engine.execute')
+    editor.send({
+      id: editor.lastRequest().id,
+      ok: false,
+      error: { code: 'SOMETHING_NEW', message: 'boom' },
+      mountSeq: MOUNT_SEQ
+    })
+    await expect(odd).resolves.toEqual({
+      ok: false,
+      error: { code: 'ENGINE_ERROR', message: 'boom' }
+    })
+  })
+
+  it('keeps contentVersion as text and reports crashes', () => {
+    editor.ready()
+    editor.send({
+      method: 'event.dirtyChanged',
+      params: '{"dirty":true,"contentVersion":18446744073709551615}',
+      mountSeq: MOUNT_SEQ
+    })
+    editor.send({ method: 'event.crashed', params: '{"reason":"panic"}', mountSeq: MOUNT_SEQ })
+    editor.send({ method: 'event.selectionChanged', params: '{}', mountSeq: MOUNT_SEQ })
+    expect(events).toEqual([
+      { method: 'event.ready' },
+      { method: 'event.dirtyChanged', dirty: true, contentVersion: '18446744073709551615' },
+      { method: 'event.crashed', reason: 'panic' }
+    ])
+  })
+
+  it('resolves pending and later calls with CANVAS_CLOSED once disposed', async () => {
+    const queued = bridge.call('document.inspect')
+    editor.ready()
+    const inFlight = bridge.call('engine.commands')
+    bridge.dispose()
+
+    const closed = { ok: false, error: { code: 'CANVAS_CLOSED', message: expect.any(String) } }
+    await expect(queued).resolves.toEqual(closed)
+    await expect(inFlight).resolves.toEqual(closed)
+    await expect(bridge.call('document.inspect')).resolves.toEqual(closed)
+
+    editor.send({ method: 'event.crashed', params: '{}', mountSeq: MOUNT_SEQ })
+    expect(events).toEqual([{ method: 'event.ready' }])
+  })
+})
+
+describe('answerGatewayCall', () => {
+  let editor: FakeEditor
+  let bridge: CanvasBridge
+
+  beforeEach(() => {
+    editor = fakeEditor()
+    bridge = createCanvasBridge({
+      iframe: editor.iframe,
+      canvasOrigin: CANVAS_ORIGIN,
+      mountSeq: MOUNT_SEQ,
+      onEvent: () => {}
+    })
+    editor.ready()
+  })
+
+  afterEach(() => {
     bridge.dispose()
   })
 
-  it('dispose removes the listener and clears the retry timer', () => {
-    const iframe = fakeIframe()
-    const onEvent = vi.fn()
-    const bridge = createBridge(iframe, onEvent)
-    bridge.dispose()
-    const posts = iframe.postMessage.mock.calls.length
-    vi.advanceTimersByTime(BRIDGE_INIT_RETRY_MS * 30)
-    dispatchFromIframe(iframe, '{"type":"op-bridge/ready","generation":2,"revision":17}')
-    expect(iframe.postMessage).toHaveBeenCalledTimes(posts)
-    expect(onEvent).not.toHaveBeenCalled()
+  it('maps the gateway callId onto a bridge request and returns the result text unparsed', async () => {
+    const call = {
+      callId: 41,
+      mountSeq: MOUNT_SEQ,
+      method: 'node.get',
+      params: '{"id":18446744073709551615}'
+    }
+    const answer = answerGatewayCall(call, MOUNT_SEQ, (method, params) =>
+      bridge.call(method, params)
+    )
+    const request = editor.lastRequest()
+    expect(request).toEqual({
+      id: 1,
+      method: 'node.get',
+      params: '{"id":18446744073709551615}',
+      mountSeq: MOUNT_SEQ
+    })
+    editor.send({
+      id: request.id,
+      ok: true,
+      result: '{"id":18446744073709551615}',
+      mountSeq: MOUNT_SEQ
+    })
+    await expect(answer).resolves.toEqual({
+      callId: 41,
+      mountSeq: MOUNT_SEQ,
+      ok: true,
+      result: '{"id":18446744073709551615}'
+    })
   })
 
-  it('exposes the verbatim editor + shell message constants', () => {
-    expect(BRIDGE_EDITOR_MESSAGES.DIRTY_CHANGED).toBe('op-bridge/dirty-changed')
-    expect(BRIDGE_EDITOR_MESSAGES.SYNC_CONFLICT).toBe('op-bridge/sync-conflict')
-    expect(BRIDGE_EDITOR_MESSAGES.CONFLICT_RESOLVED).toBe('op-bridge/conflict-resolved')
-    expect(SHELL_CONTROL_MESSAGES.SAVE).toBe('op-shell/save')
-    expect(SHELL_CONTROL_MESSAGES.COPY).toBe('op-shell/copy')
+  it('carries a typed editor error back under the gateway callId', async () => {
+    const answer = answerGatewayCall(
+      { callId: 5, mountSeq: MOUNT_SEQ, method: 'ui.screenshot', params: '{}' },
+      MOUNT_SEQ,
+      (method, params) => bridge.call(method, params)
+    )
+    editor.send({
+      id: editor.lastRequest().id,
+      ok: false,
+      error: { code: 'CANVAS_HIDDEN', message: 'hidden' },
+      mountSeq: MOUNT_SEQ
+    })
+    await expect(answer).resolves.toEqual({
+      callId: 5,
+      mountSeq: MOUNT_SEQ,
+      ok: false,
+      error: { code: 'CANVAS_HIDDEN', message: 'hidden' }
+    })
+  })
+
+  it('answers CANVAS_CLOSED without reaching the editor when the call targets another mount', async () => {
+    const answer = answerGatewayCall(
+      { callId: 9, mountSeq: MOUNT_SEQ - 1, method: 'document.inspect', params: '{}' },
+      MOUNT_SEQ,
+      (method, params) => bridge.call(method, params)
+    )
+    await expect(answer).resolves.toMatchObject({
+      callId: 9,
+      ok: false,
+      error: { code: 'CANVAS_CLOSED' }
+    })
+    expect(editor.posted).not.toHaveBeenCalled()
   })
 })

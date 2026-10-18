@@ -13,12 +13,21 @@
 //! to the agent. Minimal runtime: no Tauri plugins, no `AppHandle`, no sinks —
 //! works identically on desktop + standalone.
 
+use rmcp::handler::server::router::tool::{ToolRoute, ToolRouter};
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::service::serve_server;
-use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use rmcp::model::{
+    GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Tool,
+};
+use rmcp::service::{serve_server, RequestContext};
+use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler};
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
+use crate::acp::host_mcp::canvas_tools;
 use crate::acp::host_mcp::{
     FrameKind, FrameReply, FrameRequest, TermulAskUserInput, TermulBrowserInput, TermulPlanInput,
     TermulSetTitleInput, ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
@@ -101,6 +110,32 @@ pub fn run() -> i32 {
 /// fresh TCP connection to the parent.
 struct TermulPlanServer {
     config: ChildConfig,
+    /// The host tools plus figcraft's canvas tools, present from session start
+    /// whether or not a canvas is open.
+    tools: ToolRouter<Self>,
+}
+
+impl TermulPlanServer {
+    fn new(config: ChildConfig) -> Self {
+        let mut tools = Self::tool_router();
+        for tool in canvas_tools::tools() {
+            tools.add_route(canvas_route(tool));
+        }
+        Self { config, tools }
+    }
+}
+
+fn canvas_route(tool: Tool) -> ToolRoute<TermulPlanServer> {
+    ToolRoute::new_dyn(tool, |context: ToolCallContext<'_, TermulPlanServer>| {
+        let config = context.service.config.clone();
+        let name = context.name.to_string();
+        let arguments = context.arguments.map_or(Value::Null, Value::Object);
+        Box::pin(async move {
+            Ok(canvas_tools::call_tool(config, name, arguments)
+                .await
+                .into())
+        })
+    })
 }
 
 /// rmcp derives the `tools/list` entry from the `#[tool]` attribute; the input
@@ -130,6 +165,9 @@ impl TermulPlanServer {
             browser_args: None,
             browser_element: None,
             ask: None,
+            canvas_method: None,
+            canvas_params: None,
+            canvas_tool: None,
         };
         match forward_to_parent(&self.config, request, "plan updated").await {
             Ok(msg) => msg,
@@ -153,6 +191,9 @@ impl TermulPlanServer {
             browser_args: Some(input.args),
             browser_element: input.element,
             ask: None,
+            canvas_method: None,
+            canvas_params: None,
+            canvas_tool: None,
         };
         match forward_to_parent_raw(&self.config, request).await {
             Ok(reply) if reply.ok => reply
@@ -192,6 +233,9 @@ impl TermulPlanServer {
             browser_args: None,
             browser_element: None,
             ask: None,
+            canvas_method: None,
+            canvas_params: None,
+            canvas_tool: None,
         };
         match forward_to_parent(&self.config, request, "title updated").await {
             Ok(msg) => msg,
@@ -219,6 +263,9 @@ impl TermulPlanServer {
             browser_args: None,
             browser_element: None,
             ask: Some(input),
+            canvas_method: None,
+            canvas_params: None,
+            canvas_tool: None,
         };
         // No client-side timeout: the user decides when to answer, and the
         // parent always resolves the call (answer, cancel, or session end).
@@ -247,15 +294,64 @@ impl TermulPlanServer {
 /// and skips `get_info` because it is provided here: the returned
 /// `instructions` land in the MCP `initialize` result so agents learn they can
 /// embed images in markdown replies and link files for open-in-editor.
-#[tool_handler]
+/// Resources and prompts are figcraft's, answered by `canvas_tools`.
+#[tool_handler(router = self.tools)]
 impl ServerHandler for TermulPlanServer {
     fn get_info(&self) -> rmcp::model::ServerConfig {
         rmcp::model::ServerConfig::new(
             rmcp::model::ServerCapabilities::builder()
                 .enable_tools()
+                .enable_resources()
+                .enable_prompts()
                 .build(),
         )
         .with_instructions(TERMUL_CHAT_INSTRUCTIONS.to_string())
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        canvas_tools::request(self.config.clone(), "resources/list", json!({})).await
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        canvas_tools::request(self.config.clone(), "resources/templates/list", json!({})).await
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let params = json!({ "uri": request.uri });
+        canvas_tools::request::<ReadResourceResult>(self.config.clone(), "resources/read", params)
+            .await
+            .map(Into::into)
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        canvas_tools::request(self.config.clone(), "prompts/list", json!({})).await
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, ErrorData> {
+        let params = json!({ "name": request.name, "arguments": request.arguments });
+        canvas_tools::request::<GetPromptResult>(self.config.clone(), "prompts/get", params)
+            .await
+            .map(Into::into)
     }
 }
 
@@ -372,7 +468,7 @@ where
     tokio::spawn(async move {
         let _ = copy_with_discover_meta(stdin, shim_side).await;
     });
-    let service = TermulPlanServer { config };
+    let service = TermulPlanServer::new(config);
     let running = serve_server(service, (server_read, stdout))
         .await
         .map_err(|e| format!("mcp server initialize failed: {e}"))?;

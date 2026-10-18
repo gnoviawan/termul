@@ -1,17 +1,8 @@
 /**
- * Canvas facade tests (OpenPencil canvas mode, task 22).
- *
- * Following the `git-api.web.test.ts` pattern, asserts one method at a
- * time that:
- * - the WEB branch calls `fetch` (POST /canvas/*) and NOT `invoke`, merges
- *   the bearer web auth header, and sets the per-canvas `op_canvas_ct_<id>`
- *   cookie from the open response's `canvasToken` (BEFORE the iframe could
- *   mount; one web canvas cannot overwrite another's credential);
- * - the DESKTOP branch calls `invoke` and NOT `fetch`;
- * - phone-width viewports answer a typed `UNSUPPORTED_SURFACE` failure
- *   (mobile gating — the mobile web shell has no canvas);
- * - typed server error codes (e.g. DAEMON_DOWN) and transport failures
- *   (NETWORK_ERROR) are surfaced through the `IpcResult` envelope.
+ * Canvas facade: the web branch calls `fetch` (POST /canvas/open|close with
+ * the bearer header) and never `invoke`; the desktop branch calls `invoke`
+ * and never `fetch`; both return the same `CanvasOpenInfo`; phone-width
+ * viewports answer `UNSUPPORTED_SURFACE` without a transport call.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -30,13 +21,8 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: mockInvoke
 }))
 
+import type { CanvasOpenInfo } from '@shared/types/canvas.types'
 import { canvasApi } from '../canvas-api'
-import {
-  CANVAS_COOKIE_NAME,
-  type CanvasOpenInfo,
-  canvasCookieName,
-  canvasIdOfEmbedUrl
-} from '../web-canvas-api'
 
 const NARROW_QUERY = '(max-width: 767px)'
 
@@ -49,17 +35,16 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response
 }
 
-const DOC = 'C:/proj/design.op'
+const DOC = 'C:/proj/design.figcraft'
 const PROJECT = 'proj-1'
 
-const CANVAS_ID = 'cv0123456789abcdef'
-
-const OPEN_INFO = {
-  embedUrl: `/canvas/${CANVAS_ID}/?embed=vscode&ct=cafebabecafebabecafebabecafebabe`,
-  mcpUrl: '/canvas/mcp',
-  docKey: 'C:/proj/design.op',
-  canvasId: CANVAS_ID,
-  canvasToken: 'cafebabecafebabecafebabecafebabe'
+const WEB_INFO: CanvasOpenInfo = {
+  canvasId: 'cv0123456789abcdef',
+  baseUrl: '',
+  canvasToken: 'cafebabecafebabecafebabecafebabe',
+  pinTag: 'termul-v1',
+  docKey: DOC,
+  mountSeq: 1
 }
 
 describe('canvasApi (web vs desktop branch)', () => {
@@ -89,8 +74,6 @@ describe('canvasApi (web vs desktop branch)', () => {
         dispatchEvent: vi.fn()
       }))
     })
-    document.cookie = `${canvasCookieName(CANVAS_ID)}=; Path=/; Max-Age=0`
-    document.cookie = `${CANVAS_COOKIE_NAME}=; Path=/; Max-Age=0`
   })
 
   afterEach(() => {
@@ -100,9 +83,9 @@ describe('canvasApi (web vs desktop branch)', () => {
     }
   })
 
-  // ---- open ----
-  it('open: web → POST /canvas/open with docPath + projectId + auth header', async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: OPEN_INFO }))
+  it('open: web → POST /canvas/open with docPath + projectId, no cookie written', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: WEB_INFO }))
+    const cookieBefore = document.cookie
     const result = await canvasApi.open(DOC, PROJECT)
     expect(mockFetch).toHaveBeenCalledWith(
       `${window.location.origin}/canvas/open`,
@@ -112,155 +95,61 @@ describe('canvasApi (web vs desktop branch)', () => {
       })
     )
     expect(mockInvoke).not.toHaveBeenCalled()
-    expect(result).toEqual({ success: true, data: OPEN_INFO })
+    expect(result).toEqual({ success: true, data: WEB_INFO })
+    expect(document.cookie).toBe(cookieBefore)
   })
 
-  it('open: web sets the per-canvas op_canvas_ct_<id> cookie from the canvasToken before the iframe mounts', async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: OPEN_INFO }))
-    await canvasApi.open(DOC, PROJECT)
-    expect(document.cookie).toContain(`${canvasCookieName(CANVAS_ID)}=${OPEN_INFO.canvasToken}`)
-    expect(document.cookie).not.toContain(`${CANVAS_COOKIE_NAME}=`)
-  })
-
-  it('open: a second canvas token does not overwrite the first canvas cookie (per-canvas names)', async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: OPEN_INFO }))
-    await canvasApi.open(DOC, PROJECT)
-    const second = {
-      ...OPEN_INFO,
-      embedUrl: '/canvas/cvfeedfacefeedface/?embed=vscode&ct=deadbeefdeadbeefdeadbeefdeadbeef',
-      canvasId: 'cvfeedfacefeedface',
-      canvasToken: 'deadbeefdeadbeefdeadbeefdeadbeef'
-    } satisfies CanvasOpenInfo
-    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: second }))
-    await canvasApi.open(DOC, PROJECT)
-
-    expect(document.cookie).toContain(`${canvasCookieName(CANVAS_ID)}=${OPEN_INFO.canvasToken}`)
-    expect(document.cookie).toContain(`${canvasCookieName(second.canvasId)}=${second.canvasToken}`)
-  })
-
-  it('canvasIdOfEmbedUrl resolves the canvas id from the embed path', () => {
-    expect(canvasIdOfEmbedUrl(OPEN_INFO.embedUrl)).toBe(CANVAS_ID)
-    expect(canvasIdOfEmbedUrl('/canvas/cvfeedfacefeedface/pkg/x.js?ct=t')).toBe(
-      'cvfeedfacefeedface'
-    )
-    // Non-canvas embed URLs (desktop loopback shape) resolve no id.
-    expect(canvasIdOfEmbedUrl('http://127.0.0.1:5199/?embed=vscode')).toBeNull()
-    expect(canvasIdOfEmbedUrl('/some/other/path')).toBeNull()
-  })
-
-  it('canvasCookieName builds the per-canvas name (bare prefix fallback)', () => {
-    expect(canvasCookieName(CANVAS_ID)).toBe(`op_canvas_ct_${CANVAS_ID}`)
-    expect(canvasCookieName(null)).toBe(CANVAS_COOKIE_NAME)
-  })
-
-  it('open: web keeps the server-provided typed error code (DAEMON_DOWN)', async () => {
+  it('open: web keeps the server-provided typed error code', async () => {
     mockFetch.mockResolvedValueOnce(
-      jsonResponse({ success: false, error: 'canvas daemon is not running', code: 'DAEMON_DOWN' })
+      jsonResponse({ success: false, error: 'outside the project', code: 'PATH_VALIDATION_FAILED' })
     )
-    const result = await canvasApi.open(DOC, PROJECT)
-    expect(result).toEqual({
+    await expect(canvasApi.open(DOC, PROJECT)).resolves.toEqual({
       success: false,
-      error: 'canvas daemon is not running',
-      code: 'DAEMON_DOWN'
+      error: 'outside the project',
+      code: 'PATH_VALIDATION_FAILED'
     })
   })
 
   it('open: web maps a transport failure to NETWORK_ERROR', async () => {
     mockFetch.mockRejectedValueOnce(new Error('network gone'))
     const result = await canvasApi.open(DOC, PROJECT)
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('NETWORK_ERROR')
-    }
+    expect(result).toMatchObject({ success: false, code: 'NETWORK_ERROR' })
   })
 
-  it('open: desktop → invoke("canvas_open") with docPath + projectId', async () => {
+  it('open: desktop → invoke("canvas_open") returning the loopback base', async () => {
     mockIsTauriContext.mockReturnValue(true)
-    mockInvoke.mockResolvedValueOnce({
-      success: true,
-      data: {
-        ...OPEN_INFO,
-        canvasId: undefined,
-        canvasToken: undefined,
-        embedUrl: 'http://127.0.0.1:5199/?embed=vscode'
-      }
-    })
+    const desktopInfo = { ...WEB_INFO, baseUrl: 'http://127.0.0.1:5199' }
+    mockInvoke.mockResolvedValueOnce({ success: true, data: desktopInfo })
     const result = await canvasApi.open(DOC, PROJECT)
     expect(mockInvoke).toHaveBeenCalledWith('canvas_open', { docPath: DOC, projectId: PROJECT })
     expect(mockFetch).not.toHaveBeenCalled()
-    expect(result.success).toBe(true)
-    if (result.success) {
-      expect(result.data.embedUrl).toBe('http://127.0.0.1:5199/?embed=vscode')
-    }
+    expect(result).toEqual({ success: true, data: desktopInfo })
   })
 
-  // ---- close ----
-  it('close: web → POST /canvas/close with docPath', async () => {
+  it('close: web → POST /canvas/close with projectId and discard', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: true }))
-    await canvasApi.close(DOC)
+    await expect(canvasApi.close(PROJECT)).resolves.toEqual({ success: true, data: true })
     expect(mockFetch).toHaveBeenCalledWith(
       `${window.location.origin}/canvas/close`,
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ docPath: DOC })
+        body: JSON.stringify({ projectId: PROJECT, discard: false })
       })
     )
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
-  it('close: desktop → invoke("canvas_close")', async () => {
+  it('close: desktop → invoke("canvas_close") with projectId and discard', async () => {
     mockIsTauriContext.mockReturnValue(true)
     mockInvoke.mockResolvedValueOnce({ success: true, data: true })
-    await canvasApi.close(DOC)
-    expect(mockInvoke).toHaveBeenCalledWith('canvas_close', { docPath: DOC })
+    await canvasApi.close(PROJECT)
+    expect(mockInvoke).toHaveBeenCalledWith('canvas_close', { projectId: PROJECT, discard: false })
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
-  // ---- save ----
-  it('save: web → POST /canvas/save with docPath', async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: { ok: true } }))
-    const result = await canvasApi.save(DOC)
-    expect(mockFetch).toHaveBeenCalledWith(
-      `${window.location.origin}/canvas/save`,
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ docPath: DOC })
-      })
-    )
-    expect(result).toEqual({ success: true, data: { ok: true } })
-    expect(mockInvoke).not.toHaveBeenCalled()
-  })
-
-  it('save: desktop → invoke("canvas_save")', async () => {
-    mockIsTauriContext.mockReturnValue(true)
-    mockInvoke.mockResolvedValueOnce({ success: true, data: { ok: true } })
-    await canvasApi.save(DOC)
-    expect(mockInvoke).toHaveBeenCalledWith('canvas_save', { docPath: DOC })
-    expect(mockFetch).not.toHaveBeenCalled()
-  })
-
-  // ---- status ----
-  it('status: desktop → invoke("canvas_status"); web answers WEB_UNSUPPORTED', async () => {
-    mockIsTauriContext.mockReturnValue(true)
-    mockInvoke.mockResolvedValueOnce({ success: true, data: { daemons: [], activeDocKey: null } })
-    const desktop = await canvasApi.status()
-    expect(mockInvoke).toHaveBeenCalledWith('canvas_status', undefined)
-    expect(desktop.success).toBe(true)
-
-    mockIsTauriContext.mockReturnValue(false)
-    const web = await canvasApi.status()
-    expect(mockFetch).not.toHaveBeenCalled()
-    expect(web.success).toBe(false)
-    if (!web.success) {
-      expect(web.code).toBe('WEB_UNSUPPORTED')
-    }
-  })
-
-  // ---- mobile gating (UNSUPPORTED_SURFACE) ----
   it('open: a phone-width viewport answers UNSUPPORTED_SURFACE without any transport call', async () => {
     matchesByQuery[NARROW_QUERY] = true
-    const result = await canvasApi.open(DOC, PROJECT)
-    expect(result).toEqual({
+    await expect(canvasApi.open(DOC, PROJECT)).resolves.toEqual({
       success: false,
       error: 'canvas open is unavailable on the mobile web shell',
       code: 'UNSUPPORTED_SURFACE'
@@ -269,27 +158,59 @@ describe('canvasApi (web vs desktop branch)', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
-  it('save: a phone-width viewport answers UNSUPPORTED_SURFACE without any transport call', async () => {
+  it('close stays available at phone width so a stray mount can still be released', async () => {
     matchesByQuery[NARROW_QUERY] = true
-    const result = await canvasApi.save(DOC)
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('UNSUPPORTED_SURFACE')
-    }
-    expect(mockFetch).not.toHaveBeenCalled()
-    expect(mockInvoke).not.toHaveBeenCalled()
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: true }))
+    await expect(canvasApi.close(PROJECT)).resolves.toEqual({ success: true, data: true })
   })
 
-  it('mobile gating resolves through resolveMobileWebShell (narrow web viewport, non-Tauri)', async () => {
-    // The facade's gate is the same predicate the mobile shell hook uses:
-    // resolveMobileWebShell(false, true) → mobile (gated).
-    const { resolveMobileWebShell } = await import('@/hooks/use-mobile-web-shell')
-    expect(resolveMobileWebShell(false, true)).toBe(true)
-    expect(resolveMobileWebShell(true, true)).toBe(false)
-    // Desktop-width web viewport stays ungated.
-    matchesByQuery[NARROW_QUERY] = false
-    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: OPEN_INFO }))
-    const result = await canvasApi.open(DOC, PROJECT)
-    expect(result.success).toBe(true)
-  })
+  const PERSISTENCE_CASES = [
+    {
+      name: 'readDocument',
+      call: () => canvasApi.readDocument(PROJECT, 3),
+      command: 'canvas_read_document',
+      route: '/canvas/read-document',
+      args: { projectId: PROJECT, mountSeq: 3 }
+    },
+    {
+      name: 'documentLoaded',
+      call: () => canvasApi.documentLoaded(PROJECT, 3, '{"contentVersion":7}'),
+      command: 'canvas_document_loaded',
+      route: '/canvas/document-loaded',
+      args: { projectId: PROJECT, mountSeq: 3, ack: '{"contentVersion":7}' }
+    },
+    {
+      name: 'dirtyChanged',
+      call: () => canvasApi.dirtyChanged(PROJECT, 3, true, '9007199254740993'),
+      command: 'canvas_dirty_changed',
+      route: '/canvas/dirty-changed',
+      args: { projectId: PROJECT, mountSeq: 3, dirty: true, contentVersion: '9007199254740993' }
+    },
+    {
+      name: 'writeSnapshot',
+      call: () => canvasApi.writeSnapshot(PROJECT, 3, '{"contentVersion":8,"bytes":"AA=="}'),
+      command: 'canvas_write_snapshot',
+      route: '/canvas/write-snapshot',
+      args: { projectId: PROJECT, mountSeq: 3, snapshot: '{"contentVersion":8,"bytes":"AA=="}' }
+    }
+  ] as const
+
+  for (const { name, call, command, route, args } of PERSISTENCE_CASES) {
+    it(`${name}: web posts ${route} and desktop invokes ${command} with the same body`, async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: { ok: 1 } }))
+      await expect(call()).resolves.toEqual({ success: true, data: { ok: 1 } })
+      expect(mockFetch).toHaveBeenCalledWith(
+        `${window.location.origin}${route}`,
+        expect.objectContaining({ method: 'POST', body: JSON.stringify(args) })
+      )
+      expect(mockInvoke).not.toHaveBeenCalled()
+
+      mockFetch.mockClear()
+      mockIsTauriContext.mockReturnValue(true)
+      mockInvoke.mockResolvedValueOnce({ success: true, data: { ok: 1 } })
+      await expect(call()).resolves.toEqual({ success: true, data: { ok: 1 } })
+      expect(mockInvoke).toHaveBeenCalledWith(command, args)
+      expect(mockFetch).not.toHaveBeenCalled()
+    })
+  }
 })

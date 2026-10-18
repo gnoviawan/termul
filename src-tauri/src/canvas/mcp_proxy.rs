@@ -1,7 +1,5 @@
-//! Shared HTTP proxy to the active canvas daemon — mounted at every surface
-//! (desktop agentation `/canvas/mcp` + `/canvas/<id>/mcp`; termul-server
-//! `/canvas/mcp` + `/canvas/<id>/*` + the root canvas routes `/pkg|canvaskit|
-//! /api`).
+//! Shared HTTP proxy to the active canvas daemon — mounted on termul-server at
+//! `/canvas/<id>/*` and the root canvas routes `/pkg|canvaskit|/api`.
 //!
 //! Rules (AD-8):
 //! - the daemon is always reached over loopback only; remote clients never
@@ -24,9 +22,7 @@
 //!   chunked encoding (misparse), and `reqwest::Body::wrap(axum_body)`
 //!   (which propagates the exact size hint) is unavailable because the
 //!   axum request body is `Send`-only, not `Sync`. The buffer is the
-//!   documented fallback the daemon's parser dictates. The MCP POST
-//!   forward buffers for the same framing reason (plus: JSON-RPC payloads
-//!   are small and the cap bounds hostile proxy memory).
+//!   documented fallback the daemon's parser dictates.
 //! - request completion (send + response headers) is bounded by a 30s
 //!   timeout → typed `DAEMON_DOWN`-family error; only the streamed response
 //!   BODY may run past it (SSE streams for the canvas session lifetime).
@@ -46,9 +42,8 @@ use serde_json::json;
 use super::managed::CanvasDaemon;
 use super::{CanvasError, CODE_DAEMON_DOWN, CODE_SAVE_FAILED};
 
-/// Cap for the buffered request bodies (path-proxy body-carrying methods +
-/// the MCP JSON-RPC forward) — see the module doc for the framing
-/// rationale.
+/// Cap for the buffered path-proxy request bodies of body-carrying methods —
+/// see the module doc for the framing rationale.
 const MAX_FORWARDED_BODY: usize = 32 * 1024 * 1024;
 
 /// Deadline for request completion (send + response HEADERS) on every
@@ -104,8 +99,7 @@ pub(crate) fn is_stripped_header(name: &HeaderName) -> bool {
 
 /// Extract a presented `Authorization: Bearer <token>` header (scheme match
 /// case-insensitive, RFC 7235 — mirrors `web::router::presented_token`).
-/// Shared by the web `/canvas/mcp` credential check and the agentation
-/// canvas MCP bearer gate. The token value is never logged.
+/// The token value is never logged.
 pub(crate) fn presented_bearer(headers: &HeaderMap) -> Option<String> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let bytes = value.as_bytes();
@@ -216,52 +210,6 @@ async fn send_with_timeout(
             ))
         }
         Ok(Ok(resp)) => Ok(resp),
-    }
-}
-
-/// Proxy the stable MCP endpoint: `POST` → daemon `POST /mcp` (status,
-/// headers, and body passed through); any other method → 405 (mirroring the
-/// daemon's own `GET /mcp` behavior); no active daemon → typed 502
-/// `DAEMON_DOWN`.
-///
-/// The request body is buffered under [`MAX_FORWARDED_BODY`] (JSON-RPC
-/// payloads are small and bounded; the cap bounds hostile proxy memory) —
-/// see the module doc for the one-buffered-route rationale.
-pub async fn proxy_mcp_request(daemon: Option<&Arc<CanvasDaemon>>, request: Request) -> Response {
-    if request.method() != Method::POST {
-        return (
-            StatusCode::METHOD_NOT_ALLOWED,
-            axum::Json(json!({
-                "ok": false,
-                "error": "Method not allowed. POST a JSON-RPC message to /mcp.",
-            })),
-        )
-            .into_response();
-    }
-    let Some(daemon) = daemon else {
-        log::debug!("[canvas] MCP proxy request with no active daemon");
-        return daemon_down_response("canvas daemon is not running");
-    };
-    let (parts, body) = request.into_parts();
-    let bytes = match axum::body::to_bytes(body, MAX_FORWARDED_BODY).await {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({
-                    "success": false,
-                    "error": format!("failed to read MCP request body: {err}"),
-                    "code": "BAD_REQUEST",
-                })),
-            )
-                .into_response()
-        }
-    };
-    let url = format!("http://127.0.0.1:{}/mcp", daemon.port);
-    let forwarded = copy_forwardable_headers(client().post(&url), &parts.headers);
-    match send_with_timeout(forwarded.body(bytes.to_vec()), "canvas MCP proxy").await {
-        Ok(resp) => response_from_reqwest(resp).await,
-        Err(err) => canvas_error_response(err),
     }
 }
 

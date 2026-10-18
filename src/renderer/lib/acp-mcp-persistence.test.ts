@@ -168,6 +168,85 @@ describe('registry persistence parity', () => {
   })
 })
 
+describe('legacy canvas-mcp-* migration', () => {
+  const legacy = [
+    {
+      id: 'canvas-mcp-proj-7',
+      type: 'http',
+      name: 'OpenPencil Canvas',
+      url: 'http://127.0.0.1:5199/canvas/mcp',
+      headers: [{ name: 'Authorization', value: 'Bearer t0k' }],
+      enabled: true
+    },
+    { id: 'canvas-mcp-proj-8', type: 'http', name: 'OpenPencil Canvas' }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    vi.mocked(persistenceApi.write).mockResolvedValue({ success: true, data: undefined })
+    vi.mocked(syncMcpRegistryToProject).mockResolvedValue({ success: true })
+  })
+
+  it('drops persisted canvas-mcp-* entries on load, keeps the rest, logs the count and writes back', async () => {
+    vi.mocked(persistenceApi.read).mockResolvedValue({
+      success: true,
+      data: [...legacy, ...registry]
+    })
+
+    expect(await loadMcpServers('p1')).toEqual(registry)
+
+    expect(persistenceApi.write).toHaveBeenCalledTimes(1)
+    expect(persistenceApi.write).toHaveBeenCalledWith(PersistenceKeys.acpMcpServers, registry)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        message: 'removed 2 legacy canvas-mcp-* MCP registry entries'
+      })
+    )
+  })
+
+  it('migrates a web project file the same way', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    vi.mocked(webServerMcpServers.get).mockResolvedValue({
+      success: true,
+      data: [...registry, legacy[0]]
+    })
+    vi.mocked(webServerMcpServers.put).mockResolvedValue({ success: true, data: undefined })
+
+    expect(await loadMcpServers('p1')).toEqual(registry)
+    expect(webServerMcpServers.put).toHaveBeenCalledWith('p1', registry)
+  })
+
+  it('writes nothing and logs nothing when no canvas-mcp-* entry is present', async () => {
+    vi.mocked(persistenceApi.read).mockResolvedValue({ success: true, data: registry })
+
+    expect(await loadMcpServers('p1')).toEqual(registry)
+
+    expect(persistenceApi.write).not.toHaveBeenCalled()
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it('still returns the cleaned registry when the write-back fails, and retries on the next load', async () => {
+    vi.mocked(persistenceApi.read).mockResolvedValue({
+      success: true,
+      data: [...legacy, ...registry]
+    })
+    vi.mocked(persistenceApi.write).mockResolvedValue({
+      success: false,
+      error: 'disk full'
+    })
+
+    expect(await loadMcpServers('p1')).toEqual(registry)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('disk full') })
+    )
+
+    expect(await loadMcpServers('p1')).toEqual(registry)
+    expect(persistenceApi.write).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('desktop → project-file sync (CAP-7)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

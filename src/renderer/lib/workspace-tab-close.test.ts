@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import { closeWorkspaceTab, type GuardedTabClose } from './workspace-tab-close'
 
-const { mockRemoveTab, mockRemoveBrowserTab, mockCloseCanvas, mockCloseAgentChat, mockLog } =
+const { mockRemoveTab, mockRemoveBrowserTab, mockUnmountCanvas, mockCloseAgentChat, mockLog } =
   vi.hoisted(() => ({
     mockRemoveTab: vi.fn(),
     mockRemoveBrowserTab: vi.fn(),
-    mockCloseCanvas: vi.fn(),
+    mockUnmountCanvas: vi.fn(),
     mockCloseAgentChat: vi.fn(),
     mockLog: vi.fn()
   }))
@@ -18,7 +18,7 @@ vi.mock('@/stores/browser-session-store', () => ({
   useBrowserSessionStore: { getState: () => ({ removeTab: mockRemoveBrowserTab }) }
 }))
 vi.mock('@/stores/canvas-store', () => ({
-  useCanvasStore: { getState: () => ({ closeCanvas: mockCloseCanvas }) }
+  useCanvasStore: { getState: () => ({ unmountCanvas: mockUnmountCanvas }) }
 }))
 vi.mock('@/lib/agent-chat-close', () => ({ closeAgentChat: mockCloseAgentChat }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
@@ -37,7 +37,7 @@ function close(tab: WorkspaceTab, handlers: GuardedTabClose = guarded()): boolea
 beforeEach(() => {
   mockRemoveTab.mockReset()
   mockRemoveBrowserTab.mockReset()
-  mockCloseCanvas.mockReset().mockResolvedValue(undefined)
+  mockUnmountCanvas.mockReset().mockResolvedValue(undefined)
   mockLog.mockReset().mockResolvedValue(undefined)
   mockCloseAgentChat
     .mockReset()
@@ -73,15 +73,13 @@ describe('closeWorkspaceTab', () => {
     expect(mockRemoveTab).toHaveBeenCalledWith('browser-b1')
   })
 
-  it('evicts a canvas before removing its tab', () => {
+  it('removes a canvas tab and leaves its mount alone (AD-19: closing hides)', () => {
     expect(close({ type: 'canvas', id: 'canvas-p1', projectId: 'p1', docPath: '/p/Plan.op' })).toBe(
       false
     )
 
-    expect(mockCloseCanvas).toHaveBeenCalledWith('p1')
-    expect(mockCloseCanvas.mock.invocationCallOrder[0]).toBeLessThan(
-      mockRemoveTab.mock.invocationCallOrder[0]
-    )
+    expect(mockRemoveTab).toHaveBeenCalledWith('canvas-p1')
+    expect(mockUnmountCanvas).not.toHaveBeenCalled()
   })
 
   it('closes a chat through closeAgentChat, removing the tab only when it completes', () => {
@@ -105,7 +103,7 @@ describe('closeWorkspaceTab', () => {
     expect(close(tab)).toBe(false)
     expect(mockRemoveTab).toHaveBeenCalledWith(tab.id)
     expect(mockRemoveBrowserTab).not.toHaveBeenCalled()
-    expect(mockCloseCanvas).not.toHaveBeenCalled()
+    expect(mockUnmountCanvas).not.toHaveBeenCalled()
     expect(mockCloseAgentChat).not.toHaveBeenCalled()
   })
 

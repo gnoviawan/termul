@@ -5,34 +5,42 @@ import { useWindowState } from '@/hooks/use-window-state'
 import { CLOSE_WRITE_TIMEOUT_MS } from '@/lib/close-flush'
 import { useAppClose } from './use-app-close'
 
-const { windowMock, persistenceMock, windowApiMock, runtimeMock, logMock, tauriEventHandlers } =
-  vi.hoisted(() => ({
-    windowMock: {
-      isMaximized: vi.fn(async () => false),
-      scaleFactor: vi.fn(async () => 1),
-      outerPosition: vi.fn(async () => ({ x: 40, y: 30 })),
-      outerSize: vi.fn(async () => ({ width: 1100, height: 700 })),
-      setPosition: vi.fn(async (_position: unknown) => {}),
-      setSize: vi.fn(async (_size: unknown) => {}),
-      maximize: vi.fn(async () => {}),
-      onMoved: vi.fn(async () => vi.fn()),
-      onResized: vi.fn(async () => vi.fn()),
-      onCloseRequested: vi.fn(async (_handler: unknown) => vi.fn())
-    },
-    persistenceMock: {
-      read: vi.fn(async () => ({ success: false, data: null })),
-      write: vi.fn(async (_key: string, _value: unknown) => ({ success: true })),
-      writeDebounced: vi.fn(async (_key: string, _value: unknown) => ({ success: true })),
-      flushPendingWrites: vi.fn(async () => ({ success: true }))
-    },
-    windowApiMock: {
-      onCloseRequested: vi.fn((_callback: () => Promise<boolean>) => () => {}),
-      respondToClose: vi.fn((_response: 'close' | 'cancel') => {})
-    },
-    runtimeMock: { isTauri: true },
-    logMock: vi.fn(async (_payload: unknown) => {}),
-    tauriEventHandlers: new Map<string, () => void>()
-  }))
+const {
+  windowMock,
+  persistenceMock,
+  windowApiMock,
+  runtimeMock,
+  logMock,
+  tauriEventHandlers,
+  unmountCanvases
+} = vi.hoisted(() => ({
+  windowMock: {
+    isMaximized: vi.fn(async () => false),
+    scaleFactor: vi.fn(async () => 1),
+    outerPosition: vi.fn(async () => ({ x: 40, y: 30 })),
+    outerSize: vi.fn(async () => ({ width: 1100, height: 700 })),
+    setPosition: vi.fn(async (_position: unknown) => {}),
+    setSize: vi.fn(async (_size: unknown) => {}),
+    maximize: vi.fn(async () => {}),
+    onMoved: vi.fn(async () => vi.fn()),
+    onResized: vi.fn(async () => vi.fn()),
+    onCloseRequested: vi.fn(async (_handler: unknown) => vi.fn())
+  },
+  persistenceMock: {
+    read: vi.fn(async () => ({ success: false, data: null })),
+    write: vi.fn(async (_key: string, _value: unknown) => ({ success: true })),
+    writeDebounced: vi.fn(async (_key: string, _value: unknown) => ({ success: true })),
+    flushPendingWrites: vi.fn(async () => ({ success: true }))
+  },
+  windowApiMock: {
+    onCloseRequested: vi.fn((_callback: () => Promise<boolean>) => () => {}),
+    respondToClose: vi.fn((_response: 'close' | 'cancel') => {})
+  },
+  runtimeMock: { isTauri: true },
+  logMock: vi.fn(async (_payload: unknown) => {}),
+  tauriEventHandlers: new Map<string, () => void>(),
+  unmountCanvases: vi.fn(async (_projectIds?: string[]) => true)
+}))
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => windowMock,
@@ -65,6 +73,7 @@ vi.mock('@/stores/editor-store', () => ({
   useEditorStore: { getState: () => ({ getDirtyFileCount: () => 0 }) }
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+vi.mock('@/lib/canvas-unmount-flow', () => ({ unmountCanvases }))
 
 const geometry = { x: 40, y: 30, width: 1100, height: 700, isMaximized: false }
 
@@ -186,5 +195,45 @@ describe('useAppClose window geometry flush', () => {
 
     await waitFor(() => expect(windowApiMock.respondToClose).toHaveBeenCalledWith('close'))
     expect(persistenceMock.write).not.toHaveBeenCalled()
+  })
+})
+
+describe('useAppClose canvas unmount (AD-31)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tauriEventHandlers.clear()
+    runtimeMock.isTauri = true
+    unmountCanvases.mockResolvedValue(true)
+  })
+
+  it('closes only after every canvas was saved and unmounted', async () => {
+    let unmounted: (value: boolean) => void = () => {}
+    unmountCanvases.mockReturnValueOnce(new Promise((resolve) => (unmounted = resolve)))
+    const { requestAppClose } = await mountApp()
+
+    await act(async () => {
+      requestAppClose()
+    })
+    expect(unmountCanvases).toHaveBeenCalledWith()
+    expect(windowApiMock.respondToClose).not.toHaveBeenCalled()
+    expect(persistenceMock.flushPendingWrites).not.toHaveBeenCalled()
+
+    await act(async () => {
+      unmounted(true)
+    })
+    await waitFor(() => expect(windowApiMock.respondToClose).toHaveBeenCalledWith('close'))
+  })
+
+  it('cancels the quit when the user keeps editing an unsaved canvas', async () => {
+    unmountCanvases.mockResolvedValueOnce(false)
+    const { requestAppClose } = await mountApp()
+
+    await act(async () => {
+      requestAppClose()
+    })
+
+    await waitFor(() => expect(windowApiMock.respondToClose).toHaveBeenCalledWith('cancel'))
+    expect(windowApiMock.respondToClose).not.toHaveBeenCalledWith('close')
+    expect(persistenceMock.flushPendingWrites).not.toHaveBeenCalled()
   })
 })

@@ -5,7 +5,6 @@ import {
   type WorkspaceTabKind
 } from '@/lib/workspace-tab-kinds'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
-import { useCanvasStore } from '@/stores/canvas-store'
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
 
 type TabOfKind<K extends WorkspaceTabKind> = Extract<WorkspaceTab, { type: K }>
@@ -44,10 +43,9 @@ const TAB_CLOSE: { [K in WorkspaceTabKind]: TabCloser<K> } = {
     })
     return false
   },
-  canvas: (tab) => {
-    void useCanvasStore.getState().closeCanvas(tab.projectId)
-    return removeTab(tab)
-  }
+  // Closing the tab hides the canvas; the mount stays until the project
+  // closes (AD-19), so agents keep working in it and reopening is instant.
+  canvas: removeTab
 }
 
 export function closeWorkspaceTab(

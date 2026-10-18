@@ -133,6 +133,9 @@ fn title_frame_round_trips_with_kind_and_title() {
         browser_args: None,
         browser_element: None,
         ask: None,
+        canvas_method: None,
+        canvas_params: None,
+        canvas_tool: None,
     };
     let value = serde_json::to_value(&frame).unwrap();
     assert_eq!(value["kind"], "set_title");
@@ -418,6 +421,9 @@ fn frame_from_flat_call_carries_folded_keys_in_browser_args() {
         browser_args: Some(input.args),
         browser_element: input.element,
         ask: None,
+        canvas_method: None,
+        canvas_params: None,
+        canvas_tool: None,
     };
     let value = serde_json::to_value(&frame).unwrap();
     assert_eq!(value["browser_action"], "navigate");
@@ -443,6 +449,9 @@ fn title_frame_carries_the_optional_branch_slug() {
         browser_args: None,
         browser_element: None,
         ask: None,
+        canvas_method: None,
+        canvas_params: None,
+        canvas_tool: None,
     };
     let value = serde_json::to_value(&frame).unwrap();
     assert_eq!(value["branch"], "fix-login");

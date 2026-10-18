@@ -27,8 +27,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 mod precondition;
-pub(crate) use precondition::sha256_hex;
 use precondition::Expected;
+pub(crate) use precondition::{sha256_hex, write_unchecked};
 
 use crate::trackers::git_tracker::GitTracker;
 use crate::web::capabilities::{write_decision, WriteDecision, WriteFlags};

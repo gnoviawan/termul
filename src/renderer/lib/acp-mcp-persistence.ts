@@ -183,9 +183,51 @@ export async function loadMcpServers(projectId: string): Promise<StoredMcpServer
   const res = isTauriContext()
     ? await persistenceApi.read<unknown>(PersistenceKeys.acpMcpServers)
     : await webServerMcpServers.get(projectId as string)
-  if (res.success) return normalizeMcpRegistry(res.data)
+  if (res.success) return dropLegacyCanvasMcpEntries(res.data, projectId)
   if (res.code === 'KEY_NOT_FOUND') return []
   throw new Error(res.error ?? 'Failed to load MCP servers')
+}
+
+const LEGACY_CANVAS_MCP_ID_PREFIX = 'canvas-mcp-'
+
+/**
+ * One-time migration: per-project `canvas-mcp-*` entries were written by the
+ * retired canvas MCP proxy and now point at routes that no longer exist. They
+ * are dropped on load and the cleaned registry is written back, so a later
+ * load finds nothing to drop. A failed write-back leaves the file as it was
+ * and the next load retries.
+ */
+async function dropLegacyCanvasMcpEntries(
+  raw: unknown,
+  projectId: string
+): Promise<StoredMcpServer[]> {
+  if (!Array.isArray(raw)) return normalizeMcpRegistry(raw)
+  const kept = raw.filter(
+    (entry) =>
+      !(
+        isRecord(entry) &&
+        typeof entry.id === 'string' &&
+        entry.id.startsWith(LEGACY_CANVAS_MCP_ID_PREFIX)
+      )
+  )
+  const registry = normalizeMcpRegistry(kept)
+  const dropped = raw.length - kept.length
+  if (dropped === 0) return registry
+  void logFrontendError({
+    level: 'info',
+    source: 'acp-mcp-persistence.dropLegacyCanvasMcpEntries',
+    message: `removed ${dropped} legacy canvas-mcp-* MCP registry entries`
+  })
+  try {
+    await saveMcpServers(registry, projectId)
+  } catch (err) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-mcp-persistence.dropLegacyCanvasMcpEntries',
+      message: `failed to persist the registry without legacy canvas-mcp-* entries (${String(err)})`
+    })
+  }
+  return registry
 }
 
 export async function saveMcpServers(list: StoredMcpServer[], projectId: string): Promise<void> {

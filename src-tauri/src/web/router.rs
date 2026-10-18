@@ -23,9 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::web::acp_api;
 use crate::web::auth::{BearerVerified, WebAuth};
 
-use crate::acp::{
-    AcpCatalogService, AcpInstallService, AcpManager,
-};
+use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager};
 use crate::canvas::pool::CanvasDaemonPool;
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
@@ -338,12 +336,12 @@ pub fn router(
         );
     let mut r = r
         // Canvas web routes (OpenPencil canvas mode, CAP-5): open/close/
-        // save (IpcBody), the stable /canvas/mcp proxy, the same-origin
+        // save (IpcBody), the same-origin
         // /canvas/<id>/* embed proxy, and the ROOT canvas routes
         // (/pkg|/canvaskit|/api — the editor's absolute-path traffic).
         // Merged BEFORE the static fallback so the SPA mount cannot shadow
         // them. Bearer-gated via GATED_PREFIXES ("/canvas/") for
-        // open/close/save only: /canvas/mcp, /canvas/<id>/*, and the root
+        // open/close/save only: /canvas/<id>/* and the root
         // routes are exempt from the bearer gate (is_canvas_proxy_path /
         // not under a gated prefix) and authenticated by the canvas
         // sub-router's own credentials instead (browser iframes cannot
@@ -450,7 +448,7 @@ const GATED_PREFIXES: &[&str] = &[
     "/acp/",
     "/worktree/",
     // OpenPencil canvas mode: the /canvas/open|close|save API routes
-    // require the token. /canvas/mcp and the /canvas/<id>/* embed paths are
+    // require the token. The /canvas/<id>/* embed paths are
     // exempt — see [`is_canvas_proxy_path`] (canvas-credential authed in
     // the sub-router); the root canvas routes (/pkg, /canvaskit, /api) are
     // not under any gated prefix (cookie authed in the sub-router).
@@ -458,17 +456,24 @@ const GATED_PREFIXES: &[&str] = &[
 ];
 
 /// Whether `path` is canvas-credential authed INSTEAD of the outer bearer
-/// gate: `/canvas/mcp` (accepts the web auth bearer OR the canvas cookie —
-/// canvas layer) and the `/canvas/<id>…` embed/proxy paths (`?ct=` canvas
+/// gate: the `/canvas/<id>…` embed/proxy paths (`?ct=` canvas
 /// token, first segment after `/canvas/` is a canvas id, not an API route
 /// name). The root canvas routes (`/pkg|/canvaskit|/api`) need no exemption
 /// — they are not under any gated prefix; their cookie middleware owns them.
 fn is_canvas_proxy_path(path: &str) -> bool {
-    if path == "/canvas/mcp" {
-        return true;
-    }
     path.strip_prefix("/canvas/").is_some_and(|rest| {
-        !matches!(rest.split('/').next(), Some("open" | "close" | "save"))
+        !matches!(
+            rest.split('/').next(),
+            Some(
+                "open"
+                    | "close"
+                    | "save"
+                    | "read-document"
+                    | "document-loaded"
+                    | "dirty-changed"
+                    | "write-snapshot"
+            )
+        )
     })
 }
 
@@ -477,9 +482,9 @@ fn requires_token(path: &str) -> bool {
     if PUBLIC_PATHS.contains(&path) {
         return false;
     }
-    // Canvas embed/proxy paths and /canvas/mcp carry their own canvas
-    // credentials (ct token / cookie / canvas-layer bearer check); the
-    // outer bearer gate skips them.
+    // Canvas embed/proxy paths carry their own canvas credentials (ct token
+    // / cookie / canvas-layer bearer check); the outer bearer gate skips
+    // them.
     if is_canvas_proxy_path(path) {
         return false;
     }

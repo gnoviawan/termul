@@ -22,6 +22,7 @@ pub mod assets;
 pub mod acp_api;
 pub mod auth;
 pub mod canvas_api;
+pub mod canvas_persistence_api;
 pub mod capabilities;
 pub mod catalog_api;
 pub mod chat_reads;
@@ -181,7 +182,12 @@ pub async fn serve(
         ws_relay,
         registry,
         cfg,
-        shutdown_signal_future(),
+        // Figcraft canvases save through their renderer's socket (AD-31), so
+        // they flush before the sockets are told to close.
+        async {
+            shutdown_signal_future().await;
+            crate::canvas::static_server::close_all_canvases_bounded().await;
+        },
         acp_catalog,
         acp_install,
         store,

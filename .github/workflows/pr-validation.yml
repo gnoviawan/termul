@@ -202,6 +202,15 @@ jobs:
       - name: Assert dist-web/index.html exists
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
+      # The pin must name the same tag as the figcraft-mcp dependency (skips
+      # with a message until src-tauri depends on it), and its bundle must
+      # download and match the pinned sha256.
+      - name: Check figcraft pin
+        run: bun scripts/canvas/check-figcraft-pin.mjs
+
+      - name: Fetch and verify figcraft bundle (canvas/bundle/)
+        run: bun scripts/canvas/fetch-figcraft-bundle.mjs
+
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check --all-targets

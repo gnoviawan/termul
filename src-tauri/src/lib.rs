@@ -1335,11 +1335,15 @@ pub fn run() {
 
             // OpenPencil canvas mode: the shared daemon pool. Tauri-free so
             // the standalone server composes it too; the desktop's four
-            // canvas_* commands drive it and the agentation HTTP server
-            // mounts /canvas/mcp against it (must exist BEFORE the
-            // agentation service starts).
-            let canvas_pool = Arc::new(crate::canvas::pool::CanvasDaemonPool::real());
-            app.manage(canvas_pool.clone());
+            // canvas_* commands drive it.
+            app.manage(Arc::new(crate::canvas::pool::CanvasDaemonPool::real()));
+
+            // figcraft canvas bundle: the 127.0.0.1:0 static listener the
+            // canvas iframe loads from (restarted if it dies).
+            crate::canvas::static_server::log_bundle_status();
+            let canvas_static_server = crate::canvas::static_server::StaticServer::new();
+            app.manage(canvas_static_server.clone());
+            tauri::async_runtime::spawn(canvas_static_server.run());
 
             // Load persisted agentation enabled preference (issue #451 CodeRabbit).
             // Falls back to true (enabled by default) when no stored value exists.
@@ -1360,10 +1364,7 @@ pub fn run() {
                     .app_data_dir()
                     .map_err(|e| format!("agentation: app_data_dir: {e}"))?;
                 let db_path = agentation::db_path(&app_data);
-                match tauri::async_runtime::block_on(agentation::AgentationService::start(
-                    &db_path,
-                    Some(canvas_pool.clone()),
-                )) {
+                match tauri::async_runtime::block_on(agentation::AgentationService::start(&db_path)) {
                     Ok(service) => {
                         let port = service.http_port();
                         let endpoint = format!("http://127.0.0.1:{port}");
@@ -2009,8 +2010,13 @@ pub fn run() {
             // OpenPencil canvas mode (managed sidecar daemon lifecycle)
             commands::canvas_open,
             commands::canvas_close,
+            commands::canvas_read_document,
+            commands::canvas_document_loaded,
+            commands::canvas_dirty_changed,
+            commands::canvas_write_snapshot,
             commands::canvas_save,
             commands::canvas_status,
+            commands::canvas_bundle_base,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -2074,6 +2080,11 @@ pub fn run() {
                 .try_state::<Arc<PtyManager>>()
                 .map(|state| state.inner().clone());
             let preserve = async move {
+                // Figcraft canvases save through their renderer (AD-31), so
+                // this runs while the Channel and remote sockets are still up.
+                // The quit dialog already flushed them; this catches an exit
+                // that skipped it.
+                crate::canvas::static_server::close_all_canvases_bounded().await;
                 if let Some(ssh_manager) = ssh_manager {
                     ssh_manager.shutdown().await;
                 }

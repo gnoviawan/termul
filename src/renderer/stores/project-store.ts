@@ -2,6 +2,7 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { writeActiveProject } from '@/lib/active-project'
+import { unmountCanvases } from '@/lib/canvas-unmount-flow'
 import { logFrontendError } from '@/lib/log-api'
 import { clientFieldsOf, forgetProjectPrefs, rememberProjectPrefs } from '@/lib/project-prefs'
 import {
@@ -215,6 +216,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   deleteProject: async (id: string, options?: CascadeOptions): Promise<void> => {
     const project = get().projects.find((p) => p.id === id)
+    if (!(await unmountCanvases([id]))) return
     try {
       await projectRegistryApi.remove(id, options)
     } catch (error) {
@@ -240,6 +242,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   archiveProject: async (id: string, options?: CascadeOptions): Promise<void> => {
     const project = get().projects.find((p) => p.id === id)
+    if (!(await unmountCanvases([id]))) return
     try {
       await projectRegistryApi.archive(id, options)
     } catch (error) {

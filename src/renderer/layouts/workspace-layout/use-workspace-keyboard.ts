@@ -8,6 +8,7 @@ import { cycleSSHTab, requestCloseSSHSession } from '@/lib/ssh-sessions'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getWebAuthGateState } from '@/lib/web-auth-gate'
 import { useUiZoomLevel } from '@/stores/app-settings-store'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { matchesShortcut } from '@/stores/keyboard-shortcuts-store'
@@ -98,6 +99,12 @@ export function useWorkspaceKeyboard({
       if (!isSaveFileShortcut(e)) return
       e.preventDefault()
       e.stopPropagation()
+      // Keys pressed inside the cross-origin canvas iframe never reach this
+      // window, so this only fires while focus is in Termul's own chrome.
+      if (activeTab?.type === 'canvas') {
+        void useCanvasStore.getState().saveCanvas(activeTab.projectId)
+        return
+      }
       const path =
         activeTab?.type === 'editor' ? activeTab.filePath : useEditorStore.getState().activeFilePath
       if (path) {

@@ -202,6 +202,12 @@ impl Default for ClientId {
     }
 }
 
+impl std::fmt::Display for ClientId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl WsRelaySink {
     /// Fan one just-assigned event out to every subscriber of `sid`. Runs
     /// inside the publish critical section (`sessions` held): lock order

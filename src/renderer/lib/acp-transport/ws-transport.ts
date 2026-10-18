@@ -27,10 +27,12 @@ import {
   type SessionSnapshotEvent,
   type SessionSubscribeReply,
   type UpdateProjectPayload,
+  WS_CANVAS_CALL_FRAME_TYPE,
   WS_ERROR_CODES,
   WS_EVENT_TYPES,
   WS_WATCH_FRAME_TYPE,
   type WsAgentSummary,
+  type WsCanvasCallFrame,
   type WsEvent,
   type WsReply,
   type WsRequest,
@@ -70,6 +72,7 @@ import {
   handleProtocolVersionMismatch
 } from '@/lib/web-protocol-reload'
 import { webServerMcpProbe } from '@/lib/web-server-api'
+import { CanvasGatewayClient } from './canvas-gateway-client'
 import { judgeEvent, SyncGate } from './cursor'
 import { toWsEventType } from './event-names'
 import { HOST_GOING_AWAY_CLOSE_CODE, HostOfflineMonitor } from './host-offline'
@@ -263,6 +266,11 @@ export class WsAcpTransport implements AcpTransport {
    */
   readonly watches = new WatchClient({
     request: (type, payload, timeoutMs) => this.request(type, payload, timeoutMs),
+    isLive: () => this.isSocketLive()
+  })
+  /** The canvas gateway's renderer leg: mount reports and forwarded calls. */
+  readonly canvas = new CanvasGatewayClient({
+    request: (type, payload) => this.request(type, payload),
     isLive: () => this.isSocketLive()
   })
   /** Idempotent prompt_complete turn ids already delivered, scoped by session. */
@@ -2023,6 +2031,10 @@ export class WsAcpTransport implements AcpTransport {
       this.watches.handleFrame(obj as unknown as WsWatchFrame)
       return
     }
+    if (obj.type === WS_CANVAS_CALL_FRAME_TYPE) {
+      this.canvas.handleFrame(obj as unknown as WsCanvasCallFrame)
+      return
+    }
     if (obj.type === 'gap' && typeof obj.sid === 'string') {
       const gapSid = obj.sid
       // Queued behind the events already received so it lands in wire order.
@@ -2171,6 +2183,7 @@ export class WsAcpTransport implements AcpTransport {
         this.startStableTimer()
         // Every watch rebuilds from fresh full state on this socket.
         this.watches.onConnected()
+        this.canvas.onConnected()
         // CAP-3: if the tab is already hidden when auth completes (e.g. a
         // reconnect that finished while backgrounded), the hide event fired
         // before we were authed and was a no-op. Re-sync the server's watchdog

@@ -255,7 +255,17 @@ export const WS_REQUEST_TYPES = [
   // on the host (a forced read still reuses one younger than 60 s).
   'list_claude_usage',
   'set_default_claude_account',
-  'set_project_claude_account'
+  'set_project_claude_account',
+  // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
+  // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
+  // holds (or no longer holds) a project's canvas; the host then forwards
+  // agent canvas calls to it as top-level `canvas_call` frames, answered with
+  // `canvas_reply { callId, mountSeq, ok, result | error }`. `params` and
+  // `result` are JSON text, never parsed on the way. Replies `{}`,
+  // `{ unmounted }` and `{ resolved }`.
+  'canvas_mount',
+  'canvas_unmount',
+  'canvas_reply'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -333,7 +343,10 @@ export const WS_COMMAND_CLASSES: Readonly<
   record_agent_switch: ['command', 'payload'],
   mark_chat_read: ['idempotent', null],
   watch: ['read', null],
-  unwatch: ['read', null]
+  unwatch: ['read', null],
+  canvas_mount: ['idempotent', null],
+  canvas_unmount: ['idempotent', null],
+  canvas_reply: ['idempotent', null]
 }
 
 /** Longest accepted `commandId`, in bytes. Mirrors the Rust `MAX_COMMAND_ID_LEN`. */
@@ -903,6 +916,29 @@ export interface WsGapFrame {
 export interface WsHeartbeatFrame {
   type: 'heartbeat'
 }
+
+/** `type` of the top-level frame that forwards an agent canvas call (no `seq`). */
+export const WS_CANVAS_CALL_FRAME_TYPE = 'canvas_call'
+
+/**
+ * Host → the connection holding `projectId`'s canvas at `mountSeq`: one
+ * figcraft control-protocol call to run in the editor. `params` is JSON text.
+ * Answered with a `canvas_reply` request carrying the same `callId` and
+ * `mountSeq`; the host times the call out, never the renderer.
+ */
+export interface WsCanvasCallFrame {
+  type: typeof WS_CANVAS_CALL_FRAME_TYPE
+  callId: number
+  projectId: string
+  mountSeq: number
+  method: string
+  params: string
+}
+
+/** `canvas_reply` payload: the result's JSON text, or a typed error. */
+export type WsCanvasReplyPayload =
+  | { callId: number; mountSeq: number; ok: true; result: string }
+  | { callId: number; mountSeq: number; ok: false; error: { code: string; message: string } }
 
 /**
  * `type` of the top-level watch frame (no `seq`): the full state of a watch

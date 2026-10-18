@@ -19,13 +19,22 @@
 //! - [`managed`] — binary resolution, argv, spawn + handshake, dispose.
 //! - [`pool`] — `CanvasDaemonPool`: doc-keyed map, coalesced acquires,
 //!   respawn-once-then-evict crash policy.
-//! - [`mcp_proxy`] — shared HTTP proxy to the active daemon (`/mcp` + path
-//!   proxy, streaming via reqwest).
+//! - [`mcp_proxy`] — shared HTTP path proxy to the active daemon (streaming
+//!   via reqwest).
+//! - [`persistence`] — the figcraft mount registry: load floor, autosave
+//!   debounce, saved version and the atomic document write (AD-23, AD-31).
 
 pub mod managed;
 pub mod mcp_proxy;
+pub mod persistence;
+pub mod pin;
 pub mod pool;
+pub mod static_server;
 
+#[cfg(test)]
+mod pin_tests;
+#[cfg(test)]
+mod static_server_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -50,7 +59,10 @@ pub const CODE_DAEMON_DOWN: &str = "DAEMON_DOWN";
 pub const CODE_PATH_VALIDATION_FAILED: &str = "PATH_VALIDATION_FAILED";
 /// The canvas was closed (or the pool shut down) mid-operation.
 pub const CODE_CANVAS_CLOSED: &str = "CANVAS_CLOSED";
-/// A save request failed at the daemon transport or protocol level.
+/// The canvas is running its unmount sequence (AD-31 quiesce).
+pub const CODE_CANVAS_CLOSING: &str = "CANVAS_CLOSING";
+/// A save failed: the daemon transport, or a figcraft mount's flush before
+/// unmount (the mount stays open and the user is asked).
 pub const CODE_SAVE_FAILED: &str = "SAVE_FAILED";
 /// The web canvas session token could not be generated (CSPRNG failure).
 pub const CODE_TOKEN_GENERATION_FAILED: &str = "TOKEN_GENERATION_FAILED";
@@ -88,56 +100,6 @@ pub struct CanvasDaemonInfo {
     pub doc_key: String,
     pub port: u16,
     pub version: String,
-}
-
-/// Result of opening a canvas. Desktop returns the loopback embed URL (the
-/// renderer iframes it directly — no proxy); web returns the same-origin
-/// proxy path plus the `canvasId` the proxy routes on. The `canvas_token`
-/// value differs per surface — see the field doc.
-///
-/// Embed URL shapes (both append params as raw query text — the editor
-/// refuses URL-encoded `embed%3Dvscode`):
-/// - desktop: `http://127.0.0.1:<port>/?embed=vscode`
-/// - web: `/canvas/<canvasId>/?embed=vscode&ct=<32-hex>` — the `ct` canvas
-///   session token authenticates the iframe's `/canvas/<id>/*` requests
-///   through the canvas-token gate (`web::canvas_api::canvas_token_gate`).
-///
-/// On web the same token is ALSO returned as `canvas_token` so the
-/// renderer can set it as the same-origin PER-CANVAS cookie
-/// `op_canvas_ct_<canvasId>`: the cookie authenticates the editor's
-/// root-relative traffic — the root canvas routes `/pkg/*`, `/canvaskit/*`,
-/// `/api/*` (the editor wasm derives its daemon base from
-/// `window.location.origin` and uses absolute paths, so a
-/// `/canvas/<id>/` iframe still requests those at the server root) — and
-/// the cookie path of `/canvas/mcp`. The per-canvas name keeps sibling
-/// canvases isolated (canvas B's cookie never authenticates canvas A's
-/// traffic). It is dropped with the pool entry on close/evict, so a stale
-/// token yields 401.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CanvasOpenInfo {
-    pub embed_url: String,
-    /// Stable Termul-proxied MCP endpoint. Desktop: the id-scoped agentation
-    /// route `http://127.0.0.1:<port>/canvas/<canvasId>/mcp` (agents of
-    /// project A never reach project B's canvas; the id is deterministic so
-    /// the URL is stable across re-opens). Web: the global `/canvas/mcp`
-    /// (bearer-or-cookie authed, routes to the active canvas). `None` when
-    /// the desktop agentation server is unavailable.
-    pub mcp_url: Option<String>,
-    /// Canonicalized absolute doc path (the pool's daemon key).
-    pub doc_key: String,
-    /// Web-only: the project-derived id the `/canvas/<id>/*` proxy routes on.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub canvas_id: Option<String>,
-    /// The canvas credential. **Desktop:** the daemon's managed (handshake)
-    /// token — the renderer/agents present it as the `Authorization: Bearer`
-    /// value on the agentation `/canvas(/<canvasId>)/mcp` mounts. **Web:**
-    /// the canvas session token — the `ct` embed param and the value the
-    /// renderer sets as the same-origin per-canvas `op_canvas_ct_<canvasId>`
-    /// cookie (root canvas routes + the `/canvas/mcp` cookie path). Never
-    /// logged.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub canvas_token: Option<String>,
 }
 
 /// Pool status for `canvas_status` / `POST /canvas/status`-style queries.

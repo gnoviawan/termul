@@ -26,6 +26,19 @@ fn main() {
     // install). Watch it so a web-client rebuild triggers a cargo rebuild, for
     // both build targets.
     println!("cargo:rerun-if-changed=../dist-web");
+    // The figcraft web bundle (`canvas/bundle/`, fetched by
+    // `scripts/canvas/fetch-figcraft-bundle.mjs`) is embedded the same way.
+    // A missing bundle must not fail dev/CI, but a release build without it
+    // would ship a canvas that answers BUNDLE_MISSING, so say so loudly.
+    println!("cargo:rerun-if-changed=../canvas/bundle");
+    println!("cargo:rerun-if-changed=../canvas/figcraft.pin");
+    if std::env::var("PROFILE").as_deref() == Ok("release")
+        && !Path::new("../canvas/bundle/index.html").is_file()
+    {
+        println!(
+            "cargo:warning=canvas/bundle/index.html is missing: this release build will not embed \n             the figcraft canvas bundle (run scripts/canvas/fetch-figcraft-bundle.mjs first)"
+        );
+    }
 
     // Declare the custom `web_embed_missing` cfg so the 2024 edition's
     // unexpected-cfg check doesn't reject the `#[cfg(web_embed_missing)]` in

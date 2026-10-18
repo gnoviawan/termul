@@ -10,7 +10,7 @@ const {
   mockCloseFileIfIdle,
   mockRemoveTab,
   mockRemoveBrowserTab,
-  mockCloseCanvas,
+  mockUnmountCanvas,
   mockCloseAgentChat
 } = vi.hoisted(() => ({
   menuListeners: new Map<string, () => void>(),
@@ -18,7 +18,7 @@ const {
   mockCloseFileIfIdle: vi.fn(),
   mockRemoveTab: vi.fn(),
   mockRemoveBrowserTab: vi.fn(),
-  mockCloseCanvas: vi.fn(),
+  mockUnmountCanvas: vi.fn(),
   mockCloseAgentChat: vi.fn()
 }))
 
@@ -41,7 +41,7 @@ vi.mock('@/stores/browser-session-store', () => ({
   useBrowserSessionStore: { getState: () => ({ removeTab: mockRemoveBrowserTab }) }
 }))
 vi.mock('@/stores/canvas-store', () => ({
-  useCanvasStore: { getState: () => ({ closeCanvas: mockCloseCanvas }) }
+  useCanvasStore: { getState: () => ({ unmountCanvas: mockUnmountCanvas }) }
 }))
 vi.mock('@/lib/agent-chat-close', () => ({ closeAgentChat: mockCloseAgentChat }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn().mockResolvedValue(undefined) }))
@@ -74,7 +74,7 @@ beforeEach(() => {
   mockCloseFileIfIdle.mockReset().mockReturnValue(true)
   mockRemoveTab.mockReset()
   mockRemoveBrowserTab.mockReset()
-  mockCloseCanvas.mockReset().mockResolvedValue(undefined)
+  mockUnmountCanvas.mockReset().mockResolvedValue(undefined)
   mockCloseAgentChat
     .mockReset()
     .mockImplementation((_id: string, closeTab: () => void) => closeTab())
@@ -145,7 +145,7 @@ describe('useCloseActiveTab (menu Close Tab)', () => {
       docPath: '/p/Plan.op'
     })
 
-    expect(mockCloseCanvas).not.toHaveBeenCalled()
+    expect(mockUnmountCanvas).not.toHaveBeenCalled()
     expect(mockRemoveTab).not.toHaveBeenCalled()
   })
 })

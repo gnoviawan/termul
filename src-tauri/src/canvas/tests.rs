@@ -4,8 +4,8 @@
 //! child processes (the `remote/host/tests.rs` quick-exit precedent), and
 //! the proxy is exercised against a local axum echo server.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -59,14 +59,14 @@ fn handshake_rejects_invalid_lines() {
         "not json at all",
         "[1,2,3]",
         "null",
-        r#"{"port":1,"token":"t","version":"v"}"#,          // missing ok
+        r#"{"port":1,"token":"t","version":"v"}"#, // missing ok
         r#"{"ok":false,"port":1,"token":"t","version":"v"}"#, // ok not true
         r#"{"ok":true,"port":65536,"token":"t","version":"v"}"#, // port out of range
         r#"{"ok":true,"port":0,"token":"t","version":"v"}"#, // port 0: meaningless post-bind
         r#"{"ok":true,"port":-1,"token":"t","version":"v"}"#, // negative port
         r#"{"ok":true,"port":1.5,"token":"t","version":"v"}"#, // non-integer port
         r#"{"ok":true,"port":1,"token":"","version":"v"}"#, // empty token
-        r#"{"ok":true,"port":1,"token":"t"}"#,              // missing version
+        r#"{"ok":true,"port":1,"token":"t"}"#,     // missing version
         r#"{"ok":true,"port":"1","token":"t","version":"v"}"#, // port as string
     ] {
         let err = parse_handshake_line(case)
@@ -152,12 +152,10 @@ fn resolution_from_root_prefers_release_then_debug() {
     let resolved =
         super::managed::resolve_daemon_binary_from(None, Some(root.to_str().unwrap()), &[])
             .expect("debug resolves");
-    assert!(
-        resolved
-            .binary
-            .ancestors()
-            .any(|ancestor| ancestor.file_name().is_some_and(|name| name == "debug"))
-    );
+    assert!(resolved
+        .binary
+        .ancestors()
+        .any(|ancestor| ancestor.file_name().is_some_and(|name| name == "debug")));
     assert!(resolved
         .binary
         .file_name()
@@ -171,12 +169,10 @@ fn resolution_from_root_prefers_release_then_debug() {
     let resolved =
         super::managed::resolve_daemon_binary_from(None, Some(root.to_str().unwrap()), &[])
             .expect("release resolves");
-    assert!(
-        resolved
-            .binary
-            .ancestors()
-            .any(|ancestor| ancestor.file_name().is_some_and(|name| name == "release"))
-    );
+    assert!(resolved
+        .binary
+        .ancestors()
+        .any(|ancestor| ancestor.file_name().is_some_and(|name| name == "release")));
 }
 
 #[test]
@@ -271,7 +267,9 @@ pub(crate) fn fake_daemon_command_with_port(kind: FakeKind, port: u16) -> Comman
                     .arg(format!("printf '%s\\n' '{line}'; exec sleep 30"));
             }
             FakeKind::GarbageThenSleep => {
-                command.arg("-c").arg("printf 'not-a-handshake\\n'; exec sleep 30");
+                command
+                    .arg("-c")
+                    .arg("printf 'not-a-handshake\\n'; exec sleep 30");
             }
             FakeKind::Silent => {
                 command.arg("-c").arg("exec sleep 30");
@@ -474,11 +472,7 @@ async fn pool_release_evicts_daemon_without_respawn() {
     assert!(pool.daemon_for_doc(&doc).is_none(), "evict on close");
     assert!(!daemon.alive(), "daemon disposed (stdin EOF → kill)");
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        spawner.calls(),
-        1,
-        "a dispose-driven exit must NOT respawn"
-    );
+    assert_eq!(spawner.calls(), 1, "a dispose-driven exit must NOT respawn");
     drop(dir);
 }
 
@@ -525,23 +519,29 @@ async fn pool_tracks_active_daemon_per_project_and_canvas_id() {
         .expect("acquire");
 
     assert_eq!(
-        pool.active_daemon()
-            .expect("globally active daemon")
-            .port,
+        pool.active_daemon().expect("globally active daemon").port,
         daemon.port
     );
     assert!(pool.active_daemon_for_project("proj-7").is_some());
     assert!(pool.active_daemon_for_project("proj-8").is_none());
     let id = canvas_id_for_project("proj-7");
     assert!(pool.daemon_for_canvas_id(&id).is_some());
-    assert!(pool.daemon_for_canvas_id(&canvas_id_for_project("proj-8")).is_none());
+    assert!(pool
+        .daemon_for_canvas_id(&canvas_id_for_project("proj-8"))
+        .is_none());
 
     let status = pool.status();
     assert_eq!(status.daemons.len(), 1);
-    assert_eq!(status.active_doc_key.as_deref(), Some(daemon.doc_key.as_str()));
+    assert_eq!(
+        status.active_doc_key.as_deref(),
+        Some(daemon.doc_key.as_str())
+    );
 
     pool.release(&doc).await;
-    assert!(pool.active_daemon().is_none(), "release clears active tracking");
+    assert!(
+        pool.active_daemon().is_none(),
+        "release clears active tracking"
+    );
     assert!(pool.active_daemon_for_project("proj-7").is_none());
     drop(dir);
 }
@@ -577,11 +577,9 @@ fn canvas_id_is_deterministic_and_url_safe() {
         canvas_id_for_project("proj-2")
     );
     assert!(canvas_id_for_project("proj-1").starts_with("cv"));
-    assert!(
-        canvas_id_for_project("proj-1")
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric())
-    );
+    assert!(canvas_id_for_project("proj-1")
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric()));
 }
 
 // ---------------------------------------------------------------------------
@@ -651,57 +649,6 @@ pub(crate) async fn spawn_echo_server_marked(
     (addr, handle)
 }
 
-fn post_mcp_request(body: &'static str) -> Request {
-    Request::builder()
-        .method(Method::POST)
-        .uri("/canvas/mcp")
-        .header("content-type", "application/json")
-        .body(Body::from(body))
-        .expect("build MCP request")
-}
-
-#[tokio::test]
-async fn proxy_mcp_rejects_get_with_405() {
-    let request = Request::builder()
-        .method(Method::GET)
-        .uri("/canvas/mcp")
-        .body(Body::empty())
-        .expect("build GET");
-    let resp = mcp_proxy::proxy_mcp_request(None, request).await;
-    assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-}
-
-#[tokio::test]
-async fn proxy_mcp_without_daemon_is_typed_502() {
-    let request = post_mcp_request(r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#);
-    let resp = mcp_proxy::proxy_mcp_request(None, request).await;
-    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    assert_eq!(parsed["code"], "DAEMON_DOWN");
-}
-
-#[tokio::test]
-async fn proxy_mcp_forwards_post_body_status_and_headers() {
-    let (addr, server) = spawn_echo_server().await;
-    let daemon = super::managed::synthetic_daemon("doc", addr.port(), TEST_ORIGIN);
-    let request = post_mcp_request(r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#);
-    let resp = mcp_proxy::proxy_mcp_request(Some(&daemon), request).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        resp.headers().get("x-echo").and_then(|v| v.to_str().ok()),
-        Some("mcp")
-    );
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    assert_eq!(parsed["proxied"], true);
-    server.abort();
-}
-
 #[tokio::test]
 async fn proxy_canvas_path_forwards_method_path_query_and_content_type() {
     let (addr, server) = spawn_echo_server().await;
@@ -711,8 +658,7 @@ async fn proxy_canvas_path_forwards_method_path_query_and_content_type() {
         .uri("/pkg/op_host_web.js?v=7")
         .body(Body::empty())
         .expect("build path request");
-    let resp = mcp_proxy::proxy_canvas_path(Some(&daemon), request, "/pkg/op_host_web.js")
-        .await;
+    let resp = mcp_proxy::proxy_canvas_path(Some(&daemon), request, "/pkg/op_host_web.js").await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(
         resp.headers()
@@ -754,8 +700,7 @@ async fn proxy_sse_streams_first_event_without_buffering() {
         .uri("/api/mcp/events")
         .body(Body::empty())
         .expect("build SSE request");
-    let resp = mcp_proxy::proxy_canvas_path(Some(&daemon), request, "/api/mcp/events")
-        .await;
+    let resp = mcp_proxy::proxy_canvas_path(Some(&daemon), request, "/api/mcp/events").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let mut stream = resp.into_body().into_data_stream();
     // The echo stream NEVER completes — if the proxy buffered the response,
@@ -826,28 +771,8 @@ fn web_canvas_app_with_boundary(
     })
 }
 
-/// Sub-router app with an explicit web auth gate (for the bearer-OR-cookie
-/// MCP tests).
-fn web_canvas_app_gated(
-    pool: Option<Arc<CanvasDaemonPool>>,
-    token: &str,
-) -> Router {
-    crate::web::canvas_api::canvas_router(crate::web::canvas_api::CanvasState {
-        pool,
-        web_auth: Some(Arc::new(crate::web::auth::WebAuth::new(
-            crate::web::auth::WebAuthToken::new(token).expect("non-empty"),
-        ))),
-        boundary: None,
-        write_flags: loopback_write_flags(),
-    })
-}
-
 /// POST /canvas/open helper returning the parsed IpcBody JSON.
-async fn web_open(
-    app: Router,
-    doc: &str,
-    project_id: &str,
-) -> serde_json::Value {
+async fn web_open(app: Router, doc: &str, project_id: &str) -> serde_json::Value {
     let resp = app
         .oneshot(
             Request::builder()
@@ -870,56 +795,72 @@ async fn web_open(
 }
 
 #[tokio::test]
-async fn web_open_returns_embed_path_with_canvas_session_token() {
+async fn web_open_mints_a_bundle_mount_without_spawning_a_daemon() {
     let (dir, doc) = temp_doc();
     let spawner = FakeSpawner::new(FakeKind::HandshakeThenSleep);
-    let pool = Arc::new(CanvasDaemonPool::new(spawner));
+    let pool = Arc::new(CanvasDaemonPool::new(spawner.clone()));
     let app = web_canvas_app(Some(pool));
-    let parsed = web_open(app, &doc, "proj-7").await;
-    assert_eq!(parsed["success"], true);
-    let expected_id = canvas_id_for_project("proj-7");
-    let embed_url = parsed["data"]["embedUrl"].as_str().expect("embedUrl");
-    // Shape: /canvas/<id>/?embed=vscode&ct=<32-hex> — raw query text.
-    let (path_part, token) = embed_url
-        .split_once("ct=")
-        .unwrap_or_else(|| panic!("embed URL carries a ct param: {embed_url}"));
-    assert_eq!(path_part, format!("/canvas/{expected_id}/?embed=vscode&"));
-    assert_eq!(token.len(), 32, "32-hex-char canvas token");
-    assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
-    // The same token is returned for the renderer's op_canvas_ct cookie.
-    assert_eq!(parsed["data"]["canvasToken"], *token);
-    assert_eq!(parsed["data"]["canvasId"], expected_id);
-    assert_eq!(parsed["data"]["mcpUrl"], "/canvas/mcp");
-    assert!(parsed["data"]["docKey"].as_str().is_some_and(|k| k.ends_with("design.op")));
+    let parsed = web_open(app, &doc, "proj-web-open").await;
+    assert_eq!(parsed["success"], true, "{parsed}");
+    let data = &parsed["data"];
+    assert_eq!(data["canvasId"], canvas_id_for_project("proj-web-open"));
+    assert_eq!(data["baseUrl"], "", "the web bundle is same-origin");
+    assert_eq!(data["pinTag"], crate::canvas::pin::pinned_tag());
+    let token = data["canvasToken"].as_str().expect("canvasToken");
+    assert_eq!(token.len(), 32);
+    assert!(data["docKey"]
+        .as_str()
+        .is_some_and(|key| key.ends_with("design.op")));
+    assert_eq!(
+        spawner.calls(),
+        0,
+        "mounting figcraft never spawns a daemon"
+    );
+    crate::canvas::static_server::close_canvas(
+        "proj-web-open",
+        crate::canvas::persistence::CloseMode::Save,
+    )
+    .await
+    .unwrap();
     drop(dir);
 }
 
 #[tokio::test]
-async fn web_open_is_idempotent_for_a_live_session() {
-    // A repeat open of a doc with a live daemon + live token returns the
-    // SAME embed URL + token (no iframe rebuild, no live editor state
-    // loss). Rotation happens only on a fresh spawn — i.e. after a close
-    // evicted the entry.
+async fn web_open_reuses_the_token_until_close_revokes_it() {
     let (dir, doc) = temp_doc();
-    let spawner = FakeSpawner::new(FakeKind::HandshakeThenSleep);
-    let pool = Arc::new(CanvasDaemonPool::new(spawner));
-    let app = web_canvas_app(Some(pool));
+    let app = web_canvas_app(None);
+    let project = "proj-web-reopen";
+    let token_of =
+        |parsed: &serde_json::Value| parsed["data"]["canvasToken"].as_str().unwrap().to_string();
 
-    let first = web_open(app.clone(), &doc, "proj-7").await;
-    let first_url = first["data"]["embedUrl"].as_str().unwrap().to_string();
-    let second = web_open(app.clone(), &doc, "proj-7").await;
-    let second_url = second["data"]["embedUrl"].as_str().unwrap().to_string();
+    let first = token_of(&web_open(app.clone(), &doc, project).await);
+    let second = token_of(&web_open(app.clone(), &doc, project).await);
     assert_eq!(
-        first_url, second_url,
-        "repeat open of a live session keeps the same embed URL + token"
-    );
-    assert_eq!(
-        first["data"]["canvasToken"], second["data"]["canvasToken"],
-        "repeat open does not rotate the canvas token"
+        first, second,
+        "a repeat open keeps the mounted iframe URL valid"
     );
 
-    // Close evicts the entry (daemon + token); the next open is a fresh
-    // spawn → fresh token.
+    let embed = format!(
+        "/canvas/{}/?embed=kiosk&ct={first}",
+        canvas_id_for_project(project)
+    );
+    let get_embed = |app: Router, uri: String| async move {
+        app.oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router responds")
+        .status()
+    };
+    assert_ne!(
+        get_embed(app.clone(), embed.clone()).await,
+        StatusCode::UNAUTHORIZED
+    );
+
     let resp = app
         .clone()
         .oneshot(
@@ -928,21 +869,49 @@ async fn web_open_is_idempotent_for_a_live_session() {
                 .uri("/canvas/close")
                 .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
-                .body(Body::from(serde_json::json!({"docPath": doc}).to_string()))
+                .body(Body::from(
+                    serde_json::json!({ "projectId": project }).to_string(),
+                ))
                 .expect("build close request"),
         )
         .await
         .expect("router responds");
     assert_eq!(resp.status(), StatusCode::OK);
-    let third = web_open(app, &doc, "proj-7").await;
-    let third_url = third["data"]["embedUrl"].as_str().unwrap().to_string();
-    assert_ne!(
-        first_url, third_url,
-        "a fresh spawn after close mints a fresh token"
+    assert_eq!(
+        get_embed(app.clone(), embed).await,
+        StatusCode::UNAUTHORIZED,
+        "close revokes the ct token"
     );
+
+    let third = token_of(&web_open(app, &doc, project).await);
+    assert_ne!(first, third, "the next open mints a fresh token");
+    crate::canvas::static_server::close_canvas(project, crate::canvas::persistence::CloseMode::Save)
+        .await
+        .unwrap();
     drop(dir);
 }
 
+/// What `POST /canvas/open` did before the figcraft mount: acquire the doc's
+/// daemon and set its proxy token. Keeps the legacy daemon proxy routes
+/// covered until they leave with the daemon.
+async fn daemon_session(pool: &CanvasDaemonPool, doc: &str, project_id: &str) -> serde_json::Value {
+    let daemon = pool
+        .acquire(doc, "http://127.0.0.1", project_id)
+        .await
+        .expect("acquire daemon");
+    let token = crate::canvas::static_server::generate_token().expect("token");
+    assert!(pool.set_canvas_token(&daemon.doc_key, token.clone()));
+    let canvas_id = canvas_id_for_project(project_id);
+    serde_json::json!({
+        "success": true,
+        "data": {
+            "embedUrl": format!("/canvas/{canvas_id}/?embed=vscode&ct={token}"),
+            "canvasToken": token,
+            "canvasId": canvas_id,
+            "docKey": daemon.doc_key,
+        }
+    })
+}
 
 #[tokio::test]
 async fn web_canvas_proxy_requires_valid_canvas_token() {
@@ -950,13 +919,20 @@ async fn web_canvas_proxy_requires_valid_canvas_token() {
     let (dir, doc) = temp_doc();
     let spawner = FakeSpawner::with_port(FakeKind::HandshakeThenSleep, addr.port());
     let pool = Arc::new(CanvasDaemonPool::new(spawner));
-    let app = web_canvas_app(Some(pool));
+    let app = web_canvas_app(Some(pool.clone()));
 
-    let parsed = web_open(app.clone(), &doc, "proj-7").await;
+    let parsed = daemon_session(&pool, &doc, "proj-7").await;
     assert_eq!(parsed["success"], true);
-    let embed_url = parsed["data"]["embedUrl"].as_str().expect("embedUrl").to_string();
+    let embed_url = parsed["data"]["embedUrl"]
+        .as_str()
+        .expect("embedUrl")
+        .to_string();
     let (canvas_path, token) = embed_url.rsplit_once("ct=").expect("ct param");
-    let canvas_id = canvas_path.split('/').nth(2).expect("canvas id").to_string();
+    let canvas_id = canvas_path
+        .split('/')
+        .nth(2)
+        .expect("canvas id")
+        .to_string();
 
     // Valid ct: the embed document itself proxies through to the echo
     // daemon — the `ct` canvas session token is STRIPPED from the
@@ -979,8 +955,7 @@ async fn web_canvas_proxy_requires_valid_canvas_token() {
         .expect("read body");
     let text = String::from_utf8(body.to_vec()).expect("utf8");
     assert_eq!(
-        text,
-        "GET /?embed=vscode",
+        text, "GET /?embed=vscode",
         "the embed page proxies to the daemon root with the ct param stripped"
     );
 
@@ -1045,26 +1020,16 @@ async fn web_canvas_token_is_invalidated_on_close() {
     let (dir, doc) = temp_doc();
     let spawner = FakeSpawner::with_port(FakeKind::HandshakeThenSleep, addr.port());
     let pool = Arc::new(CanvasDaemonPool::new(spawner));
-    let app = web_canvas_app(Some(pool));
+    let app = web_canvas_app(Some(pool.clone()));
 
-    let parsed = web_open(app.clone(), &doc, "proj-7").await;
-    let embed_url = parsed["data"]["embedUrl"].as_str().expect("embedUrl").to_string();
+    let parsed = daemon_session(&pool, &doc, "proj-7").await;
+    let embed_url = parsed["data"]["embedUrl"]
+        .as_str()
+        .expect("embedUrl")
+        .to_string();
 
-    // Close the canvas (pool evicts the entry — the token goes with it).
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/canvas/close")
-                .extension(axum::extract::ConnectInfo(web_test_peer()))
-                .header("content-type", "application/json")
-                .body(Body::from(serde_json::json!({"docPath": doc}).to_string()))
-                .expect("build close request"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::OK);
+    // Releasing the daemon evicts the entry, and the token goes with it.
+    pool.release(&doc).await;
 
     // The stale ct no longer authenticates.
     let resp = app
@@ -1092,7 +1057,10 @@ async fn web_canvas_routes_trailing_slash_and_catch_all_reach_the_token_gate() {
     // catch-all) into the token-gated proxy, which rejects without a ct
     // rather than 404ing.
     let app = web_canvas_app(None);
-    for uri in ["/canvas/cv0123456789abcdef/", "/canvas/cv0123456789abcdef/pkg/x.js"] {
+    for uri in [
+        "/canvas/cv0123456789abcdef/",
+        "/canvas/cv0123456789abcdef/pkg/x.js",
+    ] {
         let resp = app
             .clone()
             .oneshot(
@@ -1114,20 +1082,16 @@ async fn web_canvas_routes_trailing_slash_and_catch_all_reach_the_token_gate() {
 
 #[tokio::test]
 async fn web_canvas_api_routes_bypass_the_canvas_token_gate() {
-    // open/close/save/mcp pass through the canvas-token middleware — the
-    // API routes are authenticated by the OUTER bearer gate instead (they
-    // never mint or check a ct). A GET /canvas/mcp without any ct still
-    // reaches the handler and 405s (the daemon's method contract).
-    let pool = Arc::new(CanvasDaemonPool::new(FakeSpawner::new(
-        FakeKind::HandshakeThenSleep,
-    )));
-    let app = web_canvas_app(Some(pool));
+    // open/close/save/bundle-base pass through the canvas-token middleware —
+    // they carry their own auth (the outer bearer gate or the handler's own
+    // bearer check) and never mint or check a ct. A GET /canvas/bundle-base
+    // without any ct still reaches its handler.
+    let app = web_canvas_app(None);
     let resp = app
         .oneshot(
             Request::builder()
                 .method(Method::GET)
-                .uri("/canvas/mcp")
-                .extension(axum::extract::ConnectInfo(web_test_peer()))
+                .uri("/canvas/bundle-base")
                 .body(Body::empty())
                 .expect("build request"),
         )
@@ -1135,35 +1099,31 @@ async fn web_canvas_api_routes_bypass_the_canvas_token_gate() {
         .expect("router responds");
     assert_eq!(
         resp.status(),
-        StatusCode::METHOD_NOT_ALLOWED,
+        StatusCode::OK,
         "exempt route reaches the handler (no canvas-token 401)"
     );
 }
 
 #[tokio::test]
-async fn web_open_without_pool_degrades_to_daemon_down() {
+async fn web_canvas_mcp_route_is_gone() {
+    // /canvas/mcp is no longer a route: it reads as a canvas id with no
+    // token, so the canvas-token gate rejects it instead of proxying.
     let app = web_canvas_app(None);
     let resp = app
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/canvas/open")
+                .uri("/canvas/mcp")
                 .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    serde_json::json!({"docPath": "C:/x/design.op", "projectId": "p"}).to_string(),
+                    r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#,
                 ))
-                .expect("build open request"),
+                .expect("build request"),
         )
         .await
         .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("IpcBody json");
-    assert_eq!(parsed["success"], false);
-    assert_eq!(parsed["code"], "DAEMON_DOWN");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -1180,9 +1140,7 @@ async fn web_save_without_daemon_is_typed_daemon_down() {
                 .uri("/canvas/save")
                 .extension(axum::extract::ConnectInfo(web_test_peer()))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({"docPath": doc}).to_string(),
-                ))
+                .body(Body::from(serde_json::json!({"docPath": doc}).to_string()))
                 .expect("build save request"),
         )
         .await
@@ -1251,10 +1209,13 @@ async fn web_canvas_write_routes_refuse_a_view_only_peer() {
 // ---------------------------------------------------------------------------
 
 /// Open a canvas on `app` and return (embed_path_prefix, canvas_token).
-async fn web_open_for_cookie(app: Router, doc: &str) -> (String, String) {
-    let parsed = web_open(app, doc, "proj-7").await;
+async fn web_open_for_cookie(pool: &CanvasDaemonPool, doc: &str) -> (String, String) {
+    let parsed = daemon_session(pool, doc, "proj-7").await;
     assert_eq!(parsed["success"], true);
-    let embed_url = parsed["data"]["embedUrl"].as_str().expect("embedUrl").to_string();
+    let embed_url = parsed["data"]["embedUrl"]
+        .as_str()
+        .expect("embedUrl")
+        .to_string();
     let (path_part, token) = embed_url.rsplit_once("ct=").expect("ct param");
     (path_part.to_string(), token.to_string())
 }
@@ -1265,8 +1226,8 @@ async fn web_root_canvas_routes_proxy_to_active_daemon_with_cookie() {
     let (dir, doc) = temp_doc();
     let spawner = FakeSpawner::with_port(FakeKind::HandshakeThenSleep, addr.port());
     let pool = Arc::new(CanvasDaemonPool::new(spawner));
-    let app = web_canvas_app(Some(pool));
-    let (_embed_path, token) = web_open_for_cookie(app.clone(), &doc).await;
+    let app = web_canvas_app(Some(pool.clone()));
+    let (_embed_path, token) = web_open_for_cookie(&pool, &doc).await;
     let canvas_id = canvas_id_for_project("proj-7");
     // Per-canvas cookie: op_canvas_ct_<canvasId>=<token>. No Referer → the
     // ACTIVE canvas is the target (single-canvas case here).
@@ -1295,7 +1256,12 @@ async fn web_root_canvas_routes_proxy_to_active_daemon_with_cookie() {
         }
         let resp = app
             .clone()
-            .oneshot(builder.header("cookie", &cookie).body(Body::empty()).expect("build request"))
+            .oneshot(
+                builder
+                    .header("cookie", &cookie)
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
             .await
             .expect("router responds");
         assert_eq!(
@@ -1343,7 +1309,11 @@ async fn web_root_canvas_routes_proxy_to_active_daemon_with_cookie() {
         )
         .await
         .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::OK, "POST /api/* with valid cookie");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "POST /api/* with valid cookie"
+    );
 
     drop(dir);
     server.abort();
@@ -1355,8 +1325,8 @@ async fn web_root_canvas_routes_reject_missing_or_wrong_cookie() {
     let (dir, doc) = temp_doc();
     let spawner = FakeSpawner::with_port(FakeKind::HandshakeThenSleep, addr.port());
     let pool = Arc::new(CanvasDaemonPool::new(spawner));
-    let app = web_canvas_app(Some(pool));
-    let (_embed_path, _token) = web_open_for_cookie(app.clone(), &doc).await;
+    let app = web_canvas_app(Some(pool.clone()));
+    let (_embed_path, _token) = web_open_for_cookie(&pool, &doc).await;
     let canvas_id = canvas_id_for_project("proj-7");
     let cookie_name = crate::web::canvas_api::canvas_cookie_name(&canvas_id);
     let referer = format!("http://127.0.0.1:1/canvas/{canvas_id}/?embed=vscode");
@@ -1450,104 +1420,6 @@ async fn web_root_canvas_routes_without_active_daemon_are_502() {
 }
 
 #[tokio::test]
-async fn web_canvas_mcp_accepts_bearer_or_cookie() {
-    let (addr, server) = spawn_echo_server().await;
-    let (dir, doc) = temp_doc();
-    let spawner = FakeSpawner::with_port(FakeKind::HandshakeThenSleep, addr.port());
-    let pool = Arc::new(CanvasDaemonPool::new(spawner));
-    let app = web_canvas_app_gated(Some(pool), "t0ken");
-    let (_embed_path, token) = web_open_for_cookie(app.clone(), &doc).await;
-
-    let mcp_request = |headers: &[(&'static str, String)]| {
-        let mut builder = Request::builder()
-            .method(Method::POST)
-            .uri("/canvas/mcp")
-            .extension(axum::extract::ConnectInfo(web_test_peer()))
-            .header("content-type", "application/json");
-        for (name, value) in headers {
-            builder = builder.header(*name, value);
-        }
-        builder.body(Body::from(r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#))
-    };
-
-    // (a) the web auth bearer token (agent clients) authenticates and
-    // proxies to the echo daemon.
-    let resp = app
-        .clone()
-        .oneshot(mcp_request(&[("authorization", "Bearer t0ken".to_string())]).expect("build"))
-        .await
-        .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::OK, "bearer authenticates");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    assert_eq!(parsed["proxied"], true);
-
-    // (b) the per-canvas canvas cookie (the embedded editor's MCP path)
-    // authenticates — WITH a Referer naming the editor's canvas page (the
-    // browser sends it from the iframe) and WITHOUT (active-canvas
-    // fallback).
-    let canvas_id = canvas_id_for_project("proj-7");
-    let cookie = format!(
-        "{}={token}",
-        crate::web::canvas_api::canvas_cookie_name(&canvas_id)
-    );
-    let referer = format!("http://127.0.0.1:1/canvas/{canvas_id}/?embed=vscode");
-    for headers in [
-        vec![("cookie", cookie.clone())],
-        vec![("cookie", cookie.clone()), ("referer", referer.clone())],
-    ] {
-        let headers: Vec<(&'static str, String)> = headers;
-        let resp = app
-            .clone()
-            .oneshot(mcp_request(&headers).expect("build"))
-            .await
-            .expect("router responds");
-        assert_eq!(
-            resp.status(),
-            StatusCode::OK,
-            "canvas cookie authenticates (headers: {headers:?})"
-        );
-    }
-
-    // Neither credential → 401 (the route is exempt from the outer bearer
-    // gate, so this 401 comes from the canvas MCP layer itself).
-    let resp = app
-        .clone()
-        .oneshot(mcp_request(&[]).expect("build"))
-        .await
-        .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    assert_eq!(parsed["code"], "UNAUTHORIZED");
-    assert_eq!(
-        parsed["error"], "canvas mcp requires a web auth bearer token or canvas cookie"
-    );
-
-    // A WRONG bearer is not accepted even when the cookie layer is also
-    // wrong (both constant-time, neither matches); the old shared bare
-    // cookie name is gone too.
-    let resp = app
-        .oneshot(
-            mcp_request(&[
-                ("authorization", "Bearer wrong".to_string()),
-                ("cookie", "op_canvas_ct=wrong".to_string()),
-            ])
-            .expect("build"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "no fallback open");
-
-    drop(dir);
-    server.abort();
-}
-
-#[tokio::test]
 async fn web_root_routes_are_referer_scoped_per_canvas() {
     // CodeRabbit cross-canvas isolation (PR #834): canvas A's iframe must
     // keep working after canvas B opens, and no credential may execute in
@@ -1595,15 +1467,21 @@ async fn web_root_routes_are_referer_scoped_per_canvas() {
         port_a: addr_a.port(),
         port_b: addr_b.port(),
     })));
-    let app = web_canvas_app(Some(pool));
+    let app = web_canvas_app(Some(pool.clone()));
 
     // Open A, then B — B is the ACTIVE (last-opened) canvas afterwards.
-    let parsed_a = web_open(app.clone(), &doc_a.to_string_lossy(), "proj-a").await;
+    let parsed_a = daemon_session(&pool, &doc_a.to_string_lossy(), "proj-a").await;
     assert_eq!(parsed_a["success"], true);
-    let parsed_b = web_open(app.clone(), &doc_b.to_string_lossy(), "proj-b").await;
+    let parsed_b = daemon_session(&pool, &doc_b.to_string_lossy(), "proj-b").await;
     assert_eq!(parsed_b["success"], true);
-    let token_a = parsed_a["data"]["canvasToken"].as_str().expect("token a").to_string();
-    let token_b = parsed_b["data"]["canvasToken"].as_str().expect("token b").to_string();
+    let token_a = parsed_a["data"]["canvasToken"]
+        .as_str()
+        .expect("token a")
+        .to_string();
+    let token_b = parsed_b["data"]["canvasToken"]
+        .as_str()
+        .expect("token b")
+        .to_string();
     let id_a = canvas_id_for_project("proj-a");
     let id_b = canvas_id_for_project("proj-b");
     let cookie_name = crate::web::canvas_api::canvas_cookie_name;
@@ -1700,7 +1578,10 @@ async fn web_root_routes_are_referer_scoped_per_canvas() {
         .expect("router responds");
     assert_eq!(resp.status(), StatusCode::OK);
     let parsed = post_json(resp).await;
-    assert_eq!(parsed["echo"], "echo-b", "no-Referer fallback routes to the active canvas");
+    assert_eq!(
+        parsed["echo"], "echo-b",
+        "no-Referer fallback routes to the active canvas"
+    );
 
     // No Referer + A's (non-active) cookie → 401: the credential does not
     // belong to the active canvas and is NEVER routed to a different canvas.
@@ -1722,30 +1603,6 @@ async fn web_root_routes_are_referer_scoped_per_canvas() {
         "a non-active canvas cookie without a Referer is rejected, not re-routed"
     );
 
-    // Global /canvas/mcp cookie path: Referer-scoped the same way (A's
-    // cookie + A's Referer → A's daemon, not the active one).
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/canvas/mcp")
-                .extension(axum::extract::ConnectInfo(web_test_peer()))
-                .header("content-type", "application/json")
-                .header("cookie", &cookie_a)
-                .header("referer", &referer_a)
-                .body(Body::from(r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#))
-                .expect("build request"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let parsed = post_json(resp).await;
-    assert_eq!(
-        parsed["echo"], "echo-a",
-        "the global MCP cookie path is Referer-scoped to A's daemon"
-    );
-
     drop(dir);
     server_a.abort();
     server_b.abort();
@@ -1753,9 +1610,8 @@ async fn web_root_routes_are_referer_scoped_per_canvas() {
 
 #[tokio::test]
 async fn web_open_rejects_doc_path_outside_project_boundary() {
-    // The daemon receives `--file <path>` — a web client may only open a
-    // doc inside the project boundary (same containment the fs/git routes
-    // enforce), and the rejection happens BEFORE any daemon spawns.
+    // A web client may only open a doc inside the project boundary (same
+    // containment the fs/git routes enforce).
     let inside = tempfile::tempdir().expect("tempdir (boundary root)");
     let outside = tempfile::tempdir().expect("tempdir (outside)");
     let (doc_dir, doc) = temp_doc(); // lives in its own temp dir → outside
@@ -1791,12 +1647,7 @@ async fn web_open_accepts_doc_path_inside_project_boundary() {
     let spawner = FakeSpawner::new(FakeKind::HandshakeThenSleep);
     let pool = Arc::new(CanvasDaemonPool::new(spawner));
     let app = web_canvas_app_with_boundary(Some(pool), root.path());
-    let parsed = web_open(
-        app,
-        &doc.to_string_lossy(),
-        "proj-7",
-    )
-    .await;
+    let parsed = web_open(app, &doc.to_string_lossy(), "proj-7").await;
     assert_eq!(parsed["success"], true, "doc inside the boundary opens");
 }
 

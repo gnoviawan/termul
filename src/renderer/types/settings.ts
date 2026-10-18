@@ -86,6 +86,9 @@ export interface AppSettings {
   editorAutoSave: boolean
   /** Idle delay in ms before a dirty editor file is auto-saved (GH-539). */
   editorAutoSaveDelayMs: number
+  /** `canvas.autosave_ms`: quiet time before the host autosaves a dirty canvas
+   * document (spine AD-23). Sent with each canvas open. */
+  canvasAutosaveMs: number
   /** ACP per-turn idle timeout in seconds, or null = use the env var / Rust
    * default (unlimited by default). Set via App Preferences; pushed to the
    * Rust core. */
@@ -273,6 +276,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   acpTurnTimeoutSecs: null,
   editorAutoSave: false,
   editorAutoSaveDelayMs: 1000,
+  canvasAutosaveMs: 1500,
   acpTurnIdleTimeoutSecs: null,
   acpSessionNewTimeoutSecs: null,
   acpSessionReopenTimeoutSecs: null,

@@ -139,34 +139,6 @@ describe('MCP probe refresh', () => {
     expect(useAcpStore.getState().mcpProbing.fs).toBe(false)
   })
 
-  it('re-probes the canvas entry when a canvas open moves it to a new URL', async () => {
-    useAcpStore.setState({
-      mcpServers: [
-        {
-          id: 'canvas-mcp-p1',
-          type: 'http',
-          name: 'OpenPencil Canvas',
-          url: 'http://127.0.0.1:5100/canvas/mcp',
-          enabled: true
-        }
-      ],
-      mcpProbeStatus: { 'canvas-mcp-p1': 'disconnected' },
-      mcpToolsLoaded: { 'canvas-mcp-p1': true }
-    })
-    vi.mocked(invoke).mockResolvedValue(CONNECTED)
-
-    await useAcpStore
-      .getState()
-      .upsertCanvasMcpServer('p1', 'http://127.0.0.1:5200/canvas/mcp', null)
-    await vi.waitFor(() =>
-      expect(useAcpStore.getState().mcpProbeStatus['canvas-mcp-p1']).toBe('connected')
-    )
-
-    expect(probedConfigs()).toEqual([
-      { type: 'http', name: 'OpenPencil Canvas', url: 'http://127.0.0.1:5200/canvas/mcp' }
-    ])
-  })
-
   it('forgets a server deleted while its probe was in flight', async () => {
     const probe = deferred<ProbeResult>()
     vi.mocked(invoke).mockReturnValueOnce(probe.promise).mockResolvedValueOnce(REFUSED)

@@ -121,8 +121,8 @@ struct PoolState {
     project_docs: HashMap<String, String>,
     /// doc key → owning project (reverse map for cleanup).
     doc_projects: HashMap<String, String>,
-    /// Most recently acquired doc (the desktop agentation MCP proxy routes
-    /// here — the desktop has one active project at a time).
+    /// Most recently acquired doc (the desktop has one active project at a
+    /// time).
     last_active_doc: Option<String>,
     shut_down: bool,
 }
@@ -502,8 +502,7 @@ impl CanvasDaemonPool {
         guard.docs.get(&doc_key).and_then(|slot| slot.daemon.clone())
     }
 
-    /// The most recently acquired daemon (the desktop agentation
-    /// `/canvas/mcp` mount routes here).
+    /// The most recently acquired daemon.
     pub fn active_daemon(&self) -> Option<Arc<CanvasDaemon>> {
         let guard = self.inner.state.lock();
         let doc_key = guard.last_active_doc.clone()?;
@@ -580,11 +579,10 @@ impl CanvasDaemonPool {
     }
 
     /// The ACTIVE (last-opened) canvas's id — the Referer-less fallback
-    /// target for the root canvas routes and the global `/canvas/mcp`
-    /// cookie path (a request with no resolvable Referer is validated
-    /// against the active canvas's per-canvas cookie and routed to the
-    /// active canvas's daemon — never to a different canvas than the
-    /// credential belongs to).
+    /// target for the root canvas routes (a request with no resolvable
+    /// Referer is validated against the active canvas's per-canvas cookie
+    /// and routed to the active canvas's daemon — never to a different
+    /// canvas than the credential belongs to).
     pub fn active_canvas_id(&self) -> Option<String> {
         let guard = self.inner.state.lock();
         let doc_key = guard.last_active_doc.as_deref()?;

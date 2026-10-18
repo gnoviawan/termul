@@ -137,7 +137,7 @@ vi.mock('@/stores/git-status-store', async (importOriginal) => ({
   useGitStatusStore: vi.fn((selector: (state: unknown) => unknown) => selector({ statuses: {} }))
 }))
 
-const mockCloseCanvas = vi.hoisted(() => vi.fn())
+const mockUnmountCanvas = vi.hoisted(() => vi.fn())
 
 vi.mock('@/stores/canvas-store', () => ({
   useCanvasStore: Object.assign(
@@ -146,7 +146,7 @@ vi.mock('@/stores/canvas-store', () => ({
     ),
     {
       getState: () => ({
-        closeCanvas: mockCloseCanvas,
+        unmountCanvas: mockUnmountCanvas,
         sessions: {}
       })
     }
@@ -621,7 +621,7 @@ describe('WorkspaceTabBar', () => {
     expect(mockRemoveTab).toHaveBeenCalledWith('browser-1')
   })
 
-  it('closes a canvas tab by routing canvas disposal (closeCanvas) before the tab removal', async () => {
+  it('closes a canvas tab without unmounting its canvas (AD-19: closing hides)', async () => {
     const tabs: WorkspaceTab[] = [
       { type: 'canvas', id: 'canvas-proj-7', projectId: 'proj-7', docPath: 'C:/proj/design.op' }
     ]
@@ -632,15 +632,8 @@ describe('WorkspaceTabBar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close tab' }))
 
-    // Canvas disposal: the daemon evict (canvas-store closeCanvas with the
-    // tab's projectId) fires BEFORE the workspace tab is removed.
-    expect(mockCloseCanvas).toHaveBeenCalledWith('proj-7')
     expect(mockRemoveTab).toHaveBeenCalledWith('canvas-proj-7')
-    const closeCanvasOrder = mockCloseCanvas.mock.invocationCallOrder[0]
-    const removeTabOrder = mockRemoveTab.mock.invocationCallOrder[0]
-    expect(closeCanvasOrder).toBeGreaterThan(0)
-    expect(removeTabOrder).toBeGreaterThan(0)
-    expect(closeCanvasOrder).toBeLessThan(removeTabOrder)
+    expect(mockUnmountCanvas).not.toHaveBeenCalled()
   })
 
   it('calls startTabDrag when dragging a terminal tab', async () => {

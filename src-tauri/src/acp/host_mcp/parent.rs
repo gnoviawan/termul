@@ -31,8 +31,11 @@ use crate::acp::session_persistence::SessionPersistence;
 use crate::web::EventSink;
 
 mod ask;
+mod canvas;
 pub use ask::IdleSignal;
 use ask::PendingAsk;
+
+use crate::acp::host_mcp::canvas::CanvasRouter;
 
 /// Per-session auth + routing context, keyed by the random token.
 #[derive(Clone)]
@@ -92,6 +95,8 @@ pub struct HostPlanServer {
     idle_signals: Mutex<HashMap<String, IdleSignal>>,
     /// Test seam: replaces the computed `ask_user` heartbeat interval.
     ask_heartbeat_override: Mutex<Option<std::time::Duration>>,
+    /// Routes `Canvas` frames to the renderer holding each project's canvas.
+    canvas: Arc<CanvasRouter>,
 }
 
 impl HostPlanServer {
@@ -119,6 +124,7 @@ impl HostPlanServer {
             branch_attempted_for_session: Mutex::new(HashSet::new()),
             plan_store: PlanStore::new(),
             persistence,
+            canvas: Arc::new(CanvasRouter::default()),
         });
         let server_for_thread = Arc::clone(&server);
         let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
@@ -304,6 +310,12 @@ impl HostPlanServer {
         if let Some(sid) = real_sid {
             self.plan_store.drop_session(&sid);
         }
+    }
+
+    /// The canvas router: renderers report mounts and replies to it.
+    #[must_use]
+    pub fn canvas_router(&self) -> Arc<CanvasRouter> {
+        Arc::clone(&self.canvas)
     }
 
     #[must_use]
@@ -500,6 +512,15 @@ impl HostPlanServer {
                         FrameReply::err_code(e.code, e.message)
                     }
                 }
+            }
+            FrameKind::Canvas => {
+                self.canvas_call(
+                    &real_session_id,
+                    req.canvas_tool,
+                    req.canvas_method,
+                    req.canvas_params,
+                )
+                .await
             }
             FrameKind::AskUser => {
                 let Some(input) = req.ask else {

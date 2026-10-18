@@ -2,16 +2,25 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { flushSessionHistory, waitForPendingSessionIndexWrite } from '@/lib/acp-history-persistence'
 import { persistenceApi, windowApi } from '@/lib/api'
+import { unmountCanvases } from '@/lib/canvas-unmount-flow'
 import { runCloseWriters } from '@/lib/close-flush'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { useEditorStore } from '@/stores/editor-store'
 
-/** App-close interception: unsaved-files dialog state, persistence flush, tray quit. */
+/** App-close interception: unsaved-files dialog state, canvas unmount,
+ * persistence flush, tray quit. */
 export function useAppClose() {
   const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
   const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
   const closeAppWithPersistenceFlush = useCallback(async () => {
+    // Canvases save through their editors before anything shuts down (AD-31);
+    // a canvas the user keeps editing cancels the quit.
+    setIsAppCloseDialogOpen(false)
+    if (!(await unmountCanvases())) {
+      windowApi.respondToClose('cancel')
+      return
+    }
     try {
       const [pendingPersistenceResult, pendingSessionIndexResult, historyFlushResult] =
         await Promise.allSettled([

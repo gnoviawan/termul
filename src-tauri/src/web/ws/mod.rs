@@ -61,6 +61,7 @@ use crate::web::store::WebStore;
 
 mod access;
 mod agents;
+mod canvas;
 pub mod channel;
 mod chat_reads;
 mod claude_accounts;
@@ -80,6 +81,7 @@ mod watch;
 // for `tests.rs`' `use super::*` without widening visibility past `ws`.
 use access::*;
 use agents::*;
+use canvas::*;
 use chat_reads::*;
 use claude_accounts::*;
 use commands::*;
@@ -785,6 +787,8 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
     }
 }
 
+#[cfg(test)]
+mod canvas_tests;
 #[cfg(test)]
 mod capability_tests;
 #[cfg(test)]

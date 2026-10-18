@@ -107,3 +107,4 @@ tests/e2e/test-results/
 
 # docker-compose.yml workspace bind mount
 /workspace/
+canvas/bundle/

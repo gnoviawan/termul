@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { clipboardApi, openerApi } from '@/lib/api'
+import { isCanvasDocPath } from '@/lib/canvas-doc'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useCanvasStore } from '@/stores/canvas-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
@@ -35,13 +36,13 @@ import { useExplorerKeyboard } from './use-explorer-keyboard'
 import { useExplorerSearch } from './use-explorer-search'
 
 /**
- * Pure gate for the `.op` open branch (OpenPencil canvas mode): desktop-width
- * viewports open the document as the canvas; the phone-width shell falls
+ * Pure gate for the canvas open branch: on desktop-width viewports a
+ * `.figcraft` document opens as the canvas; the phone-width shell falls
  * through to the existing text-editor flow (canvas is gated off there — the
  * facade would answer UNSUPPORTED_SURFACE anyway).
  */
 export function shouldOpenAsCanvas(path: string, isMobileWebShell: boolean): boolean {
-  return !isMobileWebShell && path.toLowerCase().endsWith('.op')
+  return !isMobileWebShell && isCanvasDocPath(path)
 }
 
 function copyPath(path: string): void {
@@ -179,11 +180,11 @@ export function FileExplorer(): React.JSX.Element {
   const openFileEntry = useCallback(
     async (path: string) => {
       selectPath(path)
-      // OpenPencil canvas mode (CAP-1): a `.op` document opens as the
+      // Canvas mode (CAP-1): a `.figcraft` document opens as the
       // project's singleton canvas tab on desktop-width viewports. On the
       // phone-width shell the canvas is gated off — fall through to the
-      // existing text-editor flow. A typed canvas failure (BINARY_NOT_FOUND,
-      // HANDSHAKE_TIMEOUT, …) also falls through — the failure itself is
+      // existing text-editor flow. A typed canvas failure (BUNDLE_LISTENER_DOWN,
+      // PATH_VALIDATION_FAILED, …) also falls through — the failure itself is
       // logged by canvas-store.openCanvas, and the file still opens in the
       // text editor instead of leaving it selected but unopened.
       if (shouldOpenAsCanvas(path, isMobileWebShell)) {

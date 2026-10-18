@@ -1,43 +1,47 @@
 /**
- * Canvas doc picker tests (OpenPencil canvas mode, review finding 8b).
- *
- * Pins the "Open canvas" resolution rule used by the command palette:
- * `.op` FILES only (case-insensitive), alphabetical, first match — and no
- * match when the project root carries none (the palette then toasts "no
- * .op document" and never calls openCanvas).
+ * Pins the canvas document rule used by the "Open canvas" command and the
+ * file explorer: `.figcraft` files only (case-insensitive), alphabetical,
+ * first match.
  */
 
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { describe, expect, it } from 'vitest'
-import { pickCanvasDoc } from '../canvas-doc'
+import { isCanvasDocPath, pickCanvasDoc } from '../canvas-doc'
 
-function file(path: string): DirectoryEntry {
-  const parts = path.split('/')
-  return { path, name: parts[parts.length - 1] ?? path, type: 'file' }
+function entry(path: string, type: DirectoryEntry['type']): DirectoryEntry {
+  const name = path.split('/').at(-1) ?? path
+  return { path, name, type, extension: null, size: 0, modifiedAt: 0 }
 }
 
-function directory(path: string): DirectoryEntry {
-  const parts = path.split('/')
-  return { path, name: parts[parts.length - 1] ?? path, type: 'directory' }
-}
+const file = (path: string): DirectoryEntry => entry(path, 'file')
+const directory = (path: string): DirectoryEntry => entry(path, 'directory')
 
 describe('pickCanvasDoc', () => {
-  it('returns the alphabetically-first .op file', () => {
-    const picked = pickCanvasDoc([file('/proj/poster.op'), file('/proj/design.op')])
-    expect(picked?.path).toBe('/proj/design.op')
+  it('returns the alphabetically-first .figcraft file', () => {
+    const picked = pickCanvasDoc([file('/proj/poster.figcraft'), file('/proj/design.figcraft')])
+    expect(picked?.path).toBe('/proj/design.figcraft')
   })
 
-  it('matches the .op extension case-insensitively', () => {
-    const picked = pickCanvasDoc([file('/proj/DESIGN.OP')])
-    expect(picked?.path).toBe('/proj/DESIGN.OP')
+  it('matches the extension case-insensitively', () => {
+    expect(pickCanvasDoc([file('/proj/DESIGN.FIGCRAFT')])?.path).toBe('/proj/DESIGN.FIGCRAFT')
   })
 
-  it('never picks directories (even .op-named ones) or non-.op files', () => {
-    expect(pickCanvasDoc([directory('/proj/assets.op'), file('/proj/README.md')])).toBeUndefined()
-  })
-
-  it('returns undefined when the listing carries no .op file (no openCanvas call)', () => {
-    expect(pickCanvasDoc([file('/proj/a.ts'), directory('/proj/src')])).toBeUndefined()
+  it('never picks directories, legacy .op documents or other files', () => {
+    expect(
+      pickCanvasDoc([
+        directory('/proj/assets.figcraft'),
+        file('/proj/old.op'),
+        file('/proj/README.md')
+      ])
+    ).toBeUndefined()
     expect(pickCanvasDoc([])).toBeUndefined()
+  })
+})
+
+describe('isCanvasDocPath', () => {
+  it('accepts .figcraft paths only', () => {
+    expect(isCanvasDocPath('C:/proj/design.figcraft')).toBe(true)
+    expect(isCanvasDocPath('/proj/design.op')).toBe(false)
+    expect(isCanvasDocPath('/proj/figcraft.md')).toBe(false)
   })
 })

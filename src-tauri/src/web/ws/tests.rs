@@ -205,7 +205,11 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     .expect("ping remains processable during prompt");
     let ping = match rx.recv().await.expect("ping reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected ping reply"),
+        Outbound::Event(_)
+        | Outbound::Gap(_)
+        | Outbound::Watch(_)
+        | Outbound::Canvas(_)
+        | Outbound::Close(_) => panic!("expected ping reply"),
     };
     assert!(ping.ok);
 
@@ -247,7 +251,11 @@ async fn long_prompt_dispatch_does_not_block_ping_request() {
     let _ = release.send(());
     let completed = match rx.recv().await.expect("prompt reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected prompt reply"),
+        Outbound::Event(_)
+        | Outbound::Gap(_)
+        | Outbound::Watch(_)
+        | Outbound::Canvas(_)
+        | Outbound::Close(_) => panic!("expected prompt reply"),
     };
     assert!(completed.ok);
     assert_eq!(completed.id, "prompt-long");
@@ -313,11 +321,19 @@ async fn immediate_cancel_after_prompt_is_ordered_after_turn_acceptance() {
 
     let first = match rx.recv().await.expect("first reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected reply"),
+        Outbound::Event(_)
+        | Outbound::Gap(_)
+        | Outbound::Watch(_)
+        | Outbound::Canvas(_)
+        | Outbound::Close(_) => panic!("expected reply"),
     };
     let second = match rx.recv().await.expect("second reply") {
         Outbound::Reply(reply) => reply,
-        Outbound::Event(_) | Outbound::Gap(_) | Outbound::Watch(_) | Outbound::Close(_) => panic!("expected reply"),
+        Outbound::Event(_)
+        | Outbound::Gap(_)
+        | Outbound::Watch(_)
+        | Outbound::Canvas(_)
+        | Outbound::Close(_) => panic!("expected reply"),
     };
     let replies = [first, second];
     let cancel = replies

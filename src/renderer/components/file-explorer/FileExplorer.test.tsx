@@ -1224,23 +1224,24 @@ describe('FileExplorer header toolbar (GH-540)', () => {
   })
 })
 
-describe('shouldOpenAsCanvas (.op open branch, OpenPencil canvas mode)', () => {
-  it('a .op document on a desktop-width viewport opens as the canvas', () => {
-    expect(shouldOpenAsCanvas('/proj/design.op', false)).toBe(true)
-    expect(shouldOpenAsCanvas('/proj/DESIGN.OP', false)).toBe(true)
+describe('shouldOpenAsCanvas (.figcraft open branch)', () => {
+  it('a .figcraft document on a desktop-width viewport opens as the canvas', () => {
+    expect(shouldOpenAsCanvas('/proj/design.figcraft', false)).toBe(true)
+    expect(shouldOpenAsCanvas('/proj/DESIGN.FIGCRAFT', false)).toBe(true)
   })
 
-  it('a .op document on the phone-width shell falls through to the text editor', () => {
-    expect(shouldOpenAsCanvas('/proj/design.op', true)).toBe(false)
+  it('a .figcraft document on the phone-width shell falls through to the text editor', () => {
+    expect(shouldOpenAsCanvas('/proj/design.figcraft', true)).toBe(false)
   })
 
-  it('non-.op documents always take the text-editor flow', () => {
+  it('non-.figcraft documents always take the text-editor flow', () => {
     expect(shouldOpenAsCanvas('/proj/README.md', false)).toBe(false)
     expect(shouldOpenAsCanvas('/proj/op-folder.ts', false)).toBe(false)
+    expect(shouldOpenAsCanvas('/proj/legacy.op', false)).toBe(false)
   })
 })
 
-describe('FileExplorer canvas .op open branch (OpenPencil canvas mode)', () => {
+describe('FileExplorer canvas .figcraft open branch', () => {
   let originalMatchMedia: PropertyDescriptor | undefined
 
   beforeEach(() => {
@@ -1252,7 +1253,7 @@ describe('FileExplorer canvas .op open branch (OpenPencil canvas mode)', () => {
       [
         '/project',
         [
-          { path: '/project/design.op', name: 'design.op', type: 'file' },
+          { path: '/project/design.figcraft', name: 'design.figcraft', type: 'file' },
           { path: '/project/README.md', name: 'README.md', type: 'file' }
         ]
       ]
@@ -1271,16 +1272,18 @@ describe('FileExplorer canvas .op open branch (OpenPencil canvas mode)', () => {
     fireEvent.click(screen.getByText(name))
   }
 
-  it('clicking a .op row dispatches openCanvas and does not open the text editor', async () => {
+  it('clicking a .figcraft row dispatches openCanvas and does not open the text editor', async () => {
     render(<FileExplorer />)
-    clickNode('design.op')
+    clickNode('design.figcraft')
 
-    await waitFor(() => expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.op'))
-    expect(mockOpenFile).not.toHaveBeenCalledWith('/project/design.op')
-    expect(mockAddEditorTab).not.toHaveBeenCalledWith('/project/design.op')
+    await waitFor(() =>
+      expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.figcraft')
+    )
+    expect(mockOpenFile).not.toHaveBeenCalledWith('/project/design.figcraft')
+    expect(mockAddEditorTab).not.toHaveBeenCalledWith('/project/design.figcraft')
   })
 
-  it('a .op row on the phone-width shell falls through to the text-editor flow', async () => {
+  it('a .figcraft row on the phone-width shell falls through to the text-editor flow', async () => {
     // Stub matchMedia: the narrow query matches ? the mobile web shell hook
     // reports a phone viewport (web + non-Tauri per the tauri-runtime mock).
     originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
@@ -1300,10 +1303,10 @@ describe('FileExplorer canvas .op open branch (OpenPencil canvas mode)', () => {
     })
 
     render(<FileExplorer />)
-    clickNode('design.op')
+    clickNode('design.figcraft')
 
-    await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('/project/design.op'))
-    expect(mockAddEditorTab).toHaveBeenCalledWith('/project/design.op')
+    await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('/project/design.figcraft'))
+    expect(mockAddEditorTab).toHaveBeenCalledWith('/project/design.figcraft')
     expect(mockOpenCanvas).not.toHaveBeenCalled()
   })
 
@@ -1311,25 +1314,27 @@ describe('FileExplorer canvas .op open branch (OpenPencil canvas mode)', () => {
     mockOpenCanvas.mockResolvedValue(false)
 
     render(<FileExplorer />)
-    clickNode('design.op')
+    clickNode('design.figcraft')
 
-    await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('/project/design.op'))
-    expect(mockAddEditorTab).toHaveBeenCalledWith('/project/design.op')
-    expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.op')
+    await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('/project/design.figcraft'))
+    expect(mockAddEditorTab).toHaveBeenCalledWith('/project/design.figcraft')
+    expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.figcraft')
   })
 
   it('a superseded canvas open does NOT fall back to the text editor', async () => {
     mockOpenCanvas.mockResolvedValue('superseded')
 
     render(<FileExplorer />)
-    clickNode('design.op')
+    clickNode('design.figcraft')
 
-    await waitFor(() => expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.op'))
-    expect(mockOpenFile).not.toHaveBeenCalledWith('/project/design.op')
-    expect(mockAddEditorTab).not.toHaveBeenCalledWith('/project/design.op')
+    await waitFor(() =>
+      expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.figcraft')
+    )
+    expect(mockOpenFile).not.toHaveBeenCalledWith('/project/design.figcraft')
+    expect(mockAddEditorTab).not.toHaveBeenCalledWith('/project/design.figcraft')
   })
 
-  it('non-.op rows keep the text-editor flow (canvas untouched)', async () => {
+  it('non-.figcraft rows keep the text-editor flow (canvas untouched)', async () => {
     render(<FileExplorer />)
     clickNode('README.md')
 

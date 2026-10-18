@@ -1,5 +1,6 @@
 import { act, fireEvent, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 import { useWorkspaceKeyboard } from './use-workspace-keyboard'
@@ -28,14 +29,17 @@ vi.mock('@/lib/platform', () => ({ isMac: false }))
 const CUSTOM_SIDEBAR_KEY = 'ctrl+alt+j'
 const CUSTOM_EXPLORER_KEY = 'ctrl+alt+k'
 
-function mountKeyboard(overrides: Record<string, string> = {}) {
+function mountKeyboard(
+  overrides: Record<string, string> = {},
+  activeTab: Parameters<typeof useWorkspaceKeyboard>[0]['activeTab'] = undefined
+) {
   const getActiveKey = (id: string): string =>
     overrides[id] ??
     DEFAULT_KEYBOARD_SHORTCUTS[id as keyof typeof DEFAULT_KEYBOARD_SHORTCUTS]?.defaultKey ??
     ''
   return renderHook(() =>
     useWorkspaceKeyboard({
-      activeTab: undefined,
+      activeTab,
       activeProjectId: '',
       projects: [],
       selectProject: vi.fn(),
@@ -153,5 +157,20 @@ describe('useWorkspaceKeyboard panel toggles (shell-layout store)', () => {
     expect(layout().sidePanelVisible).toBe(true)
     expect(mockWriteDebounced).not.toHaveBeenCalled()
     expect(mockToastError).not.toHaveBeenCalled()
+  })
+})
+
+describe('useWorkspaceKeyboard save shortcut on a canvas tab', () => {
+  it('Ctrl+S saves the active canvas and does not touch the editor', () => {
+    const saveCanvas = vi.fn().mockResolvedValue(true)
+    useCanvasStore.setState({ saveCanvas })
+    mountKeyboard(
+      {},
+      { type: 'canvas', id: 'canvas-proj-1', projectId: 'proj-1', docPath: 'C:/p/design.figcraft' }
+    )
+
+    press('s', { ctrlKey: true })
+
+    expect(saveCanvas).toHaveBeenCalledWith('proj-1')
   })
 })

@@ -1,34 +1,31 @@
 /**
- * Tauri IPC implementation of the canvas facade (OpenPencil canvas mode).
- *
- * Mirrors the desktop `#[tauri::command] canvas_*` handlers in
- * `src-tauri/src/commands/canvas.rs`. The Rust commands already wrap their
- * results in `IpcResult<T>`, so this adapter maps `invoke()` → `IpcResult<T>`
- * without double-wrapping (via the shared `ipc/tauri.ts` `invokeIpc` helper).
- *
- * The web/remote fallback lives in `web-canvas-api.ts` and hits the three
- * HTTP routes in `src-tauri/src/web/canvas_api.rs`. Both impls return the
- * SAME `IpcResult<...>` shape byte-for-byte — the parity-checklist canvas
- * block pins this.
+ * Tauri IPC implementation of the canvas facade. Mirrors the
+ * `#[tauri::command] canvas_*` handlers in `src-tauri/src/commands/canvas.rs`,
+ * which already return `IpcResult<T>`. The web twin is `web-canvas-api.ts`;
+ * the parity checklist pins both.
  */
 
 import type {
   CanvasApi,
+  CanvasCloseOutcome,
+  CanvasDirtyOutcome,
+  CanvasDocumentBytes,
   CanvasOpenInfo,
-  CanvasSaveResult,
-  CanvasStatus
+  CanvasPersistenceView,
+  CanvasWriteOutcome
 } from '@shared/types/canvas.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 
 import { invokeIpc } from './ipc/tauri'
 import { isTauriContext } from './tauri-runtime'
 
-/** IPC command names matching the Rust `#[tauri::command]` declarations. */
 const IPC_COMMANDS = {
   OPEN: 'canvas_open',
   CLOSE: 'canvas_close',
-  SAVE: 'canvas_save',
-  STATUS: 'canvas_status'
+  READ_DOCUMENT: 'canvas_read_document',
+  DOCUMENT_LOADED: 'canvas_document_loaded',
+  DIRTY_CHANGED: 'canvas_dirty_changed',
+  WRITE_SNAPSHOT: 'canvas_write_snapshot'
 } as const
 
 function notTauri(method: string): IpcResult<never> {
@@ -39,31 +36,59 @@ function notTauri(method: string): IpcResult<never> {
   }
 }
 
-/**
- * Build the Tauri IPC impl of [`CanvasApi`]. The singleton in
- * `canvas-api.ts` picks this when `isTauriContext()` is true; the guard
- * inside each method covers tests that construct this adapter directly.
- */
+function invokeCanvas<T>(command: string, args: Record<string, unknown>): Promise<IpcResult<T>> {
+  if (!isTauriContext()) return Promise.resolve(notTauri(command))
+  return invokeIpc<T>(command, args)
+}
+
+/** Build the Tauri IPC impl of [`CanvasApi`]; `canvas-api.ts` picks it when
+ * `isTauriContext()` is true. */
 export function createTauriCanvasApi(): CanvasApi {
   return {
-    async open(docPath: string, projectId: string): Promise<IpcResult<CanvasOpenInfo>> {
-      if (!isTauriContext()) return notTauri(IPC_COMMANDS.OPEN)
-      return invokeIpc<CanvasOpenInfo>(IPC_COMMANDS.OPEN, { docPath, projectId })
+    open(
+      docPath: string,
+      projectId: string,
+      autosaveMs?: number
+    ): Promise<IpcResult<CanvasOpenInfo>> {
+      return invokeCanvas(IPC_COMMANDS.OPEN, { docPath, projectId, autosaveMs })
     },
 
-    async close(docPath: string): Promise<IpcResult<boolean>> {
-      if (!isTauriContext()) return notTauri(IPC_COMMANDS.CLOSE)
-      return invokeIpc<boolean>(IPC_COMMANDS.CLOSE, { docPath })
+    close(projectId: string, discard = false): Promise<IpcResult<CanvasCloseOutcome>> {
+      return invokeCanvas(IPC_COMMANDS.CLOSE, { projectId, discard })
     },
 
-    async save(docPath: string): Promise<IpcResult<CanvasSaveResult>> {
-      if (!isTauriContext()) return notTauri(IPC_COMMANDS.SAVE)
-      return invokeIpc<CanvasSaveResult>(IPC_COMMANDS.SAVE, { docPath })
+    readDocument(projectId: string, mountSeq: number): Promise<IpcResult<CanvasDocumentBytes>> {
+      return invokeCanvas(IPC_COMMANDS.READ_DOCUMENT, { projectId, mountSeq })
     },
 
-    async status(): Promise<IpcResult<CanvasStatus>> {
-      if (!isTauriContext()) return notTauri(IPC_COMMANDS.STATUS)
-      return invokeIpc<CanvasStatus>(IPC_COMMANDS.STATUS)
+    documentLoaded(
+      projectId: string,
+      mountSeq: number,
+      ack: string | null
+    ): Promise<IpcResult<CanvasPersistenceView>> {
+      return invokeCanvas(IPC_COMMANDS.DOCUMENT_LOADED, { projectId, mountSeq, ack })
+    },
+
+    dirtyChanged(
+      projectId: string,
+      mountSeq: number,
+      dirty: boolean,
+      contentVersion: string
+    ): Promise<IpcResult<CanvasDirtyOutcome>> {
+      return invokeCanvas(IPC_COMMANDS.DIRTY_CHANGED, {
+        projectId,
+        mountSeq,
+        dirty,
+        contentVersion
+      })
+    },
+
+    writeSnapshot(
+      projectId: string,
+      mountSeq: number,
+      snapshot: string
+    ): Promise<IpcResult<CanvasWriteOutcome>> {
+      return invokeCanvas(IPC_COMMANDS.WRITE_SNAPSHOT, { projectId, mountSeq, snapshot })
     }
   }
 }

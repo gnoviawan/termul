@@ -156,6 +156,11 @@ where
                     send(sink, Message::Text(text.into()), stop).await?;
                 }
             }
+            Outbound::Canvas(call) => {
+                if let Some(text) = encode(&call, || format!("canvas call {}", call.call_id)) {
+                    send(sink, Message::Text(text.into()), stop).await?;
+                }
+            }
             Outbound::Reply(reply) => {
                 if let Some(text) = encode(&reply, || format!("reply for {}", reply.id)) {
                     send(sink, Message::Text(text.into()), stop).await?;
