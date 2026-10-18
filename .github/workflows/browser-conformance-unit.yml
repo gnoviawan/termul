@@ -1,0 +1,12 @@
+name: Browser Conformance (unit branch)
+
+on:
+  push:
+    branches: [unit/v3-2-2]
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    uses: ./.github/workflows/browser-conformance.yml
