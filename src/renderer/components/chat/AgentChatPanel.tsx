@@ -922,7 +922,7 @@ export function AgentChatPanel({
         />
         {/* Top-right status slot: floats over the transcript (clear of the
             scrollbar gutter) so status items take no layout height. */}
-        <div className="pointer-events-none absolute right-4 top-2 z-20 flex items-center gap-1.5">
+        <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
           <SubagentPill
             toolCalls={toolCalls}
             messages={messages}

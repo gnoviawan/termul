@@ -1264,7 +1264,7 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
         const pill = screen.getByRole('button', { name: /^Subagents:/ })
         // jsdom never finishes framer's exit spring, so read the pill's live
         // region, which follows whether the pill is shown.
-        const liveRegion = pill.closest('.top-2')?.querySelector('[aria-live]')
+        const liveRegion = pill.closest('.absolute')?.querySelector('[aria-live]')
         expect(liveRegion).toHaveTextContent('Subagents: 1 done')
 
         transportReconnectingRef.current = true
