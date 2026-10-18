@@ -1248,6 +1248,39 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Host offline')
     })
 
+    it('hides the subagent pill while the reconnect overlay holds the top-right corner', () => {
+      seedLiveSession('s1')
+      toolCallsRef.current = {
+        s1: [
+          {
+            toolCallId: 'a1',
+            status: 'completed',
+            rawInput: { description: 'Audit code', prompt: 'p', subagent_type: 'general-purpose' }
+          }
+        ] as unknown as Array<{ id: string; kind: string }>
+      }
+      try {
+        const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+        const pill = screen.getByRole('button', { name: /^Subagents:/ })
+        // jsdom never finishes framer's exit spring, so read the pill's live
+        // region, which follows whether the pill is shown.
+        const liveRegion = pill.closest('.top-2')?.querySelector('[aria-live]')
+        expect(liveRegion).toHaveTextContent('Subagents: 1 done')
+
+        transportReconnectingRef.current = true
+        rerender(<AgentChatPanel sessionId="s1" isVisible />)
+        advanceTimers(RECONNECT_GRACE_MS)
+        expect(screen.getByText(/Reconnecting/)).toBeInTheDocument()
+        expect(liveRegion).toBeEmptyDOMElement()
+
+        transportReconnectingRef.current = false
+        rerender(<AgentChatPanel sessionId="s1" isVisible />)
+        expect(liveRegion).toHaveTextContent('Subagents: 1 done')
+      } finally {
+        toolCallsRef.current = {}
+      }
+    })
+
     it('the reconnect overlay container is pointer-events-none (non-blocking, AC3)', () => {
       seedLiveSession('s1')
       transportReconnectingRef.current = true

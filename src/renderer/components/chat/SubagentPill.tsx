@@ -32,7 +32,7 @@ interface SubagentPillProps {
   /** Session `activeTurn`: a subagent with no status yet counts as running while true. */
   turnActive: boolean
   filePathContext: FilePathResolutionContext | undefined
-  /** Hide the pill (phone keyboard open). */
+  /** Hide the pill (phone keyboard open, reconnect notice in the same corner). */
   hidden?: boolean
   /** False while the chat tab is hidden (tabs stay mounted); pauses the timer. */
   isVisible?: boolean
@@ -127,9 +127,11 @@ export function SubagentPill({
 
   const close = useCallback(() => setOpen(false), [])
   useOverlayRegistration('subagent-sheet', isMobile && open && shown, close)
+  // Hidden tabs stay mounted and the list renders in a portal, so close it
+  // or it would float over the next tab.
   useEffect(() => {
-    if (!shown) setOpen(false)
-  }, [shown])
+    if (!shown || !isVisible) setOpen(false)
+  }, [shown, isVisible])
 
   // One interval for every running row, only while the list is open on a
   // visible tab. Resuming re-reads the clock, so elapsed jumps to the right value.

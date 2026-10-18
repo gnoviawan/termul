@@ -117,6 +117,11 @@ describe('SubagentPill', () => {
     expect(row()).toHaveTextContent('00:07')
 
     rerender(<SubagentPill toolCalls={[running]} {...base} isVisible={false} />)
+    // Hiding also closes the popover; drain Radix's unmount focus timers (a
+    // live tick interval would make runAllTimers abort instead).
+    act(() => {
+      vi.runAllTimers()
+    })
     expect(vi.getTimerCount()).toBe(0)
 
     rerender(
@@ -126,12 +131,26 @@ describe('SubagentPill', () => {
         turnActive={false}
       />
     )
+    fireEvent.click(pill())
     const done = () => screen.getByRole('button', { name: /^done\s*Audit code/ })
     expect(done()).toHaveTextContent('00:07')
     act(() => {
       vi.advanceTimersByTime(5000)
     })
     expect(done()).toHaveTextContent('00:07')
+  })
+
+  it('closes the popover when its chat tab is hidden', () => {
+    const calls = [sub({ status: 'completed' })]
+    const { rerender } = renderPill(calls)
+    fireEvent.click(pill())
+    expect(screen.getByRole('dialog', { name: 'Subagents' })).toBeInTheDocument()
+
+    rerender(<SubagentPill toolCalls={calls} {...base} isVisible={false} />)
+    expect(screen.queryByRole('dialog', { name: 'Subagents' })).toBeNull()
+
+    rerender(<SubagentPill toolCalls={calls} {...base} />)
+    expect(screen.queryByRole('dialog', { name: 'Subagents' })).toBeNull()
   })
 
   it('shows an in-flight call as stopped (counted failed) once the turn ended', () => {

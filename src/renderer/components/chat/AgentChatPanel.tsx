@@ -928,7 +928,7 @@ export function AgentChatPanel({
             messages={messages}
             turnActive={session.activeTurn}
             filePathContext={filePathContext}
-            hidden={isMobileShell && osk.isOskOpen}
+            hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
             isVisible={isVisible}
           />
         </div>
