@@ -258,7 +258,8 @@ impl BrowserTabManager {
         let mut builder = tauri::webview::WebviewBuilder::new(
             tab_id.clone(),
             tauri::WebviewUrl::External(parsed_url),
-        );
+        )
+        .on_permission_request(crate::browser_tab_permissions::on_permission_request);
 
         // Inject agentation globals via initialization_script (runs before page JS).
         // The toolbar bundle itself is injected via eval AFTER page load,

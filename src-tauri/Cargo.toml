@@ -51,11 +51,11 @@ standalone-server = []
 custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
+tauri = { version = "2.12.3", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 notify = "8"
@@ -215,7 +215,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 [dev-dependencies]
-tauri = { version = "2.0", features = ["test"] }
+tauri = { version = "2.12.3", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
 # Swap/rollback file tests in `server_update` use a temp dir so they never
 # touch the real binary path.
@@ -247,10 +247,10 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 # WebView2 CDP for agent browser automation (browser_automation::cdp).
-# Already in the tree transitively via wry — same major keeps the
-# ICoreWebView2 type identity shared with `with_webview`'s PlatformWebview.
-webview2-com = "0.38"
-windows-core = "0.61"
+# Already in the tree transitively via wry. Keep it on the wry-resolved 0.39 line so the
+# ICoreWebView2 type identity is shared with `with_webview`'s PlatformWebview.
+webview2-com = "0.39"
+windows-core = "0.62"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",

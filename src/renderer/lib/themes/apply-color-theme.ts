@@ -269,8 +269,7 @@ export function paletteToXtermTheme(
   const baseSurface = chrome
     ? emittedSurface(chrome.background).emittedHex
     : brandTintedNeutral(palette).emittedHex
-  const surface =
-    appearance === 'light' ? darkenHex(baseSurface, LIGHT_CANVAS_DARKEN) : baseSurface
+  const surface = appearance === 'light' ? darkenHex(baseSurface, LIGHT_CANVAS_DARKEN) : baseSurface
   const foreground = chrome?.foreground ?? palette.ink
   return {
     background: surface,
