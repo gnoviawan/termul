@@ -1,9 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, CheckCircle2, ChevronDown, XCircle } from '@/components/icons'
+import { Bot, CheckCircle2, ChevronDown, LoaderCircle, XCircle } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { Spinner } from '@/components/ui/spinner'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
@@ -54,8 +53,20 @@ const COUNT_TONE: Record<(typeof COUNT_KEYS)[number], string> = {
   failed: 'text-destructive'
 }
 
+/** Solid spinning arc in the running tone, per the approved mockup. */
+function RunningIcon(): React.JSX.Element {
+  return (
+    <LoaderCircle
+      size={13}
+      strokeWidth={2}
+      className="shrink-0 animate-spin text-warning motion-reduce:animate-none"
+      aria-hidden="true"
+    />
+  )
+}
+
 function StatusIcon({ status }: { status: SubagentStatus }): React.JSX.Element {
-  if (status === 'running') return <Spinner size={13} decorative className="text-warning" />
+  if (status === 'running') return <RunningIcon />
   if (status === 'failed') {
     return <XCircle size={13} className="shrink-0 text-destructive" aria-hidden="true" />
   }
@@ -235,7 +246,7 @@ export function SubagentPill({
       )}
     >
       {counts.running > 0 ? (
-        <Spinner size={13} decorative className="text-warning" />
+        <RunningIcon />
       ) : (
         <Bot size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
       )}
