@@ -275,6 +275,32 @@ jobs:
         shell: bash
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
+      # Tauri staples the .app seconds after notarytool reports Accepted and
+      # ignores the stapler's exit status, so a ticket that is not yet
+      # retrievable ships an unstapled .app inside the DMG and updater archive
+      # (#1388). Shadow xcrun so `stapler staple` retries and logs its output.
+      - name: Retry stapler staple during the macOS build
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          shim_dir="$RUNNER_TEMP/xcrun-shim"
+          mkdir -p "$shim_dir"
+          cat > "$shim_dir/xcrun" <<'SH'
+          #!/bin/bash
+          set -o pipefail
+          if [[ "${1-}" == stapler && "${2-}" == staple ]]; then
+            for delay in 0 15 30 60 120; do
+              sleep "$delay"
+              /usr/bin/xcrun "$@" 2>&1 | tee -a "$RUNNER_TEMP/stapler-staple.log" && exit 0
+            done
+            exit 1
+          fi
+          exec /usr/bin/xcrun "$@"
+          SH
+          chmod +x "$shim_dir/xcrun"
+          echo "$shim_dir" >> "$GITHUB_PATH"
+
       - name: Build platform artifacts locally
         id: tauri
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
@@ -322,6 +348,13 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+          if [[ ! -s "$RUNNER_TEMP/stapler-staple.log" ]]; then
+            echo "Tauri's stapler staple never reached the xcrun shim." >&2
+            exit 1
+          fi
+          echo "::group::Tauri .app staple output"
+          cat "$RUNNER_TEMP/stapler-staple.log"
+          echo "::endgroup::"
           dmgs=("src-tauri/target/$RUST_TARGET/release/bundle/dmg"/*.dmg)
           if [[ "${#dmgs[@]}" -ne 1 ]]; then
             echo "Expected exactly one macOS DMG before notarization." >&2
