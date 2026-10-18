@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the subagent strip above the composer: pick the current
+ * Pure helpers for the top-right subagent pill: pick the current
  * turn's subagent calls and derive each row's status, title, tokens, and
  * duration. No React/store dependency, so it is directly unit-testable.
  */

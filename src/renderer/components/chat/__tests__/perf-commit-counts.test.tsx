@@ -67,7 +67,7 @@ vi.mock('../ChatChangedFilesPanel', () => ({ ChatChangedFilesPanel: () => null }
 vi.mock('../PermissionPrompt', () => ({ PermissionPrompt: () => null }))
 vi.mock('../AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('../PlanPanel', () => ({ PlanPanel: () => null }))
-vi.mock('../SubagentStrip', () => ({ SubagentStrip: () => null }))
+vi.mock('../SubagentPill', () => ({ SubagentPill: () => null }))
 vi.mock('../PendingRestartBanner', () => ({ PendingRestartBanner: () => null }))
 
 import { ChatMessage } from '../ChatMessage'
