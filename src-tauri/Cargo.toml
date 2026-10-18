@@ -50,6 +50,14 @@ standalone-server = []
 # lacks it.
 custom-protocol = ["tauri/custom-protocol"]
 
+# Runs the real automation host on a real webview, so it needs its own `main`
+# (tao requires the main thread on macOS). Skips unless
+# TERMUL_BROWSER_CONFORMANCE is set.
+[[test]]
+name = "browser_conformance"
+path = "tests/browser_conformance/main.rs"
+harness = false
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

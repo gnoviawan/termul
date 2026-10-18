@@ -170,6 +170,18 @@ pub use acp::host_mcp;
 // `acp` module is private, so `server_main.rs` reaches `claude_admin::run()`
 // through this path (mirrors how `onboard::run()` is dispatched).
 pub use acp::claude_admin;
+// Seam for the browser conformance runner (`tests/browser_conformance`), which
+// drives the real automation host from outside the crate. The runner reaches
+// the host only through these names, so a host refactor edits this list and
+// the runner's adapter, nothing else. Not a supported API.
+#[doc(hidden)]
+pub mod conformance_support {
+    pub use crate::browser_automation::{
+        BrowserCall, DesktopBrowserHost, consent_responded, dispatch, eval_resolved, session_ended,
+        set_browser_host, tab_created,
+    };
+    pub use crate::browser_tab_manager::{BrowserBounds, BrowserTabManager};
+}
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use web::{PermissionRendezvous, ProjectRegistry, QuestionRendezvous, WsRelaySink};
