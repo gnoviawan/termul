@@ -67,11 +67,11 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
   // Restrict the hint to the explicit shell diagnostic and retain the raw
   // error for other npm failures.
   if (config?.command === 'npx' && /exit status:\s*127\b/.test(message)) {
-    const missingBin = /\bsh:\s+([\w.-]+): command not found\b/.exec(message)?.[1]
+    const missingBin = /\bsh:\s+([^\s:'"]+): command not found\b/.exec(message)?.[1]
     if (missingBin) {
       return (
         `npx started, but its package executable "${missingBin}" was not found. ` +
-        'The npx cache may be incomplete. Try refreshing the affected npm _npx cache entry and retry.'
+        'The npx cache may be incomplete. Run `npm config get cache`, rename the `_npx` directory there as a backup, then retry.'
       )
     }
   }
