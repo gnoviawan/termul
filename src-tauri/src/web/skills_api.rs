@@ -4,7 +4,8 @@
 //! Mirrors the desktop `#[tauri::command] list_agent_skills_cmd` /
 //! `read_agent_skill_cmd` handlers over HTTP, reusing the SAME pure-Rust
 //! skill discovery logic in `crate::skills` (`list_agent_skills`,
-//! `read_agent_skill`). These functions read `~/.agents/skills/` (global) +
+//! `read_agent_skill`). These functions read Claude Code skills
+//! (`~/.claude/skills/` and enabled plugins), `~/.agents/skills/` (global), and
 //! `{project}/.agents/skills/` (project-local) — no `AppHandle` needed, so they
 //! work as-is on the standalone server.
 //!
@@ -30,7 +31,9 @@ use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
 
 /// `GET /skills?projectRoot=` query. `projectRoot` is optional: when omitted,
-/// only global skills (`~/.agents/skills/`) are listed.
+/// project `.agents/skills/` and project Claude settings are not read. User
+/// skills (`~/.agents/skills/`, `~/.claude/skills/`, and user-enabled plugins)
+/// are still listed.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillsQuery {

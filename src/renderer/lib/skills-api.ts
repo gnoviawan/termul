@@ -1,7 +1,8 @@
 /**
  * Agent Skills IPC facade — lists and reads Zed-compatible SKILL.md packages.
  *
- * Skill discovery reads the user's local filesystem (`~/.agents/skills/` +
+ * Skill discovery reads the user's local filesystem (`~/.claude/skills/`,
+ * enabled Claude Code plugins, `~/.agents/skills/`, and
  * `{project}/.agents/skills/`). On desktop the Tauri commands
  * `list_agent_skills_cmd` / `read_agent_skill_cmd` back this facade; on the
  * web/remote client the same calls hit the shipped parity routes `GET /skills`
