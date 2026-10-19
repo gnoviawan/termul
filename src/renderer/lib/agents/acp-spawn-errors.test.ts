@@ -78,9 +78,12 @@ describe('formatAcpSpawnError', () => {
     const other = 'Process exited with exit status: 127: sh: unrelated tool failed'
     expect(formatAcpSpawnError(other, { command: 'npx' })).toBe(other)
     expect(
-      formatAcpSpawnError('Process exited with exit status: 127: sh: codex-acp: command not found', {
-        command: 'uvx'
-      })
+      formatAcpSpawnError(
+        'Process exited with exit status: 127: sh: codex-acp: command not found',
+        {
+          command: 'uvx'
+        }
+      )
     ).toContain('Install uv')
   })
 
