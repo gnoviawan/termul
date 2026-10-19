@@ -82,6 +82,38 @@ All notable changes to this project will be documented in this file.
 - **Web** — A timed-out `send_prompt` (socket dropped mid-turn) no longer toasts a send failure: the outcome is unknown until replay delivers `prompt_complete`, so the generic error is downgraded to a transient host log (#844)
 - **ACP** — A rejected durability probe releases its slot so the next over-limit flush retries; probe bookkeeping and clamp-log dedup are cleared on session drop (no phantom pins, no pin resurrection)
 
+## [0.4.52] - 2026-10-19
+
+### Highlights
+
+- **Canvas Editor (experimental).** There's a new canvas for drawing and diagrams, built on figcraft. Agents can work on it through MCP tools — from the desktop app or a browser — with an agent cursor and inline guidance while they work. Canvases autosave, keep their state when closed (up to a limit), and cope with files changing underneath them and editor crashes. It's early days, so treat it as experimental. (#1369, #1396–#1405 via #1414)
+- **Settings, one page each.** Every Preferences and Project settings category now gets its own page instead of one long scroll. (#1380, thanks @julianromli)
+- **Smaller chat touches.** You can see which Claude account an agent is using right in the launcher, a pill shows the subagents running in the current turn, and what an agent supports moved into the model tooltip. (#1394, #1368, #1387, thanks @yolkmonday)
+- **Syntax colors match Cursor.** The editor highlighting now matches the Cursor theme. (#963, thanks @julianromli)
+
+### Fixes
+
+**Agent chats**
+- An idle agent no longer burns a thread — it now parks properly between turns. (#1398)
+- You can't switch a chat to a Claude account that isn't signed in. (#1395)
+
+**Editor and explorer**
+- Browsing files on Windows works again on verbatim paths. (#1383)
+
+**Web**
+- Saving a file over a dead connection fails fast instead of hanging forever. (#1366)
+
+### Under the hood
+
+- There's a new docs site covering setup, terminals, files, git, the browser, AI agents, SSH, phones, settings and troubleshooting. (#1373–#1379)
+- The macOS release build retries the stapling step and logs what the stapler says. (#1389)
+
+### Contributors
+
+Thanks to @julianromli (#963, #1380), @yolkmonday (#1368), and @gnoviawan for their work in this release.
+
+**Full changelog:** https://github.com/gnoviawan/termul/compare/v0.4.50...v0.4.52
+
 ## [0.4.0] - 2026-05-31
 
 ### Features
