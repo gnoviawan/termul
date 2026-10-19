@@ -235,5 +235,14 @@ pub(super) fn with_stderr_tail(message: String, ring: &StderrRing) -> String {
     }
 }
 
+/// The `agent stderr:\n…` tail block an error detail carries, or an empty
+/// string when the failure reported none. Used by the npx self-heal retry to
+/// keep the first attempt's diagnostics when the retry fails without stderr.
+pub(super) fn stderr_tail_lines(failure: &str) -> String {
+    failure
+        .split_once("agent stderr:\n")
+        .map_or_else(String::new, |(_, tail)| tail.to_string())
+}
+
 #[cfg(test)]
 mod tests;

@@ -74,6 +74,7 @@ mod history;
 mod project_binding;
 mod reopen;
 mod spawn_error;
+mod npx_selfheal;
 pub(crate) mod stderr_ring;
 mod timeouts;
 mod turn;
@@ -85,6 +86,7 @@ use command_loop::*;
 use driver::*;
 use exit::{ExitIntent, ExitSignal};
 use gates::*;
+use npx_selfheal::*;
 use stderr_ring::*;
 use turn::*;
 use wire::*;
@@ -678,6 +680,66 @@ impl AcpManager {
         &self,
         config: AgentConfig,
         host_auth_ready: bool,
+        sinks: Vec<Arc<dyn EventSink>>,
+        command_id: Option<String>,
+    ) -> Result<SpawnOutcome, String> {
+        // Fail fast once process shutdown began: the agent would register
+        // (or worse, miss registration ordering) after `kill_all_checked`
+        // already drained the map, leaving a driver nobody stops or joins.
+        // The authoritative check is repeated under the `agents` lock at the
+        // insertion point below so the drain cannot race past a concurrent
+        // insert.
+        if self.process_shutdown.load(Ordering::Acquire) {
+            log::warn!("[acp] spawn refused at admission: process is shutting down");
+            return Err("agent spawn refused: process is shutting down".to_string());
+        }
+
+        // Issue #1413: an npx-launched agent can fail because npm's shared
+        // npx cache entry lost its `package.json` (npm ENOENT, exit 254). npm
+        // never repairs the entry, so a retry would fail identically. Detect
+        // the signature in the recorded failure, remove the broken entry, and
+        // retry the whole spawn exactly once — npx then rebuilds the entry.
+        let outcome = self.spawn_attempt(config.clone(), sinks.clone(), command_id.clone()).await;
+        if let Err(failure) = outcome {
+            if launches_via_npx(&config) && is_broken_npx_cache_failure(&failure) {
+                let kind = agent_kind(&config);
+                let command = command_basename(&config.command);
+                match heal_npx_cache(&failure) {
+                    Some(entry) => log::warn!(
+                        "[acp] retrying agent spawn after npx cache self-heal: kind={kind} command={command} entry={}",
+                        entry.display()
+                    ),
+                    None => log::warn!(
+                        "[acp] npx cache self-heal found nothing to remove; retrying spawn once: kind={kind} command={command}"
+                    ),
+                }
+                return self
+                    .spawn_attempt(config, sinks, command_id)
+                    .await
+                    .map_err(|second| {
+                        // The second failure is the verdict; fold the first
+                        // failure's stderr tail in when the retry produced
+                        // none, so the diagnosis survives the retry.
+                        let tail = stderr_tail_lines(&failure);
+                        if tail.is_empty() || second.contains(&tail) {
+                            second
+                        } else {
+                            format!("{second}\nfirst attempt:\n{tail}")
+                        }
+                    });
+            }
+            return Err(failure);
+        }
+        outcome
+    }
+
+    /// One launch attempt: start the driver thread, await the `initialize`
+    /// handshake, and register the agent on success. Every failure path is
+    /// reported through the shared stderr-tail helpers. The npx self-heal in
+    /// [`spawn_with_sinks`] wraps this.
+    async fn spawn_attempt(
+        &self,
+        config: AgentConfig,
         sinks: Vec<Arc<dyn EventSink>>,
         command_id: Option<String>,
     ) -> Result<SpawnOutcome, String> {
