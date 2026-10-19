@@ -169,7 +169,7 @@ export function BrowserAuthDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <code className="min-w-0 flex-1 truncate rounded-md border border-border/60 bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
             {url}
           </code>
