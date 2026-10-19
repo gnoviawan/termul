@@ -60,6 +60,20 @@ export function formatAcpSpawnError(raw: unknown, config?: Pick<AgentConfig, 'co
   const message = definiteSpawnRejectionMessage(raw)
   if (!ENOENT_PATTERN.test(message)) return message
 
+  // npx itself can start successfully while a cached package's executable is
+  // missing (exit 127). Don't tell users to reinstall Node.js: the launcher
+  // exists, but its child command could not be resolved. In particular, a
+  // damaged ~/.npm/_npx entry can produce "sh: codex-acp: command not found".
+  // Restrict the hint to the explicit shell diagnostic and retain the raw
+  // error for other npm failures.
+  if (config?.command === 'npx' && /exit status:\s*127\b/.test(message)) {
+    const missingBin = /\bsh:\s+([\w.-]+): command not found\b/.exec(message)?.[1]
+    if (missingBin) {
+      return `npx started, but its package executable "${missingBin}" was not found. ` +
+        'The npx cache may be incomplete. Try refreshing the affected npm _npx cache entry and retry.'
+    }
+  }
+
   // Resolver-level failures name the file they could not prepare (e.g.
   // `program not found or not executable: C:\…\npm\claude.cmd`). When that
   // file is not the spawned command — managed `claude-acp` runs `node` while
