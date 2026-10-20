@@ -309,19 +309,17 @@ describe('acp-store', () => {
     })
     // No live owner: the reopen spawns a fresh process, exactly like
     // useIdleStopAutoResume -> openHistorySession(id) with no options.
-    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
-      async (command: string, args: Record<string, unknown>) => {
-        if (command === 'acp_spawn_agent') {
-          return {
-            agentId: 'agent-fresh',
-            capabilities: { loadSession: true, mcpCapabilities: { http: true } },
-            authMethods: []
-          }
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return {
+          agentId: 'agent-fresh',
+          capabilities: { loadSession: true, mcpCapabilities: { http: true } },
+          authMethods: []
         }
-        if (command === 'acp_load_session') return {}
-        return undefined
       }
-    )
+      if (command === 'acp_load_session') return {}
+      return undefined
+    })
 
     await useAcpStore.getState().openHistorySession('s-idle')
 
