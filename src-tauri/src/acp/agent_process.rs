@@ -134,6 +134,9 @@ mod process {
             ));
         };
         let mut command = std::process::Command::new(&stdio.command);
+        // AppImage env scrub: agents are host binaries (node/npx/uvx) that
+        // must not resolve libraries against the AppImage mount (gh-1435).
+        crate::process_util::sanitize_appimage_env(&mut command);
         command.args(&stdio.args);
         for env_var in &stdio.env {
             command.env(&env_var.name, &env_var.value);

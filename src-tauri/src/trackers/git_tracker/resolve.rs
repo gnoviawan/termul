@@ -2,9 +2,12 @@ use super::*;
 
 /// Build a backend helper command.
 /// On Windows this suppresses stray console windows from helper binaries like git.exe.
+/// On every platform it scrubs the AppImage runtime env so git resolves host
+/// libraries, not the AppImage mount's (gh-1435).
 pub(super) fn backend_command(program: &str) -> Command {
     let mut command = Command::new(program);
     crate::process_util::hide_console(&mut command);
+    crate::process_util::sanitize_appimage_env(&mut command);
     command
 }
 

@@ -391,6 +391,8 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     };
     let (program, prepend_args) = resolve_stdio_command(command);
     let mut cmd = Command::new(&program);
+    // AppImage env scrub: the MCP server command is a host binary (gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut cmd);
     cmd.args(&prepend_args);
     cmd.args(&server.args);
     for pair in &server.env {

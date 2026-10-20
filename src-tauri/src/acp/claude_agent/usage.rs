@@ -81,6 +81,8 @@ impl ClaudeUsageProbe for SystemClaudeUsageProbe {
             .ok_or_else(|| "Node.js is not installed".to_string())?;
         let mut command = tokio::process::Command::new(node);
         crate::process_util::hide_console(&mut command);
+        // AppImage env scrub: node loads host libffi (gh-1435).
+        crate::process_util::sanitize_appimage_env(&mut command);
         command
             .args(["--input-type=module", "-e", PROBE_SCRIPT])
             .current_dir(std::env::temp_dir())

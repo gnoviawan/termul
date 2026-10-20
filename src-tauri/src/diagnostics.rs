@@ -249,6 +249,8 @@ fn gh_output(args: &[&OsStr], timeout: Duration) -> io::Result<Output> {
 fn run_with_timeout(program: &str, args: &[&OsStr], timeout: Duration) -> io::Result<Output> {
     let mut command = Command::new(program);
     hide_console(&mut command);
+    // AppImage env scrub: gh is a host binary (gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut command);
     let mut child = command
         .args(args)
         .stdin(Stdio::null())

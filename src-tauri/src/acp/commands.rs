@@ -68,6 +68,9 @@ async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
     let mut command = tokio::process::Command::new(&resolved.program);
     // Polled every 4s by the renderer: never flash a console window.
     crate::process_util::hide_console(&mut command);
+    // AppImage env scrub: the login PATH below replaces PATH, but the
+    // AppImage's LD_LIBRARY_PATH would still be inherited (gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut command);
     command
         .args(&resolved.prepend_args)
         .arg("login")

@@ -620,7 +620,10 @@ fn open_external_url(url: &str) -> Result<(), String> {
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn open_external_url(url: &str) -> Result<(), String> {
-    Command::new("xdg-open")
+    let mut command = Command::new("xdg-open");
+    // AppImage env scrub: xdg-open dispatches to host browsers/apps (gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut command);
+    command
         .arg(url)
         .spawn()
         .map(|_| ())

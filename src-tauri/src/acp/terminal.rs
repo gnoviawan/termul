@@ -119,6 +119,8 @@ impl TerminalRegistry {
         let resolved = crate::trackers::git_tracker::resolve_executable(command);
         let mut cmd = Command::new(resolved);
         crate::process_util::hide_console(&mut cmd);
+        // AppImage env scrub: terminal commands are host binaries (gh-1435).
+        crate::process_util::sanitize_appimage_env(&mut cmd);
         cmd.args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

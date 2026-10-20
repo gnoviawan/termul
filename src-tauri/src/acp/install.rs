@@ -327,6 +327,8 @@ impl NpmPackageInstaller for SystemNpmPackageInstaller {
         )?;
         let mut command = tokio::process::Command::new(npm.program);
         crate::process_util::hide_console(&mut command);
+        // AppImage env scrub: npm/node are host binaries (gh-1435).
+        crate::process_util::sanitize_appimage_env(&mut command);
         command
             .args(npm.prepend_args)
             .args([

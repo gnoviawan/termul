@@ -55,6 +55,9 @@ fn probe_node_major_uncached() -> Option<u64> {
     let node = resolve_runtime_executable("node", &path)?;
     let mut command = std::process::Command::new(node);
     crate::process_util::hide_console(&mut command);
+    // AppImage env scrub: node must load host libffi, not the mount's copy
+    // (`LIBFFI_CALL_PLAN_8.4 not found`, gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut command);
     let mut child = command
         .arg("--version")
         .env("PATH", path)
@@ -496,6 +499,8 @@ impl ClaudeAgentService {
                 .ok_or_else(|| "Claude CLI path is not valid Unicode".to_string())?,
         )?;
         let mut command = std::process::Command::new(cli.program);
+        // AppImage env scrub: the CLI is a host binary (gh-1435).
+        crate::process_util::sanitize_appimage_env(&mut command);
         if let Some(dir) = config_dir {
             command.env(CLAUDE_CONFIG_DIR_ENV, dir);
         }

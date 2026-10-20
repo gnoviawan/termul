@@ -101,6 +101,8 @@ fn opencode_candidates() -> Vec<PathBuf> {
 fn read_version(path: &Path) -> Result<String, &'static str> {
     let mut command = Command::new(path);
     crate::process_util::hide_console(&mut command);
+    // AppImage env scrub: the opencode binary is a host binary (gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut command);
     let mut child = command
         .arg("--version")
         .stdin(Stdio::null())

@@ -5,10 +5,12 @@ use std::process::Command;
 /// Without this, GUI/release builds on Windows flash a console window for every
 /// short-lived helper (git.exe, where.exe, cmd.exe) — highly visible when
 /// worktree status polling runs `git status` every 2s. See
-/// [`crate::process_util::hide_console`].
+/// [`crate::process_util::hide_console`]. On every platform it also scrubs the
+/// AppImage runtime env so helper binaries load host libraries (gh-1435).
 pub(super) fn quiet_command(program: &str) -> Command {
     let mut command = Command::new(program);
     crate::process_util::hide_console(&mut command);
+    crate::process_util::sanitize_appimage_env(&mut command);
     command
 }
 

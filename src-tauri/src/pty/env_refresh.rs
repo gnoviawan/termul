@@ -200,6 +200,8 @@ fn probe_unix_login_path() -> Option<String> {
                 . \"$HOME/.profile\" >/dev/null 2>/dev/null; \
                 printf '\\n__TERMUL_LOGIN_PATH__=%s\\n' \"$PATH\"";
             let mut cmd = Command::new(&shell);
+            // AppImage env scrub: host shell binary (gh-1435).
+            crate::process_util::sanitize_appimage_env(&mut cmd);
             // BusyBox selects applets by argv[1]; `busybox -l -c` is invalid.
             if shell_name == "busybox" {
                 cmd.args(["sh", "-l", "-c", POSIX_SCRIPT]);
@@ -396,6 +398,9 @@ fn run_shell_path_probe_with_env(
         .and_then(|s| s.to_str())
         .unwrap_or("?");
     let mut command = std::process::Command::new(shell);
+    // AppImage env scrub: the login shell is a host binary, and its output
+    // becomes every child's PATH (gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut command);
     command.args([flag, script]).envs(extra_env.iter().copied());
     match command.output() {
         Ok(o) => Some(o),

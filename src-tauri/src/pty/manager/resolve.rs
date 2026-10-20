@@ -552,7 +552,10 @@ impl PtyManager {
         #[cfg(not(target_os = "windows"))]
         {
             let path_for_which = crate::pty::env_refresh::path_for_resolution();
-            if let Ok(output) = std::process::Command::new("which")
+            let mut which_command = std::process::Command::new("which");
+            // AppImage env scrub: `which` is a host binary (gh-1435).
+            crate::process_util::sanitize_appimage_env(&mut which_command);
+            if let Ok(output) = which_command
                 .env("PATH", &path_for_which)
                 .arg(trimmed)
                 .output()
@@ -837,6 +840,11 @@ impl PtyManager {
             for (key, value) in env::vars() {
                 env.insert(key, value);
             }
+
+            // AppImage env scrub: a terminal shell is a host binary; the
+            // AppImage's LD_LIBRARY_PATH would poison every command the user
+            // runs in it (gh-1435).
+            crate::process_util::remove_appimage_env_keys_from_map(&mut env);
 
             if !custom_sets_path {
                 crate::pty::env_refresh::apply_fresh_path(&mut env);

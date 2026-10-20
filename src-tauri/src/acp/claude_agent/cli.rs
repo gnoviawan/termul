@@ -75,6 +75,8 @@ pub(super) fn claude_cli_command(
     )?;
     let mut command = tokio::process::Command::new(cli.program);
     crate::process_util::hide_console(&mut command);
+    // AppImage env scrub: host CLI binary (gh-1435).
+    crate::process_util::sanitize_appimage_env(&mut command);
     command
         .args(cli.prepend_args)
         .args(args)

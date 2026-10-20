@@ -3,6 +3,9 @@
 //! - [`hide_console`] applies Windows `CREATE_NO_WINDOW` so short-lived helper
 //!   processes (git, codex/claude status probes, npm, ACP terminal commands)
 //!   never flash a console window from the GUI app. It is a no-op elsewhere.
+//! - [`sanitize_appimage_env`] (Linux) removes AppImage runtime variables from
+//!   a command's environment so host binaries load host libraries, not the
+//!   libraries bundled in the AppImage mount (gh-1435).
 //! - [`KillOnCloseJob`] (Windows only) wraps a Job Object configured with
 //!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: terminating the job, or closing its
 //!   last handle (including when Termul itself exits), kills the assigned
@@ -21,9 +24,26 @@
 //! `ACCESS_DENIED`). ConPTY terminal jobs do not allow breakaway, so nothing
 //! launched from a terminal can outlive it (#281).
 
+use std::collections::HashMap;
+
 /// Windows `CREATE_NO_WINDOW` process creation flag.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Variables the AppImage runtime exports to locate its bundled libraries.
+/// Every one points at (or describes) the squashfs mount, so a child that
+/// inherits any of them resolves its dynamic libraries against the AppImage's
+/// copies instead of the host's: `LD_LIBRARY_PATH` makes the bundled `rg`
+/// sidecar pick up the mount's glibc and segfault, and `node` fail its
+/// `LIBFFI_CALL_PLAN_8.4` symbol lookup (gh-1435).
+#[cfg(target_os = "linux")]
+const APPIMAGE_RUNTIME_ENV_KEYS: &[&str] = &[
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "APPDIR",
+    "APPIMAGE",
+    "OW8UVFJ",
+];
 
 /// A command builder whose spawned process can be kept off-screen.
 pub(crate) trait ConsoleCommand {
@@ -65,6 +85,78 @@ impl ConsoleCommand for tokio::process::Command {
 pub(crate) fn hide_console<C: ConsoleCommand + ?Sized>(command: &mut C) -> &mut C {
     command.hide_console_window()
 }
+
+/// A command builder whose environment can be scrubbed of AppImage runtime
+/// variables before spawn.
+pub(crate) trait AppImageCommand {
+    /// Remove `LD_LIBRARY_PATH` (and the other AppImage runtime variables)
+    /// from the command's environment. Linux only; no-op elsewhere.
+    fn remove_appimage_env_keys(&mut self) -> &mut Self;
+}
+
+impl AppImageCommand for std::process::Command {
+    #[cfg(target_os = "linux")]
+    fn remove_appimage_env_keys(&mut self) -> &mut Self {
+        for key in APPIMAGE_RUNTIME_ENV_KEYS {
+            self.env_remove(key);
+        }
+        self
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn remove_appimage_env_keys(&mut self) -> &mut Self {
+        self
+    }
+}
+
+impl AppImageCommand for tokio::process::Command {
+    #[cfg(target_os = "linux")]
+    fn remove_appimage_env_keys(&mut self) -> &mut Self {
+        for key in APPIMAGE_RUNTIME_ENV_KEYS {
+            self.env_remove(key);
+        }
+        self
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn remove_appimage_env_keys(&mut self) -> &mut Self {
+        self
+    }
+}
+
+/// Strip the AppImage runtime environment from a child command so host
+/// binaries resolve their libraries against the host, not the AppImage mount.
+///
+/// When Termul runs from an AppImage, the AppImage runtime exports
+/// `LD_LIBRARY_PATH=$APPDIR/usr/lib` (plus `APPDIR`, `APPIMAGE`, …). Rust
+/// commands inherit the caller environment by default, so every spawned
+/// host tool — the `rg` sidecar, `node`/`npx` for ACP agents, `git`,
+/// `xdg-open` — loads the AppImage's bundled libraries first. On modern
+/// distros that is an ABI collision: `rg` segfaults (exit 139 →
+/// "No files or folders match") and `node` fails with
+/// `LIBFFI_CALL_PLAN_8.4 not found` (gh-1435). Removing the variables before
+/// spawn restores the host library resolution.
+///
+/// No-op on non-Linux targets and when no AppImage variable is present.
+/// Termul's own executable is unaffected: the dynamic loader resolved its
+/// libraries when the process started, before this runs.
+pub(crate) fn sanitize_appimage_env<C: AppImageCommand + ?Sized>(command: &mut C) -> &mut C {
+    command.remove_appimage_env_keys()
+}
+
+/// Environment variables to drop from an env map (e.g. the PTY environment)
+/// when running from an AppImage. Same keys as
+/// [`sanitize_appimage_env`], exposed for map-shaped environments that do not
+/// go through a `Command` builder.
+#[cfg(target_os = "linux")]
+pub(crate) fn remove_appimage_env_keys_from_map(env: &mut HashMap<String, String>) {
+    for key in APPIMAGE_RUNTIME_ENV_KEYS {
+        env.remove(*key);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn remove_appimage_env_keys_from_map(_env: &mut HashMap<String, String>) {}
 
 #[cfg(windows)]
 pub(crate) use job::KillOnCloseJob;
@@ -247,3 +339,6 @@ mod job {
 pub(crate) mod test_support;
 #[cfg(all(test, windows))]
 mod tests;
+
+#[cfg(test)]
+mod appimage_env_tests;

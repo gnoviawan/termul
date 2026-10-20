@@ -305,9 +305,12 @@ pub(crate) fn detect_rg_path() -> String {
     detected
 }
 
-/// Keep the rg sidecar off-screen (see [`crate::process_util::hide_console`]).
+/// Keep the rg sidecar off-screen (see [`crate::process_util::hide_console`])
+/// and scrub the AppImage runtime env so rg loads host libraries, not the
+/// AppImage mount's (gh-1435).
 pub(crate) fn configure_background_command(command: &mut Command) {
     crate::process_util::hide_console(command);
+    crate::process_util::sanitize_appimage_env(command);
 }
 
 /// Maximum allowed search query length to prevent resource exhaustion via

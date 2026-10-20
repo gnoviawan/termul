@@ -151,7 +151,11 @@ fn configure_background_command(command: &mut Command) {
     command.creation_flags(0x0800_0000);
 }
 #[cfg(not(target_os = "windows"))]
-fn configure_background_command(_command: &mut Command) {}
+fn configure_background_command(command: &mut Command) {
+    // Strip the AppImage runtime env so cloudflared loads host libraries
+    // (same scrub as the rg sidecar, gh-1435).
+    crate::process_util::sanitize_appimage_env(command);
+}
 
 /// A started quick tunnel: the public URL to expose (e.g. as a QR) and the live
 /// child handle to kill on server stop / app exit.
