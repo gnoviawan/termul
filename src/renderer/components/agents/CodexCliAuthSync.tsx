@@ -96,18 +96,18 @@ export function CodexCliAuthSync(): null {
         const liveSessionIds = Object.values(live.sessions)
           .filter((session) => liveAgentIds.includes(session.agentId))
           .map((session) => session.id)
-        const hasAuthError = Object.entries(live.prepareChatErrors).some(
+        const decisionHasAuthError = Object.entries(live.prepareChatErrors).some(
           ([key, error]) => key.startsWith(configPrefix) && error.category === 'auth'
         )
-        const authBusy =
+        const decisionAuthBusy =
           isAnyAgentAuthInFlight() ||
           liveAgentIds.some((agentId) => Boolean(live.pendingBrowserOpen[agentId]))
         const decision = codexAuthSyncDecision({
           previous: baselines.current.get(baselineKey) ?? null,
           next,
-          authBusy,
+          authBusy: decisionAuthBusy,
           hasLiveAgent: liveAgentIds.length > 0,
-          hasAuthError
+          hasAuthError: decisionHasAuthError
         })
         if (decision.action === 'none') {
           baselines.current.set(baselineKey, decision.previous)

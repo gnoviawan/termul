@@ -13,27 +13,27 @@ describe('isCodexAcpConfig', () => {
 
 describe('codexAuthPollWanted', () => {
   it('skips sampling with no live agent, no auth error and no auth in flight', () => {
-    expect(
-      codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: false, authBusy: false })
-    ).toBe(false)
+    expect(codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: false, authBusy: false })).toBe(
+      false
+    )
   })
 
   it('samples while a codex agent is live', () => {
-    expect(
-      codexAuthPollWanted({ hasLiveAgent: true, hasAuthError: false, authBusy: false })
-    ).toBe(true)
+    expect(codexAuthPollWanted({ hasLiveAgent: true, hasAuthError: false, authBusy: false })).toBe(
+      true
+    )
   })
 
   it('samples while a pending auth error can be cleared by a CLI login', () => {
-    expect(
-      codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: true, authBusy: false })
-    ).toBe(true)
+    expect(codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: true, authBusy: false })).toBe(
+      true
+    )
   })
 
   it('samples while a sign-in is in flight so its transition is still observed', () => {
-    expect(
-      codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: false, authBusy: true })
-    ).toBe(true)
+    expect(codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: false, authBusy: true })).toBe(
+      true
+    )
   })
 })
 
