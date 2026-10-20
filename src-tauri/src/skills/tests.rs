@@ -831,7 +831,17 @@ fn manifest_skills_paths_outside_the_install_root_are_ignored() {
     );
     write_manifest_with_skills(
         &install,
-        serde_json::json!(["../outside", "/absolute/skills", "missing-dir"]),
+        serde_json::json!([
+            "../outside",
+            "/absolute/skills",
+            // Windows-rooted (`\rooted\skills`) and drive-prefixed
+            // (`C:prefixed\skills`) forms are not `is_absolute()` without both
+            // prefix and root, yet `PathBuf::push` replaces the install root
+            // for them — they must be rejected like any other escape.
+            "\\rooted\\skills",
+            "C:prefixed\\skills",
+            "missing-dir"
+        ]),
     );
 
     let listed = list_agent_skills_with_roots(&agents, Some(&claude), None).unwrap();

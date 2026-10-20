@@ -460,7 +460,7 @@ fn plugin_default_enabled(install_path: &Path) -> bool {
 
 /// Skill directories the manifest's `skills` key declares in addition to the
 /// default `skills/` directory: a single path or an array of paths, relative
-/// to the install root. Absolute paths and paths that escape the install root
+/// to the install root. Absolute, rooted, drive-prefixed, and traversal paths
 /// are skipped — a plugin must not reach outside itself.
 fn manifest_skill_dirs(install_path: &Path) -> Vec<PathBuf> {
     let Some(manifest) = read_plugin_manifest(install_path) else {
@@ -486,17 +486,12 @@ fn manifest_skill_dirs(install_path: &Path) -> Vec<PathBuf> {
         if candidate.as_os_str().is_empty() {
             continue;
         }
-        if candidate.is_absolute() {
-            log::warn!(
-                "plugin manifest in {} declares an absolute skills path '{path}'; skipping",
-                install_path.display()
-            );
-            continue;
-        }
-        if candidate
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
+        if candidate.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
             log::warn!(
                 "plugin manifest in {} declares a skills path '{path}' outside the install root; skipping",
                 install_path.display()
@@ -504,8 +499,14 @@ fn manifest_skill_dirs(install_path: &Path) -> Vec<PathBuf> {
             continue;
         }
         // Drop interior `.` segments (`./skills`) so surfaced skill paths stay
-        // clean; `..` was already rejected above.
-        dirs.push(install_path.join(candidate).components().collect::<PathBuf>());
+        // clean; `..`, rooted, drive-prefixed, and absolute forms were already
+        // rejected above.
+        dirs.push(
+            install_path
+                .join(candidate)
+                .components()
+                .collect::<PathBuf>(),
+        );
     }
     dirs
 }
