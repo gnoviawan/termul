@@ -198,10 +198,111 @@ function BooleanOptionRow({
         aria-label={option.name}
         onCheckedChange={(checked) => {
           setOptimistic(checked)
-          void Promise.resolve(onToggle(checked)).finally(() => setOptimistic(null))
+          // Swallow the (already-toasted) rejection after the optimistic
+          // revert; a boolean cannot be marked per-value unavailable.
+          void Promise.resolve(onToggle(checked))
+            .catch(() => undefined)
+            .finally(() => setOptimistic(null))
         }}
       />
     </div>
+  )
+}
+
+/**
+ * Rows for the agent's generic (non-effort) config options. Selecting a value
+ * that the agent rejects (e.g. a tool advertised as a segment — #1480's
+ * `web-fetch`) marks that value unavailable for the rest of the panel's life:
+ * the segment greys out with a "not available" hint instead of staying a
+ * clickable dead end that only produces an error toast.
+ */
+function GenericOptionRows({
+  genericOptions,
+  onSetConfig,
+  disabled,
+  touch
+}: {
+  genericOptions: SessionConfigOption[]
+  onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
+  disabled: boolean
+  touch: boolean
+}): React.JSX.Element {
+  // `${optionId}::${value}` keys the values the agent has rejected.
+  const [rejected, setRejected] = useState<Record<string, true>>({})
+  const trySet = (optionId: string, value: string | boolean): Promise<void> => {
+    const attempt = Promise.resolve(onSetConfig(optionId, value))
+    // Observe the failure to mark the value unavailable; the rejection still
+    // propagates to callers that hold the promise (boolean switch revert).
+    void attempt.catch(() => {
+      setRejected((prev) => ({ ...prev, [`${optionId}::${String(value)}`]: true }))
+    })
+    return attempt
+  }
+  const rejectedTitle = 'Not available for this agent'
+  return (
+    <>
+      {genericOptions.map((option) => {
+        if (option.type === 'boolean') {
+          return (
+            <BooleanOptionRow
+              key={option.id}
+              option={option}
+              disabled={disabled}
+              touch={touch}
+              onToggle={(value) => trySet(option.id, value)}
+            />
+          )
+        }
+        const values = option.options ?? []
+        return values.length <= MAX_OPTION_SEGMENTS ? (
+          <SegmentedTrack
+            key={option.id}
+            id={`option-${option.id}`}
+            label={option.name}
+            touch={touch}
+            // The caption takes only its text width; the values share the rest.
+            template={`max-content repeat(${values.length}, minmax(0, 1fr))`}
+            items={[
+              {
+                key: '\0label',
+                kind: 'label' as const,
+                label: captionFor(option),
+                title: option.description ?? option.name
+              },
+              ...values.flatMap((value) => {
+                if (typeof value.value !== 'string') return []
+                const v = value.value
+                const isRejected = rejected[`${option.id}::${v}`] === true
+                return [
+                  {
+                    key: v,
+                    label: value.name,
+                    title: isRejected ? rejectedTitle : (value.description ?? undefined),
+                    selected: v === option.currentValue,
+                    disabled: disabled || isRejected,
+                    onSelect: () => {
+                      trySet(option.id, v).catch(() => {
+                        /* marked unavailable; the toast already reported it */
+                      })
+                    }
+                  }
+                ]
+              })
+            ]}
+          />
+        ) : (
+          <SelectTrack
+            key={option.id}
+            label={captionFor(option)}
+            value={typeof option.currentValue === 'string' ? option.currentValue : undefined}
+            options={values}
+            disabled={disabled}
+            touch={touch}
+            onChange={(value) => trySet(option.id, value)}
+          />
+        )
+      })}
+    </>
   )
 }
 
@@ -243,62 +344,12 @@ export function SelectorFooter({
       data-testid="selector-footer"
       className={cn('flex flex-col gap-1', touch ? 'px-3 py-2' : 'p-1')}
     >
-      {genericOptions.map((option) => {
-        if (option.type === 'boolean') {
-          return (
-            <BooleanOptionRow
-              key={option.id}
-              option={option}
-              disabled={disabled}
-              touch={touch}
-              onToggle={(value) => onSetConfig(option.id, value)}
-            />
-          )
-        }
-        const values = option.options ?? []
-        return values.length <= MAX_OPTION_SEGMENTS ? (
-          <SegmentedTrack
-            key={option.id}
-            id={`option-${option.id}`}
-            label={option.name}
-            touch={touch}
-            // The caption takes only its text width; the values share the rest.
-            template={`max-content repeat(${values.length}, minmax(0, 1fr))`}
-            items={[
-              {
-                key: '\0label',
-                kind: 'label' as const,
-                label: captionFor(option),
-                title: option.description ?? option.name
-              },
-              ...values.flatMap((value) => {
-                if (typeof value.value !== 'string') return []
-                const v = value.value
-                return [
-                  {
-                    key: v,
-                    label: value.name,
-                    title: value.description ?? undefined,
-                    selected: v === option.currentValue,
-                    disabled,
-                    onSelect: () => onSetConfig(option.id, v)
-                  }
-                ]
-              })
-            ]}
-          />
-        ) : (
-          <SelectTrack
-            key={option.id}
-            label={captionFor(option)}
-            value={typeof option.currentValue === 'string' ? option.currentValue : undefined}
-            options={values}
-            disabled={disabled}
-            touch={touch}
-            onChange={(value) => onSetConfig(option.id, value)}
-          />
-        )
-      })}
+      <GenericOptionRows
+        genericOptions={genericOptions}
+        onSetConfig={onSetConfig}
+        disabled={disabled}
+        touch={touch}
+      />
       {thoughtLevel || fastMode ? (
         <div className="flex items-stretch gap-1">
           {thoughtLevel && grid && effortOptions.length > 0 ? (

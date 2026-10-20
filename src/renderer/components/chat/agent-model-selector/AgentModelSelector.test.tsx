@@ -965,3 +965,56 @@ describe('AgentModelSelector on the mobile overlay back stack', () => {
     expect(stackIds()).toEqual([])
   })
 })
+
+describe('agent-rejected option values (#1480)', () => {
+  it('disables a segment the agent rejects instead of leaving a dead end', async () => {
+    const onSetConfig = vi.fn((_configId: string, valueId: string | boolean) => {
+      // The agent accepts `default` but rejects the tool-as-segment value.
+      return valueId === 'web-fetch'
+        ? Promise.reject(new Error('invalid value'))
+        : Promise.resolve()
+    })
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        option('agent', 'Agent', 'other', 'default', [
+          { value: 'default', name: 'Default' },
+          { value: 'web-fetch', name: 'web-fetch' }
+        ])
+      ]
+    })
+    open()
+
+    const segment = screen.getByRole('button', { name: 'web-fetch' })
+    expect(segment).toBeEnabled()
+
+    fireEvent.click(segment)
+    await waitFor(() => {
+      expect(onSetConfig).toHaveBeenCalledWith('agent', 'web-fetch')
+      expect(screen.getByRole('button', { name: 'web-fetch' })).toBeDisabled()
+    })
+    const rejectedSegment = screen.getByRole('button', { name: 'web-fetch' })
+    expect(rejectedSegment).toHaveAttribute('title', 'Not available for this agent')
+    const defaultSegment = screen.getByRole('button', { name: 'Default' })
+    expect(defaultSegment).toBeEnabled()
+  })
+
+  it('keeps boolean-switch failure behavior unchanged (revert, no stuck optimistic)', async () => {
+    const onSetConfig = vi.fn().mockRejectedValue(new Error('rejected'))
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        { id: 'web_search', name: 'Web search', type: 'boolean', currentValue: false }
+      ]
+    })
+    open()
+
+    const toggle = screen.getByRole('switch', { name: 'Web search' })
+    fireEvent.click(toggle)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    // Settled failure reverts to the advertised value.
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+  })
+})

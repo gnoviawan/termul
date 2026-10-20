@@ -247,9 +247,10 @@ export function AgentModelSelector({
       genericOptions={genericOptions}
       onSetConfig={(configId, valueId) =>
         // Return the setter's promise so a switch waits for the real outcome.
-        // Chat and launcher setters toast, then rethrow. Swallow that rejection
-        // here so it does not surface again as an unhandled rejection.
-        Promise.resolve(onSetConfig(configId, valueId)).catch(() => undefined)
+        // Rejections propagate to the footer, which both marks the value
+        // unavailable (#1480) and swallows the already-toasted failure — so
+        // nothing surfaces as an unhandled rejection here.
+        Promise.resolve(onSetConfig(configId, valueId))
       }
       usage={usage}
       messages={messages}
