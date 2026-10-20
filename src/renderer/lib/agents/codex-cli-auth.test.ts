@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { codexAuthSyncDecision, isCodexAcpConfig } from './codex-cli-auth'
+import { codexAuthPollWanted, codexAuthSyncDecision, isCodexAcpConfig } from './codex-cli-auth'
 
 describe('isCodexAcpConfig', () => {
   it('matches the registry id and the package argument', () => {
@@ -8,6 +8,32 @@ describe('isCodexAcpConfig', () => {
     expect(isCodexAcpConfig({ id: 'acp-registry:claude-acp' })).toBe(false)
     expect(isCodexAcpConfig({ id: 'custom-codex-acp-wrapper' })).toBe(false)
     expect(isCodexAcpConfig({ args: ['/opt/not-codex-acp/bin'] })).toBe(false)
+  })
+})
+
+describe('codexAuthPollWanted', () => {
+  it('skips sampling with no live agent, no auth error and no auth in flight', () => {
+    expect(
+      codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: false, authBusy: false })
+    ).toBe(false)
+  })
+
+  it('samples while a codex agent is live', () => {
+    expect(
+      codexAuthPollWanted({ hasLiveAgent: true, hasAuthError: false, authBusy: false })
+    ).toBe(true)
+  })
+
+  it('samples while a pending auth error can be cleared by a CLI login', () => {
+    expect(
+      codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: true, authBusy: false })
+    ).toBe(true)
+  })
+
+  it('samples while a sign-in is in flight so its transition is still observed', () => {
+    expect(
+      codexAuthPollWanted({ hasLiveAgent: false, hasAuthError: false, authBusy: true })
+    ).toBe(true)
   })
 })
 

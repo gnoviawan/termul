@@ -33,6 +33,23 @@ export function codexHomeFromConfig(
 }
 
 /**
+ * Whether the `codex login status` poll should run a subprocess sample now
+ * (issue #1372). The poll's only purpose is feeding
+ * {@link codexAuthSyncDecision}, which acts solely on a login change of a
+ * LIVE codex agent or a pending auth error — so while neither exists there is
+ * nothing to act on and no reason to spawn `codex` (node shim + native binary)
+ * every 4 s. `authBusy` keeps the poll armed so an in-flight sign-in's next
+ * transition is still observed.
+ */
+export function codexAuthPollWanted(input: {
+  hasLiveAgent: boolean
+  hasAuthError: boolean
+  authBusy: boolean
+}): boolean {
+  return input.hasLiveAgent || input.hasAuthError || input.authBusy
+}
+
+/**
  * Decide whether a Codex CLI login change should restart the Termul Codex agent.
  * The first sample only records the state. A later change follows `codex login status`.
  */

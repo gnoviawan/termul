@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import {
   CODEX_CLI_SIGNED_OUT_MESSAGE,
   type CodexCliAuthState,
+  codexAuthPollWanted,
   codexAuthSyncDecision,
   codexHomeFromConfig,
   isCodexAcpConfig
@@ -40,6 +41,32 @@ export function CodexCliAuthSync(): null {
           ) ?? before.agentConfigs.find((item) => isCodexAcpConfig(item))
         if (!config) return
         const baselineKey = `${config.id}\0${codexHomeFromConfig(config) ?? ''}`
+        const prefix = `${config.id}\0`
+        // Issue #1372: sample only while a sample can matter. The poll exists
+        // to feed `codexAuthSyncDecision`, which acts only on a login change
+        // of a live codex agent or a pending auth error — with neither, a
+        // `codex login status` sample has no consumer and every 4 s it
+        // spawned the full `codex` launch chain (node shim + native binary)
+        // for nothing. `authBusy` keeps the poll armed so an in-flight
+        // sign-in's transition is still observed.
+        const liveAgents = Object.entries(before.configToLiveAgent).filter(([key]) =>
+          key.startsWith(prefix)
+        )
+        const hasLiveAgent = liveAgents.length > 0
+        const pollHasAuthError = Object.entries(before.prepareChatErrors).some(
+          ([key, error]) => key.startsWith(prefix) && error.category === 'auth'
+        )
+        const pollAuthBusy =
+          isAnyAgentAuthInFlight() ||
+          liveAgents.some(([, agentId]) => Boolean(before.pendingBrowserOpen[agentId]))
+        if (
+          !codexAuthPollWanted({
+            hasLiveAgent,
+            hasAuthError: pollHasAuthError,
+            authBusy: pollAuthBusy
+          })
+        )
+          return
 
         const status = await invokeIpcWrapped<{ state: CodexCliAuthState }>(
           'codex_cli_auth_status',
@@ -54,11 +81,11 @@ export function CodexCliAuthSync(): null {
           (item) => item.id === config.id && isCodexAcpConfig(item)
         )
         if (!stillSelected) return
-        const prefix = `${config.id}\0`
+        const configPrefix = `${config.id}\0`
         const projects = useProjectStore.getState().projects
         const restarts = Object.entries(live.configToLiveAgent).flatMap(([key, agentId]) => {
-          if (!key.startsWith(prefix)) return []
-          const cwd = key.slice(prefix.length).trim()
+          if (!key.startsWith(configPrefix)) return []
+          const cwd = key.slice(configPrefix.length).trim()
           if (!cwd) return []
           const session = Object.values(live.sessions).find((item) => item.agentId === agentId)
           const projectId = session?.projectId ?? projects.find((item) => item.path === cwd)?.id
@@ -70,7 +97,7 @@ export function CodexCliAuthSync(): null {
           .filter((session) => liveAgentIds.includes(session.agentId))
           .map((session) => session.id)
         const hasAuthError = Object.entries(live.prepareChatErrors).some(
-          ([key, error]) => key.startsWith(prefix) && error.category === 'auth'
+          ([key, error]) => key.startsWith(configPrefix) && error.category === 'auth'
         )
         const authBusy =
           isAnyAgentAuthInFlight() ||
