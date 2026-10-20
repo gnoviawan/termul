@@ -17,7 +17,8 @@ fn parse_skill_md_splits_frontmatter() {
 #[test]
 fn list_and_read_project_skill() {
     let temp = std::env::temp_dir().join(format!("termul-skill-test-{}", std::process::id()));
-    let skill_dir = temp.join(".agents").join("skills").join("demo-skill");
+    let skills_root = temp.join(".agents").join("skills");
+    let skill_dir = skills_root.join("demo-skill");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
@@ -26,8 +27,10 @@ fn list_and_read_project_skill() {
     .unwrap();
     let expected_skill_md = skill_dir.join("SKILL.md");
 
+    // Hermetic seams so the fixture does not depend on the developer's real
+    // `~/.agents` / `~/.claude` directories.
     let root = temp.to_string_lossy().to_string();
-    let listed = list_agent_skills(Some(&root)).unwrap();
+    let listed = list_agent_skills_with_home(&skills_root, Some(&root)).unwrap();
     let summary = listed
         .iter()
         .find(|s| s.name == "demo-skill" && s.scope == "project")
@@ -39,7 +42,7 @@ fn list_and_read_project_skill() {
         expected_skill_md.to_string_lossy().to_string()
     );
 
-    let content = read_agent_skill("demo-skill", Some(&root)).unwrap();
+    let content = read_agent_skill_with_home("demo-skill", &skills_root, Some(&root)).unwrap();
     assert_eq!(content.name, "demo-skill");
     assert_eq!(content.body.trim(), "Run the demo.");
     assert_eq!(
@@ -136,8 +139,9 @@ fn list_agent_skills_ignores_invalid_directory_names() {
     )
     .unwrap();
 
+    // Hermetic seam: do not scan the developer's real home for this fixture.
     let root = temp.to_string_lossy().to_string();
-    let listed = list_agent_skills(Some(&root)).unwrap();
+    let listed = list_agent_skills_with_home(&skills_root, Some(&root)).unwrap();
     assert!(listed.iter().any(|s| s.name == "valid-skill"));
     assert!(!listed.iter().any(|s| s.name == "Invalid"));
 
@@ -175,8 +179,9 @@ fn list_agent_skills_skips_malformed_skill_and_keeps_valid() {
     )
     .unwrap();
 
+    // Hermetic seam: do not scan the developer's real home for this fixture.
     let root = temp.to_string_lossy().to_string();
-    let listed = list_agent_skills(Some(&root)).unwrap();
+    let listed = list_agent_skills_with_home(&skills_root, Some(&root)).unwrap();
     assert!(listed.iter().any(|s| s.name == "good-skill"));
     assert!(!listed.iter().any(|s| s.name == "bad-skill"));
 
@@ -253,6 +258,23 @@ fn install_record(path: &Path, updated: Option<&str>) -> serde_json::Value {
     record
 }
 
+/// An install record bound to one project (`scope: "project"` or `"local"`),
+/// like `claude plugin install --scope project` writes.
+fn scoped_install_record(
+    path: &Path,
+    updated: Option<&str>,
+    scope: &str,
+    project_path: Option<&Path>,
+) -> serde_json::Value {
+    let mut record = install_record(path, updated);
+    record["scope"] = serde_json::Value::String(scope.to_string());
+    if let Some(project_path) = project_path {
+        record["projectPath"] =
+            serde_json::Value::String(project_path.to_string_lossy().to_string());
+    }
+    record
+}
+
 fn write_enabled(path: &Path, enabled: serde_json::Value) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -272,6 +294,15 @@ fn write_manifest(install: &Path, default_enabled: Option<bool>) {
     if let Some(value) = default_enabled {
         manifest["defaultEnabled"] = serde_json::Value::Bool(value);
     }
+    fs::write(path, serde_json::to_string(&manifest).unwrap()).unwrap();
+}
+
+/// A manifest whose `skills` key declares skill directories in addition to the
+/// default `skills/` directory (a single path or an array of paths).
+fn write_manifest_with_skills(install: &Path, skills: serde_json::Value) {
+    let path = install.join(".claude-plugin").join("plugin.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let manifest = serde_json::json!({ "name": "demo", "skills": skills });
     fs::write(path, serde_json::to_string(&manifest).unwrap()).unwrap();
 }
 
@@ -482,6 +513,110 @@ fn equal_plugin_timestamps_use_the_last_eligible_record() {
 }
 
 #[test]
+fn project_and_local_scoped_installs_only_load_in_their_own_project() {
+    let scratch = Scratch::new("scoped-install");
+    let claude = scratch.path().join("claude");
+    let agents = scratch.path().join("agents");
+    let project_a = scratch.path().join("project-a");
+    let project_b = scratch.path().join("project-b");
+    fs::create_dir_all(&project_a).unwrap();
+    fs::create_dir_all(&project_b).unwrap();
+    let project_install = scratch.path().join("project-install");
+    let local_install = scratch.path().join("local-install");
+    write_skill(&project_install.join("skills"), "project-a-only", "scoped");
+    write_skill(&local_install.join("skills"), "project-b-only", "local");
+    write_installed(
+        &claude,
+        serde_json::json!({
+            "scoped@market": [
+                scoped_install_record(
+                    &project_install,
+                    Some("2026-10-15T18:14:07.838Z"),
+                    "project",
+                    Some(&project_a)
+                ),
+                scoped_install_record(
+                    &local_install,
+                    Some("2026-10-15T18:14:07.838Z"),
+                    "local",
+                    Some(&project_b)
+                )
+            ]
+        }),
+    );
+
+    let in_a =
+        list_agent_skills_with_roots(&agents, Some(&claude), Some(&project_a.to_string_lossy()))
+            .unwrap();
+    let a_names = listed_names(&in_a);
+    assert!(a_names.contains(&"project-a-only"));
+    assert!(!a_names.contains(&"project-b-only"));
+
+    let in_b =
+        list_agent_skills_with_roots(&agents, Some(&claude), Some(&project_b.to_string_lossy()))
+            .unwrap();
+    let b_names = listed_names(&in_b);
+    assert!(!b_names.contains(&"project-a-only"));
+    assert!(b_names.contains(&"project-b-only"));
+
+    // No active project: project-scoped installs stay out of the global list.
+    let global = list_agent_skills_with_roots(&agents, Some(&claude), None).unwrap();
+    let global_names = listed_names(&global);
+    assert!(!global_names.contains(&"project-a-only"));
+    assert!(!global_names.contains(&"project-b-only"));
+}
+
+#[test]
+fn user_install_is_kept_when_the_newer_record_belongs_to_another_project() {
+    let scratch = Scratch::new("user-vs-project");
+    let claude = scratch.path().join("claude");
+    let agents = scratch.path().join("agents");
+    let project_a = scratch.path().join("project-a");
+    let project_b = scratch.path().join("project-b");
+    fs::create_dir_all(&project_a).unwrap();
+    fs::create_dir_all(&project_b).unwrap();
+    let user_install = scratch.path().join("user-install");
+    let project_install = scratch.path().join("project-install");
+    write_skill(&user_install.join("skills"), "user-plugin-skill", "user");
+    write_skill(
+        &project_install.join("skills"),
+        "project-plugin-skill",
+        "scoped",
+    );
+    write_installed(
+        &claude,
+        serde_json::json!({
+            "demo@market": [
+                install_record(&user_install, Some("2026-01-01T00:00:00Z")),
+                scoped_install_record(
+                    &project_install,
+                    Some("2026-10-15T18:14:07.838Z"),
+                    "project",
+                    Some(&project_a)
+                )
+            ]
+        }),
+    );
+
+    // In project B the newer project-A record is ineligible, so the older
+    // user-scoped install is chosen instead of being displaced.
+    let in_b =
+        list_agent_skills_with_roots(&agents, Some(&claude), Some(&project_b.to_string_lossy()))
+            .unwrap();
+    let b_names = listed_names(&in_b);
+    assert!(b_names.contains(&"user-plugin-skill"));
+    assert!(!b_names.contains(&"project-plugin-skill"));
+
+    // In project A the newer project record displaces the user install.
+    let in_a =
+        list_agent_skills_with_roots(&agents, Some(&claude), Some(&project_a.to_string_lossy()))
+            .unwrap();
+    let a_names = listed_names(&in_a);
+    assert!(a_names.contains(&"project-plugin-skill"));
+    assert!(!a_names.contains(&"user-plugin-skill"));
+}
+
+#[test]
 fn ineligible_plugin_records_are_skipped_without_dropping_the_id() {
     let scratch = Scratch::new("bad-record");
     let claude = scratch.path().join("claude");
@@ -501,7 +636,11 @@ fn ineligible_plugin_records_are_skipped_without_dropping_the_id() {
         Some("2026-11-01T00:00:00Z"),
     );
     let bad_stamp = install_record(&bad_dir, Some("yesterday"));
-    let missing_stamp = install_record(&scratch.path().join("no-stamp"), None);
+    // The directory exists and holds a skill, so the record is rejected by the
+    // missing `lastUpdated` check, not the earlier directory check.
+    let no_stamp_dir = scratch.path().join("no-stamp");
+    write_skill(&no_stamp_dir.join("skills"), "no-stamp-skill", "nope");
+    let missing_stamp = install_record(&no_stamp_dir, None);
     write_installed(
         &claude,
         serde_json::json!({
@@ -520,6 +659,7 @@ fn ineligible_plugin_records_are_skipped_without_dropping_the_id() {
     assert!(names.contains(&"claude-user"));
     assert!(names.contains(&"kept-plugin-skill"));
     assert!(!names.contains(&"bad-stamp-skill"));
+    assert!(!names.contains(&"no-stamp-skill"));
 }
 
 #[test]
@@ -609,6 +749,94 @@ fn root_plugin_skill_is_used_only_when_skills_dir_has_no_valid_skill() {
     assert!(listed
         .iter()
         .any(|skill| skill.name == "from-invalid-dir-fallback"));
+}
+
+#[test]
+fn manifest_skills_paths_add_to_the_default_directory() {
+    let scratch = Scratch::new("manifest-skills");
+    let claude = scratch.path().join("claude");
+    let agents = scratch.path().join("agents");
+    let array_install = scratch.path().join("array-install");
+    let string_install = scratch.path().join("string-install");
+    // The default `skills/` directory is still scanned alongside declared paths.
+    write_skill(
+        &array_install.join("skills"),
+        "default-dir-skill",
+        "default",
+    );
+    // A declared container directory: one level of skill packages inside it.
+    let custom_path = write_skill(
+        &array_install.join("extra-skills"),
+        "custom-plugin-skill",
+        "custom",
+    );
+    // A declared path that directly contains `SKILL.md`: a single package.
+    let package_path = write_raw_skill(
+        &array_install.join("tools"),
+        &skill_doc("direct-package", "tool"),
+    );
+    write_manifest_with_skills(
+        &array_install,
+        serde_json::json!(["./extra-skills/", "./tools"]),
+    );
+    // The `skills` key also accepts a single string path.
+    write_skill(
+        &string_install.join("guides"),
+        "string-form-skill",
+        "string",
+    );
+    write_manifest_with_skills(
+        &string_install,
+        serde_json::Value::String("./guides".into()),
+    );
+    write_installed(
+        &claude,
+        serde_json::json!({
+            "array@market": [install_record(&array_install, Some("2026-10-15T18:14:07.838Z"))],
+            "string@market": [install_record(&string_install, Some("2026-10-15T18:14:07.838Z"))]
+        }),
+    );
+
+    let listed = list_agent_skills_with_roots(&agents, Some(&claude), None).unwrap();
+    let names = listed_names(&listed);
+    assert!(names.contains(&"default-dir-skill"));
+    assert!(names.contains(&"custom-plugin-skill"));
+    assert!(names.contains(&"direct-package"));
+    assert!(names.contains(&"string-form-skill"));
+    let custom = listed
+        .iter()
+        .find(|skill| skill.name == "custom-plugin-skill")
+        .expect("custom dir skill");
+    assert_eq!(custom.path, custom_path.to_string_lossy().to_string());
+    let package = listed
+        .iter()
+        .find(|skill| skill.name == "direct-package")
+        .expect("direct package skill");
+    assert_eq!(package.path, package_path.to_string_lossy().to_string());
+}
+
+#[test]
+fn manifest_skills_paths_outside_the_install_root_are_ignored() {
+    let scratch = Scratch::new("manifest-escape");
+    let claude = scratch.path().join("claude");
+    let agents = scratch.path().join("agents");
+    let install = scratch.path().join("install");
+    let outside = scratch.path().join("outside");
+    write_skill(&outside, "outside-skill", "nope");
+    write_installed(
+        &claude,
+        serde_json::json!({
+            "escape@market": [install_record(&install, Some("2026-10-15T18:14:07.838Z"))]
+        }),
+    );
+    write_manifest_with_skills(
+        &install,
+        serde_json::json!(["../outside", "/absolute/skills", "missing-dir"]),
+    );
+
+    let listed = list_agent_skills_with_roots(&agents, Some(&claude), None).unwrap();
+    assert!(!listed_names(&listed).contains(&"outside-skill"));
+    assert!(listed.iter().all(|skill| !skill.path.contains("outside")));
 }
 
 #[test]
