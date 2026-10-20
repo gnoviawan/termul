@@ -1,8 +1,0 @@
-{"event":"health","health":{"status":"ok","allowRemoteWrites":true,"caseInsensitivePaths":false}}
-{"event":"authenticate","ok":true}
-{"event":"cpu-baseline","ticks5s":0,"pct":0}
-{"event":"spawn_agent","reply":{"id":"probe-8l0rfjvx","ok":true,"payload":{"agentId":"68dbc8e9-e29b-41ff-96e1-d55959489346","capabilities":{"loadSession":true,"promptCapabilities":{"image":true,"audio":false,"embeddedContext":true},"mcpCapabilities":{"http":true,"sse":true},"sessionCapabilities":{"list":{},"resume":{},"close":{}},"auth":{}},"authMethods":[{"id":"opencode-login","name":"Login with opencode","description":"Run `opencode auth login` in the terminal","type":"agent"}],"hostAuthReady":false,"stableNamespace":"config:opencode-qa"}}}
-{"event":"create_session","reply":{"ok":true,"sessionId":"ses_ead703258ffe3bl7El6eZmCtTr"}}
-{"event":"cpu-idle-1","note":"agent spawned, no prompt sent","ticks5s":502,"pct":100.4}
-{"event":"cpu-idle-2","ticks5s":502,"pct":100.4}
-{"event":"cores","nproc":8}
