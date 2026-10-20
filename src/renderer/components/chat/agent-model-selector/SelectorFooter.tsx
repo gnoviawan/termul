@@ -57,6 +57,7 @@ function SelectTrack({
   options,
   disabled,
   touch,
+  rejected,
   onChange
 }: {
   label: string
@@ -64,6 +65,8 @@ function SelectTrack({
   options: SessionConfigOption['options']
   disabled: boolean
   touch: boolean
+  /** Values the agent rejected: rendered disabled with a hint (#1480). */
+  rejected: Set<string>
   onChange: (value: string) => void
 }): React.JSX.Element {
   return (
@@ -90,8 +93,21 @@ function SelectTrack({
         <SelectContent className="z-[110]">
           {options?.flatMap((option) =>
             typeof option.value === 'string' ? (
-              <SelectItem key={option.value} value={option.value}>
-                {option.name}
+              <SelectItem
+                key={option.value}
+                value={option.value}
+                disabled={disabled || rejected.has(option.value)}
+              >
+                {rejected.has(option.value) ? (
+                  <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                    <span className="truncate">{option.name}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      Not available
+                    </span>
+                  </span>
+                ) : (
+                  option.name
+                )}
               </SelectItem>
             ) : (
               []
@@ -277,6 +293,9 @@ function GenericOptionRows({
                   {
                     key: v,
                     label: value.name,
+                    // Touch UIs never show `title`; fold the reason into the
+                    // accessible name so screen readers announce it.
+                    ariaLabel: isRejected ? `${value.name} — ${rejectedTitle}` : undefined,
                     title: isRejected ? rejectedTitle : (value.description ?? undefined),
                     selected: v === option.currentValue,
                     disabled: disabled || isRejected,
@@ -298,6 +317,15 @@ function GenericOptionRows({
             options={values}
             disabled={disabled}
             touch={touch}
+            rejected={
+              new Set(
+                values.flatMap((value) =>
+                  typeof value.value === 'string' && rejected[`${option.id}::${value.value}`]
+                    ? [value.value]
+                    : []
+                )
+              )
+            }
             onChange={(value) => trySet(option.id, value)}
           />
         )

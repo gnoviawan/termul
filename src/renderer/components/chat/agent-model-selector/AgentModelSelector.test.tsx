@@ -985,16 +985,20 @@ describe('agent-rejected option values (#1480)', () => {
     })
     open()
 
-    const segment = screen.getByRole('button', { name: 'web-fetch' })
+    // Regex: the accessible name gains the "Not available" suffix once rejected.
+    const segment = screen.getByRole('button', { name: /web-fetch/ })
     expect(segment).toBeEnabled()
+    expect(segment).toHaveAccessibleName('web-fetch')
 
     fireEvent.click(segment)
     await waitFor(() => {
       expect(onSetConfig).toHaveBeenCalledWith('agent', 'web-fetch')
-      expect(screen.getByRole('button', { name: 'web-fetch' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /web-fetch/ })).toBeDisabled()
     })
-    const rejectedSegment = screen.getByRole('button', { name: 'web-fetch' })
+    const rejectedSegment = screen.getByRole('button', { name: /web-fetch/ })
     expect(rejectedSegment).toHaveAttribute('title', 'Not available for this agent')
+    // The reason is part of the accessible name — touch/screen-reader parity.
+    expect(rejectedSegment).toHaveAccessibleName('web-fetch — Not available for this agent')
     const defaultSegment = screen.getByRole('button', { name: 'Default' })
     expect(defaultSegment).toBeEnabled()
   })
