@@ -162,6 +162,15 @@ describe('updater-store', () => {
       expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
     })
 
+    it('should not re-check while a download is in flight (#1431)', async () => {
+      useUpdaterStore.setState({ isDownloading: true })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
+      expect(useUpdaterStore.getState().isChecking).toBe(false)
+    })
+
     it('should populate update state when Tauri returns an available update', async () => {
       vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
         version: '2.0.0',

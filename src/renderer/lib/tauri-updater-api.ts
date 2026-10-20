@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+import { logFrontendError } from './log-api'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
@@ -41,6 +42,18 @@ const CHANNEL_MANIFEST_URLS: Record<UpdateChannel, string> = {
   insider: 'https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json',
   nightly: 'https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json'
 }
+
+/**
+ * Update-package download stall watchdog (issue #1431). The updater plugin's
+ * `download` request has no built-in timeout, and the phases before the first
+ * byte (backup preparation, the HTTP request) can stall indefinitely on a
+ * stalled connection or a proxy that swallows the response — the user then
+ * sees the "Downloading update ... 0% complete" toast forever with no error.
+ * The watchdog turns that silent hang into a DOWNLOAD_FAILED error after a
+ * bounded wait.
+ */
+const FIRST_EVENT_TIMEOUT_MS = 60_000
+const INTER_EVENT_TIMEOUT_MS = 120_000
 
 const CHANNEL_RELEASE_PAGE_URLS: Record<UpdateChannel, string> = {
   stable: 'https://github.com/gnoviawan/termul/releases/latest',
@@ -598,23 +611,79 @@ export async function downloadUpdate(
       })
     }
 
-    await updateHandle.download((event) => {
-      if (!onProgress) return
+    // Stall watchdog (issue #1431): the plugin download request has no
+    // timeout, so a connection that never delivers a first chunk (or stalls
+    // mid-transfer) leaves the "Downloading update ..." toast at 0% forever
+    // with no error. Arm a first-event timer, re-arm an inter-event timer on
+    // every transfer event; if either fires before its event, reject so
+    // downloadUpdate reports DOWNLOAD_FAILED instead of hanging. Timers are
+    // cleared when the promise settles in either direction.
+    let watchdogReject: ((reason: Error) => void) | null = null
+    let watchdogTimer: ReturnType<typeof setTimeout> | null = null
+    let firstEventSeen = false
 
-      const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
-      downloadedSoFar = mapped.downloadedSoFar
-      totalBytes = mapped.totalBytes
-      onProgress(mapped.progress)
-    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        watchdogReject = reject
+
+        const rearmWatchdog = (): void => {
+          if (watchdogTimer !== null) clearTimeout(watchdogTimer)
+          watchdogTimer = setTimeout(
+            () => {
+              const waitedMs = firstEventSeen ? INTER_EVENT_TIMEOUT_MS : FIRST_EVENT_TIMEOUT_MS
+              const phase = firstEventSeen ? 'stalled mid-transfer' : 'delivered no data'
+              watchdogReject?.(
+                new Error(
+                  `Update download ${phase}: no progress for ${waitedMs / 1000} s. ` +
+                    'Check your connection (a proxy or firewall may be blocking the download) and try again.'
+                )
+              )
+            },
+            firstEventSeen ? INTER_EVENT_TIMEOUT_MS : FIRST_EVENT_TIMEOUT_MS
+          )
+        }
+
+        rearmWatchdog()
+
+        updateHandle
+          .download((event) => {
+            // Transfer events re-arm the watchdog; the terminal `Finished`
+            // event (or any late callback after it) must not.
+            if (event.event !== 'Finished') {
+              firstEventSeen = true
+              rearmWatchdog()
+            }
+
+            if (!onProgress) return
+
+            const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
+            downloadedSoFar = mapped.downloadedSoFar
+            totalBytes = mapped.totalBytes
+            onProgress(mapped.progress)
+          })
+          .then(resolve, reject)
+      })
+    } finally {
+      if (watchdogTimer !== null) clearTimeout(watchdogTimer)
+    }
 
     downloadedUpdate = updateHandle
     downloadedVersion = updateVersion
 
     return { success: true, data: undefined }
   } catch (error) {
+    const message = getErrorMessage(error, 'Failed to download update')
+    // Durable boundary log (policy: new failure flows log via log-api): the
+    // download stall is otherwise invisible once the toast closes, and issue
+    // triage depends on knowing the watchdog fired vs the plugin failing.
+    void logFrontendError({
+      level: 'warn',
+      message: `Update download failed for version ${updateHandle.version}: ${message}`,
+      source: 'updater:downloadUpdate'
+    })
     return {
       success: false,
-      error: getErrorMessage(error, 'Failed to download update'),
+      error: message,
       code: UpdaterErrorCodes.DOWNLOAD_FAILED
     }
   }

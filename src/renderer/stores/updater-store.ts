@@ -116,8 +116,12 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Check for available updates via the Tauri updater plugin
    */
   checkForUpdates: async (): Promise<void> => {
-    const { isChecking, updateChannel } = get()
-    if (isChecking) return
+    const { isChecking, isDownloading, updateChannel } = get()
+    // A re-check while a download is in flight would reset `downloaded`,
+    // `downloadProgress` and (via the facade) the pending Update handle
+    // mid-transfer, breaking the active download's state. The periodic loop
+    // and the Settings button must both wait until it settles.
+    if (isChecking || isDownloading) return
 
     set({ isChecking: true, error: null })
 

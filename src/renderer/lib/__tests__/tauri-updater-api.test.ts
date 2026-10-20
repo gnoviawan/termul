@@ -268,6 +268,109 @@ describe('tauri-updater-api', () => {
         code: 'DISK_SPACE_INSUFFICIENT'
       })
     })
+
+    it('aborts a download that never delivers a first event (issue #1431)', async () => {
+      vi.useFakeTimers()
+      try {
+        const update = createMockUpdate('2.0.4')
+        vi.mocked(check).mockResolvedValue(update as never)
+        await checkForUpdates()
+
+        // Pending forever: never invokes the event callback, never resolves.
+        vi.mocked(update.download).mockImplementation(
+          () => new Promise<void>(() => {}) as Promise<void>
+        )
+
+        const resultPromise = downloadUpdate()
+        await vi.advanceTimersByTimeAsync(59_000)
+        let settled = false
+        void resultPromise.then(() => {
+          settled = true
+        })
+        await Promise.resolve()
+        expect(settled).toBe(false)
+
+        await vi.advanceTimersByTimeAsync(2_000)
+        const result = await resultPromise
+
+        expect(result.success).toBe(false)
+        if (!result.success) {
+          expect(result.code).toBe('DOWNLOAD_FAILED')
+          expect(result.error).toContain('delivered no data')
+        }
+        const state = await getUpdaterState()
+        expect(state.success && state.data?.downloaded).toBeFalsy()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('aborts a download that stalls mid-transfer (issue #1431)', async () => {
+      vi.useFakeTimers()
+      try {
+        const update = createMockUpdate('2.0.5')
+        vi.mocked(check).mockResolvedValue(update as never)
+        await checkForUpdates()
+
+        let events = 0
+        vi.mocked(update.download).mockImplementation(
+          async (onEvent?: (event: DownloadEvent) => void) => {
+            // One chunk arrives, then the transfer stalls forever.
+            onEvent?.({ event: 'Started', data: { contentLength: 100 } })
+            onEvent?.({ event: 'Progress', data: { chunkLength: 40 } })
+            events += 2
+            await new Promise(() => {})
+          }
+        )
+
+        const progressPercents: number[] = []
+        const resultPromise = downloadUpdate((progress) => {
+          progressPercents.push(progress.percent)
+        })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(events).toBe(2)
+        expect(progressPercents).toContain(40)
+
+        await vi.advanceTimersByTimeAsync(120_000)
+        const result = await resultPromise
+
+        expect(result.success).toBe(false)
+        if (!result.success) {
+          expect(result.code).toBe('DOWNLOAD_FAILED')
+          expect(result.error).toContain('stalled mid-transfer')
+        }
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('keeps a healthy slow download alive while events keep arriving', async () => {
+      vi.useFakeTimers()
+      try {
+        const update = createMockUpdate('2.0.6')
+        vi.mocked(check).mockResolvedValue(update as never)
+        await checkForUpdates()
+
+        vi.mocked(update.download).mockImplementation(
+          async (onEvent?: (event: DownloadEvent) => void) => {
+            onEvent?.({ event: 'Started', data: { contentLength: 3 } })
+            // Chunks keep flowing; each re-arms the watchdog.
+            for (let i = 0; i < 3; i += 1) {
+              await vi.advanceTimersByTimeAsync(90_000)
+              onEvent?.({ event: 'Progress', data: { chunkLength: 1 } })
+            }
+          }
+        )
+
+        const result = await downloadUpdate()
+
+        expect(result).toEqual({ success: true, data: undefined })
+        const state = await getUpdaterState()
+        expect(state.success && state.data?.downloaded).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   describe('installAndRestart', () => {
