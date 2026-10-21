@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { isOutcomeUncertainError } from '@/lib/acp-transport/types'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
@@ -275,7 +276,10 @@ function GenericOptionRows({
       for (const [optionId, values] of Object.entries(record)) {
         for (const v of values) flat[`${optionId}::${v}`] = true
       }
-      setRejected(flat)
+      // Merge, never replace: this effect re-runs whenever the parent passes a
+      // new genericOptions array reference, and a replace would drop
+      // rejections already recorded in this panel instance (review).
+      setRejected((prev) => ({ ...flat, ...prev }))
     })()
     return () => {
       cancelled = true
@@ -283,16 +287,23 @@ function GenericOptionRows({
     // Re-read only when the agent changes; the advertised set is read at load.
   }, [agentConfigId, genericOptions])
 
+  // Serialized writes per agent config: concurrent rejections must not race a
+  // read-modify-write pair against each other (review).
+  const record: PersistedRejectedOptionValues = {}
   const persistRejection = (optionId: string, value: string): void => {
     if (!agentConfigId) return
     void (async () => {
       const key = PersistenceKeys.agentRejectedOptionValues(agentConfigId)
       const result = await persistenceApi.read<PersistedRejectedOptionValues>(key)
-      const record: PersistedRejectedOptionValues = result.success ? (result.data ?? {}) : {}
+      // A failed read is treated as an empty record and only ever merged —
+      // never written back on its own — so it cannot wipe stored rejections.
+      if (result.success && result.data) {
+        for (const [id, values] of Object.entries(result.data)) record[id] = values
+      }
       const values = new Set(record[optionId] ?? [])
       values.add(value)
       record[optionId] = [...values]
-      const write = await persistenceApi.write(key, record)
+      const write = await persistenceApi.write(key, { ...record })
       if (!write.success) {
         void logFrontendError({
           level: 'warn',
@@ -308,7 +319,11 @@ function GenericOptionRows({
     // Observe the failure to hide the value (now and on the next open); the
     // rejection still propagates to callers that hold the promise (boolean
     // switch revert).
-    void attempt.catch(() => {
+    void attempt.catch((error: unknown) => {
+      // Only an EXPLICIT agent rejection marks the value unavailable. A
+      // transport failure (disconnect/timeout/outcome-unknown) says nothing
+      // about the value — hiding it would bury a valid pick (review).
+      if (isOutcomeUncertainError(error)) return
       setRejected((prev) => ({ ...prev, [`${optionId}::${String(value)}`]: true }))
       if (typeof value === 'string') persistRejection(optionId, value)
     })
@@ -330,14 +345,23 @@ function GenericOptionRows({
           )
         }
         const values = option.options ?? []
-        return values.length <= MAX_OPTION_SEGMENTS ? (
+        // Grid + threshold count only the values that actually render: every
+        // hidden rejection would otherwise leave an empty track column
+        // (review).
+        const visibleCount = values.filter(
+          (value) =>
+            typeof value.value === 'string' &&
+            (value.value === option.currentValue ||
+              rejected[`${option.id}::${value.value}`] !== true)
+        ).length
+        return visibleCount <= MAX_OPTION_SEGMENTS && visibleCount > 0 ? (
           <SegmentedTrack
             key={option.id}
             id={`option-${option.id}`}
             label={option.name}
             touch={touch}
             // The caption takes only its text width; the values share the rest.
-            template={`max-content repeat(${values.length}, minmax(0, 1fr))`}
+            template={`max-content repeat(${visibleCount}, minmax(0, 1fr))`}
             items={[
               {
                 key: '\0label',

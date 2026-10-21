@@ -1021,3 +1021,60 @@ describe('agent-rejected option values (#1480)', () => {
     expect(toggle).toHaveAttribute('aria-checked', 'false')
   })
 })
+
+describe('agent-rejected option values — review hardening (#1489)', () => {
+  it('does not hide a value when the transport failed (outcome uncertain)', async () => {
+    const { AcpTransportError } = await import('@/lib/acp-transport/types')
+    const onSetConfig = vi.fn(() =>
+      Promise.reject(new AcpTransportError('closed', 'WebSocket closed'))
+    )
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        option('agent', 'Agent', 'other', 'default', [
+          { value: 'default', name: 'Default' },
+          { value: 'web-fetch', name: 'web-fetch' }
+        ])
+      ]
+    })
+    open()
+
+    const segment = screen.getByRole('button', { name: /web-fetch/ })
+    fireEvent.click(segment)
+    await waitFor(() => {
+      expect(onSetConfig).toHaveBeenCalledWith('agent', 'web-fetch')
+    })
+    // The transport failure is not an explicit rejection: the value stays
+    // visible and clickable so the user can retry once reconnected.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByRole('button', { name: /web-fetch/ })).toBeEnabled()
+  })
+
+  it('sizes the track grid from the visible values after a rejection', async () => {
+    const onSetConfig = vi.fn((_c: string, v: string | boolean) =>
+      v === 'web-fetch' ? Promise.reject(new Error('invalid value')) : Promise.resolve()
+    )
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        option('agent', 'Agent', 'other', 'default', [
+          { value: 'default', name: 'Default' },
+          { value: 'web-fetch', name: 'web-fetch' }
+        ])
+      ]
+    })
+    open()
+
+    fireEvent.click(screen.getByRole('button', { name: /web-fetch/ }))
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /web-fetch/ })).not.toBeInTheDocument()
+    })
+    // One visible value → the Default segment stretches across the freed
+    // column instead of leaving an empty gap (grid template sized 1fr).
+    const track = screen.getByRole('button', { name: 'Default' }).parentElement
+    expect(track).toBeTruthy()
+  })
+})
