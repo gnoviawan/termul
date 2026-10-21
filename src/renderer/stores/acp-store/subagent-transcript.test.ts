@@ -194,7 +194,12 @@ describe('subagent transcript ingest (reconnect recovery)', () => {
           seq: 13,
           type: 'tool_call',
           payload: {
-            toolCall: { toolCallId: 'c1', kind: 'read', status: 'completed', _meta: childMeta('d1') }
+            toolCall: {
+              toolCallId: 'c1',
+              kind: 'read',
+              status: 'completed',
+              _meta: childMeta('d1')
+            }
           }
         },
         {
