@@ -36,9 +36,11 @@ function lastUserBoundary(messages: readonly ChatMessage[] | undefined): TurnBou
 }
 
 /**
- * Background agents of the current turn that still run. A reload starts a new
- * agent process, which stops them. A known running state counts after the
- * turn ends too (an agent can outlive its parent turn).
+ * Agents of the current turn that still run apart from the reply: background
+ * agents, and agents with a known running state (a native subagent session
+ * has no background flag). A reload starts a new agent process, which stops
+ * them. A known running state counts after the turn ends too (an agent can
+ * outlive its parent turn).
  */
 export function runningBackgroundAgentCount(state: AcpState, sessionId: SessionId): number {
   const toolCalls = state.toolCalls?.[sessionId]
@@ -47,8 +49,8 @@ export function runningBackgroundAgentCount(state: AcpState, sessionId: SessionI
   const boundary = lastUserBoundary(state.messages?.[sessionId])
   return selectCurrentTurnSubagents(toolCalls, boundary).filter(
     (tc) =>
-      tc.subagentLifecycle?.background === true &&
-      (isSubagentRunning(tc, turnActive) || tc.subagentLifecycle.state === 'running')
+      tc.subagentLifecycle?.state === 'running' ||
+      (tc.subagentLifecycle?.background === true && isSubagentRunning(tc, turnActive))
   ).length
 }
 
