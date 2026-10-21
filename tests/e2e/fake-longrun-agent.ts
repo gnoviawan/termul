@@ -80,6 +80,16 @@
  * chunk lists the content the client sent, as
  * `[ANSWERED elicitation-boolean accept confirm=false]` (`notify` is absent
  * when the client left it out).
+ *
+ * `[SUBAGENTS]` / `[SUBAGENTS:<seconds>]` (subagent status QA, default 20 s):
+ * two subagents work for the whole turn, then the turn ends. The wire form
+ * follows the host's `initialize`:
+ * - Without `clientCapabilities.subagents` (legacy Claude): two background
+ *   `Agent` calls complete at once with an `async_launched` receipt, and the
+ *   subagents' tool calls and text carry `_meta.claudeCode.parentToolUseId`.
+ * - With it (Claude 0.78 native form): `subagent_spawned` on the chat, the
+ *   subagents' traffic under their own session ids, and a
+ *   `subagent_state_update` when each one ends (the first at about 45 %).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -141,6 +151,8 @@ interface InFlight {
    * timer (the response itself ends the turn).
    */
   awaitingElicitation?: boolean
+  /** `[SUBAGENTS]` turns run on their own timers, not the chunk clock. */
+  scripted?: boolean
 }
 
 function promptText(prompt: JsonValue | undefined): string {
@@ -498,6 +510,145 @@ function pushDock(sessionId: string): void {
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
 const inFlightBySession = new Map<string, InFlight>()
 
+/** Set from `initialize`: the host asked for the native subagent form. */
+let nativeSubagents = false
+
+function subagentSeconds(prompt: JsonValue | undefined): number | null {
+  const match = /\[SUBAGENTS(?::(\d+(?:\.\d+)?))?\]/.exec(promptText(prompt))
+  if (!match) return null
+  return match[1] ? Number(match[1]) : 20
+}
+
+const SUBAGENT_TASKS = [
+  { key: 'a', name: 'Review the store', files: ['src/store.ts', 'src/slices/chat.ts'] },
+  {
+    key: 'b',
+    name: 'Review the host',
+    files: ['src-tauri/src/acp/client.rs', 'src-tauri/src/web/ws.rs']
+  }
+] as const
+
+/** `[SUBAGENTS]`: two subagents report activity until the turn ends. */
+function runSubagentTurn(id: number | string, sessionId: string, seconds: number): void {
+  inFlightBySession.set(sessionId, {
+    id,
+    sessionId,
+    startedAt: Date.now(),
+    chunks: 0,
+    scripted: true
+  })
+  const live = (): boolean => inFlightBySession.get(sessionId)?.id === id
+  const update = (sid: string, body: Record<string, JsonValue>): void =>
+    notify('session/update', { sessionId: sid, update: body })
+  const text = (sid: string, value: string, meta?: Record<string, JsonValue>): void =>
+    update(sid, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: value },
+      ...(meta ? { _meta: meta } : {})
+    })
+  const native = nativeSubagents
+  const tag = randomUUID().slice(0, 6)
+  const childSession = (key: string): string => `${sessionId}-sub-${key}-${tag}`
+  const dispatchId = (key: string): string => `toolu_bg_${key}_${tag}`
+
+  text(sessionId, 'I will run two reviewers in the background.\n\n')
+  for (const task of SUBAGENT_TASKS) {
+    const prompt = `Read ${task.files.join(' and ')} and report every bug you find.`
+    if (native) {
+      update(sessionId, {
+        sessionUpdate: 'subagent_spawned',
+        subagentSessionId: childSession(task.key),
+        name: task.name,
+        task: prompt,
+        capabilities: {}
+      })
+      continue
+    }
+    update(sessionId, {
+      sessionUpdate: 'tool_call',
+      toolCallId: dispatchId(task.key),
+      title: 'Agent',
+      kind: 'think',
+      status: 'pending',
+      rawInput: {
+        description: task.name,
+        prompt,
+        subagent_type: 'general-purpose',
+        run_in_background: true
+      },
+      _meta: { claudeCode: { toolName: 'Agent' } }
+    })
+    update(sessionId, {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: dispatchId(task.key),
+      status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: 'Async agent launched.' } }],
+      _meta: {
+        claudeCode: {
+          toolName: 'Agent',
+          toolResponse: {
+            status: 'async_launched',
+            isAsync: true,
+            agentId: `agent-${task.key}-${tag}`,
+            outputFile: `/tmp/agent-${task.key}-${tag}.output`
+          }
+        }
+      }
+    })
+  }
+
+  const firstEndAt = seconds * 0.45
+  const ended = new Set<string>()
+  const endSubagent = (key: string): void => {
+    if (ended.has(key)) return
+    ended.add(key)
+    if (native) {
+      update(sessionId, {
+        sessionUpdate: 'subagent_state_update',
+        subagentSessionId: childSession(key),
+        state: 'completed'
+      })
+    }
+  }
+  let step = 0
+  const work = (): void => {
+    if (!live()) return
+    const elapsed =
+      (Date.now() - (inFlightBySession.get(sessionId)?.startedAt ?? Date.now())) / 1000
+    if (elapsed >= firstEndAt) endSubagent('a')
+    if (elapsed >= seconds) {
+      endSubagent('b')
+      text(
+        sessionId,
+        'Both reviewers finished. The store has one stale selector; the host is clean.'
+      )
+      respond(id, { stopReason: 'end_turn' })
+      inFlightBySession.delete(sessionId)
+      return
+    }
+    const active = SUBAGENT_TASKS.filter((task) => !ended.has(task.key))
+    const task = active[step % Math.max(1, active.length)]
+    if (task) {
+      step++
+      const file = task.files[step % task.files.length]
+      const sid = native ? childSession(task.key) : sessionId
+      const parent = native ? undefined : { claudeCode: { parentToolUseId: dispatchId(task.key) } }
+      update(sid, {
+        sessionUpdate: 'tool_call',
+        toolCallId: `toolu_child_${task.key}_${step}_${tag}`,
+        title: `Read ${file}`,
+        kind: 'read',
+        status: 'completed',
+        locations: [{ path: file }],
+        _meta: { claudeCode: { toolName: 'Read', ...(parent?.claudeCode ?? {}) } }
+      })
+      text(sid, `Checked ${file} (step ${step}). `, parent)
+    }
+    setTimeout(work, 1500)
+  }
+  setTimeout(work, 1000)
+}
+
 interface PendingElicitation {
   /** The held `session/prompt` request id for the awaiting turn. */
   promptId: number | string
@@ -562,6 +713,7 @@ const ELICIT_TIMEOUT_SEC = 60
 
 function tick(): void {
   for (const inFlight of inFlightBySession.values()) {
+    if (inFlight.scripted) continue
     // `[ELICIT]` turns wait on the client's elicitation/create response;
     // no chunk stream — only the timeout below applies.
     if (inFlight.awaitingElicitation) {
@@ -655,7 +807,9 @@ function handle(msg: JsonRpcMessage): void {
   }
   const p = (params ?? {}) as Record<string, JsonValue>
   switch (method) {
-    case 'initialize':
+    case 'initialize': {
+      const caps = p.clientCapabilities
+      nativeSubagents = caps !== null && typeof caps === 'object' && 'subagents' in caps
       respond(id, {
         protocolVersion: 1,
         // `loadSession` is a boolean on the wire — a string like 'persistent'
@@ -665,6 +819,7 @@ function handle(msg: JsonRpcMessage): void {
         authMethods: []
       })
       break
+    }
     case 'newSession':
     case 'session/new': {
       const sid = `sess-${randomUUID().slice(0, 8)}`
@@ -718,6 +873,11 @@ function handle(msg: JsonRpcMessage): void {
       }
       if (/\[RICH\]/.test(promptText(p.prompt))) {
         replyRichTurn(id, sessionId)
+        return
+      }
+      const subagentSec = subagentSeconds(p.prompt)
+      if (subagentSec !== null && id !== undefined) {
+        runSubagentTurn(id, sessionId, subagentSec)
         return
       }
       const elicit = elicitationRequested(p.prompt)
