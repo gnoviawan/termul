@@ -94,6 +94,17 @@ export function isBackgroundSubagent(toolCall: ToolCall): boolean {
   return toolCall.subagentLifecycle?.background === true
 }
 
+const NO_CHILD_CALLS: readonly ToolCall[] = []
+
+/** The tool calls a subagent made, in arrival order (same array when none). */
+export function subagentChildCalls(
+  toolCalls: readonly ToolCall[] | undefined,
+  dispatchId: string
+): readonly ToolCall[] {
+  const children = (toolCalls ?? []).filter((tc) => tc.parentToolCallId === dispatchId)
+  return children.length > 0 ? children : NO_CHILD_CALLS
+}
+
 /**
  * Row duration in ms: live elapsed while running; otherwise the agent's own
  * total, the host end stamp, or the pill's observed settle time, in that order.

@@ -113,6 +113,8 @@ import {
 } from './slices/session'
 import { createSwitchSlice } from './slices/switch'
 import { appendBlocks, createTranscriptSlice } from './slices/transcript'
+import { applyCodexThreadStates, mergedLifecycleField } from './subagent-lifecycle'
+import { subagentChunkText, withSubagentIngest, withSubagentText } from './subagent-transcript'
 import type {
   AcpSession,
   AcpState,
@@ -324,6 +326,16 @@ async function installTransportRecovery(
       }
       messages.push(message)
     } else if (event.type === 'message_chunk') {
+      // Subagent text is transparent to the run (host fold parity) and
+      // belongs to its dispatch card.
+      if (typeof payload.parentToolCallId === 'string' && payload.parentToolCallId) {
+        const text = subagentChunkText(payload.role, payload.content)
+        const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === payload.parentToolCallId)
+        if (text !== null && idx !== -1) {
+          recoveredToolCalls[idx] = withSubagentText(recoveredToolCalls[idx], text)
+        }
+        continue
+      }
       const role = (
         payload.role === 'thought' ? 'thought' : payload.role === 'user' ? 'user' : 'agent'
       ) as MessageRole
@@ -359,7 +371,7 @@ async function installTransportRecovery(
       const toolCall = payload.toolCall as ToolCall | undefined
       if (!toolCall || typeof toolCall.toolCallId !== 'string') continue
       const stamped: ToolCall = {
-        ...toolCall,
+        ...withSubagentIngest(toolCall),
         ...applyTerminalStream(undefined, toolCall),
         timestamp: typeof toolCall.timestamp === 'number' ? toolCall.timestamp : Date.now(),
         // The envelope seq is the server record seq: timeline placement and
@@ -375,6 +387,7 @@ async function installTransportRecovery(
         recoveredToolCalls[idx] = {
           ...recoveredToolCalls[idx],
           ...stamped,
+          ...mergedLifecycleField(recoveredToolCalls[idx], stamped),
           timestamp: recoveredToolCalls[idx].timestamp,
           seq: recoveredToolCalls[idx].seq
         }
@@ -387,9 +400,11 @@ async function installTransportRecovery(
       const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === update.toolCallId)
       if (idx === -1) continue
       const prior = recoveredToolCalls[idx]
+      const ingested = withSubagentIngest(update)
       recoveredToolCalls[idx] = {
         ...prior,
-        ...update,
+        ...ingested,
+        ...mergedLifecycleField(prior, ingested),
         ...applyTerminalStream(prior, update),
         timestamp: prior.timestamp,
         seq: prior.seq
@@ -447,7 +462,11 @@ async function installTransportRecovery(
             ...current.toolCalls,
             [recovery.sessionId]: trimLiveToolCalls([
               ...splicedToolCalls,
-              ...dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
+              ...dropHiddenToolCalls(
+                applyCodexThreadStates(recoveredToolCalls),
+                installedMessages,
+                hidden
+              )
             ])
           }
         : current.toolCalls,

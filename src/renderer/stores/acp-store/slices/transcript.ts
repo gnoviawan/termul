@@ -70,12 +70,12 @@ import {
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
+import { mergedLifecycleField, withCodexThreadStates } from '../subagent-lifecycle'
 import {
-  mergedLifecycleField,
-  withCodexThreadStates,
-  withSubagentLifecycle
-} from '../subagent-lifecycle'
-import { withSubagentUsage } from '../subagent-usage'
+  appendSubagentChunk,
+  MAX_SUBAGENT_TEXT_CHARS,
+  withSubagentIngest
+} from '../subagent-transcript'
 import type {
   AcpSession,
   AcpState,
@@ -561,6 +561,15 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
   // Ingest caps each lifecycle string at 512 chars, so this stays small too.
   if (next.subagentLifecycle !== undefined && serializedLength(next.subagentLifecycle) <= 2048) {
     reduced.subagentLifecycle = next.subagentLifecycle
+  }
+  if (typeof next.parentToolCallId === 'string' && next.parentToolCallId.length <= 512) {
+    reduced.parentToolCallId = next.parentToolCallId
+  }
+  if (
+    typeof next.subagentText === 'string' &&
+    next.subagentText.length <= MAX_SUBAGENT_TEXT_CHARS
+  ) {
+    reduced.subagentText = next.subagentText
   }
   if (
     typeof next.terminalOutput === 'string' &&
@@ -1253,13 +1262,24 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       }
       return
     }
-    // CAP-3 replay contract: drop chunks the installed payload already covers.
-    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     // Replay mode replaces the transcript with an immediate set (not a
     // per-token storm). Normal streaming is coalesced via rAF so ≤1 set()
     // fires per animation frame.
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
+    const parentToolCallId = e.parentToolCallId
+    if (parentToolCallId) {
+      // Subagent text belongs to its dispatch card, which the open turn's
+      // attach replay rebuilds, so it follows the tool-event coverage rule.
+      if (isHistoryCoveredToolEvent(e.sessionId, eventSeq)) return
+      const applyChild = (s: AcpState): Partial<AcpState> =>
+        appendSubagentChunk(s, { ...e, parentToolCallId })
+      if (useCoalesce) coalesceSet(e.sessionId, applyChild)
+      else set(applyChild)
+      return
+    }
+    // CAP-3 replay contract: drop chunks the installed payload already covers.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     const apply = (s: AcpState): Partial<AcpState> => {
       const sess = s.sessions[e.sessionId]
       // Drop chunks for unknown or already-closed sessions (no orphan state) —
@@ -1439,7 +1459,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       )
       const stream = boundTerminalStream(applyTerminalStream(prior, e.toolCall))
       const stamped = clampLiveToolCallFields(e.sessionId, {
-        ...withSubagentLifecycle(withSubagentUsage(e.toolCall)),
+        ...withSubagentIngest(e.toolCall),
         ...stream,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
         seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : (replaySeq ?? nextSeq())
@@ -1511,7 +1531,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // carrying different fields would otherwise accumulate past the bound.
       const stream = boundTerminalStream(applyTerminalStream(list[idx], e.update))
       const clampedUpdate = clampLiveToolCallFields(e.sessionId, {
-        ...withSubagentLifecycle(withSubagentUsage(e.update)),
+        ...withSubagentIngest(e.update),
         ...stream
       })
       if (!clampedUpdate) return {}

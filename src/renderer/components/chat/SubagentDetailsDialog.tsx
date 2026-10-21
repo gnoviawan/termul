@@ -9,6 +9,7 @@ import {
 import type { ContentBlock, ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { AgentProse } from './ChatMessage'
+import { SubagentActivityList } from './SubagentActivityList'
 import { renderContentItem } from './ToolCallCard'
 import {
   describeToolCall,
@@ -30,12 +31,15 @@ const LIFECYCLE_STATUS: Record<string, string> = {
  */
 export function SubagentDetailsDialog({
   toolCall,
+  childToolCalls = [],
   parentTurnActive = false,
   open,
   onOpenChange,
   filePathContext
 }: {
   toolCall: ToolCall
+  /** Tool calls the subagent made (`parentToolCallId` = this dispatch). */
+  childToolCalls?: readonly ToolCall[]
   parentTurnActive?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -102,6 +106,23 @@ export function SubagentDetailsDialog({
                   Output file: {lifecycle.outputFile}
                 </p>
               )}
+            </section>
+          )}
+          {childToolCalls.length > 0 && (
+            <SubagentActivityList
+              childToolCalls={childToolCalls}
+              parentTurnActive={parentTurnActive}
+            />
+          )}
+          {toolCall.subagentText && (
+            <section className="space-y-1.5" data-testid="subagent-output">
+              <h3 className="text-xs font-medium text-muted-foreground">Subagent output</h3>
+              <AgentProse
+                text={toolCall.subagentText}
+                streaming={running}
+                reduced={reduced}
+                filePathContext={filePathContext}
+              />
             </section>
           )}
           {(hasContent || resultText) && (

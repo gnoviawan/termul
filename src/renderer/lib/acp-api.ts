@@ -213,6 +213,11 @@ export interface ToolCall {
   /** Lifecycle of a subagent dispatch, kept apart from the tool-call status:
    * a background launch completes its tool call long before the agent ends. */
   subagentLifecycle?: SubagentLifecycle
+  /** Subagent dispatch that made this call (`_meta.claudeCode.parentToolUseId`).
+   * The timeline shows such a call inside its subagent, not in the main turn. */
+  parentToolCallId?: string
+  /** Latest text the subagent wrote (bounded tail), kept on its dispatch call. */
+  subagentText?: string
   [k: string]: unknown
 }
 
@@ -480,6 +485,8 @@ export interface MessageChunkEvent {
   content: ContentBlock
   /** ACP message id. Equal ids belong to one message. */
   messageId?: string
+  /** Subagent dispatch that wrote this chunk; its text stays out of the main reply. */
+  parentToolCallId?: string
 }
 export interface ToolCallEvent {
   agentId: AgentId
