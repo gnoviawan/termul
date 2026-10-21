@@ -178,6 +178,43 @@ describe('subagent lifecycle ingest (Claude)', () => {
     expect(subagentStatus(stored('c'), true)).toBe('stopped')
   })
 
+  it('keeps a Cursor background task running after its result arrives', () => {
+    ingest('call', {
+      toolCallId: 'cursor-1',
+      status: 'pending',
+      rawInput: { _toolName: 'task', description: 'Explore', prompt: 'Map the repo' }
+    })
+    ingest('update', {
+      toolCallId: 'cursor-1',
+      status: 'completed',
+      rawOutput: { isBackground: true }
+    })
+    const call = stored('cursor-1')
+    expect(call.subagentLifecycle).toEqual({ background: true })
+    expect(subagentStatus(call, true)).toBe('running')
+    expect(subagentStatus(call, false)).toBe('done')
+  })
+
+  it('keeps a Cursor foreground task done when its result arrives', () => {
+    ingest('call', {
+      toolCallId: 'cursor-2',
+      status: 'completed',
+      rawInput: { _toolName: 'task', description: 'Explore', prompt: 'Map the repo' },
+      rawOutput: { durationMs: 95_000, isBackground: false }
+    })
+    expect(stored('cursor-2').subagentLifecycle).toBeUndefined()
+    expect(subagentStatus(stored('cursor-2'), true)).toBe('done')
+  })
+
+  it('keeps an OpenCode background subagent running after its launch returns', () => {
+    ingest('call', {
+      toolCallId: 'oc-1',
+      status: 'completed',
+      rawInput: { agent: 'general', description: 'Explore', prompt: 'p', background: true }
+    })
+    expect(subagentStatus(stored('oc-1'), true)).toBe('running')
+  })
+
   it('keeps the lifecycle when an oversized call degrades to the structural subset', () => {
     ingest('call', { toolCallId: 'tc-5', status: 'completed', rawInput: claudeAgentInput })
     ingest('update', { toolCallId: 'tc-5', blob: 'x'.repeat(500_000) })

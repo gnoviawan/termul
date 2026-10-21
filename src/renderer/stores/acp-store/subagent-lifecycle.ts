@@ -4,9 +4,12 @@
  * the agent ends. Sources, in the order they are read:
  *
  * - `_meta["termul/subagent"]`: the host's native subagent state (Claude
- *   `subagent_update`), already normalized to running/completed/failed/cancelled.
+ *   native subagent sessions), already normalized to
+ *   running/completed/failed/cancelled.
  * - `_meta.claudeCode.toolResponse`: Claude's `async_launched` launch receipt.
- * - `rawInput.run_in_background`: the request for a background launch.
+ * - `rawOutput.isBackground`: Cursor's background task result.
+ * - `rawInput.run_in_background` (or `background`, OpenCode): the request for
+ *   a background launch.
  *
  * Codex reports agent state on other tool calls (`agentsStates` and activity
  * cards), so {@link applyCodexThreadStates} patches it onto the spawn calls.
@@ -101,15 +104,21 @@ function fromRawInput(rawInput: unknown): SubagentLifecycle | undefined {
   return { background: true }
 }
 
+function fromRawOutput(rawOutput: unknown): SubagentLifecycle | undefined {
+  return asRecord(rawOutput)?.isBackground === true ? { background: true } : undefined
+}
+
 /** Lifecycle fields carried by one tool call or update, or undefined when none. */
 export function extractSubagentLifecycle(call: {
   toolCallId: string
   rawInput?: unknown
+  rawOutput?: unknown
   _meta?: unknown
 }): SubagentLifecycle | undefined {
   const meta = asRecord(call._meta)
+  const launch = mergeSubagentLifecycle(fromRawInput(call.rawInput), fromRawOutput(call.rawOutput))
   const merged = mergeSubagentLifecycle(
-    mergeSubagentLifecycle(fromRawInput(call.rawInput), fromLaunchReceipt(meta)),
+    mergeSubagentLifecycle(launch, fromLaunchReceipt(meta)),
     fromHostMarker(meta)
   )
   if (merged?.background) {
@@ -135,7 +144,7 @@ export function mergeSubagentLifecycle(
 
 /** `call` with the lifecycle it carries; the same object when it carries none. */
 export function withSubagentLifecycle<
-  T extends { toolCallId: string; rawInput?: unknown; _meta?: unknown }
+  T extends { toolCallId: string; rawInput?: unknown; rawOutput?: unknown; _meta?: unknown }
 >(call: T): T {
   const subagentLifecycle = extractSubagentLifecycle(call)
   return subagentLifecycle ? { ...call, subagentLifecycle } : call
