@@ -11,6 +11,7 @@ import {
 } from '@/lib/test-utils/overlay-back-stack'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { AgentModelSelector } from './AgentModelSelector'
+import { SelectorFooter } from './SelectorFooter'
 
 // jsdom omits `document.elementFromPoint`; Radix/floating-ui call it while
 // positioning the popover. Same stub as ChatInputBar.test.tsx.
@@ -85,6 +86,21 @@ vi.mock('@/hooks/use-resolved-supported-acp-agents', () => ({
 }))
 
 vi.mock('@/lib/acp-api', () => ({ acpApi: { installAcpAgent: mockInstallAcpAgent } }))
+
+// Mock persistenceApi so the rejected-option-values record tests (and any
+// other persistence traffic) never touch the Tauri plugin-store transport.
+const { mockPersistenceApi } = vi.hoisted(() => ({
+  mockPersistenceApi: {
+    read: vi.fn(async () => ({ success: false })),
+    write: vi.fn(async () => ({ success: true })),
+    writeDebounced: vi.fn(async () => ({ success: true })),
+    delete: vi.fn(async () => ({ success: true }))
+  }
+}))
+vi.mock('@/lib/api', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/api')>()
+  return { ...actual, persistenceApi: mockPersistenceApi }
+})
 
 vi.mock('@/hooks/use-mobile-web-shell', () => ({ useMobileWebShell: () => mockIsMobile.current }))
 
@@ -1076,5 +1092,65 @@ describe('agent-rejected option values — review hardening (#1489)', () => {
     // column instead of leaving an empty gap (grid template sized 1fr).
     const track = screen.getByRole('button', { name: 'Default' }).parentElement
     expect(track).toBeTruthy()
+  })
+})
+
+describe('agent-rejected option values — agent scoping & write chain (#1489 round 3)', () => {
+  afterEach(() => {
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.read.mockImplementation(async () => ({ success: false }))
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.write.mockImplementation(async () => ({ success: true }))
+  })
+
+  it("does not leak one agent's rejections into another agent on switch", async () => {
+    // Agent A rejects web-fetch; agent B never did. Switching the footer's
+    // agent (panel stays mounted) must show web-fetch for B again.
+    const store: Record<string, unknown> = {
+      'agents/rejected-option-values/agent-a': { agent: ['web-fetch'] }
+    }
+    mockPersistenceApi.read.mockImplementation(async (key: string) => ({
+      success: true,
+      data: store[key] ?? {}
+    }))
+    mockPersistenceApi.write.mockImplementation(async (key: string, value: unknown) => {
+      store[key] = value
+      return { success: true }
+    })
+
+    const onSetConfig = vi.fn((_c: string, v: string | boolean) =>
+      v === 'web-fetch' ? Promise.reject(new Error('nope')) : Promise.resolve()
+    )
+    const footer = (agentConfigId: string) => (
+      <SelectorFooter
+        thoughtLevel={null}
+        effortValue={undefined}
+        onEffort={vi.fn()}
+        fastMode={null}
+        fastOn={false}
+        onToggleFast={null}
+        genericOptions={[
+          option('agent', 'Agent', 'other', 'default', [
+            { value: 'default', name: 'Default' },
+            { value: 'web-fetch', name: 'web-fetch' }
+          ])
+        ]}
+        onSetConfig={onSetConfig}
+        disabled={false}
+        touch={false}
+        agentConfigId={agentConfigId}
+      />
+    )
+    const { rerender } = render(footer('agent-a'), { wrapper: TooltipProvider })
+    // Agent A: web-fetch hidden from the persisted record.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /web-fetch/ })).not.toBeInTheDocument()
+    })
+
+    // Switch to agent B: fresh state, value visible again.
+    rerender(footer('agent-b'))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /web-fetch/ })).toBeEnabled()
+    })
   })
 })

@@ -232,6 +232,14 @@ function BooleanOptionRow({
 }
 
 /**
+ * Serialized read-modify-write chain per agent config for persisted option
+ * rejections: a closure-local record is NOT a queue — two concurrent
+ * persistRejection calls could still race their reads and the last write
+ * would lose the first value (review). Mirrors composerOptionQueues.
+ */
+const rejectionWriteQueues = new Map<string, Promise<void>>()
+
+/**
  * Rows for the agent's generic (non-effort) config options. Selecting a value
  * that the agent rejects (e.g. a tool advertised as a segment — #1480's
  * `web-fetch`) marks that value unavailable for the rest of the panel's life:
@@ -287,14 +295,15 @@ function GenericOptionRows({
     // Re-read only when the agent changes; the advertised set is read at load.
   }, [agentConfigId, genericOptions])
 
-  // Serialized writes per agent config: concurrent rejections must not race a
-  // read-modify-write pair against each other (review).
-  const record: PersistedRejectedOptionValues = {}
   const persistRejection = (optionId: string, value: string): void => {
     if (!agentConfigId) return
-    void (async () => {
-      const key = PersistenceKeys.agentRejectedOptionValues(agentConfigId)
+    const key = PersistenceKeys.agentRejectedOptionValues(agentConfigId)
+    const prev = rejectionWriteQueues.get(key) ?? Promise.resolve()
+    // Each write reads the CURRENT stored record inside the chain, so two
+    // rejections can never race their reads against each other.
+    const next = prev.then(async () => {
       const result = await persistenceApi.read<PersistedRejectedOptionValues>(key)
+      const record: PersistedRejectedOptionValues = {}
       // A failed read is treated as an empty record and only ever merged —
       // never written back on its own — so it cannot wipe stored rejections.
       if (result.success && result.data) {
@@ -311,7 +320,16 @@ function GenericOptionRows({
           message: 'failed to persist a rejected option value (details withheld)'
         })
       }
-    })()
+    })
+    rejectionWriteQueues.set(
+      key,
+      next.finally(() => {
+        if (rejectionWriteQueues.get(key) === next) rejectionWriteQueues.delete(key)
+      })
+    )
+    next.catch(() => {
+      // Observed by the chain itself; nothing further to do.
+    })
   }
 
   const trySet = (optionId: string, value: string | boolean): Promise<void> => {
@@ -463,7 +481,11 @@ export function SelectorFooter({
       data-testid="selector-footer"
       className={cn('flex flex-col gap-1', touch ? 'px-3 py-2' : 'p-1')}
     >
+      {/* Keyed by agent: a selector can switch agents while mounted, and the
+          previous agent's rejection state must not leak into the new one
+          (review) — a key remount gives every agent a fresh state + preload. */}
       <GenericOptionRows
+        key={agentConfigId ?? 'no-agent'}
         genericOptions={genericOptions}
         onSetConfig={onSetConfig}
         disabled={disabled}
