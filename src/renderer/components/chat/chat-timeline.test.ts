@@ -135,6 +135,16 @@ describe('buildTimeline', () => {
   it('returns an empty timeline when there is nothing', () => {
     expect(buildTimeline([], [])).toEqual([])
   })
+
+  it('hides subagent tool calls whose dispatch card is listed', () => {
+    const tools = [
+      tool('dispatch', 10, 1),
+      { ...tool('child', 11, 2), parentToolCallId: 'dispatch' },
+      { ...tool('orphan', 12, 3), parentToolCallId: 'trimmed-dispatch' },
+      tool('main', 13, 4)
+    ]
+    expect(buildTimeline([], tools).map(timelineItemId)).toEqual(['dispatch', 'orphan', 'main'])
+  })
 })
 
 describe('consolidateThoughtGroups', () => {

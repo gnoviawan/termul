@@ -1,5 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/shallow'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -27,11 +28,14 @@ import {
 import { opencodeStatusLine } from './opencode-status'
 import { RowReveal } from './RowReveal'
 import { SubagentDetailsDialog } from './SubagentDetailsDialog'
+import { subagentChildCalls } from './subagent-strip'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import { TurnActivity } from './TurnActivity'
 import { type EnterTracker, useEnterTracker } from './use-enter-tracker'
 import { WorktreeCreationCard } from './WorktreeCreationCard'
+
+const NO_CALLS: readonly ToolCall[] = []
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
 function ItemCountReporter({ count }: { count: number }): null {
@@ -350,6 +354,12 @@ export function ChatMessageList({
         ? selectedItem.tool
         : selection.toolCall
       : null
+  const selectedToolId = selectedTool?.toolCallId
+  const selectedChildCalls = useAcpStore(
+    useShallow((s) =>
+      selectedToolId ? subagentChildCalls(s.toolCalls[sessionId], selectedToolId) : NO_CALLS
+    )
+  )
 
   if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState sessionId={sessionId} />
@@ -384,6 +394,7 @@ export function ChatMessageList({
       {selectedTool && (
         <SubagentDetailsDialog
           toolCall={selectedTool}
+          childToolCalls={selectedChildCalls}
           parentTurnActive={showRunningIndicator}
           filePathContext={filePathContext}
           open

@@ -44,12 +44,26 @@ pub(super) fn is_tool_event(type_: &str) -> bool {
 pub(super) fn is_fold_relevant(record: &PersistedEventRecord) -> bool {
     match record.type_.as_str() {
         "user_prompt" | "tool_call" | "prompt_complete" | "agent_switch" => true,
-        "message_chunk" => record
-            .payload
-            .get("content")
-            .is_some_and(|content| !content.is_null()),
+        "message_chunk" => {
+            !is_subagent_chunk(&record.payload)
+                && record
+                    .payload
+                    .get("content")
+                    .is_some_and(|content| !content.is_null())
+        }
         _ => false,
     }
+}
+
+/// True for a `message_chunk` written by a subagent (`parentToolCallId`).
+/// Its text belongs to the subagent, not the main reply, so every fold
+/// treats it as transparent: it neither opens nor closes a bubble.
+#[must_use]
+pub fn is_subagent_chunk(payload: &Value) -> bool {
+    payload
+        .get("parentToolCallId")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
 }
 
 /// The fold bucket a `message_chunk` joins — mirrors `fold_session_records`.
@@ -89,6 +103,7 @@ pub(crate) struct FoldState {
 pub(crate) fn fold_step(state: FoldState, type_: &str, payload: &Value) -> (FoldState, bool) {
     match type_ {
         "user_prompt" => (FoldState { open_role: None }, true),
+        "message_chunk" if is_subagent_chunk(payload) => (state, false),
         "message_chunk" => {
             let role = if payload.get("role").and_then(Value::as_str) == Some("thought") {
                 "thought"

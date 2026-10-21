@@ -20,6 +20,7 @@ import {
   type SubagentCounts,
   type SubagentStatus,
   selectCurrentTurnSubagents,
+  subagentChildCalls,
   subagentDurationMs,
   subagentMetrics,
   subagentStatus,
@@ -185,6 +186,10 @@ export function SubagentPill({
     if (live) lastSelected.current = live
   }, [live])
   const selected = selectedId ? (live ?? lastSelected.current) : null
+  const selectedChildCalls = useMemo(
+    () => (selectedId ? subagentChildCalls(toolCalls, selectedId) : []),
+    [toolCalls, selectedId]
+  )
   const liveSummary = COUNT_KEYS.filter((key) => counts[key] > 0)
     .map((key) => `${counts[key]} ${STATUS_LABEL[key]}`)
     .join(', ')
@@ -324,6 +329,7 @@ export function SubagentPill({
       {selected && (
         <SubagentDetailsDialog
           toolCall={selected}
+          childToolCalls={selectedChildCalls}
           parentTurnActive={turnActive}
           filePathContext={filePathContext}
           open

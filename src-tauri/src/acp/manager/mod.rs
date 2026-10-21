@@ -71,6 +71,7 @@ mod close;
 mod exit;
 pub(crate) use gates::{ConfigOptionValue, GatewayAuthInput};
 mod history;
+mod native_subagents;
 mod project_binding;
 mod reopen;
 mod spawn_error;
@@ -96,6 +97,10 @@ mod test_driver;
 pub(crate) use test_driver::{FakeAuth, FakeDriver, FakeTurn};
 #[cfg(test)]
 mod real_loop_tests;
+#[cfg(test)]
+mod native_subagents_loop_tests;
+#[cfg(test)]
+mod native_subagents_tests;
 
 pub(crate) use history::*;
 pub use reopen::*;
