@@ -192,6 +192,30 @@ describe('background agents and reload', () => {
     expect(reloadChatBlockedReason(useAcpStore.getState(), 's1')).toBeNull()
   })
 
+  it('counts a native subagent session that still runs after the reply stops', () => {
+    useAcpStore.setState({
+      toolCalls: {
+        s1: [
+          {
+            toolCallId: 'termul-subagent:child-1',
+            status: 'in_progress',
+            seq: 5,
+            rawInput: { description: 'Review the host', prompt: 'p' },
+            subagentLifecycle: { state: 'running', agentId: 'child-1' }
+          },
+          {
+            toolCallId: 'termul-subagent:child-2',
+            status: 'completed',
+            seq: 6,
+            rawInput: { description: 'Review the store', prompt: 'p' },
+            subagentLifecycle: { state: 'completed', agentId: 'child-2', endedAt: 9 }
+          }
+        ]
+      }
+    })
+    expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(1)
+  })
+
   it('ignores background agents of an earlier turn', () => {
     useAcpStore.setState((s) => ({
       messages: { s1: [{ ...s.messages.s1[0], seq: 10 }] },

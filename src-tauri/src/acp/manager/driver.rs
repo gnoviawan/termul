@@ -499,6 +499,11 @@ pub(super) async fn drive_connection(
     // the title, a native agent `session_info_update` is suppressed here (the
     // durable defense in `append_record` is the second layer).
     let notif_persistence = persistence.clone();
+    let native_subagents = profile.native_subagents;
+    let raw_sinks = sinks.clone();
+    let raw_agent_id = agent_id.clone();
+    let raw_state = driver_state.clone();
+    let raw_persistence = persistence.clone();
     let perm_sinks = sinks.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
@@ -540,6 +545,29 @@ pub(super) async fn drive_connection(
     let connection_result = Client
         .builder()
         .name(format!("termul-acp-{agent_id}"))
+        // Before the typed handler: native subagent traffic is claimed and
+        // re-addressed to its chat; everything else passes on unchanged.
+        .on_receive_notification(
+            async move |raw: super::native_subagents::RawSessionUpdate, cx| {
+                let claimed = native_subagents
+                    && super::native_subagents::deliver_native_update(
+                        &raw_state,
+                        raw_persistence.as_ref(),
+                        &raw_sinks,
+                        &raw_agent_id,
+                        &raw.0,
+                    )
+                    .await?;
+                if claimed {
+                    return Ok(agent_client_protocol::Handled::Yes);
+                }
+                Ok(agent_client_protocol::Handled::No {
+                    message: (raw, cx),
+                    retry: false,
+                })
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_notification(
             async move |notification: agent_client_protocol::schema::v1::SessionNotification,
                         _cx| {
@@ -564,7 +592,7 @@ pub(super) async fn drive_connection(
                     options,
                     ..
                 } = request;
-                let session_string = session_id.0.to_string();
+                let session_string = perm_state.lock().chat_session_for(session_id.0.as_ref());
                 if perm_state.lock().is_ephemeral(&session_string) {
                     let _ = responder.respond(RequestPermissionResponse::new(
                         RequestPermissionOutcome::Cancelled,
@@ -606,7 +634,7 @@ pub(super) async fn drive_connection(
                 // parked `Responder<serde_json::Value>` (mirroring permissions),
                 // fan out `acp:question_request`, and resolve the responder when
                 // the user answers via `acp_answer_question` / `answer_question`.
-                let session_string = request.session_id.clone();
+                let session_string = question_state.lock().chat_session_for(&request.session_id);
                 if question_state.lock().is_ephemeral(&session_string) {
                     let _ = responder.respond(serde_json::json!({
                         "cancelled": true,
@@ -657,7 +685,9 @@ pub(super) async fn drive_connection(
                     CreateElicitationResponse, ElicitationAction, ElicitationMode, ElicitationScope,
                 };
                 let session_string = match request.scope() {
-                    ElicitationScope::Session(session) => session.session_id.0.to_string(),
+                    ElicitationScope::Session(session) => {
+                        elicit_state.lock().chat_session_for(session.session_id.0.as_ref())
+                    }
                     ElicitationScope::Request(_) => {
                         let Some(session_id) = elicit_state.lock().sole_active_turn_session() else {
                             log::warn!(
