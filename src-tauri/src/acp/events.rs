@@ -290,6 +290,10 @@ pub struct MessageChunkEvent {
     /// ACP `messageId`. Chunks with the same id belong to one message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    /// Subagent dispatch (Agent/Task tool call) that wrote this chunk. The
+    /// renderer keeps such text out of the main reply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_tool_call_id: Option<String>,
 }
 
 /// `acp:tool_call`
