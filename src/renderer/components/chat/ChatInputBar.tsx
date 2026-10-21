@@ -3,6 +3,7 @@ import { useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
+import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
 import { Paperclip } from '@/components/icons'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
@@ -666,6 +667,7 @@ export function ChatInputBar({
               </div>
             )}
             {permission && <PermissionPrompt permission={permission} isVisible={isVisible} />}
+            {!controlsDisabled && <ClaudeLimitWarning sessionId={session.id} atTop={!permission} />}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
