@@ -16,9 +16,11 @@ import {
   countSubagents,
   formatElapsed,
   formatTokens,
+  isBackgroundSubagent,
   type SubagentCounts,
   type SubagentStatus,
   selectCurrentTurnSubagents,
+  subagentDurationMs,
   subagentMetrics,
   subagentStatus,
   subagentTitle,
@@ -193,15 +195,7 @@ export function SubagentPill({
         const status = subagentStatus(tc, turnActive)
         const type = subagentType(tc)
         const metrics = subagentMetrics(tc)
-        const started = typeof tc.timestamp === 'number' ? tc.timestamp : null
-        const settledAt = endedAt[tc.toolCallId]
-        const durationMs =
-          status === 'running'
-            ? started === null
-              ? undefined
-              : now - started
-            : (metrics.totalDurationMs ??
-              (started !== null && settledAt !== undefined ? settledAt - started : undefined))
+        const durationMs = subagentDurationMs(tc, status, now, endedAt[tc.toolCallId])
         return (
           <li key={tc.toolCallId}>
             <button
@@ -223,6 +217,11 @@ export function SubagentPill({
                 {subagentTitle(tc)}
                 {type && <span className="ml-1.5 text-muted-foreground">{type}</span>}
               </span>
+              {isBackgroundSubagent(tc) && (
+                <span className="shrink-0 rounded-sm border border-border px-1 text-2xs text-muted-foreground">
+                  background
+                </span>
+              )}
               <span className="shrink-0 tabular-nums text-muted-foreground">
                 {durationMs !== undefined && formatElapsed(durationMs)}
                 {status !== 'running' && metrics.totalTokens !== undefined && (

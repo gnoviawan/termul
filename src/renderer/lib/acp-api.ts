@@ -210,7 +210,24 @@ export interface ToolCall {
   /** Subagent usage scalars lifted from `_meta.claudeCode.toolResponse` at ingest
    * (the next update replaces `_meta`, so the store keeps just these). */
   subagentUsage?: { totalTokens?: number; totalDurationMs?: number; totalToolUseCount?: number }
+  /** Lifecycle of a subagent dispatch, kept apart from the tool-call status:
+   * a background launch completes its tool call long before the agent ends. */
+  subagentLifecycle?: SubagentLifecycle
   [k: string]: unknown
+}
+
+export type SubagentLifecycleState = 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface SubagentLifecycle {
+  /** The dispatch returned at launch; the agent continues after its tool call completes. */
+  background?: boolean
+  /** Latest known agent state. Absent when only the launch is known. */
+  state?: SubagentLifecycleState
+  /** Host clock (epoch ms) when the agent reached a terminal state. */
+  endedAt?: number
+  agentId?: string
+  /** File that receives the background agent's output, when the agent names one. */
+  outputFile?: string
 }
 
 export interface ToolCallUpdate {
@@ -224,6 +241,8 @@ export interface ToolCallUpdate {
   rawOutput?: unknown
   /** See {@link ToolCall.diffStat} — carried by durable recovery records. */
   diffStat?: { added: number; removed: number }
+  /** See {@link ToolCall.subagentLifecycle} — derived at ingest. */
+  subagentLifecycle?: SubagentLifecycle
   [k: string]: unknown
 }
 
