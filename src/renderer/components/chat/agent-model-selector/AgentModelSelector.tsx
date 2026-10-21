@@ -245,6 +245,7 @@ export function AgentModelSelector({
       fastOn={fastOn}
       onToggleFast={fastNext ? () => fastSelect.select(fastNext) : null}
       genericOptions={genericOptions}
+      agentConfigId={source.currentConfigId}
       onSetConfig={(configId, valueId) =>
         // Return the setter's promise so a switch waits for the real outcome.
         // Rejections propagate to the footer, which both marks the value

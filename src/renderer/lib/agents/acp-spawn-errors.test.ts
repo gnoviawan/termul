@@ -75,16 +75,17 @@ describe('formatAcpSpawnError', () => {
     expect(result.detail).not.toContain('Install Node.js')
   })
 
-  it.each(['@scope/tool', 'tool+extra', 'tool.v2'])(
-    'recognizes npx child executable %s without blaming Node.js',
-    (binary) => {
-      const raw = `Process exited with exit status: 127: sh: ${binary}: command not found`
-      const result = formatAcpSpawnError(raw, { command: 'npx' })
-      expect(result).toContain(`"${binary}"`)
-      expect(result).toContain('npm config get cache')
-      expect(result).not.toContain('Install Node.js')
-    }
-  )
+  it.each([
+    '@scope/tool',
+    'tool+extra',
+    'tool.v2'
+  ])('recognizes npx child executable %s without blaming Node.js', (binary) => {
+    const raw = `Process exited with exit status: 127: sh: ${binary}: command not found`
+    const result = formatAcpSpawnError(raw, { command: 'npx' })
+    expect(result).toContain(`"${binary}"`)
+    expect(result).toContain('npm config get cache')
+    expect(result).not.toContain('Install Node.js')
+  })
 
   it('does not blame the npx cache for other exit-127 or missing-command failures', () => {
     const other = 'Process exited with exit status: 127: sh: unrelated tool failed'

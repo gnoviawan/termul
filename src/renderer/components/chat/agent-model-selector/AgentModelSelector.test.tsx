@@ -967,7 +967,7 @@ describe('AgentModelSelector on the mobile overlay back stack', () => {
 })
 
 describe('agent-rejected option values (#1480)', () => {
-  it('disables a segment the agent rejects instead of leaving a dead end', async () => {
+  it('hides a segment the agent rejects instead of leaving a dead end', async () => {
     const onSetConfig = vi.fn((_configId: string, valueId: string | boolean) => {
       // The agent accepts `default` but rejects the tool-as-segment value.
       return valueId === 'web-fetch'
@@ -990,17 +990,16 @@ describe('agent-rejected option values (#1480)', () => {
     expect(segment).toBeEnabled()
     expect(segment).toHaveAccessibleName('web-fetch')
 
+    // First rejection: the value disappears from the row (maintainer request
+    // on #1489 — hidden, not just disabled) and the sibling stays usable.
     fireEvent.click(segment)
     await waitFor(() => {
       expect(onSetConfig).toHaveBeenCalledWith('agent', 'web-fetch')
-      expect(screen.getByRole('button', { name: /web-fetch/ })).toBeDisabled()
     })
-    const rejectedSegment = screen.getByRole('button', { name: /web-fetch/ })
-    expect(rejectedSegment).toHaveAttribute('title', 'Not available for this agent')
-    // The reason is part of the accessible name — touch/screen-reader parity.
-    expect(rejectedSegment).toHaveAccessibleName('web-fetch — Not available for this agent')
-    const defaultSegment = screen.getByRole('button', { name: 'Default' })
-    expect(defaultSegment).toBeEnabled()
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /web-fetch/ })).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: 'Default' })).toBeEnabled()
   })
 
   it('keeps boolean-switch failure behavior unchanged (revert, no stuck optimistic)', async () => {

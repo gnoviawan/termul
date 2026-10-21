@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import type { PersistedRejectedOptionValues } from '@shared/types/persistence.types'
+import { PersistenceKeys } from '@shared/types/persistence.types'
+import { useEffect, useState } from 'react'
 import { Zap } from '@/components/icons'
 import {
   Select,
@@ -9,6 +11,8 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { persistenceApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { SegmentedTrack } from './SegmentedTrack'
 
@@ -92,7 +96,8 @@ function SelectTrack({
         {/* Above the selector popover (z-[100]); at z-50 the list opened behind it. */}
         <SelectContent className="z-[110]">
           {options?.flatMap((option) =>
-            typeof option.value === 'string' ? (
+            typeof option.value === 'string' &&
+            !(rejected.has(option.value) && option.value !== value) ? (
               <SelectItem
                 key={option.value}
                 value={option.value}
@@ -236,21 +241,76 @@ function GenericOptionRows({
   genericOptions,
   onSetConfig,
   disabled,
-  touch
+  touch,
+  agentConfigId
 }: {
   genericOptions: SessionConfigOption[]
   onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   disabled: boolean
   touch: boolean
+  /** The agent whose option values these are; keys the persisted rejections. */
+  agentConfigId: string | null
 }): React.JSX.Element {
-  // `${optionId}::${value}` keys the values the agent has rejected.
+  // `${optionId}::${value}` keys the values the agent has rejected — in this
+  // panel instance AND (per agent config) across sessions, so the panel opens
+  // with unavailable values already hidden (maintainer request on #1489).
   const [rejected, setRejected] = useState<Record<string, true>>({})
+
+  useEffect(() => {
+    if (!agentConfigId) return
+    let cancelled = false
+    void (async () => {
+      const result = await persistenceApi.read<PersistedRejectedOptionValues>(
+        PersistenceKeys.agentRejectedOptionValues(agentConfigId)
+      )
+      if (cancelled || !result.success || !result.data) return
+      // Drop entries for options the agent no longer advertises.
+      const advertised = new Set(genericOptions.map((o) => o.id))
+      const record: PersistedRejectedOptionValues = {}
+      for (const [optionId, values] of Object.entries(result.data)) {
+        if (!advertised.has(optionId)) continue
+        record[optionId] = values
+      }
+      const flat: Record<string, true> = {}
+      for (const [optionId, values] of Object.entries(record)) {
+        for (const v of values) flat[`${optionId}::${v}`] = true
+      }
+      setRejected(flat)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // Re-read only when the agent changes; the advertised set is read at load.
+  }, [agentConfigId, genericOptions])
+
+  const persistRejection = (optionId: string, value: string): void => {
+    if (!agentConfigId) return
+    void (async () => {
+      const key = PersistenceKeys.agentRejectedOptionValues(agentConfigId)
+      const result = await persistenceApi.read<PersistedRejectedOptionValues>(key)
+      const record: PersistedRejectedOptionValues = result.success ? (result.data ?? {}) : {}
+      const values = new Set(record[optionId] ?? [])
+      values.add(value)
+      record[optionId] = [...values]
+      const write = await persistenceApi.write(key, record)
+      if (!write.success) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'selector.rejectedOptionValues',
+          message: 'failed to persist a rejected option value (details withheld)'
+        })
+      }
+    })()
+  }
+
   const trySet = (optionId: string, value: string | boolean): Promise<void> => {
     const attempt = Promise.resolve(onSetConfig(optionId, value))
-    // Observe the failure to mark the value unavailable; the rejection still
-    // propagates to callers that hold the promise (boolean switch revert).
+    // Observe the failure to hide the value (now and on the next open); the
+    // rejection still propagates to callers that hold the promise (boolean
+    // switch revert).
     void attempt.catch(() => {
       setRejected((prev) => ({ ...prev, [`${optionId}::${String(value)}`]: true }))
+      if (typeof value === 'string') persistRejection(optionId, value)
     })
     return attempt
   }
@@ -289,6 +349,11 @@ function GenericOptionRows({
                 if (typeof value.value !== 'string') return []
                 const v = value.value
                 const isRejected = rejected[`${option.id}::${v}`] === true
+                // Rejected values are hidden from the track entirely (the user
+                // sees only what the agent accepts). The one exception is the
+                // currently-selected value — it stays visible (disabled) so a
+                // rejection mid-flight never blanks the row's active state.
+                if (isRejected && v !== option.currentValue) return []
                 return [
                   {
                     key: v,
@@ -349,7 +414,8 @@ export function SelectorFooter({
   genericOptions,
   onSetConfig,
   disabled,
-  touch
+  touch,
+  agentConfigId
 }: {
   thoughtLevel: SessionConfigOption | null
   effortValue: string | undefined
@@ -362,6 +428,7 @@ export function SelectorFooter({
   onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   disabled: boolean
   touch: boolean
+  agentConfigId: string | null
 }): React.JSX.Element | null {
   if (!thoughtLevel && !fastMode && genericOptions.length === 0) return null
   const effortOptions = thoughtLevel?.options ?? []
@@ -377,6 +444,7 @@ export function SelectorFooter({
         onSetConfig={onSetConfig}
         disabled={disabled}
         touch={touch}
+        agentConfigId={agentConfigId}
       />
       {thoughtLevel || fastMode ? (
         <div className="flex items-stretch gap-1">
