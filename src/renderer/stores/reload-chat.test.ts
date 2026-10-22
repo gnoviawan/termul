@@ -216,12 +216,29 @@ describe('background agents and reload', () => {
     expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(1)
   })
 
-  it('ignores background agents of an earlier turn', () => {
+  it('counts a known running agent from an earlier turn', () => {
     useAcpStore.setState((s) => ({
       messages: { s1: [{ ...s.messages.s1[0], seq: 10 }] },
       toolCalls: {
-        s1: [backgroundAgent('a', { subagentLifecycle: { background: true, state: 'running' } })]
+        s1: [
+          backgroundAgent('a', { subagentLifecycle: { background: true, state: 'running' } }),
+          {
+            toolCallId: 'termul-subagent:child-1',
+            status: 'in_progress',
+            seq: 4,
+            rawInput: { description: 'Review the host', prompt: 'p' },
+            subagentLifecycle: { state: 'running', agentId: 'child-1' }
+          }
+        ]
       }
+    }))
+    expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(2)
+  })
+
+  it('ignores a background launch from an earlier turn when the host never reported running', () => {
+    useAcpStore.setState((s) => ({
+      messages: { s1: [{ ...s.messages.s1[0], seq: 10 }] },
+      toolCalls: { s1: [backgroundAgent('a')] }
     }))
     expect(runningBackgroundAgentCount(useAcpStore.getState(), 's1')).toBe(0)
   })

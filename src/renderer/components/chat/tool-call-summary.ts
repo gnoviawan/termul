@@ -228,24 +228,22 @@ export function isToolCallRunning(toolCall: ToolCall): boolean {
 }
 
 /**
- * A subagent dispatch runs only while its parent turn is active: it is
+ * A subagent dispatch runs while its parent turn is active: it is
  * pending/in_progress, has no status yet (the adapter sends the dispatch
  * before any status update), or is a background agent whose launch call has
  * completed but whose agent has not ended. A cancelled or crashed turn can
- * leave a dispatch pending forever, so an ended turn never counts it as
- * running. A known terminal agent state always wins over the tool-call status.
+ * leave a dispatch pending forever, so an ended turn never counts that as
+ * running. A host lifecycle of `running` is different: the host reports the
+ * real end later, and the subagent can outlive the turn. A known terminal
+ * agent state always wins over the tool-call status.
  */
 export function isSubagentRunning(toolCall: ToolCall, parentTurnActive: boolean): boolean {
-  if (!parentTurnActive) return false
   const lifecycle = toolCall.subagentLifecycle
   if (lifecycle?.state !== undefined && lifecycle.state !== 'running') return false
   if (toolCall.status === 'failed') return false
-  return (
-    isToolCallRunning(toolCall) ||
-    toolCall.status == null ||
-    lifecycle?.background === true ||
-    lifecycle?.state === 'running'
-  )
+  if (lifecycle?.state === 'running') return true
+  if (!parentTurnActive) return false
+  return isToolCallRunning(toolCall) || toolCall.status == null || lifecycle?.background === true
 }
 
 function runningVerbForKind(kind: ToolKind | undefined): string {

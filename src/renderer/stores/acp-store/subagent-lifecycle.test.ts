@@ -44,6 +44,7 @@ import {
 import {
   _resetSubagentLifecycleLogsForTesting,
   applyCodexThreadStates,
+  cancelRunningSubagents,
   extractSubagentLifecycle,
   mergeSubagentLifecycle
 } from './subagent-lifecycle'
@@ -358,5 +359,31 @@ describe('applyCodexThreadStates', () => {
     expect(stored('spawn-1').subagentLifecycle?.state).toBe('running')
     ingest('call', { ...wait('completed'), seq: undefined } as unknown as Record<string, unknown>)
     expect(stored('spawn-1').subagentLifecycle?.state).toBe('completed')
+  })
+})
+
+describe('cancelRunningSubagents', () => {
+  it('cancels only calls the host still marks running', () => {
+    const running: ToolCall = {
+      toolCallId: 'child-1',
+      status: 'in_progress',
+      subagentLifecycle: { state: 'running', agentId: 'child-1' }
+    }
+    const done: ToolCall = {
+      toolCallId: 'child-2',
+      status: 'completed',
+      subagentLifecycle: { state: 'completed', endedAt: 5 }
+    }
+    const toolCalls = { s1: [running, done], s2: [running] }
+    const settled = cancelRunningSubagents(toolCalls, ['s1'], 20)
+    expect(settled).not.toBe(toolCalls)
+    expect(settled.s1[0]?.subagentLifecycle).toEqual({
+      state: 'cancelled',
+      agentId: 'child-1',
+      endedAt: 20
+    })
+    expect(settled.s1[1]).toBe(done)
+    expect(settled.s2).toBe(toolCalls.s2)
+    expect(cancelRunningSubagents(settled, ['s1'], 30)).toBe(settled)
   })
 })

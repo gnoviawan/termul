@@ -56,6 +56,7 @@ import {
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
+import { cancelRunningSubagents } from '../subagent-lifecycle'
 import type { AcpState, AgentStatus, SessionStatus } from '../types'
 import { clearPromptReconcile } from './prompt-reconcile'
 import {
@@ -1052,6 +1053,15 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       }
       return { agentStatus, launchingSessionIds, preparedSessions, sessions }
     })
+    const endedAt = Date.now()
+    const crashedSessions = Object.entries(get().sessions)
+      .filter(([, session]) => session.agentId === e.agentId)
+      .map(([id]) => id)
+    if (e.sessionId && !crashedSessions.includes(e.sessionId)) crashedSessions.push(e.sessionId)
+    set((s) => {
+      const toolCalls = cancelRunningSubagents(s.toolCalls, crashedSessions, endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
     if (
       e.sessionId &&
       get().sessions[e.sessionId] &&
@@ -1084,6 +1094,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // a same-id re-spawn would skip `authenticate` and a stopped agent would
     // accumulate a stale auth entry).
     authenticatedAgents.delete(e.agentId)
+    const goneSessionIds = Object.entries(get().sessions)
+      .filter(([, session]) => session.agentId === e.agentId)
+      .map(([id]) => id)
     dropInFlightAuthForAgent(e.agentId)
     lastAuthAttempt.delete(e.agentId)
     autoOpenGrantedFlight.delete(e.agentId)
@@ -1193,6 +1206,11 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // A dead process can never finish its browser-open flow — drop the
     // captured URL so the dialog dismisses.
     get().clearPendingBrowserOpen(e.agentId)
+    const endedAt = Date.now()
+    set((s) => {
+      const toolCalls = cancelRunningSubagents(s.toolCalls, goneSessionIds, endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
     // Persist closed status + transcript while maps still hold content, then
     // free WebView heap for every session this disconnect retired.
     for (const id of affected) {

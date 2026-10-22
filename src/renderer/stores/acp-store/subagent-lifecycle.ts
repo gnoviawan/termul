@@ -142,6 +142,45 @@ export function mergeSubagentLifecycle(
   return merged
 }
 
+/**
+ * The agent process is gone, so a subagent still marked `running` will never
+ * receive its end. Marks those calls `cancelled`. Returns the same map when
+ * nothing was running.
+ */
+export function cancelRunningSubagents(
+  toolCalls: Record<string, ToolCall[]>,
+  sessionIds: readonly string[],
+  endedAt: number
+): Record<string, ToolCall[]> {
+  let next: Record<string, ToolCall[]> | null = null
+  for (const sessionId of sessionIds) {
+    const calls = toolCalls[sessionId]
+    if (!calls) continue
+    let count = 0
+    const settled = calls.map((call) => {
+      if (call.subagentLifecycle?.state !== 'running') return call
+      count += 1
+      return {
+        ...call,
+        subagentLifecycle: {
+          ...call.subagentLifecycle,
+          state: 'cancelled' as const,
+          endedAt: call.subagentLifecycle.endedAt ?? endedAt
+        }
+      }
+    })
+    if (count === 0) continue
+    if (!next) next = { ...toolCalls }
+    next[sessionId] = settled
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.subagentLifecycle',
+      message: `Cancelled ${count} running subagents on chat ${sessionId}: the agent process is gone`
+    })
+  }
+  return next ?? toolCalls
+}
+
 /** `call` with the lifecycle it carries; the same object when it carries none. */
 export function withSubagentLifecycle<
   T extends { toolCallId: string; rawInput?: unknown; rawOutput?: unknown; _meta?: unknown }

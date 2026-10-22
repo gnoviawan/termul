@@ -176,6 +176,14 @@ describe('background subagents', () => {
     expect(subagentStatus(ended('cancelled'), true)).toBe('stopped')
   })
 
+  it('stays running after the turn when the host still reports running', () => {
+    const live = sub({
+      status: 'in_progress',
+      subagentLifecycle: { state: 'running', agentId: 'child-1' }
+    })
+    expect(subagentStatus(live, false)).toBe('running')
+  })
+
   it('times a background row from launch to its end, not by the launch duration', () => {
     const call = background({
       timestamp: 1_000,

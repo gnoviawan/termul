@@ -20,6 +20,7 @@ import {
 } from '@/stores/acp-store'
 import { ephemeralSessionIds } from '@/stores/acp-store/ephemeral-ids'
 import { liveSiblingCount, reloadInFlight } from '@/stores/acp-store/reload-guard'
+import { cancelRunningSubagents } from '@/stores/acp-store/subagent-lifecycle'
 import { sessionAgentConfigId } from '@/stores/claude-account-switch'
 
 const CANNOT_REOPEN = 'This agent cannot reload a chat. Open a new chat to use the new settings.'
@@ -36,22 +37,26 @@ function lastUserBoundary(messages: readonly ChatMessage[] | undefined): TurnBou
 }
 
 /**
- * Agents of the current turn that still run apart from the reply: background
- * agents, and agents with a known running state (a native subagent session
- * has no background flag). A reload starts a new agent process, which stops
- * them. A known running state counts after the turn ends too (an agent can
- * outlive its parent turn).
+ * Agents that a reload would stop. A host `running` state counts in every
+ * turn: a native subagent keeps running after the user sends another message.
+ * A background launch with no host state is only inferred for the current
+ * turn, and only while that turn is active.
  */
 export function runningBackgroundAgentCount(state: AcpState, sessionId: SessionId): number {
   const toolCalls = state.toolCalls?.[sessionId]
   if (!toolCalls || toolCalls.length === 0) return 0
   const turnActive = Boolean(state.sessions?.[sessionId]?.activeTurn)
   const boundary = lastUserBoundary(state.messages?.[sessionId])
-  return selectCurrentTurnSubagents(toolCalls, boundary).filter(
-    (tc) =>
-      tc.subagentLifecycle?.state === 'running' ||
-      (tc.subagentLifecycle?.background === true && isSubagentRunning(tc, turnActive))
+  const knownRunning = selectCurrentTurnSubagents(toolCalls, null).filter(
+    (tc) => tc.subagentLifecycle?.state === 'running'
   ).length
+  const inferredRunning = selectCurrentTurnSubagents(toolCalls, boundary).filter(
+    (tc) =>
+      tc.subagentLifecycle?.state !== 'running' &&
+      tc.subagentLifecycle?.background === true &&
+      isSubagentRunning(tc, turnActive)
+  ).length
+  return knownRunning + inferredRunning
 }
 
 export function agentCanReopenChat(
@@ -156,6 +161,15 @@ export async function reloadAgentChat(sessionId: SessionId): Promise<void> {
         }
       })
     }
+
+    // The old process is gone. Settle before the reopen reads the transcript
+    // back, so the new chat does not show those subagents as still running.
+    const endedAt = Date.now()
+    useAcpStore.setState((s) => {
+      const toolCalls = cancelRunningSubagents(s.toolCalls, [sessionId], endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
+    useAcpStore.getState().flushLiveSessionSaves()
 
     try {
       await useAcpStore.getState().openHistorySession(sessionId, {

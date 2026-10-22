@@ -473,4 +473,18 @@ describe('isSubagentRunning', () => {
     expect(isSubagentRunning(call({ status: 'completed' }), true)).toBe(false)
     expect(isSubagentRunning(call({ status: 'failed' }), true)).toBe(false)
   })
+
+  it('stays running after the turn when the host still reports running', () => {
+    const live = call({ status: 'in_progress', subagentLifecycle: { state: 'running' } })
+    expect(isSubagentRunning(live, false)).toBe(true)
+    expect(
+      isSubagentRunning(
+        call({ status: 'in_progress', subagentLifecycle: { state: 'completed' } }),
+        true
+      )
+    ).toBe(false)
+    expect(
+      isSubagentRunning(call({ status: 'failed', subagentLifecycle: { state: 'running' } }), false)
+    ).toBe(false)
+  })
 })

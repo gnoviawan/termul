@@ -441,6 +441,34 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
   })
 
+  it('agent_disconnected cancels subagents the host still marked running', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            timestamp: 1
+          }
+        ]
+      },
+      toolCalls: {
+        s1: [
+          {
+            toolCallId: 'termul-subagent:child-1',
+            status: 'in_progress',
+            rawInput: { description: 'Review', prompt: 'p' },
+            subagentLifecycle: { state: 'running', agentId: 'child-1' }
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+  })
+
   it.each([
     'killed',
     'reaped',
