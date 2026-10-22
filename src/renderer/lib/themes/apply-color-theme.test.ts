@@ -2,15 +2,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  applyColorTheme,
-  paletteToXtermTheme,
-  resolveThemeForTest,
-  TEXT_TOKENS
-} from './apply-color-theme'
+import { applyColorTheme, paletteToXtermTheme, resolveThemeForTest } from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 import { contrastRatio, hexToOklchComponents, oklchComponentsToHex } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
+import { TEXT_TOKENS } from './resolve-theme-tokens'
 import { PROJECT_COLOR_COMPONENTS } from './status-bar-fills'
 
 function cssVarToHex(name: string): string {
