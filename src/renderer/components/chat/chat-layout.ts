@@ -121,6 +121,6 @@ export function useComposerToolbarMode(
 
 /**
  * Lift for the question panel that replaces the composer, so it reads as
- * raised over the transcript. `data-flat-elevation` themes drop it.
+ * raised over the transcript. Per-theme value: `--elevation-panel`.
  */
-export const QUESTION_PANEL_SHADOW = 'shadow-[0_12px_32px_oklch(0_0_0/0.45)]'
+export const QUESTION_PANEL_SHADOW = 'shadow-panel'

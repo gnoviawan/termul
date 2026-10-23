@@ -8,14 +8,24 @@ function emitted(hex: string): string {
 }
 
 describe('termul light chrome', () => {
-  it('uses paper, mist, graphite ink, and a hairline border', () => {
-    expect(emitted(TERMUL_LIGHT_CHROME.background)).toBe('#ffffff')
+  it('uses the Interfere gray ramp', () => {
+    expect(emitted(TERMUL_LIGHT_CHROME.background)).toBe('#fcfcfc')
     expect(emitted(TERMUL_LIGHT_CHROME.card)).toBe('#ffffff')
-    expect(emitted(TERMUL_LIGHT_CHROME.sidebar ?? '')).toBe('#f9f9f9')
-    expect(emitted(TERMUL_LIGHT_CHROME.foreground)).toBe('#0d0d0d')
-    expect(emitted(TERMUL_LIGHT_CHROME.border)).toBe('#e5e5e5')
-    expect(emitted(TERMUL_LIGHT_CHROME.secondary ?? '')).toBe('#f2f2f2')
-    expect(TERMUL_LIGHT_CHROME.flatElevation).toBe(true)
+    expect(emitted(TERMUL_LIGHT_CHROME.sidebar ?? '')).toBe('#f6f6f6')
+    expect(emitted(TERMUL_LIGHT_CHROME.foreground)).toBe('#202020')
+    expect(emitted(TERMUL_LIGHT_CHROME.border)).toBe('#ededed')
+    expect(emitted(TERMUL_LIGHT_CHROME.input ?? '')).toBe('#d9d9d9')
+    expect(emitted(TERMUL_LIGHT_CHROME.secondary ?? '')).toBe('#f0f0f0')
+    expect(emitted(TERMUL_LIGHT_CHROME.mutedForeground)).toBe('#646464')
+  })
+
+  it('carries elevation in shadows instead of a flat override', () => {
+    const tokens = TERMUL_LIGHT_CHROME.tokens ?? {}
+    expect(tokens['--elevation-sm']).toContain('0 0 0 0.5px #0000000f')
+    expect(tokens['--elevation-lg']).toContain('0 3px 12px -4px #0000001a')
+    expect(tokens['--elevation-2xl']).toContain('0 12px 32px -16px #00000026')
+    expect(tokens['--skeleton']).toBe('#00000017')
+    expect(TERMUL_LIGHT_CHROME).not.toHaveProperty('flatElevation')
   })
 
   it('keeps ink and ash readable on paper', () => {
@@ -34,6 +44,6 @@ describe('termul light chrome', () => {
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.warning).toBe('#cd9731')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.error).toBe('#cd3131')
     expect(BUNDLED_COLOR_THEMES['github-light'].dark.chrome).toBeUndefined()
-    expect(BUNDLED_COLOR_THEMES.termul.dark.chrome?.flatElevation).toBeUndefined()
+    expect(BUNDLED_COLOR_THEMES.termul.dark.chrome?.input).toBeUndefined()
   })
 })

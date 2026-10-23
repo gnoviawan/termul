@@ -119,15 +119,20 @@ describe('apply-color-theme', () => {
       ).toBeGreaterThanOrEqual(4.5)
     })
 
-    it('paints Termul light as paper with a mist sidebar and drops the flat flag on dark', () => {
+    it('paints Termul light with Interfere grays and an exact #fcfcfc page', () => {
       applyColorTheme('termul-light')
-      expect(cssVarToHex('--background')).toBe('#f9f9f9')
-      expect(cssVarToHex('--terminal-bg')).toBe('#f9f9f9')
+      expect(cssVarToHex('--background')).toBe('#fcfcfc')
+      expect(cssVarToHex('--terminal-bg')).toBe('#fcfcfc')
+      expect(resolveThemeForTest(BUNDLED_COLOR_THEMES['termul-light']).xterm.background).toBe(
+        '#fcfcfc'
+      )
       expect(cssVarToHex('--card')).toBe('#ffffff')
-      expect(cssVarToHex('--foreground')).toBe('#0d0d0d')
-      expect(cssVarToHex('--sidebar-background')).toBe('#f9f9f9')
-      expect(cssVarToHex('--border')).toBe('#e5e5e5')
-      expect(document.documentElement.dataset.flatElevation).toBe('true')
+      expect(cssVarToHex('--foreground')).toBe('#202020')
+      expect(cssVarToHex('--sidebar-background')).toBe('#f6f6f6')
+      expect(cssVarToHex('--border')).toBe('#ededed')
+      expect(cssVarToHex('--input')).toBe('#d9d9d9')
+      expect(cssVarToHex('--muted-foreground')).toBe('#646464')
+      expect(document.documentElement.dataset.flatElevation).toBeUndefined()
       expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0d74ce')
       expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.accent).toBe('#0d74ce')
       expect(cssVarToHex('--accent')).toBe('#0d74ce')
@@ -141,7 +146,6 @@ describe('apply-color-theme', () => {
       ).toBeGreaterThanOrEqual(4.5)
 
       applyColorTheme('nord')
-      expect(document.documentElement.dataset.flatElevation).toBeUndefined()
       expect(cssVarToHex('--background')).not.toBe('#ffffff')
     })
   })

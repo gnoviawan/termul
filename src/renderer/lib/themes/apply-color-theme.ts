@@ -148,8 +148,9 @@ function applyCssVariables(
   const baseNeutralSurface = chrome
     ? emittedSurface(chrome.background)
     : brandTintedNeutral(palette)
+  // Chrome themes name their page exactly; only derived light canvases darken.
   const tintedNeutralSurface =
-    appearance === 'light'
+    appearance === 'light' && !chrome
       ? emittedSurface(darkenHex(baseNeutralSurface.hex, LIGHT_CANVAS_DARKEN))
       : baseNeutralSurface
   const tintedNeutral = chrome ? chrome.background : tintedNeutralSurface.hex
@@ -234,7 +235,7 @@ function applyCssVariables(
     '--glow-blue': GLOW_BLUE_COMPONENTS,
     '--glow-purple': GLOW_PURPLE_COMPONENTS,
     '--border': hexToOklchComponents(border),
-    '--input': hexToOklchComponents(border),
+    '--input': hexToOklchComponents(chrome?.input ?? border),
     '--field-border': readableUiComponents(border, [
       card,
       tintedNeutralSurface.emittedHex,
@@ -268,12 +269,6 @@ function applyCssVariables(
     root.style.setProperty(key, value)
   }
 
-  if (chrome?.flatElevation) {
-    root.dataset.flatElevation = 'true'
-  } else {
-    delete root.dataset.flatElevation
-  }
-
   applyDocumentAppearance(appearance)
 }
 
@@ -286,7 +281,8 @@ export function paletteToXtermTheme(
   const baseSurface = chrome
     ? emittedSurface(chrome.background).emittedHex
     : brandTintedNeutral(palette).emittedHex
-  const surface = appearance === 'light' ? darkenHex(baseSurface, LIGHT_CANVAS_DARKEN) : baseSurface
+  const surface =
+    appearance === 'light' && !chrome ? darkenHex(baseSurface, LIGHT_CANVAS_DARKEN) : baseSurface
   const foreground = chrome?.foreground ?? palette.ink
   return {
     background: surface,

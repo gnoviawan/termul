@@ -21,10 +21,7 @@ const Switch = React.forwardRef<
     {...props}
     ref={ref}
   >
-    <SwitchPrimitives.Thumb
-      className="switch-thumb pointer-events-none block size-4 rounded-full ring-0 transition-transform duration-150 ease-out data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0"
-      data-keep-shadow=""
-    />
+    <SwitchPrimitives.Thumb className="switch-thumb pointer-events-none block size-4 rounded-full ring-0 transition-transform duration-150 ease-out data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0" />
   </SwitchPrimitives.Root>
 ))
 Switch.displayName = SwitchPrimitives.Root.displayName

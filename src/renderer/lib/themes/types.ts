@@ -83,16 +83,16 @@ export interface ThemeChrome {
   sidebar?: string
   /** Recessed well. */
   muted: string
-  /** Hairline borders and inputs. */
+  /** Hairline borders. */
   border: string
+  /** Input outlines. Defaults to `border`. */
+  input?: string
   /** Primary copy. */
   foreground: string
   /** Secondary labels. */
   secondaryForeground: string
   /** Muted copy. The AA solver may lift this. */
   mutedForeground: string
-  /** Hairline borders carry elevation. Termul light only. */
-  flatElevation?: boolean
   /**
    * Exact solid brand fill (buttons, selected rows) with white text. Skips the
    * palette clamp, so the value must pass 4.5:1 with white on its own.

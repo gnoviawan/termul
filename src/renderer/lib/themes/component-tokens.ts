@@ -40,7 +40,14 @@ export const COMPONENT_TOKEN_DEFAULTS = {
   '--elevation-md': '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
   '--elevation-lg': '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
   '--elevation-xl': '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
-  '--elevation-2xl': '0 25px 50px -12px rgb(0 0 0 / 0.25)'
+  '--elevation-2xl': '0 25px 50px -12px rgb(0 0 0 / 0.25)',
+  // Floating chat chrome that used one-off shadows tuned for dark canvases.
+  /** Subagent pill. */
+  '--elevation-pill': '0 4px 16px oklch(0 0 0 / 0.4)',
+  /** Question panel that replaces the composer. */
+  '--elevation-panel': '0 12px 32px oklch(0 0 0 / 0.45)',
+  /** Subagent pill menu. */
+  '--elevation-menu': '0 12px 32px oklch(0 0 0 / 0.6)'
 } as const
 
 export type ComponentToken = keyof typeof COMPONENT_TOKEN_DEFAULTS

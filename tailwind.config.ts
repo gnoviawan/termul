@@ -147,6 +147,9 @@ export default {
         lg: 'var(--elevation-lg)',
         xl: 'var(--elevation-xl)',
         '2xl': 'var(--elevation-2xl)',
+        pill: 'var(--elevation-pill)',
+        panel: 'var(--elevation-panel)',
+        menu: 'var(--elevation-menu)',
         emboss: 'var(--shadow-emboss)',
         'emboss-hover': 'var(--shadow-emboss-hover)',
         // Alpha kept inline here (single place); the hue components come from
