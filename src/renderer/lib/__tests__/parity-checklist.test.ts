@@ -2217,3 +2217,33 @@ describe('Bug report parity (spec-bug-report-dialog)', () => {
     ).toBe(true)
   })
 })
+
+// GPUIX desktop host seam (apps/gpuix, unit P1): a non-Tauri desktop shell
+// registers OS openers and notifications through `desktop-host.ts`. Each
+// facade consults the host only on its non-Tauri branch, so Tauri and the
+// host-less browser keep their behavior. Behavior is covered by
+// `desktop-host.web.test.ts`; this block pins that the seam stays wired.
+describe('Desktop host seam parity (GPUIX)', () => {
+  const Seam = join(LIB_DIR, 'desktop-host.ts')
+
+  it('desktop-host.ts exports the registry and the full capability set', () => {
+    expect(existsSync(Seam), 'desktop-host.ts should exist').toBe(true)
+    const content = readFileSync(Seam, 'utf-8')
+    for (const name of ['registerDesktopHost', 'getDesktopHost', '_resetDesktopHostForTesting']) {
+      expect(content).toMatch(new RegExp(`export\\s+function\\s+${name}\\b`))
+    }
+    for (const method of ['openUrl', 'openPath', 'revealItemInDir', 'notify']) {
+      expect(content, `DesktopHost should declare ${method}`).toMatch(new RegExp(`\\b${method}\\(`))
+    }
+  })
+
+  it('the opener and notification facades consult the host', () => {
+    for (const facade of ['tauri-opener-api.ts', 'tauri-notification-api.ts']) {
+      const content = readFileSync(join(LIB_DIR, facade), 'utf-8')
+      expect(content, `${facade} should import getDesktopHost`).toMatch(
+        /import\s*\{[^}]*\bgetDesktopHost\b[^}]*\}\s*from\s*'\.\/desktop-host'/
+      )
+      expect(content).toMatch(/getDesktopHost\(\)/)
+    }
+  })
+})

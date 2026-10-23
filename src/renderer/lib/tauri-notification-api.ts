@@ -6,6 +6,8 @@
  *   the main window. Permission still uses `@tauri-apps/plugin-notification`.
  * - Web/remote: the Web Notifications API (`Notification.requestPermission()`
  *   + `new Notification(title, { body })`). A click calls `window.focus()`.
+ * - A non-Tauri desktop shell with a registered `DesktopHost` (GPUIX): the
+ *   host's OS notification. No permission prompt and no click callback.
  *
  * Permission is requested lazily (issue #843): the web root no longer asks
  * at startup — `sendDesktopNotification` initializes permission on first
@@ -15,6 +17,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
+import { getDesktopHost } from './desktop-host'
 import { logFrontendError } from './log-api'
 import { isTauriContext } from './tauri-runtime'
 
@@ -60,6 +63,11 @@ async function performInitNotificationPermissions(): Promise<void> {
       console.error('[Notification] Failed to initialize notification permissions:', error)
       permissionGranted = false
     }
+    return
+  }
+
+  if (getDesktopHost()) {
+    permissionGranted = true
     return
   }
 
@@ -133,6 +141,21 @@ export async function sendDesktopNotification(
         level: 'warn',
         message: error instanceof Error ? error.message : String(error),
         source: 'tauri-notification-api:show',
+        stack: error instanceof Error ? error.stack : undefined
+      })
+    }
+    return
+  }
+
+  const host = getDesktopHost()
+  if (host) {
+    try {
+      await host.notify(title, body)
+    } catch (error) {
+      void logFrontendError({
+        level: 'warn',
+        message: error instanceof Error ? error.message : String(error),
+        source: 'tauri-notification-api:desktop-host',
         stack: error instanceof Error ? error.stack : undefined
       })
     }

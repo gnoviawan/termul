@@ -11,11 +11,15 @@
  * (`openWithExternalApp`, `revealInFileManager`) have no browser equivalent
  * and return an explicit `WEB_UNSUPPORTED` result when called on web — they
  * never reach the stubbed plugin (which would throw `tauriUnavailable`).
+ *
+ * A non-Tauri desktop shell that registered a `DesktopHost` (the GPUIX
+ * client) gets the OS behavior on all three instead.
  */
 
 import type { IpcResult } from '@shared/types/ipc.types'
 import { openPath, openUrl, revealItemInDir } from '@tauri-apps/plugin-opener'
 
+import { type DesktopHost, getDesktopHost } from './desktop-host'
 import { isTauriContext } from './tauri-runtime'
 
 export interface OpenerApi {
@@ -24,10 +28,25 @@ export interface OpenerApi {
   revealInFileManager: (path: string) => Promise<IpcResult<void>>
 }
 
+async function viaHost(
+  run: (host: DesktopHost) => Promise<void>,
+  host: DesktopHost,
+  code: string
+): Promise<IpcResult<void>> {
+  try {
+    await run(host)
+    return { success: true, data: undefined }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error), code }
+  }
+}
+
 function createTauriOpenerApi(): OpenerApi {
   return {
     async openWithExternalApp(path: string): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
+        const host = getDesktopHost()
+        if (host) return viaHost((h) => h.openPath(path), host, 'OPEN_ERROR')
         return {
           success: false,
           error: 'Opening with external apps is not available in the web client',
@@ -61,6 +80,8 @@ function createTauriOpenerApi(): OpenerApi {
         if (!/^(https?:|mailto:)/i.test(url)) {
           return { success: true, data: undefined }
         }
+        const host = getDesktopHost()
+        if (host) return viaHost((h) => h.openUrl(url), host, 'OPEN_URL_ERROR')
         try {
           // No 'noopener' feature: it makes window.open return null even on
           // success, so the popup-blocked check below could never be honest.
@@ -101,6 +122,8 @@ function createTauriOpenerApi(): OpenerApi {
 
     async revealInFileManager(path: string): Promise<IpcResult<void>> {
       if (!isTauriContext()) {
+        const host = getDesktopHost()
+        if (host) return viaHost((h) => h.revealItemInDir(path), host, 'REVEAL_ERROR')
         return {
           success: false,
           error: 'Revealing in file manager is not available in the web client',
