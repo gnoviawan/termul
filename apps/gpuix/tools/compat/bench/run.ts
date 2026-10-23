@@ -10,6 +10,7 @@
  * `--loop` instead repeats one phase back to back with no sleeps and reports
  * the JS thread's CPU time per iteration, which contention from other
  * processes on a shared host does not inflate the way it inflates wall time.
+ * `--profile DIR` writes a `bun --cpu-prof-md` profile of every run there.
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
@@ -28,7 +29,8 @@ const { values } = parseArgs({
   options: {
     runs: { type: 'string', default: '7' },
     rows: { type: 'string', default: '60' },
-    loop: { type: 'string' }
+    loop: { type: 'string' },
+    profile: { type: 'string' }
   }
 })
 if (values.loop !== undefined && values.loop !== 'mount' && values.loop !== 'rerender') {
@@ -61,7 +63,8 @@ async function once<T>(mode: Mode, i: number): Promise<T> {
   rmSync(out, { force: true })
   const xvfb = await startXvfb(WINDOW_WIDTH, WINDOW_HEIGHT)
   try {
-    const child = Bun.spawn(['bun', build.entry], {
+    const profile = values.profile ? ['--cpu-prof-md', `--cpu-prof-dir=${path.resolve(values.profile, `${mode}-${i}`)}`] : []
+    const child = Bun.spawn(['bun', ...profile, build.entry], {
       cwd: path.dirname(build.entry),
       env: {
         ...process.env,

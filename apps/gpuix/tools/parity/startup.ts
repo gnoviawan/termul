@@ -80,20 +80,31 @@ async function firstSeen(app: App, started: number, probe: () => Promise<boolean
  * far. Contention from other processes on a shared host inflates wall time
  * much more than this.
  */
-function appCpuMs(entry: string): number {
+function pidsWithArg(arg: string): string[] {
+  const out: string[] = []
   for (const pid of readdirSync('/proc')) {
     if (!/^\d+$/.test(pid)) continue
-    let cmdline: string
     try {
-      cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8')
-    } catch {
-      continue
-    }
-    if (!cmdline.split('\0').includes(entry)) continue
-    const fields = readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ')
-    return (Number(fields[11]) + Number(fields[12])) * CLOCK_TICK_MS
+      if (readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').includes(arg)) out.push(pid)
+    } catch {}
   }
-  throw new Error(`no process runs ${entry}`)
+  return out
+}
+
+function appCpuMs(entry: string): number {
+  const [pid] = pidsWithArg(entry)
+  if (!pid) throw new Error(`no process runs ${entry}`)
+  const fields = readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ')
+  return (Number(fields[11]) + Number(fields[12])) * CLOCK_TICK_MS
+}
+
+/** The spawned server stops with the app; the next run needs its data lock and port. */
+async function serverGone(): Promise<void> {
+  const deadline = performance.now() + 30_000
+  while (pidsWithArg(dataDir).length > 0) {
+    if (performance.now() > deadline) throw new Error(`a server on ${dataDir} is still running`)
+    await Bun.sleep(100)
+  }
 }
 
 /** The launcher's server flags for a data dir (docs/launcher.md), so the seed lands where it reads. */
@@ -162,8 +173,7 @@ async function gpuixRun(entry: string, run: number, display: string): Promise<Sa
     return { subject, run, load1, windowMs, projectListMs, dashboardMs, dashboardCpuMs, frame }
   } finally {
     await app.close()
-    // The spawned server stops with the app; give the port and data lock back before the next run.
-    await Bun.sleep(1000)
+    await serverGone()
   }
 }
 
