@@ -40,9 +40,14 @@ setControlIo({
   }
 })
 const FONT_DIR = path.join(import.meta.dir, '../../assets/fonts')
+const box = process.env.PANE_BOX?.split(',').map(Number)
 boot(config, {
   control,
   stateFile,
+  box:
+    box && box.length === 4 && box.every(Number.isFinite)
+      ? { x: box[0]!, y: box[1]!, width: box[2]!, height: box[3]! }
+      : undefined,
   onRenderer: (renderer) => {
     for (const file of FONT_FILES)
       renderer.registerFont?.(readFileSync(path.join(FONT_DIR, path.basename(file))))

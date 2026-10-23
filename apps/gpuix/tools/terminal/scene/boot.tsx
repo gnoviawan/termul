@@ -30,7 +30,7 @@ import { log } from '../../../src/log'
 import { tw } from '../../../src/style/tw'
 import { screenOf } from '../../../src/terminal/xterm-facade'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
-import type { ControlIo, PaneSceneOptions, PaneSceneState } from './contract'
+import type { ControlIo, PaneBox, PaneSceneOptions, PaneSceneState } from './contract'
 
 let io: ControlIo = { read: () => null, write: () => {} }
 export function setControlIo(next: ControlIo): void {
@@ -70,7 +70,17 @@ let nextScreenId = 1
 const screensSeen = new Map<string, Set<number>>()
 
 /** PaneContent's tab strip and terminal body for one leaf. */
-function TerminalPane({ paneId, projectId }: { paneId: string; projectId: string }) {
+const TAB_STRIP = 36
+
+function TerminalPane({
+  paneId,
+  projectId,
+  box
+}: {
+  paneId: string
+  projectId: string
+  box?: PaneBox
+}) {
   const pane = useWorkspaceStore((state) =>
     getAllLeafPanes(selectProjectTree(state, projectId).root).find((leaf) => leaf.id === paneId)
   )
@@ -84,7 +94,20 @@ function TerminalPane({ paneId, projectId }: { paneId: string; projectId: string
   const tabs = pane.tabs.filter((tab) => tab.type === 'terminal')
   const visibleTabId = isActiveProject ? pane.activeTabId : undefined
   return (
-    <div style={tw('flex h-full w-full flex-col')}>
+    <div
+      style={
+        box
+          ? {
+              ...tw('flex flex-col'),
+              position: 'absolute',
+              left: box.x,
+              top: box.y - TAB_STRIP,
+              width: box.width,
+              height: box.height + TAB_STRIP
+            }
+          : tw('flex h-full w-full flex-col')
+      }
+    >
       <div style={tw('flex h-9 shrink-0 flex-row items-center gap-1 border-b border-border px-2')}>
         {tabs.map((tab) => {
           const terminal = terminals.find((t) => t.id === tab.terminalId)
@@ -153,10 +176,12 @@ function TerminalPane({ paneId, projectId }: { paneId: string; projectId: string
 /** ProjectTreeHost: the tree stays mounted; a hidden one is invisible and unclickable. */
 function ProjectHost({
   projectId,
-  isActiveProject
+  isActiveProject,
+  box
 }: {
   projectId: string
   isActiveProject: boolean
+  box?: PaneBox
 }) {
   const paneIds = useWorkspaceStore(
     useShallow((state) =>
@@ -186,7 +211,7 @@ function ProjectHost({
         }}
       >
         {paneIds.map((paneId) => (
-          <TerminalPane key={paneId} paneId={paneId} projectId={projectId} />
+          <TerminalPane key={paneId} paneId={paneId} projectId={projectId} box={box} />
         ))}
       </div>
     </ProjectPaneContext.Provider>
@@ -401,6 +426,7 @@ function Scene({
           key={`${projectId}-${generation}`}
           projectId={projectId}
           isActiveProject={projectId === active}
+          box={options.box}
         />
       ))}
     </div>

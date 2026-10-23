@@ -342,6 +342,9 @@ export function TerminalView(props: TerminalViewProps) {
     fit()
   }, [fit])
 
+  const onFocus = useCallback(() => setHasFocus(true), [])
+  const onBlur = useCallback(() => setHasFocus(false), [])
+
   const setHost = useCallback(
     (instance: PublicInstance | null) => {
       host.current = instance
@@ -572,8 +575,8 @@ export function TerminalView(props: TerminalViewProps) {
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
       onAuxClick={onAuxClick}
-      onFocus={() => setHasFocus(true)}
-      onBlur={() => setHasFocus(false)}
+      onFocus={onFocus}
+      onBlur={onBlur}
       style={{
         display: 'flex',
         flexDirection: 'column',

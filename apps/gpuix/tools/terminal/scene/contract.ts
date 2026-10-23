@@ -51,8 +51,17 @@ export interface ControlIo {
   write(file: string, text: string): void
 }
 
+export interface PaneBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface PaneSceneOptions<Renderer> {
   control: string
   stateFile: string
+  /** Where the pane body sits (the tab strip goes right above it); the whole window by default. */
+  box?: PaneBox
   onRenderer: (renderer: Renderer) => void
 }
