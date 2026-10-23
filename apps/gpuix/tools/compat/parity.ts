@@ -17,7 +17,7 @@ import { APP_DIR, REPO_DIR } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { diffPngs } from '../parity/diff'
 import { addProject, startTestServer, type TestServer } from '../parity/server'
-import { grabFrame, LAVAPIPE_ICD, startXvfb } from '../parity/shoot-gpuix'
+import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../parity/shoot-gpuix'
 import { buildFixtures } from './build-fixtures'
 import { FIXTURE_NAMES } from './fixtures/names'
 
@@ -134,7 +134,7 @@ async function shootWeb(server: TestServer, fixture: string, outPath: string) {
 
 /** The bundle as a plain child, so React errors and compat warnings land in a log. */
 async function shootGpuix(server: TestServer, entry: string, fixture: string, outPath: string, dir: string) {
-  const xvfb = await startXvfb(WINDOW_WIDTH, WINDOW_HEIGHT)
+  const xvfb = await startXvfb(WINDOW_WIDTH + SCREEN_MARGIN, WINDOW_HEIGHT + SCREEN_MARGIN)
   try {
     const app = Bun.spawn(['bun', entry], {
       cwd: path.dirname(entry),
@@ -157,7 +157,7 @@ async function shootGpuix(server: TestServer, entry: string, fixture: string, ou
     })
     await Bun.sleep(Number(values.settle))
     if (app.exitCode !== null) return `gpuix exited with ${app.exitCode}`
-    await grabFrame(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT, outPath)
+    await grabFrame(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT, outPath, await windowOrigin(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT))
     app.kill('SIGTERM')
     await Promise.race([app.exited, Bun.sleep(3000)])
     if (app.exitCode === null) app.kill('SIGKILL')

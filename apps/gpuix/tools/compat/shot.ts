@@ -9,7 +9,7 @@ import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { launch } from '@gpuix/react/automation'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
-import { grabFrame, LAVAPIPE_ICD, startXvfb } from '../parity/shoot-gpuix'
+import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../parity/shoot-gpuix'
 
 export interface ShotOptions {
   entry: string
@@ -20,7 +20,7 @@ export interface ShotOptions {
 }
 
 export async function shoot(opts: ShotOptions): Promise<void> {
-  const xvfb = await startXvfb(WINDOW_WIDTH, WINDOW_HEIGHT)
+  const xvfb = await startXvfb(WINDOW_WIDTH + SCREEN_MARGIN, WINDOW_HEIGHT + SCREEN_MARGIN)
   try {
     const app = await launch({
       command: 'bun',
@@ -37,7 +37,7 @@ export async function shoot(opts: ShotOptions): Promise<void> {
     try {
       if (opts.waitTestId) await app.getByTestId(opts.waitTestId).waitFor({ timeoutMs: 60_000 })
       await Bun.sleep(opts.settleMs ?? 600)
-      await grabFrame(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT, opts.out)
+      await grabFrame(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT, opts.out, await windowOrigin(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT))
     } finally {
       await app.close()
     }

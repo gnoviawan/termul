@@ -22,7 +22,7 @@ type GpuixApp = Awaited<ReturnType<typeof launch>>
 export const READY_TIMEOUT_MS = 60_000
 const SETTLE_MS = 400
 /** Extra screen around the window, so GPUI's off-centre placement stays on screen. */
-const SCREEN_MARGIN = 64
+export const SCREEN_MARGIN = 64
 export const LAVAPIPE_ICD = '/usr/share/vulkan/icd.d/lvp_icd.json'
 
 function freeDisplay(): number {
