@@ -16,7 +16,7 @@
  * focus returns to the textarea at the document's caret.
  */
 
-import { type KeyEvent, type PublicInstance, useGpuixRequired } from '@gpuix/react'
+import { flushSync, type KeyEvent, type PublicInstance, useGpuixRequired } from '@gpuix/react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
@@ -69,6 +69,16 @@ const CARET_SYNC_MS = 40
 const LOG_SOURCE = 'ChatComposerEditor.gpuix'
 
 const CAPTURE_STYLE = { position: 'absolute', left: 0, top: 0, width: 1, height: 1 } as const
+const PROBE_STYLE = { position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'hidden' } as const
+
+/**
+ * Set by the composer scene: the automation tree does not carry a textarea's
+ * value, so the editor mirrors its state into an unpainted text node, as the
+ * web editor exposes itself on its DOM node in test mode.
+ */
+function testHooksEnabled(): boolean {
+  return (globalThis as { __TERMUL_GPUIX_TEST_HOOKS__?: boolean }).__TERMUL_GPUIX_TEST_HOOKS__ === true
+}
 
 function isPrintable(init: KeyInit): boolean {
   return init.key.length === 1 && !init.ctrlKey && !init.metaKey && !init.altKey
@@ -110,7 +120,10 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
     const display = toDisplay(doc)
     if (display !== lastEmittedRef.current) {
       lastEmittedRef.current = display
-      propsRef.current.onValueChange(display)
+      // GPUIX can deliver a frame's change and submit events in one task; the
+      // host's Enter handler must already see this value, as it does after a
+      // ProseMirror transaction on the web.
+      flushSync(() => propsRef.current.onValueChange(display))
     }
     const displayCaret = toDisplayOffset(doc, caret)
     if (displayCaret !== lastCaretRef.current) {
@@ -314,6 +327,13 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
         style={CAPTURE_STYLE}
         onKeyDown={onCaptureKeyDown}
       />
+      {testHooksEnabled() ? (
+        <div style={PROBE_STYLE}>
+          <text testId="composer-editor-state">
+            {JSON.stringify({ text, display: toDisplay(docRef.current), menuOpen })}
+          </text>
+        </div>
+      ) : null}
     </div>
   )
 }
