@@ -12,12 +12,16 @@
  * processes on a shared host does not inflate the way it inflates wall time.
  */
 
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { APP_DIR, buildClient } from '../../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
 import { LAVAPIPE_ICD, startXvfb } from '../../parity/shoot-gpuix'
+import { stateRoot } from '../../shared/seed'
+
+const STATE = stateRoot('/tmp/gpuix-c1')
+mkdirSync(STATE, { recursive: true })
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -53,7 +57,7 @@ type GateResult = {
 type LoopResult = { iterations: number; msPerIteration: number; cpuMsPerIteration: number }
 
 async function once<T>(mode: Mode, i: number): Promise<T> {
-  const out = `/tmp/gpuix-c1/bench-${mode}-${i}.json`
+  const out = path.join(STATE, `bench-${mode}-${i}.json`)
   rmSync(out, { force: true })
   const xvfb = await startXvfb(WINDOW_WIDTH, WINDOW_HEIGHT)
   try {
@@ -69,7 +73,7 @@ async function once<T>(mode: Mode, i: number): Promise<T> {
         BENCH_OUT: out,
         BENCH_ROWS: values.rows,
         BENCH_PROFILE: values.loop ?? '',
-        TERMUL_GPUIX_STATE_DIR: `/tmp/gpuix-c1/bench-state-${i}`
+        TERMUL_GPUIX_STATE_DIR: path.join(STATE, `bench-state-${i}`)
       },
       stdout: 'ignore',
       stderr: 'ignore'

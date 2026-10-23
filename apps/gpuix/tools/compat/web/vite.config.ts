@@ -1,8 +1,9 @@
 import path from 'node:path'
 import { mergeConfig } from 'vite'
 import base from '../../../../../vite.config.web'
+import { stateRoot } from '../../shared/seed'
 
-export const WEB_FIXTURE_OUT = '/tmp/gpuix-c1/web-dist'
+export const WEB_FIXTURE_OUT = path.join(stateRoot('/tmp/gpuix-c1'), 'web-dist')
 
 const config = mergeConfig(base, {
   root: __dirname,

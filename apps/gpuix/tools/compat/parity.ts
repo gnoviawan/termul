@@ -18,11 +18,12 @@ import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { diffPngs } from '../parity/diff'
 import { addProject, startTestServer, type TestServer } from '../parity/server'
 import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../parity/shoot-gpuix'
+import { stateRoot } from '../shared/seed'
 import { buildFixtures } from './build-fixtures'
 import { FIXTURE_NAMES } from './fixtures/names'
 
-const WEB_DIST = '/tmp/gpuix-c1/web-dist'
-const STATE = '/tmp/gpuix-c1/parity-state'
+const WEB_DIST = path.join(stateRoot('/tmp/gpuix-c1'), 'web-dist')
+const STATE = path.join(stateRoot('/tmp/gpuix-c1'), 'parity-state')
 const OUT = path.join(APP_DIR, 'parity-out/compat')
 
 /** The target's own box. Full-frame numbers flatter a mostly empty frame. */
