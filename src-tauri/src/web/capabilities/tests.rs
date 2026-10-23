@@ -221,24 +221,58 @@ fn terminal_view_allow_list_excludes_every_mutation() {
     }
 }
 
+fn policy(ip: [u8; 4], flags: WriteFlags, token_gated: bool, proxied: bool) -> CapabilityPolicy {
+    CapabilityPolicy {
+        carrier: Carrier::Ws,
+        peer: peer(ip),
+        flags,
+        token_gated,
+        proxied,
+    }
+}
+
 #[test]
-fn host_local_needs_a_loopback_peer_on_a_token_gated_host_that_allows_writes() {
-    let local = peer([127, 0, 0, 1]);
-    let lan = peer([192, 168, 1, 50]);
-    let host_local = |peer, flags, gated| Capabilities::resolve(Carrier::Ws, peer, flags, gated).host_local;
-    assert!(host_local(local, flags(false, false), true));
+fn host_local_needs_loopback_a_token_gate_no_proxy_and_the_host_credential() {
+    let local = [127, 0, 0, 1];
+    let host_local = |ip, flags, gated, proxied, credential| {
+        policy(ip, flags, gated, proxied).resolve(credential).host_local
+    };
+    assert!(host_local(local, flags(false, false), true, false, true));
     assert!(
-        !host_local(local, flags(false, false), false),
+        !host_local(local, flags(false, false), true, false, false),
+        "a loopback peer with only the bearer token may be a reverse proxy"
+    );
+    assert!(
+        !host_local(local, flags(false, false), true, true, true),
+        "a proxy header means the client is elsewhere"
+    );
+    assert!(
+        !host_local(local, flags(false, false), false, false, true),
         "an ungated host cannot tell who connected"
     );
     assert!(
-        !host_local(lan, flags(true, false), true),
+        !host_local([192, 168, 1, 50], flags(true, false), true, false, true),
         "--allow-remote-writes admits writes, never the host's credentials"
     );
     assert!(
-        !host_local(local, flags(false, true), true),
+        !host_local(local, flags(false, true), true, false, true),
         "shared-live forwards tunnel traffic from loopback"
     );
+}
+
+#[test]
+fn every_forwarding_header_names_a_proxy() {
+    for name in ["Forwarded", "X-Forwarded-For", "X-Real-IP", "CF-Connecting-IP"] {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            "203.0.113.7".parse().unwrap(),
+        );
+        assert!(names_a_proxy(&headers), "{name}");
+    }
+    let mut direct = axum::http::HeaderMap::new();
+    direct.insert("origin", "http://127.0.0.1:8190".parse().unwrap());
+    assert!(!names_a_proxy(&direct));
 }
 
 #[test]

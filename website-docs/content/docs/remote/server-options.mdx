@@ -77,6 +77,23 @@ With this flag, other devices can do everything. File changes from other devices
 
 The default is view-only because changes from another device run with your user's permissions on the server. Turn the flag on only when you trust the network, or when the server is behind HTTPS. The flag has no effect when the server listens on `127.0.0.1`.
 
+## Features that use the server's own accounts
+
+Some features act with the accounts of the user who runs the server:
+
+- Adding, signing in to, renaming, and removing Claude accounts.
+- SSH hosts, SSH sessions, and SFTP file transfers. These use the server user's SSH keys.
+
+Only the Termul desktop app on the same machine gets these features. A browser never gets them, even a browser on the same machine. The reason is that a reverse proxy or a tunnel on the server makes every remote browser look like a local one, and the token alone cannot prove where a browser is.
+
+The server proves that a client runs on the same machine with a second secret:
+
+1. At each start, the server writes a new random value to `host-local.token` in its state folder. Only the server's user can read the file.
+2. The desktop app reads the file and sends the value when it connects.
+3. The server refuses the value when the connection comes through a proxy. A connection comes through a proxy when its request has a `Forwarded`, `X-Forwarded-For`, `X-Real-IP`, or `CF-Connecting-IP` header.
+
+Do not copy `host-local.token` to another device, and do not give it to a browser. Anyone who has it and can reach the server on `127.0.0.1` can use your SSH keys and Claude accounts.
+
 ## Put a reverse proxy in front
 
 A reverse proxy such as Caddy or nginx can add HTTPS in front of Termul. HTTPS keeps the token private on the network. It also lets phones [install Termul as an app](/docs/remote/install-app) and show notifications.

@@ -257,8 +257,8 @@ export const WS_REQUEST_TYPES = [
   'set_default_claude_account',
   'set_project_claude_account',
   // Account management, admitted only for a `hostLocal` connection (a client
-  // on the host itself that presented the server token; anything else is
-  // `forbidden`). `add_claude_account { name }` → `ClaudeAccount`;
+  // on the host itself that presented the host-local credential; anything
+  // else is `forbidden`). `add_claude_account { name }` → `ClaudeAccount`;
   // `login_claude_account { accountId }` → `{}` when the host's browser login
   // finishes; `cancel_claude_account_login { accountId }` → `{ cancelled }`;
   // `rename_claude_account { accountId, name }` → `{}`;
@@ -817,6 +817,12 @@ export const MAX_CLIENT_ID_LEN = 128
  */
 export interface AcpAuthenticatePayload {
   token?: string
+  /**
+   * The host-local credential the server wrote to
+   * `<state dir>/host-local.token`; only a client that can read that file has
+   * it. Grants `hostLocal`.
+   */
+  hostLocalToken?: string
   protocolVersion: number
   /** Per install / browser profile; persisted locally. */
   deviceId: string
@@ -826,9 +832,10 @@ export interface AcpAuthenticatePayload {
 
 /**
  * What the host granted this connection at `authenticate`. `write`: may
- * mutate host state (else view-only). `hostLocal`: a client on the host
- * itself that presented the server token; may manage Claude accounts and use
- * the host's SSH keys and sessions.
+ * mutate host state (else view-only). `hostLocal`: a loopback client, not
+ * behind a proxy, that presented the server token and the host-local
+ * credential; may manage Claude accounts and use the host's SSH keys and
+ * sessions.
  */
 export interface ConnectionCapabilities {
   write: boolean

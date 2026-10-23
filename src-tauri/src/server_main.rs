@@ -192,6 +192,15 @@ fn main() -> ExitCode {
                     warn_plaintext_transport();
                 }
             }
+            // Clients that act with this host's credentials prove they run
+            // here by reading this owner-only file (`web::host_local`).
+            match termul_manager_lib::web::host_local::issue(&data_paths.state_dir) {
+                Ok((credential, path)) => {
+                    auth.set_host_local_credential(credential);
+                    info!("termul-server: host-local credential written to {}", path.display());
+                }
+                Err(error) => warn!("termul-server: no host-local clients this run: {error}"),
+            }
             Some(auth)
         }
     };

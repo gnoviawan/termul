@@ -13,9 +13,13 @@
 //! [`Capabilities::host_local`] is the narrower grant for requests that act
 //! with the host's own credentials (Claude account management, SSH keys and
 //! sessions): a loopback peer on a token-gated deployment that does not deny
-//! writes. `--allow-remote-writes` never grants it.
+//! writes, whose upgrade names no proxy, and that presented the host-local
+//! credential (`web::host_local`) at `authenticate`. `--allow-remote-writes`
+//! never grants it.
 
 use std::net::SocketAddr;
+
+use axum::http::HeaderMap;
 
 use crate::web::ws::{AppState, ClientIdentity};
 
@@ -141,11 +145,11 @@ impl Capabilities {
     }
 
     /// Resolve a connection's capabilities from its carrier, deployment flags,
-    /// peer address and whether the host gates connections on a bearer token.
-    /// Logs the decision at the connection boundary (peer + carrier only —
-    /// never a token).
+    /// peer address and whether it proved it runs on the host
+    /// ([`CapabilityPolicy::resolve`]). Logs the decision at the connection
+    /// boundary (peer + carrier only — never a token).
     #[must_use]
-    pub fn resolve(carrier: Carrier, peer: SocketAddr, flags: WriteFlags, token_gated: bool) -> Self {
+    pub fn resolve(carrier: Carrier, peer: SocketAddr, flags: WriteFlags, host_proven: bool) -> Self {
         let decision = write_decision(peer, flags);
         match decision {
             WriteDecision::Allowed => {}
@@ -166,7 +170,7 @@ impl Capabilities {
         Self {
             carrier,
             write: decision.is_allowed(),
-            host_local: decision == WriteDecision::Allowed && token_gated,
+            host_local: decision == WriteDecision::Allowed && host_proven,
         }
     }
 }
@@ -180,6 +184,20 @@ pub struct CapabilityPolicy {
     pub flags: WriteFlags,
     /// The host requires the bearer token on `authenticate`.
     pub token_gated: bool,
+    /// The upgrade request carried a header a reverse proxy or tunnel adds
+    /// ([`PROXY_HEADERS`]).
+    pub proxied: bool,
+}
+
+/// Headers a reverse proxy or tunnel adds to a forwarded request. Their
+/// presence on a loopback upgrade means the client is somewhere else. nginx
+/// adds none by default, so this is defense in depth behind the credential.
+pub const PROXY_HEADERS: [&str; 4] = ["forwarded", "x-forwarded-for", "x-real-ip", "cf-connecting-ip"];
+
+/// Whether `headers` carry any of [`PROXY_HEADERS`].
+#[must_use]
+pub fn names_a_proxy(headers: &HeaderMap) -> bool {
+    PROXY_HEADERS.iter().any(|name| headers.contains_key(*name))
 }
 
 impl CapabilityPolicy {
@@ -191,13 +209,43 @@ impl CapabilityPolicy {
             peer,
             flags: WriteFlags::from_state(state),
             token_gated: state.web_auth.is_some(),
+            proxied: false,
         }
     }
 
-    /// Resolve the connection's capabilities (called once, at authenticate).
+    /// The same policy for an upgrade that did (`true`) or did not carry a
+    /// proxy header.
     #[must_use]
-    pub fn resolve(&self) -> Capabilities {
-        Capabilities::resolve(self.carrier, self.peer, self.flags, self.token_gated)
+    pub const fn through_proxy(mut self, proxied: bool) -> Self {
+        self.proxied = proxied;
+        self
+    }
+
+    /// Resolve the connection's capabilities (called once, at authenticate).
+    /// `host_credential`: the client presented the host-local credential.
+    #[must_use]
+    pub fn resolve(&self, host_credential: bool) -> Capabilities {
+        let host_proven = self.token_gated && host_credential && !self.proxied;
+        let capabilities = Capabilities::resolve(self.carrier, self.peer, self.flags, host_proven);
+        if capabilities.write && !capabilities.host_local && self.carrier == Carrier::Ws {
+            let reason = if !self.token_gated {
+                "the host is not token-gated"
+            } else if self.proxied {
+                "the upgrade carried a proxy header"
+            } else if !host_credential {
+                "no host-local credential presented"
+            } else {
+                "the peer is not loopback"
+            };
+            tracing::info!(
+                target: "termul::web::capabilities",
+                carrier = self.carrier.as_str(),
+                peer = %self.peer,
+                reason,
+                "connection is not host-local",
+            );
+        }
+        capabilities
     }
 }
 

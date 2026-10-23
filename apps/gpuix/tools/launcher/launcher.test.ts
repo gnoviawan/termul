@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, statSync } from 'node:fs'
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { hostCommands, runHostAction } from '../../src/launcher/desktop-host'
+import { hostLocalTokenFile, readHostLocalToken } from '../../src/launcher/host-local'
 import { claimInstance } from '../../src/launcher/instance'
 import { dataDirArgs, resolveServerBinary, serverDataDir } from '../../src/launcher/paths'
 import { classifyAuthReply } from '../../src/launcher/probe'
@@ -419,5 +420,18 @@ describe('desktop host commands', () => {
         stderr: 'not found'
       }))
     ).rejects.toThrow('notify-send exited 127: not found')
+  })
+})
+
+describe('host-local credential', () => {
+  test('is read from the data dir at each call, null until the server writes it', () => {
+    const dataDir = mkdtempSync(path.join(os.tmpdir(), 'gpuix-host-local-'))
+    const file = hostLocalTokenFile(dataDir)
+    expect(file).toBe(path.join(dataDir, 'host-local.token'))
+    expect(readHostLocalToken(file)).toBeNull()
+    writeFileSync(file, 'first\n', { mode: 0o600 })
+    expect(readHostLocalToken(file)).toBe('first')
+    writeFileSync(file, 'after-restart\n')
+    expect(readHostLocalToken(file)).toBe('after-restart')
   })
 })

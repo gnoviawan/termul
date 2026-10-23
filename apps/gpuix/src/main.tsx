@@ -9,9 +9,10 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { installBrowserEnv } from './env'
+import { readInitialWindowSize } from './env/window-size'
 import { launch } from './launcher'
 import { createDesktopHost } from './launcher/desktop-host'
-import { readInitialWindowSize } from './env/window-size'
+import { readHostLocalToken } from './launcher/host-local'
 import { log } from './log'
 import { FONT_FILES } from './style/fonts'
 
@@ -19,6 +20,7 @@ const launched = await launch()
 if (launched.kind === 'secondary') process.exit(0)
 
 const { config } = launched
+const { hostLocalTokenFile } = config
 const windowSize = readInitialWindowSize()
 installBrowserEnv(config, windowSize)
 log.info(
@@ -38,5 +40,6 @@ boot(config, {
   onFocusRequest: launched.onFocusRequest,
   desktopHost: createDesktopHost(),
   window: windowSize,
-  fonts
+  fonts,
+  hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null
 })

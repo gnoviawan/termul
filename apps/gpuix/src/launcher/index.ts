@@ -21,6 +21,7 @@ import { WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
 import type { ClientConfig } from '../client-config'
 import { readClientConfig } from '../env/config'
 import { log } from '../log'
+import { hostLocalTokenFile } from './host-local'
 import { claimInstance, instanceAddress } from './instance'
 import { type HostFacts, launcherDir, resolveServerBinary, serverDataDir } from './paths'
 import { probeServer } from './probe'
@@ -206,11 +207,14 @@ export async function launch(env: NodeJS.ProcessEnv = process.env): Promise<Laun
   )
   await supervisor.start()
 
-  const config = readClientConfig({
-    ...env,
-    TERMUL_SERVER_URL: supervisor.origin(),
-    TERMUL_SERVER_TOKEN: token
-  })
+  const config = {
+    ...readClientConfig({
+      ...env,
+      TERMUL_SERVER_URL: supervisor.origin(),
+      TERMUL_SERVER_TOKEN: token
+    }),
+    hostLocalTokenFile: hostLocalTokenFile(dataDir)
+  }
   return {
     kind: 'primary',
     config,

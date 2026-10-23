@@ -117,27 +117,31 @@ pub async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let lease = state.connections.shutdown.admit();
+    let proxied = crate::web::capabilities::names_a_proxy(&headers);
     // No size override: a connection cannot raise tungstenite's limits once it
     // has authenticated, so a bigger one would apply to every peer.
-    ws.on_upgrade(move |socket| serve_socket(lease, socket, state, peer, Carrier::Ws))
+    ws.on_upgrade(move |socket| serve_socket(lease, socket, state, peer, Carrier::Ws, proxied))
 }
 
 /// Serve an upgraded socket under its shutdown `lease`: [`run_relay`] until it
 /// ends, or until the host's drain bound forces an abort. `carrier` labels the
-/// connection for capabilities and presence.
+/// connection for capabilities and presence; `proxied`: the upgrade carried a
+/// proxy header.
 pub(super) async fn serve_socket<S>(
     lease: SocketLease,
     socket: S,
     state: AppState,
     peer: SocketAddr,
     carrier: Carrier,
+    proxied: bool,
 ) where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message, Error = axum::Error> + Send + 'static,
 {
     let stop = lease.stop_token();
-    lease.run(run_relay(socket, state, peer, carrier, stop)).await;
+    lease.run(run_relay(socket, state, peer, carrier, proxied, stop)).await;
 }
 
 /// CAP-3: consume an id-less `background`/`foreground` lifecycle control frame.
@@ -186,6 +190,7 @@ pub(super) async fn run_relay<S>(
     state: AppState,
     peer: SocketAddr,
     carrier: Carrier,
+    proxied: bool,
     stop: CancellationToken,
 ) where
     S: Stream<Item = Result<Message, axum::Error>>
@@ -209,7 +214,9 @@ pub(super) async fn run_relay<S>(
 
     let liveness = Arc::new(watchdog::Liveness::new());
     let conn = ConnState::new(
-        ConnectionAccess::new(CapabilityPolicy::for_connection(carrier, peer, &state)),
+        ConnectionAccess::new(
+            CapabilityPolicy::for_connection(carrier, peer, &state).through_proxy(proxied),
+        ),
         subscriptions,
     );
     let env = HandlerEnv::new(&state, out_tx.clone(), &conn);

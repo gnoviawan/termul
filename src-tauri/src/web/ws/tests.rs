@@ -1070,6 +1070,7 @@ pub(super) fn gated_policy(
             shared_live_writes_denied,
         },
         token_gated,
+        proxied: false,
     }
 }
 

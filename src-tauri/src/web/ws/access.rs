@@ -25,9 +25,10 @@ impl ConnectionAccess {
         }
     }
 
-    /// `authenticate` succeeded: resolve capabilities once.
-    pub(super) fn grant(&mut self) {
-        self.capabilities = self.policy.resolve();
+    /// `authenticate` succeeded: resolve capabilities once. `host_credential`:
+    /// the client presented the host-local credential.
+    pub(super) fn grant(&mut self, host_credential: bool) {
+        self.capabilities = self.policy.resolve(host_credential);
     }
 
     pub(super) fn carrier(&self) -> Carrier {
@@ -48,7 +49,7 @@ impl ConnectionAccess {
     #[cfg(test)]
     pub(super) fn granted(policy: CapabilityPolicy) -> Self {
         let mut access = Self::new(policy);
-        access.capabilities = policy.resolve();
+        access.capabilities = policy.resolve(true);
         access
     }
 }
@@ -80,7 +81,7 @@ pub(super) fn forbidden_reply(
     );
     let message = if host_local {
         format!(
-            "`{request_type}` uses this host's credentials; only a client on the host itself that presented the server token may send it"
+            "`{request_type}` uses this host's credentials; only a client on the host itself that presented the host-local credential may send it"
         )
     } else {
         format!("`{request_type}` requires write capability; this connection is view-only")

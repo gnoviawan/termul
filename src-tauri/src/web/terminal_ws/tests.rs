@@ -171,6 +171,7 @@ fn capability_policy(
             shared_live_writes_denied,
         },
         token_gated: false,
+        proxied: false,
     }
 }
 

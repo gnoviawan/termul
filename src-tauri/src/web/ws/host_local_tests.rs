@@ -32,21 +32,39 @@ fn code(reply: &WsReply) -> String {
     reply.err.as_ref().map(|e| e.code.clone()).unwrap_or_default()
 }
 
+const HOST_CREDENTIAL: &str = "host-local-credential";
+
 fn gate() -> Arc<WebAuth> {
-    Arc::new(WebAuth::new(
-        crate::web::auth::WebAuthToken::new("s3cret-token").expect("non-empty"),
-    ))
+    let gate = WebAuth::new(crate::web::auth::WebAuthToken::new("s3cret-token").expect("non-empty"));
+    gate.set_host_local_credential(
+        crate::web::auth::WebAuthToken::new(HOST_CREDENTIAL).expect("non-empty"),
+    );
+    Arc::new(gate)
 }
 
-/// Authenticate a connection from `policy`, then send every host-local
-/// request on it. Returns the `authenticate` payload and each request's code.
+/// Authenticate a connection from `policy` (presenting the host-local
+/// credential), then send every host-local request on it. Returns the
+/// `authenticate` payload and each request's code.
 fn run(policy: CapabilityPolicy, gated: bool) -> (Value, Vec<(String, String)>) {
+    run_presenting(policy, gated, Some(HOST_CREDENTIAL))
+}
+
+fn run_presenting(
+    policy: CapabilityPolicy,
+    gated: bool,
+    host_credential: Option<&str>,
+) -> (Value, Vec<(String, String)>) {
     let gate = gated.then(gate);
     let mut access = ConnectionAccess::new(policy);
     let mut authed = false;
     let mut identity = None;
+    let mut frame: Value = serde_json::from_str(&auth_frame("a", gated.then_some("s3cret-token")))
+        .expect("auth frame");
+    if let Some(credential) = host_credential {
+        frame["payload"]["hostLocalToken"] = json!(credential);
+    }
     let auth = handle_sync_with_access(
-        &auth_frame("a", gated.then_some("s3cret-token")),
+        &frame.to_string(),
         &mut authed,
         &mut identity,
         &mut access,
@@ -106,13 +124,33 @@ fn a_shared_live_tunnel_client_is_refused() {
 }
 
 #[test]
-fn a_loopback_client_holding_the_token_passes_the_check() {
+fn a_loopback_client_holding_the_token_and_the_host_credential_passes_the_check() {
     let (auth, codes) = run(gated_policy([127, 0, 0, 1], false, false, true), true);
     assert_eq!(auth["capabilities"], json!({ "write": true, "hostLocal": true }));
     // The harness host has no Account store, so each handler answers with
     // its own refusal: anything but `forbidden` proves the check let it in.
     for (type_, code) in codes {
         assert_ne!(code, "forbidden", "{type_}");
+    }
+}
+
+#[test]
+fn a_loopback_client_with_only_the_bearer_token_is_refused() {
+    for presented in [None, Some("a-guess"), Some("s3cret-token")] {
+        let (auth, codes) = run_presenting(gated_policy([127, 0, 0, 1], false, false, true), true, presented);
+        assert_eq!(auth["capabilities"], json!({ "write": true, "hostLocal": false }), "{presented:?}");
+        for (type_, code) in codes {
+            assert_eq!(code, "forbidden", "{type_} with {presented:?}");
+        }
+    }
+}
+
+#[test]
+fn a_client_behind_a_same_host_proxy_is_refused_even_with_the_credential() {
+    let (auth, codes) = run(gated_policy([127, 0, 0, 1], false, false, true).through_proxy(true), true);
+    assert_eq!(auth["capabilities"], json!({ "write": true, "hostLocal": false }));
+    for (type_, code) in codes {
+        assert_eq!(code, "forbidden", "{type_}");
     }
 }
 
@@ -129,7 +167,7 @@ fn the_refusal_names_the_host_local_requirement() {
     );
     assert_eq!(
         reply.err.unwrap().message,
-        "`rename_claude_account` uses this host's credentials; only a client on the host itself that presented the server token may send it"
+        "`rename_claude_account` uses this host's credentials; only a client on the host itself that presented the host-local credential may send it"
     );
 }
 

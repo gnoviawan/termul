@@ -200,7 +200,7 @@ async fn serve_connection(
     let stop = lease.stop_token();
     lease
         .run(async {
-            let relay = run_relay(carrier, inner.state.clone(), local_peer(), Carrier::Ipc, stop);
+            let relay = run_relay(carrier, inner.state.clone(), local_peer(), Carrier::Ipc, false, stop);
             tokio::pin!(relay);
             tokio::select! {
                 () = &mut relay => {}

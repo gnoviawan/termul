@@ -47,6 +47,7 @@ export function readClientConfig(env: NodeJS.ProcessEnv = process.env): ClientCo
   return {
     serverUrl: parseServerUrl(env.TERMUL_SERVER_URL),
     token,
-    stateDir: env.TERMUL_GPUIX_STATE_DIR?.trim() || defaultStateDir(env)
+    stateDir: env.TERMUL_GPUIX_STATE_DIR?.trim() || defaultStateDir(env),
+    hostLocalTokenFile: null
   }
 }
