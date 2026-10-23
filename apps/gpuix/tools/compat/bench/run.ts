@@ -10,21 +10,27 @@
  * `--loop` instead repeats one phase back to back with no sleeps and reports
  * the JS thread's CPU time per iteration, which contention from other
  * processes on a shared host does not inflate the way it inflates wall time.
+ * `--profile DIR` writes a `bun --cpu-prof-md` profile of every run there.
  */
 
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { APP_DIR, buildClient } from '../../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
 import { LAVAPIPE_ICD, startXvfb } from '../../parity/shoot-gpuix'
+import { stateRoot } from '../../shared/seed'
+
+const STATE = stateRoot('/tmp/gpuix-c1')
+mkdirSync(STATE, { recursive: true })
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
     runs: { type: 'string', default: '7' },
     rows: { type: 'string', default: '60' },
-    loop: { type: 'string' }
+    loop: { type: 'string' },
+    profile: { type: 'string' }
   }
 })
 if (values.loop !== undefined && values.loop !== 'mount' && values.loop !== 'rerender') {
@@ -53,11 +59,12 @@ type GateResult = {
 type LoopResult = { iterations: number; msPerIteration: number; cpuMsPerIteration: number }
 
 async function once<T>(mode: Mode, i: number): Promise<T> {
-  const out = `/tmp/gpuix-c1/bench-${mode}-${i}.json`
+  const out = path.join(STATE, `bench-${mode}-${i}.json`)
   rmSync(out, { force: true })
   const xvfb = await startXvfb(WINDOW_WIDTH, WINDOW_HEIGHT)
   try {
-    const child = Bun.spawn(['bun', build.entry], {
+    const profile = values.profile ? ['--cpu-prof-md', `--cpu-prof-dir=${path.resolve(values.profile, `${mode}-${i}`)}`] : []
+    const child = Bun.spawn(['bun', ...profile, build.entry], {
       cwd: path.dirname(build.entry),
       env: {
         ...process.env,
@@ -69,7 +76,7 @@ async function once<T>(mode: Mode, i: number): Promise<T> {
         BENCH_OUT: out,
         BENCH_ROWS: values.rows,
         BENCH_PROFILE: values.loop ?? '',
-        TERMUL_GPUIX_STATE_DIR: `/tmp/gpuix-c1/bench-state-${i}`
+        TERMUL_GPUIX_STATE_DIR: path.join(STATE, `bench-state-${i}`)
       },
       stdout: 'ignore',
       stderr: 'ignore'

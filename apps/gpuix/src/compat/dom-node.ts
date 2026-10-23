@@ -12,7 +12,10 @@
 
 import { appliedBatchCount } from '@gpuix/native/host'
 import type { DomHandlers } from './events'
+import { type CompatRenderer, type LiveReads, liveReads, type TreeJson } from './live-reads'
 import { compatWarn } from './log'
+
+export type { CompatRenderer } from './live-reads'
 
 /** What the compat layer stores on each GPUIX element it creates, as `props.__dom`. */
 export interface DomInfo {
@@ -30,25 +33,21 @@ export interface TrackedInstance {
   readonly props: { readonly __dom?: DomInfo; readonly value?: string }
 }
 
-export interface CompatRenderer {
-  focusElement(id: number): void
-  getFocusedElementId(): number | null
-  blur(): void
-  scrollTo(id: number, x: number, y: number): void
-  getScrollOffset(id: number): number[] | null
-  scrollIntoView(id: number): void
-  getElementBounds(id: number): { x: number; y: number; width: number; height: number } | null
-  getAutomationTree(): string
-}
-
 let renderer: CompatRenderer | null = null
+let reads: LiveReads | null = null
 
 export function bindCompatRenderer(next: CompatRenderer | null): void {
   renderer = next
+  reads = next ? liveReads(next) : null
 }
 
 export function compatRenderer(): CompatRenderer | null {
   return renderer
+}
+
+/** Geometry reads, memoized for the current task (`live-reads.ts`). */
+export function compatReads(): LiveReads | null {
+  return reads
 }
 
 const instances = new Map<number, TrackedInstance>()
@@ -94,22 +93,16 @@ interface TreeIndex {
   root: number | null
 }
 
-interface TreeJson {
-  id: number
-  type: string
-  children?: TreeJson[]
-}
-
 let index: TreeIndex = { parent: new Map(), children: new Map(), root: null }
 let indexBatch = -1
 
 /** The retained tree's parent/child links as of the last applied batch. */
 export function treeIndex(): TreeIndex {
   const batch = appliedBatchCount()
-  if (batch === indexBatch || !renderer) return index
+  if (batch === indexBatch || !reads) return index
   const parent = new Map<number, number>()
   const children = new Map<number, number[]>()
-  const json = JSON.parse(renderer.getAutomationTree()) as TreeJson | null
+  const json = reads.tree().root
   const walk = (node: TreeJson) => {
     if (!node.children?.length) return
     const ids: number[] = []
@@ -300,10 +293,11 @@ export class CompatElement {
 
   scrollIntoView(): void {
     renderer?.scrollIntoView(this.elementId)
+    reads?.invalidate()
   }
 
   getBoundingClientRect(): RectLike {
-    const b = renderer?.getElementBounds(this.elementId) ?? null
+    const b = reads?.bounds(this.elementId) ?? null
     if (!b) compatWarn('dom-method-partial', 'getBoundingClientRect before paint')
     return rect(b?.x ?? 0, b?.y ?? 0, b?.width ?? 0, b?.height ?? 0)
   }
@@ -333,7 +327,7 @@ export class CompatElement {
   }
 
   get scrollTop(): number {
-    const offset = renderer?.getScrollOffset(this.elementId)
+    const offset = reads?.scrollOffset(this.elementId)
     return offset ? -offset[1] : 0
   }
 
@@ -342,7 +336,7 @@ export class CompatElement {
   }
 
   get scrollLeft(): number {
-    const offset = renderer?.getScrollOffset(this.elementId)
+    const offset = reads?.scrollOffset(this.elementId)
     return offset ? -offset[0] : 0
   }
 
@@ -359,15 +353,24 @@ export class CompatElement {
     return this.contentExtent().width
   }
 
+  /** One tree read gives this box and every child's, from the same frame. */
   private contentExtent(): { width: number; height: number } {
-    const own = this.getBoundingClientRect()
+    const kids = treeIndex().children.get(this.elementId)
+    if (!kids?.length || !reads) {
+      const own = this.getBoundingClientRect()
+      return { width: own.width, height: own.height }
+    }
+    const painted = reads.tree().bounds
+    const own = painted.get(this.elementId) ?? { x: 0, y: 0, width: 0, height: 0 }
+    const left = this.scrollLeft
+    const top = this.scrollTop
     let right = own.width
     let bottom = own.height
-    for (const child of treeIndex().children.get(this.elementId) ?? []) {
-      const b = renderer?.getElementBounds(child)
+    for (const child of kids) {
+      const b = painted.get(child)
       if (!b) continue
-      right = Math.max(right, b.x - own.x + this.scrollLeft + b.width)
-      bottom = Math.max(bottom, b.y - own.y + this.scrollTop + b.height)
+      right = Math.max(right, b.x - own.x + left + b.width)
+      bottom = Math.max(bottom, b.y - own.y + top + b.height)
     }
     return { width: right, height: bottom }
   }
@@ -378,6 +381,7 @@ export class CompatElement {
     const left = options.left ?? this.scrollLeft
     const top = options.top ?? this.scrollTop
     renderer.scrollTo(this.elementId, left, top)
+    reads?.invalidate()
   }
 
   scrollBy(xOrOptions?: number | { top?: number; left?: number }, y?: number): void {

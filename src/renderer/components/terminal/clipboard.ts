@@ -1,8 +1,9 @@
 import type { Terminal } from '@xterm/xterm'
 import type { MutableRefObject } from 'react'
 import { isPlatformModifier } from '@/lib/platform'
+import { decideTerminalClipboardKey } from './clipboard-key'
 
-export const CLIPBOARD_RATE_LIMIT_MS = 100
+export { CLIPBOARD_RATE_LIMIT_MS } from './clipboard-key'
 
 export interface TerminalClipboardKeyActions {
   /** Copy current selection (Ctrl/⌘+C). */
@@ -34,57 +35,52 @@ export function handleTerminalClipboardKey(
   lastClipboardOpRef: MutableRefObject<number>,
   actions: TerminalClipboardKeyActions
 ): boolean | undefined {
-  if (!isPlatformModifier(event)) {
-    return undefined
-  }
-
-  // Rate limit check
   const now = Date.now()
-  if (now - lastClipboardOpRef.current < CLIPBOARD_RATE_LIMIT_MS) {
-    return false // Rate limited - prevent xterm handling but don't process
-  }
+  const decision = decideTerminalClipboardKey({
+    key: event.key,
+    platformModifier: isPlatformModifier(event),
+    hasSelection: () => terminal.hasSelection(),
+    clipboardAvailable: () =>
+      typeof navigator === 'undefined' || typeof navigator.clipboard !== 'undefined',
+    now,
+    lastClipboardOp: lastClipboardOpRef.current
+  })
 
-  switch (event.key.toLowerCase()) {
-    case 'c':
-      // Copy: if selection exists, copy and prevent xterm handling
-      // Otherwise allow xterm to handle (for interrupt signal)
-      if (terminal.hasSelection()) {
-        event.preventDefault()
-        const selection = terminal.getSelection()
-        if (!actions.copyRequiresNonEmptySelection || selection) {
-          lastClipboardOpRef.current = now
-          // Use the hook's copySelection for consistency
-          void actions.copySelection()
-        }
-        return false
+  switch (decision) {
+    case null:
+      return undefined
+    case 'rate-limited':
+      return false // Rate limited - prevent xterm handling but don't process
+    case 'copy': {
+      event.preventDefault()
+      const selection = terminal.getSelection()
+      if (!actions.copyRequiresNonEmptySelection || selection) {
+        lastClipboardOpRef.current = now
+        // Use the hook's copySelection for consistency
+        void actions.copySelection()
       }
+      return false
+    }
+    case 'interrupt':
       // No selection - allow xterm to send Ctrl+C (interrupt signal)
       return true
-
-    case 'v':
-      // Paste: read clipboard and paste to terminal. In a non-secure
-      // context (HTTP+bare-IP — GH-588), `navigator.clipboard` is
-      // undefined and the facade's paste-event fallback can't fire
-      // because preventDefault() here would suppress the very paste
-      // event it waits on. Degrade to xterm's native paste (the browser
-      // paste event on xterm's helper textarea) in that case; the
-      // secure-context path keeps the bracketed + sanitized paste via
-      // the facade (pasteFromClipboard).
-      if (typeof navigator !== 'undefined' && typeof navigator.clipboard === 'undefined') {
-        lastClipboardOpRef.current = now
-        return true
-      }
+    case 'native-paste':
+      // In a non-secure context (HTTP+bare-IP — GH-588) `navigator.clipboard`
+      // is undefined and the facade's paste-event fallback can't fire
+      // because preventDefault() here would suppress the very paste event it
+      // waits on. Degrade to xterm's native paste (the browser paste event
+      // on xterm's helper textarea); the secure-context path keeps the
+      // bracketed + sanitized paste via the facade (pasteFromClipboard).
+      lastClipboardOpRef.current = now
+      return true
+    case 'paste':
       event.preventDefault()
       lastClipboardOpRef.current = now
       // Use the hook's pasteFromClipboard for consistency
       void actions.pasteFromClipboard()
       return false
-
-    case 'a':
-      // Select all
+    case 'select-all':
       terminal.selectAll()
       return false
   }
-
-  return undefined
 }

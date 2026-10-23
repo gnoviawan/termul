@@ -15,7 +15,8 @@
  * - Vite's `?raw` suffix and eager raw `import.meta.glob` (agent and material
  *   icons, reached by the chat rows) become inlined file text.
  *
- * Run `bun build.ts` for one build, or `bun tools/dev.ts` to rebuild on change.
+ * Run `bun build.ts` for one production build (`--dev` for React's development
+ * build), or `bun tools/dev.ts` to rebuild on change.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -274,12 +275,23 @@ export interface BuildResult {
   logs: string[]
 }
 
+/**
+ * The production entry. `react`, `react-reconciler` and `@gpuix/react` are
+ * external and pick their build from `process.env.NODE_ENV` when they load,
+ * which ESM does before any line of the bundle runs. This file sets it first,
+ * so `bun dist/main.js` gets React's production build with or without the env.
+ */
+function productionEntry(bundle: string): string {
+  return `process.env.NODE_ENV = 'production'\nawait import(${JSON.stringify(`./${bundle}`)})\n`
+}
+
 export async function buildClient(
   entry: string = ENTRY,
   outdir: string = OUT_DIR,
   options: { production?: boolean } = {}
 ): Promise<BuildResult> {
   const reactResolves: ReactResolve[] = []
+  const name = path.basename(entry).replace(/\.tsx?$/, '')
   const result = await Bun.build({
     entrypoints: [entry],
     outdir,
@@ -289,15 +301,22 @@ export async function buildClient(
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
     plugins: [rawPlugin(), globPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
-    naming: '[name].[ext]',
+    naming: options.production
+      ? { entry: '[name].bundle.[ext]', chunk: 'chunk-[hash].[ext]', asset: '[name].[ext]' }
+      : '[name].[ext]',
+    // Dynamic imports (shiki grammars, mermaid, BlockNote) become chunks read on first use.
+    splitting: Boolean(options.production),
     // React's production build has no jsxDEV, so a production bundle needs jsx().
     ...(options.production
-      ? { jsx: { development: false }, define: { 'process.env.NODE_ENV': '"production"' } }
+      ? { minify: true, jsx: { development: false }, define: { 'process.env.NODE_ENV': '"production"' } }
       : {})
   })
+  if (result.success && options.production) {
+    await Bun.write(path.join(outdir, `${name}.js`), productionEntry(`${name}.bundle.js`))
+  }
   return {
     ok: result.success,
-    entry: path.join(outdir, `${path.basename(entry).replace(/\.tsx?$/, '')}.js`),
+    entry: path.join(outdir, `${name}.js`),
     reactResolves,
     logs: result.logs.map((log) => String(log))
   }
@@ -305,7 +324,7 @@ export async function buildClient(
 
 if (import.meta.main) {
   const started = performance.now()
-  const result = await buildClient()
+  const result = await buildClient(ENTRY, OUT_DIR, { production: !Bun.argv.includes('--dev') })
   for (const line of result.logs) console.error(line)
   if (!result.ok) process.exit(1)
   console.log(

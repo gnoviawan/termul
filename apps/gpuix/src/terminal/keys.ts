@@ -6,6 +6,8 @@
  * character. Kybern's `terminal/keys.ts` (MIT) was the reference for the GPUI
  * key names.
  */
+import { decideTerminalClipboardKey } from '@/components/terminal/clipboard-key'
+
 export interface KeyModifiers {
   shift?: boolean
   alt?: boolean
@@ -25,6 +27,8 @@ export type KeyAction =
   | { type: 'copy' }
   | { type: 'paste' }
   | { type: 'select-all' }
+  /** Taken by the clipboard rate limit: swallowed, nothing sent. */
+  | { type: 'swallow' }
   | { type: 'none' }
 
 export interface KeyContext {
@@ -33,6 +37,9 @@ export interface KeyContext {
   hasSelection: boolean
   /** macOS uses Cmd as the clipboard modifier, everything else Ctrl. */
   mac: boolean
+  /** For the shared clipboard rate limit: now and the last clipboard operation, in ms. */
+  now?: number
+  lastClipboardOp?: number
 }
 
 const ESC = '\x1b'
@@ -87,18 +94,30 @@ const CURSOR_KEYS: Record<string, string> = {
   end: 'F'
 }
 
-/**
- * The app's clipboard keys (`handleTerminalClipboardKey` in
- * src/renderer/components/terminal/clipboard.ts): with the platform modifier,
- * C copies when there is a selection and otherwise reaches the shell as
- * SIGINT, V pastes, A selects all.
- */
+/** The app's clipboard keys, decided by the keymap the DOM terminal uses (`clipboard-key.ts`). */
 function clipboardKey(key: string, m: KeyModifiers, context: KeyContext): KeyAction | null {
-  if (!(context.mac ? m.cmd : m.ctrl)) return null
-  if (key === 'c') return context.hasSelection ? { type: 'copy' } : null
-  if (key === 'v') return { type: 'paste' }
-  if (key === 'a') return { type: 'select-all' }
-  return null
+  const decision = decideTerminalClipboardKey({
+    key,
+    platformModifier: !!(context.mac ? m.cmd : m.ctrl),
+    hasSelection: () => context.hasSelection,
+    // GPUIX always has a clipboard path (clipboard.ts falls back to memory).
+    clipboardAvailable: () => true,
+    now: context.now ?? 0,
+    lastClipboardOp: context.lastClipboardOp ?? Number.NEGATIVE_INFINITY
+  })
+  switch (decision) {
+    case 'copy':
+      return { type: 'copy' }
+    case 'paste':
+    case 'native-paste':
+      return { type: 'paste' }
+    case 'select-all':
+      return { type: 'select-all' }
+    case 'rate-limited':
+      return { type: 'swallow' }
+    default:
+      return null
+  }
 }
 
 export function encodeKey(event: KeyPress, context: KeyContext): KeyAction {

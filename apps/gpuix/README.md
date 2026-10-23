@@ -33,7 +33,7 @@ Scripts:
 - `bun run dev` bundles, runs the bundle under `bun --hot`, and rebuilds when
   `src/`, `../../src/renderer` or `../../src/shared` change. A rebuild remounts
   the tree in the same window; state resets (GPUIX has no React Refresh on desktop).
-- `bun run build` writes `dist/main.js`; `bun run start` builds and runs it once.
+- `bun run build` writes the production bundle (`dist/main.js` sets `NODE_ENV=production`, then loads the minified `dist/main.bundle.js`; `--dev` builds React's development bundle instead); `bun run start` builds and runs it once.
 - `bun run typecheck` runs both tsc projects (see below).
 - `bun run check:react` proves the bundle shares one React 19 with `@gpuix/react`.
 - `bun run parity <scenario>` runs the pixel-parity harness.

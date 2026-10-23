@@ -8,7 +8,9 @@
  * (`viewportY + y` for a visible row `y`); `col` is a cell column.
  */
 import { type IBufferCell, Terminal } from '@xterm/headless'
+import { installColorReports } from './color-reports'
 import { buildPalette, resolveCellColors, type TerminalPalette, type TerminalTheme } from './colors'
+import { type MouseEncoding, trackMouseEncoding } from './mouse'
 
 export interface StyledRun {
   text: string
@@ -68,6 +70,8 @@ const ordered = (selection: Selection): [CellPoint, CellPoint] => {
 export class TerminalScreen {
   readonly terminal: Terminal
   palette: TerminalPalette
+  /** The cell geometry the view last painted with, for tools that aim the pointer. */
+  cellSize: { width: number; height: number } | null = null
   private selection: Selection | null = null
   private revision = 0
   private frameCache: ScreenFrame | null = null
@@ -76,6 +80,7 @@ export class TerminalScreen {
   private readonly frameMs: number
   private readonly listeners = new Set<(frame: ScreenFrame) => void>()
   private readonly cell: IBufferCell
+  private readonly mouse: ReturnType<typeof trackMouseEncoding>
 
   constructor(options: ScreenOptions) {
     this.terminal = new Terminal({
@@ -93,6 +98,13 @@ export class TerminalScreen {
     this.terminal.onScroll(() => this.invalidate())
     this.terminal.onResize(() => this.invalidate())
     this.terminal.onCursorMove(() => this.invalidate())
+    this.mouse = trackMouseEncoding(this.terminal)
+    installColorReports(this.terminal, () => this.palette)
+  }
+
+  /** The mouse report encoding the running program selected (DECSET 1006/1016). */
+  get mouseEncoding(): MouseEncoding {
+    return this.mouse.encoding
   }
 
   get cols(): number {
@@ -127,6 +139,17 @@ export class TerminalScreen {
     this.invalidate()
   }
 
+  scrollToLine(line: number): void {
+    this.terminal.scrollToLine(line)
+    this.invalidate()
+  }
+
+  /** Repaint every row, for a change the row keys do not see. */
+  refresh(): void {
+    this.rowCache.clear()
+    this.invalidate()
+  }
+
   scrollToBottom(): void {
     this.terminal.scrollToBottom()
     this.invalidate()
@@ -150,6 +173,15 @@ export class TerminalScreen {
     })
   }
 
+  /** Whether a cell boundary point lies inside the current selection. */
+  isSelected(point: CellPoint): boolean {
+    if (!this.selection) return false
+    const [start, end] = ordered(this.selection)
+    const after = point.row > start.row || (point.row === start.row && point.col >= start.col)
+    const before = point.row < end.row || (point.row === end.row && point.col < end.col)
+    return after && before
+  }
+
   getSelection(): Selection | null {
     return this.selection
   }
@@ -170,6 +202,36 @@ export class TerminalScreen {
       lines.push(text)
     }
     return lines.join('')
+  }
+
+  /**
+   * Select the next (or previous) occurrence of `term` after the selection,
+   * wrapping around the buffer, and scroll it into view. Plain text, case
+   * sensitive, one line at a time: the cases the DOM search handle offers.
+   */
+  find(term: string, backwards = false): boolean {
+    if (!term) return false
+    const buffer = this.terminal.buffer.active
+    const lines = buffer.length
+    const from = this.selection ? ordered(this.selection)[backwards ? 0 : 1] : null
+    for (let i = 0; i <= lines; i++) {
+      const offset = backwards ? -i : i
+      const row = ((from?.row ?? (backwards ? lines - 1 : 0)) + offset + lines) % lines
+      const text = buffer.getLine(row)?.translateToString(false) ?? ''
+      let col: number
+      if (backwards) {
+        const limit = i === 0 && from ? from.col - 1 : text.length
+        col = limit < 0 ? -1 : text.lastIndexOf(term, limit)
+      } else {
+        col = text.indexOf(term, i === 0 && from ? from.col : 0)
+      }
+      if (col < 0) continue
+      this.setSelection({ anchor: { row, col }, head: { row, col: col + term.length } })
+      if (row < buffer.viewportY || row >= buffer.viewportY + this.terminal.rows)
+        this.scrollToLine(Math.max(0, row - (this.terminal.rows >> 1)))
+      return true
+    }
+    return false
   }
 
   /** Word boundaries around a cell, for double-click selection. */
@@ -240,6 +302,7 @@ export class TerminalScreen {
   dispose(): void {
     if (this.pendingFrame) clearTimeout(this.pendingFrame)
     this.listeners.clear()
+    this.mouse.dispose()
     this.terminal.dispose()
   }
 

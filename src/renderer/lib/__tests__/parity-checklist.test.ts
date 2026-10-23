@@ -969,22 +969,24 @@ describe('Parity Checklist Automation', () => {
       // browser paste event reaches xterm's helper textarea. The secure-context
       // path keeps the bracketed + sanitized paste via pasteFromClipboard.
       // The keydown clipboard dispatch was split out of ConnectedTerminal.tsx
-      // into terminal/clipboard.ts (handleTerminalClipboardKey) — grep there.
-      const ConnectedTerminalClipboard = join(
-        LIB_DIR,
-        '..',
-        'components',
-        'terminal',
-        'clipboard.ts'
-      )
+      // into terminal/clipboard.ts (handleTerminalClipboardKey), and its pure
+      // decision into terminal/clipboard-key.ts (decideTerminalClipboardKey),
+      // which the GPUIX client shares — grep both.
+      const terminalDir = join(LIB_DIR, '..', 'components', 'terminal')
+      const ConnectedTerminalClipboard = join(terminalDir, 'clipboard.ts')
+      const ClipboardKey = join(terminalDir, 'clipboard-key.ts')
       expect(existsSync(ConnectedTerminalClipboard), 'terminal/clipboard.ts should exist').toBe(
         true
       )
+      expect(existsSync(ClipboardKey), 'terminal/clipboard-key.ts should exist').toBe(true)
+      const decision = readFileSync(ClipboardKey, 'utf-8')
+      expect(decision).toMatch(/case ['"]v['"]:\s*return input\.clipboardAvailable\(\) \? 'paste' : 'native-paste'/)
+      // Pins the non-secure branch exists (specific to the degrade path): the
+      // DOM handler reports the Async Clipboard API's presence and lets xterm
+      // take the key natively when it is missing.
       const content = readFileSync(ConnectedTerminalClipboard, 'utf-8')
-      expect(content).toMatch(/case ['"]v['"]/)
-      // Pins the non-secure branch exists (specific to the degrade path); the
-      // bare `return true` check was too coarse (matched any return in the file).
-      expect(content).toMatch(/typeof navigator\.clipboard === ['"]undefined['"]/)
+      expect(content).toMatch(/typeof navigator\.clipboard !== ['"]undefined['"]/)
+      expect(content).toMatch(/case ['"]native-paste['"]/)
     })
 
     it('CAP-3: DirectoryPicker sources the initial path from the host catalog (acpCatalogApi.listCatalog), not navigator.platform', () => {

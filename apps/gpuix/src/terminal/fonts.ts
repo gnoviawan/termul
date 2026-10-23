@@ -51,13 +51,47 @@ export interface CellMetrics {
   height: number
 }
 
+/** Ascent and descent in font units, as Skia reads them (OS/2 typo metrics when USE_TYPO_METRICS is set). */
+export function verticalMetrics(font: Buffer): {
+  ascent: number
+  descent: number
+  unitsPerEm: number
+} {
+  const tables = new Map<string, number>()
+  for (let i = 0, n = font.readUInt16BE(4); i < n; i++) {
+    const record = 12 + i * 16
+    tables.set(font.toString('latin1', record, record + 4), font.readUInt32BE(record + 8))
+  }
+  const head = tables.get('head')
+  const hhea = tables.get('hhea')
+  if (head === undefined || hhea === undefined) throw new Error('font has no head or hhea table')
+  const unitsPerEm = font.readUInt16BE(head + 18)
+  const os2 = tables.get('OS/2')
+  if (os2 !== undefined && (font.readUInt16BE(os2 + 62) & 0x80) !== 0) {
+    return { ascent: font.readInt16BE(os2 + 68), descent: -font.readInt16BE(os2 + 70), unitsPerEm }
+  }
+  return { ascent: font.readInt16BE(hhea + 4), descent: -font.readInt16BE(hhea + 6), unitsPerEm }
+}
+
+let regularMetrics: ReturnType<typeof verticalMetrics> | null = null
+
 /**
- * xterm.js cell geometry (CharSizeService + renderer dimensions): the measured
- * glyph advance, and `floor(charHeight * lineHeight)` for the row.
+ * The glyph box height Chromium reports for the terminal font
+ * (`fontBoundingBoxAscent + fontBoundingBoxDescent`): Blink rounds the
+ * ascent and the descent to whole pixels separately.
  */
-export function cellMetrics(
-  probe: { width: number; height: number; chars: number },
-  lineHeight: number
-): CellMetrics {
-  return { width: probe.width / probe.chars, height: Math.floor(probe.height * lineHeight) }
+export function terminalCharHeight(fontSize: number): number {
+  regularMetrics ??= verticalMetrics(readFileSync(TERMINAL_FONT_FILES.regular))
+  const { ascent, descent, unitsPerEm } = regularMetrics
+  return (
+    Math.round((ascent * fontSize) / unitsPerEm) + Math.round((descent * fontSize) / unitsPerEm)
+  )
+}
+
+/**
+ * xterm.js cell geometry (CharSizeService + the WebGL renderer's dimensions):
+ * `floor(advance)` wide, `floor(ceil(charHeight) * lineHeight)` tall.
+ */
+export function cellMetrics(advance: number, charHeight: number, lineHeight: number): CellMetrics {
+  return { width: Math.floor(advance), height: Math.floor(Math.ceil(charHeight) * lineHeight) }
 }
