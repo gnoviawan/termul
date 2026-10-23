@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.tools.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@gpuix/react"
+  },
+  "include": ["src/terminal", "tools/terminal", "../../src/renderer/vite-env.d.ts"],
+  "exclude": []
+}

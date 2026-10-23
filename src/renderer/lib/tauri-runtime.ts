@@ -35,7 +35,7 @@ type ServerCapabilityState = {
   /** Bounded backoff retry timer (cleared on success/reset). `null` when no
    * retry is pending. Tracks the `setTimeout` handle so a reset or a
    * successful resolution can clear it. */
-  retryTimer: number | null
+  retryTimer: ReturnType<typeof setTimeout> | null
   /** Retry attempt count (bounded — caps the backoff). */
   retryCount: number
 }
@@ -216,7 +216,7 @@ function clearRetryTimer(): void {
 /** Schedule a bounded backoff retry. Returns the timer handle (cleared on
  * success/reset). Exponential backoff: 2s, 4s, 8s, 16s, 32s — capped at
  * MAX_RETRY_ATTEMPTS (then fail-closed permanently). */
-function scheduleRetry(count: number): number | null {
+function scheduleRetry(count: number): ReturnType<typeof setTimeout> | null {
   if (count > MAX_RETRY_ATTEMPTS) return null
   const delayMs = Math.min(2000 * 2 ** (count - 1), 32000)
   return setTimeout(() => {

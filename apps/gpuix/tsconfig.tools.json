@@ -22,5 +22,6 @@
       "#app/boot": ["./src/boot-contract.ts"]
     }
   },
-  "include": ["src/main.tsx", "src/env", "src/log.ts", "build.ts", "tools"]
+  "include": ["src/main.tsx", "src/env", "src/log.ts", "build.ts", "tools"],
+  "exclude": ["tools/terminal"]
 }
