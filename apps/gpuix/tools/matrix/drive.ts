@@ -170,9 +170,27 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
       return log
     },
     async check(step, check) {
+      if (check.order) {
+        const order = check.order
+        const inOrder = async () =>
+          ordered(
+            await page.evaluate(
+              (within) => (document.querySelector(`[data-testid="${within}"]`) as HTMLElement | null)?.innerText ?? '',
+              check.within
+            ),
+            order
+          )
+        return { step, text: order.join(' < '), expect: 'present', pass: await poll(inOrder, PRESENT_TIMEOUT_MS) }
+      }
       const want = normalize(check.text)
       const painted = () =>
-        page.evaluate((needle) => document.body.innerText.replace(/\s+/g, ' ').includes(needle), want)
+        page.evaluate(
+          ({ needle, within }) => {
+            const root = within ? document.querySelector(`[data-testid="${within}"]`) : document.body
+            return (root as HTMLElement | null)?.innerText.replace(/\s+/g, ' ').includes(needle) ?? false
+          },
+          { needle: want, within: check.within }
+        )
       const pass = check.gone
         ? await poll(async () => !(await painted()), GONE_TIMEOUT_MS)
         : await poll(painted, PRESENT_TIMEOUT_MS)
@@ -185,6 +203,22 @@ interface Node {
   text?: string
   testId?: string
   bounds?: { x: number; y: number; width: number; height: number }
+  children?: Node[]
+}
+
+/** Every text in `texts` occurs in `haystack`, each after the previous one. */
+function ordered(haystack: string, texts: string[]): boolean {
+  let from = 0
+  for (const text of texts) {
+    const at = normalize(haystack).indexOf(normalize(text), from)
+    if (at < 0) return false
+    from = at + text.length
+  }
+  return true
+}
+
+function subtreeText(node: Node): string {
+  return [node.text ?? '', ...(node.children ?? []).map(subtreeText)].join(' ')
 }
 
 function nearest(nodes: Node[], to: Point | undefined): Point | null {
@@ -283,8 +317,22 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>): Driver {
       return log
     },
     async check(step, check) {
+      if (check.order) {
+        const order = check.order
+        const inOrder = async () => {
+          const scope = app.getByTestId(check.within)
+          return (await scope.count()) > 0 && ordered(subtreeText(await scope.element()), order)
+        }
+        return { step, text: order.join(' < '), expect: 'present', pass: await poll(inOrder, PRESENT_TIMEOUT_MS) }
+      }
       const want = normalize(check.text)
       const painted = async () => {
+        if (check.within) {
+          const scope = app.getByTestId(check.within)
+          if ((await scope.count()) === 0) return false
+          if ((await scope.getByText(check.text).count()) > 0) return true
+          return normalize(subtreeText(await scope.element())).includes(want)
+        }
         if ((await app.getByText(check.text).count()) > 0) return true
         const { text } = await app.call('getAllText', {})
         return normalize(text.join(' ')).includes(want)

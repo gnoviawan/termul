@@ -19,6 +19,7 @@
     "check:react": "bun tools/check-react.ts",
     "compat:lint": "bun tools/compat/lint.ts",
     "parity": "bun tools/parity/index.ts",
+    "parity:matrix": "bun tools/matrix/run.ts",
     "perf": "bun tools/perf/run.ts",
     "perf:report": "bun tools/perf/report.ts",
     "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.compat.json && tsc -p tsconfig.compat-app.json && tsc -p tsconfig.chat.json && tsc -p tsconfig.composer.json",

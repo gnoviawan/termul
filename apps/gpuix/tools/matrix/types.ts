@@ -31,8 +31,15 @@ export type Action =
   | { do: 'drag'; from: Target; to: Target }
   | { do: 'wait'; ms: number }
 
-/** A text both clients must paint (or have stopped painting) once the step settles. */
-export type Check = { text: string; gone?: true }
+/**
+ * A text both clients must paint (or have stopped painting) once the step
+ * settles; `within` scopes the search to the subtree of a test id both
+ * clients set, so a match elsewhere on screen cannot pass the check.
+ */
+export type Check = { text: string; gone?: true; within?: string; order?: never } | OrderCheck
+
+/** Texts that must appear in this order inside the `within` subtree (a list after a reorder). */
+export type OrderCheck = { order: string[]; within: string; text?: never; gone?: never }
 
 export interface Step {
   name: string

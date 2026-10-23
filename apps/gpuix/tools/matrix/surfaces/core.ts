@@ -50,7 +50,7 @@ const RAIL: Surface[] = [
           type('gamma-renamed'),
           press('enter')
         ],
-        see('gamma-renamed')
+        [{ text: 'gamma-renamed', within: 'shell-rail' }]
       )
     ]
   },
@@ -77,7 +77,12 @@ const RAIL: Surface[] = [
     area: 'rail',
     title: 'Reorder projects by drag',
     roi: '[data-testid="shell-rail"]',
-    steps: [DASHBOARD, step('b-dragged', [drag(id('project-item-m1-gamma'), id('project-item-m1-alpha')), wait(500)], see('gamma'))]
+    steps: [
+      DASHBOARD,
+      step('b-dragged', [drag(id('project-item-m1-gamma'), id('project-item-m1-alpha')), wait(500)], [
+        { order: ['alpha', 'gamma', 'beta'], within: 'shell-rail' }
+      ])
+    ]
   },
   {
     id: 'rail.add-menu',
