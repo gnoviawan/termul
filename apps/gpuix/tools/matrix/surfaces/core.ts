@@ -417,6 +417,17 @@ const TERMINAL: Surface[] = [
     ]
   },
   {
+    id: 'terminal.file-link',
+    area: 'terminal',
+    title: 'Ctrl+click a file path in terminal output opens it in the editor',
+    steps: [
+      DASHBOARD,
+      step('b-open', [openTerminal, wait(2500)]),
+      step('c-echo', [type('clear && echo src/app.ts\n'), wait(1500)]),
+      step('d-link', [{ do: 'click', target: { css: '.xterm-screen', at: { x: 24, y: 9 } }, modifiers: 'ctrl' }, wait(2500)], see('export function greet'))
+    ]
+  },
+  {
     id: 'terminal.new-tab-menu',
     area: 'terminal',
     title: 'New tab menu (terminal, browser, ...)',

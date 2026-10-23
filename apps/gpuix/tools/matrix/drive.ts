@@ -119,6 +119,18 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
         switch (action.do) {
           case 'click': {
             const locator = webLocator(page, action.target)
+            const at = 'css' in action.target ? action.target.at : undefined
+            if (at) {
+              await locator.waitFor({ state: 'visible', timeout: PRESENT_TIMEOUT_MS })
+              const box = await locator.boundingBox()
+              if (!box) throw new Error('no box')
+              const point = { x: box.x + at.x, y: box.y + at.y }
+              points.set(key, point)
+              if (action.modifiers) await page.keyboard.down('Control')
+              await page.mouse.click(point.x, point.y, { button: action.button })
+              if (action.modifiers) await page.keyboard.up('Control')
+              break
+            }
             await centre(key, locator)
             await locator.click({
               button: action.button,
