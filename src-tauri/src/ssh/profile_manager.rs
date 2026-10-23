@@ -175,8 +175,9 @@ impl From<&SSHProfile> for StoredSSHProfile {
 
 pub struct ProfileManager {
     path: PathBuf,
-    /// In-memory cache of profiles for fast access
-    cache: Mutex<Option<Vec<SSHProfile>>>,
+    /// Serializes this process's read-modify-write of the file. Profiles are
+    /// not kept in memory: another host on the same data dir may rewrite it.
+    writes: Mutex<()>,
 }
 
 /// The whole store file: `{"profiles": [...]}` plus any key another writer
@@ -190,17 +191,29 @@ fn read_store_file(path: &Path) -> Result<serde_json::Map<String, serde_json::Va
     serde_json::from_slice(&bytes).map_err(|e| format!("Failed to deserialize SSH profiles: {}", e))
 }
 
-/// Write through a sibling temp file and a rename, so a crash leaves either
-/// the old file or the new one.
+/// Write through a sibling temp file, flushed to disk, and a rename, so a
+/// crash or power loss leaves either the old file or the new one.
 fn write_store_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
+    use std::io::Write as _;
+    let dir = path.parent();
+    if let Some(dir) = dir {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
+    let written = std::fs::File::create(&tmp)
+        .and_then(|mut file| file.write_all(bytes).and_then(|()| file.sync_all()))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
-    })
+    }
+    written?;
+    // The rename is durable once the directory entry is (Unix only; Windows
+    // cannot open a directory as a file).
+    #[cfg(unix)]
+    if let Some(dir) = dir {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    Ok(())
 }
 
 impl ProfileManager {
@@ -208,7 +221,7 @@ impl ProfileManager {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             path: data_dir.join(STORE_FILE),
-            cache: Mutex::new(None),
+            writes: Mutex::new(()),
         }
     }
 
@@ -241,17 +254,10 @@ impl ProfileManager {
         })
     }
 
-    /// Get all profiles (uses cache). Secrets are NOT included in the returned profiles.
+    /// Get all profiles, read from the file. Secrets are NOT included in the
+    /// returned profiles.
     pub fn list(&self) -> Result<Vec<SSHProfile>, String> {
-        let mut cache = self.cache.lock().map_err(|_| "Cache lock poisoned")?;
-
-        if let Some(ref profiles) = *cache {
-            return Ok(profiles.clone());
-        }
-
-        let profiles = self.load_from_store()?;
-        *cache = Some(profiles.clone());
-        Ok(profiles)
+        self.load_from_store()
     }
 
     /// Get a single profile by ID (without secrets)
@@ -346,7 +352,7 @@ impl ProfileManager {
         profile.password = None;
         profile.passphrase = None;
 
-        let mut cache = self.cache.lock().map_err(|_| "Cache lock poisoned")?;
+        let _writes = self.writes.lock().map_err(|_| "Profile lock poisoned")?;
         let mut profiles = self.load_from_store()?;
 
         // Update existing or insert new
@@ -356,15 +362,12 @@ impl ProfileManager {
             profiles.push(profile);
         }
 
-        self.save_to_store(&profiles)?;
-        *cache = Some(profiles);
-
-        Ok(())
+        self.save_to_store(&profiles)
     }
 
     /// Delete a profile by ID (also removes credentials from keychain)
     pub fn delete(&self, id: &str) -> Result<(), String> {
-        let mut cache = self.cache.lock().map_err(|_| "Cache lock poisoned")?;
+        let _writes = self.writes.lock().map_err(|_| "Profile lock poisoned")?;
         let mut profiles = self.load_from_store()?;
         let original_len = profiles.len();
         profiles.retain(|p| p.id != id);
@@ -378,21 +381,13 @@ impl ProfileManager {
             log::warn!("[SSH] Failed to delete credentials from keychain: {}", e);
         }
 
-        self.save_to_store(&profiles)?;
-        *cache = Some(profiles);
-
-        Ok(())
+        self.save_to_store(&profiles)
     }
 
     /// Update last_connected timestamp for a profile
     pub fn update_last_connected(&self, id: &str) -> Result<(), String> {
-        let mut cache = self.cache.lock().map_err(|_| "Cache lock poisoned")?;
-
-        // Use cache if available, otherwise load from store
-        let mut profiles = match cache.as_ref() {
-            Some(cached) => cached.clone(),
-            None => self.load_from_store()?,
-        };
+        let _writes = self.writes.lock().map_err(|_| "Profile lock poisoned")?;
+        let mut profiles = self.load_from_store()?;
 
         if let Some(profile) = profiles.iter_mut().find(|p| p.id == id) {
             profile.last_connected = Some(chrono::Utc::now().to_rfc3339());
@@ -400,10 +395,7 @@ impl ProfileManager {
             return Err(format!("Profile not found: {}", id));
         }
 
-        self.save_to_store(&profiles)?;
-        *cache = Some(profiles);
-
-        Ok(())
+        self.save_to_store(&profiles)
     }
 
     /// Copy a profile under a new id, including its keychain secrets.
@@ -455,7 +447,7 @@ impl ProfileManager {
         &self,
         parsed: Vec<super::config_parser::ParsedSSHProfile>,
     ) -> Result<Vec<SSHProfile>, String> {
-        let mut cache = self.cache.lock().map_err(|_| "Cache lock poisoned")?;
+        let _writes = self.writes.lock().map_err(|_| "Profile lock poisoned")?;
         let mut profiles = self.load_from_store()?;
         let mut imported = Vec::new();
 
@@ -503,7 +495,6 @@ impl ProfileManager {
 
         if !imported.is_empty() {
             self.save_to_store(&profiles)?;
-            *cache = Some(profiles);
         }
 
         Ok(imported)
