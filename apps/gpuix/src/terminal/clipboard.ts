@@ -9,7 +9,10 @@ type Tool = { copy: string[]; paste: string[] }
 
 const TOOLS: Tool[] = [
   { copy: ['wl-copy'], paste: ['wl-paste', '--no-newline'] },
-  { copy: ['xclip', '-selection', 'clipboard', '-in'], paste: ['xclip', '-selection', 'clipboard', '-out'] },
+  {
+    copy: ['xclip', '-selection', 'clipboard', '-in'],
+    paste: ['xclip', '-selection', 'clipboard', '-out']
+  },
   { copy: ['xsel', '--clipboard', '--input'], paste: ['xsel', '--clipboard', '--output'] },
   { copy: ['pbcopy'], paste: ['pbpaste'] }
 ]
@@ -20,7 +23,8 @@ let resolved: Tool | null | undefined
 function tool(): Tool | null {
   if (resolved !== undefined) return resolved
   resolved = TOOLS.find((candidate) => Bun.which(candidate.copy[0]!) !== null) ?? null
-  if (!resolved) terminalLog('warn', 'clipboard.no-tool', { tried: TOOLS.map((t) => t.copy[0]).join(',') })
+  if (!resolved)
+    terminalLog('warn', 'clipboard.no-tool', { tried: TOOLS.map((t) => t.copy[0]).join(',') })
   return resolved
 }
 
@@ -28,7 +32,11 @@ export async function copyText(text: string): Promise<void> {
   memory = text
   const found = tool()
   if (!found) return
-  const proc = Bun.spawn(found.copy, { stdin: new TextEncoder().encode(text), stdout: 'ignore', stderr: 'ignore' })
+  const proc = Bun.spawn(found.copy, {
+    stdin: new TextEncoder().encode(text),
+    stdout: 'ignore',
+    stderr: 'ignore'
+  })
   await proc.exited
 }
 

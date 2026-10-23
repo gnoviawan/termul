@@ -17,16 +17,27 @@ interface DemoState {
 }
 
 const readState = async (file: string): Promise<DemoState | null> =>
-  existsSync(file) ? ((await Bun.file(file).json().catch(() => null)) as DemoState | null) : null
+  existsSync(file)
+    ? ((await Bun.file(file)
+        .json()
+        .catch(() => null)) as DemoState | null)
+    : null
 
-async function waitForState(file: string, predicate: (state: DemoState) => boolean, timeoutMs: number, what: string): Promise<DemoState> {
+async function waitForState(
+  file: string,
+  predicate: (state: DemoState) => boolean,
+  timeoutMs: number,
+  what: string
+): Promise<DemoState> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const state = await readState(file)
     if (state && predicate(state)) return state
     await Bun.sleep(100)
   }
-  throw new Error(`timed out waiting for ${what}; last state: ${JSON.stringify(await readState(file))}`)
+  throw new Error(
+    `timed out waiting for ${what}; last state: ${JSON.stringify(await readState(file))}`
+  )
 }
 
 export async function runDemo(outDir = '/tmp/gpuix-t1/demo') {
@@ -41,7 +52,12 @@ export async function runDemo(outDir = '/tmp/gpuix-t1/demo') {
   })
   try {
     await app.getByTestId('terminal').waitFor({ timeoutMs: 60_000 })
-    const idle = await waitForState(stateFile, (state) => state.status === 'idle', 60_000, 'the fixture to finish')
+    const idle = await waitForState(
+      stateFile,
+      (state) => state.status === 'idle',
+      60_000,
+      'the fixture to finish'
+    )
     const fixturePng = resolve(outDir, 'fixture.png')
     await grabScreen(xvfb.display, fixturePng)
     const before = idle.rows.length
@@ -50,7 +66,12 @@ export async function runDemo(outDir = '/tmp/gpuix-t1/demo') {
     await terminal.click()
     for (const key of ['e', 'c', 'h', 'o', 'space', 'h', 'i']) await terminal.press(key)
     await terminal.press('enter')
-    const typed = await waitForState(stateFile, (state) => state.rows.includes('hi'), 10_000, 'the `hi` row')
+    const typed = await waitForState(
+      stateFile,
+      (state) => state.rows.includes('hi'),
+      10_000,
+      'the `hi` row'
+    )
     await Bun.sleep(300)
     const typedPng = resolve(outDir, 'typed.png')
     await grabScreen(xvfb.display, typedPng)

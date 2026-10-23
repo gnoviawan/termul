@@ -6,12 +6,16 @@
  *
  * bun tools/terminal/parity.ts [outDir]
  */
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { TERMINAL_FONT_FILES, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../src/terminal/fonts'
+import {
+  TERMINAL_FONT_FILES,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_LINE_HEIGHT
+} from '../../src/terminal/fonts'
 import { terminalThemeFor } from '../../src/terminal/theme'
 import { FIXTURE_BYTES, FIXTURE_COLS, FIXTURE_ROWS } from './fixture'
-import { crop, diffImages, readPng, type RgbImage, writePng } from './pixels'
+import { crop, diffImages, type RgbImage, readPng, writePng } from './pixels'
 import { renderWithXtermJs } from './xterm-chromium'
 import { shootEntry } from './xvfb'
 
@@ -58,13 +62,18 @@ export async function runParity(outDir = '/tmp/gpuix-t1/parity', bytesPath = FIX
     outPng: webPng
   })
   const readyFile = resolve(outDir, 'gpuix-ready.json')
-  await Bun.file(readyFile).exists().then((exists) => exists && Bun.write(readyFile, ''))
-  const { unlinkSync, existsSync } = await import('node:fs')
   if (existsSync(readyFile)) unlinkSync(readyFile)
   const fullPng = resolve(outDir, 'gpuix-window.png')
   const gpuix = await shootEntry<GpuixReady>({
     entry: resolve(import.meta.dir, 'parity-gpuix.tsx'),
-    args: [bytesPath, readyFile, String(FIXTURE_COLS), String(FIXTURE_ROWS), String(web.cellWidth), String(web.cellHeight)],
+    args: [
+      bytesPath,
+      readyFile,
+      String(FIXTURE_COLS),
+      String(FIXTURE_ROWS),
+      String(web.cellWidth),
+      String(web.cellHeight)
+    ],
     readyFile,
     outPng: fullPng,
     settleMs: 800
@@ -75,14 +84,26 @@ export async function runParity(outDir = '/tmp/gpuix-t1/parity', bytesPath = FIX
   const origin = windowOrigin(window)
   await writePng(
     gpuixPng,
-    crop(window, origin.x + Math.round(gpuix.grid.x), origin.y + Math.round(gpuix.grid.y), Math.round(gpuix.grid.width), Math.round(gpuix.grid.height))
+    crop(
+      window,
+      origin.x + Math.round(gpuix.grid.x),
+      origin.y + Math.round(gpuix.grid.y),
+      Math.round(gpuix.grid.width),
+      Math.round(gpuix.grid.height)
+    )
   )
   const diffPng = resolve(outDir, 'diff.png')
-  const diff = await diffImages(await readPng(webPng), await readPng(gpuixPng), { threshold: 24, outDiff: diffPng })
+  const diff = await diffImages(await readPng(webPng), await readPng(gpuixPng), {
+    threshold: 24,
+    outDiff: diffPng
+  })
 
   const mismatches: string[] = []
   for (let y = 0; y < FIXTURE_ROWS; y++) {
-    if (web.rows[y] !== gpuix.rows[y]) mismatches.push(`row ${y}: web=${JSON.stringify(web.rows[y])} gpuix=${JSON.stringify(gpuix.rows[y])}`)
+    if (web.rows[y] !== gpuix.rows[y])
+      mismatches.push(
+        `row ${y}: web=${JSON.stringify(web.rows[y])} gpuix=${JSON.stringify(gpuix.rows[y])}`
+      )
   }
   const cursorEqual = web.cursor.x === gpuix.cursor.x && web.cursor.y === gpuix.cursor.y
   const result = {

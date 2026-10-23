@@ -32,7 +32,23 @@ export const gpuixEnv = (display: string): Record<string, string> => ({
 
 export async function grabScreen(display: string, outPng: string): Promise<void> {
   const proc = Bun.spawn(
-    ['ffmpeg', '-loglevel', 'error', '-y', '-f', 'x11grab', '-draw_mouse', '0', '-video_size', `${SCREEN.width}x${SCREEN.height}`, '-i', display, '-frames:v', '1', outPng],
+    [
+      'ffmpeg',
+      '-loglevel',
+      'error',
+      '-y',
+      '-f',
+      'x11grab',
+      '-draw_mouse',
+      '0',
+      '-video_size',
+      `${SCREEN.width}x${SCREEN.height}`,
+      '-i',
+      display,
+      '-frames:v',
+      '1',
+      outPng
+    ],
     { stdout: 'ignore', stderr: 'inherit' }
   )
   await proc.exited

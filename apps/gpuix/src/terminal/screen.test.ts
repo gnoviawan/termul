@@ -3,7 +3,8 @@ import { encodeKey, encodePaste } from './keys'
 import { TerminalScreen } from './screen'
 import { terminalThemeFor } from './theme'
 
-const write = (screen: TerminalScreen, data: string) => new Promise<void>((done) => screen.write(data, done))
+const write = (screen: TerminalScreen, data: string) =>
+  new Promise<void>((done) => screen.write(data, done))
 
 describe('TerminalScreen', () => {
   test('flattens styled cells into runs with xterm colour semantics', async () => {
@@ -67,7 +68,8 @@ describe('TerminalScreen', () => {
 })
 
 describe('encodeKey', () => {
-  const send = (key: string, modifiers = {}, keyChar?: string) => encodeKey({ key, keyChar, modifiers }, false)
+  const send = (key: string, modifiers = {}, keyChar?: string) =>
+    encodeKey({ key, keyChar, modifiers }, false)
   test('xterm key table for a non-mac platform', () => {
     expect(send('enter')).toEqual({ type: 'send', data: '\r' })
     expect(send('up')).toEqual({ type: 'send', data: '\x1b[A' })

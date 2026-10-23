@@ -4,8 +4,9 @@
  * nearest tsconfig (the repo root) maps only `@/`. Mirrors the alias map of
  * `vite.config.web.ts`. Registered through `apps/gpuix/bunfig.toml`.
  */
-import { plugin } from 'bun'
+
 import { resolve } from 'node:path'
+import { plugin } from 'bun'
 
 const root = resolve(import.meta.dir, '../../../..')
 const renderer = resolve(root, 'src/renderer')
@@ -49,7 +50,8 @@ plugin({
     }))
     build.onResolve({ filter: /^@tauri-apps\// }, ({ path }) => {
       const stub = TAURI_STUBS[path]
-      if (!stub) throw new Error(`GPUIX: unhandled @tauri-apps import "${path}"; add it to bun-resolve.ts`)
+      if (!stub)
+        throw new Error(`GPUIX: unhandled @tauri-apps import "${path}"; add it to bun-resolve.ts`)
       return { path: resolve(stubs, `${stub}.ts`) }
     })
   }

@@ -15,7 +15,9 @@
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
+    "@types/react": "19.3.0",
     "playwright": "1.63.0",
+    "typescript": "5.9.3",
     "wawoff2": "2.0.1"
   }
 }

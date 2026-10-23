@@ -6,6 +6,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import type { TerminalSpawnOptions } from '@shared/types/ipc.types'
 import { loadTerminalTransport, spawnSession } from '../../src/terminal/transport'
 
 export const FIXTURE_DIR = resolve(import.meta.dir, 'fixtures')
@@ -19,18 +20,38 @@ export const PROJECT_ID = process.env.TERMUL_PROJECT_ID ?? 't1'
 export const PROJECT_DIR = process.env.TERMUL_PROJECT_DIR ?? '/tmp/gpuix-t1/project'
 
 /** A shell with a fixed prompt and no rc files, so the recording is stable. */
-export const SHELL_SPAWN = {
+export const SHELL_SPAWN: Pick<TerminalSpawnOptions, 'program' | 'args' | 'env'> = {
   program: '/bin/bash',
   args: ['--norc', '--noprofile', '-i'],
-  env: { PS1: '$ ', TERM: 'xterm-256color', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', COLUMNS: String(FIXTURE_COLS), LINES: String(FIXTURE_ROWS) }
-} as const
+  env: {
+    PS1: '$ ',
+    TERM: 'xterm-256color',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    COLUMNS: String(FIXTURE_COLS),
+    LINES: String(FIXTURE_ROWS)
+  }
+}
 
 /** Each step is a line typed at the prompt and the time to wait for its output. */
 export const FIXTURE_STEPS: Array<{ input: string; waitMs: number }> = [
   { input: 'cd fixture && ls --color=always -la', waitMs: 400 },
-  { input: 'for i in $(seq 0 255); do printf "\\e[48;5;${i}m "; if (( (i+1) % 32 == 0 )); then printf "\\e[0m\\n"; fi; done; printf "\\e[0m"', waitMs: 500 },
-  { input: 'for i in $(seq 0 63); do printf "\\e[48;2;$((i*4));$((255-i*4));$((128+i))m "; done; printf "\\e[0m\\n"', waitMs: 400 },
-  { input: 'printf "\\e[1mbold\\e[0m \\e[3mitalic\\e[0m \\e[4munder\\e[0m \\e[7minverse\\e[0m \\e[2mdim\\e[0m \\e[9mstrike\\e[0m \\e[1;31;44mbold red on blue\\e[0m\\n"', waitMs: 300 },
+  {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: bash parameter expansion typed at the prompt
+    input:
+      'for i in $(seq 0 255); do printf "\\e[48;5;${i}m "; if (( (i+1) % 32 == 0 )); then printf "\\e[0m\\n"; fi; done; printf "\\e[0m"',
+    waitMs: 500
+  },
+  {
+    input:
+      'for i in $(seq 0 63); do printf "\\e[48;2;$((i*4));$((255-i*4));$((128+i))m "; done; printf "\\e[0m\\n"',
+    waitMs: 400
+  },
+  {
+    input:
+      'printf "\\e[1mbold\\e[0m \\e[3mitalic\\e[0m \\e[4munder\\e[0m \\e[7minverse\\e[0m \\e[2mdim\\e[0m \\e[9mstrike\\e[0m \\e[1;31;44mbold red on blue\\e[0m\\n"',
+    waitMs: 300
+  },
   { input: 'printf "%s\\n" "$(printf "wrap-%03d " $(seq 1 24))"', waitMs: 300 },
   { input: 'less -S wrapped.txt', waitMs: 800 },
   { input: 'q', waitMs: 400 },
@@ -44,7 +65,10 @@ export function seedFixtureDir(root = PROJECT_DIR): void {
   mkdirSync(resolve(dir, 'sub'), { recursive: true })
   writeFileSync(resolve(dir, 'file.txt'), 'hello\n')
   writeFileSync(resolve(dir, 'run.sh'), '#!/bin/sh\necho run\n', { mode: 0o755 })
-  writeFileSync(resolve(dir, 'wrapped.txt'), `${'0123456789'.repeat(12)}\nsecond line\nthird line\n`)
+  writeFileSync(
+    resolve(dir, 'wrapped.txt'),
+    `${'0123456789'.repeat(12)}\nsecond line\nthird line\n`
+  )
 }
 
 export async function recordFixture(): Promise<Uint8Array> {

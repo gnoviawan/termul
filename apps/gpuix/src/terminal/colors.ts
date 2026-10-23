@@ -4,7 +4,31 @@
  * the 6x6x6 cube and the grey ramp for 16..255, 24-bit RGB, bold-to-bright,
  * inverse, dim as 50% alpha and invisible as the background.
  */
-import type { ITheme } from '@xterm/headless'
+
+/** The xterm `ITheme` fields the view reads (the app's `paletteToXtermTheme` fills every one). */
+export interface TerminalTheme {
+  foreground?: string
+  background?: string
+  cursor?: string
+  cursorAccent?: string
+  selectionBackground?: string
+  black?: string
+  red?: string
+  green?: string
+  yellow?: string
+  blue?: string
+  magenta?: string
+  cyan?: string
+  white?: string
+  brightBlack?: string
+  brightRed?: string
+  brightGreen?: string
+  brightYellow?: string
+  brightBlue?: string
+  brightMagenta?: string
+  brightCyan?: string
+  brightWhite?: string
+}
 
 export interface TerminalPalette {
   foreground: string
@@ -20,9 +44,10 @@ const CUBE_LEVELS = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
 
 const hex2 = (n: number): string => n.toString(16).padStart(2, '0')
 
-export const rgbToHex = (r: number, g: number, b: number): string => `#${hex2(r)}${hex2(g)}${hex2(b)}`
+export const rgbToHex = (r: number, g: number, b: number): string =>
+  `#${hex2(r)}${hex2(g)}${hex2(b)}`
 
-export function buildPalette(theme: ITheme): TerminalPalette {
+export function buildPalette(theme: TerminalTheme): TerminalPalette {
   const named = [
     theme.black,
     theme.red,

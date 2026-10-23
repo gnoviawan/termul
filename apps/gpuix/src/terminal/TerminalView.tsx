@@ -5,8 +5,9 @@
  * to a resize. The screen model decides what is visible; this file only
  * paints the frame it is given.
  */
+
+import { type EventPayload, type KeyEvent, type PublicInstance, useGpuix } from '@gpuix/react'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { type EventPayload, type PublicInstance, useGpuix } from '@gpuix/react'
 import { copyText, pasteText } from './clipboard'
 import {
   type CellMetrics,
@@ -59,7 +60,12 @@ export interface Geometry {
   glyphSize: number
 }
 
-export function geometryFor(probe: { width: number; height: number; chars: number }, fontSize: number, lineHeight: number, fixed?: CellMetrics): Geometry {
+export function geometryFor(
+  probe: { width: number; height: number; chars: number },
+  fontSize: number,
+  lineHeight: number,
+  fixed?: CellMetrics
+): Geometry {
   const advance = probe.width / probe.chars
   const measured = cellMetrics(probe, lineHeight)
   const cell = fixed ?? { width: Math.floor(measured.width), height: measured.height }
@@ -76,13 +82,34 @@ interface RowProps {
   fontSize: number
   selection: [number, number] | null
   selectionColor: string
-  cursor: { x: number; char: string; style: CursorStyle | 'outline'; color: string; accent: string } | null
+  cursor: {
+    x: number
+    char: string
+    style: CursorStyle | 'outline'
+    color: string
+    accent: string
+  } | null
 }
 
-const RowView = memo(function RowView({ row, cell, fontSize, selection, selectionColor, cursor }: RowProps) {
+const RowView = memo(function RowView({
+  row,
+  cell,
+  fontSize,
+  selection,
+  selectionColor,
+  cursor
+}: RowProps) {
   let x = 0
   return (
-    <div style={{ display: 'flex', position: 'relative', height: cell.height, minHeight: cell.height, flexShrink: 0 }}>
+    <div
+      style={{
+        display: 'flex',
+        position: 'relative',
+        height: cell.height,
+        minHeight: cell.height,
+        flexShrink: 0
+      }}
+    >
       {selection && (
         <div
           style={{
@@ -100,7 +127,18 @@ const RowView = memo(function RowView({ row, cell, fontSize, selection, selectio
         const left = x * cell.width
         x += run.cols
         return (
-          <div key={i} style={{ position: 'absolute', left, top: 0, width: run.cols * cell.width, height: cell.height, ...(run.bg ? { backgroundColor: run.bg } : {}), pointerEvents: 'none' }}>
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left,
+              top: 0,
+              width: run.cols * cell.width,
+              height: cell.height,
+              ...(run.bg ? { backgroundColor: run.bg } : {}),
+              pointerEvents: 'none'
+            }}
+          >
             <text
               style={{
                 width: run.cols * cell.width,
@@ -110,7 +148,11 @@ const RowView = memo(function RowView({ row, cell, fontSize, selection, selectio
                 fontSize,
                 fontWeight: run.bold ? TERMINAL_FONT_WEIGHT_BOLD : 400,
                 color: run.fg,
-                ...(run.underline ? { textDecoration: 'underline' } : run.strike ? { textDecoration: 'line-through' } : {}),
+                ...(run.underline
+                  ? { textDecoration: 'underline' }
+                  : run.strike
+                    ? { textDecoration: 'line-through' }
+                    : {}),
                 whiteSpace: 'nowrap',
                 userSelect: 'none'
               }}
@@ -163,12 +205,28 @@ const RowView = memo(function RowView({ row, cell, fontSize, selection, selectio
       )}
       {cursor && cursor.style === 'bar' && (
         <div
-          style={{ position: 'absolute', left: cursor.x * cell.width, top: 0, width: 1, height: cell.height, backgroundColor: cursor.color, pointerEvents: 'none' }}
+          style={{
+            position: 'absolute',
+            left: cursor.x * cell.width,
+            top: 0,
+            width: 1,
+            height: cell.height,
+            backgroundColor: cursor.color,
+            pointerEvents: 'none'
+          }}
         />
       )}
       {cursor && cursor.style === 'underline' && (
         <div
-          style={{ position: 'absolute', left: cursor.x * cell.width, top: cell.height - 1, width: cell.width, height: 1, backgroundColor: cursor.color, pointerEvents: 'none' }}
+          style={{
+            position: 'absolute',
+            left: cursor.x * cell.width,
+            top: cell.height - 1,
+            width: cell.width,
+            height: 1,
+            backgroundColor: cursor.color,
+            pointerEvents: 'none'
+          }}
         />
       )}
     </div>
@@ -204,9 +262,14 @@ export function TerminalView(props: TerminalViewProps) {
   const dragging = useRef(false)
   const palette = screen.palette
 
+  // GPUI caches a family's resolution at first use, so nothing names Paper
+  // Mono until registerFont has returned (it blocks for a few hundred ms).
+  const [fontsReady, setFontsReady] = useState(false)
   useEffect(() => {
-    if (renderer) registerTerminalFonts(renderer)
-  }, [renderer])
+    if (!renderer || fontsReady) return
+    registerTerminalFonts(renderer)
+    setFontsReady(true)
+  }, [renderer, fontsReady])
 
   useEffect(() => screen.onFrame(setFrame), [screen])
 
@@ -241,8 +304,14 @@ export function TerminalView(props: TerminalViewProps) {
   const cellAt = (event: EventPayload): CellPoint | null => {
     const bounds = host.current && renderer?.getElementBounds?.(host.current.id)
     if (!bounds || !cell || event.x === undefined || event.y === undefined) return null
-    const col = Math.max(0, Math.min(screen.cols, Math.round((event.x - bounds.x - padding) / cell.width)))
-    const y = Math.max(0, Math.min(screen.rows - 1, Math.floor((event.y - bounds.y - padding) / cell.height)))
+    const col = Math.max(
+      0,
+      Math.min(screen.cols, Math.round((event.x - bounds.x - padding) / cell.width))
+    )
+    const y = Math.max(
+      0,
+      Math.min(screen.rows - 1, Math.floor((event.y - bounds.y - padding) / cell.height))
+    )
     return { row: screen.rowAt(y), col }
   }
 
@@ -251,7 +320,7 @@ export function TerminalView(props: TerminalViewProps) {
     onInput(data)
   }
 
-  const onKeyDown = (event: EventPayload) => {
+  const onKeyDown = (event: KeyEvent) => {
     const action = encodeKey(event, screen.modes.applicationCursorKeysMode)
     if (action.type === 'none') return
     event.preventDefault()
@@ -291,7 +360,11 @@ export function TerminalView(props: TerminalViewProps) {
       return
     }
     dragging.current = true
-    screen.setSelection(event.modifiers?.shift && screen.getSelection() ? { ...screen.getSelection()!, head: point } : { anchor: point, head: point })
+    screen.setSelection(
+      event.modifiers?.shift && screen.getSelection()
+        ? { ...screen.getSelection()!, head: point }
+        : { anchor: point, head: point }
+    )
   }
   const onMouseMove = (event: EventPayload) => {
     if (!dragging.current || event.pressedButton !== 0) return
@@ -302,7 +375,11 @@ export function TerminalView(props: TerminalViewProps) {
   const onMouseUp = () => {
     dragging.current = false
     const selection = screen.getSelection()
-    if (selection && selection.anchor.row === selection.head.row && selection.anchor.col === selection.head.col) {
+    if (
+      selection &&
+      selection.anchor.row === selection.head.row &&
+      selection.anchor.col === selection.head.col
+    ) {
       screen.setSelection(null)
     }
   }
@@ -314,7 +391,10 @@ export function TerminalView(props: TerminalViewProps) {
     <div
       ref={host}
       testId={testId}
+      role="textbox"
+      aria-label="Terminal"
       tabIndex={0}
+      // biome-ignore lint/a11y/noAutofocus: a terminal pane takes focus on mount like xterm's textarea does
       autoFocus={autoFocus}
       onLayout={onLayout}
       onKeyDown={onKeyDown}
@@ -335,11 +415,16 @@ export function TerminalView(props: TerminalViewProps) {
         cursor: 'text'
       }}
     >
-      {!cell && (
+      {fontsReady && !cell && (
         <div style={{ display: 'flex', position: 'absolute', left: 0, top: 0, opacity: 0 }}>
           <text
             onLayout={(event) => {
-              const next = geometryFor({ width: event.width ?? 0, height: event.height ?? 0, chars: PROBE_CHARS }, fontSize, lineHeight, fixedCell)
+              const next = geometryFor(
+                { width: event.width ?? 0, height: event.height ?? 0, chars: PROBE_CHARS },
+                fontSize,
+                lineHeight,
+                fixedCell
+              )
               terminalLog('info', 'terminal.geometry', {
                 advance: (event.width ?? 0) / PROBE_CHARS,
                 charHeight: event.height ?? 0,
@@ -350,7 +435,13 @@ export function TerminalView(props: TerminalViewProps) {
               setGeometry(next)
               onMetrics?.(next.cell)
             }}
-            style={{ fontFamily: TERMINAL_FONT_FAMILY, fontSize, lineHeight: fontSize * 1.2, color: palette.background, whiteSpace: 'nowrap' }}
+            style={{
+              fontFamily: TERMINAL_FONT_FAMILY,
+              fontSize,
+              lineHeight: fontSize * 1.2,
+              color: palette.background,
+              whiteSpace: 'nowrap'
+            }}
           >
             {'M'.repeat(PROBE_CHARS)}
           </text>
@@ -367,7 +458,13 @@ export function TerminalView(props: TerminalViewProps) {
             selectionColor={palette.selection}
             cursor={
               showCursor && frame.cursor.y === y
-                ? { x: frame.cursor.x, char: frame.cursor.char, style: cursorShape, color: palette.cursor, accent: palette.cursorAccent }
+                ? {
+                    x: frame.cursor.x,
+                    char: frame.cursor.char,
+                    style: cursorShape,
+                    color: palette.cursor,
+                    accent: palette.cursorAccent
+                  }
                 : null
             }
           />

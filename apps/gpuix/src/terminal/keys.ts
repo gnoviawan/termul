@@ -69,7 +69,14 @@ const FUNCTION_KEYS: Record<string, [string, string]> = {
   f12: ['[24~', '[24;{m}~']
 }
 
-const CURSOR_KEYS: Record<string, string> = { up: 'A', down: 'B', right: 'C', left: 'D', home: 'H', end: 'F' }
+const CURSOR_KEYS: Record<string, string> = {
+  up: 'A',
+  down: 'B',
+  right: 'C',
+  left: 'D',
+  home: 'H',
+  end: 'F'
+}
 
 export function encodeKey(event: KeyPress, applicationCursor: boolean): KeyAction {
   const key = event.key ?? ''
@@ -148,7 +155,7 @@ export function encodeKey(event: KeyPress, applicationCursor: boolean): KeyActio
   }
   if (m.ctrl || m.cmd) return { type: 'none' }
   if (key === 'space') return send(' ')
-  if (event.keyChar && event.keyChar.length >= 1 && !/^[\x00-\x1f]$/.test(event.keyChar)) {
+  if (event.keyChar && event.keyChar.length >= 1 && event.keyChar.codePointAt(0)! >= 0x20) {
     return send(event.keyChar)
   }
   if (key.length === 1) return send(m.shift ? key.toUpperCase() : key)

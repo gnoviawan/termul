@@ -63,9 +63,11 @@ export async function spawnSession(
     if (terminalId === id) onExit?.(code)
   })
   terminalLog('info', 'spawn.ok', { cols: result.data.cols, rows: result.data.rows })
-  const report = (what: string) => (outcome: { success: boolean; code?: string; error?: string }) => {
-    if (!outcome.success) terminalLog('warn', `${what}.refused`, { code: outcome.code, error: outcome.error })
-  }
+  const report =
+    (what: string) => (outcome: { success: boolean; code?: string; error?: string }) => {
+      if (!outcome.success)
+        terminalLog('warn', `${what}.refused`, { code: outcome.code, error: outcome.error })
+    }
   return {
     id,
     cols: result.data.cols,

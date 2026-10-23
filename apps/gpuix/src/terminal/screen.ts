@@ -7,8 +7,8 @@
  * Coordinates: `row` is an absolute line index into the active buffer
  * (`viewportY + y` for a visible row `y`); `col` is a cell column.
  */
-import { type IBufferCell, type ITheme, Terminal } from '@xterm/headless'
-import { buildPalette, resolveCellColors, type TerminalPalette } from './colors'
+import { type IBufferCell, Terminal } from '@xterm/headless'
+import { buildPalette, resolveCellColors, type TerminalPalette, type TerminalTheme } from './colors'
 
 export interface StyledRun {
   text: string
@@ -53,7 +53,7 @@ export interface ScreenFrame {
 export interface ScreenOptions {
   cols: number
   rows: number
-  theme: ITheme
+  theme: TerminalTheme
   scrollback?: number
   /** Milliseconds to coalesce output before a frame is announced. */
   frameMs?: number
@@ -116,7 +116,7 @@ export class TerminalScreen {
     this.invalidate()
   }
 
-  setTheme(theme: ITheme): void {
+  setTheme(theme: TerminalTheme): void {
     this.palette = buildPalette(theme)
     this.rowCache.clear()
     this.invalidate()
@@ -246,7 +246,11 @@ export class TerminalScreen {
     }, this.frameMs)
   }
 
-  private selectionColumns(viewportY: number, rows: number, cols: number): Array<[number, number] | null> {
+  private selectionColumns(
+    viewportY: number,
+    rows: number,
+    cols: number
+  ): Array<[number, number] | null> {
     const out: Array<[number, number] | null> = new Array(rows).fill(null)
     if (!this.selection) return out
     const [start, end] = ordered(this.selection)
@@ -295,7 +299,9 @@ export class TerminalScreen {
       }
     }
     for (const run of runs) {
-      keyParts.push(`${run.fg}${run.bg ?? ''}${run.bold ? 'b' : ''}${run.italic ? 'i' : ''}${run.underline ? 'u' : ''}${run.strike ? 's' : ''}${run.cols}:${run.text}`)
+      keyParts.push(
+        `${run.fg}${run.bg ?? ''}${run.bold ? 'b' : ''}${run.italic ? 'i' : ''}${run.underline ? 'u' : ''}${run.strike ? 's' : ''}${run.cols}:${run.text}`
+      )
     }
     return { key: keyParts.join('\u0001'), runs }
   }
