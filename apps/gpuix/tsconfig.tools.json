@@ -33,5 +33,5 @@
     "src/style/fonts.ts",
     "src/style/__tests__"
   ],
-  "exclude": ["tools/terminal"]
+  "exclude": ["tools/terminal", "tools/ui/gallery"]
 }
