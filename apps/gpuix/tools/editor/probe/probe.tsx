@@ -54,15 +54,33 @@ const report: Record<string, unknown> = { mode: MODE, lines: LINES, plain: PLAIN
 const renderMs: number[] = []
 const t0 = performance.now()
 
-type Stats = ReturnType<NativeRenderer['getDebugFrameOverlayStats']>
-async function frames(renderer: NativeRenderer, run: () => Promise<void>): Promise<Stats> {
+interface Stats {
+  frames: number
+  p90Ms?: number
+  p99Ms?: number
+  maxMs?: number
+}
+
+/** The live renderer's test methods, present on the desktop napi build. */
+type Live = NativeRenderer & {
+  setDebugFrameOverlay(mode: string): string
+  resetDebugFrameOverlayStats(): void
+  getDebugFrameOverlayStats(): Stats
+  simulateScrollWheel(x: number, y: number, dx: number, dy: number): void
+  simulateKeystrokes(keys: string): void
+  simulateKeyDown(key: string): void
+  simulateKeyUp(key: string): void
+  focusElement(id: number): void
+}
+
+async function frames(renderer: Live, run: () => Promise<void>): Promise<Stats> {
   renderer.resetDebugFrameOverlayStats()
   await run()
   await Bun.sleep(100)
   return renderer.getDebugFrameOverlayStats()
 }
 
-async function wheel(renderer: NativeRenderer, x: number, y: number): Promise<void> {
+async function wheel(renderer: Live, x: number, y: number): Promise<void> {
   for (let i = 0; i < 60; i++) {
     renderer.simulateScrollWheel(x, y, 0, -60)
     await Bun.sleep(16)
@@ -70,7 +88,7 @@ async function wheel(renderer: NativeRenderer, x: number, y: number): Promise<vo
 }
 
 function TextareaProbe() {
-  const renderer = useGpuixRequired()
+  const renderer = useGpuixRequired() as Live
   const [value, setValue] = useState(source)
   const changes = useRef<number[]>([])
   const ups = useRef<string[]>([])
@@ -124,7 +142,7 @@ function TextareaProbe() {
           changes.current.push(performance.now())
           setValue(e.value ?? '')
         }}
-        onKeyUp={(e: KeyEvent) => ups.current.push(e.key)}
+        onKeyUp={(e: KeyEvent) => ups.current.push(e.key ?? '')}
       />
     </div>
   )
@@ -165,7 +183,7 @@ function lineRuns(state: EditorState, line: number): Run[] {
 }
 
 function RowsProbe() {
-  const renderer = useGpuixRequired()
+  const renderer = useGpuixRequired() as Live
   const [state, setState] = useState(() =>
     EditorState.create({ doc: source, extensions: [javascript({ typescript: true })] })
   )
@@ -265,7 +283,7 @@ function RowsProbe() {
         )
       }
       onKeyDown={(e: KeyEvent) => {
-        downs.current.push(e.key)
+        downs.current.push(e.key ?? '')
         if (e.keyChar && e.keyChar.length === 1) {
           const pos = state.doc.line(first + 2).from + 4
           setState((s) => s.update({ changes: { from: pos, insert: e.keyChar! } }).state)
