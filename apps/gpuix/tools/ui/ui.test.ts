@@ -3,9 +3,9 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { CheckIcon, Search01Icon } from '@hugeicons/core-free-icons'
 import { iconSource } from '../../src/icons/hugeicons'
-import { cometSource } from '../../src/ui/spinner'
 import { domKey, splitDescendantClasses } from '../../src/ui/internal/host'
 import { centeredClasses } from '../../src/ui/internal/modal'
+import { cometSource } from '../../src/ui/spinner'
 import { gpuixTwin } from './alias'
 import { GPUIX_ICONS, generateIcons, WEB_ICONS } from './gen-icons'
 
@@ -68,7 +68,9 @@ describe('host', () => {
 
   test('dialog centring classes are dropped and grid becomes a column', () => {
     expect(
-      centeredClasses('fixed left-[50%] top-[50%] z-50 grid w-full translate-x-[-50%] translate-y-[-50%] gap-4')
+      centeredClasses(
+        'fixed left-[50%] top-[50%] z-50 grid w-full translate-x-[-50%] translate-y-[-50%] gap-4'
+      )
     ).toBe('z-50 flex flex-col w-full gap-4')
   })
 })

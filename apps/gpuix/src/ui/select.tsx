@@ -235,9 +235,11 @@ const OpenSelect = forwardRef<PublicInstance, SelectContentProps & { overlay: Ov
     const triggerWidth = overlay.trigger
       ? renderer?.getElementBounds?.(overlay.trigger.id)?.width
       : undefined
+    // Items mount once the trigger is known (the content portals into it), so wait for it.
+    const mounted = overlay.trigger !== null
     useLayoutEffect(() => {
-      menu.highlightValue(select.value)
-    }, [menu.highlightValue, select.value])
+      if (mounted) menu.highlightValue(select.value)
+    }, [menu.highlightValue, select.value, mounted])
     return (
       <Floating
         layer={node}

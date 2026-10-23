@@ -6,15 +6,7 @@
  * against the GPUIX components unchanged.
  */
 import type { EventPayload, KeyEvent, PublicInstance, StyleDesc } from '@gpuix/react'
-import {
-  Children,
-  createContext,
-  forwardRef,
-  isValidElement,
-  type ReactNode,
-  type Ref,
-  useContext
-} from 'react'
+import { Children, createContext, forwardRef, type ReactNode, type Ref, useContext } from 'react'
 import { type TwState, tw } from '../../style/tw'
 import { WINDOW_WIDTH } from '../../window'
 import { reducedMotion } from './motion'
@@ -237,49 +229,13 @@ export function nativeHandlers(props: HostProps): NativeDivProps {
 }
 
 /** `data-*` and `aria-*` props, the attribute half of tw()'s variant state. */
-export function attributesOf(props: object): Record<string, string | boolean | undefined> {
+function attributesOf(props: object): Record<string, string | boolean | undefined> {
   const attrs: Record<string, string | boolean | undefined> = {}
   for (const [key, value] of Object.entries(props)) {
     if (!key.startsWith('data-') && !key.startsWith('aria-')) continue
     attrs[key] = typeof value === 'number' ? String(value) : (value as string | boolean | undefined)
   }
   return attrs
-}
-
-const HOST_KEYS = new Set<string>([
-  'className',
-  'style',
-  'children',
-  'id',
-  'role',
-  'title',
-  'tabIndex',
-  'autoFocus',
-  'onClick',
-  'onAuxClick',
-  'onContextMenu',
-  'onDoubleClick',
-  'onMouseDown',
-  'onMouseUp',
-  'onMouseEnter',
-  'onMouseLeave',
-  'onMouseMove',
-  'onPointerDown',
-  'onPointerEnter',
-  'onPointerLeave',
-  'onKeyDown',
-  'onKeyUp',
-  'onFocus',
-  'onBlur'
-])
-
-/** Split HostProps from a component's own props (variant, size, asChild, …). */
-export function splitHostProps<P extends HostProps>(props: P): HostProps {
-  const host: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(props)) {
-    if (HOST_KEYS.has(key) || key.startsWith('data-') || key.startsWith('aria-')) host[key] = value
-  }
-  return host as HostProps
 }
 
 /** Text colour of the nearest ancestor that sets one: what `currentColor` is to an icon. */
@@ -463,6 +419,3 @@ export function mergeRefs<T>(...refs: (Ref<T> | undefined)[]): (value: T | null)
     }
   }
 }
-
-/** True for a React element child (the `asChild` target). */
-export const isElement = isValidElement

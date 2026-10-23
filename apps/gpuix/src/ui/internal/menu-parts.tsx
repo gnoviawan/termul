@@ -159,9 +159,10 @@ const OpenMenu = forwardRef<
   })
   const opened = useRef(overlay.openReason)
   // Opened from the keyboard, Radix focuses the first item; from the pointer, none.
+  const mounted = overlay.trigger !== null || floating.position !== undefined
   useLayoutEffect(() => {
-    if (opened.current === 'keyboard') menu.highlightFirst()
-  }, [menu.highlightFirst])
+    if (mounted && opened.current === 'keyboard') menu.highlightFirst()
+  }, [menu.highlightFirst, mounted])
   return (
     <Floating
       {...floating}

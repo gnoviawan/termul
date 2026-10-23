@@ -17,7 +17,7 @@ function elementRef(element: ReactElement): Ref<PublicInstance> | undefined {
   return (element as unknown as { ref?: Ref<PublicInstance> }).ref
 }
 
-export function mergeSlotProps(slot: AnyProps, child: AnyProps): AnyProps {
+function mergeSlotProps(slot: AnyProps, child: AnyProps): AnyProps {
   const merged: AnyProps = { ...slot, ...child }
   for (const key of Object.keys(slot)) {
     const a = slot[key]

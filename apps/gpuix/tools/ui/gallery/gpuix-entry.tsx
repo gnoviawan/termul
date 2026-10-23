@@ -13,7 +13,8 @@ import { Gallery } from './Gallery'
 import { GALLERY_HEIGHT, GALLERY_WIDTH, isScene, type SceneId } from './layout'
 
 const requested = process.env.GALLERY_SCENE
-if (!isScene(requested)) throw new Error(`GALLERY_SCENE must name a gallery scene, got ${requested}`)
+if (!isScene(requested))
+  throw new Error(`GALLERY_SCENE must name a gallery scene, got ${requested}`)
 const scene: SceneId = requested
 setTwTheme(process.env.GALLERY_THEME ?? 'termul')
 
@@ -37,12 +38,7 @@ function Root() {
         lineHeight: 24
       }}
     >
-      {ready && (
-        <Gallery
-          scene={scene}
-          interactive={process.env.GALLERY_INTERACTIVE === '1'}
-        />
-      )}
+      {ready && <Gallery scene={scene} interactive={process.env.GALLERY_INTERACTIVE === '1'} />}
     </div>
   )
 }
