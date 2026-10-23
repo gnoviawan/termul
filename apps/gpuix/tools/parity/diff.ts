@@ -65,3 +65,22 @@ export function diffPngs(aPath: string, bPath: string, outPath: string): DiffRes
     perceptual: count(perceptual)
   }
 }
+
+export interface Rect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Write the `rect` part of a PNG to `outPath`, clamped to the image. */
+export function cropPng(inPath: string, rect: Rect, outPath: string): void {
+  const src = PNG.sync.read(readFileSync(inPath))
+  const x = Math.max(0, Math.round(rect.x))
+  const y = Math.max(0, Math.round(rect.y))
+  const width = Math.min(src.width - x, Math.round(rect.width))
+  const height = Math.min(src.height - y, Math.round(rect.height))
+  const out = new PNG({ width, height })
+  PNG.bitblt(src, out, x, y, width, height, 0, 0)
+  writeFileSync(outPath, PNG.sync.write(out))
+}

@@ -278,7 +278,16 @@ export class CompatElement {
 
   focus(): void {
     if (!renderer) return compatWarn('dom-method-noop', 'focus before the renderer is bound')
-    renderer.focusElement(this.elementId)
+    // `document.body` and stand-in elements have no GPUIX element: focusing
+    // them does nothing, like `body.focus()` on a page.
+    if (this.elementId < 0) return
+    // A detached element ignores focus() in the DOM; GPUIX throws for an id it
+    // no longer knows (focus restored to a trigger that unmounted).
+    try {
+      renderer.focusElement(this.elementId)
+    } catch (error) {
+      compatWarn('focus-detached', error instanceof Error ? error.message : String(error))
+    }
   }
 
   blur(): void {

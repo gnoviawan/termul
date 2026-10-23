@@ -22,10 +22,15 @@
       ],
       "#compat/bench-dom": [
         "./tools/compat/bench/dom-contract.ts"
+      ],
+      "#app/web-root": [
+        "./src/app/web-root-contract.ts"
       ]
     }
   },
   "include": [
+    "src/boot.tsx",
+    "src/App.tsx",
     "tools/compat/fixtures/boot.tsx",
     "tools/compat/bench/app.tsx",
     "../../src/renderer/vite-env.d.ts"

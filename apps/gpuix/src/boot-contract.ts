@@ -14,6 +14,7 @@
 import type { DesktopHost } from '@/lib/desktop-host'
 import type { ClientConfig } from './client-config'
 import type { ServerStatus } from './launcher/status'
+import type { WindowSize } from './window'
 
 export interface BootOptions {
   /** Whether the window takes keyboard focus on open. Headless runs pass `false`. */
@@ -24,6 +25,10 @@ export interface BootOptions {
   onFocusRequest(listener: () => void): void
   /** OS openers and notifications for the shared facades. */
   desktopHost: DesktopHost
+  /** Initial window size. */
+  window: WindowSize
+  /** Termul's font faces (TTF bytes), registered before the first paint. */
+  fonts: readonly Uint8Array[]
 }
 
 export type BootFn = (config: ClientConfig, options: BootOptions) => void

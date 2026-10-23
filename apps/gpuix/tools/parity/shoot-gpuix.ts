@@ -117,6 +117,7 @@ export interface GpuixSessionOptions {
 
 export interface GpuixSession {
   app: GpuixApp
+  display: string
   /** Wait a few frames, then write the current window contents to `outPath`. */
   grab(outPath: string): Promise<void>
 }
@@ -137,6 +138,7 @@ export async function withGpuix<T>(
         DISPLAY: xvfb.display,
         VK_ICD_FILENAMES: process.env.VK_ICD_FILENAMES ?? LAVAPIPE_ICD,
         GPUIX_BACKGROUND: '1',
+        GPUIX_WINDOW_SIZE: `${opts.width}x${opts.height}`,
         TERMUL_SERVER_URL: opts.server.baseUrl,
         TERMUL_SERVER_TOKEN: opts.server.token,
         TERMUL_GPUIX_STATE_DIR: opts.clientStateDir
@@ -145,6 +147,7 @@ export async function withGpuix<T>(
     try {
       return await body({
         app,
+        display: xvfb.display,
         grab: async (outPath) => {
           await Bun.sleep(SETTLE_MS)
           const origin = await windowOrigin(xvfb.display, opts.width, opts.height)

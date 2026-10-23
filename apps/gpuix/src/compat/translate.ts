@@ -8,6 +8,8 @@
 
 import type { StyleDesc } from '@gpuix/react'
 import { resolveTwTheme } from '../style/theme'
+import { liftFillMinus, liftPlacement, type Placement } from './placement'
+import { viewportHeight, viewportWidth } from './viewport'
 import { type CompiledStyle, createTw, type Tw } from '../style/tw'
 import { MONO_FAMILY } from '../style/utilities'
 import type { Condition } from '../style/variants'
@@ -60,6 +62,10 @@ export interface Translation {
   readonly listInside: boolean
   /** `[&_svg]:x` / `[&>svg]:x` tokens, provided to icons below. */
   readonly svgClasses: string | null
+  /** Centering or popup placement rebuilt in `placement.tsx`. */
+  readonly placement: Placement | null
+  /** px subtracted by a `w-[calc(100%-x)]` width, or null. */
+  readonly fillMinus: number | null
 }
 
 const PHRASING = new Set([
@@ -137,6 +143,8 @@ interface Lifted {
   display: 'inline' | 'block' | null
   scope: ScopeName | null
   svg: string[]
+  placement: Placement | null
+  fillMinus: number | null
 }
 
 /** Pull out the tokens tw() has no StyleDesc for. Variant-prefixed ones stay with tw(). */
@@ -151,9 +159,15 @@ function lift(className: string): Lifted {
     listInside: false,
     display: null,
     scope: null,
-    svg: []
+    svg: [],
+    placement: null,
+    fillMinus: null
   }
-  for (const raw of className.split(/\s+/)) {
+  const placed = liftPlacement(className.split(/\s+/))
+  lifted.placement = placed.placement
+  const fill = liftFillMinus(placed.rest)
+  lifted.fillMinus = fill.minus
+  for (const raw of fill.rest) {
     if (!raw) continue
     // `group-hover/name:` binds to the nearest group, whatever its name.
     const token = raw.includes('/') ? raw.replace(NAMED_GROUP_VARIANT, '$1$2') : raw
@@ -270,7 +284,10 @@ function translate(tw: Tw, tag: string, className: string): Translation {
   const lifted = lift(className)
   const compiled = tw.compile(lifted.classes)
   const defaults = TAG_DEFAULTS[tag]
-  const merged: StyleDesc = defaults ? { ...defaults, ...compiled.base } : compiled.base
+  // A button centres its content only as an inline-block; `flex` / `grid` on it
+  // lay the content out from the start, like any flex container.
+  const ownLayout = tag === 'button' && compiled.base.display !== undefined && compiled.base.display !== 'none'
+  const merged: StyleDesc = defaults && !ownLayout ? { ...defaults, ...compiled.base } : compiled.base
   const base = layoutFixes(merged)
   let ruleMode: RuleMode = 'static'
   for (const rule of compiled.rules) {
@@ -307,13 +324,33 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     hoverable: base.hover !== undefined || base.active !== undefined,
     scope: lifted.scope,
     listInside: lifted.listInside,
-    svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null
+    svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null,
+    placement: lifted.placement,
+    fillMinus: lifted.fillMinus
   }
 }
 
 let active: Tw = createTw(resolveTwTheme('termul'))
 /** tag -> class string -> translation. Two levels, so a lookup hashes the class string without building a key. */
 let cache = new Map<string, Map<string, Translation>>()
+
+const VIEWPORT_LENGTH = /(-?\d*\.?\d+)(d|s|l)?(vh|vw)\b/g
+
+/**
+ * Arbitrary viewport lengths (`h-[85vh]`, `w-[90vw]`) as px of the window
+ * size when the element renders. tw() resolves lengths once per class string,
+ * so the px form is the cache key; an element shows a new window size when it
+ * next renders.
+ */
+export function resolveViewportUnits(classes: string, width: number, height: number): string {
+  if (!/\d[dsl]?v[hw]\b/.test(classes)) return classes
+  return classes.replace(/\[[^\]]*\]/g, (bracket) =>
+    bracket.replace(VIEWPORT_LENGTH, (_m, n: string, _kind: string | undefined, unit: string) => {
+      const px = (Number.parseFloat(n) / 100) * (unit === 'vh' ? height : width)
+      return `${Math.round(px * 100) / 100}px`
+    })
+  )
+}
 
 /** The cached translation of one DOM tag and class string. */
 export function translation(tag: string, className: string | undefined): Translation {
@@ -322,7 +359,7 @@ export function translation(tag: string, className: string | undefined): Transla
     byClass = new Map()
     cache.set(tag, byClass)
   }
-  const classes = className ?? ''
+  const classes = resolveViewportUnits(className ?? '', viewportWidth(), viewportHeight())
   let hit = byClass.get(classes)
   if (!hit) {
     hit = translate(active, tag, classes)
@@ -335,11 +372,23 @@ export function compatTw(): Tw {
   return active
 }
 
-/** Switch the theme every translation resolves against. */
+const themeListeners = new Set<() => void>()
+
+/** Switch the theme every translation resolves against. Subscribers re-render the tree. */
 export function setCompatTheme(themeId: string): void {
   if (active.theme.id === themeId) return
   active = createTw(resolveTwTheme(themeId))
   cache = new Map()
+  for (const listener of themeListeners) listener()
+}
+
+export function compatThemeId(): string {
+  return active.theme.id
+}
+
+export function subscribeCompatTheme(listener: () => void): () => void {
+  themeListeners.add(listener)
+  return () => themeListeners.delete(listener)
 }
 
 /** Cache size, for the bench report. */

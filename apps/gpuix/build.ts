@@ -120,10 +120,16 @@ export const PACKAGE_ALIASES: Record<string, string> = {
   '@radix-ui/react-hover-card': 'radix/generic.tsx',
   '@radix-ui/react-switch': 'radix/generic.tsx',
   '@radix-ui/react-select': 'radix/generic.tsx',
+  '@radix-ui/react-radio-group': 'radix/radio-group.tsx',
   'framer-motion': 'shims/framer-motion.tsx',
   cmdk: 'shims/cmdk.tsx',
-  '@streamdown/mermaid': 'shims/streamdown-mermaid.ts'
+  '@streamdown/mermaid': 'shims/streamdown-mermaid.ts',
+  '@tiptap/react': 'shims/tiptap-react.tsx',
+  dompurify: 'shims/dompurify.ts'
 }
+
+/** Stand-ins only shared code gets; libraries built on the real package keep it (BlockNote on tiptap). */
+const RENDERER_ONLY_ALIASES = new Set(['@tiptap/react', 'dompurify'])
 
 /**
  * Files written against GPUIX directly keep the real JSX runtime and React:
@@ -174,10 +180,11 @@ export function compatPlugin(aliases?: CompatResolve[]): BunPlugin {
         if (isNativeImporter(args.importer)) return { path: 'react', external: true }
         return { path: path.join(COMPAT_DIR, 'react.ts') }
       })
-      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid)$/ }, (args) => {
+      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid|@tiptap\/react|dompurify)$/ }, (args) => {
         if (args.path.startsWith('react-dom') && isNativeImporter(args.importer)) {
           return { path: args.path, external: true }
         }
+        if (RENDERER_ONLY_ALIASES.has(args.path) && !args.importer.startsWith(RENDERER_DIR + path.sep)) return undefined
         const target = PACKAGE_ALIASES[args.path]
         if (!target) throw new Error(`compat: no stand-in for ${args.path} (imported by ${args.importer})`)
         aliases?.push({ specifier: args.path, target })

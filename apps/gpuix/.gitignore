@@ -5,4 +5,5 @@ parity-out/
 dist-compat/
 dist-bench/
 tools/perf/results/
+dist-prod/
 perf-out/

@@ -5,11 +5,11 @@
  */
 
 import { type PublicInstance, type RenderOptions, useGpuixRequired } from '@gpuix/react'
-import { type ReactNode, useLayoutEffect, useState } from 'react'
+import { Fragment, type ReactNode, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
 import { windowKeyEvent } from './events'
 import { setOverlayLayer } from './react-dom'
-import { compatTw } from './translate'
+import { compatThemeId, compatTw, subscribeCompatTheme } from './translate'
 import { observeViewport } from './viewport'
 
 const OVERLAY = {
@@ -45,10 +45,12 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
     setOverlayLayer(layer)
     return () => setOverlayLayer(null)
   }, [layer])
+  // Translations are fixed at element creation, so a theme switch remounts the tree.
+  const themeId = useSyncExternalStore(subscribeCompatTheme, compatThemeId)
   const root = compatTw()('relative h-full w-full bg-background text-foreground font-sans')
   return (
     <div style={{ ...root, fontSize: 16, lineHeight: 24 }}>
-      {ready && layer ? children : null}
+      {ready && layer ? <Fragment key={themeId}>{children}</Fragment> : null}
       <div ref={setLayer} style={OVERLAY} />
     </div>
   )

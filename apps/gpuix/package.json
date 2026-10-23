@@ -6,6 +6,7 @@
   "description": "Termul desktop client rendered natively with GPUIX (React on Zed's GPUI)",
   "imports": {
     "#app/boot": "./src/boot.tsx",
+    "#app/web-root": "./src/app/web-root.ts",
     "#compat/fixture-boot": "./tools/compat/fixtures/boot.tsx",
     "#compat/fixture-dom": "./tools/compat/fixtures/dom/index.tsx",
     "#compat/bench-app": "./tools/compat/bench/app.tsx",
@@ -20,8 +21,8 @@
     "parity": "bun tools/parity/index.ts",
     "perf": "bun tools/perf/run.ts",
     "perf:report": "bun tools/perf/report.ts",
-    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.compat.json && tsc -p tsconfig.compat-app.json && tsc -p tsconfig.chat.json",
-    "test": "bun test src/style src/terminal src/ui src/chat tools/ui tools/launcher tools/compat",
+    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.compat.json && tsc -p tsconfig.compat-app.json && tsc -p tsconfig.chat.json && tsc -p tsconfig.composer.json",
+    "test": "bun test src/env src/style src/terminal src/ui src/chat src/composer tools/ui tools/launcher tools/compat tools/composer",
     "style:scan": "bun tools/style/scan-classes.ts",
     "style:gen": "bun tools/style/gen-color-vars.ts",
     "style:fonts": "uv run --with fonttools --with brotli python -I tools/style/build-fonts.py",

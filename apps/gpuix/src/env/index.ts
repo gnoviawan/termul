@@ -7,12 +7,15 @@
  * the `/ws` transport, `web-auth-token`, `web-client-identity`) and adding each
  * global the run touched:
  *
- * - `window.location`: `serverBase()` and the WS URL builders read the origin.
- *   Pointing it at the server makes every same-origin fetch and socket reach it.
+ * - `window.location` and `window.history` (`history.ts`): `serverBase()` and the
+ *   WS URL builders read the origin; the hash router and the overlay back stack
+ *   read and push the fragment.
  * - `window.localStorage` / `sessionStorage`: device id, auth token, protocol
  *   latch. `localStorage` persists per server origin under the client state dir.
- * - `window` and `document` as event targets with a `visibilityState`: the WS
- *   transport and the registry hook install page-lifecycle listeners.
+ * - `window` is the global object, as in a page (`window.setInterval`,
+ *   `window.fetch`); Bun's global is already an event target, so the WS
+ *   transport's page-lifecycle listeners land on it. `document` is an event
+ *   target with a `visibilityState`.
  * - `window.innerWidth` / `innerHeight`: GPUIX's automation `initialize`
  *   handler reports them whenever a `window` global exists.
  *
@@ -26,23 +29,12 @@
 import path from 'node:path'
 import type { ClientConfig } from './config'
 import { installDom } from './dom'
+import { createSessionHistory } from './history'
 import { FileStorage, MemoryStorage } from './storage'
 
-/** The fields of `window.location` the shared code reads. */
-export interface ClientLocation {
-  href: string
-  origin: string
-  protocol: string
-  host: string
-  hostname: string
-  port: string
-  pathname: string
-  search: string
-  hash: string
-}
-
 export interface BrowserEnv {
-  location: ClientLocation
+  location: Location
+  history: History
   localStorage: FileStorage
   sessionStorage: MemoryStorage
 }
@@ -50,20 +42,6 @@ export interface BrowserEnv {
 function storageFileFor(config: ClientConfig): string {
   const origin = config.serverUrl.host.replace(/[^A-Za-z0-9.-]/g, '_')
   return path.join(config.stateDir, 'web-storage', `${origin}.json`)
-}
-
-function locationFor(url: URL): ClientLocation {
-  return Object.freeze({
-    href: url.href,
-    origin: url.origin,
-    protocol: url.protocol,
-    host: url.host,
-    hostname: url.hostname,
-    port: url.port,
-    pathname: '/',
-    search: '',
-    hash: ''
-  })
 }
 
 let installed: BrowserEnv | null = null
@@ -75,7 +53,6 @@ export interface Viewport {
 
 export function installBrowserEnv(config: ClientConfig, viewport: Viewport): BrowserEnv {
   if (installed) return installed
-  const location = locationFor(config.serverUrl)
   const localStorage = new FileStorage(storageFileFor(config))
   const sessionStorage = new MemoryStorage()
 
@@ -83,17 +60,23 @@ export function installBrowserEnv(config: ClientConfig, viewport: Viewport): Bro
     visibilityState: 'visible' as DocumentVisibilityState,
     hidden: false
   })
-  const window = Object.assign(new EventTarget(), {
+  // The page's global object is `window`; Bun's global is already an event target.
+  const window = globalThis as unknown as EventTarget & Record<string, unknown>
+  const { location, history } = createSessionHistory(config.serverUrl, window)
+  Object.assign(window, {
+    window,
+    self: window,
     location,
+    history,
     localStorage,
     sessionStorage,
     document,
     innerWidth: viewport.width,
     innerHeight: viewport.height
   })
+  Object.assign(document, { defaultView: window })
 
-  Object.assign(globalThis, { window, document, localStorage, sessionStorage })
   installDom(viewport, { reducedMotion: process.env.GPUIX_REDUCED_MOTION === '1' })
-  installed = { location, localStorage, sessionStorage }
+  installed = { location, history, localStorage, sessionStorage }
   return installed
 }

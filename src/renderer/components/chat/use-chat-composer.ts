@@ -1,4 +1,3 @@
-import type { Editor } from '@tiptap/core'
 import type { MutableRefObject, RefObject } from 'react'
 import { useCallback, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
@@ -9,7 +8,7 @@ import type {
   SessionConfigOption,
   SessionModeState
 } from '@/lib/acp-api'
-import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
+import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
 import {
   extractCommandNames,
@@ -24,6 +23,12 @@ import {
 } from '@/lib/skill-tokens'
 import type { AgentSkillSummary } from '@/lib/skills-api'
 import { attachmentToBlock, guessMimeType } from './chat-attachments'
+import {
+  type ComposerEditor,
+  composerEditorCaret,
+  composerEditorElement,
+  focusComposerEditor
+} from './composer/editor-ops'
 import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
 import type { SlashMenuHandle } from './SlashCommandMenu'
 import type { ComposerKeyboardEvent } from './slash-menu-keyboard'
@@ -88,7 +93,7 @@ export interface UseChatComposerArgs {
   setValue: (v: string) => void
   /** The Tiptap editor instance (drives transactional pill insertion + caret
    * restoration after a programmatic string splice). */
-  editorRef: MutableRefObject<Editor | null>
+  editorRef: MutableRefObject<ComposerEditor | null>
   slashMenuRef: RefObject<SlashMenuHandle | null>
   commands: AvailableCommand[]
   configOptions: SessionConfigOption[]
@@ -233,7 +238,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
   // ref supplies the path for each token's name when building the wire text.
   const skillPathsRef = useRef<Record<string, string>>({})
 
-  const caret = composerStringCaret(editorRef.current, value.length)
+  const caret = composerEditorCaret(editorRef.current, value.length)
   const slashOpen = isSlashTriggerAny(value, caret) && !disabled
   const filter = slashFilter(value, caret)
   const slashSections = useMemo(
@@ -264,7 +269,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         // synchronously at send time. A trailing space is appended so the
         // caret lands in plain text and the next `/` trigger matches.
         const editor = editorRef.current
-        const caret = composerStringCaret(editor, value.length)
+        const caret = composerEditorCaret(editor, value.length)
         const trigger = findSlashTrigger(value, caret)
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
@@ -290,13 +295,13 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         // Splice the command token where the `/` filter is, same as a skill.
         // One command per draft: a second pick leaves the value unchanged.
         const editor = editorRef.current
-        const caret = composerStringCaret(editor, value.length)
+        const caret = composerEditorCaret(editor, value.length)
         const trigger = findSlashTrigger(value, caret)
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
         const result = insertCommandToken(value, insertAt, item.name, deleteBefore)
         if (!result.inserted) {
-          editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+          focusComposerEditor(editorRef.current)
           toast.error('This message already has a command.')
           void logFrontendError({
             level: 'warn',
@@ -312,7 +317,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         return
       }
       const editor = editorRef.current
-      const caretNow = composerStringCaret(editor, value.length)
+      const caretNow = composerEditorCaret(editor, value.length)
       const trigger = findSlashTrigger(value, caretNow)
       const next = trigger ? `${value.slice(0, trigger.start)}${value.slice(trigger.end)}` : value
       const nextCaret = trigger ? trigger.start : caretNow
@@ -332,7 +337,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
 
   const onSlashOrMentionKeyDown = useCallback(
     (event: KeyboardEvent): boolean => {
-      const editorEl = editorRef.current?.view.dom ?? null
+      const editorEl = composerEditorElement(editorRef.current)
       const reactLike = adaptDomKeybEvent(event, editorEl)
       if (
         tryHandleSlashMenuKeyDown(reactLike, {
@@ -443,10 +448,4 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     onSlashOrMentionKeyDown,
     buildPromptParts
   }
-}
-
-/** Display-string offset of the editor caret. Falls back when the editor is not mounted. */
-export function composerStringCaret(editor: Editor | null, fallback: number): number {
-  if (!editor) return fallback
-  return docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
 }

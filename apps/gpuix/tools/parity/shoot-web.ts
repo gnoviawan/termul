@@ -10,22 +10,29 @@
 
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { chromium } from 'playwright'
+import { chromium, type Page } from 'playwright'
 import { REPO_DIR } from '../../build'
 import type { TestServer } from './server'
 
-const READY_TIMEOUT_MS = 30_000
+export const READY_TIMEOUT_MS = 30_000
 const SETTLE_MS = 500
 
 export const DIST_WEB = path.join(REPO_DIR, 'dist-web')
 
-export async function shootWeb(opts: {
+export interface WebSessionOptions {
   server: TestServer
-  readyTestIds: string[]
-  outPath: string
   width: number
   height: number
-}): Promise<void> {
+}
+
+export interface WebSession {
+  page: Page
+  /** Wait for fonts and a settle delay, then write the viewport to `outPath`. */
+  grab(outPath: string): Promise<void>
+}
+
+/** Open the web client against the test server, run `body` on the page, then close the browser. */
+export async function withWeb<T>(opts: WebSessionOptions, body: (session: WebSession) => Promise<T>): Promise<T> {
   if (!existsSync(path.join(DIST_WEB, 'index.html'))) {
     throw new Error(
       `${DIST_WEB} has no index.html: run \`bun run build:web\` at the repo root first`
@@ -70,16 +77,27 @@ export async function shootWeb(opts: {
     )
     const page = await context.newPage()
     await page.goto(`${opts.server.baseUrl}/`)
+    return await body({
+      page,
+      grab: async (outPath) => {
+        await page.evaluate(() => document.fonts.ready)
+        await page.waitForTimeout(SETTLE_MS)
+        await page.screenshot({ path: outPath, fullPage: false })
+      }
+    })
+  } finally {
+    await browser.close()
+  }
+}
+
+export async function shootWeb(opts: WebSessionOptions & { readyTestIds: string[]; outPath: string }): Promise<void> {
+  await withWeb(opts, async ({ page, grab }) => {
     for (const testId of opts.readyTestIds) {
       await page
         .getByTestId(testId)
         .first()
         .waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
     }
-    await page.evaluate(() => document.fonts.ready)
-    await page.waitForTimeout(SETTLE_MS)
-    await page.screenshot({ path: opts.outPath, fullPage: false })
-  } finally {
-    await browser.close()
-  }
+    await grab(opts.outPath)
+  })
 }
