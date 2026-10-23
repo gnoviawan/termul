@@ -15,14 +15,14 @@ import type { TwState } from '../style/variants'
 import { childInfo, layoutChildren, wrapAutoMargin } from './children'
 import { ColorContext, SvgClassContext } from './color'
 import { ScopeContext, scopedClasses } from './scope'
-import { type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
+import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
 import { adaptHandlers, type GpuixListeners } from './events'
 import { log } from '../log'
 import { compatWarn } from './log'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
-import { translation, type Translation } from './translate'
+import { translation, type Translation, unreverse } from './translate'
 
 export type DomProps = Readonly<Record<string, unknown>> & {
   className?: string
@@ -121,7 +121,7 @@ function adaptRef(ref: Ref<unknown>, raw = false): AdaptedRef {
   const adapted = (instance: TrackedInstance | null) => {
     if (!instance) return undefined
     const untrack = trackInstance(instance)
-    const node = raw ? instance : nodeFor(instance.id)
+    const node = raw ? decorateInstance(instance) : nodeFor(instance.id)
     let cleanup: unknown
     if (typeof ref === 'function') cleanup = ref(node)
     else if (ref) (ref as { current: unknown }).current = node
@@ -236,7 +236,9 @@ export function buildElement(
     element = jsx(tag, native, key)
   } else {
     if (props.dangerouslySetInnerHTML) compatWarn('prop-unsupported', 'dangerouslySetInnerHTML')
-    const laid = layoutChildren(tr, style, props.children, isStatic)
+    const flipped = unreverse(style)
+    if (flipped) native.style = style = flipped
+    const laid = layoutChildren(tr, style, props.children, isStatic, flipped !== null)
     if (laid.runStyle) native.style = { ...style, ...laid.runStyle }
     const nested = laid.children !== undefined && typeof laid.children !== 'string'
     let kids: ReactNode = laid.children

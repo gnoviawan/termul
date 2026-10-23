@@ -165,9 +165,15 @@ function withMarkers(slots: Slot[], marker: 'disc' | 'decimal', inside: boolean)
  * array, positions are identity) or `jsx` (one child, or a dynamic array the
  * caller keyed).
  */
-export function layoutChildren(tr: Translation, style: StyleDesc, children: ReactNode, isStatic: boolean): Laid {
+export function layoutChildren(
+  tr: Translation,
+  style: StyleDesc,
+  children: ReactNode,
+  isStatic: boolean,
+  reverse = false
+): Laid {
   if (isEmpty(children)) return { children: undefined, isStatic: false }
-  if (tr.reverse && Array.isArray(children)) children = [...children].reverse()
+  if (reverse && Array.isArray(children)) children = [...children].reverse()
   if (isText(children)) {
     const text = applyTextTransform(tr.inline ? collapse(String(children)) : collapse(String(children)).trim(), tr.transform)
     return { children: text === '' ? undefined : text, isStatic: false }

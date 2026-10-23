@@ -402,9 +402,14 @@ export class CompatElement {
   }
 
   contains(other: unknown): boolean {
-    if (!(other instanceof CompatElement)) return false
-    if (other.elementId === this.elementId) return true
-    return ancestorIds(other.elementId).includes(this.elementId)
+    const id =
+      other instanceof CompatElement
+        ? other.elementId
+        : typeof other === 'object' && other !== null && decorated.has(other)
+          ? (other as TrackedInstance).id
+          : null
+    if (id === null) return false
+    return id === this.elementId || ancestorIds(id).includes(this.elementId)
   }
 
   matches(selector: string): boolean {
@@ -462,10 +467,43 @@ export class CompatElement {
   }
 }
 
+const decorated = new WeakSet<object>()
+
+/**
+ * A GPUIX instance that also answers the HTMLElement members shared code
+ * calls (`focus()`, `disabled`, `contains()`…). GPUIX-native primitives keep
+ * the real instance (portals and focus APIs key on it) while a shared caller
+ * holding the same ref still gets DOM behaviour. Members the instance already
+ * has (`id`, `type`, `props`, `scrollIntoView`) stay GPUIX's.
+ */
+export function decorateInstance<T extends TrackedInstance>(instance: T): T {
+  if (decorated.has(instance)) return instance
+  decorated.add(instance)
+  const node = () => nodeFor(instance.id)
+  for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(CompatElement.prototype))) {
+    if (name === 'constructor' || name in instance) continue
+    if (typeof descriptor.value === 'function') {
+      Object.defineProperty(instance, name, {
+        configurable: true,
+        value: (...args: unknown[]) => (node() as unknown as Record<string, (...a: unknown[]) => unknown>)[name](...args)
+      })
+    } else {
+      Object.defineProperty(instance, name, {
+        configurable: true,
+        get: () => (node() as unknown as Record<string, unknown>)[name],
+        set: (value: unknown) => {
+          ;(node() as unknown as Record<string, unknown>)[name] = value
+        }
+      })
+    }
+  }
+  return instance
+}
+
 /** The DOM node types shared code tests with `instanceof`. */
 export class CompatNode {
   static [Symbol.hasInstance](value: unknown): boolean {
-    return value instanceof CompatElement
+    return value instanceof CompatElement || (typeof value === 'object' && value !== null && decorated.has(value))
   }
 }
 

@@ -58,8 +58,6 @@ export interface Translation {
   /** An index.css scope whose descendant rules apply below this element. */
   readonly scope: ScopeName | null
   readonly listInside: boolean
-  /** row-reverse / column-reverse, which GPUIX ignores: children are laid out reversed instead. */
-  readonly reverse: boolean
   /** `[&_svg]:x` / `[&>svg]:x` tokens, provided to icons below. */
   readonly svgClasses: string | null
 }
@@ -233,13 +231,30 @@ const FLIP: Readonly<Record<string, string>> = {
   'flex-end': 'flex-start'
 }
 
+const unreversed = new WeakMap<StyleDesc, StyleDesc>()
+
+/**
+ * GPUIX ignores row-reverse / column-reverse (measured in its renderer): the
+ * caller lays the children out in reverse, and the main axis flips here.
+ * Decided on the final style, since a variant (`sm:flex-row`) can undo it.
+ */
+export function unreverse(style: StyleDesc): StyleDesc | null {
+  if (style.flexDirection !== 'row-reverse' && style.flexDirection !== 'column-reverse') return null
+  let hit = unreversed.get(style)
+  if (!hit) {
+    const justify = (style.justifyContent as string | undefined) ?? 'flex-start'
+    hit = {
+      ...style,
+      flexDirection: style.flexDirection === 'row-reverse' ? 'row' : 'column',
+      justifyContent: (FLIP[justify] ?? justify) as StyleDesc['justifyContent']
+    }
+    unreversed.set(style, hit)
+  }
+  return hit
+}
+
 function layoutFixes(style: StyleDesc): StyleDesc {
   const out: StyleDesc = { ...style }
-  if (out.flexDirection === 'row-reverse' || out.flexDirection === 'column-reverse') {
-    out.flexDirection = out.flexDirection === 'row-reverse' ? 'row' : 'column'
-    const justify = (out.justifyContent as string | undefined) ?? 'flex-start'
-    out.justifyContent = (FLIP[justify] ?? justify) as StyleDesc['justifyContent']
-  }
   // CSS resolves `min-width: auto` to 0 for scroll containers and lets a
   // `flex: 1 1 0%` item shrink to its min-content. Taffy measures text at
   // max-content, so without this a flex-1 or overflow-hidden item never shrinks.
@@ -256,7 +271,6 @@ function translate(tw: Tw, tag: string, className: string): Translation {
   const compiled = tw.compile(lifted.classes)
   const defaults = TAG_DEFAULTS[tag]
   const merged: StyleDesc = defaults ? { ...defaults, ...compiled.base } : compiled.base
-  const reverse = merged.flexDirection === 'row-reverse' || merged.flexDirection === 'column-reverse'
   const base = layoutFixes(merged)
   let ruleMode: RuleMode = 'static'
   for (const rule of compiled.rules) {
@@ -293,7 +307,6 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     hoverable: base.hover !== undefined || base.active !== undefined,
     scope: lifted.scope,
     listInside: lifted.listInside,
-    reverse,
     svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null
   }
 }
