@@ -419,6 +419,17 @@ export const WS_COMMAND_CLASSES: Readonly<
   canvas_reply: ['idempotent', null]
 }
 
+/**
+ * Whether the host admits `type` only with a `commandId` and refuses it
+ * `invalid_command_id` without one. Mirrors the Rust `CommandClass::ledgered`:
+ * every `create`, and every `command` but the `entity` replays (`send_prompt`,
+ * whose `turnId` is its id).
+ */
+export function isLedgeredRequest(type: WsRequestType): boolean {
+  const [kind, replay] = WS_COMMAND_CLASSES[type]
+  return kind === 'create' || (kind === 'command' && replay !== 'entity')
+}
+
 /** Longest accepted `commandId`, in bytes. Mirrors the Rust `MAX_COMMAND_ID_LEN`. */
 export const MAX_COMMAND_ID_LEN = 128
 

@@ -1,7 +1,9 @@
 /**
- * The `/ws` Claude Account management requests and the connection
- * capabilities the host reports on `authenticate`, against a fake host.
+ * The `/ws` host-local requests (Claude Account management, SSH) and the
+ * connection capabilities the host reports on `authenticate`, against a fake
+ * host.
  */
+import { WS_REQUEST_TYPES } from '@shared/types/web-protocol.types'
 import { afterEach, describe, expect, it } from 'vitest'
 import { WsAcpTransport } from './ws-transport'
 
@@ -120,6 +122,25 @@ describe('Claude Account management over /ws', () => {
     expect(ids[1]).toMatch(/^[A-Za-z0-9_-]{1,128}$/)
     expect(ids[0]).not.toBe(ids[1])
     expect(ids.slice(2)).toEqual([undefined, undefined, undefined])
+    t.dispose()
+  })
+})
+
+describe('SSH over /ws', () => {
+  it('stamps a commandId on exactly the requests the host ledgers', async () => {
+    const t = transport()
+    await t.connect()
+    const ssh = WS_REQUEST_TYPES.filter((type) => /^(ssh|sftp)_/.test(type))
+    for (const type of ssh) await t.sshRequest(type as Parameters<typeof t.sshRequest>[0], {})
+    const stamped = (FakeHost.last?.frames ?? [])
+      .filter((f) => ssh.includes(f.type as (typeof ssh)[number]))
+      .filter((f) => f.command_id !== undefined)
+    expect(stamped.map((f) => f.type)).toEqual([
+      'ssh_duplicate_profile',
+      'ssh_import_config',
+      'ssh_session_open'
+    ])
+    for (const f of stamped) expect(f.command_id).toMatch(/^[A-Za-z0-9_-]{1,128}$/)
     t.dispose()
   })
 })

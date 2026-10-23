@@ -23,6 +23,7 @@ import {
   type ConnectionCapabilities,
   type DeleteSessionPayload,
   type HistoryMode,
+  isLedgeredRequest,
   type PersistedSessionSummary,
   type RemoveProjectPayload,
   type SessionCursorReply,
@@ -967,37 +968,39 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   addClaudeAccount(name: string): Promise<ClaudeAccount> {
-    return this.request<ClaudeAccount>('add_claude_account', { name }, undefined, {
-      commandId: randomUUID()
-    })
+    return this.hostRequest<ClaudeAccount>('add_claude_account', { name })
   }
 
   async loginClaudeAccount(accountId: string): Promise<void> {
-    await this.request('login_claude_account', { accountId }, undefined, {
-      commandId: randomUUID()
-    })
+    await this.hostRequest('login_claude_account', { accountId })
   }
 
   async cancelClaudeAccountLogin(accountId: string): Promise<boolean> {
-    const reply = await this.request<{ cancelled: boolean }>('cancel_claude_account_login', {
+    const reply = await this.hostRequest<{ cancelled: boolean }>('cancel_claude_account_login', {
       accountId
     })
     return reply?.cancelled === true
   }
 
   async renameClaudeAccount(accountId: string, name: string): Promise<void> {
-    await this.request('rename_claude_account', { accountId, name })
+    await this.hostRequest('rename_claude_account', { accountId, name })
   }
 
   async removeClaudeAccount(accountId: string): Promise<string[]> {
-    const reply = await this.request<{ movedProjectIds: string[] }>('remove_claude_account', {
+    const reply = await this.hostRequest<{ movedProjectIds: string[] }>('remove_claude_account', {
       accountId
     })
     return reply?.movedProjectIds ?? []
   }
 
   sshRequest<T>(command: SshWsRequestType, args: Record<string, unknown> = {}): Promise<T> {
-    return this.request<T>(command, args)
+    return this.hostRequest<T>(command, args)
+  }
+
+  /** The host refuses a ledgered type without a `commandId`. */
+  private hostRequest<T>(type: WsRequestType, payload: Record<string, unknown>): Promise<T> {
+    const command = isLedgeredRequest(type) ? { commandId: randomUUID() } : undefined
+    return this.request<T>(type, payload, undefined, command)
   }
 
   async spawnAgent(
