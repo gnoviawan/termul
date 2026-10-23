@@ -13,6 +13,8 @@
     "start": "bun build.ts && bun dist/main.js",
     "check:react": "bun tools/check-react.ts",
     "parity": "bun tools/parity/index.ts",
+    "perf": "bun tools/perf/run.ts",
+    "perf:report": "bun tools/perf/report.ts",
     "typecheck": "tsc -p . && tsc -p tsconfig.tools.json",
     "test": "bun test src/style",
     "style:scan": "bun tools/style/scan-classes.ts",
