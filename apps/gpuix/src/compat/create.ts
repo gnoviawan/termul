@@ -14,7 +14,7 @@ import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
 import { childInfo, layoutChildren, wrapAutoMargin } from './children'
 import { ColorContext, SvgClassContext } from './color'
-import { ScopeContext, scopedClasses } from './scope'
+import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
 import { adaptHandlers, type GpuixListeners } from './events'
@@ -280,8 +280,7 @@ export function createDomElement(
   if (tag === 'br' || tag === 'wbr') return jsx('div', { style: tag === 'br' ? BREAK : HIDDEN }, key)
   if (UNSUPPORTED_TAGS.has(tag)) compatWarn('element-unsupported', tag)
   if (SVG_CHILD_TAGS.has(tag)) return jsx(tag as never, props, key)
-  const scoped = scopedClasses(tag, props['data-streamdown'])
-  const className = scoped ? (props.className ? `${scoped} ${props.className}` : scoped) : props.className
+  const className = withScopedClasses(tag, props['data-streamdown'], props.className)
   const tr = translation(tag, className)
   const element =
     tr.ruleMode === 'host' || tr.group !== null

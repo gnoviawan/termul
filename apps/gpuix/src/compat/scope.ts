@@ -17,20 +17,28 @@ interface DescendantRule {
   /** `data-streamdown` value. */
   part?: RegExp
   classes: string
+  /** The rule sits in `@layer utilities` with higher specificity, so it beats the element's own classes. */
+  wins?: true
 }
 
 /**
- * index.css values at the chat's 14px text size (em resolved to px). The
+ * index.css values at the chat's 14px text size (em resolved to px). Most
  * rules sit in `@layer components`, below every utility, so they go in front
- * of the element's own classes. Margins are left out: streamdown's block
- * container sets `space-y-4`, a utility on the parent that wins over them.
+ * of the element's own classes; `wins` rules go after them. Margins are left
+ * out: streamdown's block container sets `space-y-4`, a utility on the parent
+ * that wins over them.
  */
 export const DESCENDANT_RULES: Readonly<Record<ScopeName, readonly DescendantRule[]>> = {
   'chat-streamdown': [
     { part: /^(ordered|unordered)-list$/, classes: 'pl-5' },
     { part: /^list-item$/, classes: 'py-[1.12px]' },
     { part: /^blockquote$/, classes: 'border-l-2 pl-[10.4px]' },
-    { part: /^heading-/, classes: 'font-semibold leading-[1.25]' }
+    { part: /^heading-/, classes: 'font-semibold leading-[1.25]' },
+    {
+      part: /^inline-code$/,
+      classes: 'rounded bg-muted/55 px-[3.7px] py-[0.99px] text-[12.32px] leading-[17.6px]',
+      wins: true
+    }
   ]
 }
 
@@ -52,16 +60,18 @@ function currentScope(): ScopeName | null {
   }
 }
 
-/** Extra classes for an element created now with this tag and `data-streamdown` part. */
-export function scopedClasses(tag: string, part: unknown): string | null {
-  if (!CANDIDATE_TAGS.has(tag) && typeof part !== 'string') return null
+/** `className` with the descendant rules for an element created now with this tag and `data-streamdown` part. */
+export function withScopedClasses(tag: string, part: unknown, className: string | undefined): string | undefined {
+  if (!CANDIDATE_TAGS.has(tag) && typeof part !== 'string') return className
   const scope = currentScope()
-  if (!scope) return null
-  let out: string | null = null
+  if (!scope) return className
+  const lead: string[] = []
+  const tail: string[] = []
   for (const rule of DESCENDANT_RULES[scope]) {
     if (rule.tag !== undefined && rule.tag !== tag) continue
     if (rule.part !== undefined && !(typeof part === 'string' && rule.part.test(part))) continue
-    out = out ? `${out} ${rule.classes}` : rule.classes
+    ;(rule.wins ? tail : lead).push(rule.classes)
   }
-  return out
+  if (lead.length === 0 && tail.length === 0) return className
+  return [...lead, className, ...tail].filter(Boolean).join(' ')
 }

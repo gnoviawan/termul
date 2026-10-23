@@ -136,11 +136,30 @@ function runStyleFor(tr: Translation, style: StyleDesc): StyleDesc {
 }
 
 const MARKER_ROW: StyleDesc = { position: 'relative' }
-const INSIDE_ROW: StyleDesc = { display: 'flex', flexDirection: 'row', alignItems: 'baseline' }
+const INSIDE_ROW: StyleDesc = { display: 'flex', flexDirection: 'row', alignItems: 'flex-start' }
 const INSIDE_BODY: StyleDesc = { flexGrow: 1, flexShrink: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }
-const INSIDE_DISC: StyleDesc = { width: 16, flexShrink: 0 }
-const DISC: StyleDesc = { position: 'absolute', left: -14, top: 0 }
-const DECIMAL: StyleDesc = { position: 'absolute', left: -26, top: 0, width: 20, textAlign: 'right' }
+const MARKER_BASE: Record<'inside' | 'disc' | 'decimal', StyleDesc> = {
+  inside: { width: 16, flexShrink: 0 },
+  disc: { position: 'absolute', left: -14 },
+  decimal: { position: 'absolute', left: -26, width: 20, textAlign: 'right' }
+}
+const markerStyles = new Map<string, StyleDesc>()
+
+/**
+ * The marker sits on the item's first line. It is a sibling of the item, not
+ * a child, so it takes the item's top padding as its own offset.
+ */
+function markerStyle(kind: 'inside' | 'disc' | 'decimal', item: Slot): StyleDesc {
+  const pad = isValidElement(item) ? (item.props as { style?: StyleDesc }).style?.paddingTop : undefined
+  const top = typeof pad === 'number' ? pad : 0
+  const key = `${kind}:${top}`
+  let style = markerStyles.get(key)
+  if (!style) {
+    style = kind === 'inside' ? { ...MARKER_BASE.inside, paddingTop: top } : { ...MARKER_BASE[kind], top }
+    markerStyles.set(key, style)
+  }
+  return style
+}
 
 /** CSS list markers: `list-outside` hangs the marker in the list's padding, `list-inside` puts it in the line. */
 function withMarkers(slots: Slot[], marker: 'disc' | 'decimal', inside: boolean): Slot[] {
@@ -150,11 +169,10 @@ function withMarkers(slots: Slot[], marker: 'disc' | 'decimal', inside: boolean)
     n++
     const label = marker === 'disc' ? '•' : `${n}.`
     const key = isValidElement(slot) && slot.key !== null ? slot.key : `m${i}`
+    const glyph = jsx('text', { style: markerStyle(inside ? 'inside' : marker, slot), children: label })
     if (inside) {
-      const glyph = jsx('text', { style: INSIDE_DISC, children: label })
       return jsxs('div', { style: INSIDE_ROW, children: [glyph, jsx('div', { style: INSIDE_BODY, children: slot })] }, key)
     }
-    const glyph = jsx('text', { style: marker === 'disc' ? DISC : DECIMAL, children: label })
     return jsxs('div', { style: MARKER_ROW, children: [glyph, slot] }, key)
   })
 }
