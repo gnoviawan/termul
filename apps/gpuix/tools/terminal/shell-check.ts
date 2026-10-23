@@ -129,6 +129,35 @@ try {
         measuredCellWidth: source.cellWidth
       })
 
+      const word = (await term())!.rows.find((r) => r.text.trim() === 'copyme')!
+      await app.mouse.click({ x: word.x + 2.5 * cw, y: word.y + word.height / 2 }, { button: 2 })
+      const menu = await app
+        .getByText('Explain with AI')
+        .waitFor({ timeoutMs: 5000 })
+        .then(() => true)
+        .catch(() => false)
+      await grab(path.join(OUT, 'context-menu.png'))
+      if (menu) await app.getByText('Explain with AI').click()
+      const panel = await app
+        .getByText('Explain output')
+        .waitFor({ timeoutMs: 15_000 })
+        .then(() => true)
+        .catch(() => false)
+      await Bun.sleep(1500)
+      await grab(path.join(OUT, 'assist-panel.png'))
+      if (panel) await app.getByTestId('terminal-assist-close').click()
+      await Bun.sleep(300)
+      const closed = (await app.getByText('Explain output').count()) === 0
+      check(
+        'right-click menu opens Explain with AI in the assist panel, which closes',
+        menu && panel && closed,
+        {
+          menu,
+          panel,
+          closed
+        }
+      )
+
       await type('clear')
       await type('stty size')
       const sizeBefore = (
