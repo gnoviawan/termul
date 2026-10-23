@@ -37,6 +37,11 @@ const OVERLAP =
 const PROSE =
   'Native markdown prose loses inline-code chips, link colour and italics, and some runs pick up a warm tint; a blockquote gets a filled background instead of a rule.'
 const TREE_TEXT = 'The text check fails only because natively painted text is not in the automation tree.'
+const TINT =
+  'Some words in labels and descriptions paint in an accent or warm colour (word runs pick up a colour the web text does not have).'
+const SELECT =
+  'Each native select renders as a chevron button plus every option laid out as plain text in the row, which squeezes the label column; the web shows one closed dropdown.'
+const SETTINGS_BASE = ['The section content and navigation match.', 'The modal backdrop is far lighter than the web bg-overlay.', TINT]
 const TOAST =
   'The toast is the sonner shim: a flat green box at the window edge with the close button on the right, where the web shows a card with a check icon and the close button at its top-left.'
 
@@ -228,5 +233,54 @@ export const REVIEWS: Record<string, Review> = {
     cause: 'compat translator gap',
     unit: 'C2 menus and popovers',
     impact: 1
-  }
+  },
+  'settings.interface': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 },
+  'settings.notifications': {
+    status: 'partial',
+    differences: [...SETTINGS_BASE, 'Row dividers inside a group are missing and rows sit tighter.'],
+    cause: 'compat translator gap',
+    unit: 'C8 text colour runs',
+    impact: 1
+  },
+  'settings.editor': { status: 'broken', differences: [SELECT, ...SETTINGS_BASE.slice(1)], cause: 'native override needed', unit: 'O8 native select', impact: 2 },
+  'settings.appearance': {
+    status: 'broken',
+    differences: [SELECT, 'Renderer and Scrollback rows wrap their descriptions one word per line.', ...SETTINGS_BASE.slice(1)],
+    cause: 'native override needed',
+    unit: 'O8 native select',
+    impact: 2
+  },
+  'settings.shell': { status: 'broken', differences: [SELECT, ...SETTINGS_BASE.slice(1)], cause: 'native override needed', unit: 'O8 native select', impact: 2 },
+  'settings.terminal-profiles': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C8 text colour runs', impact: 1 },
+  'settings.ai-agents': {
+    status: 'broken',
+    differences: [SELECT, 'The Close idle chats after label wraps one or two letters per line, filling the pane; the agents list below is pushed out of view.'],
+    cause: 'native override needed',
+    unit: 'O8 native select',
+    impact: 2
+  },
+  'settings.skills': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C8 text colour runs', impact: 1 },
+  'settings.provider': {
+    status: 'partial',
+    differences: [...SETTINGS_BASE, 'The usage line moves under the account instead of beside it.'],
+    cause: 'compat translator gap',
+    unit: 'C8 text colour runs',
+    impact: 1
+  },
+  'settings.mcp-servers': {
+    status: 'partial',
+    differences: [...SETTINGS_BASE, 'The inline code in the footnote breaks onto its own line.'],
+    cause: 'compat translator gap',
+    unit: 'C8 text colour runs',
+    impact: 1
+  },
+  'settings.shortcuts': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C8 text colour runs', impact: 1 },
+  'settings.diagnostics': {
+    status: 'partial',
+    differences: [...SETTINGS_BASE, 'Server version reads termul-server v0.1.0 in GPUIX and v0.4.52 on the web against the same server.'],
+    cause: 'needs diagnosis',
+    unit: 'O9 server version source',
+    impact: 1
+  },
+  'settings.reset': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 }
 }
