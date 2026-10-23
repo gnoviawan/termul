@@ -191,3 +191,35 @@ edit diff, mermaid). A prompt `storm <seconds> <rate> <chars>` makes it
 stream at the perf toolkit's stream-storm shape and log each chunk.
 `tools/chat/scene` is the GPUIX side: the transcript at the box the web
 gives its viewport, driven through a control file (scroll, prompt, perf flush).
+
+## Chat composer (`src/composer/`, `tools/composer/`)
+
+tiptap needs contentEditable, and stock GPUIX 0.11 has IME only inside
+`<textarea>`. The override of `components/chat/composer/ChatComposerEditor.tsx`
+edits the draft in a native textarea that shows each pill as a label
+(`@app.ts`, `/compact`). `src/composer/model.ts` keeps the document (text runs
+and pills) and parses and serializes the shared sentinel display string with
+the web's own `draftFromTokens` and `pillTokenText`. `reconcile.ts` diffs each
+native change back onto the document, so a pill is deleted as a unit and an
+edit inside a label lands after the pill. The caret is placed by walking it
+with `simulateKeystrokes`, because 0.11 has no selection API.
+
+The textarea consumes Backspace, the arrows and Enter as native actions. While
+a composer menu lists options (it sets `aria-controls` on `inputRef`), focus
+moves to a key-capture box: the host's `onBeforeEditorKeyDown` sees each key
+first, and the rest edit the document directly. Hosts reach the editor only
+through `components/chat/composer/editor-ops.ts`, which has a GPUIX twin.
+
+- `bun tools/composer/e2e.ts` seeds a termul-server with a small project and a
+  prompt-logging ACP agent, mounts the shared `ChatInputBar` on GPUIX, types
+  through automation, and asserts on the prompt blocks the agent received.
+- `bun tools/composer/parity.ts` shoots the web and GPUIX composers on one
+  server (empty, mention menu, two pills) into `/tmp/gpuix-o3/parity/`.
+- `bun tools/composer/probe/probe-run.ts` records which keys a stock textarea
+  and a focusable box deliver to JS.
+
+Both tool sets seed their servers through `tools/shared/` (`ws.ts`, the
+authenticated `/ws` client; `seed.ts`, port picking and agent registration)
+and bundle their scenes with `buildClient` from `build.ts`. They keep server
+state and output under `/tmp/gpuix-o2` and `/tmp/gpuix-o3`; set
+`GPUIX_STATE_ROOT` to use another directory.

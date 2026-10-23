@@ -15,6 +15,7 @@ import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { CommandPill } from './CommandPillNode'
+import type { ComposerEditor } from './editor-ops'
 import { FilePill } from './FilePillNode'
 import { SkillPill } from './SkillPillNode'
 
@@ -41,7 +42,7 @@ export interface ChatComposerEditorProps {
   onBeforeEditorKeyDown?: (event: KeyboardEvent) => boolean | undefined
   /** Ref that receives the editor instance once it mounts (for `useChatComposer`
    * to drive transactional skill insertion + caret restoration). */
-  editorRef?: React.MutableRefObject<Editor | null>
+  editorRef?: React.MutableRefObject<ComposerEditor | null>
   /** Ref that receives the mounted editable element for menu ARIA wiring. */
   inputRef?: React.MutableRefObject<HTMLElement | null>
   /**

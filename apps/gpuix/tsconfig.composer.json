@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/components/chat/ChatInputBar": ["./tools/composer/scene/dom-components.d.ts"],
+      "@/*": ["../../src/renderer/*"],
+      "@renderer/*": ["../../src/renderer/*"],
+      "@shared/*": ["../../src/shared/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
+    }
+  },
+  "include": ["tools/composer/scene/boot.tsx", "../../src/renderer/vite-env.d.ts"],
+  "exclude": []
+}
