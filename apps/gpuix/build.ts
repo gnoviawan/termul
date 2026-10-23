@@ -12,11 +12,13 @@
  * - `react` and `react-dom` stay external, so the bundle, `@gpuix/react` and
  *   every vendored library load the single copy in `apps/gpuix/node_modules`.
  * - `@gpuix/*` stays external: the native addon is loaded by file path.
+ * - Vite's `?raw` suffix and eager raw `import.meta.glob` (agent and material
+ *   icons, reached by the chat rows) become inlined file text.
  *
  * Run `bun build.ts` for one build, or `bun tools/dev.ts` to rebuild on change.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { BunPlugin } from 'bun'
 import { gpuixUiAliases } from './tools/ui/alias'
@@ -204,6 +206,59 @@ export function overridesPlugin(): BunPlugin {
   }
 }
 
+/** `import svg from './x.svg?raw'` -> the file's text as the default export. */
+export function rawPlugin(): BunPlugin {
+  return {
+    name: 'vite-raw-suffix',
+    setup(build) {
+      build.onResolve({ filter: /\?raw$/ }, (args) => {
+        const file = args.path.slice(0, -'?raw'.length)
+        return {
+          path: file.startsWith('@/')
+            ? path.join(RENDERER_DIR, file.slice(2))
+            : path.resolve(path.dirname(args.importer), file),
+          namespace: 'raw'
+        }
+      })
+      build.onLoad({ filter: /.*/, namespace: 'raw' }, (args) => ({
+        loader: 'js',
+        contents: `export default ${JSON.stringify(readFileSync(args.path, 'utf8'))}`
+      }))
+    }
+  }
+}
+
+const GLOB_CALL = /import\.meta\.glob(?:<[^>]*>)?\(\s*'([^']+)'\s*,\s*\{[^}]*\}\s*\)/g
+
+/**
+ * Vite's eager raw `import.meta.glob(pattern, { eager, query: '?raw', import: 'default' })`
+ * -> an object literal of file text keyed by repo-relative path, the shape Vite returns.
+ */
+export function globPlugin(): BunPlugin {
+  return {
+    name: 'vite-eager-raw-glob',
+    setup(build) {
+      const roots: Record<string, string> = {
+        '@/': `${RENDERER_DIR}/`,
+        '@material-icons/': `${path.join(path.dirname(Bun.resolveSync('material-icon-theme/package.json', REPO_DIR)), 'icons')}/`
+      }
+      build.onLoad({ filter: /(agent-icon-catalog|material-icon-catalog)\.ts$/ }, (args) => {
+        const source = readFileSync(args.path, 'utf8').replace(GLOB_CALL, (_call, pattern: string) => {
+          const prefix = Object.keys(roots).find((key) => pattern.startsWith(key))
+          const absolute = prefix ? roots[prefix] + pattern.slice(prefix.length) : pattern
+          const dir = path.dirname(absolute)
+          const entries = [...new Bun.Glob(path.basename(absolute)).scanSync({ cwd: dir })].map((name) => {
+            const file = path.join(dir, name)
+            return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
+          })
+          return `({${entries.join(',')}})`
+        })
+        return { loader: 'ts', contents: source }
+      })
+    }
+  }
+}
+
 export interface BuildResult {
   ok: boolean
   /** Absolute path of the entry bundle. */
@@ -226,7 +281,7 @@ export async function buildClient(
     sourcemap: 'linked',
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
-    plugins: [compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
+    plugins: [rawPlugin(), globPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
     naming: '[name].[ext]',
     // React's production build has no jsxDEV, so a production bundle needs jsx().
     ...(options.production
