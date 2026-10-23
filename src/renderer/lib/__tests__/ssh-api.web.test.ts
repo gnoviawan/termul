@@ -274,6 +274,11 @@ describe('sshApi (host-local web connection)', () => {
     transport.connect.mockResolvedValue(undefined)
     transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
     transport.sshRequest.mockResolvedValue(null)
+    mockPersistenceApi.read.mockResolvedValue({
+      success: false,
+      error: 'not found',
+      code: 'KEY_NOT_FOUND'
+    })
   })
 
   it('sends each command over /ws under its Tauri name and arguments', async () => {
@@ -326,7 +331,45 @@ describe('sshApi (host-local web connection)', () => {
     expect(transport.sshRequest.mock.calls[1][1]).toEqual({
       profile: profile({ password: 'secret' })
     })
-    expect(mockPersistenceApi.read).not.toHaveBeenCalled()
+    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
+  })
+
+  it('moves the web-store profiles the host lacks to the host once, then empties the store', async () => {
+    const api = createSSHApi()
+    const stored = [profile(), profile({ id: 'p-2', name: 'staging' })]
+    mockPersistenceApi.read.mockResolvedValueOnce({ success: true, data: stored })
+    mockPersistenceApi.write.mockResolvedValue({ success: true, data: undefined })
+    transport.sshRequest
+      .mockResolvedValueOnce([profile()])
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce([profile(), profile({ id: 'p-2', name: 'staging' })])
+
+    expect(await api.listProfiles()).toEqual({
+      success: true,
+      data: [profile(), profile({ id: 'p-2', name: 'staging' })]
+    })
+    expect(transport.sshRequest.mock.calls).toEqual([
+      ['ssh_list_profiles', undefined],
+      ['ssh_save_profile', { profile: profile({ id: 'p-2', name: 'staging' }) }],
+      ['ssh_list_profiles', undefined]
+    ])
+    expect(mockPersistenceApi.write).toHaveBeenCalledWith('ssh/profiles', [], { expected: stored })
+
+    // The store is empty now: a later list moves nothing.
+    mockPersistenceApi.read.mockResolvedValueOnce({ success: true, data: [] })
+    transport.sshRequest.mockResolvedValueOnce([profile()])
+    expect(await api.listProfiles()).toEqual({ success: true, data: [profile()] })
+    expect(transport.sshRequest).toHaveBeenCalledTimes(4)
+    expect(mockPersistenceApi.write).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the web-store profiles when the host refuses one', async () => {
+    const api = createSSHApi()
+    mockPersistenceApi.read.mockResolvedValueOnce({ success: true, data: [profile({ id: 'p-2' })] })
+    transport.sshRequest
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(Object.assign(new Error('disk full'), { code: 'SSH_PROFILE_ERROR' }))
+    expect(await api.listProfiles()).toEqual({ success: true, data: [] })
     expect(mockPersistenceApi.write).not.toHaveBeenCalled()
   })
 

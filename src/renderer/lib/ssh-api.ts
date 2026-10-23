@@ -22,6 +22,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getAcpTransport } from './acp-transport'
 import type { AcpTransport } from './acp-transport/types'
 import { invokeIpc as invokeTauriIpc } from './ipc/tauri'
+import { logFrontendError } from './log-api'
 import { persistenceApi } from './persistence-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
@@ -173,6 +174,41 @@ async function hostOwnsProfiles(): Promise<boolean> {
   return isTauriContext() || (await hostTransport()) !== null
 }
 
+/**
+ * A web client that is not host-local keeps profiles in the server-side store
+ * (issue #613); a host-local one lists the host's SSH profiles. On the first
+ * host-local list, the stored profiles the host lacks are saved to it and the
+ * store is emptied (compare-and-set, so a write from another client in
+ * between is kept for the next list). Saving by id makes a repeat harmless.
+ * Resolves to how many profiles moved.
+ */
+async function moveStoreProfilesToHost(hostProfiles: SSHProfile[]): Promise<number> {
+  const stored = await readProfilesSnapshot()
+  if (!stored.success || stored.data.profiles.length === 0) return 0
+  const known = new Set(hostProfiles.map((p) => p.id))
+  const missing = stored.data.profiles.filter((p) => !known.has(p.id))
+  for (const profile of missing) {
+    const saved = await invokeIpc<void>(SSH_COMMANDS.SAVE_PROFILE, { profile })
+    if (!saved.success) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'ssh.profileMigration',
+        message: `moving web SSH profiles to the host stopped: ${saved.error}`
+      })
+      return 0
+    }
+  }
+  const emptied = await persistenceApi.write(PersistenceKeys.sshProfiles, [], {
+    expected: stored.data.expected
+  })
+  void logFrontendError({
+    level: 'info',
+    source: 'ssh.profileMigration',
+    message: `moved ${missing.length} web SSH profile(s) to the host${emptied.success ? '' : `; store not emptied: ${emptied.error}`}`
+  })
+  return missing.length
+}
+
 interface SshWatchDelta {
   event?: string
   payload?: unknown
@@ -221,7 +257,10 @@ export function createSSHApi(): SSHApi {
     // (it cannot open sessions).
     async listProfiles(): Promise<IpcResult<SSHProfile[]>> {
       if (!(await hostOwnsProfiles())) return readProfilesFromStore()
-      return invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
+      const listed = await invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
+      if (!listed.success || isTauriContext()) return listed
+      const moved = await moveStoreProfilesToHost(listed.data)
+      return moved > 0 ? invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES) : listed
     },
 
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {
