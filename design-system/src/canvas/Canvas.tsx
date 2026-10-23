@@ -27,6 +27,7 @@ import {
   type Point,
   zoomAt
 } from './camera'
+import { routeWheel, type WheelGesture } from './wheel-routing'
 
 const TOOLBAR_HEIGHT = 56
 const PAN_STEP = 80
@@ -56,30 +57,32 @@ function isEditable(element: Element | null): boolean {
   )
 }
 
-/** True when a scrollable ancestor between target and the canvas can consume this wheel delta. */
-function nestedCanScroll(target: EventTarget | null, root: HTMLElement, dx: number, dy: number) {
-  let node = target instanceof Element ? target : null
-  while (node && node !== root) {
-    if (node instanceof HTMLElement) {
-      const style = getComputedStyle(node)
-      const canY = /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight
-      const canX = /(auto|scroll)/.test(style.overflowX) && node.scrollWidth > node.clientWidth
-      if (canY && dy !== 0) {
-        if (
-          dy < 0 ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1
-        )
-          return true
-      }
-      if (canX && dx !== 0) {
-        if (
-          dx < 0 ? node.scrollLeft > 0 : node.scrollLeft + node.clientWidth < node.scrollWidth - 1
-        )
-          return true
-      }
-    }
-    node = node.parentElement
+/** True when this element is a scroll container that can still move by the wheel delta. */
+function canScrollBy(node: HTMLElement, dx: number, dy: number) {
+  const style = getComputedStyle(node)
+  const canY = /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight
+  const canX = /(auto|scroll)/.test(style.overflowX) && node.scrollWidth > node.clientWidth
+  if (canY && dy !== 0) {
+    if (dy < 0 ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1)
+      return true
+  }
+  if (canX && dx !== 0) {
+    if (dx < 0 ? node.scrollLeft > 0 : node.scrollLeft + node.clientWidth < node.scrollWidth - 1)
+      return true
   }
   return false
+}
+
+/** Nearest scroll container inside a canvas item, from target upward, that can take this delta. */
+function findScrollContainer(target: EventTarget | null, dx: number, dy: number) {
+  const start = target instanceof Element ? target : null
+  const item = start?.closest('[data-canvas-item]')
+  let node = start
+  while (node && item && node !== item) {
+    if (node instanceof HTMLElement && canScrollBy(node, dx, dy)) return node
+    node = node.parentElement
+  }
+  return null
 }
 
 /** Swallow the click that follows a pan so it does not activate a preview. */
@@ -122,6 +125,7 @@ export function Canvas({
   } | null>(null)
   const touchesRef = useRef(new Map<number, Point>())
   const pinchRef = useRef<{ distance: number; mid: Point; origin: Camera } | null>(null)
+  const wheelGestureRef = useRef<WheelGesture<HTMLElement> | null>(null)
   const onCameraSettledRef = useRef(onCameraSettled)
   onCameraSettledRef.current = onCameraSettled
 
@@ -256,11 +260,12 @@ export function Canvas({
       body.style.overscrollBehaviorX = previous.body
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
       window.clearTimeout(settleTimer.current)
+      wheelGestureRef.current = null
     }
   }, [])
 
-  // Wheel: Ctrl/Meta (and trackpad pinch, which arrives as ctrl+wheel) zooms at the pointer;
-  // plain wheel pans unless a nested scroll area can take it.
+  // Wheel: Ctrl/Meta (and trackpad pinch, which arrives as ctrl+wheel) zooms at the pointer.
+  // Plain wheel picks one owner per gesture: a preview scroll area that can take it, or the camera.
   useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport) return
@@ -268,17 +273,26 @@ export function Canvas({
       const scale = event.deltaMode === 1 ? LINE_HEIGHT_PX : event.deltaMode === 2 ? 400 : 1
       const dx = event.deltaX * scale
       const dy = event.deltaY * scale
-      const rect = viewport.getBoundingClientRect()
-      if (event.ctrlKey || event.metaKey) {
-        event.preventDefault()
+      const { action, gesture } = routeWheel(wheelGestureRef.current, {
+        time: event.timeStamp,
+        dx,
+        dy,
+        zoom: event.ctrlKey || event.metaKey,
+        findContainer: (x, y) => findScrollContainer(event.target, x, y),
+        canScroll: canScrollBy
+      })
+      wheelGestureRef.current = gesture
+      if (action === 'native') return
+      event.preventDefault()
+      if (action === 'block') return
+      if (action === 'zoom') {
+        const rect = viewport.getBoundingClientRect()
         const factor = Math.exp(-clamp(dy, -60, 60) * 0.01)
         setCamera(
           zoomAt(cameraRef.current, event.clientX - rect.left, event.clientY - rect.top, factor)
         )
         return
       }
-      if (nestedCanScroll(event.target, viewport, dx, dy)) return
-      event.preventDefault()
       const horizontal = event.shiftKey && dx === 0 ? dy : dx
       const vertical = event.shiftKey && dx === 0 ? 0 : dy
       const camera = cameraRef.current

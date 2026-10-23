@@ -189,7 +189,7 @@ export const CanvasItem = memo(function CanvasItem({
         </span>
       </div>
       <div
-        className="relative overflow-auto rounded-xl border border-border bg-background text-foreground"
+        className="relative overflow-auto overscroll-contain rounded-xl border border-border bg-background text-foreground"
         style={{ height: entry.height }}
         data-preview-frame
       >
