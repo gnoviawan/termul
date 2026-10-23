@@ -9,7 +9,10 @@ describe('Switch', () => {
     const sw = screen.getByRole('switch', { name: 'Auto save' })
     expect(sw.className).toContain('switch-track')
     expect(sw.className).not.toContain('bg-foreground')
-    expect(sw.querySelector('span')?.className).toContain('switch-thumb')
+    const thumb = sw.querySelector('span')?.className ?? ''
+    expect(thumb).toContain('switch-thumb')
+    // ring-/shadow- utilities would override the .switch-thumb box-shadow token.
+    expect(thumb).not.toMatch(/(^|\s)(ring|shadow)-/)
     expect(sw.className).toContain('h-5 w-9')
     expect(sw.className).toContain('focus-visible:ring-ring')
     expect(sw.className).not.toContain('primary')
