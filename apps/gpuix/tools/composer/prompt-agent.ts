@@ -31,7 +31,9 @@ function advertiseCommands(sessionId: string): void {
       sessionId,
       update: {
         sessionUpdate: 'available_commands_update',
-        availableCommands: [{ name: 'compact', description: 'Compact the conversation', input: null }]
+        availableCommands: [
+          { name: 'compact', description: 'Compact the conversation', input: null }
+        ]
       }
     }
   })
@@ -43,7 +45,10 @@ function handle({ id, method, params }: Incoming): void {
       id,
       result: {
         protocolVersion: 1,
-        agentCapabilities: { loadSession: false, promptCapabilities: { image: true, embeddedContext: true } },
+        agentCapabilities: {
+          loadSession: false,
+          promptCapabilities: { image: true, embeddedContext: true }
+        },
         authMethods: []
       }
     })
@@ -61,7 +66,13 @@ function handle({ id, method, params }: Incoming): void {
     }
     send({
       method: 'session/update',
-      params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'received' } } }
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'received' }
+        }
+      }
     })
     send({ id, result: { stopReason: 'end_turn' } })
   } else if (method === 'session/cancel') {

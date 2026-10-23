@@ -4,7 +4,12 @@
  * check; the props are the subset the scene passes.
  */
 
-import type { AvailableCommand, ContentBlock, SessionConfigOption, SessionModeState } from '@/lib/acp-api'
+import type {
+  AvailableCommand,
+  ContentBlock,
+  SessionConfigOption,
+  SessionModeState
+} from '@/lib/acp-api'
 import type { AcpSession } from '@/stores/acp-store'
 
 export interface ChatInputBarSceneProps {

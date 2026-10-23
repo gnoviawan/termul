@@ -5,7 +5,7 @@
  * Driven by `probe-run.ts`; events go to `$PROBE_LOG`.
  */
 import { appendFileSync } from 'node:fs'
-import { render, useGpuixRequired, type KeyEvent } from '@gpuix/react'
+import { type KeyEvent, render, useGpuixRequired } from '@gpuix/react'
 import { useState } from 'react'
 
 const LOG = process.env.PROBE_LOG ?? '/tmp/gpuix-o3/probe.log'
@@ -19,7 +19,17 @@ function Probe() {
   const renderer = useGpuixRequired()
   const [value, setValue] = useState('')
   return (
-    <div style={{ width: 800, height: 600, display: 'flex', flexDirection: 'column', gap: 16, padding: 20, backgroundColor: '#111' }}>
+    <div
+      style={{
+        width: 800,
+        height: 600,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        padding: 20,
+        backgroundColor: '#111'
+      }}
+    >
       <textarea
         testId="ta"
         value={value}
@@ -44,8 +54,10 @@ function Probe() {
         }}
         onKeyUp={(e) => log(keyLine('ta', 'up', e))}
       />
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: a probe of raw key delivery to a focusable box */}
       <div
         testId="kd"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the probe needs a focusable plain box
         tabIndex={0}
         style={{ width: 400, height: 60, backgroundColor: '#333' }}
         onKeyDown={(e) => log(keyLine('kd', 'down', e))}

@@ -11,7 +11,7 @@ export function blurComposerEditor(editor: ComposerEditor | null): void {
 
 /** Append a `@` or `/` trigger at the end of the draft so its menu opens. */
 export function insertComposerTrigger(editor: ComposerEditor | null, trigger: '@' | '/'): boolean {
-  if (!editor || !editor.isLive() || !editor.isEditable()) {
+  if (!editor?.isLive() || !editor.isEditable()) {
     void logFrontendError({
       level: 'warn',
       source: LOG_SOURCE,

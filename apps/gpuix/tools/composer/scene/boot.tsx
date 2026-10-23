@@ -28,7 +28,9 @@ function useStartedChat(start: SceneStart, onSession: (id: string) => void): str
     let cancelled = false
     const run = async () => {
       await useAcpStore.getState().loadAgentConfigs()
-      const id = await useAcpStore.getState().startChat(start.configId, start.cwd, undefined, start.projectId)
+      const id = await useAcpStore
+        .getState()
+        .startChat(start.configId, start.cwd, undefined, start.projectId)
       log.info('composer-scene', `started ${id}`)
       if (!cancelled) {
         setSessionId(id)
@@ -51,15 +53,29 @@ function Composer({ sessionId, box }: { sessionId: string; box: SceneBox }) {
   return (
     <div
       testId="composer-scene-ready"
-      style={{ position: 'absolute', left: box.x, top: box.y, width: box.width, display: 'flex', flexDirection: 'column' }}
+      style={{
+        position: 'absolute',
+        left: box.x,
+        top: box.y,
+        width: box.width,
+        display: 'flex',
+        flexDirection: 'column'
+      }}
     >
-      {commands.length > 0 ? <div testId="composer-scene-commands" style={{ position: 'absolute', width: 1, height: 1 }} /> : null}
+      {commands.length > 0 ? (
+        <div
+          testId="composer-scene-commands"
+          style={{ position: 'absolute', width: 1, height: 1 }}
+        />
+      ) : null}
       <ChatInputBar
         session={session}
         busy={session.activeTurn}
         disabled={false}
         onSend={(text) => void store.sendPrompt(sessionId, text)}
-        onSendBlocks={(blocks, displayBlocks) => void store.sendPromptBlocks(sessionId, blocks, { displayBlocks })}
+        onSendBlocks={(blocks, displayBlocks) =>
+          void store.sendPromptBlocks(sessionId, blocks, { displayBlocks })
+        }
         onCancel={() => void store.cancelPrompt(sessionId)}
         commands={commands}
         configOptions={session.configOptions ?? []}
@@ -73,12 +89,29 @@ function Composer({ sessionId, box }: { sessionId: string; box: SceneBox }) {
   )
 }
 
-function Scene({ start, box, onSession }: { start: SceneStart; box: SceneBox; onSession: (id: string) => void }) {
+function Scene({
+  start,
+  box,
+  onSession
+}: {
+  start: SceneStart
+  box: SceneBox
+  onSession: (id: string) => void
+}) {
   useProjectRegistry()
   useAcpListeners()
   const sessionId = useStartedChat(start, onSession)
   return (
-    <div style={{ ...tw('bg-terminal-bg'), position: 'absolute', left: 0, top: 0, width: WINDOW_WIDTH, height: WINDOW_HEIGHT }}>
+    <div
+      style={{
+        ...tw('bg-terminal-bg'),
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: WINDOW_WIDTH,
+        height: WINDOW_HEIGHT
+      }}
+    >
       {sessionId ? <Composer sessionId={sessionId} box={box} /> : null}
     </div>
   )
@@ -95,6 +128,12 @@ export const boot: ComposerSceneBoot = (config, options) => {
     <CompatRoot onRenderer={options.onRenderer}>
       <Scene start={options.start} box={options.box} onSession={options.onSession} />
     </CompatRoot>,
-    { title: 'Termul composer scene', width: WINDOW_WIDTH, height: WINDOW_HEIGHT, focus: false, ...compatRenderOptions }
+    {
+      title: 'Termul composer scene',
+      width: WINDOW_WIDTH,
+      height: WINDOW_HEIGHT,
+      focus: false,
+      ...compatRenderOptions
+    }
   )
 }

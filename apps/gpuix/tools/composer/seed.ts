@@ -55,7 +55,8 @@ function exposeRipgrep(): void {
     mkdirSync(dir, { recursive: true })
     symlinkSync(path.join(REPO_DIR, 'src-tauri/bin/rg-x86_64-unknown-linux-gnu'), link)
   }
-  if (!process.env.PATH?.split(':').includes(dir)) process.env.PATH = `${dir}:${process.env.PATH ?? ''}`
+  if (!process.env.PATH?.split(':').includes(dir))
+    process.env.PATH = `${dir}:${process.env.PATH ?? ''}`
 }
 
 export async function seedComposerServer(): Promise<ComposerServer> {
@@ -69,33 +70,41 @@ export async function seedComposerServer(): Promise<ComposerServer> {
     writeFileSync(path.join(root, file), `// ${file}\n`)
   }
   const promptLog = path.join(base, 'prompts.jsonl')
-  const server = await startTestServer({ port, token: COMPOSER_TOKEN, stateDir: path.join(base, 'server') })
+  const server = await startTestServer({
+    port,
+    token: COMPOSER_TOKEN,
+    stateDir: path.join(base, 'server')
+  })
   const stop = async () => {
     await server.stop()
     rmSync(base, { recursive: true, force: true })
   }
   try {
-    await addProject(server, { id: COMPOSER_PROJECT_ID, name: 'composer-project', path: root, color: 'blue' })
-    const ws = await connectWs({ baseUrl: server.baseUrl, token: COMPOSER_TOKEN, deviceId: COMPOSER_DEVICE_ID })
+    await addProject(server, {
+      id: COMPOSER_PROJECT_ID,
+      name: 'composer-project',
+      path: root,
+      color: 'blue'
+    })
+    const ws = await connectWs({
+      baseUrl: server.baseUrl,
+      token: COMPOSER_TOKEN,
+      deviceId: COMPOSER_DEVICE_ID
+    })
     await ws.request('set_default_project', { projectId: COMPOSER_PROJECT_ID })
     const agentsKey = scopedKey('acp/agents', COMPOSER_DEVICE_ID)
+    const config = {
+      configId: COMPOSER_AGENT_ID,
+      name: 'Composer Agent',
+      command: 'bun',
+      args: [path.join(import.meta.dir, 'prompt-agent.ts')],
+      env: { COMPOSER_PROMPT_LOG: promptLog },
+      allowTerminal: false
+    }
     const current = await ws.request<{ revision?: number }>('store_read', { key: agentsKey })
     await ws.request('store_write', {
       key: agentsKey,
-      value: {
-        _version: 1,
-        data: [
-          {
-            id: COMPOSER_AGENT_ID,
-            configId: COMPOSER_AGENT_ID,
-            name: 'Composer Agent',
-            command: 'bun',
-            args: [path.join(import.meta.dir, 'prompt-agent.ts')],
-            env: { COMPOSER_PROMPT_LOG: promptLog },
-            allowTerminal: false
-          }
-        ]
-      },
+      value: { _version: 1, data: [{ id: COMPOSER_AGENT_ID, ...config }] },
       baseRevision: current.revision ?? 0
     })
     await ws.request('store_write', {

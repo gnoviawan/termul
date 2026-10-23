@@ -13,7 +13,7 @@ export function composerEditorCaret(
 }
 
 export function isComposerEditorLive(editor: ComposerEditor | null): editor is ComposerEditor {
-  return editor !== null && editor.isLive()
+  return editor?.isLive() === true
 }
 
 export function focusComposerEditor(editor: ComposerEditor | null, position?: 'end'): void {

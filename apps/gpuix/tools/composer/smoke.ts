@@ -1,7 +1,7 @@
 /** `bun tools/composer/smoke.ts [out.png]`: seed, open the scene, grab one frame. */
 
-import { seedComposerServer } from './seed'
 import { withScene } from './scene/session'
+import { seedComposerServer } from './seed'
 
 const out = Bun.argv[2] ?? '/tmp/gpuix-o3/smoke.png'
 const seeded = await seedComposerServer()

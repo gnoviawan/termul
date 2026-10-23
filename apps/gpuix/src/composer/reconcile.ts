@@ -26,7 +26,11 @@ function editAtCaret(prev: string, next: string, caret: number): TextEdit | null
   }
   // Backspace removes the characters before the caret, Delete the ones after it.
   for (const from of [caret + grow, caret]) {
-    if (from >= 0 && from - grow <= prev.length && prev.slice(0, from) + prev.slice(from - grow) === next) {
+    if (
+      from >= 0 &&
+      from - grow <= prev.length &&
+      prev.slice(0, from) + prev.slice(from - grow) === next
+    ) {
       return { from, to: from - grow, inserted: '' }
     }
   }
@@ -47,7 +51,11 @@ export function diffTexts(prev: string, next: string, caretHint: number | null):
   ) {
     suffix++
   }
-  return { from: prefix, to: prev.length - suffix, inserted: next.slice(prefix, next.length - suffix) }
+  return {
+    from: prefix,
+    to: prev.length - suffix,
+    inserted: next.slice(prefix, next.length - suffix)
+  }
 }
 
 export interface Reconciled extends EditResult {
@@ -55,7 +63,12 @@ export interface Reconciled extends EditResult {
   readonly text: string
 }
 
-export function reconcile(doc: ComposerDoc, prev: string, next: string, caretHint: number | null): Reconciled {
+export function reconcile(
+  doc: ComposerDoc,
+  prev: string,
+  next: string,
+  caretHint: number | null
+): Reconciled {
   if (prev === next) return { doc, caret: caretHint ?? next.length, text: next }
   const edit = diffTexts(prev, next, caretHint)
   let { from } = edit

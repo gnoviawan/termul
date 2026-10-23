@@ -6,11 +6,20 @@
 import { WS_PROTOCOL_VERSION } from '../../../../src/shared/types/web-protocol.types.ts'
 
 export interface WsClient {
-  request<T = unknown>(type: string, payload: unknown, timeoutMs?: number): Promise<T>
+  request<T = unknown>(
+    type: string,
+    payload: unknown,
+    timeoutMs?: number,
+    commandId?: string
+  ): Promise<T>
   close(): void
 }
 
-export async function connectWs(opts: { baseUrl: string; token: string; deviceId: string }): Promise<WsClient> {
+export async function connectWs(opts: {
+  baseUrl: string
+  token: string
+  deviceId: string
+}): Promise<WsClient> {
   const socket = new WebSocket(`${opts.baseUrl.replace(/^http/, 'ws')}/ws`)
   const pending = new Map<string, { resolve(v: unknown): void; reject(e: Error): void }>()
   let nextId = 0
@@ -28,7 +37,12 @@ export async function connectWs(opts: { baseUrl: string; token: string; deviceId
     if (frame.ok) waiter.resolve(frame.payload)
     else waiter.reject(new Error(`${frame.err?.code}: ${frame.err?.message}`))
   }
-  const request = <T>(type: string, payload: unknown, timeoutMs = 15_000): Promise<T> => {
+  const request = <T>(
+    type: string,
+    payload: unknown,
+    timeoutMs = 15_000,
+    commandId?: string
+  ): Promise<T> => {
     const id = `r${nextId++}`
     const { promise, resolve, reject } = Promise.withResolvers<T>()
     const timer = setTimeout(() => {
@@ -36,7 +50,7 @@ export async function connectWs(opts: { baseUrl: string; token: string; deviceId
       reject(new Error(`ws ${type} timed out after ${timeoutMs} ms`))
     }, timeoutMs)
     pending.set(id, { resolve: (value) => resolve(value as T), reject })
-    socket.send(JSON.stringify({ id, type, payload }))
+    socket.send(JSON.stringify({ id, type, payload, ...(commandId && { command_id: commandId }) }))
     return promise.finally(() => clearTimeout(timer))
   }
   const opened = Promise.withResolvers<void>()

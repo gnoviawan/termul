@@ -19,7 +19,14 @@ export async function buildScene(): Promise<string> {
     format: 'esm',
     sourcemap: 'linked',
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
-    plugins: [rawPlugin(), globPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver()],
+    plugins: [
+      rawPlugin(),
+      globPlugin(),
+      compatPlugin(),
+      gpuixUiAliases(),
+      overridesPlugin(),
+      termulResolver()
+    ],
     naming: '[name].[ext]'
   })
   for (const line of result.logs) console.error(String(line))

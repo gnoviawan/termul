@@ -11,13 +11,32 @@ const app = await launch({
   command: 'bun',
   args: [path.join(import.meta.dir, 'probe.tsx')],
   cwd: import.meta.dir,
-  env: { ...process.env, DISPLAY: xvfb.display, VK_ICD_FILENAMES: LAVAPIPE_ICD, GPUIX_BACKGROUND: '1', PROBE_LOG: LOG }
+  env: {
+    ...process.env,
+    DISPLAY: xvfb.display,
+    VK_ICD_FILENAMES: LAVAPIPE_ICD,
+    GPUIX_BACKGROUND: '1',
+    PROBE_LOG: LOG
+  }
 })
 const mark = (m: string) => appendFileSync(LOG, `--- ${m}\n`)
 try {
   const ta = app.getByTestId('ta')
   await ta.waitFor({ timeoutMs: 30000 })
-  for (const key of ['a', '@', 'b', 'backspace', 'left', 'right', 'up', 'down', 'shift-enter', 'enter', 'tab', 'ctrl-v']) {
+  for (const key of [
+    'a',
+    '@',
+    'b',
+    'backspace',
+    'left',
+    'right',
+    'up',
+    'down',
+    'shift-enter',
+    'enter',
+    'tab',
+    'ctrl-v'
+  ]) {
     mark(`ta ${key}`)
     await ta.press(key)
     await Bun.sleep(120)
@@ -28,7 +47,18 @@ try {
   await ta.press('X')
   await Bun.sleep(200)
   const kd = app.getByTestId('kd')
-  for (const key of ['a', '@', 'shift-2', 'backspace', 'left', 'up', 'enter', 'shift-enter', 'ctrl-v', 'tab']) {
+  for (const key of [
+    'a',
+    '@',
+    'shift-2',
+    'backspace',
+    'left',
+    'up',
+    'enter',
+    'shift-enter',
+    'ctrl-v',
+    'tab'
+  ]) {
     mark(`kd ${key}`)
     await kd.press(key)
     await Bun.sleep(120)

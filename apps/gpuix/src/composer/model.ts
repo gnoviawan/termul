@@ -68,13 +68,19 @@ const PILL_NODE: Record<Pill['kind'], PillNodeType> = {
 }
 
 function pillAttrs(pill: Pill): Record<string, unknown> {
-  return pill.kind === 'file' ? { display: pill.display, absPath: pill.absPath } : { name: pill.name }
+  return pill.kind === 'file'
+    ? { display: pill.display, absPath: pill.absPath }
+    : { name: pill.name }
 }
 
 function pillFromNode(type: PillNodeType, attrs: Record<string, unknown>): Pill {
   switch (type) {
     case FILE_PILL_NODE:
-      return { kind: 'file', display: String(attrs.display ?? ''), absPath: String(attrs.absPath ?? '') }
+      return {
+        kind: 'file',
+        display: String(attrs.display ?? ''),
+        absPath: String(attrs.absPath ?? '')
+      }
     case CMD_PILL_NODE:
       return { kind: 'command', name: String(attrs.name ?? '') }
     case SKILL_PILL_NODE:
@@ -91,7 +97,8 @@ export function normalize(segments: readonly Segment[]): ComposerDoc {
     }
     if (segment.text.length === 0) continue
     const last = out.at(-1)
-    if (last?.kind === 'text') out[out.length - 1] = { kind: 'text', text: last.text + segment.text }
+    if (last?.kind === 'text')
+      out[out.length - 1] = { kind: 'text', text: last.text + segment.text }
     else out.push(segment)
   }
   return out
@@ -102,7 +109,11 @@ export function fromDisplay(value: string): ComposerDoc {
   const segments: Segment[] = []
   draftFromTokens(value).content.forEach((paragraph, index) => {
     if (index > 0) segments.push({ kind: 'text', text: '\n' })
-    const inline = (paragraph.content ?? []) as Array<{ type: string; text?: string; attrs?: Record<string, unknown> }>
+    const inline = (paragraph.content ?? []) as Array<{
+      type: string
+      text?: string
+      attrs?: Record<string, unknown>
+    }>
     for (const node of inline) {
       if (node.type === 'text') segments.push({ kind: 'text', text: node.text ?? '' })
       else if (isPillNodeType(node.type)) segments.push(pillFromNode(node.type, node.attrs ?? {}))
@@ -113,7 +124,9 @@ export function fromDisplay(value: string): ComposerDoc {
 
 /** Serialize to the shared display string, pills through the web's `pillTokenText`. */
 export function toDisplay(doc: ComposerDoc): string {
-  return doc.map((s) => (s.kind === 'text' ? s.text : pillTokenText(PILL_NODE[s.kind], pillAttrs(s)))).join('')
+  return doc
+    .map((s) => (s.kind === 'text' ? s.text : pillTokenText(PILL_NODE[s.kind], pillAttrs(s))))
+    .join('')
 }
 
 export function project(doc: ComposerDoc): Projection {
@@ -143,7 +156,8 @@ export function toDisplayOffset(doc: ComposerDoc, offset: number): number {
     const length = segmentLength(segment)
     const token = segment.kind === 'text' ? length : toDisplay([segment]).length
     if (offset <= text) return display
-    if (offset < text + length) return segment.kind === 'text' ? display + (offset - text) : display + token
+    if (offset < text + length)
+      return segment.kind === 'text' ? display + (offset - text) : display + token
     text += length
     display += token
   }
@@ -158,7 +172,8 @@ export function fromDisplayOffset(doc: ComposerDoc, offset: number): number {
     const length = segmentLength(segment)
     const token = segment.kind === 'text' ? length : toDisplay([segment]).length
     if (offset <= display) return text
-    if (offset < display + token) return segment.kind === 'text' ? text + (offset - display) : text + length
+    if (offset < display + token)
+      return segment.kind === 'text' ? text + (offset - display) : text + length
     text += length
     display += token
   }
@@ -193,7 +208,12 @@ function splitAt(doc: ComposerDoc, offset: number): [Segment[], Segment[]] {
  * - An insertion inside a pill label lands after the pill.
  * - Sentinel tokens inside `inserted` (a pasted display string) become pills.
  */
-export function replaceRange(doc: ComposerDoc, from: number, to: number, inserted: string): EditResult {
+export function replaceRange(
+  doc: ComposerDoc,
+  from: number,
+  to: number,
+  inserted: string
+): EditResult {
   let start = Math.min(from, to)
   let end = Math.max(from, to)
   for (const span of project(doc).pills) {

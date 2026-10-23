@@ -69,7 +69,14 @@ const CARET_SYNC_MS = 40
 const LOG_SOURCE = 'ChatComposerEditor.gpuix'
 
 const CAPTURE_STYLE = { position: 'absolute', left: 0, top: 0, width: 1, height: 1 } as const
-const PROBE_STYLE = { position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'hidden' } as const
+const PROBE_STYLE = {
+  position: 'absolute',
+  left: 0,
+  top: 0,
+  width: 0,
+  height: 0,
+  overflow: 'hidden'
+} as const
 
 /**
  * Set by the composer scene: the automation tree does not carry a textarea's
@@ -77,7 +84,9 @@ const PROBE_STYLE = { position: 'absolute', left: 0, top: 0, width: 0, height: 0
  * web editor exposes itself on its DOM node in test mode.
  */
 function testHooksEnabled(): boolean {
-  return (globalThis as { __TERMUL_GPUIX_TEST_HOOKS__?: boolean }).__TERMUL_GPUIX_TEST_HOOKS__ === true
+  return (
+    (globalThis as { __TERMUL_GPUIX_TEST_HOOKS__?: boolean }).__TERMUL_GPUIX_TEST_HOOKS__ === true
+  )
 }
 
 function isPrintable(init: KeyInit): boolean {
@@ -140,7 +149,11 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
         const id = textareaIdRef.current
         if (!liveRef.current || id === null || menuOpenRef.current) return
         if (!placeTextareaCaret(renderer, id, nativeRef.current, offset)) {
-          void logFrontendError({ level: 'warn', source: LOG_SOURCE, message: 'caret placement unavailable' })
+          void logFrontendError({
+            level: 'warn',
+            source: LOG_SOURCE,
+            message: 'caret placement unavailable'
+          })
         }
       }, CARET_SYNC_MS)
     },
@@ -185,7 +198,10 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
       if (id !== null) renderer.focusElement?.(id)
       return
     }
-    if (captureIdRef.current !== null && renderer.getFocusedElementId?.() === captureIdRef.current) {
+    if (
+      captureIdRef.current !== null &&
+      renderer.getFocusedElementId?.() === captureIdRef.current
+    ) {
       placeCaret(caretRef.current)
     }
   }, [menuOpen, renderer, placeCaret])
@@ -261,7 +277,11 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
         event.preventDefault()
         return
       }
-      if (init.key === 'v' && (init.ctrlKey || init.metaKey) && propsRef.current.onPasteAttachments) {
+      if (
+        init.key === 'v' &&
+        (init.ctrlKey || init.metaKey) &&
+        propsRef.current.onPasteAttachments
+      ) {
         void logFrontendError({
           level: 'info',
           source: LOG_SOURCE,
@@ -292,7 +312,12 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
   )
 
   const tw = compatTw()
-  const textStyle = tw(cn('text-base leading-relaxed text-foreground outline-none pointer-fine:text-sm', editorClassName))
+  const textStyle = tw(
+    cn(
+      'text-base leading-relaxed text-foreground outline-none pointer-fine:text-sm',
+      editorClassName
+    )
+  )
   const lineHeight = typeof textStyle.lineHeight === 'number' ? textStyle.lineHeight : 22.75
   return (
     <div style={tw(cn('relative w-full overflow-hidden', disabled && 'opacity-60', className))}>
@@ -303,6 +328,7 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
           aria-label={ariaLabel}
           value={text}
           readOnly={disabled}
+          // biome-ignore lint/a11y/noAutofocus: hosts opt in (focus on chat open), as with the web editor's mount focus.
           autoFocus={autoFocus}
           minRows={1}
           maxRows={Math.max(1, Math.floor(maxHeight / lineHeight))}
@@ -318,6 +344,7 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
           </div>
         ) : null}
       </div>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: an unlabeled focus sink; the textarea is the accessible editor and the menu is the listbox. */}
       <div
         ref={(instance: PublicInstance | null) => {
           captureIdRef.current = instance?.id ?? null

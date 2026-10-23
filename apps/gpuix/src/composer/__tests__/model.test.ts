@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import { Node, Schema } from '@tiptap/pm/model'
-import { formatPromptWithSkills } from '@/lib/skills-prompt'
 import { docToDisplayText } from '@/lib/composer/doc-to-prompt'
 import { draftFromTokens } from '@/lib/composer/draft-from-tokens'
 import {
@@ -10,6 +9,7 @@ import {
   replaceCommandTokensInline,
   replaceFileTokensInline
 } from '@/lib/skill-tokens'
+import { formatPromptWithSkills } from '@/lib/skills-prompt'
 import {
   type ComposerDoc,
   deleteBackward,
@@ -40,13 +40,27 @@ const schema = new Schema({
     paragraph: { group: 'block', content: 'inline*' },
     text: { group: 'inline' },
     hardBreak: { group: 'inline', inline: true },
-    skillPill: { group: 'inline', inline: true, atom: true, attrs: { name: { default: '' }, path: { default: '' } } },
+    skillPill: {
+      group: 'inline',
+      inline: true,
+      atom: true,
+      attrs: { name: { default: '' }, path: { default: '' } }
+    },
     commandPill: { group: 'inline', inline: true, atom: true, attrs: { name: { default: '' } } },
-    filePill: { group: 'inline', inline: true, atom: true, attrs: { display: { default: '' }, absPath: { default: '' } } }
+    filePill: {
+      group: 'inline',
+      inline: true,
+      atom: true,
+      attrs: { display: { default: '' }, absPath: { default: '' } }
+    }
   }
 })
 
-function typeAll(doc: ComposerDoc, caret: number, text: string): { doc: ComposerDoc; caret: number } {
+function typeAll(
+  doc: ComposerDoc,
+  caret: number,
+  text: string
+): { doc: ComposerDoc; caret: number } {
   let state = { doc, caret }
   for (const ch of text) state = insertText(state.doc, state.caret, ch)
   return state
@@ -144,7 +158,10 @@ describe('editing', () => {
 
   test('a selection across part of a pill removes the pill', () => {
     const doc = fromDisplay(`ab ${FILE} cd`)
-    expect(replaceRange(doc, 1, 6, 'X')).toEqual({ doc: [{ kind: 'text', text: 'aX cd' }], caret: 2 })
+    expect(replaceRange(doc, 1, 6, 'X')).toEqual({
+      doc: [{ kind: 'text', text: 'aX cd' }],
+      caret: 2
+    })
   })
 
   test('typing inside a pill label lands after the pill', () => {
@@ -154,7 +171,10 @@ describe('editing', () => {
 
   test('pasting a display string with tokens pastes pills', () => {
     const state = insertText(fromDisplay('x'), 1, ` ${FILE}\ny`)
-    expect(state).toEqual({ doc: [{ kind: 'text', text: 'x ' }, app, { kind: 'text', text: '\ny' }], caret: 11 })
+    expect(state).toEqual({
+      doc: [{ kind: 'text', text: 'x ' }, app, { kind: 'text', text: '\ny' }],
+      caret: 11
+    })
   })
 })
 
@@ -187,7 +207,11 @@ describe('native textarea edits', () => {
   test('native paste of plain text keeps pills in place', () => {
     const doc = fromDisplay(`${FILE} `)
     const next = reconcile(doc, '@app.ts ', '@app.ts two\nlines', 8)
-    expect(next).toEqual({ doc: [app, { kind: 'text', text: ' two\nlines' }], caret: 17, text: '@app.ts two\nlines' })
+    expect(next).toEqual({
+      doc: [app, { kind: 'text', text: ' two\nlines' }],
+      caret: 17,
+      text: '@app.ts two\nlines'
+    })
     expect(toDisplay(next.doc)).toBe(`${FILE} two\nlines`)
   })
 })

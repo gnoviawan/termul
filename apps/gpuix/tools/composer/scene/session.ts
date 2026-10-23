@@ -5,10 +5,16 @@ import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { APP_DIR } from '../../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
-import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../../parity/shoot-gpuix'
+import {
+  grabFrame,
+  LAVAPIPE_ICD,
+  SCREEN_MARGIN,
+  startXvfb,
+  windowOrigin
+} from '../../parity/shoot-gpuix'
 import type { ComposerServer } from '../seed'
-import type { SceneBox } from './contract'
 import { buildScene } from './build'
+import type { SceneBox } from './contract'
 
 export type GpuixApp = Awaited<ReturnType<typeof launch>>
 
