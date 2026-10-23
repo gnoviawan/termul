@@ -224,6 +224,7 @@ export class WsAcpTransport implements AcpTransport {
   private negotiatedHistoryMode: HistoryMode = 'live_only'
   private runtimePolicy: AcpRuntimePolicy | null = null
   private grantedCapabilities: ConnectionCapabilities | null = null
+  private readonly capabilityListeners = new Set<() => void>()
   private connecting: Promise<void> | null = null
   private disposed = false
   private reconnectAttempt = 0
@@ -965,6 +966,13 @@ export class WsAcpTransport implements AcpTransport {
 
   connectionCapabilities(): ConnectionCapabilities | null {
     return this.grantedCapabilities
+  }
+
+  subscribeCapabilities(listener: () => void): () => void {
+    this.capabilityListeners.add(listener)
+    return () => {
+      this.capabilityListeners.delete(listener)
+    }
   }
 
   addClaudeAccount(name: string): Promise<ClaudeAccount> {
@@ -2214,9 +2222,14 @@ export class WsAcpTransport implements AcpTransport {
         )
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
-        this.grantedCapabilities = {
+        const granted = {
           write: auth?.capabilities?.write === true,
           hostLocal: auth?.capabilities?.hostLocal === true
+        }
+        const previous = this.grantedCapabilities
+        this.grantedCapabilities = granted
+        if (previous?.write !== granted.write || previous?.hostLocal !== granted.hostLocal) {
+          for (const listener of this.capabilityListeners) listener()
         }
         this.authed = true
         // Issue #907 (F3): the handshake succeeded — any prior token-class

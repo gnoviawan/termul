@@ -239,6 +239,8 @@ export interface AcpTransport {
    * the first handshake. Web carriers only.
    */
   connectionCapabilities?(): ConnectionCapabilities | null
+  /** Called whenever {@link connectionCapabilities} changes. Web carriers only. */
+  subscribeCapabilities?(listener: () => void): () => void
   /**
    * Claude Account management over `/ws`, admitted only for a `hostLocal`
    * connection. Web carriers only: the desktop manages Accounts through its

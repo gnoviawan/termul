@@ -7,6 +7,7 @@ import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertCircle, Check, ExternalLink, Info, Link2, Shuffle } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { useHostGate } from '@/hooks/use-host-gate'
 import type { ProjectClaudeAccountDraft } from '@/hooks/use-project-claude-account-draft'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { formatUsageReset, usageTone, usageWindowLabel } from '@/lib/claude-usage-format'
@@ -151,6 +152,7 @@ export function ProjectProviderSettings({
   const { snapshot, usage, loading, error, refreshingUsage, reload, refreshUsage } = claude.accounts
   const listRef = useRef<HTMLDivElement>(null)
   const [signingIn, setSigningIn] = useState(false)
+  const canManage = useHostGate(claudeAccountsApi.canManageAccounts)
 
   const readinessOf = (accountId: string | null) => {
     const account = snapshot?.accounts.find(
@@ -372,7 +374,7 @@ export function ProjectProviderSettings({
               New Claude chats in this project cannot start until you sign in again.
             </span>
           </div>
-          {claudeAccountsApi.canManageAccounts() ? (
+          {canManage ? (
             <Button
               type="button"
               size="xs"

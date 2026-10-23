@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
+import { useHostGate } from '@/hooks/use-host-gate'
 import { claudeAccountsApi } from '@/lib/claude-accounts-api'
 import { formatUsageReset } from '@/lib/claude-usage-format'
 import { logFrontendError } from '@/lib/log-api'
@@ -94,6 +95,7 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
   const cancelResume = useClaudeResumeStore((s) => s.cancel)
   const [switchingTo, setSwitchingTo] = useState<string | null>(null)
   const [, rerender] = useState(0)
+  const canManage = useHostGate(claudeAccountsApi.canManageAccounts)
   if (!ctx?.rateLimit) return null
 
   const limit = ctx.rateLimit
@@ -255,7 +257,7 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
                 Continue when it resets
               </Button>
             )}
-            {claudeAccountsApi.canManageAccounts() && (
+            {canManage && (
               <Button
                 type="button"
                 size="xs"
