@@ -2,6 +2,7 @@ import * as C from '../previews/components'
 import * as F from '../previews/foundations'
 import * as P from '../previews/patterns'
 import * as S from '../previews/surfaces'
+import * as T from '../previews/tokens'
 import type { CanvasEntry, CanvasSection } from './types'
 
 const THEMES = 'src/renderer/lib/themes'
@@ -39,7 +40,15 @@ export const SECTIONS: CanvasSection[] = [
         title: 'Color: accent and status',
         entries: [
           tokens('color.accent', 'Accent tokens', F.ACCENT_TOKENS),
-          tokens('color.status', 'Status tokens', F.STATUS_TOKENS)
+          tokens('color.status', 'Status tokens', F.STATUS_TOKENS),
+          {
+            id: 'color.brand',
+            name: 'Brand scale',
+            source: `${THEMES}/termul-brand.ts`,
+            width: 560,
+            height: 316,
+            Preview: T.BrandScale
+          }
         ]
       },
       {
@@ -138,6 +147,14 @@ export const SECTIONS: CanvasSection[] = [
             width: 560,
             height: 304,
             Preview: F.ShadowScale
+          },
+          {
+            id: 'space.elevation',
+            name: 'Elevation ladder',
+            source: `${THEMES}/component-tokens.ts`,
+            width: 600,
+            height: 410,
+            Preview: T.ElevationLadder
           }
         ]
       },
@@ -227,6 +244,22 @@ export const SECTIONS: CanvasSection[] = [
             width: 520,
             height: 288,
             Preview: C.Toggles
+          },
+          {
+            id: 'switch.states',
+            name: 'Switch states',
+            source: `${UI}/switch.tsx`,
+            width: 560,
+            height: 292,
+            Preview: T.SwitchStates
+          },
+          {
+            id: 'button.emboss',
+            name: 'Emboss and fill states',
+            source: `${UI}/button.tsx`,
+            width: 560,
+            height: 260,
+            Preview: T.EmbossStates
           },
           {
             id: 'icon-actions',
