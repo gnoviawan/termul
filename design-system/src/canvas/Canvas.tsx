@@ -553,7 +553,14 @@ export function Canvas({
               <Menu size={18} aria-hidden />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuContent
+            align="start"
+            collisionPadding={8}
+            // Short viewports (browser zoom, landscape phones): cap the panel to
+            // the space Radix measures below the trigger and scroll inside it,
+            // so every item stays reachable.
+            className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-56 overflow-x-hidden overflow-y-auto overscroll-contain"
+          >
             <DropdownMenuGroup>
               <DropdownMenuLabel>Sections</DropdownMenuLabel>
               {sections.map((section) => (
