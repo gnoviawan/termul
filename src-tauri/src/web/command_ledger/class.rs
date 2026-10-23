@@ -155,12 +155,14 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("sftp_realpath", CommandClass::read()),
     ("sftp_download", CommandClass::idempotent()),
     ("sftp_upload", CommandClass::idempotent()),
-    ("sftp_delete", CommandClass::idempotent()),
-    ("sftp_mkdir", CommandClass::idempotent()),
-    ("sftp_rename", CommandClass::idempotent()),
+    // A repeat of a delete, mkdir, rename or create fails (the path is gone
+    // or already there), so a resend must replay the first outcome.
+    ("sftp_delete", CommandClass::command(Replay::Payload)),
+    ("sftp_mkdir", CommandClass::command(Replay::Payload)),
+    ("sftp_rename", CommandClass::command(Replay::Payload)),
     ("sftp_read_file", CommandClass::read()),
     ("sftp_write_file", CommandClass::idempotent()),
-    ("sftp_create_file", CommandClass::idempotent()),
+    ("sftp_create_file", CommandClass::command(Replay::Payload)),
     ("kill_agent", CommandClass::idempotent()),
     ("list_agents", CommandClass::read()),
     ("authenticate", CommandClass::read()),
@@ -244,6 +246,10 @@ fn identifying_fields(request_type: &str) -> &'static [&'static str] {
         "authenticate_agent" => &["agentId", "methodId"],
         "ssh_session_open" => &["request.sessionId", "request.profileId"],
         "ssh_duplicate_profile" => &["profileId"],
+        "sftp_delete" | "sftp_mkdir" | "sftp_create_file" => {
+            &["request.connectionId", "request.remotePath"]
+        }
+        "sftp_rename" => &["request.connectionId", "request.oldPath", "request.newPath"],
         "respond_elicitation" => &["agentId", "requestId", "action"],
         "acp_deliver_auth_redirect" | "install_acp_agent" | "logout_agent" | "kill_agent" => {
             &["agentId"]

@@ -138,7 +138,11 @@ describe('SSH over /ws', () => {
     expect(stamped.map((f) => f.type)).toEqual([
       'ssh_duplicate_profile',
       'ssh_import_config',
-      'ssh_session_open'
+      'ssh_session_open',
+      'sftp_delete',
+      'sftp_mkdir',
+      'sftp_rename',
+      'sftp_create_file'
     ])
     for (const f of stamped) expect(f.command_id).toMatch(/^[A-Za-z0-9_-]{1,128}$/)
     t.dispose()

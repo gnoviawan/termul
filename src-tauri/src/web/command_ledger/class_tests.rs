@@ -146,6 +146,10 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
             "ssh_duplicate_profile",
             "ssh_import_config",
             "ssh_session_open",
+            "sftp_delete",
+            "sftp_mkdir",
+            "sftp_rename",
+            "sftp_create_file",
         ])
     );
     assert!(!class_of("send_prompt").unwrap().1.ledgered(), "TurnWatermark owns prompts");
@@ -251,4 +255,20 @@ fn blank_and_padded_ids_normalize_like_the_handlers_do() {
     assert_eq!(print(json!("   ")), absent, "a blank projectId is no projectId");
     assert_eq!(print(json!(" p1 ")), print(json!("p1")));
     assert_ne!(print(json!("p1")), print(json!("p2")));
+}
+
+#[test]
+fn an_sftp_mutation_is_fingerprinted_by_its_session_and_paths() {
+    let rename = |to: &str| {
+        Fingerprint::of(
+            "sftp_rename",
+            &json!({"request": {"connectionId": "s", "oldPath": "/a", "newPath": to}}),
+        )
+    };
+    assert_eq!(rename("/b"), rename("/b"));
+    assert_ne!(rename("/b"), rename("/c"), "another target is another command");
+    let mkdir = |path: &str| {
+        Fingerprint::of("sftp_mkdir", &json!({"request": {"connectionId": "s", "remotePath": path}}))
+    };
+    assert_ne!(mkdir("/a"), mkdir("/b"));
 }
