@@ -34,16 +34,26 @@ const SHARED_BRAND_TOKENS = {
   '--ghost-hover-foreground': 'oklch(var(--foreground))'
 } as const satisfies ThemeComponentTokens
 
-/** Interfere s-default. One hairline plus a short drop. */
-const LIGHT_EMBOSS = '0 0 0 0.5px #0000000f, 0 1px 1px -1px #0000001a, 0 1px 2px 0 #0000000d'
-/** Interfere dark s-default. Dark surfaces separate by a white hairline, not a drop. */
-const DARK_EMBOSS = 'inset 0 0 0 0.5px #ffffff12'
+/**
+ * Emboss on the primary fill: a dark outer hairline, a short drop, a white
+ * top bevel and a dark bottom bevel. The bevels make the depth read on the
+ * blue fill itself, so it works on both canvases. Hover lifts a little.
+ */
+const LIGHT_EMBOSS =
+  '0 0 0 0.5px #00000033, 0 1px 2px #00000026, 0 2px 4px -1px #0000001a, inset 0 1px 0 #ffffff47, inset 0 -1px 0 #00000026'
+const LIGHT_EMBOSS_HOVER =
+  '0 0 0 0.5px #0000003d, 0 1px 2px #0000002e, 0 3px 6px -1px #00000024, inset 0 1px 0 #ffffff52, inset 0 -1px 0 #0000002e'
+/** Dark: the drop needs more alpha to read on the near-black canvas. */
+const DARK_EMBOSS =
+  '0 0 0 0.5px #000000cc, 0 1px 2px #00000080, 0 2px 6px -1px #00000066, inset 0 1px 0 #ffffff40, inset 0 -1px 0 #00000047'
+const DARK_EMBOSS_HOVER =
+  '0 0 0 0.5px #000000d9, 0 1px 2px #0000008c, 0 3px 8px -1px #00000073, inset 0 1px 0 #ffffff4d, inset 0 -1px 0 #00000052'
 
 /** Light: gray-a3/a4/a5 off track, white thumb with a hairline so it reads on grey. */
 export const TERMUL_LIGHT_BRAND_TOKENS: ThemeComponentTokens = {
   ...SHARED_BRAND_TOKENS,
   '--shadow-emboss': LIGHT_EMBOSS,
-  '--shadow-emboss-hover': LIGHT_EMBOSS,
+  '--shadow-emboss-hover': LIGHT_EMBOSS_HOVER,
   '--switch-track-off': '#0000000f',
   '--switch-track-off-hover': '#00000017',
   '--switch-track-off-active': '#0000001f',
@@ -58,7 +68,7 @@ export const TERMUL_LIGHT_BRAND_TOKENS: ThemeComponentTokens = {
 export const TERMUL_DARK_BRAND_TOKENS: ThemeComponentTokens = {
   ...SHARED_BRAND_TOKENS,
   '--shadow-emboss': DARK_EMBOSS,
-  '--shadow-emboss-hover': DARK_EMBOSS,
+  '--shadow-emboss-hover': DARK_EMBOSS_HOVER,
   '--switch-track-off': '#ffffff12',
   '--switch-track-off-hover': '#ffffff1b',
   '--switch-track-off-active': '#ffffff22',
