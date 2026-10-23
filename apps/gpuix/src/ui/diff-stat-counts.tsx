@@ -13,9 +13,9 @@ export function DiffStatCounts({ added, removed, omitZero = false }: DiffStatCou
   if (!showAdded && !showRemoved) return null
   return (
     <>
-      {showAdded && <text style={tw('text-success')}>+{added}</text>}
+      {showAdded && <text style={tw('text-success')}>{`+${added}`}</text>}
       {showAdded && showRemoved && <text> </text>}
-      {showRemoved && <text style={tw('text-destructive')}>−{removed}</text>}
+      {showRemoved && <text style={tw('text-destructive')}>{`−${removed}`}</text>}
     </>
   )
 }
