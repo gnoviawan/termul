@@ -97,7 +97,10 @@ export function App() {
 
   const themeControl = (
     <Select value={themeId} onValueChange={setThemeId}>
-      <SelectTrigger aria-label="Color theme" className="h-8 w-44 cursor-default text-xs">
+      <SelectTrigger
+        aria-label="Color theme"
+        className="h-8 w-32 min-w-0 cursor-default text-xs sm:w-44"
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent position="popper" align="end" className="max-h-[70vh]">

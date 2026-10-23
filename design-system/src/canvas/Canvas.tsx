@@ -1,6 +1,15 @@
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
-import { Maximize2, Minus, Plus, RotateCcw } from '@/components/icons'
+import { Maximize2, Menu, Minus, Plus, RotateCcw } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
@@ -531,13 +540,65 @@ export function Canvas({
         className="absolute inset-x-0 top-0 z-10 flex items-center gap-3 border-b border-border bg-background/90 px-4 backdrop-blur"
         style={{ height: TOOLBAR_HEIGHT }}
       >
-        <div className="flex min-w-0 items-baseline gap-2">
-          <h1 className="truncate text-sm font-semibold">Termul design system</h1>
-          <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
+        {/* Below xl the section links do not fit; they move into this menu along
+            with the controls that get hidden on narrow widths. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="-ml-2 size-11 shrink-0 cursor-default touch-manipulation hover:text-foreground xl:hidden"
+              aria-label="Sections and layout"
+            >
+              <Menu size={18} aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Sections</DropdownMenuLabel>
+              {sections.map((section) => (
+                <DropdownMenuItem
+                  key={section.id}
+                  className="min-h-11 cursor-default gap-2"
+                  onSelect={() => revealSection(section.id)}
+                >
+                  {section.title}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator className="md:hidden" />
+            <DropdownMenuGroup className="md:hidden">
+              <DropdownMenuLabel>View</DropdownMenuLabel>
+              <DropdownMenuItem
+                className="min-h-11 cursor-default gap-2"
+                onSelect={() => zoomBy(ZOOM_STEP)}
+              >
+                <Plus size={16} aria-hidden />
+                Zoom in
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="min-h-11 cursor-default gap-2"
+                onSelect={() => zoomBy(1 / ZOOM_STEP)}
+              >
+                <Minus size={16} aria-hidden />
+                Zoom out
+              </DropdownMenuItem>
+              <DropdownMenuItem className="min-h-11 cursor-default gap-2" onSelect={onResetLayout}>
+                <RotateCcw size={16} aria-hidden />
+                Reset layout
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <div className="flex min-w-0 shrink-0 items-baseline gap-2">
+          <h1 className="whitespace-nowrap text-sm font-semibold">
+            Termul<span className="hidden md:inline"> design system</span>
+          </h1>
+          <span className="hidden text-xs text-muted-foreground tabular-nums md:inline">
             v{import.meta.env.PACKAGE_VERSION}
           </span>
         </div>
-        <nav aria-label="Sections" className="hidden items-center gap-0.5 md:flex">
+        <nav aria-label="Sections" className="hidden items-center gap-0.5 xl:flex">
           {sections.map((section) => (
             <Button
               key={section.id}
@@ -550,14 +611,14 @@ export function Canvas({
             </Button>
           ))}
         </nav>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           {themeControl}
-          <Separator orientation="vertical" className="h-5" />
+          <Separator orientation="vertical" className="hidden h-5 md:block" />
           <div className="flex items-center gap-0.5">
             <Button
               variant="ghost"
               size="icon-sm"
-              className="cursor-default hover:text-foreground"
+              className="hidden cursor-default hover:text-foreground md:inline-flex"
               aria-label="Zoom out"
               onClick={() => zoomBy(1 / ZOOM_STEP)}
             >
@@ -566,14 +627,14 @@ export function Canvas({
             <span
               ref={zoomLabelRef}
               aria-live="off"
-              className="w-11 text-center text-xs text-muted-foreground tabular-nums"
+              className="hidden w-11 text-center text-xs text-muted-foreground tabular-nums md:inline"
             >
               {Math.round(cameraRef.current.z * 100)}%
             </span>
             <Button
               variant="ghost"
               size="icon-sm"
-              className="cursor-default hover:text-foreground"
+              className="hidden cursor-default hover:text-foreground md:inline-flex"
               aria-label="Zoom in"
               onClick={() => zoomBy(ZOOM_STEP)}
             >
@@ -600,11 +661,11 @@ export function Canvas({
               <RotateCcw size={16} aria-hidden />
             </Button>
           </div>
-          <Separator orientation="vertical" className="h-5" />
+          <Separator orientation="vertical" className="hidden h-5 md:block" />
           <Button
             variant="ghost"
             size="sm"
-            className="cursor-default hover:text-foreground"
+            className="hidden cursor-default hover:text-foreground md:inline-flex"
             onClick={onResetLayout}
           >
             Reset layout
