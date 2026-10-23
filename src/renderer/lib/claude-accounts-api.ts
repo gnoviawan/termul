@@ -7,7 +7,7 @@
  * login or delete login state on the host. The desktop runs them through its
  * Tauri commands; a web client runs them over `/ws` only when the host
  * reports the connection `hostLocal` (a client on the host itself holding
- * the server token, such as the GPUIX desktop client). Other web clients
+ * the host-local credential, such as the GPUIX desktop client). Other web clients
  * manage Accounts with `termul-server claude account` on the host.
  */
 

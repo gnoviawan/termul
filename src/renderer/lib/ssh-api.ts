@@ -109,8 +109,8 @@ const WEB_UNSUPPORTED = {
 
 /**
  * The web transport when the host runs SSH for this connection: only a
- * `hostLocal` one (a client on the host itself holding the server token,
- * such as the GPUIX desktop client). The grant is known after the
+ * `hostLocal` one (a client on the host itself holding the host-local
+ * credential, such as the GPUIX desktop client). The grant is known after the
  * handshake, so a call made before it waits for the connection.
  */
 async function hostTransport(): Promise<AcpTransport | null> {
