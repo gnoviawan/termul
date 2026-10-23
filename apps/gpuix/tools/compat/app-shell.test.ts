@@ -114,3 +114,36 @@ describe('calc(100% - x) widths', () => {
     expect(props.children.props.style).not.toHaveProperty('width')
   })
 })
+
+describe('positioned children', () => {
+  function Icon(_props: { className?: string }) {
+    return null
+  }
+
+  test('a centred icon component is wrapped and painted after the input it sits on', () => {
+    const field = jsxs('div', {
+      className: 'relative',
+      children: [
+        jsx(Icon, { className: 'pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground' }),
+        jsxs('input', { className: 'h-8 w-full' }),
+        ''
+      ]
+    })
+    const kids = (field.props as { children: unknown[] }).children
+    const types = kids.map((kid) => (kid && typeof kid === 'object' ? (kid as { type: unknown }).type : kid))
+    expect(types[0]).toBeNull()
+    expect(types[1]).toBe('input')
+    const wrapper = kids[kids.length - 1] as { key: string; props: { style: unknown; children: { props: { className: string } } } }
+    expect(wrapper.key).toBe('$positioned0')
+    expect(wrapper.props.style).toEqual({
+      position: 'absolute',
+      display: 'flex',
+      pointerEvents: 'none',
+      left: 10,
+      top: 0,
+      bottom: 0,
+      alignItems: 'center'
+    })
+    expect(wrapper.props.children.props.className).toBe('pointer-events-none text-muted-foreground')
+  })
+})

@@ -19,7 +19,8 @@
 import type { StyleDesc } from '@gpuix/react'
 import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { applyTextTransform, type AutoMargin, type Translation } from './translate'
+import { liftPlacement, placeStyle } from './placement'
+import { applyTextTransform, type AutoMargin, type Translation, translation } from './translate'
 
 /** What a parent may know about a child element the compat layer created. */
 export interface ChildInfo {
@@ -28,6 +29,8 @@ export interface ChildInfo {
   run?: { text: string; style: StyleDesc }
   /** The child asked for auto margins and was wrapped; the parent may re-style the wrapper. */
   autoMargin?: { margin: AutoMargin; inner: ReactElement }
+  /** Absolutely positioned: painted after its in-flow siblings. */
+  positioned?: boolean
 }
 
 export const childInfo = new WeakMap<object, ChildInfo>()
@@ -207,6 +210,7 @@ export function layoutChildren(
     return { children: text === '' ? undefined : text, isStatic: false }
   }
   if (!Array.isArray(children)) {
+    children = placeComponent(children)
     const info = infoOf(children)
     if (info?.autoMargin && isValidElement(children)) {
       return { children: placeAutoMargin(children, info.autoMargin, tr.flexDirection === 'row'), isStatic: false }
@@ -248,7 +252,7 @@ export function layoutChildren(
   if (tr.listMarker) return { children: withMarkers(out, tr.listMarker, tr.listInside), isStatic }
 
   if (texts === 0 && blocks === 0 && styledInline > 0 && tr.inline && !flex) {
-    return { children: out, runStyle: runStyleFor(tr, style), isStatic }
+    return { children: paintPositionedLast(out), runStyle: runStyleFor(tr, style), isStatic }
   }
 
   if (flex || blocks > 0 || texts === 0) {
@@ -271,7 +275,7 @@ export function layoutChildren(
       const info = i < out.length ? infoOf(slot) : undefined
       if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row)
     }
-    return { children: out, isStatic }
+    return { children: paintPositionedLast(out), isStatic }
   }
 
   if (styledInline === 0) {
@@ -304,7 +308,7 @@ export function layoutChildren(
     }
     seen = true
   }
-  return { children: out, runStyle: runStyleFor(tr, style), isStatic }
+  return { children: paintPositionedLast(out), runStyle: runStyleFor(tr, style), isStatic }
 }
 
 function isBlock(node: unknown): boolean {
@@ -331,4 +335,55 @@ export function dropBlockWhitespace(children: unknown): unknown {
     }
   }
   return out ?? children
+}
+
+const OFFSET_TOKEN = /^-?(top|right|bottom|left|inset|inset-x|inset-y|start|end)-/
+
+/**
+ * A component (an icon, a shared button) whose className uses the centring
+ * idiom: compat never sees its host element, so the idiom is applied around
+ * it. The component keeps its other classes; the absolute box and its px
+ * offsets move to the centring wrapper.
+ */
+function placeComponent(slot: Slot): Slot {
+  if (!isValidElement(slot) || typeof slot.type === 'string') return slot
+  const className = (slot.props as { className?: unknown }).className
+  if (typeof className !== 'string' || !className.includes('1/2')) return slot
+  const tokens = className.split(/\s+/).filter(Boolean)
+  const { placement, rest } = liftPlacement(tokens)
+  if (!placement || placement.popup || !rest.includes('absolute')) return slot
+  const box = translation('div', rest.join(' ')).base
+  const placed = placeStyle(box, placement)
+  if (!placed) return slot
+  const inner = rest.filter((t) => t !== 'absolute' && !OFFSET_TOKEN.test(t)).join(' ')
+  const wrapper = placed.wrap(cloneElement(slot as ReactElement<{ className?: string }>, { className: inner }), slot.key ?? undefined)
+  childInfo.set(wrapper, { inline: false, positioned: true })
+  return wrapper
+}
+
+function isPositioned(slot: Slot): boolean {
+  if (!isValidElement(slot)) return false
+  if (infoOf(slot)?.positioned) return true
+  const style = (slot.props as { style?: StyleDesc }).style
+  return slot.type === 'div' && style?.position === 'absolute'
+}
+
+/**
+ * CSS paints positioned boxes after the in-flow content of their stacking
+ * context; GPUIX paints in tree order. Absolutely positioned children are out
+ * of flow, so moving them to the end changes paint order and hit order only.
+ * Their slots stay as nulls and the moved elements carry keys, so React
+ * matches every child as before.
+ */
+function paintPositionedLast(out: Slot[]): Slot[] {
+  const slots = out.map(placeComponent)
+  if (!slots.some(isPositioned)) return slots
+  const moved: Slot[] = []
+  const kept = slots.map((slot, i) => {
+    if (!isPositioned(slot)) return slot
+    const element = slot as ReactElement
+    moved.push(element.key === null ? cloneElement(element, { key: `$positioned${i}` }) : element)
+    return null
+  })
+  return [...kept, ...moved]
 }
