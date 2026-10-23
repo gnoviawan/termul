@@ -29,8 +29,8 @@ export type Action =
 export interface Step {
   name: string
   actions: Action[]
-  /** Text both clients paint once the step's state is on screen. */
-  ready: string
+  /** Texts both clients paint once the step's state is on screen (async data included). */
+  ready: string[]
 }
 
 export interface Region {
@@ -51,16 +51,16 @@ export const WORKSPACE_PROJECTS = [
 ] as const
 
 export const WORKSPACE_STEPS: Step[] = [
-  { name: 'a-dashboard-alpha', actions: [], ready: 'What should we do in alpha?' },
+  { name: 'a-dashboard-alpha', actions: [], ready: ['What should we do in alpha?', 'main', '+3'] },
   {
     name: 'b-dashboard-beta',
     actions: [{ kind: 'click-testid', testId: 'project-item-parity-beta' }],
-    ready: 'What should we do in beta?'
+    ready: ['What should we do in beta?']
   },
   {
     name: 'c-settings',
     actions: [{ kind: 'click-button', label: 'Settings' }],
-    ready: 'Interface zoom'
+    ready: ['Interface zoom']
   },
   {
     name: 'd-command-palette',
@@ -69,7 +69,7 @@ export const WORKSPACE_STEPS: Step[] = [
       { kind: 'gone', text: 'Interface zoom' },
       { kind: 'press', key: 'Control+k' }
     ],
-    ready: 'App Preferences'
+    ready: ['App Preferences']
   }
 ]
 
@@ -124,10 +124,11 @@ async function webAction(page: Page, action: Action): Promise<Rect | null> {
   }
 }
 
-async function gpuixGone(app: GpuixApp, text: string): Promise<void> {
+/** Poll until `text` is painted (`present`) or gone. Any number of matches counts as painted. */
+async function gpuixText(app: GpuixApp, text: string, present: boolean): Promise<void> {
   const deadline = Date.now() + READY_TIMEOUT_MS
-  while ((await app.getByText(text).count()) > 0) {
-    if (Date.now() > deadline) throw new Error(`gpuix: "${text}" still painted`)
+  while ((await app.getByText(text).count()) > 0 !== present) {
+    if (Date.now() > deadline) throw new Error(`gpuix: "${text}" ${present ? 'never painted' : 'still painted'}`)
     await Bun.sleep(100)
   }
 }
@@ -171,7 +172,9 @@ export async function runWorkspace(opts: WorkspaceRun): Promise<StepResult[]> {
         const box = await webAction(page, action)
         if (box) clickPoints.set(`${step.name}/${i}`, box)
       }
-      await page.getByText(step.ready, { exact: true }).first().waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
+      for (const text of step.ready) {
+        await page.getByText(text, { exact: true }).first().waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
+      }
       rects.set(step.name, await regionRects(page))
       await grab(shot(step.name, 'web'))
     }
@@ -182,14 +185,14 @@ export async function runWorkspace(opts: WorkspaceRun): Promise<StepResult[]> {
       for (const [i, action] of step.actions.entries()) {
         if (action.kind === 'click-testid') await app.getByTestId(action.testId).click()
         else if (action.kind === 'press') await app.call('keystrokes', { keys: GPUI_KEYS[action.key] })
-        else if (action.kind === 'gone') await gpuixGone(app, action.text)
+        else if (action.kind === 'gone') await gpuixText(app, action.text, false)
         else {
           const box = clickPoints.get(`${step.name}/${i}`)
           if (!box) throw new Error(`no web position for "${action.label}"`)
           await app.mouse.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 })
         }
       }
-      await app.getByText(step.ready).waitFor({ timeoutMs: READY_TIMEOUT_MS })
+      for (const text of step.ready) await gpuixText(app, text, true)
       await grab(shot(step.name, 'gpuix'))
     }
   })
