@@ -12,6 +12,7 @@
 
 import { memo, useEffect, useRef, useState } from 'react'
 import { Brain, ChevronDown, ChevronRight, Maximize2, Minimize2 } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import type { ContentBlock } from '@/lib/acp-api'
 import type { ChatMessage } from '@/stores/acp-store'
 import { useColorTheme } from '@/stores/app-settings-store'
@@ -53,11 +54,14 @@ interface ThoughtGroupProps {
   isLiveTail: boolean
 }
 
-const TRIGGER = tw('flex w-full min-h-7 cursor-pointer items-center gap-1')
-const MARKER = tw('flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-muted-foreground')
+const TRIGGER = 'flex w-full min-h-7 cursor-pointer items-center gap-1 text-left'
+const MARKER = tw(
+  'flex min-w-0 flex-1 items-center gap-2 text-xs font-medium text-muted-foreground'
+)
 const LABEL = tw('text-xs font-medium text-muted-foreground')
 const COUNT = tw('text-xs font-normal text-muted-foreground')
-const TOGGLE = tw('mt-1 flex min-h-10 cursor-pointer items-center gap-1 self-start px-1 hover:text-foreground')
+const TOGGLE =
+  'mt-1 flex min-h-10 cursor-pointer items-center gap-1 self-start px-1 text-xs text-muted-foreground hover:text-foreground'
 
 function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps) {
   const themes = transcriptThemes(useColorTheme())
@@ -82,11 +86,13 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps) {
   const Chevron = open ? ChevronDown : ChevronRight
   return (
     <div style={tw('flex flex-col pt-2')} testId="thought-group">
-      <div
-        testId="thought-group-trigger"
-        role="button"
+      <Button
+        data-testid="thought-group-trigger"
+        type="button"
+        variant={null}
+        size={null}
         aria-expanded={open}
-        style={TRIGGER}
+        className={TRIGGER}
         onClick={() => {
           userOverride.current = true
           setOpen((value) => !value)
@@ -96,11 +102,13 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps) {
           <Brain size={14} className="text-muted-foreground" />
           <div style={tw('flex min-w-0 flex-1 flex-row items-center')}>
             <text style={LABEL}>{isStreaming ? 'Thinking…' : 'Thought'}</text>
-            {lines > 0 ? <text style={COUNT}>{` · ${lines} line${lines === 1 ? '' : 's'}`}</text> : null}
+            {lines > 0 ? (
+              <text style={COUNT}>{` · ${lines} line${lines === 1 ? '' : 's'}`}</text>
+            ) : null}
           </div>
         </div>
         <Chevron size={13} className="shrink-0 text-muted-foreground" />
-      </div>
+      </Button>
       {open ? (
         <div style={tw('mt-1.5 flex flex-col pb-2 pl-3')} testId="thought-group-body">
           <div
@@ -112,13 +120,19 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps) {
               ...(expanded ? {} : { maxHeight: COLLAPSED_MAX_H })
             }}
           >
-            <markdown source={thoughtMarkdown(text)} theme={themes.thought} style={{ flexShrink: 0, minWidth: 0 }} />
+            <markdown
+              source={thoughtMarkdown(text)}
+              theme={themes.thought}
+              style={{ flexShrink: 0, minWidth: 0 }}
+            />
           </div>
           {expanded || overflows ? (
-            <div
-              role="button"
+            <Button
+              type="button"
+              variant={null}
+              size={null}
               aria-label={expanded ? 'Collapse thinking' : 'Expand all thinking'}
-              style={TOGGLE}
+              className={TOGGLE}
               onClick={() => setExpanded((value) => !value)}
             >
               {expanded ? (
@@ -127,7 +141,7 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps) {
                 <Maximize2 size={12} className="text-muted-foreground" />
               )}
               <text style={tw('text-xs text-muted-foreground')}>{expanded ? 'Less' : 'More'}</text>
-            </div>
+            </Button>
           ) : null}
         </div>
       ) : null}

@@ -21,15 +21,26 @@ export const TRANSCRIPT_SELECTOR = '[data-slot="message-scroller-viewport"]'
 
 export async function openWebChat(
   chat: SeededChat,
-  opts: { width: number; height: number; launchArgs?: string[]; headless?: boolean; env?: Record<string, string> }
+  opts: {
+    width: number
+    height: number
+    launchArgs?: string[]
+    headless?: boolean
+    env?: Record<string, string>
+  }
 ): Promise<WebChat> {
   if (!existsSync(path.join(DIST_WEB, 'index.html'))) {
-    throw new Error(`${DIST_WEB} has no index.html: run \`bun run build:web\` at the repo root first`)
+    throw new Error(
+      `${DIST_WEB} has no index.html: run \`bun run build:web\` at the repo root first`
+    )
   }
   const browser = await chromium.launch({
     headless: opts.headless ?? true,
     env: opts.env,
-    args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks', ...(opts.launchArgs ?? [])]
+    args: [
+      '--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks',
+      ...(opts.launchArgs ?? [])
+    ]
   })
   const context = await browser.newContext({
     viewport: { width: opts.width, height: opts.height },
@@ -42,7 +53,12 @@ export async function openWebChat(
     const request = route.request()
     const url = new URL(request.url())
     const file = path.join(DIST_WEB, url.pathname === '/' ? 'index.html' : url.pathname)
-    if (request.method() === 'GET' && file.startsWith(DIST_WEB) && existsSync(file) && !file.endsWith(path.sep)) {
+    if (
+      request.method() === 'GET' &&
+      file.startsWith(DIST_WEB) &&
+      existsSync(file) &&
+      !file.endsWith(path.sep)
+    ) {
       await route.fulfill({ path: file })
       return
     }

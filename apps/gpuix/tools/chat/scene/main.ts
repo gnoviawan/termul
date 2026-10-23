@@ -6,18 +6,19 @@
  * agent under, registers Termul's fonts, and boots the transcript scene.
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import type { ClientConfig } from '../../../src/client-config'
 import { installBrowserEnv } from '../../../src/env'
 import { readClientConfig } from '../../../src/env/config'
-import type { ClientConfig } from '../../../src/client-config'
 import { FONT_FILES } from '../../../src/style/fonts'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
 import type { ControlIo, SceneCommand, SceneOptions, SceneTarget } from './contract'
 
 function parseBox(raw: string | undefined): SceneOptions<unknown>['box'] {
   const [x, y, width, height] = (raw ?? '0,0,1280,800').split(',').map(Number)
-  if (![x, y, width, height].every(Number.isFinite)) throw new Error(`CHAT_BOX is not x,y,w,h: ${raw}`)
+  if (![x, y, width, height].every(Number.isFinite))
+    throw new Error(`CHAT_BOX is not x,y,w,h: ${raw}`)
   return { x, y, width, height }
 }
 
@@ -47,7 +48,8 @@ setControlIo({
     } catch {
       return null
     }
-  }
+  },
+  write: (file, text) => writeFileSync(file, text)
 })
 // fonts.ts resolves its directory from import.meta.dir, which is the dist dir once bundled.
 const FONT_DIR = path.join(import.meta.dir, '../../assets/fonts')
@@ -55,7 +57,9 @@ boot(config, {
   target,
   box: parseBox(process.env.CHAT_BOX),
   control: process.env.CHAT_CONTROL,
+  perfOut: process.env.CHAT_PERF_OUT,
   onRenderer: (renderer) => {
-    for (const file of FONT_FILES) renderer.registerFont?.(readFileSync(path.join(FONT_DIR, path.basename(file))))
+    for (const file of FONT_FILES)
+      renderer.registerFont?.(readFileSync(path.join(FONT_DIR, path.basename(file))))
   }
 })

@@ -6,7 +6,11 @@
  */
 
 import { useMemo } from 'react'
-import { buildTimeline, consolidateThoughtGroups, type TimelineItem } from '@/components/chat/chat-timeline'
+import {
+  buildTimeline,
+  consolidateThoughtGroups,
+  type TimelineItem
+} from '@/components/chat/chat-timeline'
 import type { SessionId } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { useAcpStore } from '@/stores/acp-store'
@@ -31,7 +35,9 @@ export function useSessionTimeline(sessionId: SessionId): SessionTimeline {
   const filePathContext = useMemo(
     () => ({
       cwd: session?.cwd,
-      projectRoot: session ? projects.find((p) => p.id === session.projectId)?.path || session.cwd : undefined
+      projectRoot: session
+        ? projects.find((p) => p.id === session.projectId)?.path || session.cwd
+        : undefined
     }),
     [session, projects]
   )
@@ -39,5 +45,10 @@ export function useSessionTimeline(sessionId: SessionId): SessionTimeline {
     () => consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches)),
     [messages, toolCalls, agentSwitches]
   )
-  return { items, showRunningIndicator: Boolean(session?.activeTurn), filePathContext, known: Boolean(session) }
+  return {
+    items,
+    showRunningIndicator: Boolean(session?.activeTurn),
+    filePathContext,
+    known: Boolean(session)
+  }
 }

@@ -18,8 +18,8 @@ import { PNG } from 'pngjs'
 import { APP_DIR } from '../../build'
 import { diffPngs } from '../parity/diff'
 import { READY_TIMEOUT_MS, withGpuix } from '../parity/shoot-gpuix'
-import type { SceneCommand } from './scene/contract'
 import { buildScene } from './scene/build'
+import type { SceneCommand } from './scene/contract'
 import { seedChat } from './seed'
 import { openWebChat, TRANSCRIPT_SELECTOR } from './web'
 
@@ -29,7 +29,7 @@ const SETTLE_MS = 1200
 
 type Box = { x: number; y: number; width: number; height: number }
 type Position = 'bottom' | 'middle' | 'top'
-type Anchor = { scroll: 'bottom' } | { scroll: 'row'; index: number; offset: number }
+type Anchor = { scroll: 'bottom' } | { scroll: 'item'; key: string; offset: number }
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -61,7 +61,12 @@ try {
     await page.waitForTimeout(2500)
     const raw = await viewport.boundingBox()
     if (!raw) throw new Error('web transcript viewport has no box')
-    roi = { x: Math.round(raw.x), y: Math.round(raw.y), width: Math.round(raw.width), height: Math.round(raw.height) }
+    roi = {
+      x: Math.round(raw.x),
+      y: Math.round(raw.y),
+      width: Math.round(raw.width),
+      height: Math.round(raw.height)
+    }
     const shots: Array<[Position, (el: HTMLElement) => void]> = [
       ['bottom', () => {}],
       ['middle', (el) => el.scrollTo({ top: Math.round((el.scrollHeight - el.clientHeight) / 2) })],
@@ -81,9 +86,13 @@ try {
         for (const row of rows) {
           const rect = row.getBoundingClientRect()
           if (rect.bottom > top) {
-            const index = Number(row.dataset.index ?? rows.indexOf(row))
+            const first = rows[0] === row && Number(row.dataset.index ?? 0) === 0
             // Row 0 sits under the viewport's py-4; the GPUIX row carries that padding itself.
-            return { scroll: 'row', index, offset: top - rect.top + (index === 0 ? 16 : 0) }
+            return {
+              scroll: 'item',
+              key: row.dataset.messageId ?? '',
+              offset: top - rect.top + (first ? 16 : 0)
+            }
           }
         }
         return { scroll: 'bottom' }
@@ -106,7 +115,12 @@ try {
   writeFileSync(control, JSON.stringify({ seq: 0, scroll: 'bottom' }))
   await withGpuix(
     {
-      server: { baseUrl: chat.baseUrl, token: chat.token, stateDir: seeded.stateDir, stop: async () => {} },
+      server: {
+        baseUrl: chat.baseUrl,
+        token: chat.token,
+        stateDir: seeded.stateDir,
+        stop: async () => {}
+      },
       entry,
       width: WIDTH,
       height: HEIGHT,
@@ -135,7 +149,11 @@ for (const position of ['bottom', 'middle', 'top'] as Position[]) {
   if (!roi) break
   cropPng(path.join(dir, 'web.png'), roi, path.join(dir, 'web-roi.png'))
   cropPng(path.join(dir, 'gpuix.png'), roi, path.join(dir, 'gpuix-roi.png'))
-  const diff = diffPngs(path.join(dir, 'web-roi.png'), path.join(dir, 'gpuix-roi.png'), path.join(dir, 'diff-roi.png'))
+  const diff = diffPngs(
+    path.join(dir, 'web-roi.png'),
+    path.join(dir, 'gpuix-roi.png'),
+    path.join(dir, 'diff-roi.png')
+  )
   const row = {
     position,
     roi,

@@ -6,7 +6,7 @@
  */
 
 import { type NativeRenderer, render } from '@gpuix/react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatMessageList } from '@/components/chat/ChatMessageList'
 import { useAcpHistory } from '@/hooks/use-acp-history'
 import { useAcpListeners } from '@/hooks/use-acp-listeners'
@@ -17,14 +17,14 @@ import { checkWebAuthGate } from '@/lib/web-auth-gate'
 import { setWebAuthToken } from '@/lib/web-auth-token'
 import { ensureClientIdentity } from '@/lib/web-client-identity'
 import { useAcpStore } from '@/stores/acp-store'
-import type { ClientConfig } from '../../../src/client-config'
-import type { ControlIo, SceneBox, SceneOptions, SceneTarget } from './contract'
+import { transcriptProbe } from '../../../src/chat/perf-probe'
 import { useSessionTimeline } from '../../../src/chat/use-session-timeline'
+import type { ClientConfig } from '../../../src/client-config'
 import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
 import { log } from '../../../src/log'
 import { tw } from '../../../src/style/tw'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
-
+import type { ControlIo, SceneBox, SceneOptions, ScenePerf, SceneTarget } from './contract'
 
 /** ChatRoute's open: a live session is already known; a persisted one opens from history, retried while the index loads. */
 function openExisting(sessionId: string): () => void {
@@ -55,7 +55,9 @@ async function startChat(target: Extract<SceneTarget, { kind: 'start' }>): Promi
   const store = useAcpStore.getState()
   await store.loadAgentConfigs()
   const started = performance.now()
-  const sessionId = await useAcpStore.getState().startChat(target.configId, target.cwd, undefined, target.projectId)
+  const sessionId = await useAcpStore
+    .getState()
+    .startChat(target.configId, target.cwd, undefined, target.projectId)
   log.info('chat-scene', `started ${sessionId} in ${Math.round(performance.now() - started)} ms`)
   return sessionId
 }
@@ -83,9 +85,22 @@ function Transcript({ sessionId, box }: { sessionId: string; box: SceneBox }) {
   return (
     <div
       testId={timeline.items.length > 0 ? 'chat-scene-ready' : 'chat-scene-loading'}
-      style={{ position: 'absolute', left: box.x, top: box.y, width: box.width, height: box.height, display: 'flex', flexDirection: 'column' }}
+      style={{
+        position: 'absolute',
+        left: box.x,
+        top: box.y,
+        width: box.width,
+        height: box.height,
+        display: 'flex',
+        flexDirection: 'column'
+      }}
     >
-      {timeline.showRunningIndicator ? <div testId="chat-scene-turn-active" style={{ position: 'absolute', width: 1, height: 1 }} /> : null}
+      {timeline.showRunningIndicator ? (
+        <div
+          testId="chat-scene-turn-active"
+          style={{ position: 'absolute', width: 1, height: 1 }}
+        />
+      ) : null}
       {timeline.items.length > 0 ? (
         <ChatMessageList
           items={timeline.items}
@@ -100,15 +115,30 @@ function Transcript({ sessionId, box }: { sessionId: string; box: SceneBox }) {
   )
 }
 
-function Scene({ options, renderer }: { options: SceneOptions<NativeRenderer>; renderer: NativeRenderer | null }) {
+function Scene({
+  options,
+  renderer
+}: {
+  options: SceneOptions<NativeRenderer>
+  renderer: NativeRenderer | null
+}) {
   useProjectRegistry()
   useAcpListeners()
   useAcpHistory()
   useAcpSessionResume()
   const sessionId = useSceneSession(options.target)
-  useSceneControl(renderer, options.control, sessionId)
+  useSceneControl(renderer, options.control, sessionId, options.perfOut)
   return (
-    <div style={{ ...tw('bg-terminal-bg'), position: 'absolute', left: 0, top: 0, width: WINDOW_WIDTH, height: WINDOW_HEIGHT }}>
+    <div
+      style={{
+        ...tw('bg-terminal-bg'),
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: WINDOW_WIDTH,
+        height: WINDOW_HEIGHT
+      }}
+    >
       {sessionId ? <Transcript sessionId={sessionId} box={options.box} /> : null}
     </div>
   )
@@ -134,15 +164,28 @@ function findTestId(node: TreeNode, testId: string): TreeNode | null {
  * a `SceneCommand`. The automation protocol has no scroll call, so the scene
  * applies it with the renderer's own list scrolling.
  */
-function useSceneControl(renderer: NativeRenderer | null, file: string | undefined, sessionId: string | null): void {
+function useSceneControl(
+  renderer: NativeRenderer | null,
+  file: string | undefined,
+  sessionId: string | null,
+  perfOut: string | undefined
+): void {
+  const sessionRef = useRef(sessionId)
+  sessionRef.current = sessionId
   useEffect(() => {
     if (!renderer || !file) return
+    const probe = perfOut ? startPerfProbe(renderer) : null
     let last = 0
     const timer = setInterval(() => {
       const raw = io.read(file)
       if (!raw || raw.seq <= last) return
       last = raw.seq
+      if ('flushPerf' in raw) {
+        if (probe && perfOut) io.write(perfOut, JSON.stringify(probe.perf))
+        return
+      }
       if ('prompt' in raw) {
+        const sessionId = sessionRef.current
         if (!sessionId) return
         void useAcpStore
           .getState()
@@ -150,20 +193,61 @@ function useSceneControl(renderer: NativeRenderer | null, file: string | undefin
           .catch((error: unknown) => log.warn('chat-scene', `prompt failed: ${String(error)}`))
         return
       }
-      if (!('getAutomationTree' in renderer) || typeof renderer.getAutomationTree !== 'function') return
+      if (!('getAutomationTree' in renderer) || typeof renderer.getAutomationTree !== 'function')
+        return
       const tree = JSON.parse(renderer.getAutomationTree()) as TreeNode
       const list = findTestId(tree, 'chat-transcript-list')
       if (!list) return
       const count = list.children?.length ?? 0
       if (raw.scroll === 'bottom') renderer.scrollToItem?.(list.id, count)
-      else renderer.scrollToItem?.(list.id, raw.index, raw.offset)
+      else if (raw.scroll === 'row') renderer.scrollToItem?.(list.id, raw.index, raw.offset)
+      else {
+        const index = (list.children ?? []).findIndex((row) => row.testId === `chat-row-${raw.key}`)
+        if (index >= 0) renderer.scrollToItem?.(list.id, index, raw.offset)
+      }
       log.info('chat-scene', `control ${JSON.stringify(raw)} rows=${count}`)
     }, 100)
-    return () => clearInterval(timer)
-  }, [renderer, file, sessionId])
+    return () => {
+      clearInterval(timer)
+      probe?.stop()
+    }
+  }, [renderer, file, perfOut])
 }
 
-let io: ControlIo = { read: () => null }
+let io: ControlIo = { read: () => null, write: () => {} }
+
+const MARKER = /mk(\d+)x/g
+
+/**
+ * Perf probe: frame events from GPUI's draw counter (polled every 1 ms, so a
+ * frame's time is known to about a millisecond), and the commit time of each
+ * storm chunk marker the transcript renders.
+ */
+function startPerfProbe(renderer: NativeRenderer): { perf: ScenePerf; stop(): void } {
+  const perf: ScenePerf = { frames: [], commits: {} }
+  const now = () => performance.timeOrigin + performance.now()
+  transcriptProbe.onStreamCommit = (text) => {
+    const t = now()
+    for (const match of text.slice(-4000).matchAll(MARKER)) {
+      const id = Number(match[1])
+      if (perf.commits[id] === undefined) perf.commits[id] = t
+    }
+  }
+  let last = renderer.getDebugFrameOverlayStats?.().frames ?? 0
+  const timer = setInterval(() => {
+    const stats = renderer.getDebugFrameOverlayStats?.()
+    if (!stats || stats.frames === last) return
+    last = stats.frames
+    perf.frames.push({ t: now(), drawMs: stats.currentMs ?? 0 })
+  }, 1)
+  return {
+    perf,
+    stop: () => {
+      clearInterval(timer)
+      transcriptProbe.onStreamCommit = undefined
+    }
+  }
+}
 
 export function setControlIo(next: ControlIo): void {
   io = next
@@ -193,13 +277,11 @@ export function boot(config: ClientConfig, options: SceneOptions<NativeRenderer>
   getAcpTransport()
     .connect()
     .catch((error: unknown) => log.warn('chat-scene', `ws connect failed: ${String(error)}`))
-  render(<SceneRoot options={options} />,
-    {
-      title: 'Termul transcript',
-      width: WINDOW_WIDTH,
-      height: WINDOW_HEIGHT,
-      focus: false,
-      ...compatRenderOptions
-    }
-  )
+  render(<SceneRoot options={options} />, {
+    title: 'Termul transcript',
+    width: WINDOW_WIDTH,
+    height: WINDOW_HEIGHT,
+    focus: false,
+    ...compatRenderOptions
+  })
 }

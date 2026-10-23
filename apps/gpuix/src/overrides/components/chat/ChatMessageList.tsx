@@ -8,9 +8,12 @@
  * (`alignment="bottom" followTail`). The data path is the web's: the same
  * turn grouping, identity stabilisation and row components.
  *
+ * Agent replies span one row per block (`AgentReplyRows`), so GPUI lays out
+ * only the blocks near the viewport while a reply streams.
+ *
  * Follow state comes from `getListScrollTop`: a bottom-aligned list resting
- * at its end reports the at-end sentinel (index === row count). Anywhere else
- * the reader has scrolled away, so the jump-to-latest button shows.
+ * at its end reports the at-end sentinel (index === host row count). Anywhere
+ * else the reader has scrolled away, so the jump-to-latest button shows.
  */
 
 import { type PublicInstance, useGpuixRequired } from '@gpuix/react'
@@ -33,23 +36,18 @@ import { TurnActivity } from '@/components/chat/TurnActivity'
 import { type EnterTracker, useEnterTracker } from '@/components/chat/use-enter-tracker'
 import { WorktreeCreationCard } from '@/components/chat/WorktreeCreationCard'
 import { ArrowDown } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import type { SessionId, ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
+import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import { AgentReplyRows, hasMediaBlocks } from '../../../chat/AgentReplyRows'
+import { RowCountContext, RowShell } from '../../../chat/row-shell'
 import { log } from '../../../log'
 import { tw } from '../../../style/tw'
 
 /** How often the follow state is read back from the native list. */
 const FOLLOW_POLL_MS = 120
-/** `max-w-3xl`. */
-const COLUMN_MAX = 768
-/**
- * `px-5` on a pane at least 400px wide (`CHAT_GUTTER_X`), plus the web
- * viewport's `scrollbar-gutter: stable both-edges` (10px each side in Chromium).
- */
-const GUTTER = 30
-/** `py-4` on the viewport. */
-const EDGE_PAD = 16
 
 type ListAnchor = [index: number, offset: number]
 
@@ -174,43 +172,59 @@ function RowContent({
   )
 }
 
-const JUMP_BUTTON = tw(
-  'relative flex size-10 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted'
-)
 const BADGE = tw(
   'absolute -top-1.5 rounded-full bg-foreground px-1.5 text-3xs font-semibold text-background shadow-sm'
 )
 
+/** `MessageScrollerButton`: the same Button variant and classes, centred over the list's bottom. */
 function JumpToLatest({ newCount, onJump }: { newCount: number; onJump: () => void }) {
   return (
     <div
-      style={{ position: 'absolute', left: 0, right: 0, bottom: 16, display: 'flex', justifyContent: 'center' }}
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 16,
+        display: 'flex',
+        justifyContent: 'center'
+      }}
     >
-      <div
-        testId="chat-jump-latest"
-        role="button"
+      <Button
+        data-testid="chat-jump-latest"
+        type="button"
+        variant="secondary"
+        size="icon-sm"
         aria-label={newCount > 0 ? `Scroll to latest (${newCount} new)` : 'Scroll to latest'}
-        style={{ ...JUMP_BUTTON, ...(newCount > 0 ? tw('border-foreground/40') : {}), cursor: 'pointer' }}
         onClick={onJump}
+        className={cn(
+          'relative size-10 rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted',
+          newCount > 0 && 'border-foreground/40'
+        )}
       >
-        <ArrowDown size={16} />
+        <ArrowDown />
         {newCount > 0 ? (
           <div style={{ ...BADGE, left: 12 }}>
-            <text style={tw('text-3xs font-semibold text-background')}>{newCount > 99 ? '99+' : `${newCount}`}</text>
+            <text style={tw('text-3xs font-semibold text-background')}>
+              {newCount > 99 ? '99+' : `${newCount}`}
+            </text>
           </div>
         ) : null}
-      </div>
+      </Button>
     </div>
   )
 }
 
 /** Follow state of a native list: pinned at the live edge, or the reader's anchor. */
-function useListFollow(listRef: React.RefObject<PublicInstance | null>, count: number, sessionId: SessionId) {
+function useListFollow(
+  listRef: React.RefObject<PublicInstance | null>,
+  hostRows: () => number,
+  sessionId: SessionId
+) {
   const renderer = useGpuixRequired()
   const [pinned, setPinned] = useState(() => !savedAnchors.has(sessionId))
   const anchorRef = useRef<ListAnchor | null>(null)
-  const countRef = useRef(count)
-  countRef.current = count
+  const countRef = useRef(hostRows)
+  countRef.current = hostRows
 
   useEffect(() => {
     const read = () => {
@@ -218,7 +232,7 @@ function useListFollow(listRef: React.RefObject<PublicInstance | null>, count: n
       if (id === undefined) return
       const top = renderer.getListScrollTop?.(id)
       if (!top) return
-      const atEnd = top[0] >= countRef.current
+      const atEnd = top[0] >= countRef.current()
       anchorRef.current = atEnd ? null : [top[0], top[1]]
       setPinned(atEnd)
     }
@@ -245,7 +259,7 @@ function useListFollow(listRef: React.RefObject<PublicInstance | null>, count: n
   const jumpToLatest = useCallback(() => {
     const id = listRef.current?.id
     if (id === undefined) return
-    renderer.scrollToItem?.(id, countRef.current)
+    renderer.scrollToItem?.(id, countRef.current())
     anchorRef.current = null
     setPinned(true)
   }, [renderer, listRef])
@@ -272,7 +286,10 @@ export function ChatMessageList({
 }: ChatMessageListProps) {
   const opencodeNotice = useAcpStore((s) => s.sessions[sessionId]?.opencodeNotice)
   const statusLine = opencodeStatusLine(opencodeNotice)
-  const groupedItems = useMemo(() => groupTurnActivity(items, showRunningIndicator), [items, showRunningIndicator])
+  const groupedItems = useMemo(
+    () => groupTurnActivity(items, showRunningIndicator),
+    [items, showRunningIndicator]
+  )
   const stableRef = useRef<TurnTimelineItem[]>([])
   const stableItems = useMemo(() => {
     stableRef.current = stabilizedTimeline(stableRef.current, groupedItems)
@@ -281,8 +298,13 @@ export function ChatMessageList({
   const lastMsgIndex = useMemo(() => lastMessageIndex(stableItems), [stableItems])
   const itemIds = useMemo(() => items.map(timelineItemId), [items])
   const enter = useEnterTracker(sessionId, itemIds)
-  const [selection, setSelection] = useState<{ sessionId: SessionId; toolCall: ToolCall } | null>(null)
-  const openSubagent = useCallback((toolCall: ToolCall) => setSelection({ sessionId, toolCall }), [sessionId])
+  const [selection, setSelection] = useState<{ sessionId: SessionId; toolCall: ToolCall } | null>(
+    null
+  )
+  const openSubagent = useCallback(
+    (toolCall: ToolCall) => setSelection({ sessionId, toolCall }),
+    [sessionId]
+  )
   const selectedItem = items.find(
     (item) => item.kind === 'tool' && item.tool.toolCallId === selection?.toolCall.toolCallId
   )
@@ -295,7 +317,14 @@ export function ChatMessageList({
 
   const listRef = useRef<PublicInstance | null>(null)
   const count = stableItems.length
-  const { pinned, jumpToLatest } = useListFollow(listRef, count, sessionId)
+  const rowCounts = useRef(new Map<string, number>()).current
+  const itemsRef = useRef(stableItems)
+  itemsRef.current = stableItems
+  const hostRows = useCallback(
+    () => itemsRef.current.reduce((sum, item) => sum + (rowCounts.get(item.key) ?? 1), 0),
+    [rowCounts]
+  )
+  const { pinned, jumpToLatest } = useListFollow(listRef, hostRows, sessionId)
   const newCount = useUnread(count, pinned)
 
   useEffect(() => {
@@ -330,7 +359,11 @@ export function ChatMessageList({
     [edge]: 0,
     height: 24,
     pointerEvents: 'none' as const,
-    ...tw(edge === 'top' ? 'bg-gradient-to-b from-terminal-bg to-transparent' : 'bg-gradient-to-t from-terminal-bg to-transparent')
+    ...tw(
+      edge === 'top'
+        ? 'bg-gradient-to-b from-terminal-bg to-transparent'
+        : 'bg-gradient-to-t from-terminal-bg to-transparent'
+    )
   })
 
   return (
@@ -344,36 +377,49 @@ export function ChatMessageList({
         onVisibleRange={onVisibleRange}
         style={{ flexGrow: 1, minHeight: 0 }}
       >
-        {stableItems.map((item, index) => (
-          <div
-            key={item.key}
-            testId={`chat-row-${item.key}`}
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              paddingLeft: GUTTER,
-              paddingRight: GUTTER,
-              paddingTop: index === 0 ? EDGE_PAD : 0,
-              paddingBottom: index === count - 1 ? EDGE_PAD : 0
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: COLUMN_MAX, minWidth: 0 }}>
-              <RowContent
-                item={item}
-                index={index}
-                count={count}
-                lastMsgIndex={lastMsgIndex}
-                enter={enter}
-                onEditMessage={onEditMessage}
-                onRetry={onRetry}
-                filePathContext={filePathContext}
-                onOpenSubagent={openSubagent}
-                parentTurnActive={showRunningIndicator}
-                statusLine={statusLine}
-              />
-            </div>
-          </div>
-        ))}
+        <RowCountContext.Provider value={rowCounts}>
+          {stableItems.map((item, index) => {
+            const edges = { first: index === 0, last: index === count - 1 }
+            if (
+              item.kind === 'message' &&
+              item.message.role !== 'user' &&
+              !hasMediaBlocks(item.message)
+            ) {
+              return (
+                <AgentReplyRows
+                  key={item.key}
+                  rowKey={item.key}
+                  message={item.message}
+                  isLast={index === count - 1}
+                  isTurnTail={item.isTurnTail === true}
+                  turnText={item.turnText}
+                  actionsPinned={index === lastMsgIndex}
+                  onRetry={onRetry}
+                  filePathContext={filePathContext}
+                  edges={edges}
+                />
+              )
+            }
+            rowCounts.delete(item.key)
+            return (
+              <RowShell key={item.key} testId={`chat-row-${item.key}`} edges={edges}>
+                <RowContent
+                  item={item}
+                  index={index}
+                  count={count}
+                  lastMsgIndex={lastMsgIndex}
+                  enter={enter}
+                  onEditMessage={onEditMessage}
+                  onRetry={onRetry}
+                  filePathContext={filePathContext}
+                  onOpenSubagent={openSubagent}
+                  parentTurnActive={showRunningIndicator}
+                  statusLine={statusLine}
+                />
+              </RowShell>
+            )
+          })}
+        </RowCountContext.Provider>
       </virtual-list>
       <div style={fade('top')} />
       <div style={fade('bottom')} />

@@ -5,6 +5,9 @@
       "bun"
     ],
     "paths": {
+      "@/components/chat/MessageActions": [
+        "./src/chat/dom-components.d.ts"
+      ],
       "@/components/chat/ChatMessageList": [
         "./src/overrides/components/chat/ChatMessageList.tsx"
       ],

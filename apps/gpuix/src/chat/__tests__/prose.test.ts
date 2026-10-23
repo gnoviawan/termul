@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { proseChunks, proseParts } from '../prose-parts'
 import { flowGap, leadingMargin, trailingMargin } from '../prose-flow'
+import { proseChunks, proseParts } from '../prose-parts'
 import { fileLinkPath, proseBlocks } from '../prose-source'
 
 describe('proseParts', () => {
@@ -20,7 +20,13 @@ describe('proseParts', () => {
       { kind: 'fence', key: '1', language: 'bash', code: 'ls', open: true }
     ])
     expect(later.map((p) => p.key)).toEqual(['0.0', '1', '2.0'])
-    expect(later[1]).toEqual({ kind: 'fence', key: '1', language: 'bash', code: 'ls -la\npwd', open: false })
+    expect(later[1]).toEqual({
+      kind: 'fence',
+      key: '1',
+      language: 'bash',
+      code: 'ls -la\npwd',
+      open: false
+    })
   })
 
   test('a fence nested in a list item stays in the prose piece', () => {
@@ -36,7 +42,9 @@ describe('proseParts', () => {
 
   test('long prose is cut only at block boundaries, and earlier cuts never move', () => {
     const para = (n: number) => `Paragraph ${n} line one\nline two`
-    const lines = Array.from({ length: 30 }, (_, i) => para(i)).join('\n\n').split('\n')
+    const lines = Array.from({ length: 30 }, (_, i) => para(i))
+      .join('\n\n')
+      .split('\n')
     const chunks = proseChunks(lines)
     expect(chunks.length).toBe(3)
     expect(chunks[0].startsWith('Paragraph 0 line one')).toBe(true)
@@ -77,11 +85,15 @@ describe('proseBlocks', () => {
 
   test('paths in inline code and urls stay as written', () => {
     const source = 'See `src/a.ts` and https://example.com/src/a.ts'
-    expect(proseBlocks(source, true)).toEqual([{ kind: 'markdown', block: 'paragraph', depth: 0, source }])
+    expect(proseBlocks(source, true)).toEqual([
+      { kind: 'markdown', block: 'paragraph', depth: 0, source }
+    ])
   })
 
   test('a markdown link to a local file keeps its label and opens the file', () => {
-    expect(proseBlocks('Open [the app](src/renderer/App.tsx#L12) or [docs](https://x.dev)', true)).toEqual([
+    expect(
+      proseBlocks('Open [the app](src/renderer/App.tsx#L12) or [docs](https://x.dev)', true)
+    ).toEqual([
       {
         kind: 'markdown',
         block: 'paragraph',
@@ -107,7 +119,12 @@ describe('proseBlocks', () => {
 
   test('a reference definition follows the block that uses it', () => {
     expect(proseBlocks('See [docs][d].\n\nNext.\n\n[d]: https://x.dev', false)).toEqual([
-      { kind: 'markdown', block: 'paragraph', depth: 0, source: 'See [docs][d].\n\n[d]: https://x.dev' },
+      {
+        kind: 'markdown',
+        block: 'paragraph',
+        depth: 0,
+        source: 'See [docs][d].\n\n[d]: https://x.dev'
+      },
       { kind: 'markdown', block: 'paragraph', depth: 0, source: 'Next.' }
     ])
   })

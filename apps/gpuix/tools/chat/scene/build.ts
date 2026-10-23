@@ -54,16 +54,21 @@ export function globPlugin(): BunPlugin {
     name: 'vite-eager-raw-glob',
     setup(build) {
       build.onLoad({ filter: /(agent-icon-catalog|material-icon-catalog)\.ts$/ }, (args) => {
-        const source = readFileSync(args.path, 'utf8').replace(GLOB_CALL, (_call, pattern: string) => {
-          const prefix = Object.keys(GLOB_ROOTS).find((key) => pattern.startsWith(key))
-          const absolute = prefix ? GLOB_ROOTS[prefix] + pattern.slice(prefix.length) : pattern
-          const dir = path.dirname(absolute)
-          const entries = [...new Bun.Glob(path.basename(absolute)).scanSync({ cwd: dir })].map((name) => {
-            const file = path.join(dir, name)
-            return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
-          })
-          return `({${entries.join(',')}})`
-        })
+        const source = readFileSync(args.path, 'utf8').replace(
+          GLOB_CALL,
+          (_call, pattern: string) => {
+            const prefix = Object.keys(GLOB_ROOTS).find((key) => pattern.startsWith(key))
+            const absolute = prefix ? GLOB_ROOTS[prefix] + pattern.slice(prefix.length) : pattern
+            const dir = path.dirname(absolute)
+            const entries = [...new Bun.Glob(path.basename(absolute)).scanSync({ cwd: dir })].map(
+              (name) => {
+                const file = path.join(dir, name)
+                return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
+              }
+            )
+            return `({${entries.join(',')}})`
+          }
+        )
         return { loader: 'ts', contents: source }
       })
     }
@@ -78,7 +83,14 @@ async function bundle(file: string): Promise<void> {
     format: 'esm',
     sourcemap: 'linked',
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
-    plugins: [rawPlugin(), globPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver()],
+    plugins: [
+      rawPlugin(),
+      globPlugin(),
+      compatPlugin(),
+      gpuixUiAliases(),
+      overridesPlugin(),
+      termulResolver()
+    ],
     naming: '[name].[ext]'
   })
   for (const log of result.logs) console.error(String(log))
@@ -93,5 +105,7 @@ export async function buildScene(): Promise<string> {
 if (import.meta.main) {
   const started = performance.now()
   const entry = await buildScene()
-  console.log(`built ${path.relative(APP_DIR, entry)} in ${Math.round(performance.now() - started)} ms`)
+  console.log(
+    `built ${path.relative(APP_DIR, entry)} in ${Math.round(performance.now() - started)} ms`
+  )
 }

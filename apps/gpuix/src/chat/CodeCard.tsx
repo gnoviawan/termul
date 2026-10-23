@@ -54,7 +54,9 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   markdown: 'markdown'
 }
 
-const CARD = tw('relative flex w-full flex-col gap-2 rounded-xl border border-border bg-sidebar p-2')
+const CARD = tw(
+  'relative flex w-full flex-col gap-2 rounded-xl border border-border bg-sidebar p-2'
+)
 const HEADER = tw('flex h-8 items-center text-muted-foreground text-xs')
 const HEADER_LABEL = tw('ml-1 font-mono text-xs text-muted-foreground')
 const ACTIONS = tw('absolute top-2 right-2 flex items-center')
@@ -78,9 +80,12 @@ function saveCode(code: string, language: string): string {
 export function CopyAction({ code, disabled }: { code: string; disabled: boolean }) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current)
-  }, [])
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    []
+  )
   const copy = useCallback(() => {
     if (!code || disabled) return
     copyText(code).then(
@@ -96,13 +101,26 @@ export function CopyAction({ code, disabled }: { code: string; disabled: boolean
     )
   }, [code, disabled])
   return (
-    <IconActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy} disabled={disabled} size="sm">
+    <IconActionButton
+      label={copied ? 'Copied' : 'Copy'}
+      onClick={copy}
+      disabled={disabled}
+      size="sm"
+    >
       <IconSwap iconKey={copied}>{copied ? <Check className="text-success" /> : <Copy />}</IconSwap>
     </IconActionButton>
   )
 }
 
-export function DownloadAction({ code, language, disabled }: { code: string; language: string; disabled: boolean }) {
+export function DownloadAction({
+  code,
+  language,
+  disabled
+}: {
+  code: string
+  language: string
+  disabled: boolean
+}) {
   const download = useCallback(() => {
     if (!code || disabled) return
     try {

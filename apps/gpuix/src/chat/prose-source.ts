@@ -24,10 +24,23 @@ import { gfm } from 'micromark-extension-gfm'
 import { localLinkPath } from '@/components/chat/chat-markdown-file-links'
 import { findFilePathMatches } from '@/lib/file-path-match'
 
-export type BlockKind = 'paragraph' | 'heading' | 'list' | 'blockquote' | 'table' | 'code' | 'rule' | 'other'
+export type BlockKind =
+  | 'paragraph'
+  | 'heading'
+  | 'list'
+  | 'blockquote'
+  | 'table'
+  | 'code'
+  | 'rule'
+  | 'other'
 
 export type ProseBlock =
-  | { kind: 'markdown'; block: BlockKind; /** Heading level, else 0. */ depth: number; source: string }
+  | {
+      kind: 'markdown'
+      block: BlockKind /** Heading level, else 0. */
+      depth: number
+      source: string
+    }
   | { kind: 'image'; url: string; alt: string }
 
 export const FILE_LINK_SCHEME = 'termul-file:'
@@ -90,11 +103,18 @@ function linkEdit(source: string, node: Link, edits: Edit[]): void {
 }
 
 function walk(source: string, node: Nodes, edits: Edit[]): void {
-  if (node.type === 'text') return textEdits(source, node, edits)
-  if (node.type === 'link') return linkEdit(source, node, edits)
+  if (node.type === 'text') {
+    textEdits(source, node, edits)
+    return
+  }
+  if (node.type === 'link') {
+    linkEdit(source, node, edits)
+    return
+  }
   if (node.type === 'linkReference' || node.type === 'inlineCode' || node.type === 'code') return
   if (node.type === 'html' || node.type === 'definition') return
-  if ('children' in node) for (const child of (node as Parent).children) walk(source, child as Nodes, edits)
+  if ('children' in node)
+    for (const child of (node as Parent).children) walk(source, child as Nodes, edits)
 }
 
 /** A paragraph that is only images (whitespace between them allowed). */
@@ -139,7 +159,8 @@ function taskEdits(source: string, node: Nodes, edits: Edit[]): void {
       }
     }
   }
-  if ('children' in node) for (const child of (node as Parent).children) taskEdits(source, child as Nodes, edits)
+  if ('children' in node)
+    for (const child of (node as Parent).children) taskEdits(source, child as Nodes, edits)
 }
 
 function applyEdits(source: string, start: number, end: number, edits: Edit[]): string {

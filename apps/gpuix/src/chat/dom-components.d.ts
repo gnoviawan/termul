@@ -19,3 +19,4 @@ export declare const ToolCallCard: SharedComponent
 export declare const TurnActivity: SharedComponent
 export declare const WorktreeCreationCard: SharedComponent
 export declare const TermulPlanRenderer: SharedComponent
+export declare const MessageActions: SharedComponent

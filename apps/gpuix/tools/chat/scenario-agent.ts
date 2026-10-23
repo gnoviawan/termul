@@ -4,10 +4,11 @@
  * toolkit's fake agent (tools/perf/fake-agent/fake-agent.ts), which cannot
  * script thoughts, edits with diffs and tables in one turn.
  *
- * A prompt whose text is `storm {json}` (see `StormDirective`) instead streams
- * agent_message_chunk updates at a fixed rate for a fixed time, the shape of
- * the perf toolkit's stream-storm, and appends one JSONL line per chunk to
- * `directive.log` with the wall-clock ms it was written to stdout. Every
+ * A prompt `storm <seconds> <rate> <chunkChars>` (see `parseStorm`) instead
+ * streams agent_message_chunk updates at a fixed rate for a fixed time, the
+ * shape of the perf toolkit's stream-storm, and appends one JSONL line per
+ * chunk to `$CHAT_STORM_LOG` with the wall-clock ms it was written to stdout.
+ * The prompt carries no path, so it can be typed into the web launcher. Every
  * chunk ends with a unique word (`stormMarker(id)`) a client can look for
  * to time when that chunk reached the screen.
  */
@@ -22,10 +23,18 @@ export interface StormDirective {
   rate: number
   /** Approximate characters per chunk (stream-storm default: 120). */
   chunkChars: number
-  log: string
 }
 
-export const STORM_PREFIX = 'storm '
+export function stormPrompt(directive: StormDirective): string {
+  return `storm ${directive.seconds} ${directive.rate} ${directive.chunkChars}`
+}
+
+export function parseStorm(text: string): StormDirective | null {
+  const match = /^storm (\d+(?:\.\d+)?) (\d+(?:\.\d+)?) (\d+)\s*$/.exec(text.trim())
+  return match
+    ? { seconds: Number(match[1]), rate: Number(match[2]), chunkChars: Number(match[3]) }
+    : null
+}
 
 export interface StormChunkRecord {
   id: number
@@ -48,6 +57,7 @@ interface Incoming {
   }
 }
 
+const STORM_LOG = process.env.CHAT_STORM_LOG
 const CHUNK_WORDS = 4
 const CHUNK_DELAY_MS = 18
 const TOOL_RUN_MS = 250
@@ -142,8 +152,10 @@ function stormText(chars: number, id: number): string {
   const marker = stormMarker(id)
   const flavor = id % 20
   if (flavor < 2) return `\n\n**${words[0]}** ${words.slice(1).join(' ')} ${marker} `
-  if (flavor < 4) return `\n\n${'```'}ts\nconst chunk${id} = '${words.join(' ')}' // ${marker}\n${'```'}\n\n`
-  if (flavor === 4) return `\n\n| chunk | words |\n| --- | ---: |\n| ${marker} | ${words.length} |\n\n`
+  if (flavor < 4)
+    return `\n\n${'```'}ts\nconst chunk${id} = '${words.join(' ')}' // ${marker}\n${'```'}\n\n`
+  if (flavor === 4)
+    return `\n\n| chunk | words |\n| --- | ---: |\n| ${marker} | ${words.length} |\n\n`
   return `${words.join(' ')} ${marker} `
 }
 
@@ -161,7 +173,7 @@ async function storm(sessionId: string, directive: StormDirective): Promise<void
     update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
     offset += text.length
     const record: StormChunkRecord = { id, t, bytes: Buffer.byteLength(text), offset }
-    appendFileSync(directive.log, `${JSON.stringify(record)}\n`)
+    if (STORM_LOG) appendFileSync(STORM_LOG, `${JSON.stringify(record)}\n`)
   }
 }
 
@@ -177,8 +189,9 @@ async function handlePrompt(id: Id, sessionId: string, text: string): Promise<vo
   }
   cancelled = false
   try {
-    if (text.startsWith(STORM_PREFIX)) {
-      await storm(sessionId, JSON.parse(text.slice(STORM_PREFIX.length)) as StormDirective)
+    const directive = parseStorm(text)
+    if (directive) {
+      await storm(sessionId, directive)
     } else {
       const turn = session.prompts++
       await playTurn(sessionId, scriptedTurn(turn, session.cwd), turn)

@@ -61,7 +61,8 @@ function turnExplain(cwd: string): Step[] {
       kind: 'read',
       locations: [{ path: app, line: 211 }],
       rawInput: { path: app },
-      output: "const router = createHashRouter([\n  { path: '/', element: <WorkspaceLayout />, children: [...] }\n])"
+      output:
+        "const router = createHashRouter([\n  { path: '/', element: <WorkspaceLayout />, children: [...] }\n])"
     },
     {
       step: 'say',
@@ -198,7 +199,8 @@ function turnFollowUp(cwd: string): Step[] {
       kind: 'search',
       locations: [{ path: path.join(cwd, 'src/renderer/components/ChatRoute.tsx'), line: 111 }],
       rawInput: { pattern: '/c/', path: path.join(cwd, 'src/renderer/components') },
-      output: "src/renderer/components/ChatRoute.tsx:111:    const match = location.pathname.match(/^\\/c\\/(.+)$/)"
+      output:
+        'src/renderer/components/ChatRoute.tsx:111:    const match = location.pathname.match(/^\\/c\\/(.+)$/)'
     },
     {
       step: 'say',

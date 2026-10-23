@@ -120,7 +120,12 @@ export function proseChunks(lines: readonly string[]): string[] {
     }
     const marker = NESTED_FENCE.exec(line)
     if (fence !== null) {
-      if (marker && marker[2][0] === fence[0] && marker[2].length >= fence.length && !marker[3].trim()) {
+      if (
+        marker &&
+        marker[2][0] === fence[0] &&
+        marker[2].length >= fence.length &&
+        !marker[3].trim()
+      ) {
         fence = null
       }
     } else if (marker && !(marker[2][0] === '`' && marker[3].includes('`'))) {
