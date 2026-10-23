@@ -43,11 +43,14 @@ const LIGHT_EMBOSS =
   '0 0 0 0.5px #00000033, 0 1px 2px #00000026, 0 2px 4px -1px #0000001a, inset 0 1px 0 #ffffff47, inset 0 -1px 0 #00000026'
 const LIGHT_EMBOSS_HOVER =
   '0 0 0 0.5px #0000003d, 0 1px 2px #0000002e, 0 3px 6px -1px #00000024, inset 0 1px 0 #ffffff52, inset 0 -1px 0 #0000002e'
-/** Dark: the drop needs more alpha to read on the near-black canvas. */
+/**
+ * Dark: a drop barely reads on the near-black canvas, so depth comes from a
+ * brighter top bevel, a 2px bottom bevel and a faint white inner rim.
+ */
 const DARK_EMBOSS =
-  '0 0 0 0.5px #000000cc, 0 1px 2px #00000080, 0 2px 6px -1px #00000066, inset 0 1px 0 #ffffff40, inset 0 -1px 0 #00000047'
+  '0 0 0 0.5px #000000, 0 1px 3px #000000b3, inset 0 0 0 0.5px #ffffff1f, inset 0 1px 0 #ffffff66, inset 0 -2px 0 #00000059'
 const DARK_EMBOSS_HOVER =
-  '0 0 0 0.5px #000000d9, 0 1px 2px #0000008c, 0 3px 8px -1px #00000073, inset 0 1px 0 #ffffff4d, inset 0 -1px 0 #00000052'
+  '0 0 0 0.5px #000000, 0 2px 4px #000000cc, inset 0 0 0 0.5px #ffffff29, inset 0 1px 0 #ffffff80, inset 0 -2px 0 #00000066'
 
 /** Light: gray-a3/a4/a5 off track, white thumb with a hairline so it reads on grey. */
 export const TERMUL_LIGHT_BRAND_TOKENS: ThemeComponentTokens = {
