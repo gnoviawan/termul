@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.tools.json",
+  "compilerOptions": {
+    "paths": {
+      "@/components/ui/*": ["./src/ui/*"],
+      "@/components/icons": ["./src/icons/index.tsx"],
+      "@/*": ["../../src/renderer/*"],
+      "@renderer/*": ["../../src/renderer/*"],
+      "@shared/*": ["../../src/shared/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "#app/boot": ["./src/boot-contract.ts"]
+    }
+  },
+  "include": ["tools/ui/gallery", "../../src/renderer/vite-env.d.ts"],
+  "exclude": ["tools/ui/gallery/web"]
+}

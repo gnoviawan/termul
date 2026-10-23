@@ -29,6 +29,8 @@
     "src/window.ts",
     "src/shims",
     "src/style",
+    "src/ui",
+    "src/icons",
     "../../src/renderer/vite-env.d.ts"
   ],
   "exclude": ["src/style/fonts.ts", "src/style/__tests__"]
