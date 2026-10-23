@@ -157,6 +157,17 @@ async function invokeIpc<T>(
   }
 }
 
+/**
+ * Whether this surface can run SSH sessions now: the desktop, or a web
+ * connection whose handshake granted `hostLocal`. For UI gates that render
+ * synchronously; `false` until that handshake.
+ */
+export function canUseHostSsh(): boolean {
+  if (isTauriContext()) return true
+  const transport = getAcpTransport()
+  return !!transport.sshRequest && transport.connectionCapabilities?.()?.hostLocal === true
+}
+
 /** Whether profiles live with the host's SSH (desktop, host-local web). */
 async function hostOwnsProfiles(): Promise<boolean> {
   return isTauriContext() || (await hostTransport()) !== null

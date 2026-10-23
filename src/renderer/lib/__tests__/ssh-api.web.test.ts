@@ -54,7 +54,7 @@ vi.mock('../persistence-api', () => ({
 }))
 
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { createSSHApi } from '../ssh-api'
+import { canUseHostSsh, createSSHApi } from '../ssh-api'
 
 const profile = (overrides: Partial<SSHProfile> = {}): SSHProfile => ({
   id: 'p-1',
@@ -338,6 +338,14 @@ describe('sshApi (host-local web connection)', () => {
     await api.listSessions()
     expect(transport.connect).toHaveBeenCalledTimes(1)
     expect(transport.sshRequest).toHaveBeenCalledWith('ssh_session_list', undefined)
+  })
+
+  it('reports SSH usable only once the grant is hostLocal', () => {
+    expect(canUseHostSsh()).toBe(true)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: false })
+    expect(canUseHostSsh()).toBe(false)
+    transport.connectionCapabilities.mockReturnValue(null)
+    expect(canUseHostSsh()).toBe(false)
   })
 
   it('keeps port forwarding desktop-only', async () => {
