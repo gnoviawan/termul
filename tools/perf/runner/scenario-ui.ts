@@ -16,7 +16,7 @@ import { REPO_ROOT } from './launch.ts'
 import type { ScenarioContext } from './scenario-harness.ts'
 
 export const START_CHAT_SELECTOR = 'button[aria-label="Start agent chat"]'
-export const NEW_CHAT_SELECTOR = 'button[aria-label="New agent chat"]'
+export const NEW_CHAT_SELECTOR = 'button[aria-label="New chat"]'
 export const LAUNCHER_COMPOSER =
   '[data-agent-launcher-composer-group="true"] [data-composer-editor="true"]'
 export const CHAT_TAB_MARKER = '[data-chat-tab-state]'
@@ -38,7 +38,7 @@ export async function waitForLauncher(page: Page): Promise<void> {
 
 /**
  * Re-open the launcher on a workspace that already holds chats: click the
- * pane toolbar's "New agent chat" button, then wait for the launcher
+ * side panel's "New chat" button, then wait for the launcher
  * composer. Without this, a bare composer locator resolves to a hidden
  * chat-panel composer and every click burns the 30s actionability
  * timeout.
