@@ -33,6 +33,7 @@ import { copyText, pasteText } from '../terminal/clipboard'
 import { CHUNK_LINES, chunksBetween, chunkStarts } from './chunks'
 import { type KeyIntent, keyIntent } from './keymap'
 import { loadLanguage, nativeGrammar } from './languages'
+import { perfSnapshot, recordRender, testHooksEnabled } from './test-hooks'
 import {
   caretPoint,
   contentHeight,
@@ -142,6 +143,8 @@ function languageExtensions(language: Extension | null, readOnly: boolean): Exte
 export function CodeView(props: CodeViewProps): React.JSX.Element {
   const { filePath, language, readOnly = false, isVisible, testId } = props
   const renderer = useGpuixRequired()
+  const renderStart = performance.now()
+  useEffect(() => recordRender(performance.now() - renderStart))
   const propsRef = useRef(props)
   propsRef.current = props
 
@@ -684,19 +687,12 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
                 .split('\n')
                 .slice(first - (chunks[0]?.startLine ?? first), last - (chunks[0]?.startLine ?? first) + 1),
               charWidth: vp.charWidth,
-              chunkLines: CHUNK_LINES
+              chunkLines: CHUNK_LINES,
+              perf: perfSnapshot(renderer)
             })}
           </text>
         </div>
       ) : null}
     </div>
-  )
-}
-
-/** Set by test scenes: the automation tree does not carry editor state, so the view mirrors it into an unpainted text. */
-function testHooksEnabled(): boolean {
-  return (
-    (globalThis as { __TERMUL_GPUIX_TEST_HOOKS__?: boolean }).__TERMUL_GPUIX_TEST_HOOKS__ === true ||
-    (typeof process !== 'undefined' && process.env.TERMUL_GPUIX_TEST_HOOKS === '1')
   )
 }

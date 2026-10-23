@@ -173,23 +173,45 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
     logFrontendError.mockReset()
   })
 
-  it('surfaces the error via ErrorBoundary + logFrontendError when the editor chunk fails', async () => {
+  it('surfaces the error in the tab\'s own boundary + logFrontendError when the editor chunk fails', async () => {
     render(
       <ErrorBoundary context="Editor Pane">
         <PaneContent pane={editorPane} />
       </ErrorBoundary>
     )
 
-    // The ErrorBoundary catches the thrown error, calls logFrontendError,
-    // and renders the ErrorFallback UI with the error message.
+    // The tab's ErrorBoundary catches the thrown error, calls logFrontendError,
+    // and renders the ErrorFallback UI with the error message; the pane-level
+    // boundary above never sees it.
     await waitFor(() => {
       expect(logFrontendError).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'ErrorBoundary:Editor Pane' })
+        expect.objectContaining({ source: 'ErrorBoundary:Editor Tab' })
       )
     })
 
-    expect(screen.getByText('Something went wrong in Editor Pane')).toBeInTheDocument()
+    expect(screen.getByText('Something went wrong in Editor Tab')).toBeInTheDocument()
     expect(screen.getByText('Failed to load dynamic target chunk')).toBeInTheDocument()
+    expect(screen.queryByText('Something went wrong in Editor Pane')).not.toBeInTheDocument()
+  })
+
+  it('keeps the pane\'s other tabs mounted when one tab throws', async () => {
+    const mixedPane: LeafNode = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'tab-editor-1',
+      tabs: [
+        { type: 'editor', id: 'tab-editor-1', filePath: '/project/foo.ts' },
+        { type: 'agent-chat', id: 'tab-chat-1', sessionId: 'session-1' }
+      ]
+    } as LeafNode
+    render(
+      <ErrorBoundary context="Editor Pane">
+        <PaneContent pane={mixedPane} />
+      </ErrorBoundary>
+    )
+
+    expect(await screen.findByText('Something went wrong in Editor Tab')).toBeInTheDocument()
+    expect(await screen.findByTestId('chat-panel-stub')).toBeInTheDocument()
   })
 })
 

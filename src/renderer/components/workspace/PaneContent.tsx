@@ -1,6 +1,15 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  lazy,
+  type ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
@@ -9,6 +18,7 @@ import {
   LAUNCHER_EXIT_REDUCED_MS,
   LAUNCHER_EXIT_WINDOW_MS
 } from '@/components/agents/launcher/launcher-motion'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ShowSidePanelSlot } from '@/components/shell/SidePanelVisibilityButtons'
 import { usePaneTopRow } from '@/components/shell/top-row-context'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -60,6 +70,19 @@ const GitPanel = lazy(() =>
 /** Lightweight Suspense fallback for lazy-loaded panes (reuses Skeleton). */
 function PaneSkeleton(): React.JSX.Element {
   return <Skeleton className="h-full w-full" />
+}
+
+/**
+ * One tab's lazy content behind its own error boundary: a tab that throws
+ * shows its fallback in place, and the pane's other tabs (a live terminal,
+ * say) stay mounted instead of falling to the pane-level boundary.
+ */
+function TabContent({ label, children }: { label: string; children: ReactNode }): React.JSX.Element {
+  return (
+    <ErrorBoundary context={label}>
+      <Suspense fallback={<PaneSkeleton />}>{children}</Suspense>
+    </ErrorBoundary>
+  )
 }
 
 interface PaneContentProps {
@@ -378,7 +401,7 @@ export function PaneContent({
                         'rounded-sm ring-2 ring-inset ring-warning/70 animate-pulse motion-reduce:animate-none'
                     )}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Terminal Tab">
                       <ConnectedTerminal
                         terminalId={terminal.ptyId}
                         storeTerminalId={terminal.id}
@@ -394,7 +417,7 @@ export function PaneContent({
                         className="w-full h-full"
                         isVisible={isVisible}
                       />
-                    </Suspense>
+                    </TabContent>
                     {/* Agent loading overlay: shown until ConnectedTerminal attaches
 											the renderer (rendererAttachmentCount flips to 1). Covers the
 											xterm div with a centered pulsing icon so the user sees feedback. */}
@@ -429,9 +452,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Editor Tab">
                       <EditorPanel filePath={tab.filePath} isVisible={isVisible} />
-                    </Suspense>
+                    </TabContent>
                   </div>
                 )
               })}
@@ -445,9 +468,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Browser Tab">
                       <BrowserPanel browserTabId={tab.browserTabId} isVisible={isVisible} />
-                    </Suspense>
+                    </TabContent>
                   </div>
                 )
               })}
@@ -461,13 +484,13 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Canvas Tab">
                       <CanvasPanel
                         projectId={tab.projectId}
                         docPath={tab.docPath}
                         isVisible={isVisible}
                       />
-                    </Suspense>
+                    </TabContent>
                   </div>
                 )
               })}
@@ -481,9 +504,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Git Tab">
                       <GitPanel cwd={tab.cwd} isVisible={isVisible} />
-                    </Suspense>
+                    </TabContent>
                   </div>
                 )
               })}
@@ -497,9 +520,9 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Git History Tab">
                       <GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />
-                    </Suspense>
+                    </TabContent>
                   </div>
                 )
               })}
@@ -513,14 +536,14 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Diff Tab">
                       <DiffTab
                         cwd={tab.cwd}
                         path={tab.path}
                         staged={tab.staged}
                         isVisible={isVisible}
                       />
-                    </Suspense>
+                    </TabContent>
                   </div>
                 )
               })}
@@ -534,7 +557,7 @@ export function PaneContent({
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Commit Diff Tab">
                       <CommitDiffTab
                         cwd={tab.cwd}
                         commit={tab.commit}
@@ -542,7 +565,7 @@ export function PaneContent({
                         oldPath={tab.oldPath}
                         isVisible={isVisible}
                       />
-                    </Suspense>
+                    </TabContent>
                   </div>
                 )
               })}
@@ -568,9 +591,9 @@ export function PaneContent({
                     animate={{ opacity: 1 }}
                     transition={{ duration: 0.22, ease: 'easeOut' }}
                   >
-                    <Suspense fallback={<PaneSkeleton />}>
+                    <TabContent label="Chat Tab">
                       <AgentChatPanel sessionId={tab.sessionId} isVisible={isVisible} />
-                    </Suspense>
+                    </TabContent>
                   </motion.div>
                 )
               })}
