@@ -1310,8 +1310,8 @@ pub fn run() {
             let cwd_tracker = Arc::new(CwdTracker::new(terminal_events.clone()));
             app.manage(cwd_tracker.clone());
 
-            let git_tracker = Arc::new(GitTracker::new(
-                Some(handle.clone()),
+            let git_tracker = Arc::new(GitTracker::with_cwd_tracker(
+                cwd_tracker.clone(),
                 terminal_events.clone(),
             ));
             app.manage(git_tracker.clone());
