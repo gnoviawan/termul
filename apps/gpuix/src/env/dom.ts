@@ -170,7 +170,7 @@ export function installDom(viewport: Viewport, options: DomEnvOptions): void {
  * A `MediaQueryList` that fires `change` when a window resize flips its
  * answer. The seam tracks it only while it has listeners.
  */
-class MediaList extends EventTarget {
+export class MediaList extends EventTarget {
   onchange: ((event: Event) => void) | null = null
   private last: boolean
   private readonly handlers = new Map<unknown, EventListener>()

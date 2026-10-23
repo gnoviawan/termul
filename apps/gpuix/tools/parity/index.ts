@@ -14,7 +14,7 @@ import { parseArgs } from 'node:util'
 import { APP_DIR, buildClient } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { diffPngs, PERCEPTUAL_THRESHOLD } from './diff'
-import { SCENARIOS } from './scenarios'
+import { type Scenario, SCENARIOS } from './scenarios'
 import { startTestServer } from './server'
 import { shootGpuix } from './shoot-gpuix'
 import { shootWeb } from './shoot-web'
@@ -33,7 +33,7 @@ const { values, positionals } = parseArgs({
   }
 })
 
-const scenario = SCENARIOS[positionals[0] ?? '']
+const scenario: Scenario | undefined = (SCENARIOS as Record<string, Scenario>)[positionals[0] ?? '']
 if (!scenario) {
   console.error(
     `usage: bun run parity <${Object.keys(SCENARIOS).join('|')}> [--port N] [--out DIR]`

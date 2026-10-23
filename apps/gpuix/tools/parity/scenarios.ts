@@ -25,9 +25,9 @@ export const SEEDED_PROJECTS = [
   { id: 'parity-beta', name: 'beta' }
 ] as const
 
-export const SCENARIOS: Record<string, Scenario> = {
+export const SCENARIOS = {
   projects: {
-    kind: 'still',
+    kind: 'still' as const,
     name: 'projects',
     async seed(server) {
       for (const project of SEEDED_PROJECTS) {
@@ -41,4 +41,4 @@ export const SCENARIOS: Record<string, Scenario> = {
     readyTestIds: SEEDED_PROJECTS.map((project) => `project-item-${project.id}`)
   },
   workspace: { kind: 'steps', name: 'workspace', seed: seedWorkspace }
-}
+} satisfies Record<string, Scenario>
