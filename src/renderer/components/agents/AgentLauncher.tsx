@@ -1,7 +1,6 @@
 import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { BaseBranchInfo } from '@shared/types/worktree.types'
-import type { Editor } from '@tiptap/core'
 import { useIsPresent, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -55,6 +54,7 @@ import {
 import { useComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ChatStarters, ChatStartHero } from '@/components/chat/chat-start'
 import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
+import { type ComposerEditor, focusComposerEditor } from '@/components/chat/composer/editor-ops'
 import {
   FileMentionMenu,
   MENTION_EMPTY_LABEL,
@@ -157,7 +157,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const launchInFlightRef = useRef(false)
   const menuRef = useRef<SlashMenuHandle>(null)
-  const editorRef = useRef<Editor | null>(null)
+  const editorRef = useRef<ComposerEditor | null>(null)
   // Set when an agent pick happens INSIDE the open selector popover (the only
   // place picks originate): the editor must not take focus while that popover
   // is open — Radix dismisses a popover the moment focus moves outside its
@@ -1256,7 +1256,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     if (!deferEditorFocusRef.current) return
     event.preventDefault()
     deferEditorFocusRef.current = false
-    editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+    focusComposerEditor(editorRef.current)
   }, [])
 
   // Model selector: a model on another agent's tab selects that agent with
@@ -2094,7 +2094,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               isExiting={isExiting}
               onPick={(text) => {
                 setPrompt(text)
-                editorRef.current?.commands.focus('end', { scrollIntoView: false })
+                focusComposerEditor(editorRef.current, 'end')
               }}
             />
           )}
