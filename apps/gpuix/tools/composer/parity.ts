@@ -4,7 +4,7 @@
  * open on "app", and a draft with two file pills. Each pair is diffed inside
  * the web composer's box (ROI), plus the menu's box when it is open.
  * Needs this worktree's `dist-web` (`bun run build:web` at the repo root).
- * Output: /tmp/gpuix-o3/parity/<state>/{web,gpuix,web-roi,gpuix-roi,diff-roi}.png
+ * Output: $GPUIX_STATE_ROOT (default /tmp/gpuix-o3)/parity/<state>/{web,gpuix,web-roi,gpuix-roi,diff-roi}.png
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

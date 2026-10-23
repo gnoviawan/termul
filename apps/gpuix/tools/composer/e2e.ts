@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { type GpuixApp, withScene } from './scene/session'
-import { seedComposerServer } from './seed'
+import { STATE_ROOT, seedComposerServer } from './seed'
 
 interface AgentPrompt {
   sessionId: string
@@ -89,7 +89,7 @@ function prompts(log: string): AgentPrompt[] {
     .map((line) => JSON.parse(line) as AgentPrompt)
 }
 
-const FAIL_SHOT = '/tmp/gpuix-o3/e2e-failure.png'
+const FAIL_SHOT = path.join(STATE_ROOT, 'e2e-failure.png')
 const seeded = await seedComposerServer()
 const root = seeded.root
 try {
@@ -226,11 +226,11 @@ try {
     } catch (error) {
       await grab(FAIL_SHOT)
       await Bun.write(
-        '/tmp/gpuix-o3/e2e-tree.json',
+        path.join(STATE_ROOT, 'e2e-tree.json'),
         JSON.stringify(await app.call('getTree', {}), null, 1)
       )
       await Bun.write(
-        '/tmp/gpuix-o3/e2e-painted.json',
+        path.join(STATE_ROOT, 'e2e-painted.json'),
         JSON.stringify(await app.call('getAllText', {}))
       )
       console.error(

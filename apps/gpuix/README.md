@@ -217,3 +217,6 @@ through `components/chat/composer/editor-ops.ts`, which has a GPUIX twin.
   server (empty, mention menu, two pills) into `/tmp/gpuix-o3/parity/`.
 - `bun tools/composer/probe/probe-run.ts` records which keys a stock textarea
   and a focusable box deliver to JS.
+
+The chat and composer tools keep server state and output under `/tmp/gpuix-o2`
+and `/tmp/gpuix-o3`; set `GPUIX_STATE_ROOT` to use another directory.

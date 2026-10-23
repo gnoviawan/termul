@@ -17,6 +17,7 @@ import { parseArgs } from 'node:util'
 import { scopedKey } from '../../../../src/shared/types/persistence.types.ts'
 import { REPO_DIR } from '../../build.ts'
 import { addProject, startTestServer } from '../parity/server.ts'
+import { stateRoot } from '../shared/seed.ts'
 import { SCRIPT_PROMPTS } from './script.ts'
 import { commandId, connectWs, type WsClient } from './ws.ts'
 
@@ -25,7 +26,7 @@ export const CHAT_DEVICE_ID = 'gpuix-chat'
 export const CHAT_AGENT_CONFIG_ID = 'custom-chat-scenario'
 export const CHAT_AGENT_NAME = 'Chat Scenario Agent'
 export const CHAT_PROJECT_ID = 'chat-project'
-const STATE_ROOT = '/tmp/gpuix-o2'
+const STATE_ROOT = stateRoot('/tmp/gpuix-o2')
 const PORT_RANGE = [8190, 8199] as const
 const TURN_TIMEOUT_MS = 120_000
 

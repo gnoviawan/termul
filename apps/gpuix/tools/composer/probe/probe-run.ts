@@ -3,8 +3,9 @@ import { appendFileSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { LAVAPIPE_ICD, startXvfb } from '../../parity/shoot-gpuix'
+import { STATE_ROOT } from '../seed'
 
-const LOG = '/tmp/gpuix-o3/probe.log'
+const LOG = path.join(STATE_ROOT, 'probe.log')
 rmSync(LOG, { force: true })
 const xvfb = await startXvfb(900, 700)
 const app = await launch({

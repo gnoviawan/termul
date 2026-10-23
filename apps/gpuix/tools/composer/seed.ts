@@ -10,9 +10,10 @@ import path from 'node:path'
 import { scopedKey } from '../../../../src/shared/types/persistence.types.ts'
 import { REPO_DIR } from '../../build'
 import { addProject, startTestServer, type TestServer } from '../parity/server'
+import { stateRoot } from '../shared/seed'
 import { connectWs } from './ws'
 
-export const STATE_ROOT = '/tmp/gpuix-o3'
+export const STATE_ROOT = stateRoot('/tmp/gpuix-o3')
 export const COMPOSER_TOKEN = 'gpuix-composer-token'
 export const COMPOSER_DEVICE_ID = 'gpuix-composer'
 export const COMPOSER_AGENT_ID = 'custom-composer-agent'
