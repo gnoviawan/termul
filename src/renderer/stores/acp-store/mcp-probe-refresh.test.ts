@@ -29,7 +29,7 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
 import { invoke } from '@tauri-apps/api/core'
 import { acpApi, type ProbeResult } from '@/lib/acp-api'
 import { loadMcpServers } from '@/lib/acp-mcp-persistence'
-import { useAcpStore } from '@/stores/acp-store'
+import { mcpProbesInFlight, useAcpStore } from '@/stores/acp-store'
 import { deferred } from './testkit'
 
 const CONNECTED: ProbeResult = { status: 'connected', tools: [{ name: 'read_file' }] }
@@ -166,6 +166,24 @@ describe('MCP probe refresh', () => {
     expect(useAcpStore.getState().mcpProbeStatus.fs).toBe('disconnected')
     expect(useAcpStore.getState().mcpTools.fs).toEqual([])
     expect(useAcpStore.getState().mcpProbeError.fs).toBe('spawn failed')
+  })
+
+  it('keeps counting a probe whose server was deleted mid-flight until it settles', async () => {
+    const probe = deferred<ProbeResult>()
+    vi.mocked(invoke).mockReturnValueOnce(probe.promise)
+    const before = mcpProbesInFlight()
+
+    const inFlight = useAcpStore.getState().probeMcpServer('fs')
+    await useAcpStore.getState().deleteMcpServer('fs')
+
+    // Deleting clears the `mcpProbing` flag, so the flag alone cannot tell a
+    // test teardown that this probe is still about to reach `invoke`.
+    expect(useAcpStore.getState().mcpProbing).toEqual({})
+    expect(mcpProbesInFlight()).toBe(before + 1)
+
+    probe.resolve(CONNECTED)
+    await inFlight
+    expect(mcpProbesInFlight()).toBe(before)
   })
 
   it('keeps the result of a probe that finishes while another project is active', async () => {
