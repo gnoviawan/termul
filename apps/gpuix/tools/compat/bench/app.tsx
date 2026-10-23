@@ -8,14 +8,17 @@ import { flushSync, render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState } from 'react'
 import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
+import { CompatList } from '#compat/bench-dom'
+import type { BenchHost, RunBench } from './app-contract'
 import { ROWS, useBenchStore } from './data'
 import { HandList } from './HandList'
 
-import { CompatList } from '#compat/bench-dom'
-
 type Mode = 'compat' | 'hand'
 
-import type { BenchHost, RunBench } from './app-contract'
+const WARM_MOUNTS = 10
+const RERENDERS = 30
+/** Lavapipe paints a frame in ~50 ms on this host; a sample must not start inside the last one. */
+const SAMPLE_GAP_MS = 250
 
 interface LiveRenderer {
   simulateMouseMove(x: number, y: number): void
@@ -31,34 +34,61 @@ function countNodes(json: string): number {
   return (json.match(/"id":/g) ?? []).length
 }
 
+/** Back-to-back iterations for `bun --cpu-prof`: no sleeps, so the profile is the work. */
+async function profileLoop(host: BenchHost, setShow: (show: boolean) => void): Promise<void> {
+  const ITERATIONS = host.iterations ?? (host.profile === 'mount' ? 200 : 1000)
+  const t0 = performance.now()
+  const c0 = host.cpuMicros()
+  for (let i = 0; i < ITERATIONS; i++) {
+    if (host.profile === 'mount') {
+      flushSync(() => setShow(true))
+      flushSync(() => setShow(false))
+    } else {
+      if (i === 0) flushSync(() => setShow(true))
+      flushSync(() => useBenchStore.getState().rename(5 + (i % 10), `renamed ${i}`))
+    }
+  }
+  host.write(JSON.stringify({ profile: host.profile, iterations: ITERATIONS, msPerIteration: (performance.now() - t0) / ITERATIONS, cpuMsPerIteration: (host.cpuMicros() - c0) / 1000 / ITERATIONS }))
+  host.exit()
+}
+
 function Bench({ mode, host }: { mode: Mode; host: BenchHost }) {
   const renderer = useGpuixRequired() as unknown as LiveRenderer
   const [show, setShow] = useState(false)
   useEffect(() => {
     void (async () => {
       await host.sleep(1500)
+      if (host.profile) {
+        await profileLoop(host, setShow)
+        return
+      }
       host.gc()
       const t0 = performance.now()
       flushSync(() => setShow(true))
       const mountMs = performance.now() - t0
       await host.sleep(800)
-      flushSync(() => setShow(false))
-      await host.sleep(300)
-      host.gc()
-      const w0 = performance.now()
-      flushSync(() => setShow(true))
-      const warmMountMs = performance.now() - w0
-      await host.sleep(1200)
+      const warmMounts: number[] = []
+      for (let i = 0; i < WARM_MOUNTS; i++) {
+        flushSync(() => setShow(false))
+        await host.sleep(SAMPLE_GAP_MS)
+        host.gc()
+        const w0 = performance.now()
+        flushSync(() => setShow(true))
+        warmMounts.push(performance.now() - w0)
+        await host.sleep(SAMPLE_GAP_MS)
+      }
+      await host.sleep(1000)
       const nodes = countNodes(renderer.getAutomationTree())
       const rerender: number[] = []
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < RERENDERS; i++) {
         const index = 5 + (i % 10)
         const r0 = performance.now()
         flushSync(() => useBenchStore.getState().rename(index, `renamed ${i}`))
         rerender.push(performance.now() - r0)
-        await host.sleep(60)
+        await host.sleep(SAMPLE_GAP_MS)
       }
       await host.sleep(500)
+      const renamedPainted = renderer.getAutomationTree().includes(`renamed ${RERENDERS - 1}`)
       renderer.setDebugFrameOverlay('minimal')
       await host.sleep(300)
       renderer.resetDebugFrameOverlayStats()
@@ -69,11 +99,14 @@ function Bench({ mode, host }: { mode: Mode; host: BenchHost }) {
         }
       }
       const frames = renderer.getDebugFrameOverlayStats()
+      renderer.simulateMouseMove(120, 8 + 3 * 34 + 16)
+      await host.sleep(300)
+      const hoverShowsActions = renderer.getAutomationTree().includes('Ctrl+4')
       host.gc()
       await host.sleep(300)
       const rss = host.rssBytes()
       host.write(
-        JSON.stringify({ mode, rows: ROWS, mountMs, warmMountMs, rerenderMs: median(rerender), rerender, frames, rssMb: rss / 2 ** 20, nodes })
+        JSON.stringify({ mode, rows: ROWS, mountMs, warmMountMs: median(warmMounts), warmMounts, rerenderMs: median(rerender), rerender, frames, rssMb: rss / 2 ** 20, nodes, renamedPainted, hoverShowsActions })
       )
       host.exit()
     })()
