@@ -8,7 +8,7 @@
 
 import type { StyleDesc } from '@gpuix/react'
 import { resolveTwTheme } from '../style/theme'
-import { liftPlacement, type Placement } from './placement'
+import { liftFillMinus, liftPlacement, type Placement } from './placement'
 import { viewportHeight, viewportWidth } from './viewport'
 import { type CompiledStyle, createTw, type Tw } from '../style/tw'
 import { MONO_FAMILY } from '../style/utilities'
@@ -64,6 +64,8 @@ export interface Translation {
   readonly svgClasses: string | null
   /** Centering or popup placement rebuilt in `placement.tsx`. */
   readonly placement: Placement | null
+  /** px subtracted by a `w-[calc(100%-x)]` width, or null. */
+  readonly fillMinus: number | null
 }
 
 const PHRASING = new Set([
@@ -142,6 +144,7 @@ interface Lifted {
   scope: ScopeName | null
   svg: string[]
   placement: Placement | null
+  fillMinus: number | null
 }
 
 /** Pull out the tokens tw() has no StyleDesc for. Variant-prefixed ones stay with tw(). */
@@ -157,11 +160,14 @@ function lift(className: string): Lifted {
     display: null,
     scope: null,
     svg: [],
-    placement: null
+    placement: null,
+    fillMinus: null
   }
   const placed = liftPlacement(className.split(/\s+/))
   lifted.placement = placed.placement
-  for (const raw of placed.rest) {
+  const fill = liftFillMinus(placed.rest)
+  lifted.fillMinus = fill.minus
+  for (const raw of fill.rest) {
     if (!raw) continue
     // `group-hover/name:` binds to the nearest group, whatever its name.
     const token = raw.includes('/') ? raw.replace(NAMED_GROUP_VARIANT, '$1$2') : raw
@@ -319,7 +325,8 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     scope: lifted.scope,
     listInside: lifted.listInside,
     svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null,
-    placement: lifted.placement
+    placement: lifted.placement,
+    fillMinus: lifted.fillMinus
   }
 }
 

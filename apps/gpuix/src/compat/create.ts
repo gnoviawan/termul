@@ -8,7 +8,7 @@
  */
 
 import type { StyleDesc } from '@gpuix/react'
-import type { ReactElement, ReactNode, Ref } from 'react'
+import { cloneElement, type ReactElement, type ReactNode, type Ref } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
@@ -19,7 +19,7 @@ import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackIns
 import { convertDomStyle } from './dom-style'
 import { adaptHandlers, type GpuixListeners } from './events'
 import { compatWarn } from './log'
-import { placeStyle } from './placement'
+import { placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
 import { translation, type Translation, unreverse } from './translate'
@@ -265,6 +265,14 @@ export function buildElement(
   }
   if (!childInfo.has(element)) childInfo.set(element, { inline: tr.inline })
   if (placed) return placed.wrap(element, key)
+  if (tr.fillMinus !== null) {
+    const m = tr.autoMargin
+    const side = m?.left && m.right ? 'both' : m?.left ? 'left' : 'right'
+    const grown = cloneElement(element as ReactElement<{ style?: StyleDesc }>, {
+      style: { ...(element.props as { style?: StyleDesc }).style, flexGrow: 1, minWidth: 0 }
+    })
+    return wrapFillMinus(grown, tr.fillMinus, side, key)
+  }
   if (tr.fixed) {
     return jsx('anchored' as never, { fill: 'window', style: { backgroundColor: 'transparent' }, children: element }, key)
   }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { jsx } from 'react/jsx-runtime'
+import { jsxs } from '../../src/compat/jsx-runtime'
 import { hasContainerClasses, resolveContainerClasses } from '../../src/compat/container'
 import { type Placement, placeStyle } from '../../src/compat/placement'
 import { defaultFilter, splitPartClasses } from '../../src/compat/shims/cmdk-model'
@@ -99,5 +100,17 @@ describe('button layout', () => {
     expect(flex.display).toBe('flex')
     expect(flex.justifyContent).toBeUndefined()
     expect(flex.alignItems).toBeUndefined()
+  })
+})
+
+describe('calc(100% - x) widths', () => {
+  test('a centred box keeps the subtracted width as even padding on a full-width row', () => {
+    const tr = translation('div', 'relative mx-auto -mt-4 flex w-[calc(100%-2.75rem)] items-center')
+    expect(tr.fillMinus).toBe(44)
+    const element = jsxs('div', { className: 'relative mx-auto -mt-4 flex w-[calc(100%-2.75rem)] items-center', children: ['a', 'b'] })
+    const props = element.props as { style: Record<string, unknown>; children: { props: { style: Record<string, unknown> } } }
+    expect(props.style).toEqual({ display: 'flex', flexDirection: 'row', width: '100%', flexShrink: 0, paddingLeft: 22, paddingRight: 22 })
+    expect(props.children.props.style).toMatchObject({ flexGrow: 1, minWidth: 0, marginTop: -16 })
+    expect(props.children.props.style).not.toHaveProperty('width')
   })
 })

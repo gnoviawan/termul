@@ -142,3 +142,38 @@ function AnchoredPopup({ side, gap, offsets, children }: AnchoredPopupProps): Re
     children: width !== undefined ? jsx('div', { style: { display: 'flex', flexDirection: 'column', width }, children }) : children
   })
 }
+
+const FILL_MINUS = /^w-\[calc\(100%-(\d*\.?\d+)(px|rem)\)\]$/
+
+/**
+ * `w-[calc(100%-2.75rem)]`: GPUIX widths are px or a plain percent, so the
+ * percent part becomes a full-width row wrapper whose padding takes the
+ * subtracted length, and the element grows inside it. With `mx-auto` the
+ * padding splits evenly (the element stays centred); with `ml-auto` it goes
+ * on the left; otherwise on the right.
+ */
+export function liftFillMinus(tokens: string[]): { minus: number | null; rest: string[] } {
+  let minus: number | null = null
+  const rest = tokens.filter((token) => {
+    const match = token.match(FILL_MINUS)
+    if (!match) return true
+    minus = Number.parseFloat(match[1]) * (match[2] === 'rem' ? 16 : 1)
+    return false
+  })
+  return { minus, rest }
+}
+
+export function wrapFillMinus(
+  element: ReactElement<{ style?: StyleDesc }>,
+  minus: number,
+  side: 'both' | 'left' | 'right',
+  key?: string
+): ReactElement {
+  const padding =
+    side === 'both'
+      ? { paddingLeft: minus / 2, paddingRight: minus / 2 }
+      : side === 'left'
+        ? { paddingLeft: minus }
+        : { paddingRight: minus }
+  return jsx('div', { style: { display: 'flex', flexDirection: 'row', width: '100%', flexShrink: 0, ...padding }, children: element }, key)
+}
