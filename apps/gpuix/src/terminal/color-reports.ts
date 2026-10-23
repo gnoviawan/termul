@@ -12,10 +12,10 @@ const ESC = '\x1b'
 const ST = `${ESC}\\`
 
 /** `#rrggbb` as xterm's 16-bit `rgb:rrrr/gggg/bbbb`. */
-export function toRgbReport(hex: string): string | null {
+function toRgbReport(hex: string): string | null {
   const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex)
   if (!match) return null
-  const [, r, g, b] = match as unknown as [string, string, string, string]
+  const [, r = '', g = '', b = ''] = match
   return `rgb:${r}${r}/${g}${g}/${b}${b}`.toLowerCase()
 }
 
