@@ -1,14 +1,14 @@
 /** cmdk stand-in: the parts render as plain containers; filtering and keyboard nav are not attempted. */
 import { forwardRef, type ReactNode } from 'react'
 const part = (tag: string) =>
-  forwardRef<unknown, Record<string, unknown> & { children?: ReactNode }>(function CmdkPart(
+  forwardRef<HTMLDivElement, Record<string, unknown> & { children?: ReactNode }>(function CmdkPart(
     { children, value, onValueChange, onSelect, shouldFilter, filter, loop, vimBindings, ...props },
     ref
   ) {
     const Tag = tag as 'div'
     return (
       <Tag {...props} ref={ref} onClick={onSelect ? () => (onSelect as (v: unknown) => void)(value) : undefined}>
-        {children}
+        {children as ReactNode}
       </Tag>
     )
   })

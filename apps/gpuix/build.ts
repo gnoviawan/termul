@@ -128,7 +128,7 @@ export const PACKAGE_ALIASES: Record<string, string> = {
  * everything under apps/gpuix except the compat stand-ins (radix, shims),
  * which are DOM components like the code they replace.
  */
-const DOM_DIRS = ['src/compat/radix', 'src/compat/shims', 'tools/compat/fixtures/dom'].map(
+const DOM_DIRS = ['src/compat/radix', 'src/compat/shims', 'tools/compat/fixtures/dom', 'tools/compat/bench/dom'].map(
   (dir) => path.join(APP_DIR, dir) + path.sep
 )
 
@@ -214,7 +214,8 @@ export interface BuildResult {
 
 export async function buildClient(
   entry: string = ENTRY,
-  outdir: string = OUT_DIR
+  outdir: string = OUT_DIR,
+  options: { production?: boolean } = {}
 ): Promise<BuildResult> {
   const reactResolves: ReactResolve[] = []
   const result = await Bun.build({
@@ -226,7 +227,11 @@ export async function buildClient(
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
     plugins: [compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
-    naming: '[name].[ext]'
+    naming: '[name].[ext]',
+    // React's production build has no jsxDEV, so a production bundle needs jsx().
+    ...(options.production
+      ? { jsx: { development: false }, define: { 'process.env.NODE_ENV': '"production"' } }
+      : {})
   })
   return {
     ok: result.success,

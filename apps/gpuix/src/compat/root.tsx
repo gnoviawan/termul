@@ -10,6 +10,7 @@ import { type CompatRenderer, bindCompatRenderer } from './dom-node'
 import { windowKeyEvent } from './events'
 import { setOverlayLayer } from './react-dom'
 import { compatTw } from './translate'
+import { observeViewport } from './viewport'
 
 const OVERLAY = {
   position: 'absolute',
@@ -33,8 +34,12 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
   useLayoutEffect(() => {
     bindCompatRenderer(renderer as unknown as CompatRenderer)
     onRenderer?.(renderer)
+    const unobserve = observeViewport(renderer)
     setReady(true)
-    return () => bindCompatRenderer(null)
+    return () => {
+      unobserve()
+      bindCompatRenderer(null)
+    }
   }, [renderer, onRenderer])
   useLayoutEffect(() => {
     setOverlayLayer(layer)

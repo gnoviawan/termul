@@ -3,7 +3,7 @@
  * `CompatRoot`, booted the way `src/boot.tsx` boots the client.
  */
 
-import { render } from '@gpuix/react'
+import { type NativeRenderer, render } from '@gpuix/react'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { checkWebAuthGate } from '@/lib/web-auth-gate'
 import { setWebAuthToken } from '@/lib/web-auth-token'
@@ -11,9 +11,18 @@ import { ensureClientIdentity } from '@/lib/web-client-identity'
 import type { ClientConfig } from '../../../src/client-config'
 import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
-import { FixtureRoot } from './dom'
+import type { ComponentType } from 'react'
 
-export function boot(config: ClientConfig, fixture: string, onRenderer: (renderer: never) => void): void {
+// A non-literal specifier keeps the DOM-typed fixtures out of this program;
+// tsconfig.compat.json checks them under React DOM's JSX types.
+const DOM_FIXTURES: string = './dom'
+const { FixtureRoot } = (await import(DOM_FIXTURES)) as { FixtureRoot: ComponentType<{ name: string }> }
+
+export function boot(
+  config: ClientConfig,
+  fixture: string,
+  onRenderer: (renderer: NativeRenderer) => void
+): void {
   if (config.token) setWebAuthToken(config.token)
   ensureClientIdentity()
   checkWebAuthGate()

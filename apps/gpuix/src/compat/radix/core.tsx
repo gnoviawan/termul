@@ -24,7 +24,8 @@ import { type CompatElement, trackedInstance } from '../dom-node'
 import { domPropsOf } from '../create'
 import { compatWarn } from '../log'
 
-type AnyProps = Record<string, unknown> & { children?: ReactNode }
+// biome-ignore lint/suspicious/noExplicitAny: a Radix stand-in passes arbitrary DOM props through
+type AnyProps = { children?: ReactNode; [prop: string]: any }
 
 function composeRefs(...refs: unknown[]) {
   return (value: unknown) => {
@@ -51,7 +52,7 @@ function mergeProps(slot: AnyProps, child: AnyProps): AnyProps {
   return out
 }
 
-export const Slot = forwardRef<unknown, AnyProps>(function Slot({ children, ...props }, ref) {
+export const Slot = forwardRef<HTMLDivElement, AnyProps>(function Slot({ children, ...props }, ref) {
   const only = Children.toArray(children).find(isValidElement)
   if (!only) return null
   const childProps = (domPropsOf(only) ?? only.props) as AnyProps
@@ -97,7 +98,7 @@ export function makeRoot(kind: OverlayState['kind']) {
 }
 
 export function makeTrigger(part: string) {
-  return forwardRef<unknown, AnyProps>(function Trigger({ asChild, children, ...props }, ref) {
+  return forwardRef<HTMLDivElement, AnyProps>(function Trigger({ asChild, children, ...props }, ref) {
     const ctx = useOverlay(part)
     const handlers: AnyProps = { 'data-state': ctx.open ? 'open' : 'closed' }
     if (ctx.kind === 'tooltip') {
@@ -135,7 +136,7 @@ export function Portal({ children }: AnyProps) {
 const SIDES = new Set(['top', 'right', 'bottom', 'left'])
 
 export function makeContent(part: string) {
-  return forwardRef<unknown, AnyProps>(function Content(
+  return forwardRef<HTMLDivElement, AnyProps>(function Content(
     {
       children,
       side = 'bottom',
@@ -193,7 +194,7 @@ export function makeContent(part: string) {
 }
 
 export function makeItem(closeOnSelect = true) {
-  return forwardRef<unknown, AnyProps>(function Item({ onSelect, asChild, disabled, children, textValue, ...props }, ref) {
+  return forwardRef<HTMLDivElement, AnyProps>(function Item({ onSelect, asChild, disabled, children, textValue, ...props }, ref) {
     const ctx = useContext(OverlayCtx)
     const onClick = () => {
       if (disabled) return
@@ -214,7 +215,7 @@ export function makeItem(closeOnSelect = true) {
 }
 
 export function passthrough(tag = 'div', defaults: AnyProps = {}) {
-  return forwardRef<unknown, AnyProps>(function Part({ asChild, children, ...props }, ref) {
+  return forwardRef<HTMLDivElement, AnyProps>(function Part({ asChild, children, ...props }, ref) {
     if (asChild) return <Slot {...defaults} {...props} ref={ref}>{children}</Slot>
     const Tag = tag as 'div'
     return (
@@ -237,7 +238,7 @@ export function Close({ asChild, children, ...props }: AnyProps) {
 }
 
 /** Dialog content: a window-filling layer centring its child. */
-export const DialogContent = forwardRef<unknown, AnyProps>(function DialogContent(
+export const DialogContent = forwardRef<HTMLDivElement, AnyProps>(function DialogContent(
   { children, onOpenAutoFocus, onCloseAutoFocus, onEscapeKeyDown, onPointerDownOutside, onInteractOutside, forceMount, ...props },
   ref
 ) {
@@ -258,7 +259,7 @@ export const DialogContent = forwardRef<unknown, AnyProps>(function DialogConten
   )
 })
 
-export const DialogOverlay = forwardRef<unknown, AnyProps>(function DialogOverlay({ forceMount, ...props }, ref) {
+export const DialogOverlay = forwardRef<HTMLDivElement, AnyProps>(function DialogOverlay({ forceMount, ...props }, ref) {
   const ctx = useOverlay('Dialog.Overlay')
   if (!ctx.open && !forceMount) return null
   return (

@@ -5,7 +5,6 @@
  * else is built directly by `createDomElement`.
  */
 
-import { useWindowSize } from '@gpuix/react'
 import {
   createContext,
   type ReactElement,
@@ -21,6 +20,7 @@ import { applyRules } from '../style/tw'
 import type { Condition, TwState } from '../style/variants'
 import { buildElement, compatDark, type DomProps, domAttrs } from './create'
 import type { Translation } from './translate'
+import { subscribeViewport, viewportWidth } from './viewport'
 
 interface GroupSnapshot {
   hovered: boolean
@@ -89,7 +89,7 @@ function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactE
   const parentGroup = useContext(GroupContext) ?? NO_GROUP
   const group = useSyncExternalStore(needs.group ? parentGroup.subscribe : noSubscribe, parentGroup.get)
   const [focus, setFocus] = useState({ self: false, within: false })
-  const width = useWindowSize().width
+  const width = useSyncExternalStore(needs.viewport ? subscribeViewport : noSubscribe, viewportWidth)
   const ownStore = useRef<GroupStore | null>(null)
   if (tr.group !== null && !ownStore.current) ownStore.current = new GroupStore()
   const store = ownStore.current

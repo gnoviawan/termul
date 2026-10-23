@@ -29,9 +29,12 @@
     "src/window.ts",
     "src/shims",
     "src/style",
+    "src/compat",
+    "tools/compat/fixtures/boot.tsx",
+    "tools/compat/bench/app.tsx",
     "src/ui",
     "src/icons",
     "../../src/renderer/vite-env.d.ts"
   ],
-  "exclude": ["src/style/fonts.ts", "src/style/__tests__"]
+  "exclude": ["src/style/fonts.ts", "src/style/__tests__", "src/compat/radix", "src/compat/shims"]
 }

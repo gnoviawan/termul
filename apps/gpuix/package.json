@@ -14,7 +14,7 @@
     "check:react": "bun tools/check-react.ts",
     "compat:lint": "bun tools/compat/lint.ts",
     "parity": "bun tools/parity/index.ts",
-    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json",
+    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.compat.json",
     "test": "bun test src/style src/terminal src/ui tools/ui tools/compat",
     "style:scan": "bun tools/style/scan-classes.ts",
     "style:gen": "bun tools/style/gen-color-vars.ts",

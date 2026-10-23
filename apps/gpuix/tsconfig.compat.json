@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "types": []
+  },
+  "include": [
+    "src/compat/radix",
+    "src/compat/shims",
+    "tools/compat/fixtures/dom",
+    "tools/compat/bench/dom",
+    "tools/compat/web/main.tsx",
+    "../../src/renderer/vite-env.d.ts"
+  ],
+  "exclude": []
+}

@@ -3,3 +3,4 @@ node_modules/
 parity-out/
 .tsbuild/
 dist-compat/
+dist-bench/
