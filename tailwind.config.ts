@@ -25,6 +25,8 @@ export default {
         primary: {
           DEFAULT: 'oklch(var(--primary) / <alpha-value>)',
           fill: 'oklch(var(--primary-fill) / <alpha-value>)',
+          // fill-hover and fill-active are complete CSS colors: an alpha modifier
+          // such as bg-primary-fill-hover/50 is silently ignored.
           'fill-hover': 'var(--primary-fill-hover)',
           'fill-active': 'var(--primary-fill-active)',
           foreground: 'oklch(var(--primary-foreground) / <alpha-value>)'
@@ -46,7 +48,8 @@ export default {
         connection: {
           DEFAULT: 'oklch(var(--connection) / <alpha-value>)'
         },
-        // Component tokens are complete CSS colors; no alpha modifier.
+        // Component tokens are complete CSS colors: an alpha modifier such as
+        // bg-skeleton/50 is silently ignored, with no build error.
         skeleton: 'var(--skeleton)',
         'ghost-hover-foreground': 'var(--ghost-hover-foreground)',
         'diff-modified': 'oklch(var(--diff-modified) / <alpha-value>)',
@@ -141,6 +144,9 @@ export default {
       // makes Vite warn "A PostCSS plugin did not pass the `from` option".
       boxShadow: {
         // The scale reads the per-theme elevation ladder (component-tokens.ts).
+        // Plain `shadow` matches Tailwind's default, which equals the sm step.
+        // shadow-inner stays Tailwind's inset; the ladder has no inset step.
+        DEFAULT: 'var(--elevation-sm)',
         '2xs': 'var(--elevation-2xs)',
         xs: 'var(--elevation-xs)',
         sm: 'var(--elevation-sm)',
