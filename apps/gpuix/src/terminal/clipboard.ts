@@ -3,7 +3,7 @@
  * clipboard tool on PATH. Absent tools degrade to an in-process buffer so
  * copy then paste still round-trips inside the app.
  */
-import { terminalLog } from './log'
+import { log } from '../log'
 
 type Tool = { copy: string[]; paste: string[] }
 
@@ -24,7 +24,10 @@ function tool(): Tool | null {
   if (resolved !== undefined) return resolved
   resolved = TOOLS.find((candidate) => Bun.which(candidate.copy[0]!) !== null) ?? null
   if (!resolved)
-    terminalLog('warn', 'clipboard.no-tool', { tried: TOOLS.map((t) => t.copy[0]).join(',') })
+    log.warn(
+      'terminal',
+      `clipboard.no-tool ${JSON.stringify({ tried: TOOLS.map((t) => t.copy[0]).join(',') })}`
+    )
   return resolved
 }
 

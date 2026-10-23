@@ -1,6 +1,11 @@
-import { existsSync } from 'node:fs'
+/**
+ * xterm.js in headless Chromium, the reference side of the parity and
+ * throughput checks: the app's own `@xterm/xterm` and `@xterm/addon-webgl`
+ * builds, the same font files, theme and grid as TerminalView.
+ */
 import { extname } from 'node:path'
 import { chromium, type Page } from 'playwright'
+import { cellRows } from './cells'
 
 export interface XtermRenderOptions {
   bytes: Uint8Array
@@ -21,12 +26,16 @@ export interface XtermRenderOptions {
 
 export interface XtermRenderResult {
   rows: string[]
+  /** `cellRows` of the visible buffer. */
+  cells: string[]
   cursor: { x: number; y: number }
   cellWidth: number
   cellHeight: number
   screenBox: { x: number; y: number; width: number; height: number }
   writeMs?: number
   renderMs?: number
+  /** Animation frames that ran between the first write and the paint after the last. */
+  frames?: number
   bufferLength: number
 }
 
@@ -42,15 +51,17 @@ interface PageInput {
   chunkSize: number
   renderer: 'dom' | 'webgl'
   families: string[]
+  cellRowsSource: string
 }
 
-type PageOutput = Omit<XtermRenderResult, 'screenBox' | 'writeMs' | 'renderMs'> & {
+type PageOutput = Omit<XtermRenderResult, 'screenBox' | 'writeMs' | 'renderMs' | 'frames'> & {
   writeMs: number
   renderMs: number
+  frames: number
 }
 
 const ORIGIN = 'http://xterm.local'
-const XTERM_DIR = '/root/termul/node_modules/@xterm'
+const XTERM_DIR = new URL('../../../../node_modules/@xterm', import.meta.url).pathname
 
 const FONT_FORMATS: Record<string, { format: string; mime: string }> = {
   '.ttf': { format: 'truetype', mime: 'font/ttf' },
@@ -170,7 +181,15 @@ async function runInPage(input: PageInput): Promise<PageOutput> {
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i)
   const frame = (): Promise<number> => new Promise((resolve) => requestAnimationFrame(resolve))
 
+  let frames = 0
+  let counting = true
+  const count = () => {
+    if (!counting) return
+    frames++
+    requestAnimationFrame(count)
+  }
   const start = performance.now()
+  requestAnimationFrame(count)
   await new Promise<void>((resolve) => {
     if (bytes.length === 0) return resolve()
     for (let offset = 0; offset < bytes.length; offset += input.chunkSize) {
@@ -181,9 +200,13 @@ async function runInPage(input: PageInput): Promise<PageOutput> {
   const written = performance.now()
   await frame()
   const painted = performance.now()
+  counting = false
   await frame()
 
   const buffer = term.buffer.active
+  const cells = (new Function(`return (${input.cellRowsSource})`)() as (t: unknown) => string[])(
+    term
+  )
   const rows: string[] = []
   for (let y = 0; y < input.rows; y++)
     rows.push(buffer.getLine(buffer.viewportY + y)?.translateToString(true) ?? '')
@@ -202,12 +225,14 @@ async function runInPage(input: PageInput): Promise<PageOutput> {
 
   return {
     rows,
+    cells,
     cursor: { x: buffer.cursorX, y: buffer.cursorY },
     cellWidth,
     cellHeight,
     bufferLength: buffer.length,
     writeMs: written - start,
-    renderMs: painted - start
+    renderMs: painted - start,
+    frames
   }
 }
 
@@ -235,7 +260,8 @@ export async function renderWithXtermJs(opts: XtermRenderOptions): Promise<Xterm
       scrollback: opts.scrollback,
       chunkSize: opts.chunkSize ?? 65536,
       renderer,
-      families: [...new Set(opts.fontFiles.map((font) => font.family))]
+      families: [...new Set(opts.fontFiles.map((font) => font.family))],
+      cellRowsSource: cellRows.toString()
     }
     const out = await page.evaluate(runInPage, input)
     const screen = page.locator('.xterm-screen')
@@ -258,37 +284,11 @@ export async function renderWithXtermJs(opts: XtermRenderOptions): Promise<Xterm
       animations: 'disabled',
       caret: 'initial'
     })
-    const { writeMs, renderMs, ...rest } = out
+    const { writeMs, renderMs, frames, ...rest } = out
     const result: XtermRenderResult = { ...rest, screenBox: box }
-    if (opts.timing) Object.assign(result, { writeMs, renderMs })
+    if (opts.timing) Object.assign(result, { writeMs, renderMs, frames })
     return result
   } finally {
     await browser.close()
   }
 }
-
-async function main(argv: string[]): Promise<void> {
-  const [bytesPath, outPng, cols = '80', rows = '24'] = argv
-  if (!bytesPath || !outPng) {
-    console.error('usage: bun tools/terminal/xterm-chromium.ts <bytes.bin> <out.png> [cols rows]')
-    process.exit(2)
-  }
-  const paperMono = '/tmp/gpuix-t1/PaperMono.ttf'
-  const fontFamily = existsSync(paperMono) ? 'Paper Mono' : 'DejaVu Sans Mono'
-  const { rows: _rows, ...summary } = await renderWithXtermJs({
-    bytes: new Uint8Array(await Bun.file(bytesPath).arrayBuffer()),
-    cols: Number(cols),
-    rows: Number(rows),
-    fontFamily,
-    fontFiles: fontFamily === 'Paper Mono' ? [{ family: fontFamily, path: paperMono }] : [],
-    fontSize: 14,
-    lineHeight: 1.2,
-    theme: { background: '#0d0d0d', foreground: '#e6e6e6', cursor: '#e6e6e6', red: '#ff5f56' },
-    scrollback: 10000,
-    outPng,
-    timing: true
-  })
-  console.log(JSON.stringify({ fontFamily, ...summary }, null, 2))
-}
-
-if (import.meta.main) await main(process.argv.slice(2))

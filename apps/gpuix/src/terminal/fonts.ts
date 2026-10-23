@@ -7,16 +7,19 @@
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { terminalLog } from './log'
+import { log } from '../log'
+import boldFile from './fonts/PaperMono-Bold.ttf' with { type: 'file' }
+import regularFile from './fonts/PaperMono-Regular.ttf' with { type: 'file' }
 
 export const TERMINAL_FONT_FAMILY = 'Paper Mono'
 export const TERMINAL_FONT_SIZE = 14
 export const TERMINAL_LINE_HEIGHT = 1.2
 export const TERMINAL_FONT_WEIGHT_BOLD = 700
 
+/** Bun's file loader yields an absolute path from source and a bundle-relative one from a bundle. */
 export const TERMINAL_FONT_FILES = {
-  regular: resolve(import.meta.dir, 'fonts/PaperMono-Regular.ttf'),
-  bold: resolve(import.meta.dir, 'fonts/PaperMono-Bold.ttf')
+  regular: resolve(import.meta.dir, regularFile),
+  bold: resolve(import.meta.dir, boldFile)
 } as const
 
 interface FontRegistrar {
@@ -33,11 +36,14 @@ export function registerTerminalFonts(renderer: FontRegistrar): void {
     renderer.registerFont(readFileSync(TERMINAL_FONT_FILES.regular))
     renderer.registerFont(readFileSync(TERMINAL_FONT_FILES.bold))
   } catch (error) {
-    terminalLog('error', 'fonts.register-failed', { error: String(error) })
+    log.error('terminal', `fonts.register-failed ${JSON.stringify({ error: String(error) })}`)
     throw error
   }
   registered = true
-  terminalLog('info', 'fonts.registered', { ms: Math.round(performance.now() - started) })
+  log.info(
+    'terminal',
+    `fonts.registered ${JSON.stringify({ ms: Math.round(performance.now() - started) })}`
+  )
 }
 
 export interface CellMetrics {

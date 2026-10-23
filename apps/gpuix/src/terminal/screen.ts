@@ -142,6 +142,14 @@ export class TerminalScreen {
     this.invalidate()
   }
 
+  selectAll(): void {
+    const buffer = this.terminal.buffer.active
+    this.setSelection({
+      anchor: { row: 0, col: 0 },
+      head: { row: buffer.length - 1, col: this.terminal.cols }
+    })
+  }
+
   getSelection(): Selection | null {
     return this.selection
   }

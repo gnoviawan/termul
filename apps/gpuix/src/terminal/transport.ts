@@ -1,30 +1,33 @@
 /**
- * Termul's own `/terminal/ws` client, loaded after the DOM seam is in place.
- * `web-terminal-api.ts` builds its singleton at import time from
- * `window.location`, so the import has to be dynamic and ordered after
- * `installTerminalEnv`.
+ * Termul's own `/terminal/ws` client. `web-terminal-api.ts` builds its
+ * singleton at import time from `window.location`, so it is imported
+ * dynamically, after the environment seam is installed for the server.
  */
 import type { TerminalApi, TerminalSpawnOptions } from '@shared/types/ipc.types'
-import { installTerminalEnv, type TerminalEnvOptions } from './env'
-import { terminalLog } from './log'
+import type { ClientConfig } from '../client-config'
+import { installBrowserEnv } from '../env'
+import { log } from '../log'
+import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../window'
 
 export type { TerminalApi }
 
-export interface TerminalTransport {
-  api: TerminalApi
-  /** The deferred `web-terminal-api` module for the status helpers. */
-  module: typeof import('@/lib/web-terminal-api')
-}
+let loading: Promise<TerminalApi> | null = null
 
-let loading: Promise<TerminalTransport> | null = null
-
-export function loadTerminalTransport(options: TerminalEnvOptions): Promise<TerminalTransport> {
+export function loadTerminalApi(config: ClientConfig): Promise<TerminalApi> {
   if (loading) return loading
-  installTerminalEnv(options)
-  loading = import('@/lib/web-terminal-api').then((module) => {
-    terminalLog('info', 'transport.loaded', { origin: options.origin, gated: !!options.token })
-    return { api: module.createWebTerminalApi(), module }
-  })
+  installBrowserEnv(config, { width: WINDOW_WIDTH, height: WINDOW_HEIGHT })
+  loading = (async () => {
+    const [{ setWebAuthToken }, { createWebTerminalApi }] = await Promise.all([
+      import('@/lib/web-auth-token'),
+      import('@/lib/web-terminal-api')
+    ])
+    if (config.token) setWebAuthToken(config.token)
+    log.info(
+      'terminal',
+      `transport.loaded ${JSON.stringify({ origin: config.serverUrl.origin, gated: !!config.token })}`
+    )
+    return createWebTerminalApi()
+  })()
   return loading
 }
 
@@ -46,36 +49,45 @@ export interface SpawnSessionOptions extends TerminalSpawnOptions {
 }
 
 export async function spawnSession(
-  transport: TerminalTransport,
+  api: TerminalApi,
   options: SpawnSessionOptions
 ): Promise<TerminalSession> {
   const { onData, onExit, ...spawnOptions } = options
-  const result = await transport.api.spawn(spawnOptions)
+  const result = await api.spawn(spawnOptions)
   if (!result.success) {
-    terminalLog('error', 'spawn.failed', { code: result.code, error: result.error })
+    log.error(
+      'terminal',
+      `spawn.failed ${JSON.stringify({ code: result.code, error: result.error })}`
+    )
     throw new Error(`spawn failed: ${result.code} ${result.error}`)
   }
   const id = result.data.id
-  const offData = transport.api.onData((terminalId, bytes) => {
+  const offData = api.onData((terminalId, bytes) => {
     if (terminalId === id) onData(bytes)
   })
-  const offExit = transport.api.onExit((terminalId, code) => {
+  const offExit = api.onExit((terminalId, code) => {
     if (terminalId === id) onExit?.(code)
   })
-  terminalLog('info', 'spawn.ok', { cols: result.data.cols, rows: result.data.rows })
+  log.info(
+    'terminal',
+    `spawn.ok ${JSON.stringify({ cols: result.data.cols, rows: result.data.rows })}`
+  )
   const report =
     (what: string) => (outcome: { success: boolean; code?: string; error?: string }) => {
       if (!outcome.success)
-        terminalLog('warn', `${what}.refused`, { code: outcome.code, error: outcome.error })
+        log.warn(
+          'terminal',
+          `${what}.refused ${JSON.stringify({ code: outcome.code, error: outcome.error })}`
+        )
     }
   return {
     id,
     cols: result.data.cols,
     rows: result.data.rows,
-    write: (data) => void transport.api.write(id, data).then(report('write')),
-    resize: (cols, rows) => void transport.api.resize(id, cols, rows).then(report('resize')),
+    write: (data) => void api.write(id, data).then(report('write')),
+    resize: (cols, rows) => void api.resize(id, cols, rows).then(report('resize')),
     kill: async () => {
-      report('kill')(await transport.api.kill(id))
+      report('kill')(await api.kill(id))
     },
     dispose: () => {
       offData()

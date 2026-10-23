@@ -16,7 +16,7 @@ type GpuixApp = Awaited<ReturnType<typeof launch>>
 
 export const READY_TIMEOUT_MS = 60_000
 const SETTLE_MS = 400
-const LAVAPIPE_ICD = '/usr/share/vulkan/icd.d/lvp_icd.json'
+export const LAVAPIPE_ICD = '/usr/share/vulkan/icd.d/lvp_icd.json'
 
 function freeDisplay(): number {
   for (let n = 90; n < 200; n++) {
@@ -25,7 +25,7 @@ function freeDisplay(): number {
   throw new Error('no free X display between :90 and :199')
 }
 
-async function startXvfb(
+export async function startXvfb(
   width: number,
   height: number
 ): Promise<{ display: string; stop(): void }> {
@@ -45,7 +45,7 @@ async function startXvfb(
   return { display, stop: () => child.kill() }
 }
 
-async function grabFrame(
+export async function grabFrame(
   display: string,
   width: number,
   height: number,

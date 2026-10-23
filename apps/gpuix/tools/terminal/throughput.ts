@@ -2,13 +2,14 @@
  * Throughput bench: time to parse and paint `seq 1 200000` and a 5 MB
  * random-printable file, fed from memory in 64 KB chunks, in GPUIX
  * (TerminalView under Xvfb + lavapipe) and in xterm.js (headless Chromium).
- * Same grid, font, size, theme and chunking on both sides. Runs alternate
+ * Same grid, font, size, theme and chunking on both sides. Line ends are
+ * CRLF, as a PTY with `onlcr` delivers them. Runs alternate
  * A, B, A, B so warmup and drift favour neither; the visible rows must match
  * on every run or the run is counted as an error.
  *
  * bun tools/terminal/throughput.ts [outDir] [runs]
  */
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   TERMINAL_FONT_FILES,
@@ -17,8 +18,8 @@ import {
 } from '../../src/terminal/fonts'
 import { terminalThemeFor } from '../../src/terminal/theme'
 import { FIXTURE_COLS, FIXTURE_ROWS } from './fixture'
+import { runEntry } from './headless'
 import { renderWithXtermJs } from './xterm-chromium'
-import { gpuixEnv, startXvfb } from './xvfb'
 
 const CHUNK_BYTES = 65536
 const CELL = { width: 8, height: 19 }
@@ -26,6 +27,7 @@ const CELL = { width: 8, height: 19 }
 interface Sample {
   writeMs: number
   paintMs: number
+  frames: number
   rows: string[]
   bufferLength: number
 }
@@ -40,12 +42,13 @@ function seeded(seed: number): () => number {
 
 export async function makeInputs(dir: string): Promise<Record<string, string>> {
   mkdirSync(dir, { recursive: true })
-  const seqPath = resolve(dir, 'seq-200000.bin')
+  const seqPath = resolve(dir, 'seq-200000.crlf')
   if (!existsSync(seqPath)) {
     const proc = Bun.spawn(['seq', '1', '200000'], { stdout: 'pipe' })
-    writeFileSync(seqPath, new Uint8Array(await new Response(proc.stdout).arrayBuffer()))
+    const text = await new Response(proc.stdout).text()
+    writeFileSync(seqPath, text.replaceAll('\n', '\r\n'))
   }
-  const randomPath = resolve(dir, 'random-5mb.bin')
+  const randomPath = resolve(dir, 'random-5mb.crlf')
   if (!existsSync(randomPath)) {
     const size = 5 * 1024 * 1024
     const out = new Uint8Array(size)
@@ -53,7 +56,10 @@ export async function makeInputs(dir: string): Promise<Record<string, string>> {
     let column = 0
     let lineLength = 1 + Math.floor(next() * 120)
     for (let i = 0; i < size; i++) {
-      if (column >= lineLength) {
+      if (column === lineLength) {
+        out[i] = 0x0d
+        column++
+      } else if (column > lineLength) {
         out[i] = 0x0a
         column = 0
         lineLength = 1 + Math.floor(next() * 120)
@@ -68,37 +74,19 @@ export async function makeInputs(dir: string): Promise<Record<string, string>> {
 }
 
 async function runGpuix(input: string, outDir: string): Promise<Sample> {
-  const resultFile = resolve(outDir, 'gpuix-result.json')
-  if (existsSync(resultFile)) unlinkSync(resultFile)
-  const xvfb = await startXvfb()
-  const app = Bun.spawn(
-    [
-      'bun',
-      resolve(import.meta.dir, 'throughput-gpuix.tsx'),
+  return runEntry<Sample>({
+    entry: 'throughput-gpuix',
+    args: [
       input,
-      resultFile,
+      resolve(outDir, 'gpuix-result.json'),
       String(FIXTURE_COLS),
       String(FIXTURE_ROWS),
       String(CELL.width),
       String(CELL.height),
       String(CHUNK_BYTES)
     ],
-    { env: gpuixEnv(xvfb.display), stdout: 'ignore', stderr: 'ignore' }
-  )
-  try {
-    const deadline = Date.now() + 120_000
-    while (!existsSync(resultFile)) {
-      if (Date.now() > deadline) throw new Error('GPUIX bench timed out')
-      if (app.exitCode !== null)
-        throw new Error(`GPUIX bench exited ${app.exitCode} without a result`)
-      await Bun.sleep(50)
-    }
-    await Bun.sleep(100)
-    return (await Bun.file(resultFile).json()) as Sample
-  } finally {
-    app.kill()
-    xvfb.stop()
-  }
+    readyFile: resolve(outDir, 'gpuix-result.json')
+  })
 }
 
 async function runWeb(input: string, outDir: string): Promise<Sample> {
@@ -123,6 +111,7 @@ async function runWeb(input: string, outDir: string): Promise<Sample> {
   return {
     writeMs: result.writeMs ?? Number.NaN,
     paintMs: result.renderMs ?? Number.NaN,
+    frames: result.frames ?? Number.NaN,
     rows: result.rows,
     bufferLength: result.bufferLength
   }
@@ -185,6 +174,7 @@ export async function runThroughput(outDir = '/tmp/gpuix-t1/throughput', runs = 
       gpuix: {
         writeMs: summary(gpuix.map((s) => s.writeMs)),
         paintMs: summary(gpuix.map((s) => s.paintMs)),
+        frames: summary(gpuix.map((s) => s.frames)),
         mbPerSecondPaint: Number(
           (bytes / 1048576 / (median(gpuix.map((s) => s.paintMs)) / 1000)).toFixed(2)
         )
@@ -192,6 +182,7 @@ export async function runThroughput(outDir = '/tmp/gpuix-t1/throughput', runs = 
       web: {
         writeMs: summary(web.map((s) => s.writeMs)),
         paintMs: summary(web.map((s) => s.paintMs)),
+        frames: summary(web.map((s) => s.frames)),
         mbPerSecondPaint: Number(
           (bytes / 1048576 / (median(web.map((s) => s.paintMs)) / 1000)).toFixed(2)
         )

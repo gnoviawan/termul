@@ -1,67 +1,77 @@
 /**
- * GPUIX side of the throughput bench: write a file into TerminalView in
- * fixed chunks and record when xterm parsed the last chunk and when GPUI
- * painted the frame after it (a marker mounted after the final commit gets
- * bounds only once painted). Writes a JSON result and exits.
+ * GPUIX side of the throughput bench: writes a file into a TerminalView in
+ * fixed chunks, all queued at once like a PTY flood, and records when xterm
+ * parsed the last chunk, how many frames GPUIX committed on the way, and when
+ * the frame holding the final state was laid out (a marker mounted with that
+ * commit gets bounds only after GPUI has laid out and painted the window).
  *
- * bun tools/terminal/throughput-gpuix.tsx <input.bin> <result.json> [cols rows cellWidth cellHeight chunkBytes]
+ * bun dist/terminal/throughput-gpuix.js <input.bin> <result.json> <cols> <rows> <cellWidth> <cellHeight> <chunkBytes>
  */
-import { writeFileSync } from 'node:fs'
+import { renameSync, writeFileSync } from 'node:fs'
 import { type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import { TerminalScreen } from '../../src/terminal/screen'
 import { TerminalView } from '../../src/terminal/TerminalView'
 import { terminalThemeFor } from '../../src/terminal/theme'
-import { SCREEN } from './xvfb'
+import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 
 const [inputPath, resultFile, colsArg, rowsArg, cellWidthArg, cellHeightArg, chunkArg] =
   process.argv.slice(2)
-if (!inputPath || !resultFile)
+if (!inputPath || !resultFile || !chunkArg) {
   throw new Error(
-    'usage: throughput-gpuix.tsx <input.bin> <result.json> [cols rows cellWidth cellHeight chunkBytes]'
+    'usage: throughput-gpuix.js <input.bin> <result.json> <cols> <rows> <cellWidth> <cellHeight> <chunkBytes>'
   )
-const cols = Number(colsArg ?? 80)
-const rows = Number(rowsArg ?? 24)
-const fixedCell =
-  cellWidthArg && cellHeightArg
-    ? { width: Number(cellWidthArg), height: Number(cellHeightArg) }
-    : undefined
-const chunkBytes = Number(chunkArg ?? 65536)
+}
+const cols = Number(colsArg)
+const rows = Number(rowsArg)
+const cell = { width: Number(cellWidthArg), height: Number(cellHeightArg) }
+const chunkBytes = Number(chunkArg)
 const theme = terminalThemeFor('termul')
 const screen = new TerminalScreen({ cols, rows, theme, frameMs: 16 })
 const bytes = new Uint8Array(await Bun.file(inputPath).arrayBuffer())
 
+interface Timing {
+  start: number
+  parsed: number
+  finalRevision: number
+  frames: number
+}
+
 function App() {
   const renderer = useGpuixRequired()
   const marker = useRef<PublicInstance | null>(null)
-  const [metrics, setMetrics] = useState<{ width: number; height: number } | null>(null)
+  const [measured, setMeasured] = useState(false)
   const [revision, setRevision] = useState(0)
-  const timing = useRef<{ start: number; parsed: number; finalRevision: number } | null>(null)
-  const [done, setDone] = useState(false)
-  useEffect(() => screen.onFrame((frame) => setRevision(frame.revision)), [])
+  const [parsed, setParsed] = useState(false)
+  const timing = useRef<Timing>({ start: 0, parsed: 0, finalRevision: 0, frames: 0 })
+  useEffect(
+    () =>
+      screen.onFrame((frame) => {
+        timing.current.frames++
+        setRevision(frame.revision)
+      }),
+    []
+  )
   useEffect(() => {
-    if (!metrics) return
-    const start = performance.now()
-    timing.current = { start, parsed: 0, finalRevision: 0 }
+    if (!measured) return
+    timing.current.start = performance.now()
     for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
-      const chunk = bytes.subarray(offset, Math.min(bytes.length, offset + chunkBytes))
-      const last = offset + chunkBytes >= bytes.length
+      const end = Math.min(bytes.length, offset + chunkBytes)
       screen.write(
-        chunk,
-        last
+        bytes.subarray(offset, end),
+        end === bytes.length
           ? () => {
-              timing.current!.parsed = performance.now()
-              timing.current!.finalRevision = screen.frame().revision
-              setDone(true)
+              timing.current.parsed = performance.now()
+              timing.current.finalRevision = screen.frame().revision
+              setParsed(true)
             }
           : undefined
       )
     }
-  }, [metrics])
-  const finalRevision = timing.current?.finalRevision ?? Number.POSITIVE_INFINITY
+  }, [measured])
+  const settled = parsed && revision >= timing.current.finalRevision
   useEffect(() => {
-    if (!done || revision < finalRevision) return
-    const committed = performance.now()
+    if (!settled) return
     let cancelled = false
     const poll = () => {
       if (cancelled) return
@@ -70,50 +80,40 @@ function App() {
         setTimeout(poll, 1)
         return
       }
-      const painted = performance.now()
-      const t = timing.current!
+      const t = timing.current
       writeFileSync(
-        resultFile,
+        `${resultFile}.tmp`,
         JSON.stringify({
-          bytes: bytes.length,
-          chunkBytes,
           writeMs: t.parsed - t.start,
-          commitMs: committed - t.start,
-          paintMs: painted - t.start,
+          paintMs: performance.now() - t.start,
+          frames: t.frames,
           rows: screen.visibleText(),
-          bufferLength: screen.frame().bufferLength,
-          revision
+          bufferLength: screen.frame().bufferLength
         })
       )
-      setTimeout(() => process.exit(0), 50)
+      renameSync(`${resultFile}.tmp`, resultFile)
     }
     setTimeout(poll, 0)
     return () => {
       cancelled = true
     }
-  }, [done, revision, finalRevision, renderer])
+  }, [settled, renderer])
   return (
     <div
       style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: theme.background }}
     >
-      <div
-        style={{
-          display: 'flex',
-          width: cols * (fixedCell ?? metrics ?? { width: 8 }).width,
-          height: rows * (fixedCell ?? metrics ?? { height: 19 }).height
-        }}
-      >
+      <div style={{ display: 'flex', width: cols * cell.width, height: rows * cell.height }}>
         <TerminalView
           screen={screen}
           onInput={() => {}}
-          onMetrics={setMetrics}
-          cell={fixedCell}
+          onMetrics={() => setMeasured(true)}
+          cell={cell}
           focused
           cursorBlink={false}
           testId="bench-terminal"
         />
       </div>
-      {done && revision >= finalRevision && (
+      {settled && (
         <div ref={marker} style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1 }} />
       )}
     </div>
@@ -122,7 +122,7 @@ function App() {
 
 render(<App />, {
   title: 'terminal throughput',
-  width: SCREEN.width,
-  height: SCREEN.height,
+  width: WINDOW_WIDTH,
+  height: WINDOW_HEIGHT,
   focus: false
 })

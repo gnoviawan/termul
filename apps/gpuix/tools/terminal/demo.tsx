@@ -1,70 +1,81 @@
 /**
  * Live terminal demo: a GPUIX window with one TerminalView attached to a
- * shell spawned on a termul-server through Termul's `/terminal/ws` client.
- * Runs the fixture script after the prompt appears, then keeps mirroring the
- * visible rows to STATE_FILE on every frame so a driver (demo.ts) can assert
- * what typed input produced.
+ * shell spawned on the termul-server named by `TERMUL_SERVER_URL`, through
+ * Termul's `/terminal/ws` client. Runs the fixture steps after the prompt
+ * appears and mirrors the visible rows and the current step to the state
+ * file on every frame, so `demo.ts` can shoot and assert what it sees.
  *
- * TERMUL_SERVER_URL=http://127.0.0.1:8191 bun tools/terminal/demo.tsx [stateFile] [--no-fixture]
+ * TERMUL_DEMO_STATE_FILE=<state.json> bun dist/terminal/demo.js [--no-fixture]
  */
-import { writeFileSync } from 'node:fs'
+import { renameSync, writeFileSync } from 'node:fs'
 import { render } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
-import { terminalLog } from '../../src/terminal/log'
+import { readClientConfig } from '../../src/env/config'
+import { log } from '../../src/log'
 import { TerminalScreen } from '../../src/terminal/screen'
 import { TerminalView } from '../../src/terminal/TerminalView'
 import { terminalThemeFor } from '../../src/terminal/theme'
-import {
-  loadTerminalTransport,
-  spawnSession,
-  type TerminalSession
-} from '../../src/terminal/transport'
+import { loadTerminalApi, spawnSession, type TerminalSession } from '../../src/terminal/transport'
+import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import {
   FIXTURE_COLS,
   FIXTURE_ROWS,
   FIXTURE_STEPS,
   PROJECT_DIR,
   PROJECT_ID,
-  SERVER_ORIGIN,
-  SERVER_TOKEN,
   SHELL_SPAWN,
   seedFixtureDir
 } from './fixture'
-import { SCREEN } from './xvfb'
+
+export interface DemoState {
+  status: string
+  step: string | null
+  rows: string[]
+  cursor: { x: number; y: number }
+  cols: number
+  rowCount: number
+}
 
 const args = process.argv.slice(2)
-const stateFile = args.find((arg) => !arg.startsWith('--')) ?? '/tmp/gpuix-t1/demo-state.json'
+const stateFile = process.env.TERMUL_DEMO_STATE_FILE ?? ''
+if (!stateFile) throw new Error('TERMUL_DEMO_STATE_FILE is not set')
 const runFixture = !args.includes('--no-fixture')
+const config = readClientConfig()
 const theme = terminalThemeFor('termul')
 const screen = new TerminalScreen({ cols: FIXTURE_COLS, rows: FIXTURE_ROWS, theme })
 
+let status = 'connecting'
+let step: string | null = null
+
+function publish(): void {
+  const frame = screen.frame()
+  const state: DemoState = {
+    status,
+    step,
+    rows: screen.visibleText(),
+    cursor: { x: frame.cursor.x, y: frame.cursor.y },
+    cols: screen.cols,
+    rowCount: screen.rows
+  }
+  writeFileSync(`${stateFile}.tmp`, JSON.stringify(state))
+  renameSync(`${stateFile}.tmp`, stateFile)
+}
+
 function App() {
   const session = useRef<TerminalSession | null>(null)
-  const [status, setStatus] = useState('connecting')
+  const [label, setLabel] = useState(status)
   useEffect(() => {
     let live = true
-    const publish = () => {
-      if (!live) return
-      writeFileSync(
-        stateFile,
-        JSON.stringify({
-          status,
-          rows: screen.visibleText(),
-          cursor: screen.frame().cursor,
-          cols: screen.cols,
-          rows_: screen.rows
-        })
-      )
+    const setStatus = (next: string) => {
+      status = next
+      setLabel(next)
+      publish()
     }
     const offFrame = screen.onFrame(publish)
     ;(async () => {
       seedFixtureDir()
-      const transport = await loadTerminalTransport({
-        origin: SERVER_ORIGIN,
-        token: SERVER_TOKEN,
-        windowSize: SCREEN
-      })
-      const spawned = await spawnSession(transport, {
+      const api = await loadTerminalApi(config)
+      const spawned = await spawnSession(api, {
         ...SHELL_SPAWN,
         projectId: PROJECT_ID,
         cwd: PROJECT_DIR,
@@ -82,16 +93,18 @@ function App() {
       setStatus('ready')
       if (runFixture) {
         await Bun.sleep(500)
-        for (const step of FIXTURE_STEPS) {
-          spawned.write(step.input.endsWith('\r') ? step.input : `${step.input}\r`)
-          await Bun.sleep(step.waitMs)
+        for (const next of FIXTURE_STEPS) {
+          step = next.name
+          spawned.write(next.input.endsWith('\r') ? next.input : `${next.input}\r`)
+          await Bun.sleep(next.waitMs)
+          publish()
         }
       }
+      step = null
       await Bun.sleep(300)
       setStatus('idle')
-      publish()
     })().catch((error) => {
-      terminalLog('error', 'demo.failed', { error: String(error) })
+      log.error('terminal', `demo.failed ${JSON.stringify({ error: String(error) })}`)
       setStatus(`error: ${String(error)}`)
     })
     return () => {
@@ -100,18 +113,6 @@ function App() {
       session.current?.dispose()
     }
   }, [])
-  useEffect(() => {
-    writeFileSync(
-      stateFile,
-      JSON.stringify({
-        status,
-        rows: screen.visibleText(),
-        cursor: screen.frame().cursor,
-        cols: screen.cols,
-        rows_: screen.rows
-      })
-    )
-  }, [status])
   return (
     <div
       style={{
@@ -128,13 +129,12 @@ function App() {
           alignItems: 'center',
           height: 28,
           paddingLeft: 12,
-          backgroundColor: '#111214'
+          backgroundColor: theme.background
         }}
       >
-        <text
-          testId="demo-status"
-          style={{ color: '#9a9b9d', fontSize: 12 }}
-        >{`termul gpuix terminal · ${SERVER_ORIGIN} · ${status}`}</text>
+        <text testId="demo-status" style={{ color: theme.brightBlack, fontSize: 12 }}>
+          {`termul gpuix terminal · ${config.serverUrl.origin} · ${label}`}
+        </text>
       </div>
       <TerminalView
         screen={screen}
@@ -150,7 +150,7 @@ function App() {
 
 render(<App />, {
   title: 'Termul terminal (GPUIX)',
-  width: SCREEN.width,
-  height: SCREEN.height,
+  width: WINDOW_WIDTH,
+  height: WINDOW_HEIGHT,
   focus: process.env.GPUIX_BACKGROUND !== '1'
 })

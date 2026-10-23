@@ -24,7 +24,16 @@ export type KeyAction =
   | { type: 'page'; direction: -1 | 1 }
   | { type: 'copy' }
   | { type: 'paste' }
+  | { type: 'select-all' }
   | { type: 'none' }
+
+export interface KeyContext {
+  /** DECCKM: cursor keys send `ESC O x` instead of `ESC [ x`. */
+  applicationCursor: boolean
+  hasSelection: boolean
+  /** macOS uses Cmd as the clipboard modifier, everything else Ctrl. */
+  mac: boolean
+}
 
 const ESC = '\x1b'
 
@@ -78,17 +87,30 @@ const CURSOR_KEYS: Record<string, string> = {
   end: 'F'
 }
 
-export function encodeKey(event: KeyPress, applicationCursor: boolean): KeyAction {
+/**
+ * The app's clipboard keys (`handleTerminalClipboardKey` in
+ * src/renderer/components/terminal/clipboard.ts): with the platform modifier,
+ * C copies when there is a selection and otherwise reaches the shell as
+ * SIGINT, V pastes, A selects all.
+ */
+function clipboardKey(key: string, m: KeyModifiers, context: KeyContext): KeyAction | null {
+  if (!(context.mac ? m.cmd : m.ctrl)) return null
+  if (key === 'c') return context.hasSelection ? { type: 'copy' } : null
+  if (key === 'v') return { type: 'paste' }
+  if (key === 'a') return { type: 'select-all' }
+  return null
+}
+
+export function encodeKey(event: KeyPress, context: KeyContext): KeyAction {
   const key = event.key ?? ''
   const m = event.modifiers ?? {}
   const modifiers = (m.shift ? 1 : 0) | (m.alt ? 2 : 0) | (m.ctrl ? 4 : 0) | (m.cmd ? 8 : 0)
   const mod = String(modifiers + 1)
   const send = (data: string): KeyAction => ({ type: 'send', data })
+  const applicationCursor = context.applicationCursor
 
-  if (m.ctrl && m.shift && !m.alt) {
-    if (key === 'c') return { type: 'copy' }
-    if (key === 'v') return { type: 'paste' }
-  }
+  const clipboard = clipboardKey(key, m, context)
+  if (clipboard) return clipboard
   if (key === 'insert' && m.shift && !m.ctrl) return { type: 'paste' }
   if (key === 'insert' && m.ctrl && !m.shift) return { type: 'copy' }
 

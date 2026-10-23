@@ -8,6 +8,7 @@
 
 import { type EventPayload, type KeyEvent, type PublicInstance, useGpuix } from '@gpuix/react'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { log } from '../log'
 import { copyText, pasteText } from './clipboard'
 import {
   type CellMetrics,
@@ -19,7 +20,6 @@ import {
   TERMINAL_LINE_HEIGHT
 } from './fonts'
 import { encodeKey, encodePaste } from './keys'
-import { terminalLog } from './log'
 import type { CellPoint, ScreenFrame, ScreenRow, TerminalScreen } from './screen'
 
 export type CursorStyle = 'block' | 'bar' | 'underline'
@@ -288,7 +288,7 @@ export function TerminalView(props: TerminalViewProps) {
     if (cols === screen.cols && rows === screen.rows) return
     screen.resize(cols, rows)
     onResize?.(cols, rows)
-    terminalLog('info', 'terminal.resize', { cols, rows })
+    log.info('terminal', `terminal.resize ${JSON.stringify({ cols, rows })}`)
   }, [cell, padding, screen, onResize])
 
   useEffect(() => {
@@ -321,12 +321,18 @@ export function TerminalView(props: TerminalViewProps) {
   }
 
   const onKeyDown = (event: KeyEvent) => {
-    const action = encodeKey(event, screen.modes.applicationCursorKeysMode)
+    const action = encodeKey(event, {
+      applicationCursor: screen.modes.applicationCursorKeysMode,
+      hasSelection: screen.selectedText() !== '',
+      mac: process.platform === 'darwin'
+    })
     if (action.type === 'none') return
     event.preventDefault()
     if (action.type === 'send') {
       screen.setSelection(null)
       send(action.data)
+    } else if (action.type === 'select-all') {
+      screen.selectAll()
     } else if (action.type === 'page') {
       screen.scrollLines(action.direction * screen.rows)
     } else if (action.type === 'copy') {
@@ -340,12 +346,19 @@ export function TerminalView(props: TerminalViewProps) {
   }
 
   const onScroll = (event: EventPayload) => {
-    if (!cell || screen.terminal.buffer.active.type === 'alternate') return
+    if (!cell) return
     const pixels = event.precise ? (event.deltaY ?? 0) : (event.deltaY ?? 0) * cell.height
     wheelRemainder.current += -pixels / cell.height
     const lines = Math.trunc(wheelRemainder.current)
     if (!lines) return
     wheelRemainder.current -= lines
+    if (screen.terminal.buffer.active.type === 'alternate') {
+      // xterm.js turns the wheel into cursor keys on the alternate screen, so
+      // less, vim and man scroll their own view.
+      const prefix = screen.modes.applicationCursorKeysMode ? '\x1bO' : '\x1b['
+      onInput(`${prefix}${lines < 0 ? 'A' : 'B'}`.repeat(Math.abs(lines)))
+      return
+    }
     screen.scrollLines(lines)
   }
 
@@ -388,6 +401,7 @@ export function TerminalView(props: TerminalViewProps) {
   const showCursor = frame.cursor.visible && (!cursorBlink || !focused || blinkOn)
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: GPUIX has no terminal element; a <textarea> would take the keys meant for the PTY
     <div
       ref={host}
       testId={testId}
@@ -425,13 +439,16 @@ export function TerminalView(props: TerminalViewProps) {
                 lineHeight,
                 fixedCell
               )
-              terminalLog('info', 'terminal.geometry', {
-                advance: (event.width ?? 0) / PROBE_CHARS,
-                charHeight: event.height ?? 0,
-                cellWidth: next.cell.width,
-                cellHeight: next.cell.height,
-                glyphSize: next.glyphSize
-              })
+              log.info(
+                'terminal',
+                `terminal.geometry ${JSON.stringify({
+                  advance: (event.width ?? 0) / PROBE_CHARS,
+                  charHeight: event.height ?? 0,
+                  cellWidth: next.cell.width,
+                  cellHeight: next.cell.height,
+                  glyphSize: next.glyphSize
+                })}`
+              )
               setGeometry(next)
               onMetrics?.(next.cell)
             }}

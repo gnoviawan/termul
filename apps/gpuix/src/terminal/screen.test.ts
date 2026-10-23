@@ -65,15 +65,26 @@ describe('TerminalScreen', () => {
     screen.setSelection({ anchor: { row: 0, col: 3 }, head: { row: 1, col: 2 } })
     expect(screen.selectedText()).toBe('3456')
   })
+
+  test('select all spans scrollback and the screen', async () => {
+    const screen = new TerminalScreen({ cols: 5, rows: 2, theme: terminalThemeFor('termul') })
+    await write(screen, 'one\r\ntwo\r\nthree')
+    screen.selectAll()
+    expect(screen.selectedText()).toBe('one\ntwo\nthree')
+  })
 })
 
 describe('encodeKey', () => {
+  const linux = { applicationCursor: false, hasSelection: false, mac: false }
   const send = (key: string, modifiers = {}, keyChar?: string) =>
-    encodeKey({ key, keyChar, modifiers }, false)
+    encodeKey({ key, keyChar, modifiers }, linux)
   test('xterm key table for a non-mac platform', () => {
     expect(send('enter')).toEqual({ type: 'send', data: '\r' })
     expect(send('up')).toEqual({ type: 'send', data: '\x1b[A' })
-    expect(encodeKey({ key: 'up' }, true)).toEqual({ type: 'send', data: '\x1bOA' })
+    expect(encodeKey({ key: 'up' }, { ...linux, applicationCursor: true })).toEqual({
+      type: 'send',
+      data: '\x1bOA'
+    })
     expect(send('up', { shift: true })).toEqual({ type: 'send', data: '\x1b[1;2A' })
     expect(send('c', { ctrl: true })).toEqual({ type: 'send', data: '\x03' })
     expect(send('x', { alt: true })).toEqual({ type: 'send', data: '\x1bx' })
@@ -83,8 +94,19 @@ describe('encodeKey', () => {
     expect(send('tab', { shift: true })).toEqual({ type: 'send', data: '\x1b[Z' })
     expect(send('a', { shift: true }, 'A')).toEqual({ type: 'send', data: 'A' })
     expect(send('pageup', { shift: true })).toEqual({ type: 'page', direction: -1 })
-    expect(send('v', { ctrl: true, shift: true })).toEqual({ type: 'paste' })
-    expect(send('c', { ctrl: true, shift: true })).toEqual({ type: 'copy' })
+  })
+  test("the app's clipboard keys: Ctrl+C copies only with a selection", () => {
+    const selected = { ...linux, hasSelection: true }
+    expect(encodeKey({ key: 'c', modifiers: { ctrl: true } }, selected)).toEqual({ type: 'copy' })
+    expect(send('c', { ctrl: true })).toEqual({ type: 'send', data: '\x03' })
+    expect(send('v', { ctrl: true })).toEqual({ type: 'paste' })
+    expect(send('a', { ctrl: true })).toEqual({ type: 'select-all' })
+    const mac = { ...linux, mac: true, hasSelection: true }
+    expect(encodeKey({ key: 'c', modifiers: { cmd: true } }, mac)).toEqual({ type: 'copy' })
+    expect(encodeKey({ key: 'c', modifiers: { ctrl: true } }, mac)).toEqual({
+      type: 'send',
+      data: '\x03'
+    })
   })
   test('bracketed paste wraps and strips escapes', () => {
     expect(encodePaste('a\nb\x1b', true)).toBe('\x1b[200~a\rb\x1b[201~')
