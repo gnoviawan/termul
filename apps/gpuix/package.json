@@ -1,9 +1,21 @@
 {
   "name": "@termul/gpuix",
   "private": true,
+  "version": "0.0.0",
   "type": "module",
+  "description": "Termul desktop client rendered natively with GPUIX (React on Zed's GPUI)",
+  "imports": {
+    "#app/boot": "./src/boot.tsx"
+  },
   "scripts": {
-    "terminal:demo": "bun tools/terminal/demo.tsx",
+    "build": "bun build.ts",
+    "dev": "bun tools/dev.ts",
+    "start": "bun build.ts && bun dist/main.js",
+    "check:react": "bun tools/check-react.ts",
+    "parity": "bun tools/parity/index.ts",
+    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json",
+    "test:terminal": "bun test src/terminal",
+    "terminal:demo": "bun tools/terminal/demo.ts",
     "terminal:parity": "bun tools/terminal/parity.ts",
     "terminal:throughput": "bun tools/terminal/throughput.ts"
   },
@@ -11,12 +23,16 @@
     "@gpuix/native": "0.11.0",
     "@gpuix/react": "0.11.0",
     "@xterm/headless": "6.1.0-beta.287",
-    "react": "19.3.1"
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
-    "@types/react": "19.3.0",
+    "@types/pngjs": "6.0.5",
+    "@types/react": "19.2.14",
+    "pixelmatch": "7.1.0",
     "playwright": "1.63.0",
+    "pngjs": "7.0.0",
     "typescript": "5.9.3",
     "wawoff2": "2.0.1"
   }
