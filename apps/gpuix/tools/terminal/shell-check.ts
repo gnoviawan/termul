@@ -194,7 +194,8 @@ try {
       ).text
         .trim()
         .slice(4)
-      const screenBefore = (await term())!.rows.map((r) => r.text)
+      await Bun.sleep(700)
+      const screenBefore = (await term())!.rows.map((r) => r.text.trimEnd())
       const shellParent = readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[3]
       const parentCmd = readFileSync(`/proc/${shellParent}/cmdline`, 'utf8').split('\0')
       const ownedByTestServer =
@@ -217,7 +218,7 @@ try {
       )
       const backMs = Math.round(performance.now() - alphaClick)
       const treeAt = performance.now()
-      const screenAfter = (await term())!.rows.map((r) => r.text)
+      const screenAfter = (await term())!.rows.map((r) => r.text.trimEnd())
       const oneTreeReadMs = Math.round(performance.now() - treeAt)
       await grab(path.join(OUT, 'after-switch.png'))
       await type('echo PID=$$')
@@ -240,6 +241,11 @@ try {
           aliveWhileAway: aliveAway,
           rowsPaintedWhileAway: hiddenRows,
           screenIdentical: screenAfter.join('\n') === screenBefore.join('\n'),
+          rowsChanged: screenAfter
+            .map((row, i) =>
+              row === screenBefore[i] ? null : { i, before: screenBefore[i], after: row }
+            )
+            .filter(Boolean),
           pids,
           switchToBetaPaintedMs: betaMs,
           switchBackTerminalPaintedMs: backMs,
@@ -305,6 +311,35 @@ try {
         expected: JSON.stringify(expected)
       })
       await grab(path.join(OUT, 'final.png'))
+
+      // Last: the file opens in an editor tab, whose BlockNote view has no GPUIX override yet.
+      await type('clear')
+      await type('echo ./README.md')
+      const linkRow = await until('README.md row', async () =>
+        rowMatching(await term(), /^\.\/README\.md$/)
+      )
+      const aboveGrid = async () =>
+        (await app.getByText('README.md').all()).filter(
+          (n) => (n.bounds?.y ?? 1e9) < linkRow.y - linkRow.height
+        ).length
+      const tabsBefore = await aboveGrid()
+      await app.mouse.click(
+        { x: linkRow.x + 4.5 * cw, y: linkRow.y + linkRow.height / 2 },
+        { modifiers: 'ctrl' }
+      )
+      const tabsAfter = await until(
+        'a README.md tab',
+        async () => {
+          const n = await aboveGrid()
+          return n > tabsBefore ? n : null
+        },
+        10_000
+      ).catch(() => tabsBefore)
+      await grab(path.join(OUT, 'link-click.png'))
+      check('ctrl-click on a file path in the output opens it in a tab', tabsAfter > tabsBefore, {
+        tabsBefore,
+        tabsAfter
+      })
     }
   )
 } catch (error) {

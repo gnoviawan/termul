@@ -518,8 +518,8 @@ export function TerminalView(props: TerminalViewProps) {
     if (host.current) renderer?.focusElement?.(host.current.id)
     const button = MOUSE_BUTTONS[event.button ?? 0]
     pressed.current = button ?? null
-    const linkModifier =
-      process.platform === 'darwin' ? event.modifiers?.cmd : event.modifiers?.ctrl
+    // The DOM view opens a link on Ctrl or Meta click on every platform.
+    const linkModifier = event.modifiers?.ctrl || event.modifiers?.cmd
     if (event.button === 0 && linkModifier && onLinkClick) {
       const at = cellUnder(event)
       if (at && onLinkClick({ row: screen.rowAt(at.row), col: at.col }, event)) return
