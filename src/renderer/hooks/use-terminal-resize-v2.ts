@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef } from 'react'
 const FIT_DEBOUNCE_MS = 8
 
 /** Debounce for PTY resize IPC — caps at ~4 calls/sec */
-const PTY_RESIZE_DEBOUNCE_MS = 256
+export const PTY_RESIZE_DEBOUNCE_MS = 256
 
 export interface UseTerminalResizeV2Options {
   /** Called with new cols/rows after a confirmed dimension change */
