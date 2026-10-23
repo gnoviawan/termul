@@ -36,7 +36,10 @@ const MOTIONS: Readonly<Record<string, Motion>> = {
   end: 'lineEnd'
 }
 
-const run = (command: CommandName): KeyIntent => ({ kind: 'edit', command: { kind: 'run', command } })
+const run = (command: CommandName): KeyIntent => ({
+  kind: 'edit',
+  command: { kind: 'run', command }
+})
 const moveBy = (motion: Motion, extend: boolean): KeyIntent => ({
   kind: 'edit',
   command: { kind: 'move', motion, extend }
@@ -114,7 +117,7 @@ export function keyIntent(input: KeyInput): KeyIntent | null {
   if (ctrl || cmd) return null
 
   const char = key === 'space' ? ' ' : input.keyChar
-  if (char && char.length > 0 && !/[\u0000-\u001f\u007f]/.test(char)) {
+  if (char && [...char].every((c) => (c.codePointAt(0) ?? 0) >= 0x20 && c !== '\u007f')) {
     return { kind: 'edit', command: { kind: 'insert', text: char } }
   }
   return null

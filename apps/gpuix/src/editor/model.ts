@@ -33,7 +33,6 @@ import {
   undo
 } from '@codemirror/commands'
 import { indentUnit } from '@codemirror/language'
-import type { Command } from '@codemirror/view'
 import {
   CharCategory,
   countColumn,
@@ -47,6 +46,7 @@ import {
   StateEffect,
   Transaction
 } from '@codemirror/state'
+import type { Command } from '@codemirror/view'
 
 export const TAB_SIZE = 4
 
@@ -122,7 +122,10 @@ function baseExtensions(extensions: readonly Extension[]): Extension[] {
 }
 
 export function createModel(doc: string, extensions: readonly Extension[] = []): EditorModel {
-  return { state: EditorState.create({ doc, extensions: baseExtensions(extensions) }), goalColumn: null }
+  return {
+    state: EditorState.create({ doc, extensions: baseExtensions(extensions) }),
+    goalColumn: null
+  }
 }
 
 /** Swap the configuration (language, read-only); the document, selection and history stay. */
@@ -218,7 +221,10 @@ function move(
   const collapse = !extend && !range.empty
   switch (motion) {
     case 'charLeft':
-      return { head: collapse ? range.from : moveByChar(state, range.head, false), goalColumn: null }
+      return {
+        head: collapse ? range.from : moveByChar(state, range.head, false),
+        goalColumn: null
+      }
     case 'charRight':
       return { head: collapse ? range.to : moveByChar(state, range.head, true), goalColumn: null }
     case 'groupLeft':
@@ -249,12 +255,20 @@ function move(
   }
 }
 
-function withSelection(model: EditorModel, selection: EditorSelection, goalColumn: number | null): EditorModel {
+function withSelection(
+  model: EditorModel,
+  selection: EditorSelection,
+  goalColumn: number | null
+): EditorModel {
   const tr = model.state.update({ selection, scrollIntoView: true, userEvent: 'select' })
   return { state: tr.state, goalColumn }
 }
 
-export function execute(model: EditorModel, command: EditorCommand, context: ExecuteContext): EditorModel {
+export function execute(
+  model: EditorModel,
+  command: EditorCommand,
+  context: ExecuteContext
+): EditorModel {
   const { state } = model
   switch (command.kind) {
     case 'move': {

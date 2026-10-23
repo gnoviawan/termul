@@ -8,6 +8,7 @@
  * edits it. Mermaid fences render as their source, with a note.
  */
 
+import type { KeyEvent } from '@gpuix/react'
 import { useCallback, useEffect, useMemo } from 'react'
 import { FrontmatterProperties } from '@/components/editor/FrontmatterProperties'
 import {
@@ -15,7 +16,11 @@ import {
   unregisterEditorContentFlusher
 } from '@/lib/editor-content-flush'
 import { logFrontendError } from '@/lib/log-api'
-import { composeFullMarkdown, type FrontmatterMap, splitFrontmatter } from '@/lib/markdown-frontmatter'
+import {
+  composeFullMarkdown,
+  type FrontmatterMap,
+  splitFrontmatter
+} from '@/lib/markdown-frontmatter'
 import { useColorTheme } from '@/stores/app-settings-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { transcriptThemes } from '../../../chat/theme'
@@ -83,12 +88,30 @@ export function MarkdownEditor({
   }, [themeId])
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: GPUIX has no <button>; the scroll container is the click target
     <div
       testId="markdown-preview"
-      style={{ ...tw('h-full w-full bg-background'), overflow: 'scroll', scrollbarColor: '#ffffff22' }}
+      style={{
+        ...tw('h-full w-full bg-background'),
+        overflow: 'scroll',
+        scrollbarColor: '#ffffff22'
+      }}
+      role="button"
+      aria-label="Edit source"
+      tabIndex={0}
       onClick={editSource}
+      onKeyDown={(event: KeyEvent) => {
+        if (event.key === 'enter' || event.key === 'space') editSource()
+      }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: 80 }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          paddingBottom: 80
+        }}
+      >
         {parsed.hasFrontmatter ? (
           <div style={{ width: '100%', opacity: readOnly ? 0.6 : 1 }}>
             <FrontmatterProperties data={parsed.data} onChange={onFrontmatterChange} />

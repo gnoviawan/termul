@@ -30,10 +30,9 @@ import { useColorTheme } from '@/stores/app-settings-store'
 import { transcriptThemes } from '../chat/theme'
 import { tw } from '../style/tw'
 import { copyText, pasteText } from '../terminal/clipboard'
-import { CHUNK_LINES, chunksBetween, chunkStarts } from './chunks'
+import { CHUNK_LINES, chunkStarts, chunksBetween } from './chunks'
 import { type KeyIntent, keyIntent } from './keymap'
 import { loadLanguage, nativeGrammar } from './languages'
-import { CRASH_SUFFIX, markKey, perfSnapshot, recordRender, testHooksEnabled } from './test-hooks'
 import {
   caretPoint,
   contentHeight,
@@ -68,6 +67,7 @@ import {
   replaceDocument,
   selectedText
 } from './model'
+import { CRASH_SUFFIX, markKey, perfSnapshot, recordRender, testHooksEnabled } from './test-hooks'
 
 const LOG_SOURCE = 'gpuix-editor'
 const CHANGE_DEBOUNCE_MS = 300
@@ -199,7 +199,11 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
       maxTop: Math.max(0, contentHeight(doc.lines) - vp.height),
       maxLeft: Math.max(
         0,
-        PAD_LEFT + widestRef.current.columns * vp.charWidth + PAD_RIGHT + vp.charWidth - contentWidth
+        PAD_LEFT +
+          widestRef.current.columns * vp.charWidth +
+          PAD_RIGHT +
+          vp.charWidth -
+          contentWidth
       )
     }
   }, [gutter])
@@ -376,7 +380,11 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
 
   const onKeyDown = useCallback(
     (event: KeyEvent) => {
-      const intent = keyIntent({ key: event.key ?? '', keyChar: event.keyChar, modifiers: event.modifiers })
+      const intent = keyIntent({
+        key: event.key ?? '',
+        keyChar: event.keyChar,
+        modifiers: event.modifiers
+      })
       if (!intent) return
       markKey()
       event.preventDefault()
@@ -396,11 +404,14 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
     [clipboard, flush, run]
   )
 
-  const pointPos = useCallback((event: EventPayload) => {
-    const x = (event.x ?? 0) - originRef.current.x - gutter
-    const y = (event.y ?? 0) - originRef.current.y
-    return posAtPoint(modelRef.current!.state, x, y, viewportRef.current)
-  }, [gutter])
+  const pointPos = useCallback(
+    (event: EventPayload) => {
+      const x = (event.x ?? 0) - originRef.current.x - gutter
+      const y = (event.y ?? 0) - originRef.current.y
+      return posAtPoint(modelRef.current!.state, x, y, viewportRef.current)
+    },
+    [gutter]
+  )
 
   const onMouseDown = useCallback(
     (event: EventPayload) => {
@@ -411,7 +422,10 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
       const { state: current } = modelRef.current!
       if (clicks >= 3) {
         const line = current.doc.lineAt(pos)
-        run({ kind: 'select', anchor: line.from, head: Math.min(current.doc.length, line.to + 1) }, false)
+        run(
+          { kind: 'select', anchor: line.from, head: Math.min(current.doc.length, line.to + 1) },
+          false
+        )
       } else if (clicks === 2) {
         const word = current.wordAt(pos)
         if (word) run({ kind: 'select', anchor: word.from, head: word.to }, false)
@@ -477,25 +491,22 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
       metrics: { ...base.metrics, codeTextSize: FONT_SIZE, codeLineHeight: LINE_HEIGHT }
     }
   }, [themeId])
-  const colors = useMemo(
-    () => ({
-      background: tw('bg-background').backgroundColor as string,
-      card: tw('bg-card').backgroundColor as string,
-      border: tw('border-border').borderColor as string,
-      muted: tw('text-muted-foreground').color as string,
-      foreground: tw('text-foreground').color as string,
-      activeLine: tw('bg-foreground/[0.03]').backgroundColor as string,
-      selection: tw('bg-foreground/[0.14]').backgroundColor as string,
-      caret: tw('bg-primary').backgroundColor as string
-    }),
-    // biome-ignore lint/correctness/useExhaustiveDependencies: tw() reads the applied theme's tokens
-    [themeId]
-  )
+  const colors = {
+    background: tw('bg-background').backgroundColor as string,
+    card: tw('bg-card').backgroundColor as string,
+    border: tw('border-border').borderColor as string,
+    muted: tw('text-muted-foreground').color as string,
+    foreground: tw('text-foreground').color as string,
+    activeLine: tw('bg-foreground/[0.03]').backgroundColor as string,
+    selection: tw('bg-foreground/[0.14]').backgroundColor as string,
+    caret: tw('bg-primary').backgroundColor as string
+  }
 
   const vp = viewport
   const contentWidth = Math.max(0, vp.width - gutter)
   const [first, last] = visibleLines(lines, vp)
-  const starts = useMemo(() => chunkStarts(state), [state])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chunk starts depend on the text only, not the selection
+  const starts = useMemo(() => chunkStarts(state), [state.doc])
   const chunks = chunksBetween(starts, lines, first, last)
   const chunkTexts = chunks.map((chunk) =>
     state
@@ -559,7 +570,7 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
   }
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: the editor surface; GPUIX has no textbox role with a custom painter
+    // biome-ignore lint/a11y/useSemanticElements: a painted editor surface; GPUIX's native textarea cannot host it (see the file comment)
     <div
       ref={(instance: PublicInstance | null) => {
         rootIdRef.current = instance?.id ?? null
@@ -668,7 +679,9 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
           />
         ) : null}
       </div>
-      <div style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'hidden' }}>
+      <div
+        style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'hidden' }}
+      >
         <text
           onLayout={onMeasure}
           style={{ fontFamily: MONO_FAMILY, fontSize: FONT_SIZE, whiteSpace: 'nowrap' }}
@@ -677,7 +690,9 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
         </text>
       </div>
       {testHooksEnabled() ? (
-        <div style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'hidden' }}>
+        <div
+          style={{ position: 'absolute', left: 0, top: 0, width: 0, height: 0, overflow: 'hidden' }}
+        >
           <text testId={testId ? `${testId}-state` : 'code-view-state'}>
             {JSON.stringify({
               caret: caretLineCol(state),
@@ -689,7 +704,10 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
               painted: chunkTexts
                 .join('\n')
                 .split('\n')
-                .slice(first - (chunks[0]?.startLine ?? first), last - (chunks[0]?.startLine ?? first) + 1),
+                .slice(
+                  first - (chunks[0]?.startLine ?? first),
+                  last - (chunks[0]?.startLine ?? first) + 1
+                ),
               charWidth: vp.charWidth,
               chunkLines: CHUNK_LINES,
               perf: perfSnapshot(renderer, lines >= 1000)

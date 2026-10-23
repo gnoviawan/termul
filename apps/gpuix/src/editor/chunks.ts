@@ -10,8 +10,9 @@
  * shows covering the line start.
  */
 
-import { syntaxTree } from '@codemirror/language'
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language'
 import type { EditorState } from '@codemirror/state'
+import type { Tree } from '@lezer/common'
 
 export const CHUNK_LINES = 64
 const MAX_SHIFT = CHUNK_LINES * 4
@@ -25,17 +26,27 @@ export interface Chunk {
   readonly endLine: number
 }
 
-function insideMultilineToken(state: EditorState, pos: number): boolean {
-  for (let node: ReturnType<ReturnType<typeof syntaxTree>['resolveInner']> | null = syntaxTree(
-    state
-  ).resolveInner(pos, 1); node; node = node.parent) {
+/** Parse time one call may spend; past it the partial tree decides, and the next call continues. */
+const PARSE_BUDGET_MS = 50
+
+function insideMultilineToken(tree: Tree, pos: number): boolean {
+  for (
+    let node: ReturnType<Tree['resolveInner']> | null = tree.resolveInner(pos, 1);
+    node;
+    node = node.parent
+  ) {
     if (node.from < pos && node.to > pos && MULTILINE_TOKEN.test(node.name)) return true
   }
   return false
 }
 
-/** Every chunk start line, ascending, beginning with 1. */
+/**
+ * Every chunk start line, ascending, beginning with 1. `syntaxTree(state)`
+ * keeps the tree the state was created with, so the parse is advanced here
+ * (`ensureSyntaxTree`), within a budget.
+ */
 export function chunkStarts(state: EditorState): number[] {
+  const tree = ensureSyntaxTree(state, state.doc.length, PARSE_BUDGET_MS) ?? syntaxTree(state)
   const starts = [1]
   const lines = state.doc.lines
   let next = 1 + CHUNK_LINES
@@ -44,7 +55,7 @@ export function chunkStarts(state: EditorState): number[] {
     while (
       line <= lines &&
       line - next < MAX_SHIFT &&
-      insideMultilineToken(state, state.doc.line(line).from)
+      insideMultilineToken(tree, state.doc.line(line).from)
     ) {
       line++
     }
@@ -56,7 +67,12 @@ export function chunkStarts(state: EditorState): number[] {
 }
 
 /** The chunks that intersect lines `first`..`last`. */
-export function chunksBetween(starts: readonly number[], lines: number, first: number, last: number): Chunk[] {
+export function chunksBetween(
+  starts: readonly number[],
+  lines: number,
+  first: number,
+  last: number
+): Chunk[] {
   const chunks: Chunk[] = []
   for (let i = 0; i < starts.length; i++) {
     const startLine = starts[i]!

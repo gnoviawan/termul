@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { javascript } from '@codemirror/lang-javascript'
-import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
-import { chunksBetween, chunkStarts } from '../chunks'
+import { chunkStarts, chunksBetween } from '../chunks'
 import { keyIntent } from '../keymap'
 import {
   caretLineCol,
@@ -18,8 +17,17 @@ import {
 const ctx = { pageLines: 10 }
 const run = (model: EditorModel, ...commands: EditorCommand[]) =>
   commands.reduce((m, c) => execute(m, c, ctx), model)
-const key = (model: EditorModel, k: string, mods: Record<string, boolean> = {}, keyChar?: string) => {
-  const intent = keyIntent({ key: k, keyChar: keyChar ?? (k.length === 1 ? k : undefined), modifiers: mods })
+const key = (
+  model: EditorModel,
+  k: string,
+  mods: Record<string, boolean> = {},
+  keyChar?: string
+) => {
+  const intent = keyIntent({
+    key: k,
+    keyChar: keyChar ?? (k.length === 1 ? k : undefined),
+    modifiers: mods
+  })
   if (intent?.kind !== 'edit') throw new Error(`${k} is not an edit: ${JSON.stringify(intent)}`)
   return execute(model, intent.command, ctx)
 }
@@ -122,7 +130,6 @@ describe('chunks', () => {
     for (let i = 63; i < 70; i++) lines[i] = ` comment ${i}`
     lines[70] = '*/'
     const m = createModel(lines.join('\n'), [javascript()])
-    ensureSyntaxTree(m.state, m.state.doc.length, 5000)
     const starts = chunkStarts(m.state)
     expect(starts[0]).toBe(1)
     expect(starts[1]).toBe(72)

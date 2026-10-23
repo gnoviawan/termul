@@ -17,6 +17,9 @@ export const SIZE = { width: 1280, height: 800 } as const
 export const PROJECT = { id: 'editor-alpha', name: 'alpha' } as const
 export const READY_TEXT = 'What should we do in alpha?'
 
+/** The seeded file holds template literals; `${` here is file content, not interpolation. */
+const DOLLAR = '$'
+
 export const APP_TS = [
   "import { createServer } from 'node:http'",
   '',
@@ -24,7 +27,7 @@ export const APP_TS = [
   '',
   '/** Answers every request with a greeting and the request path. */',
   'export function handler(path: string): string {',
-  '  return `hello from ${path}`',
+  `  return \`hello from ${DOLLAR}{path}\``,
   '}',
   '',
   'const server = createServer((req, res) => {',
@@ -33,7 +36,7 @@ export const APP_TS = [
   '})',
   '',
   'server.listen(PORT, () => {',
-  '  console.log(`listening on ${PORT}`)',
+  `  console.log(\`listening on ${DOLLAR}{PORT}\`)`,
   '})',
   ''
 ].join('\n')
@@ -135,4 +138,3 @@ export async function gpuixOpenFile(app: GpuixApp, segments: readonly string[]):
     await app.mouse.click({ x: row.x + row.width / 2, y: row.y + row.height / 2 })
   }
 }
-

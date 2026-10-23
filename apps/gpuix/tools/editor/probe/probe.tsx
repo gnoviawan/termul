@@ -235,10 +235,23 @@ function RowsProbe() {
     rows.push(
       <div
         key="window"
-        style={{ position: 'absolute', top: (first - 1) * LH - top, left: 0, display: 'flex', flexDirection: 'row' }}
+        style={{
+          position: 'absolute',
+          top: (first - 1) * LH - top,
+          left: 0,
+          display: 'flex',
+          flexDirection: 'row'
+        }}
       >
-        <code code={numbers.join('\n')} style={{ width: 48, fontSize: 13, lineHeight: LH, color: '#666' }} />
-        <code code={state.sliceDoc(from, to)} language="typescript" style={{ width: 900, fontSize: 13, lineHeight: LH }} />
+        <code
+          code={numbers.join('\n')}
+          style={{ width: 48, fontSize: 13, lineHeight: LH, color: '#666' }}
+        />
+        <code
+          code={state.sliceDoc(from, to)}
+          language="typescript"
+          style={{ width: 900, fontSize: 13, lineHeight: LH }}
+        />
       </div>
     )
   }
@@ -256,12 +269,16 @@ function RowsProbe() {
         }}
       >
         <text style={{ width: 48, color: '#666', fontSize: 13, lineHeight: LH }}>{String(n)}</text>
-        {(PLAIN ? [{ text: state.doc.line(n).text, color: '#ddd' }] : lineRuns(state, n)).map((run, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: runs of one line are positional
-          <text key={i} style={{ color: run.color, fontSize: 13, lineHeight: LH, whiteSpace: 'nowrap' }}>
-            {run.text}
-          </text>
-        ))}
+        {(PLAIN ? [{ text: state.doc.line(n).text, color: '#ddd' }] : lineRuns(state, n)).map(
+          (run, i) => (
+            <text
+              key={i}
+              style={{ color: run.color, fontSize: 13, lineHeight: LH, whiteSpace: 'nowrap' }}
+            >
+              {run.text}
+            </text>
+          )
+        )}
       </div>
     )
   }
@@ -271,6 +288,7 @@ function RowsProbe() {
       ref={(i: PublicInstance | null) => {
         box.current = i?.id ?? null
       }}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: the probe's key sink must take focus
       tabIndex={0}
       testId="scroller"
       style={{ ...VIEW, overflow: 'hidden', position: 'relative', backgroundColor: '#111' }}

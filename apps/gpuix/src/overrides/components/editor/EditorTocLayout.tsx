@@ -23,7 +23,15 @@ interface EditorTocLayoutProps {
   renderOutline: (variant: TocVariant) => React.ReactNode
 }
 
-const HIDDEN = { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, opacity: 0, overflow: 'hidden' } as const
+const HIDDEN = {
+  position: 'absolute',
+  left: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
+  opacity: 0,
+  overflow: 'hidden'
+} as const
 
 export function EditorTocLayout({
   isVisible,

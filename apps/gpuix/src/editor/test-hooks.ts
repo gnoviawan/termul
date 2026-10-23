@@ -15,8 +15,8 @@ const env = typeof process === 'undefined' ? {} : process.env
 
 export function testHooksEnabled(): boolean {
   return (
-    (globalThis as { __TERMUL_GPUIX_TEST_HOOKS__?: boolean }).__TERMUL_GPUIX_TEST_HOOKS__ === true ||
-    env.TERMUL_GPUIX_TEST_HOOKS === '1'
+    (globalThis as { __TERMUL_GPUIX_TEST_HOOKS__?: boolean }).__TERMUL_GPUIX_TEST_HOOKS__ ===
+      true || env.TERMUL_GPUIX_TEST_HOOKS === '1'
   )
 }
 

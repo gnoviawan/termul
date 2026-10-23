@@ -19,18 +19,17 @@ import { parseArgs } from 'node:util'
 import { buildClient } from '../../build'
 import { cropPng, diffPngs } from '../parity/diff'
 import { startTestServer } from '../parity/server'
-import { openStatusBarTerminal, rowMatching, terminals } from '../terminal/shell-tree'
 import { READY_TIMEOUT_MS, withGpuix } from '../parity/shoot-gpuix'
+import { openStatusBarTerminal, rowMatching, terminals } from '../terminal/shell-tree'
 import {
   APP_TS,
   BIG_LINES,
   freePort,
+  gpuixOpenFile as openFromExplorer,
   PROJECT,
-  projectDir,
   READY_TEXT,
   SIZE,
   STATE_ROOT,
-  gpuixOpenFile as openFromExplorer,
   seedEditorProject
 } from './scenario'
 
@@ -61,7 +60,11 @@ interface ViewState {
   charWidth: number
 }
 
-async function until<T>(label: string, probe: () => Promise<T | null | undefined | false>, ms = 15_000): Promise<T> {
+async function until<T>(
+  label: string,
+  probe: () => Promise<T | null | undefined | false>,
+  ms = 15_000
+): Promise<T> {
   const deadline = Date.now() + ms
   for (;;) {
     const value = await probe().catch(() => null)
@@ -82,12 +85,13 @@ async function viewState(app: App): Promise<ViewState> {
  * GPUI runs on its own thread, so the view mirrors what it paints.
  */
 async function painted(app: App): Promise<string[]> {
-  const state = (await viewState(app).catch(() => null)) as (ViewState & { painted?: string[] }) | null
+  const state = (await viewState(app).catch(() => null)) as
+    | (ViewState & { painted?: string[] })
+    | null
   return state?.painted ?? []
 }
 
-const keys = (text: string) =>
-  [...text].map((ch) => (ch === ' ' ? 'space' : ch)).join(' ')
+const keys = (text: string) => [...text].map((ch) => (ch === ' ' ? 'space' : ch)).join(' ')
 
 process.env.TERMUL_GPUIX_TEST_HOOKS = '1'
 process.env.TERMUL_GPUIX_EDITOR_PERF = '1'
@@ -114,23 +118,30 @@ try {
       await openFromExplorer(app, ['src', 'app.ts'])
       await app.getByTestId(editorId).waitFor({ timeoutMs: 20_000 })
       const firstLine = APP_TS.split('\n')[0]!
-      await until('app.ts painted', async () => (await painted(app)).some((t) => t.includes(firstLine))).catch(
-        async (error) => {
-          await grab(path.join(OUT, 'open-failed.png'))
-          await Bun.write(path.join(OUT, 'open-failed.json'), JSON.stringify(await painted(app), null, 1))
-          throw error
-        }
-      )
+      await until('app.ts painted', async () =>
+        (await painted(app)).some((t) => t.includes(firstLine))
+      ).catch(async (error) => {
+        await grab(path.join(OUT, 'open-failed.png'))
+        await Bun.write(
+          path.join(OUT, 'open-failed.json'),
+          JSON.stringify(await painted(app), null, 1)
+        )
+        throw error
+      })
       const openMs = Math.round(performance.now() - opened)
       await Bun.sleep(600)
       await grab(path.join(OUT, 'app-ts.png'))
       const view = await viewState(app)
       const numbers = (await app.getByText('18').all()).map(() => '18')
-      check('src/app.ts opens from the Explorer with line numbers', view.lines === 18 && numbers.includes('18'), {
-        openMs,
-        lines: view.lines,
-        numbersPainted: numbers.length
-      })
+      check(
+        'src/app.ts opens from the Explorer with line numbers',
+        view.lines === 18 && numbers.includes('18'),
+        {
+          openMs,
+          lines: view.lines,
+          numbersPainted: numbers.length
+        }
+      )
 
       if (!only || only.has('edit')) {
         const box = await app.getByTestId(editorId).bounds()
@@ -148,11 +159,18 @@ try {
         ).catch(() => null)
         const typed = await viewState(app)
         await grab(path.join(OUT, 'typed.png'))
-        check('a click at line 3 col 5 then XY edits that line, on screen', clicked.caret.line === 3 && clicked.caret.col === 5 && paintedLine === expected && typed.caret.col === 7, {
-          clickedCaret: clicked.caret,
-          caretAfter: typed.caret,
-          paintedLine
-        })
+        check(
+          'a click at line 3 col 5 then XY edits that line, on screen',
+          clicked.caret.line === 3 &&
+            clicked.caret.col === 5 &&
+            paintedLine === expected &&
+            typed.caret.col === 7,
+          {
+            clickedCaret: clicked.caret,
+            caretAfter: typed.caret,
+            paintedLine
+          }
+        )
 
         const zone = { x: 548, y: 14, width: 30, height: 30 }
         cropPng(path.join(OUT, 'clicked.png'), zone, path.join(OUT, 'tab-clean.png'))
@@ -162,19 +180,27 @@ try {
           path.join(OUT, 'tab-dirty.png'),
           path.join(OUT, 'tab-dirty-diff.png')
         )
-        check('the tab shows the dirty dot after an edit (tab close zone pixels change)', dirtyDiff.exact.mismatched > 10, {
-          zone,
-          pixelsChanged: dirtyDiff.exact.mismatched
-        })
+        check(
+          'the tab shows the dirty dot after an edit (tab close zone pixels change)',
+          dirtyDiff.exact.mismatched > 10,
+          {
+            zone,
+            pixelsChanged: dirtyDiff.exact.mismatched
+          }
+        )
         await app.call('keystrokes', { keys: 'ctrl-s' })
         const file = path.join(dir, 'src', 'app.ts')
         const saved = await until('saved to disk', async () => {
           const text = await readFile(file, 'utf8')
           return text.split('\n')[2] === expected ? text : null
         }).catch(() => null)
-        check('Ctrl+S writes the edit to disk', saved === APP_TS.replace('const PORT', 'consXYt PORT'), {
-          line3OnDisk: (await readFile(file, 'utf8')).split('\n')[2]
-        })
+        check(
+          'Ctrl+S writes the edit to disk',
+          saved === APP_TS.replace('const PORT', 'consXYt PORT'),
+          {
+            line3OnDisk: (await readFile(file, 'utf8')).split('\n')[2]
+          }
+        )
         await Bun.sleep(400)
         await grab(path.join(OUT, 'saved.png'))
 
@@ -186,10 +212,14 @@ try {
         const restored = await until('undo saved', async () =>
           (await readFile(file, 'utf8')) === APP_TS ? true : null
         ).catch(() => false)
-        check('Ctrl+Z undoes the edit (and the undo saves back the original bytes)', !!undone && restored, {
-          undonePainted: !!undone,
-          diskMatchesOriginal: restored
-        })
+        check(
+          'Ctrl+Z undoes the edit (and the undo saves back the original bytes)',
+          !!undone && restored,
+          {
+            undonePainted: !!undone,
+            diskMatchesOriginal: restored
+          }
+        )
       }
 
       if (!only || only.has('readme')) {
@@ -203,7 +233,8 @@ try {
           })
         await Bun.sleep(800)
         await grab(path.join(OUT, 'readme-preview.png'))
-        const note = (await app.getByText('Mermaid diagrams show as source in this client.').count()) > 0
+        const note =
+          (await app.getByText('Mermaid diagrams show as source in this client.').count()) > 0
         await app.getByTestId('markdown-preview').click()
         editorId = 'code-editor-README.md'
         await app
@@ -218,7 +249,9 @@ try {
         const view = await viewState(app)
         await app.mouse.click({ x: box.x + 34.484 + 6 + 7 * view.charWidth + 2, y: box.y + 4 + 10 })
         await app.call('keystrokes', { keys: keys(' edited') })
-        await until('README edit painted', async () => (await painted(app)).includes('# alpha edited'))
+        await until('README edit painted', async () =>
+          (await painted(app)).includes('# alpha edited')
+        )
         await app.call('keystrokes', { keys: 'ctrl-s' })
         const file = path.join(dir, 'README.md')
         const saved = await until('README saved', async () =>
@@ -226,10 +259,14 @@ try {
         ).catch(() => false)
         await Bun.sleep(300)
         await grab(path.join(OUT, 'readme-source.png'))
-        check('README.md opens in Preview with the mermaid note; a click edits the source; Ctrl+S saves', note && saved, {
-          mermaidNote: note,
-          line1OnDisk: (await readFile(file, 'utf8')).split('\n')[0]
-        })
+        check(
+          'README.md opens in Preview with the mermaid note; a click edits the source; Ctrl+S saves',
+          note && saved,
+          {
+            mermaidNote: note,
+            line1OnDisk: (await readFile(file, 'utf8')).split('\n')[0]
+          }
+        )
       }
 
       if (!only || only.has('big')) {
@@ -256,7 +293,9 @@ try {
         })
         const wheelMs = Math.round(performance.now() - wheelStart)
         await Bun.sleep(500)
-        const afterScroll = (await viewState(app)) as ViewState & { perf?: { frames?: unknown; renderMs?: number[] } }
+        const afterScroll = (await viewState(app)) as ViewState & {
+          perf?: { frames?: unknown; renderMs?: number[] }
+        }
         await grab(path.join(OUT, 'big-scrolled.png'))
         await app.mouse.click({ x: box.x + 200, y: box.y + 100 })
         await Bun.sleep(200)
@@ -265,24 +304,31 @@ try {
           await app.call('keystrokes', { keys: 'q' })
           await Bun.sleep(60)
         }
-        await until('typed run applied', async () => ((await viewState(app)).caret.col === startCol + 20 ? true : null))
+        await until('typed run applied', async () =>
+          (await viewState(app)).caret.col === startCol + 20 ? true : null
+        )
         const end = (await viewState(app)) as ViewState & {
           perf?: { frames?: unknown; renderMs?: number[]; keyToCommitMs?: number[] }
         }
         const typed = (end.perf?.keyToCommitMs ?? []).slice(-20)
         const renders = (afterScroll.perf?.renderMs ?? []).slice(-60).sort((a, b) => a - b)
-        const p = (q: number) => renders[Math.min(renders.length - 1, Math.floor(q * renders.length))]
-        check('big.ts (5,000 lines): first paint, wheel scroll and typing timed', scrolled.lines === BIG_LINES + 1, {
-          firstPaintMs,
-          lines: scrolled.lines,
-          wheelEvents: 60,
-          wheelLoopMs: wheelMs,
-          scrollTopAfter: afterScroll.scrollTop,
-          frameStatsDuringScroll: afterScroll.perf?.frames,
-          renderJsMs: { p50: p(0.5), p90: p(0.9), max: renders.at(-1), samples: renders.length },
-          keyToCommitJsMs: typed,
-          frameStatsAfterTyping: end.perf?.frames
-        })
+        const p = (q: number) =>
+          renders[Math.min(renders.length - 1, Math.floor(q * renders.length))]
+        check(
+          'big.ts (5,000 lines): first paint, wheel scroll and typing timed',
+          scrolled.lines === BIG_LINES + 1,
+          {
+            firstPaintMs,
+            lines: scrolled.lines,
+            wheelEvents: 60,
+            wheelLoopMs: wheelMs,
+            scrollTopAfter: afterScroll.scrollTop,
+            frameStatsDuringScroll: afterScroll.perf?.frames,
+            renderJsMs: { p50: p(0.5), p90: p(0.9), max: renders.at(-1), samples: renders.length },
+            keyToCommitJsMs: typed,
+            frameStatsAfterTyping: end.perf?.frames
+          }
+        )
         await app.call('keystrokes', { keys: 'ctrl-z' })
       }
 
@@ -303,18 +349,27 @@ try {
           (n) => (n.bounds?.y ?? 1e9) < 48 && (n.bounds?.x ?? 0) > 470
         )
         if (termTab?.bounds) {
-          await app.mouse.click({ x: termTab.bounds.x + termTab.bounds.width / 2, y: termTab.bounds.y + termTab.bounds.height / 2 })
+          await app.mouse.click({
+            x: termTab.bounds.x + termTab.bounds.width / 2,
+            y: termTab.bounds.y + termTab.bounds.height / 2
+          })
         }
         await Bun.sleep(500)
         await app.mouse.click({ x: 900, y: 400 })
         await app.call('keystrokes', { keys: `${keys('echo alive')} enter` })
-        const alive = await until('terminal still paints', async () => rowMatching(await term(), /^alive$/)).catch(() => null)
+        const alive = await until('terminal still paints', async () =>
+          rowMatching(await term(), /^alive$/)
+        ).catch(() => null)
         await grab(path.join(OUT, 'crash-terminal.png'))
-        check('a tab that throws shows its own fallback; the terminal tab in the same pane still paints', fallback && !!alive, {
-          fallback,
-          terminalTabFound: !!termTab,
-          aliveRow: alive?.text
-        })
+        check(
+          'a tab that throws shows its own fallback; the terminal tab in the same pane still paints',
+          fallback && !!alive,
+          {
+            fallback,
+            terminalTabFound: !!termTab,
+            aliveRow: alive?.text
+          }
+        )
       }
     }
   )

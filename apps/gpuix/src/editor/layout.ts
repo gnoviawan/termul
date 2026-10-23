@@ -61,7 +61,11 @@ export function visibleLines(lines: number, viewport: Viewport, overscan = 0): [
 }
 
 /** Top-left of the caret at `pos`, in content coordinates (before scrolling). */
-export function caretPoint(state: EditorState, pos: number, charWidth: number): { x: number; y: number } {
+export function caretPoint(
+  state: EditorState,
+  pos: number,
+  charWidth: number
+): { x: number; y: number } {
   const line = state.doc.lineAt(pos)
   return { x: PAD_LEFT + columnAt(state, pos) * charWidth, y: lineTop(line.number) }
 }
@@ -100,7 +104,8 @@ export function selectionRects(
     const line = state.doc.line(n)
     const left = from > line.from ? caretPoint(state, from, charWidth).x : PAD_LEFT
     const right = to <= line.to ? caretPoint(state, to, charWidth).x : rightEdge
-    if (right > left) rects.push({ x: left, y: lineTop(n), width: right - left, height: LINE_HEIGHT })
+    if (right > left)
+      rects.push({ x: left, y: lineTop(n), width: right - left, height: LINE_HEIGHT })
   }
   return rects
 }
@@ -116,9 +121,11 @@ export function followCaret(
   const { x, y } = caretPoint(state, pos, viewport.charWidth)
   let { scrollTop, scrollLeft } = viewport
   if (y < scrollTop) scrollTop = y - PAD_TOP
-  else if (y + LINE_HEIGHT > scrollTop + viewport.height) scrollTop = y + LINE_HEIGHT + PAD_TOP - viewport.height
+  else if (y + LINE_HEIGHT > scrollTop + viewport.height)
+    scrollTop = y + LINE_HEIGHT + PAD_TOP - viewport.height
   if (x < scrollLeft + PAD_LEFT) scrollLeft = x - PAD_LEFT
-  else if (x + viewport.charWidth > scrollLeft + viewport.width) scrollLeft = x + viewport.charWidth * 4 - viewport.width
+  else if (x + viewport.charWidth > scrollLeft + viewport.width)
+    scrollLeft = x + viewport.charWidth * 4 - viewport.width
   return {
     scrollTop: Math.min(Math.max(0, scrollTop), maxScrollTop),
     scrollLeft: Math.min(Math.max(0, scrollLeft), maxScrollLeft)
