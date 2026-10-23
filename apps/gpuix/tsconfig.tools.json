@@ -16,6 +16,8 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["bun"],
     "paths": {
+      "#compat/fixture-boot": ["./tools/compat/fixtures/boot-contract.ts"],
+      "#compat/bench-app": ["./tools/compat/bench/app-contract.ts"],
       "@/*": ["../../src/renderer/*"],
       "@renderer/*": ["../../src/renderer/*"],
       "@shared/*": ["../../src/shared/*"],

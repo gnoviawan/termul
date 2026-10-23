@@ -1,3 +1,4 @@
+/** Clicks each child of `click.tsx` through automation and leaves the log in /tmp/gpuix-c1/click.log. */
 import path from 'node:path'
 import { launch } from '@gpuix/react/automation'
 import { LAVAPIPE_ICD, startXvfb } from '../../parity/shoot-gpuix'

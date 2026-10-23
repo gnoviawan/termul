@@ -1,3 +1,8 @@
+/**
+ * Probe behind the inline-text design: how GPUIX lays out sibling text runs,
+ * whether div text style inherits, whether static Inter weights paint, and
+ * how `<markdown>` themes. `bun tools/compat/shot.ts tools/compat/probe/probe.tsx out.png --wait probe`
+ */
 import { render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState } from 'react'
 import { registerTermulFonts } from '../../../src/style/fonts'

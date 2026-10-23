@@ -30,8 +30,21 @@ interface GroupSnapshot {
 
 /** A `group` element's live state. Consumers subscribe; the group itself never re-renders for it. */
 class GroupStore {
-  private snapshot: GroupSnapshot = { hovered: false, focused: false, attrs: {} }
+  private snapshot: GroupSnapshot
+  private attrsKey: string
   private readonly listeners = new Set<() => void>()
+
+  constructor(attrs: Readonly<Record<string, unknown>> = {}, attrsKey = '{}') {
+    this.snapshot = { hovered: false, focused: false, attrs }
+    this.attrsKey = attrsKey
+  }
+
+  /** New attributes notify consumers only when they differ by value. */
+  setAttrs(attrs: Readonly<Record<string, unknown>>, key: string): void {
+    if (key === this.attrsKey) return
+    this.attrsKey = key
+    this.set({ attrs })
+  }
 
   get = (): GroupSnapshot => this.snapshot
 
@@ -90,15 +103,14 @@ function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactE
   const group = useSyncExternalStore(needs.group ? parentGroup.subscribe : noSubscribe, parentGroup.get)
   const [focus, setFocus] = useState({ self: false, within: false })
   const width = useSyncExternalStore(needs.viewport ? subscribeViewport : noSubscribe, viewportWidth)
-  const ownStore = useRef<GroupStore | null>(null)
-  if (tr.group !== null && !ownStore.current) ownStore.current = new GroupStore()
-  const store = ownStore.current
-
   const attrs = domAttrs(dom)
+  const attrsKey = tr.group !== null ? JSON.stringify(attrs) : ''
+  const ownStore = useRef<GroupStore | null>(null)
+  if (tr.group !== null && !ownStore.current) ownStore.current = new GroupStore(attrs, attrsKey)
+  const store = ownStore.current
   const disabled = Boolean(dom.disabled)
-  const attrsKey = store ? JSON.stringify(attrs) : ''
   useLayoutEffect(() => {
-    store?.set({ attrs })
+    store?.setAttrs(attrs, attrsKey)
   }, [attrsKey])
 
   const state: TwState = {

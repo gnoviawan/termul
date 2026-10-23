@@ -9,18 +9,7 @@ import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
 
 installBrowserEnv(readClientConfig(), { width: WINDOW_WIDTH, height: WINDOW_HEIGHT })
 const FONT_DIR = path.join(import.meta.dir, '../assets/fonts')
-// Non-literal: app.tsx is app-side code, checked by tsconfig.json, not this Bun-typed program.
-const APP: string = './app'
-interface BenchHost {
-  sleep(ms: number): Promise<void>
-  gc(): void
-  rssBytes(): number
-  write(json: string): void
-  exit(): void
-}
-const { runBench } = (await import(APP)) as {
-  runBench(mode: 'compat' | 'hand', host: BenchHost, onRenderer: (renderer: { registerFont?(data: Buffer): void }) => void): void
-}
+const { runBench } = await import('#compat/bench-app')
 const out = process.env.BENCH_OUT ?? '/tmp/gpuix-c1/bench.json'
 runBench(
   process.env.BENCH_MODE === 'hand' ? 'hand' : 'compat',

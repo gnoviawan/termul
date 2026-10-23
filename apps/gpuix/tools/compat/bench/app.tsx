@@ -4,27 +4,18 @@
  * Both subjects mount inside `CompatRoot`, so the root costs the same.
  */
 
-import { flushSync, type NativeRenderer, render, useGpuixRequired } from '@gpuix/react'
-import { type ComponentType, useEffect, useState } from 'react'
+import { flushSync, render, useGpuixRequired } from '@gpuix/react'
+import { useEffect, useState } from 'react'
 import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
 import { ROWS, useBenchStore } from './data'
 import { HandList } from './HandList'
 
-// A non-literal specifier keeps the DOM-typed subject out of this program (tsconfig.compat.json checks it).
-const DOM_SUBJECT: string = './dom/CompatList'
-const { CompatList } = (await import(DOM_SUBJECT)) as { CompatList: ComponentType }
+import { CompatList } from '#compat/bench-dom'
 
 type Mode = 'compat' | 'hand'
 
-/** What the Bun side hands the app side (this file is typed with the DOM lib only). */
-export interface BenchHost {
-  sleep(ms: number): Promise<void>
-  gc(): void
-  rssBytes(): number
-  write(json: string): void
-  exit(): void
-}
+import type { BenchHost, RunBench } from './app-contract'
 
 interface LiveRenderer {
   simulateMouseMove(x: number, y: number): void
@@ -91,7 +82,7 @@ function Bench({ mode, host }: { mode: Mode; host: BenchHost }) {
   return mode === 'compat' ? <CompatList /> : <HandList />
 }
 
-export function runBench(mode: Mode, host: BenchHost, onRenderer: (renderer: NativeRenderer) => void): void {
+export const runBench: RunBench = (mode, host, onRenderer) => {
   render(
     <CompatRoot onRenderer={onRenderer}>
       <Bench mode={mode} host={host} />

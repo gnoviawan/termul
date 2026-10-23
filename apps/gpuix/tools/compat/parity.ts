@@ -150,7 +150,6 @@ async function shootGpuix(server: TestServer, entry: string, fixture: string, ou
         COMPAT_FIXTURE: fixture,
         COMPAT_REPORT: path.join(dir, 'compat-report.json'),
         COMPAT_VERBOSE: '1',
-        COMPAT_TRACE: process.env.COMPAT_TRACE ?? '',
         COMPAT_DUMP: path.join(dir, 'tree.json')
       },
       stdout: Bun.file(path.join(dir, 'gpuix.log')),

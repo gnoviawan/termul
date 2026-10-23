@@ -5,7 +5,11 @@
   "type": "module",
   "description": "Termul desktop client rendered natively with GPUIX (React on Zed's GPUI)",
   "imports": {
-    "#app/boot": "./src/boot.tsx"
+    "#app/boot": "./src/boot.tsx",
+    "#compat/fixture-boot": "./tools/compat/fixtures/boot.tsx",
+    "#compat/fixture-dom": "./tools/compat/fixtures/dom/index.tsx",
+    "#compat/bench-app": "./tools/compat/bench/app.tsx",
+    "#compat/bench-dom": "./tools/compat/bench/dom/CompatList.tsx"
   },
   "scripts": {
     "build": "bun build.ts",
@@ -14,7 +18,7 @@
     "check:react": "bun tools/check-react.ts",
     "compat:lint": "bun tools/compat/lint.ts",
     "parity": "bun tools/parity/index.ts",
-    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.compat.json",
+    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.compat.json && tsc -p tsconfig.compat-app.json",
     "test": "bun test src/style src/terminal src/ui tools/ui tools/compat",
     "style:scan": "bun tools/style/scan-classes.ts",
     "style:gen": "bun tools/style/gen-color-vars.ts",

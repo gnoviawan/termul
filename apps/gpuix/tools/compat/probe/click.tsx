@@ -1,3 +1,8 @@
+/**
+ * Probe behind compat event bubbling: which ancestors GPUIX delivers a click
+ * to when the child has a fill, a hover style, its own handler, or
+ * pointer-events. Run through `click-run.ts`; results go to /tmp/gpuix-c1/click.log.
+ */
 import { render } from '@gpuix/react'
 
 import { appendFileSync } from 'node:fs'

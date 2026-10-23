@@ -18,7 +18,6 @@ import { ScopeContext, scopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
 import { adaptHandlers, type GpuixListeners } from './events'
-import { log } from '../log'
 import { compatWarn } from './log'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
@@ -39,7 +38,6 @@ const ATTR_PROPS = new Set(['id', 'role', 'type', 'href', 'name', 'title', 'tabI
 /** GPUIX ignores `display: none` (measured): a hidden element is an empty, zero-size, unpainted box. */
 const HIDDEN: StyleDesc = { position: 'absolute', width: 0, height: 0, overflow: 'hidden', visibility: 'hidden' }
 const BREAK: StyleDesc = { width: '100%', height: 0 }
-const TRACE = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.COMPAT_TRACE === '1'
 const NO_ATTRS: Readonly<Record<string, unknown>> = Object.freeze({})
 
 export function domAttrs(props: DomProps): Readonly<Record<string, unknown>> {
@@ -263,7 +261,6 @@ export function buildElement(
     }
   }
   if (!childInfo.has(element)) childInfo.set(element, { inline: tr.inline })
-  if (TRACE) log.info('compat-trace', `${tag}.${props.className ?? ''} -> ${element.type as string} ${JSON.stringify((element.props as { style?: unknown }).style)}`)
   if (tr.fixed) {
     return jsx('anchored' as never, { fill: 'window', style: { backgroundColor: 'transparent' }, children: element }, key)
   }

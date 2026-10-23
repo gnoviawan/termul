@@ -123,3 +123,43 @@ bun run parity projects            # port 8193, output in parity-out/projects/
    the result; the exact count is the one to track.
 
 Add a scenario by adding an entry to `SCENARIOS` with its seed and ready ids.
+
+## Shared DOM components on GPUIX (`src/compat/`)
+
+Shared `src/renderer` components render on GPUIX unchanged. `build.ts`
+points their `react/jsx-runtime`, `react` and `react-dom` at `src/compat`, so
+each `<div className=… onClick=…>` becomes a GPUIX element when it is
+created. Files under `apps/gpuix` keep the real runtime, except the Radix,
+framer-motion and cmdk stand-ins in `src/compat/radix` and `src/compat/shims`.
+
+- `translate.ts` maps a tag and class string to a style once and caches it,
+  so an unchanged element keeps the same style object across renders.
+- `children.ts` lays out text. GPUIX has no inline formatting context, so
+  plain text merges into one node and mixed inline content becomes a
+  wrapping row of word runs.
+- `events.ts` turns DOM handlers into GPUIX listeners and bubbles mouse
+  events through ancestors, which GPUIX does not do past a filled box.
+- `dom-node.ts` is what `ref`, `event.target` and `document.activeElement`
+  return. Tree queries read a mirror of the retained tree.
+- `host.tsx` is the only per-element component. It is used only for
+  `group-*`, `focus:`, `focus-within:` and breakpoint variants, and for the
+  `group` element itself.
+
+The ui primitives in `src/ui` build their host element through the same
+`buildElement`.
+
+A native replacement for a shared file goes at
+`src/overrides/<path under src/renderer>` and must export the same names.
+The bundler uses it for every importer. `bun run compat:lint` fails when a
+shared file uses a DOM API the compat layer lacks
+(`src/compat/dom-support.ts`) and has no override or
+`tools/compat/overrides.json` entry.
+
+Tools:
+
+- `bun tools/compat/parity.ts [fixture…] --port N` diffs StatusBar, ShellRail,
+  ChatMessage and ConfirmDialog against the web build. Output goes to
+  `parity-out/compat/`.
+- `bun tools/compat/bench/run.ts --runs N --rows N` times the real
+  `ProjectItem` through compat against a direct GPUIX version of the same
+  rows.

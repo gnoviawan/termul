@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": [
+        "../../src/renderer/*"
+      ],
+      "@renderer/*": [
+        "../../src/renderer/*"
+      ],
+      "@shared/*": [
+        "../../src/shared/*"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react/*": [
+        "./node_modules/@types/react/*"
+      ],
+      "#compat/fixture-dom": [
+        "./tools/compat/fixtures/dom-contract.ts"
+      ],
+      "#compat/bench-dom": [
+        "./tools/compat/bench/dom-contract.ts"
+      ]
+    }
+  },
+  "include": [
+    "tools/compat/fixtures/boot.tsx",
+    "tools/compat/bench/app.tsx",
+    "../../src/renderer/vite-env.d.ts"
+  ],
+  "exclude": []
+}
