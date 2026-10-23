@@ -7,3 +7,4 @@ dist-bench/
 tools/perf/results/
 dist-prod/
 perf-out/
+dist-s*/

@@ -301,7 +301,11 @@ export async function buildClient(
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
     plugins: [rawPlugin(), globPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
-    naming: options.production ? { entry: '[name].bundle.[ext]', asset: '[name].[ext]' } : '[name].[ext]',
+    naming: options.production
+      ? { entry: '[name].bundle.[ext]', chunk: 'chunk-[hash].[ext]', asset: '[name].[ext]' }
+      : '[name].[ext]',
+    // Dynamic imports (shiki grammars, mermaid, BlockNote) become chunks read on first use.
+    splitting: Boolean(options.production),
     // React's production build has no jsxDEV, so a production bundle needs jsx().
     ...(options.production
       ? { minify: true, jsx: { development: false }, define: { 'process.env.NODE_ENV': '"production"' } }
