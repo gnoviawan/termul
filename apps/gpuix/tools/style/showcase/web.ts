@@ -11,7 +11,8 @@ import { resolveThemeTokens } from '@/lib/themes/resolve-theme-tokens'
 import { compileTailwind, REPO } from '../tailwind-css'
 import { allClasses, cellRect, SWATCHES, type SwatchNode } from './swatches'
 
-const PORT = Number(process.env.SHOWCASE_PORT ?? 8197)
+/** 0 picks a free loopback port; sibling test servers hold the 819x range. */
+const PORT = Number(process.env.SHOWCASE_PORT ?? 0)
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
@@ -55,6 +56,7 @@ export async function serveShowcase(themeId: string) {
   const interDir = join(REPO, 'node_modules/@fontsource-variable/inter')
   return Bun.serve({
     port: PORT,
+    hostname: '127.0.0.1',
     fetch(req) {
       const path = decodeURIComponent(new URL(req.url).pathname)
       if (path === '/')
@@ -81,7 +83,7 @@ export async function screenshotWeb(out: string, themeId: string): Promise<void>
       viewport: { width: 1280, height: 800 },
       deviceScaleFactor: 1
     })
-    await page.goto(`http://127.0.0.1:${PORT}/`)
+    await page.goto(`http://127.0.0.1:${server.port}/`)
     await page.evaluate(() => document.fonts.ready)
     await page.screenshot({ path: out })
   } finally {
