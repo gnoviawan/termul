@@ -38,7 +38,8 @@
     "terminal:demo": "bun tools/terminal/demo.ts",
     "terminal:parity": "bun tools/terminal/parity.ts",
     "terminal:throughput": "bun tools/terminal/throughput.ts",
-    "terminal:pane": "bun tools/terminal/pane-check.ts"
+    "terminal:pane": "bun tools/terminal/pane-check.ts",
+    "terminal:shell": "bun tools/terminal/shell-check.ts"
   },
   "dependencies": {
     "@gpuix/native": "0.11.0",
