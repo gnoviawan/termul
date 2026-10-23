@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import baseline from './__fixtures__/theme-output-baseline.json'
 import { applyColorTheme, resolveThemeForTest } from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
+import { COMPONENT_TOKEN_DEFAULTS } from './component-tokens'
 
 /**
  * Output captured before the Termul brand move. Every theme other than the
@@ -55,6 +56,9 @@ describe('theme output regression', () => {
     it(`${id} emits the same CSS variables as before`, () => {
       const vars = emittedVars(id)
       for (const [name, value] of Object.entries(cssBaseline[id])) {
+        expect(vars[name], `${id} ${name}`).toBe(value)
+      }
+      for (const [name, value] of Object.entries(COMPONENT_TOKEN_DEFAULTS)) {
         expect(vars[name], `${id} ${name}`).toBe(value)
       }
       expect(document.documentElement.dataset.flatElevation).toBeUndefined()

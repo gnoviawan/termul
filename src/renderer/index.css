@@ -329,6 +329,40 @@
 
     /* Modal / drawer scrim. Always near-black; alpha is applied at the call site. */
     --overlay: 0 0 0;
+
+    /* Component tokens. Full CSS values read as var(--token); see component-tokens.ts. */
+    --primary-fill-hover: color-mix(in oklch, oklch(var(--primary-fill)) 85%, black);
+    --primary-fill-active: var(--primary-fill-hover);
+    --shadow-emboss:
+      0 1px 2px oklch(0 0 0 / 0.22), 0 4px 8px oklch(0 0 0 / 0.16), inset 0 1px 0 oklch(
+        1 0 0 / 0.28
+      ), inset 0 -1px 1px oklch(0 0 0 / 0.16);
+    --shadow-emboss-hover:
+      0 1px 2px oklch(0 0 0 / 0.26), 0 5px 10px oklch(0 0 0 / 0.2), inset 0 1px 0 oklch(
+        1 0 0 / 0.34
+      ), inset 0 -1px 1px oklch(0 0 0 / 0.2);
+    --switch-track-on: oklch(var(--foreground));
+    --switch-track-on-hover: var(--switch-track-on);
+    --switch-track-on-active: var(--switch-track-on-hover);
+    --switch-track-off: oklch(var(--input));
+    --switch-track-off-hover: var(--switch-track-off);
+    --switch-track-off-active: var(--switch-track-off-hover);
+    --switch-track-on-disabled: var(--switch-track-on);
+    --switch-track-off-disabled: var(--switch-track-off);
+    --switch-thumb-on: oklch(var(--background));
+    --switch-thumb-off: oklch(var(--muted-foreground));
+    --switch-thumb-on-disabled: var(--switch-thumb-on);
+    --switch-thumb-off-disabled: var(--switch-thumb-off);
+    --switch-thumb-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --switch-disabled-opacity: 0.5;
+    --skeleton: oklch(var(--muted));
+    --elevation-2xs: 0 1px rgb(0 0 0 / 0.05);
+    --elevation-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --elevation-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --elevation-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --elevation-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --elevation-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+    --elevation-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
   }
 }
 
@@ -805,6 +839,58 @@
   .label-panel {
     @apply text-xs font-medium text-muted-foreground;
     line-height: 1.4;
+  }
+}
+
+/* ------------------------------------------------------------
+ * Switch: track and thumb read per-theme tokens (component-tokens.ts).
+ * Every rule names its data-state so hover on one state never paints
+ * the other state's color. Defaults reproduce the neutral switch.
+ * ------------------------------------------------------------ */
+@layer components {
+  .switch-track[data-state="unchecked"] {
+    background-color: var(--switch-track-off);
+  }
+  .switch-track[data-state="checked"] {
+    background-color: var(--switch-track-on);
+  }
+  @media (hover: hover) {
+    .switch-track[data-state="unchecked"]:enabled:hover {
+      background-color: var(--switch-track-off-hover);
+    }
+    .switch-track[data-state="checked"]:enabled:hover {
+      background-color: var(--switch-track-on-hover);
+    }
+  }
+  .switch-track[data-state="unchecked"]:enabled:active {
+    background-color: var(--switch-track-off-active);
+  }
+  .switch-track[data-state="checked"]:enabled:active {
+    background-color: var(--switch-track-on-active);
+  }
+  .switch-track:disabled {
+    opacity: var(--switch-disabled-opacity);
+  }
+  .switch-track[data-state="unchecked"]:disabled {
+    background-color: var(--switch-track-off-disabled);
+  }
+  .switch-track[data-state="checked"]:disabled {
+    background-color: var(--switch-track-on-disabled);
+  }
+  .switch-thumb {
+    box-shadow: var(--switch-thumb-shadow);
+  }
+  .switch-thumb[data-state="unchecked"] {
+    background-color: var(--switch-thumb-off);
+  }
+  .switch-thumb[data-state="checked"] {
+    background-color: var(--switch-thumb-on);
+  }
+  .switch-thumb[data-state="unchecked"][data-disabled] {
+    background-color: var(--switch-thumb-off-disabled);
+  }
+  .switch-thumb[data-state="checked"][data-disabled] {
+    background-color: var(--switch-thumb-on-disabled);
   }
 }
 

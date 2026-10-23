@@ -324,24 +324,24 @@ describe('apply-color-theme', () => {
       const css = readFileSync(cssPath, 'utf8')
       const match = css.match(/@layer base \{\s*:root \{([\s\S]*?)\n {2}\}\n\}/)
       expect(match, 'index.css :root block').toBeTruthy()
+      // Biome wraps long values (shadow lists) across lines; compare collapsed.
+      const normalize = (value: string) =>
+        value
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\s+/g, ' ')
+          .replace(/\(\s+/g, '(')
+          .replace(/\s+\)/g, ')')
+          .trim()
       const declared = new Map<string, string>()
-      for (const line of match?.[1].split('\n') ?? []) {
-        const token = line.trim().match(/^(--[\w-]+):\s*([^;]+);/)
-        if (!token) continue
-        declared.set(
-          token[1],
-          token[2]
-            .trim()
-            .replace(/\s+\/\*.*$/, '')
-            .trim()
-        )
+      for (const token of (match?.[1] ?? '').matchAll(/(--[\w-]+):\s*([^;]+);/g)) {
+        declared.set(token[1], normalize(token[2]))
       }
       const mismatches: Array<{ key: string; css: string | undefined; js: string }> = []
       const style = document.documentElement.style
       for (let i = 0; i < style.length; i++) {
         const key = style.item(i)
         if (!key.startsWith('--')) continue
-        const emitted = style.getPropertyValue(key).trim()
+        const emitted = normalize(style.getPropertyValue(key))
         if (declared.get(key) !== emitted) {
           mismatches.push({ key, css: declared.get(key), js: emitted })
         }

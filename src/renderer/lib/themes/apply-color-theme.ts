@@ -16,6 +16,7 @@ import {
   TEXT_CONTRAST_MIN,
   UI_CONTRAST_MIN
 } from './color-utils'
+import { componentTokenVars } from './component-tokens'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
 import { fillInkComponents, solidFillComponents } from './solid-fills'
@@ -249,7 +250,8 @@ function applyCssVariables(
     '--search-match': hexToOklchComponents(
       appearance === 'light' ? darkenHex(muted, 0.08) : lightenHex(muted, 0.12)
     ),
-    '--search-match-active': readableTokens['--warning']
+    '--search-match-active': readableTokens['--warning'],
+    ...componentTokenVars(chrome?.tokens)
   }
 
   for (const [key, value] of Object.entries(vars)) {

@@ -1,3 +1,5 @@
+import type { ThemeComponentTokens } from './component-tokens'
+
 /** OpenCode-compatible desktop theme schema (subset used by Termul). */
 
 export interface ThemePalette {
@@ -91,6 +93,8 @@ export interface ThemeChrome {
   mutedForeground: string
   /** Hairline borders carry elevation. Termul light only. */
   flatElevation?: boolean
+  /** Component tokens (switch, emboss, elevation...). Unset keys keep the defaults. */
+  tokens?: ThemeComponentTokens
 }
 
 export interface ThemeVariant {

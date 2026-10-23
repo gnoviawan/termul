@@ -25,6 +25,8 @@ export default {
         primary: {
           DEFAULT: 'oklch(var(--primary) / <alpha-value>)',
           fill: 'oklch(var(--primary-fill) / <alpha-value>)',
+          'fill-hover': 'var(--primary-fill-hover)',
+          'fill-active': 'var(--primary-fill-active)',
           foreground: 'oklch(var(--primary-foreground) / <alpha-value>)'
         },
         secondary: {
@@ -44,6 +46,8 @@ export default {
         connection: {
           DEFAULT: 'oklch(var(--connection) / <alpha-value>)'
         },
+        // Component tokens are complete CSS colors; no alpha modifier.
+        skeleton: 'var(--skeleton)',
         'diff-modified': 'oklch(var(--diff-modified) / <alpha-value>)',
         'diff-added': 'oklch(var(--diff-added) / <alpha-value>)',
         overlay: 'oklch(var(--overlay) / <alpha-value>)',
@@ -135,6 +139,16 @@ export default {
       // keyframes from this JS config reach PostCSS without a source file, which
       // makes Vite warn "A PostCSS plugin did not pass the `from` option".
       boxShadow: {
+        // The scale reads the per-theme elevation ladder (component-tokens.ts).
+        '2xs': 'var(--elevation-2xs)',
+        xs: 'var(--elevation-xs)',
+        sm: 'var(--elevation-sm)',
+        md: 'var(--elevation-md)',
+        lg: 'var(--elevation-lg)',
+        xl: 'var(--elevation-xl)',
+        '2xl': 'var(--elevation-2xl)',
+        emboss: 'var(--shadow-emboss)',
+        'emboss-hover': 'var(--shadow-emboss-hover)',
         // Alpha kept inline here (single place); the hue components come from
         // the per-theme --glow-* tokens emitted by applyColorTheme.
         'glow-blue': '0 0 15px oklch(var(--glow-blue) / 0.3)',
