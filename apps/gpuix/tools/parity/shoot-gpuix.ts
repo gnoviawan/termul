@@ -5,6 +5,11 @@
  * waits for test ids over the stdin protocol. Its `screenshot()` is not
  * available on Linux, so frames are grabbed from the X server with ffmpeg,
  * with the pointer left out of the capture.
+ *
+ * GPUI centres its window on the screen and then lands 2px right of centre
+ * (measured with xwininfo: +2+0 on a window-sized screen, +34+32 on one 64px
+ * larger). The screen gets a margin so the whole window is on it, and the grab
+ * starts at the window's origin as the X server reports it.
  */
 
 import { existsSync } from 'node:fs'
@@ -16,6 +21,8 @@ type GpuixApp = Awaited<ReturnType<typeof launch>>
 
 export const READY_TIMEOUT_MS = 60_000
 const SETTLE_MS = 400
+/** Extra screen around the window, so GPUI's off-centre placement stays on screen. */
+const SCREEN_MARGIN = 64
 export const LAVAPIPE_ICD = '/usr/share/vulkan/icd.d/lvp_icd.json'
 
 function freeDisplay(): number {
@@ -45,11 +52,35 @@ export async function startXvfb(
   return { display, stop: () => child.kill() }
 }
 
+export interface Point {
+  x: number
+  y: number
+}
+
+/**
+ * Origin of the top-level window of exactly `width`x`height`, from
+ * `xwininfo -root -tree` (no window manager, so no frame or reparenting).
+ */
+export async function windowOrigin(display: string, width: number, height: number): Promise<Point> {
+  const deadline = Date.now() + 5000
+  const pattern = new RegExp(`\\s${width}x${height}[+-]\\d+[+-]\\d+\\s+([+-]\\d+)([+-]\\d+)`)
+  for (;;) {
+    const proc = Bun.spawnSync(['xwininfo', '-root', '-tree', '-display', display])
+    const match = proc.stdout.toString().match(pattern)
+    if (match) return { x: Number(match[1]), y: Number(match[2]) }
+    if (Date.now() > deadline) {
+      throw new Error(`no ${width}x${height} window on ${display}: ${proc.stdout.toString()}`)
+    }
+    await Bun.sleep(100)
+  }
+}
+
 export async function grabFrame(
   display: string,
   width: number,
   height: number,
-  outPath: string
+  outPath: string,
+  origin: Point = { x: 0, y: 0 }
 ): Promise<void> {
   const ffmpeg = Bun.spawn(
     [
@@ -64,7 +95,7 @@ export async function grabFrame(
       '-video_size',
       `${width}x${height}`,
       '-i',
-      display,
+      `${display}+${origin.x},${origin.y}`,
       '-frames:v',
       '1',
       outPath
@@ -95,7 +126,7 @@ export async function withGpuix<T>(
   opts: GpuixSessionOptions,
   body: (session: GpuixSession) => Promise<T>
 ): Promise<T> {
-  const xvfb = await startXvfb(opts.width, opts.height)
+  const xvfb = await startXvfb(opts.width + SCREEN_MARGIN, opts.height + SCREEN_MARGIN)
   try {
     const app = await launch({
       command: 'bun',
@@ -116,7 +147,8 @@ export async function withGpuix<T>(
         app,
         grab: async (outPath) => {
           await Bun.sleep(SETTLE_MS)
-          await grabFrame(xvfb.display, opts.width, opts.height, outPath)
+          const origin = await windowOrigin(xvfb.display, opts.width, opts.height)
+          await grabFrame(xvfb.display, opts.width, opts.height, outPath, origin)
         }
       })
     } finally {
