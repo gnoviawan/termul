@@ -6,8 +6,14 @@
  * against the GPUIX components unchanged.
  */
 import type { EventPayload, KeyEvent, PublicInstance, StyleDesc } from '@gpuix/react'
-import { Children, createContext, forwardRef, type ReactNode, type Ref, useContext } from 'react'
-import { type TwState, tw } from '../../style/tw'
+import { createContext, forwardRef, type ReactElement, type ReactNode, type Ref, useContext } from 'react'
+import { layoutChildren } from '../../compat/children'
+import { ColorContext, SvgClassContext } from '../../compat/color'
+import { buildElement, type DomProps, domAttrs, resolveStyle } from '../../compat/create'
+import { nodeFor } from '../../compat/dom-node'
+import { CompatEvent, domKey as compatDomKey } from '../../compat/events'
+import { splitDescendantClasses as compatSplit, translation } from '../../compat/translate'
+import type { TwState } from '../../style/tw'
 import { WINDOW_WIDTH } from '../../window'
 import { reducedMotion } from './motion'
 
@@ -15,118 +21,25 @@ type AttrValue = string | number | boolean | undefined
 export type DataAttributes = { [key: `data-${string}`]: AttrValue }
 export type AriaAttributes = { [key: `aria-${string}`]: AttrValue }
 
-/** The parts of a DOM MouseEvent that Termul handlers read. */
-export interface UiMouseEvent {
-  type: string
-  clientX: number
-  clientY: number
-  button: number
-  /** Click count, like `MouseEvent.detail`. */
-  detail: number
-  shiftKey: boolean
-  ctrlKey: boolean
-  altKey: boolean
-  metaKey: boolean
-  defaultPrevented: boolean
-  preventDefault(): void
-  stopPropagation(): void
-  nativeEvent: EventPayload
-}
-
-/** The parts of a DOM KeyboardEvent that Termul handlers read, with DOM key names. */
-export interface UiKeyboardEvent {
-  type: string
-  key: string
-  shiftKey: boolean
-  ctrlKey: boolean
-  altKey: boolean
-  metaKey: boolean
-  repeat: boolean
-  readonly defaultPrevented: boolean
-  preventDefault(): void
-  stopPropagation(): void
-  nativeEvent: KeyEvent
-}
-
-export interface UiFocusEvent {
-  type: string
-  nativeEvent: EventPayload
-}
-
-/** GPUI key names that differ from `KeyboardEvent.key`. */
-const DOM_KEYS: Record<string, string> = {
-  enter: 'Enter',
-  escape: 'Escape',
-  tab: 'Tab',
-  space: ' ',
-  backspace: 'Backspace',
-  delete: 'Delete',
-  up: 'ArrowUp',
-  down: 'ArrowDown',
-  left: 'ArrowLeft',
-  right: 'ArrowRight',
-  home: 'Home',
-  end: 'End',
-  pageup: 'PageUp',
-  pagedown: 'PageDown'
-}
+/** The DOM event a handler receives: the compat runtime's SyntheticEvent stand-in. */
+export type UiMouseEvent = CompatEvent
+export type UiKeyboardEvent = CompatEvent & { readonly key: string }
+export type UiFocusEvent = CompatEvent
 
 export function domKey(key: string | undefined): string {
-  if (!key) return ''
-  return DOM_KEYS[key] ?? (/^f\d+$/.test(key) ? key.toUpperCase() : key)
+  return compatDomKey(key) ?? ''
 }
 
 export function toMouseEvent(event: EventPayload): UiMouseEvent {
-  let prevented = false
-  const mods = event.modifiers
-  return {
-    type: event.eventType,
-    clientX: event.x ?? 0,
-    clientY: event.y ?? 0,
-    button: event.button ?? (event.isRightClick ? 2 : 0),
-    detail: event.clickCount ?? 1,
-    shiftKey: mods?.shift ?? false,
-    ctrlKey: mods?.ctrl ?? false,
-    altKey: mods?.alt ?? false,
-    metaKey: mods?.cmd ?? false,
-    get defaultPrevented() {
-      return prevented
-    },
-    preventDefault: () => {
-      prevented = true
-    },
-    // GPUI clicks do not bubble, so there is nothing to stop.
-    stopPropagation: () => {},
-    nativeEvent: event
-  }
+  return new CompatEvent(event.eventType, nodeFor(event.elementId), event)
 }
 
 export function toKeyboardEvent(event: KeyEvent): UiKeyboardEvent {
-  const mods = event.modifiers
-  return {
-    type: event.eventType,
-    key:
-      event.keyChar && event.keyChar.length === 1 && !DOM_KEYS[event.key ?? '']
-        ? event.keyChar
-        : domKey(event.key),
-    shiftKey: mods?.shift ?? false,
-    ctrlKey: mods?.ctrl ?? false,
-    altKey: mods?.alt ?? false,
-    metaKey: mods?.cmd ?? false,
-    repeat: event.isHeld ?? false,
-    get defaultPrevented() {
-      return event.defaultPrevented
-    },
-    preventDefault: () => event.preventDefault(),
-    stopPropagation: () => event.stopPropagation(),
-    nativeEvent: event
-  }
+  return new CompatEvent(event.eventType, nodeFor(event.elementId), event) as UiKeyboardEvent
 }
 
-const toFocusEvent = (event: EventPayload): UiFocusEvent => ({
-  type: event.eventType,
-  nativeEvent: event
-})
+const toFocusEvent = (event: EventPayload): UiFocusEvent =>
+  new CompatEvent(event.eventType, nodeFor(event.elementId), event)
 
 /** DOM-shaped props a Termul ui primitive accepts on its host element. */
 export interface HostProps extends DataAttributes, AriaAttributes {
@@ -228,21 +141,10 @@ export function nativeHandlers(props: HostProps): NativeDivProps {
   }
 }
 
-/** `data-*` and `aria-*` props, the attribute half of tw()'s variant state. */
-function attributesOf(props: object): Record<string, string | boolean | undefined> {
-  const attrs: Record<string, string | boolean | undefined> = {}
-  for (const [key, value] of Object.entries(props)) {
-    if (!key.startsWith('data-') && !key.startsWith('aria-')) continue
-    attrs[key] = typeof value === 'number' ? String(value) : (value as string | boolean | undefined)
-  }
-  return attrs
-}
-
 /** Text colour of the nearest ancestor that sets one: what `currentColor` is to an icon. */
-export const CurrentColorContext = createContext<string | undefined>(undefined)
+export const CurrentColorContext = ColorContext
 
-/** `[&_svg]:…` classes of an ancestor: they size every icon below it, as the descendant selector does. */
-export const SvgClassContext = createContext<string | undefined>(undefined)
+export { SvgClassContext }
 
 /** Layout facts a tw() variant reads that GPUIX does not track per element. */
 export interface UiEnvironment {
@@ -255,96 +157,26 @@ export const UiEnvironmentContext = createContext<UiEnvironment>({
   reducedMotion: reducedMotion()
 })
 
-interface SplitClasses {
-  own: string
-  svg?: string
-}
+export const splitDescendantClasses = compatSplit
 
-const splitCache = new Map<string, SplitClasses>()
-
-/** Pull `[&_svg]:x` tokens out of a class string; tw() cannot select descendants. */
-export function splitDescendantClasses(classes: string): SplitClasses {
-  const cached = splitCache.get(classes)
-  if (cached) return cached
-  const own: string[] = []
-  const svg: string[] = []
-  for (const token of classes.split(/\s+/)) {
-    if (!token) continue
-    if (token.startsWith('[&_svg]:')) svg.push(token.slice('[&_svg]:'.length))
-    else if (token.startsWith('[&>svg]:')) svg.push(token.slice('[&>svg]:'.length))
-    else own.push(token)
-  }
-  const split = { own: own.join(' '), svg: svg.length > 0 ? svg.join(' ') : undefined }
-  splitCache.set(classes, split)
-  return split
-}
-
-/**
- * `ml-auto` and friends: GPUIX margins are px only. In a flex row an auto
- * margin hands the free space to that side, so the element grows and places
- * its content at the far end, which paints the same.
- */
-const AUTO_MARGIN: Record<string, StyleDesc> = {
-  'ml-auto': { flexGrow: 1, display: 'flex', justifyContent: 'end' },
-  'ms-auto': { flexGrow: 1, display: 'flex', justifyContent: 'end' },
-  'mr-auto': { flexGrow: 1, display: 'flex', justifyContent: 'start' },
-  'me-auto': { flexGrow: 1, display: 'flex', justifyContent: 'start' },
-  'mx-auto': { flexGrow: 1, display: 'flex', justifyContent: 'center' }
-}
-
-function autoMargins(own: string): { rest: string; style?: StyleDesc } {
-  if (!own.includes('-auto')) return { rest: own }
-  let style: StyleDesc | undefined
-  const rest = own
-    .split(' ')
-    .filter((token) => {
-      const auto = AUTO_MARGIN[token]
-      if (auto) style = { ...style, ...auto }
-      return !auto
-    })
-    .join(' ')
-  return { rest, style }
-}
-
-/** tw() with the element's attributes, the viewport and the reduced-motion flag. */
+/** The element's style: the compat translation of its classes under the given variant state. */
 export function useTw(className: string | undefined, state: TwState = {}, props: object = {}) {
   const env = useContext(UiEnvironmentContext)
-  const split = splitDescendantClasses(className ?? '')
-  const { rest: own, style: auto } = autoMargins(split.own)
-  const svg = split.svg
-  const computed = tw(own, {
+  const tr = translation('div', className)
+  const style = resolveStyle(tr, {
     viewportWidth: env.viewportWidth,
     reducedMotion: env.reducedMotion,
     ...state,
-    attrs: { ...attributesOf(props), ...state.attrs }
+    attrs: { ...(domAttrs(props as DomProps) as TwState['attrs']), ...state.attrs }
   })
-  return { style: auto ? { ...auto, ...computed } : computed, svgClasses: svg }
+  return { style, svgClasses: tr.svgClasses ?? undefined }
 }
 
-/**
- * Wrap bare strings and numbers in `<text>`, the only GPUIX element that paints
- * text. Adjacent ones (`⌘{key}`) share one `<text>`, as they share a line box.
- */
+const FLEX_TEXT = translation('div', 'flex')
+
+/** Bare strings and numbers as text nodes; adjacent ones (`⌘{key}`) share one, as they share a line box. */
 export function wrapText(children: ReactNode): ReactNode {
-  const out: ReactNode[] = []
-  let run: string | null = null
-  let hasText = false
-  const flush = () => {
-    if (run !== null) out.push(<text key={`t${out.length}`}>{run}</text>)
-    run = null
-  }
-  Children.forEach(children, (child) => {
-    if (typeof child === 'string' || typeof child === 'number') {
-      hasText = true
-      run = (run ?? '') + String(child)
-    } else if (child !== null && child !== undefined && typeof child !== 'boolean') {
-      flush()
-      out.push(child)
-    }
-  })
-  if (!hasText) return children
-  flush()
-  return out
+  return layoutChildren(FLEX_TEXT, FLEX_TEXT.base, children, false).children
 }
 
 /** Provide the resolved text colour and `[&_svg]` classes to the subtree. */
@@ -360,8 +192,7 @@ export function Inherit({
   let out = children
   if (svgClasses !== undefined)
     out = <SvgClassContext.Provider value={svgClasses}>{out}</SvgClassContext.Provider>
-  if (color !== undefined)
-    out = <CurrentColorContext.Provider value={color}>{out}</CurrentColorContext.Provider>
+  if (color !== undefined) out = <ColorContext.Provider value={color}>{out}</ColorContext.Provider>
   return out
 }
 
@@ -373,41 +204,28 @@ export interface BoxProps extends HostProps {
 }
 
 /**
- * A `div` styled by its className. The workhorse of every primitive here:
- * attributes become tw() state, strings become `<text>`, handlers get
- * DOM-shaped events, and `data-testid` becomes the automation `testId`.
+ * A `div` styled by its className, built by the compat runtime: attributes
+ * become tw() state, strings become text, handlers get DOM-shaped events that
+ * bubble like the DOM's, and `data-testid` becomes the automation `testId`.
+ * The forwarded ref is the GPUIX instance.
  */
-export const Box = forwardRef<PublicInstance, BoxProps>(function Box(props, ref) {
-  const { className, style, children, state, native, role, tabIndex, autoFocus } = props
-  const { style: twStyle, svgClasses } = useTw(className, state, props)
-  const merged: StyleDesc = style ? { ...twStyle, ...style } : twStyle
-  const handlers = nativeHandlers(props)
-  const nativeProps: NativeDivProps = { ...handlers }
-  if (native) {
-    for (const [key, value] of Object.entries(native) as [keyof NativeDivProps, unknown][]) {
-      const own = nativeProps[key] as Handler<unknown>
-      ;(nativeProps as Record<string, unknown>)[key] =
-        typeof value === 'function' && typeof own === 'function'
-          ? both(own, value as Handler<unknown>)
-          : value
-    }
-  }
-  return (
-    <div
-      ref={ref as Ref<PublicInstance>}
-      {...nativeProps}
-      style={merged}
-      testId={props['data-testid'] as string | undefined}
-      role={role}
-      aria-label={props['aria-label'] as string | undefined}
-      tabIndex={nativeProps.tabIndex ?? tabIndex}
-      autoFocus={autoFocus}
-    >
-      <Inherit color={merged.color as string | undefined} svgClasses={svgClasses}>
-        {wrapText(children)}
-      </Inherit>
-    </div>
-  )
+export const Box = forwardRef<PublicInstance, BoxProps>(function Box(props, ref): ReactElement {
+  const { className, style, state, native, ...rest } = props
+  const env = useContext(UiEnvironmentContext)
+  const tr = translation('div', className)
+  const resolved = resolveStyle(tr, {
+    viewportWidth: env.viewportWidth,
+    reducedMotion: env.reducedMotion,
+    ...state,
+    attrs: { ...(domAttrs(rest as DomProps) as TwState['attrs']), ...state?.attrs }
+  })
+  const dom = { ...rest, className, ref } as unknown as DomProps
+  return buildElement('div', tr, dom, undefined, false, {
+    style: resolved,
+    nativeStyle: style,
+    native: native as Record<string, unknown> | undefined,
+    instanceRef: true
+  })
 })
 
 /** Merge refs, for primitives that keep their own ref and forward the caller's. */

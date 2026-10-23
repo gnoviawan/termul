@@ -13,7 +13,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
 import { childInfo, layoutChildren, wrapAutoMargin } from './children'
-import { ColorContext } from './color'
+import { ColorContext, SvgClassContext } from './color'
 import { ScopeContext, scopedClasses } from './scope'
 import { type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
@@ -38,7 +38,7 @@ const UNSUPPORTED_TAGS = new Set(['iframe', 'canvas', 'video', 'audio', 'object'
 const ATTR_PROPS = new Set(['id', 'role', 'type', 'href', 'name', 'title', 'tabIndex', 'disabled', 'htmlFor', 'value', 'checked', 'placeholder'])
 /** GPUIX ignores `display: none` (measured): a hidden element is an empty, zero-size, unpainted box. */
 const HIDDEN: StyleDesc = { position: 'absolute', width: 0, height: 0, overflow: 'hidden', visibility: 'hidden' }
-const BREAK: StyleDesc = { flexBasis: '100%', width: '100%', height: 0 }
+const BREAK: StyleDesc = { width: '100%', height: 0 }
 const TRACE = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.COMPAT_TRACE === '1'
 const NO_ATTRS: Readonly<Record<string, unknown>> = Object.freeze({})
 
@@ -105,16 +105,23 @@ function passThrough(style: StyleDesc): StyleDesc {
   return hit
 }
 
-const composedRefs = new WeakMap<object, (instance: TrackedInstance | null) => (() => void) | undefined>()
+type AdaptedRef = (instance: TrackedInstance | null) => (() => void) | undefined
+const composedRefs = new WeakMap<object, AdaptedRef>()
+const instanceRefs = new WeakMap<object, AdaptedRef>()
 
-/** Track the instance and hand the user's ref a CompatElement. Cached per ref so identity is stable. */
-function adaptRef(ref: Ref<unknown>): (instance: TrackedInstance | null) => (() => void) | undefined {
-  const cached = composedRefs.get(ref as object)
+/**
+ * Track the instance and hand the user's ref a CompatElement, or with
+ * `raw` the GPUIX instance itself (GPUIX-native primitives). Cached per ref
+ * so identity is stable across renders.
+ */
+function adaptRef(ref: Ref<unknown>, raw = false): AdaptedRef {
+  const cache = raw ? instanceRefs : composedRefs
+  const cached = cache.get(ref as object)
   if (cached) return cached
   const adapted = (instance: TrackedInstance | null) => {
     if (!instance) return undefined
     const untrack = trackInstance(instance)
-    const node = nodeFor(instance.id)
+    const node = raw ? instance : nodeFor(instance.id)
     let cleanup: unknown
     if (typeof ref === 'function') cleanup = ref(node)
     else if (ref) (ref as { current: unknown }).current = node
@@ -125,8 +132,14 @@ function adaptRef(ref: Ref<unknown>): (instance: TrackedInstance | null) => (() 
       else if (ref) (ref as { current: unknown }).current = null
     }
   }
-  composedRefs.set(ref as object, adapted)
+  cache.set(ref as object, adapted)
   return adapted
+}
+
+/** A translation's style under explicit variant state (focus, group hover, viewport…). */
+export function resolveStyle(tr: Translation, state: TwState): StyleDesc {
+  if (tr.compiled.rules.length === 0) return tr.base
+  return applyRules({ ...tr.compiled, base: tr.base }, state, compatDark())
 }
 
 export interface BuildOverrides {
@@ -134,6 +147,21 @@ export interface BuildOverrides {
   style?: StyleDesc
   /** Handlers a host adds in front of the component's. */
   handlers?: Record<string, unknown>
+  /** A GPUIX StyleDesc merged last (a GPUIX primitive's `style` prop). */
+  nativeStyle?: StyleDesc
+  /** Extra GPUIX props (focus handles, outside press); listeners run after the compat ones. */
+  native?: Record<string, unknown>
+  /** Hand `props.ref` the GPUIX instance rather than a CompatElement. */
+  instanceRef?: boolean
+}
+
+function both(a: unknown, b: unknown): unknown {
+  if (typeof a !== 'function') return b
+  if (typeof b !== 'function') return a
+  return (event: unknown) => {
+    ;(a as (e: unknown) => void)(event)
+    ;(b as (e: unknown) => void)(event)
+  }
 }
 
 /** Build the GPUIX element for one DOM element. Shared by the runtime and `CompatHost`. */
@@ -150,10 +178,11 @@ export function buildElement(
   let style =
     overrides?.style ?? (tr.ruleMode === 'props' ? propsStyle(tr, attrs, disabled) : tr.base)
   if (props.hidden === true || style.display === 'none') {
-    const ref = props.ref != null ? adaptRef(props.ref) : undefined
+    const ref = props.ref != null ? adaptRef(props.ref, overrides?.instanceRef) : undefined
     return jsx('div', { style: HIDDEN, ref }, key)
   }
   if (props.style) style = { ...style, ...convertDomStyle(props.style) }
+  if (overrides?.nativeStyle) style = { ...style, ...overrides.nativeStyle }
 
   const listeners: GpuixListeners = {}
   const source = overrides?.handlers ? { ...props, ...overrides.handlers } : props
@@ -175,14 +204,17 @@ export function buildElement(
     value: typeof props.value === 'string' ? props.value : undefined
   }
   const native: Record<string, unknown> = { style, __dom: dom, ...listeners }
-  if (tracked) native.ref = userRef != null ? adaptRef(userRef) : trackInstance
+  if (overrides?.native) {
+    for (const [name, value] of Object.entries(overrides.native)) native[name] = both(native[name], value)
+  }
+  if (tracked) native.ref = userRef != null ? adaptRef(userRef, overrides?.instanceRef) : trackInstance
   if (userRef != null) native.onLayout = layoutListener
   const testId = props['data-testid']
   if (typeof testId === 'string') native.testId = testId
   if (typeof props.role === 'string') native.role = props.role
   if (typeof props['aria-label'] === 'string') native['aria-label'] = props['aria-label']
   if (typeof props.tabIndex === 'number') native.tabIndex = props.tabIndex
-  else if (focusable) native.tabIndex = 0
+  else if (focusable && native.tabIndex === undefined) native.tabIndex = 0
   if (props.autoFocus === true) native.autoFocus = true
 
   let element: ReactElement
@@ -213,6 +245,10 @@ export function buildElement(
       kids = (laid.isStatic ? jsxs : jsx)(ColorContext.Provider, { value: style.color, children: kids })
       wrapped = true
     }
+    if (nested && tr.svgClasses) {
+      kids = (laid.isStatic && !wrapped ? jsxs : jsx)(SvgClassContext.Provider, { value: tr.svgClasses, children: kids })
+      wrapped = true
+    }
     if (nested && tr.scope) {
       kids = (laid.isStatic && !wrapped ? jsxs : jsx)(ScopeContext.Provider, { value: tr.scope, children: kids })
       wrapped = true
@@ -227,7 +263,7 @@ export function buildElement(
   if (!childInfo.has(element)) childInfo.set(element, { inline: tr.inline })
   if (TRACE) log.info('compat-trace', `${tag}.${props.className ?? ''} -> ${element.type as string} ${JSON.stringify((element.props as { style?: unknown }).style)}`)
   if (tr.fixed) {
-    return jsx('anchored', { fill: 'window', style: { backgroundColor: 'transparent' }, children: element }, key)
+    return jsx('anchored' as never, { fill: 'window', style: { backgroundColor: 'transparent' }, children: element }, key)
   }
   if (tr.autoMargin) return wrapAutoMargin(element, tr.autoMargin, key)
   return element
@@ -244,7 +280,7 @@ export function createDomElement(
   if (SKIPPED.has(tag)) return jsx('div', { style: HIDDEN }, key)
   if (tag === 'br' || tag === 'wbr') return jsx('div', { style: tag === 'br' ? BREAK : HIDDEN }, key)
   if (UNSUPPORTED_TAGS.has(tag)) compatWarn('element-unsupported', tag)
-  if (SVG_CHILD_TAGS.has(tag)) return jsx(tag, props, key)
+  if (SVG_CHILD_TAGS.has(tag)) return jsx(tag as never, props, key)
   const scoped = scopedClasses(tag, props['data-streamdown'])
   const className = scoped ? (props.className ? `${scoped} ${props.className}` : scoped) : props.className
   const tr = translation(tag, className)

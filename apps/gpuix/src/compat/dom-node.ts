@@ -558,9 +558,7 @@ function matchesCompound(node: CompatElement, compound: Compound): boolean {
     if (test.op === '*=' && !actual.includes(want)) return false
     if (test.op === '~=' && !actual.split(/\s+/).includes(want)) return false
   }
-  for (const alternatives of compound.not) {
-    if (alternatives.some((alt) => alt.every((c) => matchesCompound(node, c)))) return false
-  }
+  if (compound.not.some((chain) => chain.every((c) => matchesCompound(node, c)))) return false
   return true
 }
 

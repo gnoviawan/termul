@@ -60,6 +60,8 @@ export interface Translation {
   readonly listInside: boolean
   /** row-reverse / column-reverse, which GPUIX ignores: children are laid out reversed instead. */
   readonly reverse: boolean
+  /** `[&_svg]:x` / `[&>svg]:x` tokens, provided to icons below. */
+  readonly svgClasses: string | null
 }
 
 const PHRASING = new Set([
@@ -136,6 +138,7 @@ interface Lifted {
   listInside: boolean
   display: 'inline' | 'block' | null
   scope: ScopeName | null
+  svg: string[]
 }
 
 /** Pull out the tokens tw() has no StyleDesc for. Variant-prefixed ones stay with tw(). */
@@ -149,12 +152,18 @@ function lift(className: string): Lifted {
     listMarker: null,
     listInside: false,
     display: null,
-    scope: null
+    scope: null,
+    svg: []
   }
   for (const raw of className.split(/\s+/)) {
     if (!raw) continue
     // `group-hover/name:` binds to the nearest group, whatever its name.
     const token = raw.includes('/') ? raw.replace(NAMED_GROUP_VARIANT, '$1$2') : raw
+    const svg = svgToken(token)
+    if (svg !== null) {
+      lifted.svg.push(svg)
+      continue
+    }
     if (token === 'group' || token.startsWith('group/')) {
       lifted.group = token
       continue
@@ -191,6 +200,25 @@ function lift(className: string): Lifted {
   }
   lifted.classes = kept.join(' ')
   return lifted
+}
+
+function svgToken(token: string): string | null {
+  if (token.startsWith('[&_svg]:')) return token.slice('[&_svg]:'.length)
+  if (token.startsWith('[&>svg]:')) return token.slice('[&>svg]:'.length)
+  return null
+}
+
+/** Split `[&_svg]:x` tokens from a class string; tw() cannot select descendants. */
+export function splitDescendantClasses(classes: string): { own: string; svg?: string } {
+  const own: string[] = []
+  const svg: string[] = []
+  for (const token of classes.split(/\s+/)) {
+    if (!token) continue
+    const lifted = svgToken(token)
+    if (lifted !== null) svg.push(lifted)
+    else own.push(token)
+  }
+  return { own: own.join(' '), svg: svg.length > 0 ? svg.join(' ') : undefined }
 }
 
 function hasAny(style: StyleDesc, keys: readonly (keyof StyleDesc)[]): boolean {
@@ -265,7 +293,8 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     hoverable: base.hover !== undefined || base.active !== undefined,
     scope: lifted.scope,
     listInside: lifted.listInside,
-    reverse
+    reverse,
+    svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null
   }
 }
 

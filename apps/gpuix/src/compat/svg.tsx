@@ -7,7 +7,8 @@
 import type { StyleDesc } from '@gpuix/react'
 import { Children, isValidElement, type ReactElement, type ReactNode, useContext } from 'react'
 import { jsx } from 'react/jsx-runtime'
-import { ColorContext } from './color'
+import { ColorContext, SvgClassContext } from './color'
+import { translation } from './translate'
 import { compatWarn } from './log'
 
 export const SVG_CHILD_TAGS = new Set([
@@ -81,9 +82,11 @@ interface CompatSvgProps {
 
 function CompatSvg({ native }: CompatSvgProps): ReactElement {
   const inherited = useContext(ColorContext)
-  const style = native.style as StyleDesc
-  if (style.color !== undefined || inherited === undefined) return jsx('svg', native)
-  return jsx('svg', { ...native, style: { ...style, color: inherited } })
+  const descendant = useContext(SvgClassContext)
+  let style = native.style as StyleDesc
+  if (descendant) style = { ...style, ...translation('svg', descendant).base }
+  if (style.color === undefined && inherited !== undefined) style = { ...style, color: inherited }
+  return style === native.style ? jsx('svg', native) : jsx('svg', { ...native, style })
 }
 
 export function svgElement(

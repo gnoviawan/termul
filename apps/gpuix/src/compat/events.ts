@@ -55,12 +55,13 @@ const KEY_NAMES: Readonly<Record<string, string>> = {
   shift: 'Shift', control: 'Control', alt: 'Alt', platform: 'Meta', capslock: 'CapsLock'
 }
 
-function domKey(key: string | undefined, keyChar: string | undefined): string | undefined {
+/** GPUI key name (and produced character) -> `KeyboardEvent.key`. */
+export function domKey(key: string | undefined, keyChar?: string): string | undefined {
   if (key === undefined) return undefined
   const named = KEY_NAMES[key]
   if (named) return named
   if (/^f\d{1,2}$/.test(key)) return key.toUpperCase()
-  return keyChar && keyChar.length > 0 ? keyChar : key
+  return keyChar && keyChar.length === 1 ? keyChar : key
 }
 
 function domCode(key: string | undefined): string | undefined {
