@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": ["bun"],
+    "paths": {
+      "@/*": ["../../src/renderer/*"],
+      "@renderer/*": ["../../src/renderer/*"],
+      "@shared/*": ["../../src/shared/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "#app/boot": ["./src/boot-contract.ts"]
+    }
+  },
+  "include": ["src/main.tsx", "src/env", "src/log.ts", "build.ts", "tools"]
+}
