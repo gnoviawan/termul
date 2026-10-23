@@ -13,6 +13,7 @@ export type GapClass =
   | 'native override needed'
   | 'server route needed'
   | 'blocked upstream'
+  | 'needs diagnosis'
 
 export interface Review {
   status: Status
@@ -31,6 +32,11 @@ const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
 const CHECKBOX = 'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
 const OVERLAY = 'the modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
+const OVERLAP =
+  'In the Chats list two chat cards paint on top of each other once a second chat exists, and GPUIX lists only the seeded chat where the web lists all three.'
+const PROSE =
+  'Native markdown prose loses inline-code chips, link colour and italics, and some runs pick up a warm tint; a blockquote gets a filled background instead of a rule.'
+const TREE_TEXT = 'The text check fails only because natively painted text is not in the automation tree.'
 const TOAST =
   'The toast is the sonner shim: a flat green box at the window edge with the close button on the right, where the web shows a card with a check icon and the close button at its top-left.'
 
@@ -130,6 +136,97 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['The commit lands (4 commits, bump version) in both.', TOAST],
     cause: 'native override needed',
     unit: 'O4 toasts',
+    impact: 1
+  },
+  'git.branch-picker': { status: 'ported', differences: ['Branch popover, Local group, feature/login and Create branch row match.'] },
+  'git.worktree-create': { status: 'ported', differences: ['Typing a new name shows No matching working copies and Create worktree feat-matrix in both.'] },
+  'chat.transcript': {
+    status: 'partial',
+    differences: ['The transcript, code card, task list, Worked for row and Changed files bar all render.', PROSE, TREE_TEXT],
+    cause: 'native override needed',
+    unit: 'O5 native prose styling',
+    impact: 3
+  },
+  'chat.scroll-top': {
+    status: 'broken',
+    differences: [
+      'One wheel event of -20000 px over the transcript scrolls the web to the first turn; GPUIX stays at the bottom. chat:check scrolls through its control file, so wheel scrolling in the full app is not covered elsewhere.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'O6 transcript wheel scroll',
+    impact: 3
+  },
+  'chat.new-chat': { status: 'ported', differences: ['New chat opens the launcher composer in place.'] },
+  'chat.agent-launcher': {
+    status: 'broken',
+    differences: [
+      'Opening the agent and model popover crashes the pane: its error boundary shows "Something went wrong in Terminal Pane: GPUIX host node does not belong to a root". The web shows the model search popover.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'C2 menus and popovers',
+    impact: 3
+  },
+  'chat.send': {
+    status: 'partial',
+    differences: [
+      'Typing and Enter start a chat and the scripted reply streams in both.',
+      'Mermaid shows as source ("Mermaid diagrams are shown as source in this client") where the web draws the diagram.',
+      PROSE,
+      OVERLAP
+    ],
+    cause: 'needs diagnosis',
+    unit: 'O7 chat list sync and layout',
+    impact: 3
+  },
+  'chat.model-selector': {
+    status: 'partial',
+    differences: ['The running chat shows the agent chip and composer like the web.', OVERLAP, PROSE],
+    cause: 'needs diagnosis',
+    unit: 'O7 chat list sync and layout',
+    impact: 2
+  },
+  'composer.mention': {
+    status: 'ported',
+    differences: [
+      'Both show "No files or folders match" for a bare @ on this server, so the file list itself is not compared here (tools/composer/e2e.ts covers it).',
+      'The web draws a focus ring on the composer; GPUIX does not.'
+    ]
+  },
+  'composer.slash': { status: 'ported', differences: ['The Skills menu matches row for row.', 'No focus ring on the GPUIX composer.'] },
+  'composer.attach': {
+    status: 'ported',
+    differences: ['Clicking Attach files opens nothing visible in either client in this headless run (the web file chooser is a native dialog Playwright does not paint).']
+  },
+  'terminal.open': { status: 'ported', differences: ['Terminal tab and prompt match; the GPUIX tab title truncates to "Ter..." where the web shows "Terminal 1".'] },
+  'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
+  'terminal.vim-replies': {
+    status: 'ported',
+    differences: [
+      'After vim -u NONE and :q! both clients show a clean prompt. The echoed query replies (^[[>0;276;0c ... rgb:) from the O1 fixture did not appear in either client here.',
+      'GPUIX draws a block cursor; the unfocused web terminal draws none.'
+    ]
+  },
+  'terminal.file-link': {
+    status: 'ported',
+    differences: ['Ctrl+click on src/app.ts in terminal output opens app.ts in a new tab in both.', TREE_TEXT]
+  },
+  'terminal.new-tab-menu': { status: 'ported', differences: ['The new tab menu matches.'] },
+  'terminal.split': {
+    status: 'unverified',
+    differences: ['Ctrl+Shift+D split nothing in the web client either, so the split binding in this build is not that key; split panes are not compared.']
+  },
+  'statusbar.items': {
+    status: 'partial',
+    differences: ['Branch, path, Terminal and settings items line up.', LAMP],
+    cause: 'compat translator gap',
+    unit: 'C7 svg fill utilities',
+    impact: 1
+  },
+  'statusbar.context-bar': {
+    status: 'broken',
+    differences: ['The Show in Context Bar popover (five toggles) does not open on click.'],
+    cause: 'compat translator gap',
+    unit: 'C2 menus and popovers',
     impact: 1
   }
 }
