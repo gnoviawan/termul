@@ -12,6 +12,8 @@ export interface ClientLaunchOptions {
   distWeb: string
   /** Software rasterizer. lavapipe is the Vulkan driver the GPUIX lane uses. */
   gl: 'lavapipe' | 'swiftshader' | 'cpu'
+  /** Skip the in-page observers, whose rAF loop keeps an idle page drawing. */
+  noPageMetrics?: boolean
 }
 
 /** What every client lane must expose to the scenarios. */

@@ -77,7 +77,7 @@ export async function launchChromium(opts: ClientLaunchOptions): Promise<Chromiu
   })
   const page = await context.newPage()
   const collector = await createCollector(page)
-  await collector.inject()
+  if (!opts.noPageMetrics) await collector.inject()
   const launchedMs = performance.now() - t0
   await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
   const backend = await page.evaluate(() => {

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { ClientDriver } from './clients/client.ts'
 
-export type ScenarioName = 'stream-storm' | 'pty-flood'
+export type ScenarioName = 'idle' | 'stream-storm' | 'pty-flood'
 export type Flags = Record<string, number>
 
 /** One measured window. The runner wraps it with proc, byte and page capture. */
@@ -23,6 +23,8 @@ export interface ScenarioEnv {
 }
 
 export const DEFAULTS: Record<ScenarioName, Flags> = {
+  // Boot, let first-run work finish, then sit on the launcher with no input.
+  idle: { settle: 20, measure: 20 },
   // Same shape as tools/perf stream-storm: agents × sessions-per-agent chats.
   'stream-storm': {
     agents: 4,
@@ -147,7 +149,13 @@ async function ptyFlood({ driver, clock, flags, seed, scratch }: ScenarioEnv): P
   })
 }
 
+async function idle({ clock, flags }: ScenarioEnv): Promise<void> {
+  await clock.phase('settle', () => sleep(flags.settle * 1000))
+  await clock.phase('measure', () => sleep(flags.measure * 1000))
+}
+
 export const SCENARIOS: Record<ScenarioName, (env: ScenarioEnv) => Promise<void>> = {
+  idle,
   'stream-storm': streamStorm,
   'pty-flood': ptyFlood
 }

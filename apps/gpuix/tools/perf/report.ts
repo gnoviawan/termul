@@ -16,6 +16,19 @@ interface Cell {
 type Aggregate = { scenarios: Record<string, { okRuns: number; metrics: Record<string, Cell> }> }
 
 const HEADLINE: Record<string, string[]> = {
+  idle: [
+    'startup.projectListMs',
+    'startup.launcherReadyMs',
+    'measure.proc.total.pssMedianMB',
+    'measure.proc.total.rssMedianMB',
+    'measure.proc.page-renderer.pssMedianMB',
+    'measure.proc.total.cpuMeanPct',
+    'measure.proc.page-renderer.cpuMeanPct',
+    'measure.proc.gpu-process.cpuMeanPct',
+    'measure.page.fps',
+    'measure.bytesDownKBps',
+    'measure.machine.foreignCpuPct'
+  ],
   'stream-storm': [
     'startup.projectListMs',
     'startup.launcherReadyMs',

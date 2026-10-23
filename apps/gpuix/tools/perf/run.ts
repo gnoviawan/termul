@@ -42,6 +42,7 @@ interface Options {
   /** Wait before each run until the machine's busy CPU drops under this (% of one core). */
   quietBelowPct: number
   quietWaitS: number
+  noPageMetrics: boolean
   distWeb: string
   outDir: string
   overrides: Flags
@@ -73,6 +74,7 @@ function parseArgs(argv: string[]): Options {
     seed: Number(take('seed', '42')),
     quietBelowPct: Number(take('quiet-below', '150')),
     quietWaitS: Number(take('quiet-wait', '600')),
+    noPageMetrics: take('page-metrics', 'on') === 'off',
     distWeb: path.resolve(take('dist-web', DIST_WEB)),
     outDir: path.resolve(take('out', path.join(HERE, 'results', `linux-${stamp}`))),
     overrides: {}
@@ -177,7 +179,8 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
       width: opts.width,
       height: opts.height,
       distWeb: opts.distWeb,
-      gl: opts.gl
+      gl: opts.gl,
+      noPageMetrics: opts.noPageMetrics
     })
     sampler = startProcSampler(handle.rootPid, chromiumRole)
     driver = chromiumDriver(handle)
@@ -194,7 +197,7 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
       from: wall0,
       to: Date.now(),
       bytes: proxy.counters(),
-      page: bootPage ? summarizePage(bootPage, Date.now() - wall0) : {}
+      page: bootPage && !opts.noPageMetrics ? summarizePage(bootPage, Date.now() - wall0) : {}
     })
 
     const d = driver
@@ -207,7 +210,13 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
         const to = Date.now()
         const bytes = proxy.counters()
         const page = await d.endPhase(name)
-        windows.push({ name, from, to, bytes, page: page ? summarizePage(page, to - from) : {} })
+        windows.push({
+          name,
+          from,
+          to,
+          bytes,
+          page: page && !opts.noPageMetrics ? summarizePage(page, to - from) : {}
+        })
       },
       note: (key, value) => {
         notes[key] = value
@@ -282,6 +291,7 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
       clientVersion: notes.client,
       backend: notes.backend,
       gl: opts.gl,
+      pageMetrics: !opts.noPageMetrics,
       seed: opts.seed,
       flags,
       viewport: `${opts.width}x${opts.height}`,
