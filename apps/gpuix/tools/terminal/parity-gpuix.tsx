@@ -69,6 +69,7 @@ function App() {
           onInput={() => {}}
           onMetrics={() => setMeasured(true)}
           cell={cell}
+          scrollbarWidth={0}
           focused
           cursorBlink={false}
           testId="parity-terminal"

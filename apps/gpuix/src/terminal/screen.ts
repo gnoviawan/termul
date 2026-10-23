@@ -8,6 +8,7 @@
  * (`viewportY + y` for a visible row `y`); `col` is a cell column.
  */
 import { type IBufferCell, Terminal } from '@xterm/headless'
+import { installColorReports } from './color-reports'
 import { buildPalette, resolveCellColors, type TerminalPalette, type TerminalTheme } from './colors'
 import { type MouseEncoding, trackMouseEncoding } from './mouse'
 
@@ -98,6 +99,7 @@ export class TerminalScreen {
     this.terminal.onResize(() => this.invalidate())
     this.terminal.onCursorMove(() => this.invalidate())
     this.mouse = trackMouseEncoding(this.terminal)
+    installColorReports(this.terminal, () => this.palette)
   }
 
   /** The mouse report encoding the running program selected (DECSET 1006/1016). */

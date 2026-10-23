@@ -1,43 +1,41 @@
 /**
- * Web vs GPUIX shot of the same workspace terminal tab at 1280x800: the DOM
- * web client (this worktree's dist-web, Playwright chromium) opens a terminal
- * from the tab bar's New tab menu; the GPUIX pane scene opens one through
- * spawnTerminalInPane with its pane body at the box the web pane occupies.
- * Both shells then `cat` T1's recorded fixture up to its `done` checkpoint,
- * so both grids hold the same bytes at the same size. The pane box is
- * cropped from both window shots and diffed (exact and perceptual).
+ * Web vs GPUIX shot of the same workspace terminal tab at 1280x800, both in
+ * the real app shell. Each client gets a fresh test server seeded the same way
+ * (same state dir, so the same prompt and cwd), opens a terminal from the
+ * status-bar Terminal button, clicks into it, and `cat`s T1's recorded fixture
+ * up to a checkpoint. The terminal pane box the web client paints is cropped
+ * from both window shots and diffed (exact and perceptual).
  *
- * bun tools/terminal/pane-parity.ts [--out /tmp/gpuix-o1/parity]
+ * The web client is this worktree's dist-web (`bun run build:web` at the repo root).
+ *
+ * bun tools/terminal/pane-parity.ts [--out DIR] [--state-dir DIR] [--checkpoint done]
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
-import { launch } from '@gpuix/react/automation'
-import { chromium } from 'playwright'
-import { PNG } from 'pngjs'
-import { APP_DIR } from '../../build'
-import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
-import { diffPngs } from '../parity/diff'
-import { addProject, startTestServer } from '../parity/server'
-import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, windowOrigin } from '../parity/shoot-gpuix'
-import { DIST_WEB } from '../parity/shoot-web'
+import { buildClient } from '../../build'
+import { cropPng, diffPngs, type Rect } from '../parity/diff'
+import { startTestServer, type TestServer } from '../parity/server'
+import { READY_TIMEOUT_MS, withGpuix } from '../parity/shoot-gpuix'
+import { withWeb } from '../parity/shoot-web'
+import { seedWorkspace } from '../parity/workspace'
 import { FIXTURE_BYTES, FIXTURE_CHECKPOINTS } from './fixture'
-import { buildScene } from './scene/build'
-import type { PaneSceneState } from './scene/contract'
+import { openStatusBarTerminal, terminals } from './shell-tree'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
     out: { type: 'string', default: '/tmp/gpuix-o1/parity' },
-    root: { type: 'string', default: '/tmp/gpuix-o1/parity-state' },
+    'state-dir': { type: 'string', default: '/tmp/gpuix-o1/parity-state' },
     checkpoint: { type: 'string', default: 'done' }
   }
 })
 const OUT = values.out!
-const ROOT = values.root!
-mkdirSync(OUT, { recursive: true })
-if (!existsSync(path.join(DIST_WEB, 'index.html')))
-  throw new Error(`${DIST_WEB} has no index.html: run \`bun run build:web\` at the repo root`)
+const STATE = values['state-dir']!
+const SIZE = { width: 1280, height: 800 }
+const COMMAND = 'clear; cat fixture.out'
+const SETTLE_MS = 2500
+const READY_TEXT = 'What should we do in alpha?'
 
 function freePort(): number {
   const listening = Bun.spawnSync(['ss', '-ltnH']).stdout.toString()
@@ -45,185 +43,122 @@ function freePort(): number {
   throw new Error('no free port in 8190-8199')
 }
 
-function freeDisplay(): number {
-  for (let n = 150; n < 250; n++)
-    if (!existsSync(`/tmp/.X${n}-lock`) && !existsSync(`/tmp/.X11-unix/X${n}`)) return n
-  throw new Error('no free X display in :150-:249')
-}
-
-function crop(
-  file: string,
-  box: { x: number; y: number; width: number; height: number },
-  out: string
-) {
-  const source = PNG.sync.read(readFileSync(file))
-  const target = new PNG({ width: box.width, height: box.height })
-  PNG.bitblt(source, target, box.x, box.y, box.width, box.height, 0, 0)
-  writeFileSync(out, PNG.sync.write(target))
-}
-
-const token = 'o1-parity-token'
-const server = await startTestServer({
-  port: freePort(),
-  token,
-  stateDir: path.join(ROOT, 'server')
-})
-const project = { id: 'o1-parity', name: 'Parity', path: path.join(ROOT, 'project'), color: 'blue' }
-await addProject(server, project)
-const offsets = JSON.parse(readFileSync(FIXTURE_CHECKPOINTS, 'utf8')) as Record<string, number>
+const offsets = JSON.parse(await readFile(FIXTURE_CHECKPOINTS, 'utf8')) as Record<string, number>
 const limit = offsets[values.checkpoint!]
 if (limit === undefined) throw new Error(`no checkpoint ${values.checkpoint}`)
-const fixture = path.join(project.path, 'fixture.out')
-writeFileSync(fixture, new Uint8Array(readFileSync(FIXTURE_BYTES)).subarray(0, limit))
-const COMMAND = 'clear; cat fixture.out'
-const SETTLE_MS = 2500
+const fixtureBytes = new Uint8Array(await readFile(FIXTURE_BYTES)).subarray(0, limit)
 
-// Web: the real app shell, New tab -> Terminal.
-const browser = await chromium.launch({
-  args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
-})
-let box: { x: number; y: number; width: number; height: number }
-const webPng = path.join(OUT, 'web-window.png')
-try {
-  const context = await browser.newContext({
-    viewport: { width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
-    deviceScaleFactor: 1,
-    colorScheme: 'dark',
-    reducedMotion: 'reduce',
-    serviceWorkers: 'block'
-  })
-  await context.route(`${server.baseUrl}/**`, async (route) => {
-    const request = route.request()
-    const url = new URL(request.url())
-    const file = path.join(DIST_WEB, url.pathname === '/' ? 'index.html' : url.pathname)
-    if (
-      request.method() === 'GET' &&
-      file.startsWith(DIST_WEB) &&
-      existsSync(file) &&
-      !file.endsWith(path.sep)
-    ) {
-      await route.fulfill({ path: file })
-      return
-    }
-    await route.continue()
-  })
-  await context.addInitScript((t) => localStorage.setItem('termul.webAuthToken', t), token)
-  const page = await context.newPage()
-  await page.goto(server.baseUrl)
-  const projectButton = page.getByText(project.name, { exact: true }).first()
-  await projectButton.waitFor({ timeout: 30_000 })
-  await projectButton.click()
-  await page.getByRole('button', { name: 'New tab' }).first().click()
-  await page.getByRole('group', { name: 'Terminal' }).getByRole('menuitem').first().click()
-  const pane = page.locator('div.bg-terminal-bg:has(.xterm)').first()
-  await pane.waitFor({ timeout: 30_000 })
-  await page.waitForTimeout(1500)
-  await page.locator('.xterm').first().click()
-  await page.keyboard.type(COMMAND)
-  await page.keyboard.press('Enter')
-  await page.waitForTimeout(SETTLE_MS)
-  await page.mouse.move(0, 0)
-  const rect = (await pane.boundingBox())!
-  box = {
-    x: Math.round(rect.x),
-    y: Math.round(rect.y),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height)
-  }
-  await page.screenshot({ path: webPng })
-} finally {
-  await browser.close()
-}
-
-// GPUIX: the pane scene with its body at the web pane's box.
-const entry = await buildScene()
-const control = path.join(ROOT, 'control.json')
-const stateFile = path.join(ROOT, 'state.json')
-rmSync(control, { force: true })
-rmSync(stateFile, { force: true })
-const display = `:${freeDisplay()}`
-const xvfb = Bun.spawn(
-  [
-    'Xvfb',
-    display,
-    '-nocursor',
-    '-screen',
-    '0',
-    `${WINDOW_WIDTH + SCREEN_MARGIN}x${WINDOW_HEIGHT + SCREEN_MARGIN}x24`
-  ],
-  {
-    stdout: 'ignore',
-    stderr: 'ignore'
-  }
-)
-const gpuixPng = path.join(OUT, 'gpuix-window.png')
-let rows: string[] = []
-try {
-  while (!existsSync(`/tmp/.X11-unix/X${display.slice(1)}`)) await Bun.sleep(50)
-  const app = await launch({
-    command: 'bun',
-    args: [entry],
-    cwd: APP_DIR,
-    env: {
-      ...process.env,
-      DISPLAY: display,
-      VK_ICD_FILENAMES: process.env.VK_ICD_FILENAMES ?? LAVAPIPE_ICD,
-      GPUIX_BACKGROUND: '1',
-      TERMUL_SERVER_URL: server.baseUrl,
-      TERMUL_SERVER_TOKEN: token,
-      TERMUL_GPUIX_STATE_DIR: path.join(ROOT, 'client'),
-      PANE_CONTROL: control,
-      PANE_STATE: stateFile,
-      PANE_BOX: `${box.x},${box.y},${box.width},${box.height}`
-    }
+/** A fresh server at the same state path, seeded with the workspace projects and the fixture. */
+async function withSeededServer<T>(body: (server: TestServer) => Promise<T>): Promise<T> {
+  await rm(STATE, { recursive: true, force: true })
+  const server = await startTestServer({
+    port: freePort(),
+    token: 'o1-parity-token',
+    stateDir: path.join(STATE, 'server')
   })
   try {
-    writeFileSync(
-      control,
-      JSON.stringify({ seq: 1, open: { projectId: project.id, cwd: project.path } })
-    )
-    const read = () => {
-      try {
-        return JSON.parse(readFileSync(stateFile, 'utf8')) as PaneSceneState
-      } catch {
-        return null
-      }
-    }
-    const deadline = Date.now() + 30_000
-    let terminal = read()?.terminals[0]
-    while (!terminal?.grid || !terminal.visibleText.some((r) => r.trim())) {
-      if (Date.now() > deadline) throw new Error('GPUIX terminal never showed a prompt')
-      await Bun.sleep(100)
-      terminal = read()?.terminals[0]
-    }
-    const node = await app.getByTestId(`terminal-${terminal.storeId}`).element()
-    const keys = [...COMMAND].map((ch) => (ch === ' ' ? 'space' : ch)).join(' ')
-    await app.call('keystrokes', { elementId: node.id, keys: `${keys} enter` })
-    await Bun.sleep(SETTLE_MS)
-    rows = read()?.terminals[0]?.visibleText ?? []
-    const origin = await windowOrigin(display, WINDOW_WIDTH, WINDOW_HEIGHT)
-    await grabFrame(display, WINDOW_WIDTH, WINDOW_HEIGHT, gpuixPng, origin)
+    await seedWorkspace(server)
+    await writeFile(path.join(server.stateDir, 'projects', 'alpha', 'fixture.out'), fixtureBytes)
+    return await body(server)
   } finally {
-    await app.close()
+    await server.stop()
   }
-} finally {
-  xvfb.kill()
-  await server.stop()
 }
+
+await mkdir(OUT, { recursive: true })
+const webPng = path.join(OUT, 'web-window.png')
+const gpuixPng = path.join(OUT, 'gpuix-window.png')
+
+const STTY_FILE = '.stty'
+/** `rows cols` as the shell saw them, written by `stty size > .stty` in the project dir. */
+async function readStty(server: TestServer): Promise<string> {
+  const file = path.join(server.stateDir, 'projects', 'alpha', STTY_FILE)
+  const deadline = Date.now() + 10_000
+  for (;;) {
+    const text = await readFile(file, 'utf8').catch(() => '')
+    if (/^\d+ \d+$/.test(text.trim())) return text.trim()
+    if (Date.now() > deadline) throw new Error('stty size never written')
+    await Bun.sleep(100)
+  }
+}
+const grids: Record<'web' | 'gpuix', { stty?: string; cellWidth?: number; cellHeight?: number }> = {
+  web: {},
+  gpuix: {}
+}
+
+const box: Rect = await withSeededServer((server) =>
+  withWeb({ server, ...SIZE }, async ({ page, grab }) => {
+    await page.getByText(READY_TEXT, { exact: true }).first().waitFor({ timeout: READY_TIMEOUT_MS })
+    await page.locator('[data-status-bar] button', { hasText: 'Terminal' }).first().click()
+    const pane = page.locator('div.bg-terminal-bg:has(.xterm)').first()
+    await pane.waitFor({ timeout: READY_TIMEOUT_MS })
+    await page.waitForTimeout(1500)
+    const rect = (await pane.boundingBox())!
+    await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    await page.keyboard.type(`stty size > ${STTY_FILE}`)
+    await page.keyboard.press('Enter')
+    const stty = await readStty(server)
+    const screen = (await page.locator('.xterm-screen').first().boundingBox())!
+    const [rows, cols] = stty.split(' ').map(Number) as [number, number]
+    grids.web = { stty, cellWidth: screen.width / cols, cellHeight: screen.height / rows }
+    await page.keyboard.type(COMMAND)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(SETTLE_MS)
+    await page.mouse.move(0, 0)
+    await grab(webPng)
+    return {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height)
+    }
+  })
+)
+
+const build = await buildClient()
+if (!build.ok) {
+  for (const line of build.logs) console.error(line)
+  process.exit(1)
+}
+await withSeededServer((server) =>
+  withGpuix(
+    { server, entry: build.entry, clientStateDir: path.join(STATE, 'client'), ...SIZE },
+    async ({ app, grab }) => {
+      await app.getByText(READY_TEXT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
+      const testId = await openStatusBarTerminal(app, SIZE.height)
+      await Bun.sleep(1500)
+      await app.mouse.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 })
+      const node = await app.getByTestId(testId).element()
+      const sttyKeys = [...`stty size > ${STTY_FILE}`].map((ch) => (ch === ' ' ? 'space' : ch))
+      await app.call('keystrokes', { elementId: node.id, keys: `${sttyKeys.join(' ')} enter` })
+      const stty = await readStty(server)
+      const term = (await terminals(app)).find((x) => x.testId === testId)
+      const row = term?.rows.find((r) => r.cellWidth !== null)
+      grids.gpuix = { stty, cellWidth: row?.cellWidth ?? undefined, cellHeight: row?.height }
+      const keys = [...COMMAND].map((ch) => (ch === ' ' ? 'space' : ch)).join(' ')
+      await app.call('keystrokes', { elementId: node.id, keys: `${keys} enter` })
+      await Bun.sleep(SETTLE_MS)
+      await app.mouse.move({ x: 0, y: 0 })
+      await grab(gpuixPng)
+    }
+  )
+)
 
 const webCrop = path.join(OUT, 'web.png')
 const gpuixCrop = path.join(OUT, 'gpuix.png')
-crop(webPng, box, webCrop)
-crop(gpuixPng, box, gpuixCrop)
-const pixels = diffPngs(webCrop, gpuixCrop, path.join(OUT, 'diff.png'))
+cropPng(webPng, box, webCrop)
+cropPng(gpuixPng, box, gpuixCrop)
+const pane = diffPngs(webCrop, gpuixCrop, path.join(OUT, 'diff.png'))
+const window = diffPngs(webPng, gpuixPng, path.join(OUT, 'window-diff.png'))
+const pct = (n: number) => Number(n.toFixed(2))
 const report = {
-  box,
   checkpoint: values.checkpoint,
-  gpuixRows: rows.filter((r) => r.trim()).length,
-  pixels: {
-    size: [pixels.width, pixels.height],
-    exactPercent: Number(pixels.exact.percent.toFixed(2)),
-    perceptualPercent: Number(pixels.perceptual.percent.toFixed(2))
+  box,
+  grids,
+  pane: { exactPercent: pct(pane.exact.percent), perceptualPercent: pct(pane.perceptual.percent) },
+  window: {
+    exactPercent: pct(window.exact.percent),
+    perceptualPercent: pct(window.perceptual.percent)
   },
   png: {
     web: webCrop,
@@ -233,5 +168,5 @@ const report = {
     gpuixWindow: gpuixPng
   }
 }
-writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2))
+await writeFile(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2))
 console.log(JSON.stringify(report, null, 2))

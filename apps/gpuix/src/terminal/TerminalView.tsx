@@ -17,7 +17,8 @@ import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_SIZE,
   TERMINAL_FONT_WEIGHT_BOLD,
-  TERMINAL_LINE_HEIGHT
+  TERMINAL_LINE_HEIGHT,
+  terminalCharHeight
 } from './fonts'
 import { encodeKey, encodePaste } from './keys'
 import { encodeMouse, type MouseAction, type MouseButton, type MouseTracking } from './mouse'
@@ -58,12 +59,19 @@ export interface TerminalViewProps {
   /**
    * Fixed cell geometry, for example the one xterm.js measured in Chromium.
    * Without it the cell is derived from the font the way xterm.js does it:
-   * `floor(advance)` wide and `floor(charHeight * lineHeight)` tall.
+   * `floor(advance)` wide and `floor(ceil(charHeight) * lineHeight)` tall.
    */
   cell?: CellMetrics
   /** Pixels between the element edge and the grid, like `.xterm` padding. */
   padding?: number
+  /**
+   * Width kept free at the right edge, as xterm's FitAddon keeps it for the
+   * scrollbar (`DEFAULT_SCROLL_BAR_WIDTH`), so both clients fit the same grid.
+   */
+  scrollbarWidth?: number
 }
+
+const XTERM_SCROLL_BAR_WIDTH = 14
 
 /**
  * xterm.js packs its glyphs into the floored cell with a negative
@@ -82,20 +90,20 @@ interface MeasuredGeometry extends Geometry {
 }
 
 export function geometryFor(
-  probe: { width: number; height: number; chars: number },
+  probe: { width: number; chars: number },
   fontSize: number,
   lineHeight: number,
   fixed?: CellMetrics
 ): Geometry {
   const advance = probe.width / probe.chars
-  const measured = cellMetrics(probe, lineHeight)
-  const cell = fixed ?? { width: Math.floor(measured.width), height: measured.height }
+  const cell = fixed ?? cellMetrics(advance, terminalCharHeight(fontSize), lineHeight)
   return { cell, glyphSize: fontSize * (cell.width / advance) }
 }
 
 const PROBE_CHARS = 100
 const RESIZE_DEBOUNCE_MS = 50
 const BLINK_MS = 600
+const FOCUS_POLL_MS = 150
 const MOUSE_BUTTONS: Record<number, MouseButton> = { 0: 'left', 1: 'middle', 2: 'right' }
 
 interface RowProps {
@@ -271,6 +279,7 @@ export function TerminalView(props: TerminalViewProps) {
     lineHeight = TERMINAL_LINE_HEIGHT,
     cell: fixedCell,
     padding = 0,
+    scrollbarWidth = XTERM_SCROLL_BAR_WIDTH,
     hostRef,
     onAuxClick,
     onKeyIntercept,
@@ -329,14 +338,15 @@ export function TerminalView(props: TerminalViewProps) {
     const size = hostSize.current
     if (!size || !cell || !visible) return
     // A hidden or collapsing host reports a box smaller than one cell; keep the PTY size.
-    if (size.width < cell.width + padding * 2 || size.height < cell.height + padding * 2) return
-    const cols = Math.max(2, Math.floor((size.width - padding * 2) / cell.width))
+    const width = size.width - padding * 2 - scrollbarWidth
+    if (width < cell.width || size.height < cell.height + padding * 2) return
+    const cols = Math.max(2, Math.floor(width / cell.width))
     const rows = Math.max(1, Math.floor((size.height - padding * 2) / cell.height))
     if (cols === screen.cols && rows === screen.rows) return
     screen.resize(cols, rows)
     onResize?.(cols, rows)
     log.info('terminal', `terminal.resize ${JSON.stringify({ cols, rows })}`)
-  }, [cell, padding, screen, onResize, visible])
+  }, [cell, padding, scrollbarWidth, screen, onResize, visible])
 
   useEffect(() => {
     fit()
@@ -344,6 +354,19 @@ export function TerminalView(props: TerminalViewProps) {
 
   const onFocus = useCallback(() => setHasFocus(true), [])
   const onBlur = useCallback(() => setHasFocus(false), [])
+  // GPUIX did not deliver onFocus/onBlur for this host while
+  // getFocusedElementId() named it (measured 2026-10-23, Xvfb and lavapipe),
+  // so the focused cursor also follows the renderer's focus directly.
+  useEffect(() => {
+    if (!visible || focusedProp !== undefined || !renderer?.getFocusedElementId) return
+    const sync = () => {
+      const id = host.current?.id
+      setHasFocus(id !== undefined && renderer.getFocusedElementId?.() === id)
+    }
+    sync()
+    const timer = setInterval(sync, FOCUS_POLL_MS)
+    return () => clearInterval(timer)
+  }, [visible, focusedProp, renderer])
 
   const setHost = useCallback(
     (instance: PublicInstance | null) => {
@@ -595,7 +618,7 @@ export function TerminalView(props: TerminalViewProps) {
           <text
             onLayout={(event) => {
               const next = geometryFor(
-                { width: event.width ?? 0, height: event.height ?? 0, chars: PROBE_CHARS },
+                { width: event.width ?? 0, chars: PROBE_CHARS },
                 fontSize,
                 lineHeight,
                 fixedCell
@@ -604,7 +627,7 @@ export function TerminalView(props: TerminalViewProps) {
                 'terminal',
                 `terminal.geometry ${JSON.stringify({
                   advance: (event.width ?? 0) / PROBE_CHARS,
-                  charHeight: event.height ?? 0,
+                  charHeight: terminalCharHeight(fontSize),
                   cellWidth: next.cell.width,
                   cellHeight: next.cell.height,
                   glyphSize: next.glyphSize
