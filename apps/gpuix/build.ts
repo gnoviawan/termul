@@ -16,8 +16,10 @@
  * Run `bun build.ts` for one build, or `bun tools/dev.ts` to rebuild on change.
  */
 
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { BunPlugin } from 'bun'
+import { gpuixUiAliases } from './tools/ui/alias'
 
 export const APP_DIR = import.meta.dir
 export const REPO_DIR = path.resolve(APP_DIR, '../..')
@@ -95,6 +97,113 @@ export function termulResolver(reactResolves?: ReactResolve[]): BunPlugin {
   }
 }
 
+const COMPAT_DIR = path.join(APP_DIR, 'src/compat')
+
+/** DOM-bound packages -> compat stand-ins with the same exports. */
+export const PACKAGE_ALIASES: Record<string, string> = {
+  'react-dom': 'react-dom.ts',
+  'react-dom/client': 'react-dom.ts',
+  '@radix-ui/react-slot': 'radix/slot.tsx',
+  '@radix-ui/react-tooltip': 'radix/tooltip.tsx',
+  '@radix-ui/react-popover': 'radix/popover.tsx',
+  '@radix-ui/react-dropdown-menu': 'radix/dropdown-menu.tsx',
+  '@radix-ui/react-context-menu': 'radix/context-menu.tsx',
+  '@radix-ui/react-dialog': 'radix/dialog.tsx',
+  '@radix-ui/react-alert-dialog': 'radix/dialog.tsx',
+  '@radix-ui/react-scroll-area': 'radix/simple.tsx',
+  '@radix-ui/react-separator': 'radix/simple.tsx',
+  '@radix-ui/react-label': 'radix/simple.tsx',
+  '@radix-ui/react-collapsible': 'radix/simple.tsx',
+  '@radix-ui/react-accordion': 'radix/generic.tsx',
+  '@radix-ui/react-hover-card': 'radix/generic.tsx',
+  '@radix-ui/react-switch': 'radix/generic.tsx',
+  '@radix-ui/react-select': 'radix/generic.tsx',
+  'framer-motion': 'shims/framer-motion.tsx',
+  cmdk: 'shims/cmdk.tsx',
+  '@streamdown/mermaid': 'shims/streamdown-mermaid.ts'
+}
+
+/**
+ * Files written against GPUIX directly keep the real JSX runtime and React:
+ * everything under apps/gpuix except the compat stand-ins (radix, shims),
+ * which are DOM components like the code they replace.
+ */
+const DOM_DIRS = ['src/compat/radix', 'src/compat/shims', 'tools/compat/fixtures/dom', 'tools/compat/bench/dom'].map(
+  (dir) => path.join(APP_DIR, dir) + path.sep
+)
+
+export function isNativeImporter(importer: string): boolean {
+  if (!importer.startsWith(APP_DIR + path.sep)) return false
+  return !DOM_DIRS.some((dir) => importer.startsWith(dir))
+}
+
+export const OVERRIDES_DIR = path.join(APP_DIR, 'src/overrides')
+
+/**
+ * A native override of a shared file lives at `src/overrides/<path relative to
+ * src/renderer>` and exports the same names; it replaces the shared file for
+ * every importer except itself.
+ */
+export function overrideFor(resolved: string, importer: string): string | null {
+  if (!resolved.startsWith(RENDERER_DIR + path.sep)) return null
+  const rel = path.relative(RENDERER_DIR, resolved).replace(/\.(tsx?|jsx?)$/, '')
+  for (const ext of ['.tsx', '.ts']) {
+    const candidate = path.join(OVERRIDES_DIR, rel + ext)
+    if (candidate !== importer && existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+export interface CompatResolve {
+  specifier: string
+  target: string
+}
+
+/** Strategy B: shared DOM components compile against the compat runtime. */
+export function compatPlugin(aliases?: CompatResolve[]): BunPlugin {
+  return {
+    name: 'termul-gpuix-compat',
+    setup(build) {
+      build.onResolve({ filter: /^(react|@gpuix\/react)\/jsx(-dev)?-runtime$/ }, (args) => {
+        if (isNativeImporter(args.importer)) return { path: args.path, external: true }
+        return { path: path.join(COMPAT_DIR, 'jsx-runtime.ts') }
+      })
+      build.onResolve({ filter: /^react$/ }, (args) => {
+        if (isNativeImporter(args.importer)) return { path: 'react', external: true }
+        return { path: path.join(COMPAT_DIR, 'react.ts') }
+      })
+      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid)$/ }, (args) => {
+        if (args.path.startsWith('react-dom') && isNativeImporter(args.importer)) {
+          return { path: args.path, external: true }
+        }
+        const target = PACKAGE_ALIASES[args.path]
+        if (!target) throw new Error(`compat: no stand-in for ${args.path} (imported by ${args.importer})`)
+        aliases?.push({ specifier: args.path, target })
+        return { path: path.join(COMPAT_DIR, target) }
+      })
+    }
+  }
+}
+
+/** Swap shared files for `src/overrides/**` twins, for `@/` and relative imports alike. */
+export function overridesPlugin(): BunPlugin {
+  return {
+    name: 'termul-gpuix-overrides',
+    setup(build) {
+      build.onResolve({ filter: /^(@\/|@renderer\/)/ }, (args) => {
+        const resolved = Bun.resolveSync(`./${args.path.replace(/^@(renderer)?\//, '')}`, RENDERER_DIR)
+        return { path: overrideFor(resolved, args.importer) ?? resolved }
+      })
+      build.onResolve({ filter: /^\.\.?\// }, (args) => {
+        if (!args.importer.startsWith(RENDERER_DIR + path.sep)) return undefined
+        const resolved = Bun.resolveSync(args.path, path.dirname(args.importer))
+        const override = overrideFor(resolved, args.importer)
+        return override ? { path: override } : undefined
+      })
+    }
+  }
+}
+
 export interface BuildResult {
   ok: boolean
   /** Absolute path of the entry bundle. */
@@ -103,21 +212,30 @@ export interface BuildResult {
   logs: string[]
 }
 
-export async function buildClient(): Promise<BuildResult> {
+export async function buildClient(
+  entry: string = ENTRY,
+  outdir: string = OUT_DIR,
+  options: { production?: boolean } = {}
+): Promise<BuildResult> {
   const reactResolves: ReactResolve[] = []
   const result = await Bun.build({
-    entrypoints: [ENTRY],
-    outdir: OUT_DIR,
+    entrypoints: [entry],
+    outdir,
     target: 'bun',
     format: 'esm',
     sourcemap: 'linked',
-    external: EXTERNAL.flatMap((name) => [name, `${name}/*`]),
-    plugins: [termulResolver(reactResolves)],
-    naming: '[name].[ext]'
+    // react and react-dom are not listed: the plugins decide per importer.
+    external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
+    plugins: [compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
+    naming: '[name].[ext]',
+    // React's production build has no jsxDEV, so a production bundle needs jsx().
+    ...(options.production
+      ? { jsx: { development: false }, define: { 'process.env.NODE_ENV': '"production"' } }
+      : {})
   })
   return {
     ok: result.success,
-    entry: path.join(OUT_DIR, 'main.js'),
+    entry: path.join(outdir, `${path.basename(entry).replace(/\.tsx?$/, '')}.js`),
     reactResolves,
     logs: result.logs.map((log) => String(log))
   }

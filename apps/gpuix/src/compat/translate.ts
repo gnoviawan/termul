@@ -1,0 +1,349 @@
+/**
+ * DOM tag + className -> how the element paints in GPUIX. Pure and cached per
+ * (tag, className): an element whose classes do not change gets the same
+ * StyleDesc object every render, so GPUIX's commitUpdate skips setStyle on
+ * identity. Tokens tw() cannot express (auto margins, text-transform, list
+ * markers, `group`) are lifted out here and handled structurally.
+ */
+
+import type { StyleDesc } from '@gpuix/react'
+import { resolveTwTheme } from '../style/theme'
+import { type CompiledStyle, createTw, type Tw } from '../style/tw'
+import { MONO_FAMILY } from '../style/utilities'
+import type { Condition } from '../style/variants'
+import { SCOPES, type ScopeName } from './scope'
+
+export type HostType = 'div' | 'text' | 'svg' | 'img' | 'input' | 'textarea'
+
+/** Which side margins are `auto`. In GPUIX margins are numbers only. */
+export interface AutoMargin {
+  left: boolean
+  right: boolean
+  top: boolean
+  bottom: boolean
+}
+
+/** How the element's conditional rules are resolved. */
+export type RuleMode =
+  /** No conditional rules: `base` is the whole style. */
+  | 'static'
+  /** Rules read only this element's props (disabled, data-*, aria-*): resolved at creation. */
+  | 'props'
+  /** Rules read state GPUIX does not track for it (group-*, focus, focus-within, viewport). */
+  | 'host'
+
+export interface Translation {
+  readonly tag: string
+  readonly type: HostType
+  readonly compiled: CompiledStyle
+  /** Static style: tag defaults, compiled base, layout fixes. Stable identity. */
+  readonly base: StyleDesc
+  readonly ruleMode: RuleMode
+  /** `group` or `group/<name>` on this element. */
+  readonly group: string | null
+  /** Inline-level (span, a, inline-flex, button...) as opposed to block-level. */
+  readonly inline: boolean
+  /** null when not a flex container. */
+  readonly flexDirection: 'row' | 'column' | null
+  readonly transform: 'uppercase' | 'lowercase' | 'capitalize' | null
+  readonly autoMargin: AutoMargin | null
+  readonly listMarker: 'disc' | 'decimal' | null
+  readonly hidden: boolean
+  readonly fixed: boolean
+  readonly nowrap: boolean
+  /** Paints a box (fill, border, padding, size): cannot merge into a parent's text run. */
+  readonly paints: boolean
+  /** Has native hover/active styles. */
+  readonly hoverable: boolean
+  /** An index.css scope whose descendant rules apply below this element. */
+  readonly scope: ScopeName | null
+  readonly listInside: boolean
+  /** `[&_svg]:x` / `[&>svg]:x` tokens, provided to icons below. */
+  readonly svgClasses: string | null
+}
+
+const PHRASING = new Set([
+  'span', 'a', 'strong', 'b', 'em', 'i', 'small', 'code', 'kbd', 'samp', 'abbr', 'time', 'sup',
+  'sub', 'mark', 'del', 's', 'u', 'ins', 'q', 'cite', 'var', 'label', 'button', 'img', 'svg',
+  'input', 'textarea', 'select', 'br', 'wbr', 'output', 'data'
+])
+
+const MONO = { fontFamily: MONO_FAMILY } satisfies StyleDesc
+const BOLD = { fontWeight: 700 } satisfies StyleDesc
+
+/** What Tailwind's preflight leaves on each tag (everything else is reset). */
+const TAG_DEFAULTS: Readonly<Record<string, StyleDesc>> = {
+  strong: BOLD,
+  b: BOLD,
+  code: MONO,
+  kbd: MONO,
+  samp: MONO,
+  pre: MONO,
+  button: { display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  svg: { flexShrink: 0 },
+  img: { flexShrink: 0 },
+  s: { textDecoration: 'line-through' },
+  del: { textDecoration: 'line-through' },
+  u: { textDecoration: 'underline' },
+  ins: { textDecoration: 'underline' }
+}
+
+const HOST_TYPE: Readonly<Record<string, HostType>> = {
+  svg: 'svg',
+  img: 'img',
+  input: 'input',
+  textarea: 'textarea'
+}
+
+const AUTO_MARGIN: Readonly<Record<string, Partial<AutoMargin>>> = {
+  'm-auto': { left: true, right: true, top: true, bottom: true },
+  'mx-auto': { left: true, right: true },
+  'my-auto': { top: true, bottom: true },
+  'ml-auto': { left: true },
+  'ms-auto': { left: true },
+  'mr-auto': { right: true },
+  'me-auto': { right: true },
+  'mt-auto': { top: true },
+  'mb-auto': { bottom: true }
+}
+
+const NAMED_GROUP_VARIANT = /(^|:)(group-[a-z-]*(?:\[[^\]]*\])?)\/[\w-]+(?=:)/g
+const TRANSFORMS = new Set(['uppercase', 'lowercase', 'capitalize'])
+const INLINE_DISPLAY = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid'])
+const BLOCK_DISPLAY = new Set(['block', 'flex', 'grid', 'table', 'flow-root', 'list-item'])
+const PAINT_KEYS: readonly (keyof StyleDesc)[] = [
+  'backgroundColor', 'background', 'borderWidth', 'borderTopWidth', 'borderRightWidth',
+  'borderBottomWidth', 'borderLeftWidth', 'paddingTop', 'paddingRight', 'paddingBottom',
+  'paddingLeft', 'padding', 'width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight',
+  'marginTop', 'marginRight', 'marginBottom', 'marginLeft', 'margin', 'position', 'boxShadow',
+  'opacity', 'display'
+]
+
+/** Conditions that need a component: the state lives outside this element's props. */
+function needsHost(condition: Condition): boolean {
+  if (condition.kind === 'viewport') return true
+  if (condition.kind === 'attr') return condition.scope === 'group'
+  if (condition.kind === 'flag') return condition.flag !== 'disabled'
+  return false
+}
+
+interface Lifted {
+  classes: string
+  group: string | null
+  autoMargin: AutoMargin | null
+  transform: Translation['transform']
+  listMarker: Translation['listMarker']
+  listInside: boolean
+  display: 'inline' | 'block' | null
+  scope: ScopeName | null
+  svg: string[]
+}
+
+/** Pull out the tokens tw() has no StyleDesc for. Variant-prefixed ones stay with tw(). */
+function lift(className: string): Lifted {
+  const kept: string[] = []
+  const lifted: Lifted = {
+    classes: '',
+    group: null,
+    autoMargin: null,
+    transform: null,
+    listMarker: null,
+    listInside: false,
+    display: null,
+    scope: null,
+    svg: []
+  }
+  for (const raw of className.split(/\s+/)) {
+    if (!raw) continue
+    // `group-hover/name:` binds to the nearest group, whatever its name.
+    const token = raw.includes('/') ? raw.replace(NAMED_GROUP_VARIANT, '$1$2') : raw
+    const svg = svgToken(token)
+    if (svg !== null) {
+      lifted.svg.push(svg)
+      continue
+    }
+    if (token === 'group' || token.startsWith('group/')) {
+      lifted.group = token
+      continue
+    }
+    const margin = AUTO_MARGIN[token]
+    if (margin) {
+      lifted.autoMargin = {
+        ...(lifted.autoMargin ?? { left: false, right: false, top: false, bottom: false }),
+        ...margin
+      }
+      continue
+    }
+    if (TRANSFORMS.has(token)) {
+      lifted.transform = token as Translation['transform']
+      continue
+    }
+    if (token === 'normal-case') {
+      lifted.transform = null
+      continue
+    }
+    if (token === 'list-disc' || token === 'list-decimal') {
+      lifted.listMarker = token === 'list-disc' ? 'disc' : 'decimal'
+      continue
+    }
+    if (token === 'list-inside' || token === 'list-outside') {
+      lifted.listInside = token === 'list-inside'
+      continue
+    }
+    if (token === 'list-none') continue
+    if (SCOPES.has(token)) lifted.scope = token as ScopeName
+    if (INLINE_DISPLAY.has(token)) lifted.display = 'inline'
+    else if (BLOCK_DISPLAY.has(token) || token === 'hidden') lifted.display = 'block'
+    kept.push(token)
+  }
+  lifted.classes = kept.join(' ')
+  return lifted
+}
+
+function svgToken(token: string): string | null {
+  if (token.startsWith('[&_svg]:')) return token.slice('[&_svg]:'.length)
+  if (token.startsWith('[&>svg]:')) return token.slice('[&>svg]:'.length)
+  return null
+}
+
+/** Split `[&_svg]:x` tokens from a class string; tw() cannot select descendants. */
+export function splitDescendantClasses(classes: string): { own: string; svg?: string } {
+  const own: string[] = []
+  const svg: string[] = []
+  for (const token of classes.split(/\s+/)) {
+    if (!token) continue
+    const lifted = svgToken(token)
+    if (lifted !== null) svg.push(lifted)
+    else own.push(token)
+  }
+  return { own: own.join(' '), svg: svg.length > 0 ? svg.join(' ') : undefined }
+}
+
+function hasAny(style: StyleDesc, keys: readonly (keyof StyleDesc)[]): boolean {
+  for (const key of keys) if (style[key] !== undefined) return true
+  return false
+}
+
+const FLIP: Readonly<Record<string, string>> = {
+  start: 'flex-end',
+  'flex-start': 'flex-end',
+  end: 'flex-start',
+  'flex-end': 'flex-start'
+}
+
+const unreversed = new WeakMap<StyleDesc, StyleDesc>()
+
+/**
+ * GPUIX ignores row-reverse / column-reverse (measured in its renderer): the
+ * caller lays the children out in reverse, and the main axis flips here.
+ * Decided on the final style, since a variant (`sm:flex-row`) can undo it.
+ */
+export function unreverse(style: StyleDesc): StyleDesc | null {
+  if (style.flexDirection !== 'row-reverse' && style.flexDirection !== 'column-reverse') return null
+  let hit = unreversed.get(style)
+  if (!hit) {
+    const justify = (style.justifyContent as string | undefined) ?? 'flex-start'
+    hit = {
+      ...style,
+      flexDirection: style.flexDirection === 'row-reverse' ? 'row' : 'column',
+      justifyContent: (FLIP[justify] ?? justify) as StyleDesc['justifyContent']
+    }
+    unreversed.set(style, hit)
+  }
+  return hit
+}
+
+function layoutFixes(style: StyleDesc): StyleDesc {
+  const out: StyleDesc = { ...style }
+  // CSS resolves `min-width: auto` to 0 for scroll containers and lets a
+  // `flex: 1 1 0%` item shrink to its min-content. Taffy measures text at
+  // max-content, so without this a flex-1 or overflow-hidden item never shrinks.
+  const clips = out.overflow === 'hidden' || out.overflow === 'scroll' || out.overflowX !== undefined
+  if (out.minWidth === undefined && (out.flexGrow === 1 || out.flexBasis === 0)) {
+    out.minWidth = 0
+  }
+  if (out.minHeight === undefined && clips && out.flexGrow === 1) out.minHeight = 0
+  return out
+}
+
+function translate(tw: Tw, tag: string, className: string): Translation {
+  const lifted = lift(className)
+  const compiled = tw.compile(lifted.classes)
+  const defaults = TAG_DEFAULTS[tag]
+  const merged: StyleDesc = defaults ? { ...defaults, ...compiled.base } : compiled.base
+  const base = layoutFixes(merged)
+  let ruleMode: RuleMode = 'static'
+  for (const rule of compiled.rules) {
+    if (rule.when.some(needsHost)) {
+      ruleMode = 'host'
+      break
+    }
+    ruleMode = 'props'
+  }
+  const display = base.display
+  const flexDirection =
+    display === 'flex'
+      ? base.flexDirection === 'column' || base.flexDirection === 'column-reverse'
+        ? 'column'
+        : 'row'
+      : null
+  const inline = lifted.display ? lifted.display === 'inline' : PHRASING.has(tag)
+  return {
+    tag,
+    type: HOST_TYPE[tag] ?? 'div',
+    compiled,
+    base,
+    ruleMode,
+    group: lifted.group,
+    inline,
+    flexDirection,
+    transform: lifted.transform,
+    autoMargin: lifted.autoMargin,
+    listMarker: lifted.listMarker,
+    hidden: display === 'none',
+    fixed: base.position === 'fixed',
+    nowrap: base.whiteSpace === 'nowrap',
+    paints: hasAny(compiled.base, PAINT_KEYS) || (defaults !== undefined && 'display' in defaults),
+    hoverable: base.hover !== undefined || base.active !== undefined,
+    scope: lifted.scope,
+    listInside: lifted.listInside,
+    svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null
+  }
+}
+
+let active: Tw = createTw(resolveTwTheme('termul'))
+let cache = new Map<string, Translation>()
+
+/** The cached translation of one DOM tag and class string. */
+export function translation(tag: string, className: string | undefined): Translation {
+  const key = className ? `${tag} ${className}` : tag
+  let hit = cache.get(key)
+  if (!hit) {
+    hit = translate(active, tag, className ?? '')
+    cache.set(key, hit)
+  }
+  return hit
+}
+
+export function compatTw(): Tw {
+  return active
+}
+
+/** Switch the theme every translation resolves against. */
+export function setCompatTheme(themeId: string): void {
+  if (active.theme.id === themeId) return
+  active = createTw(resolveTwTheme(themeId))
+  cache = new Map()
+}
+
+/** Cache size, for the bench report. */
+export function translationCount(): number {
+  return cache.size
+}
+
+export function applyTextTransform(text: string, transform: Translation['transform']): string {
+  if (transform === 'uppercase') return text.toUpperCase()
+  if (transform === 'lowercase') return text.toLowerCase()
+  if (transform === 'capitalize') return text.replace(/\b\p{L}/gu, (c) => c.toUpperCase())
+  return text
+}

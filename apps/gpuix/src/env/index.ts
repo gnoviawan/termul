@@ -16,12 +16,16 @@
  * - `window.innerWidth` / `innerHeight`: GPUIX's automation `initialize`
  *   handler reports them whenever a `window` global exists.
  *
+ * - the element-facing DOM surface (focus, tree queries, observers, matchMedia):
+ *   `dom.ts`, backed by `src/compat/dom-node.ts`.
+ *
  * `window.__TAURI_INTERNALS__` stays undefined, so `isTauriContext()` is false
  * and every facade picks its web transport.
  */
 
 import path from 'node:path'
 import type { ClientConfig } from './config'
+import { installDom } from './dom'
 import { FileStorage, MemoryStorage } from './storage'
 
 /** The fields of `window.location` the shared code reads. */
@@ -89,6 +93,7 @@ export function installBrowserEnv(config: ClientConfig, viewport: Viewport): Bro
   })
 
   Object.assign(globalThis, { window, document, localStorage, sessionStorage })
+  installDom(viewport, { reducedMotion: process.env.GPUIX_REDUCED_MOTION === '1' })
   installed = { location, localStorage, sessionStorage }
   return installed
 }

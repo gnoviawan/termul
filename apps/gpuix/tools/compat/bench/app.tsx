@@ -1,0 +1,101 @@
+/**
+ * One bench run inside the GPUIX process: mount the list, time it, rename
+ * rows, sweep the pointer over the rows, write the numbers to $BENCH_OUT.
+ * Both subjects mount inside `CompatRoot`, so the root costs the same.
+ */
+
+import { flushSync, type NativeRenderer, render, useGpuixRequired } from '@gpuix/react'
+import { type ComponentType, useEffect, useState } from 'react'
+import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
+import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
+import { ROWS, useBenchStore } from './data'
+import { HandList } from './HandList'
+
+// A non-literal specifier keeps the DOM-typed subject out of this program (tsconfig.compat.json checks it).
+const DOM_SUBJECT: string = './dom/CompatList'
+const { CompatList } = (await import(DOM_SUBJECT)) as { CompatList: ComponentType }
+
+type Mode = 'compat' | 'hand'
+
+/** What the Bun side hands the app side (this file is typed with the DOM lib only). */
+export interface BenchHost {
+  sleep(ms: number): Promise<void>
+  gc(): void
+  rssBytes(): number
+  write(json: string): void
+  exit(): void
+}
+
+interface LiveRenderer {
+  simulateMouseMove(x: number, y: number): void
+  setDebugFrameOverlay(mode: string): string
+  resetDebugFrameOverlayStats(): void
+  getDebugFrameOverlayStats(): { p90Ms?: number; p99Ms?: number; maxMs?: number; currentMs?: number; frames: number; samples: number }
+  getAutomationTree(): string
+}
+
+const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
+
+function countNodes(json: string): number {
+  return (json.match(/"id":/g) ?? []).length
+}
+
+function Bench({ mode, host }: { mode: Mode; host: BenchHost }) {
+  const renderer = useGpuixRequired() as unknown as LiveRenderer
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    void (async () => {
+      await host.sleep(1500)
+      host.gc()
+      const t0 = performance.now()
+      flushSync(() => setShow(true))
+      const mountMs = performance.now() - t0
+      await host.sleep(800)
+      flushSync(() => setShow(false))
+      await host.sleep(300)
+      host.gc()
+      const w0 = performance.now()
+      flushSync(() => setShow(true))
+      const warmMountMs = performance.now() - w0
+      await host.sleep(1200)
+      const nodes = countNodes(renderer.getAutomationTree())
+      const rerender: number[] = []
+      for (let i = 0; i < 15; i++) {
+        const index = 5 + (i % 10)
+        const r0 = performance.now()
+        flushSync(() => useBenchStore.getState().rename(index, `renamed ${i}`))
+        rerender.push(performance.now() - r0)
+        await host.sleep(60)
+      }
+      await host.sleep(500)
+      renderer.setDebugFrameOverlay('minimal')
+      await host.sleep(300)
+      renderer.resetDebugFrameOverlayStats()
+      for (let sweep = 0; sweep < 3; sweep++) {
+        for (let row = 0; row < Math.min(ROWS, 20); row++) {
+          renderer.simulateMouseMove(120, 8 + row * 34 + 16)
+          await host.sleep(40)
+        }
+      }
+      const frames = renderer.getDebugFrameOverlayStats()
+      host.gc()
+      await host.sleep(300)
+      const rss = host.rssBytes()
+      host.write(
+        JSON.stringify({ mode, rows: ROWS, mountMs, warmMountMs, rerenderMs: median(rerender), rerender, frames, rssMb: rss / 2 ** 20, nodes })
+      )
+      host.exit()
+    })()
+  }, [renderer, host])
+  if (!show) return null
+  return mode === 'compat' ? <CompatList /> : <HandList />
+}
+
+export function runBench(mode: Mode, host: BenchHost, onRenderer: (renderer: NativeRenderer) => void): void {
+  render(
+    <CompatRoot onRenderer={onRenderer}>
+      <Bench mode={mode} host={host} />
+    </CompatRoot>,
+    { title: `bench ${mode}`, width: WINDOW_WIDTH, height: WINDOW_HEIGHT, focus: false, ...compatRenderOptions }
+  )
+}

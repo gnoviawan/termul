@@ -1,0 +1,259 @@
+{
+  "components/AiPromptDialog.tsx": {
+    "reasons": ["dom-create", "execCommand"]
+  },
+  "components/CommandHistoryModal.tsx": {
+    "reasons": ["react-virtuoso"]
+  },
+  "components/GlobalContextMenu.tsx": {
+    "reasons": ["text-selection"]
+  },
+  "components/WhatsNewModal.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/agents/AgentIcon.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/agents/AgentLauncher.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/agents/IconPicker.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/agents/launcher/pickers.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/ai-elements/attachments.tsx": {
+    "reasons": ["canvas-media"]
+  },
+  "components/bug-report/copy-attachment-image.ts": {
+    "reasons": ["dom-create"]
+  },
+  "components/canvas/CanvasShell.tsx": {
+    "reasons": ["canvas-media"]
+  },
+  "components/chat/AgentGlyph.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/chat/ChatInputBar.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/chat/ChatMessageList.tsx": {
+    "reasons": ["tanstack-virtual"]
+  },
+  "components/chat/ThinkingStatus.tsx": {
+    "reasons": ["getComputedStyle"]
+  },
+  "components/chat/ToolCallCard.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/chat/chat-agent-prose.tsx": {
+    "reasons": ["mermaid", "text-selection"]
+  },
+  "components/chat/chat-markdown-code.tsx": {
+    "reasons": ["dom-create", "mermaid"]
+  },
+  "components/chat/composer/ChatComposerEditor.tsx": {
+    "reasons": ["tiptap"]
+  },
+  "components/chat/composer/CommandPillNode.tsx": {
+    "reasons": ["html5-dnd", "tiptap"]
+  },
+  "components/chat/composer/FilePillNode.tsx": {
+    "reasons": ["html5-dnd", "tiptap"]
+  },
+  "components/chat/composer/SkillPillNode.tsx": {
+    "reasons": ["html5-dnd", "tiptap"]
+  },
+  "components/chat/composer/insert-composer-trigger.ts": {
+    "reasons": ["tiptap"]
+  },
+  "components/chat/use-chat-history-entries.ts": {
+    "reasons": ["IntersectionObserver"]
+  },
+  "components/chat/use-composer-attachments.ts": {
+    "reasons": ["dom-create", "html5-dnd"]
+  },
+  "components/editor/MarkdownEditor.tsx": {
+    "reasons": ["MutationObserver", "blocknote"]
+  },
+  "components/editor/MermaidBlock.tsx": {
+    "reasons": [
+      "MutationObserver",
+      "dangerouslySetInnerHTML",
+      "element.addEventListener",
+      "mermaid"
+    ]
+  },
+  "components/editor/codemirror-theme.ts": {
+    "reasons": ["codemirror"]
+  },
+  "components/editor/mermaid-block-spec.tsx": {
+    "reasons": ["blocknote"]
+  },
+  "components/file-explorer/FileTreeNode.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/file-explorer/MaterialFileIcon.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/file-explorer/explorer-inline-input.tsx": {
+    "reasons": ["text-selection"]
+  },
+  "components/git/GitChangeList.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/git/GitHistoryView.tsx": {
+    "reasons": ["text-selection"]
+  },
+  "components/git/StashSection.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/settings/AcpAgentsSettings.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/settings/provider/ProviderGroupHeader.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/shell/ChatCard.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/shell/ChatsList.tsx": {
+    "reasons": ["tanstack-virtual"]
+  },
+  "components/sidebar/ssh-section.tsx": {
+    "reasons": ["element-style-write"]
+  },
+  "components/ssh/SSHFileExplorer.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/terminal/ConnectedTerminal.tsx": {
+    "reasons": ["text-selection", "xterm"]
+  },
+  "components/terminal/TerminalAssistPanel.tsx": {
+    "reasons": ["dangerouslySetInnerHTML"]
+  },
+  "components/terminal/XTerminal.tsx": {
+    "reasons": ["xterm"]
+  },
+  "components/terminal/clipboard.ts": {
+    "reasons": ["text-selection"]
+  },
+  "components/terminal/terminal-factory.ts": {
+    "reasons": ["xterm"]
+  },
+  "components/terminal/terminal-renderer-pool.ts": {
+    "reasons": ["dom-create", "element-style-write", "xterm"]
+  },
+  "components/terminal/use-terminal-fit.ts": {
+    "reasons": ["element-style-write"]
+  },
+  "components/terminal/xterm-touch-tap-focus.ts": {
+    "reasons": ["element.addEventListener"]
+  },
+  "components/ui/animated-menu-content.tsx": {
+    "reasons": ["getComputedStyle"]
+  },
+  "components/ui/resizable.tsx": {
+    "reasons": ["react-resizable-panels"]
+  },
+  "components/workspace/DropZoneOverlay.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/EditorTab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/WorkspaceTabBar.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/agent-chat-tab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/browser-tab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/canvas-tab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/diff-tab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/git-history-tab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/git-tab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/tab-chrome.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/terminal-tab.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "components/workspace/tabs/types.ts": {
+    "reasons": ["html5-dnd"]
+  },
+  "hooks/use-active-heading.ts": {
+    "reasons": ["IntersectionObserver"]
+  },
+  "hooks/use-attachment-drop-zone.ts": {
+    "reasons": ["html5-dnd"]
+  },
+  "hooks/use-blocknote.ts": {
+    "reasons": ["blocknote", "getComputedStyle"]
+  },
+  "hooks/use-clipped-segments.ts": {
+    "reasons": ["IntersectionObserver"]
+  },
+  "hooks/use-codemirror.ts": {
+    "reasons": ["MutationObserver", "codemirror"]
+  },
+  "hooks/use-osk-viewport.ts": {
+    "reasons": ["element-style-write"]
+  },
+  "hooks/use-pane-dnd.tsx": {
+    "reasons": ["html5-dnd"]
+  },
+  "hooks/use-prevent-file-drop-navigation.ts": {
+    "reasons": ["html5-dnd"]
+  },
+  "hooks/use-resize-handle.ts": {
+    "reasons": ["element-style-write"]
+  },
+  "hooks/use-terminal-clipboard.ts": {
+    "reasons": ["text-selection"]
+  },
+  "hooks/use-ui-zoom.ts": {
+    "reasons": ["element-style-write"]
+  },
+  "hooks/use-xterm.ts": {
+    "reasons": ["xterm"]
+  },
+  "lib/clipboard-api.ts": {
+    "reasons": ["dom-create", "element-style-write", "execCommand"]
+  },
+  "lib/codemirror-lang-astro.ts": {
+    "reasons": ["codemirror"]
+  },
+  "lib/composer-attachments-io.ts": {
+    "reasons": ["dom-create", "element-style-write", "element.addEventListener"]
+  },
+  "lib/copy-text.ts": {
+    "reasons": ["dom-create", "element-style-write", "execCommand"]
+  },
+  "lib/diff-syntax-highlight.ts": {
+    "reasons": ["codemirror"]
+  },
+  "lib/smooth-wheel.ts": {
+    "reasons": ["element.addEventListener", "getComputedStyle"]
+  },
+  "lib/text-edit-ops.ts": {
+    "reasons": ["execCommand", "text-selection"]
+  },
+  "lib/themes/apply-color-theme.ts": {
+    "reasons": ["dom-create", "element-style-write"]
+  },
+  "lib/themes/read-css-token.ts": {
+    "reasons": ["getComputedStyle"]
+  }
+}
