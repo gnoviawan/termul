@@ -1,4 +1,5 @@
 import { mixHex } from './color-utils'
+import { TERMUL_BLUE, TERMUL_LIGHT_BRAND_TOKENS } from './termul-brand'
 import type { ThemeChrome } from './types'
 
 /** ChatGPT pure white. Main canvas and elevated panels. */
@@ -28,7 +29,9 @@ function termulLightChrome(): ThemeChrome {
     foreground: INK,
     secondaryForeground: ASH,
     mutedForeground: HOLLOW,
-    flatElevation: true
+    flatElevation: true,
+    brandFill: TERMUL_BLUE.fill,
+    tokens: TERMUL_LIGHT_BRAND_TOKENS
   }
 }
 

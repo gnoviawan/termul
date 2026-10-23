@@ -93,6 +93,11 @@ export interface ThemeChrome {
   mutedForeground: string
   /** Hairline borders carry elevation. Termul light only. */
   flatElevation?: boolean
+  /**
+   * Exact solid brand fill (buttons, selected rows) with white text. Skips the
+   * palette clamp, so the value must pass 4.5:1 with white on its own.
+   */
+  brandFill?: string
   /** Component tokens (switch, emboss, elevation...). Unset keys keep the defaults. */
   tokens?: ThemeComponentTokens
 }

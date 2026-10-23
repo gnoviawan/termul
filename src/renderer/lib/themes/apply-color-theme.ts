@@ -8,6 +8,7 @@ import {
 } from './bundled-themes'
 import {
   darkenHex,
+  hexToOklch,
   hexToOklchComponents,
   lightenHex,
   mixHex,
@@ -35,6 +36,12 @@ let lastAppliedThemeId = DEFAULT_COLOR_THEME_ID
 
 export function getLastAppliedColorThemeId(): string {
   return lastAppliedThemeId
+}
+
+/** Four decimals so a named brand hex survives the round trip exactly. */
+function exactComponents(hex: string): string {
+  const { l, c, h } = hexToOklch(hex)
+  return `${l.toFixed(4)} ${c.toFixed(4)} ${h.toFixed(1)}`
 }
 
 function applyDocumentAppearance(appearance: ThemeAppearance): void {
@@ -170,16 +177,19 @@ function applyCssVariables(
     TEXT_TOKENS.map((token) => [token, readable(readableSources[token])])
   )
   const warningFillHex = oklchComponentsToHex(readableTokens['--warning'])
-  const primaryFill = solidFillComponents(palette.primary)
-  const accentFill = solidFillComponents(palette.accent)
+  const brandFill = chrome?.brandFill ? exactComponents(chrome.brandFill) : undefined
+  const primaryFill = brandFill ?? solidFillComponents(palette.primary)
+  const accentFill = brandFill ?? solidFillComponents(palette.accent)
   const successFill = solidFillComponents(palette.success)
   const destructiveFill = solidFillComponents(palette.error)
-  const primaryForeground =
-    appearance === 'light'
+  const primaryForeground = brandFill
+    ? '1 0 0'
+    : appearance === 'light'
       ? hexToOklchComponents(lightenHex(palette.primary, 0.98))
       : hexToOklchComponents(lightenHex(palette.primary, 0.95))
-  const accentForeground =
-    appearance === 'light'
+  const accentForeground = brandFill
+    ? '1 0 0'
+    : appearance === 'light'
       ? hexToOklchComponents(lightenHex(palette.accent, 0.98))
       : hexToOklchComponents(lightenHex(palette.accent, 0.95))
   const secondaryForeground = chrome

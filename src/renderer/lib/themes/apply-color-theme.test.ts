@@ -96,9 +96,18 @@ describe('apply-color-theme', () => {
       expect(cssVarToHex('--secondary')).toBe('#161718')
       expect(cssVarToHex('--popover')).toBe('#161718')
       expect(cssVarToHex('--foreground')).toBe('#e5e5e6')
-      expect(cssVarToHex('--primary-fill')).toBe(oklchComponentsToHex('0.551 0.188 259.9'))
-      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.primary).toBe('#3b82f6')
-      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.accent).toBe('#3b82f6')
+      expect(cssVarToHex('--primary-fill')).toBe('#0d74ce')
+      expect(cssVarToHex('--accent')).toBe('#0d74ce')
+      expect(cssVarToHex('--primary-foreground')).toBe('#ffffff')
+      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.primary).toBe('#3b9eff')
+      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.accent).toBe('#3b9eff')
+      expect(cssVarToHex('--primary')).toBe('#3b9eff')
+      const style = document.documentElement.style
+      expect(style.getPropertyValue('--primary-fill-hover')).toBe('#0e6abe')
+      expect(style.getPropertyValue('--primary-fill-active')).toBe('#0e60ae')
+      for (const fill of ['#0d74ce', '#0e6abe', '#0e60ae']) {
+        expect(contrastRatio('#ffffff', fill)).toBeGreaterThanOrEqual(4.5)
+      }
       expect(
         contrastRatio(cssVarToHex('--foreground'), cssVarToHex('--background'))
       ).toBeGreaterThanOrEqual(4.5)
@@ -119,7 +128,10 @@ describe('apply-color-theme', () => {
       expect(cssVarToHex('--sidebar-background')).toBe('#f9f9f9')
       expect(cssVarToHex('--border')).toBe('#e5e5e5')
       expect(document.documentElement.dataset.flatElevation).toBe('true')
-      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#3b82f6')
+      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0d74ce')
+      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.accent).toBe('#0d74ce')
+      expect(cssVarToHex('--accent')).toBe('#0d74ce')
+      expect(cssVarToHex('--accent-foreground')).toBe('#ffffff')
       const lightFill = cssVarToHex('--primary-fill')
       applyColorTheme('termul')
       expect(cssVarToHex('--primary-fill')).toBe(lightFill)

@@ -27,9 +27,9 @@ describe('termul light chrome', () => {
     ).toBeGreaterThanOrEqual(4.5)
   })
 
-  it('is attached only to Termul light and keeps the current blue', () => {
+  it('is attached only to Termul light and uses the brand blue', () => {
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.chrome).toEqual(TERMUL_LIGHT_CHROME)
-    expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#3b82f6')
+    expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0d74ce')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.success).toBe('#098658')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.warning).toBe('#cd9731')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.error).toBe('#cd3131')

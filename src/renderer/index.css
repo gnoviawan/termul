@@ -129,10 +129,11 @@
     --popover: 0.204 0.003 248;
     --popover-foreground: 0.922 0.001 286.4;
 
-    /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55). */
-    --primary: 0.623 0.188 259.8;
-    --primary-fill: 0.551 0.188 259.9;
-    --primary-foreground: 0.981 0.009 258.3;
+    /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55;
+       Termul pins it to brand blue-11 #0d74ce, 4.77:1 with white). */
+    --primary: 0.688 0.169 251.4;
+    --primary-fill: 0.5558 0.1622 252.2;
+    --primary-foreground: 1 0 0;
 
     /* Secondary - Muted surface */
     --secondary: 0.204 0.003 248;
@@ -145,8 +146,8 @@
     --disabled-foreground: 0.607 0.001 286.4;
 
     /* Accent for highlights — same fill step as primary */
-    --accent: 0.551 0.188 259.9;
-    --accent-foreground: 0.981 0.009 258.3;
+    --accent: 0.5558 0.1622 252.2;
+    --accent-foreground: 1 0 0;
 
     /* Status colors. --destructive / --success are text-on-card (AA).
        Solid buttons use --*-fill (L ≤ 0.55) + --*-foreground. */
@@ -253,7 +254,7 @@
     --surface-darker: 0.139 0.003 246.3;
 
     /* Status bar (VS Code style) */
-    --status-bar: 0.508 0.149 259.6;
+    --status-bar: 0.559 0.134 250.8;
 
     /* Shimmer text (transitions.dev) */
     --shimmer-dur: 2000ms;
@@ -320,7 +321,7 @@
     /* Sidebar — obsidian, one step above the void canvas */
     --sidebar-background: 0.204 0.003 248;
     --sidebar-foreground: 0.874 0.015 260.7;
-    --sidebar-primary: 0.551 0.188 259.9;
+    --sidebar-primary: 0.5558 0.1622 252.2;
     --sidebar-primary-foreground: 1 0 0;
     --sidebar-accent: 0.204 0.003 248;
     --sidebar-accent-foreground: 0.922 0.001 286.4;
@@ -331,30 +332,24 @@
     --overlay: 0 0 0;
 
     /* Component tokens. Full CSS values read as var(--token); see component-tokens.ts. */
-    --primary-fill-hover: color-mix(in oklch, oklch(var(--primary-fill)) 85%, black);
-    --primary-fill-active: var(--primary-fill-hover);
-    --shadow-emboss:
-      0 1px 2px oklch(0 0 0 / 0.22), 0 4px 8px oklch(0 0 0 / 0.16), inset 0 1px 0 oklch(
-        1 0 0 / 0.28
-      ), inset 0 -1px 1px oklch(0 0 0 / 0.16);
-    --shadow-emboss-hover:
-      0 1px 2px oklch(0 0 0 / 0.26), 0 5px 10px oklch(0 0 0 / 0.2), inset 0 1px 0 oklch(
-        1 0 0 / 0.34
-      ), inset 0 -1px 1px oklch(0 0 0 / 0.2);
-    --switch-track-on: oklch(var(--foreground));
-    --switch-track-on-hover: var(--switch-track-on);
-    --switch-track-on-active: var(--switch-track-on-hover);
-    --switch-track-off: oklch(var(--input));
-    --switch-track-off-hover: var(--switch-track-off);
-    --switch-track-off-active: var(--switch-track-off-hover);
-    --switch-track-on-disabled: var(--switch-track-on);
-    --switch-track-off-disabled: var(--switch-track-off);
-    --switch-thumb-on: oklch(var(--background));
-    --switch-thumb-off: oklch(var(--muted-foreground));
-    --switch-thumb-on-disabled: var(--switch-thumb-on);
-    --switch-thumb-off-disabled: var(--switch-thumb-off);
-    --switch-thumb-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-    --switch-disabled-opacity: 0.5;
+    --primary-fill-hover: #0e6abe;
+    --primary-fill-active: #0e60ae;
+    --shadow-emboss: inset 0 0 0 0.5px #ffffff12;
+    --shadow-emboss-hover: inset 0 0 0 0.5px #ffffff12;
+    --switch-track-on: #0090ff;
+    --switch-track-on-hover: #0588f0;
+    --switch-track-on-active: #0d74ce;
+    --switch-track-off: #ffffff12;
+    --switch-track-off-hover: #ffffff1b;
+    --switch-track-off-active: #ffffff22;
+    --switch-track-on-disabled: #ffffff09;
+    --switch-track-off-disabled: #ffffff09;
+    --switch-thumb-on: #ffffff;
+    --switch-thumb-off: #ffffff;
+    --switch-thumb-on-disabled: #ffffff55;
+    --switch-thumb-off-disabled: #ffffff55;
+    --switch-thumb-shadow: none;
+    --switch-disabled-opacity: 1;
     --skeleton: oklch(var(--muted));
     --elevation-2xs: 0 1px rgb(0 0 0 / 0.05);
     --elevation-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
