@@ -132,7 +132,7 @@ export function CodeEditor({
           onVisibleRangeChange={setVisibleRange}
           onSave={() => void requestSaveEditorFile(filePath)}
           handleRef={onHandle}
-          testId="code-editor"
+          testId={`code-editor-${filePath.split(/[\\/]/).pop()}`}
         />
       </div>
     </EditorTocLayout>

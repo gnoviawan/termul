@@ -17,7 +17,9 @@ import { mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { buildClient } from '../../build'
+import { cropPng, diffPngs } from '../parity/diff'
 import { startTestServer } from '../parity/server'
+import { openStatusBarTerminal, rowMatching, terminals } from '../terminal/shell-tree'
 import { READY_TIMEOUT_MS, withGpuix } from '../parity/shoot-gpuix'
 import {
   APP_TS,
@@ -68,8 +70,9 @@ async function until<T>(label: string, probe: () => Promise<T | null | undefined
   }
 }
 
+let editorId = 'code-editor-app.ts'
 async function viewState(app: App): Promise<ViewState> {
-  return JSON.parse(await app.getByTestId('code-editor-state').textContent()) as ViewState
+  return JSON.parse(await app.getByTestId(`${editorId}-state`).textContent()) as ViewState
 }
 
 /**
@@ -85,15 +88,22 @@ async function painted(app: App): Promise<string[]> {
 const keys = (text: string) =>
   [...text].map((ch) => (ch === ' ' ? 'space' : ch)).join(' ')
 
+/** Click the Explorer tab, then each tree row by its label, in the side panel column. */
 async function openFromExplorer(app: App, segments: readonly string[]): Promise<void> {
-  await app.getByText('Explorer').click()
+  const inPanel = async (label: string) => {
+    const nodes = await app.getByText(label).all()
+    return nodes.find((n) => (n.bounds?.x ?? 0) > 200 && (n.bounds?.x ?? 0) < 470)?.bounds
+  }
+  const tab = await until('Explorer tab', () => inPanel('Explorer'))
+  await app.mouse.click({ x: tab.x + tab.width / 2, y: tab.y + tab.height / 2 })
   for (const name of segments) {
-    await app.getByText(name).waitFor({ timeoutMs: 10_000 })
-    await app.getByText(name).click()
+    const row = await until(`tree row ${name}`, () => inPanel(name), 10_000)
+    await app.mouse.click({ x: row.x + row.width / 2, y: row.y + row.height / 2 })
   }
 }
 
 process.env.TERMUL_GPUIX_TEST_HOOKS = '1'
+process.env.TERMUL_GPUIX_EDITOR_PERF = '1'
 const build = await buildClient()
 if (!build.ok) {
   for (const line of build.logs) console.error(line)
@@ -115,7 +125,7 @@ try {
       await app.getByText(READY_TEXT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
       const opened = performance.now()
       await openFromExplorer(app, ['src', 'app.ts'])
-      await app.getByTestId('code-editor').waitFor({ timeoutMs: 20_000 })
+      await app.getByTestId(editorId).waitFor({ timeoutMs: 20_000 })
       const firstLine = APP_TS.split('\n')[0]!
       await until('app.ts painted', async () => (await painted(app)).some((t) => t.includes(firstLine))).catch(
         async (error) => {
@@ -136,13 +146,14 @@ try {
       })
 
       if (!only || only.has('edit')) {
-        const box = await app.getByTestId('code-editor').bounds()
+        const box = await app.getByTestId(editorId).bounds()
         const gutter = 23.656 + 9.828 + 1
         const x = box.x + gutter + 6 + 4 * view.charWidth + 1
         const y = box.y + 4 + 2 * 20.8 + 10
         await app.mouse.click({ x, y })
         await Bun.sleep(200)
         const clicked = await viewState(app)
+        await grab(path.join(OUT, 'clicked.png'))
         await app.call('keystrokes', { keys: keys('XY') })
         const expected = 'consXYt PORT = Number(process.env.PORT ?? 3000)'
         const paintedLine = await until('edited line painted', async () =>
@@ -156,6 +167,18 @@ try {
           paintedLine
         })
 
+        const zone = { x: 548, y: 14, width: 30, height: 30 }
+        cropPng(path.join(OUT, 'clicked.png'), zone, path.join(OUT, 'tab-clean.png'))
+        cropPng(path.join(OUT, 'typed.png'), zone, path.join(OUT, 'tab-dirty.png'))
+        const dirtyDiff = diffPngs(
+          path.join(OUT, 'tab-clean.png'),
+          path.join(OUT, 'tab-dirty.png'),
+          path.join(OUT, 'tab-dirty-diff.png')
+        )
+        check('the tab shows the dirty dot after an edit (tab close zone pixels change)', dirtyDiff.exact.mismatched > 10, {
+          zone,
+          pixelsChanged: dirtyDiff.exact.mismatched
+        })
         await app.call('keystrokes', { keys: 'ctrl-s' })
         const file = path.join(dir, 'src', 'app.ts')
         const saved = await until('saved to disk', async () => {
@@ -179,6 +202,130 @@ try {
         check('Ctrl+Z undoes the edit (and the undo saves back the original bytes)', !!undone && restored, {
           undonePainted: !!undone,
           diskMatchesOriginal: restored
+        })
+      }
+
+      if (!only || only.has('readme')) {
+        await openFromExplorer(app, ['README.md'])
+        await app
+          .getByTestId('markdown-preview')
+          .waitFor({ timeoutMs: 15_000 })
+          .catch(async (error) => {
+            await grab(path.join(OUT, 'readme-failed.png'))
+            throw error
+          })
+        await Bun.sleep(800)
+        await grab(path.join(OUT, 'readme-preview.png'))
+        const note = (await app.getByText('Mermaid diagrams show as source in this client.').count()) > 0
+        await app.getByTestId('markdown-preview').click()
+        editorId = 'code-editor-README.md'
+        await app
+          .getByTestId(editorId)
+          .waitFor({ timeoutMs: 15_000 })
+          .catch(async (error) => {
+            await grab(path.join(OUT, 'readme-source-failed.png'))
+            throw error
+          })
+        await until('README source painted', async () => (await painted(app)).includes('# alpha'))
+        const box = await app.getByTestId(editorId).bounds()
+        const view = await viewState(app)
+        await app.mouse.click({ x: box.x + 34.484 + 6 + 7 * view.charWidth + 2, y: box.y + 4 + 10 })
+        await app.call('keystrokes', { keys: keys(' edited') })
+        await until('README edit painted', async () => (await painted(app)).includes('# alpha edited'))
+        await app.call('keystrokes', { keys: 'ctrl-s' })
+        const file = path.join(dir, 'README.md')
+        const saved = await until('README saved', async () =>
+          (await readFile(file, 'utf8')).startsWith('# alpha edited\n') ? true : null
+        ).catch(() => false)
+        await Bun.sleep(300)
+        await grab(path.join(OUT, 'readme-source.png'))
+        check('README.md opens in Preview with the mermaid note; a click edits the source; Ctrl+S saves', note && saved, {
+          mermaidNote: note,
+          line1OnDisk: (await readFile(file, 'utf8')).split('\n')[0]
+        })
+      }
+
+      if (!only || only.has('big')) {
+        editorId = 'code-editor-big.ts'
+        const clickAt = performance.now()
+        await openFromExplorer(app, ['big.ts'])
+        await app.getByTestId(editorId).waitFor({ timeoutMs: 20_000 })
+        await until('big.ts first rows painted', async () =>
+          (await painted(app)).some((t) => t.startsWith('/** Block 1:'))
+        )
+        const firstPaintMs = Math.round(performance.now() - clickAt)
+        await Bun.sleep(1000)
+        const box = await app.getByTestId(editorId).bounds()
+        const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+        const before = await viewState(app)
+        const wheelStart = performance.now()
+        for (let i = 0; i < 60; i++) {
+          await app.mouse.wheel(center, 0, -3)
+          await Bun.sleep(16)
+        }
+        const scrolled = await until('scrolled', async () => {
+          const s = await viewState(app)
+          return s.scrollTop > before.scrollTop ? s : null
+        })
+        const wheelMs = Math.round(performance.now() - wheelStart)
+        await Bun.sleep(500)
+        const afterScroll = (await viewState(app)) as ViewState & { perf?: { frames?: unknown; renderMs?: number[] } }
+        await grab(path.join(OUT, 'big-scrolled.png'))
+        const typed: number[] = []
+        await app.mouse.click({ x: box.x + 200, y: box.y + 100 })
+        await Bun.sleep(200)
+        for (let i = 0; i < 10; i++) {
+          const prev = (await viewState(app)).caret.col
+          const t0 = performance.now()
+          await app.call('keystrokes', { keys: 'q' })
+          await until('keystroke applied', async () => ((await viewState(app)).caret.col !== prev ? true : null))
+          typed.push(Math.round(performance.now() - t0))
+        }
+        const end = (await viewState(app)) as ViewState & { perf?: { frames?: unknown; renderMs?: number[] } }
+        const renders = (afterScroll.perf?.renderMs ?? []).slice(-60).sort((a, b) => a - b)
+        const p = (q: number) => renders[Math.min(renders.length - 1, Math.floor(q * renders.length))]
+        check('big.ts (5,000 lines): first paint, wheel scroll and typing timed', scrolled.lines === BIG_LINES + 1, {
+          firstPaintMs,
+          lines: scrolled.lines,
+          wheelEvents: 60,
+          wheelLoopMs: wheelMs,
+          scrollTopAfter: afterScroll.scrollTop,
+          frameStatsDuringScroll: afterScroll.perf?.frames,
+          renderJsMs: { p50: p(0.5), p90: p(0.9), max: renders.at(-1), samples: renders.length },
+          keystrokeToStateMs: typed,
+          frameStatsAfterTyping: end.perf?.frames
+        })
+        await app.call('keystrokes', { keys: 'ctrl-z' })
+      }
+
+      if (!only || only.has('crash')) {
+        const termId = await openStatusBarTerminal(app, SIZE.height)
+        const term = async () => (await terminals(app)).find((t) => t.testId === termId)
+        await app.call('keystrokes', { keys: `${keys('echo before')} enter` })
+        await until('terminal echoed', async () => rowMatching(await term(), /^before$/))
+        await openFromExplorer(app, ['boom.gpuix-crash'])
+        const fallback = await app
+          .getByText('Something went wrong in Editor Tab')
+          .waitFor({ timeoutMs: 15_000 })
+          .then(() => true)
+          .catch(() => false)
+        await Bun.sleep(500)
+        await grab(path.join(OUT, 'crash-tab.png'))
+        const termTab = (await app.getByText('Terminal').all()).find(
+          (n) => (n.bounds?.y ?? 1e9) < 48 && (n.bounds?.x ?? 0) > 470
+        )
+        if (termTab?.bounds) {
+          await app.mouse.click({ x: termTab.bounds.x + termTab.bounds.width / 2, y: termTab.bounds.y + termTab.bounds.height / 2 })
+        }
+        await Bun.sleep(500)
+        await app.mouse.click({ x: 900, y: 400 })
+        await app.call('keystrokes', { keys: `${keys('echo alive')} enter` })
+        const alive = await until('terminal still paints', async () => rowMatching(await term(), /^alive$/)).catch(() => null)
+        await grab(path.join(OUT, 'crash-terminal.png'))
+        check('a tab that throws shows its own fallback; the terminal tab in the same pane still paints', fallback && !!alive, {
+          fallback,
+          terminalTabFound: !!termTab,
+          aliveRow: alive?.text
         })
       }
     }

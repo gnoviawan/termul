@@ -8,6 +8,9 @@
 
 import type { NativeRenderer } from '@gpuix/react'
 
+/** Under test hooks, a view for a file with this suffix throws on render (the tab boundary check). */
+export const CRASH_SUFFIX = '.gpuix-crash'
+
 const env = typeof process === 'undefined' ? {} : process.env
 
 export function testHooksEnabled(): boolean {
@@ -26,8 +29,8 @@ export function recordRender(ms: number): void {
   if (renderMs.length > 200) renderMs.shift()
 }
 
-export function perfSnapshot(renderer: NativeRenderer): unknown {
-  if (env.TERMUL_GPUIX_EDITOR_PERF !== '1') return undefined
+export function perfSnapshot(renderer: NativeRenderer, large: boolean): unknown {
+  if (env.TERMUL_GPUIX_EDITOR_PERF !== '1' || !large) return undefined
   if (!statsOn) {
     statsOn = true
     renderer.setDebugFrameOverlay?.('minimal')

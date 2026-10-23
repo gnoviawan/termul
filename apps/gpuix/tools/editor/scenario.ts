@@ -79,6 +79,7 @@ export async function seedEditorProject(server: TestServer): Promise<string> {
   await writeFile(path.join(dir, 'src', 'app.ts'), APP_TS)
   await writeFile(path.join(dir, 'README.md'), README_MD)
   await writeFile(path.join(dir, 'big.ts'), bigFile())
+  await writeFile(path.join(dir, 'boom.gpuix-crash'), 'this tab throws under test hooks\n')
   return dir
 }
 

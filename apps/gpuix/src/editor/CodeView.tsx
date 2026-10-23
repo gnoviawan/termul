@@ -33,7 +33,7 @@ import { copyText, pasteText } from '../terminal/clipboard'
 import { CHUNK_LINES, chunksBetween, chunkStarts } from './chunks'
 import { type KeyIntent, keyIntent } from './keymap'
 import { loadLanguage, nativeGrammar } from './languages'
-import { perfSnapshot, recordRender, testHooksEnabled } from './test-hooks'
+import { CRASH_SUFFIX, perfSnapshot, recordRender, testHooksEnabled } from './test-hooks'
 import {
   caretPoint,
   contentHeight,
@@ -143,6 +143,9 @@ function languageExtensions(language: Extension | null, readOnly: boolean): Exte
 export function CodeView(props: CodeViewProps): React.JSX.Element {
   const { filePath, language, readOnly = false, isVisible, testId } = props
   const renderer = useGpuixRequired()
+  if (testHooksEnabled() && filePath.endsWith(CRASH_SUFFIX)) {
+    throw new Error(`deliberate render failure for ${filePath}`)
+  }
   const renderStart = performance.now()
   useEffect(() => recordRender(performance.now() - renderStart))
   const propsRef = useRef(props)
@@ -688,7 +691,7 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
                 .slice(first - (chunks[0]?.startLine ?? first), last - (chunks[0]?.startLine ?? first) + 1),
               charWidth: vp.charWidth,
               chunkLines: CHUNK_LINES,
-              perf: perfSnapshot(renderer)
+              perf: perfSnapshot(renderer, lines >= 1000)
             })}
           </text>
         </div>

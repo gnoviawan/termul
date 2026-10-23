@@ -8,6 +8,7 @@ import type { ComponentType } from 'react'
 
 type SharedComponent = ComponentType<Record<string, unknown>>
 
-export declare const EditorTocLayout: SharedComponent
 export declare const TocPanel: SharedComponent
 export declare const FrontmatterProperties: SharedComponent
+
+export type TocVariant = 'panel' | 'strip'

@@ -8,7 +8,6 @@
  * edits it. Mermaid fences render as their source, with a note.
  */
 
-import type { EventPayload } from '@gpuix/react'
 import { useCallback, useEffect, useMemo } from 'react'
 import { FrontmatterProperties } from '@/components/editor/FrontmatterProperties'
 import {
@@ -87,6 +86,7 @@ export function MarkdownEditor({
     <div
       testId="markdown-preview"
       style={{ ...tw('h-full w-full bg-background'), overflow: 'scroll', scrollbarColor: '#ffffff22' }}
+      onClick={editSource}
     >
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: 80 }}>
         {parsed.hasFrontmatter ? (
@@ -102,9 +102,6 @@ export function MarkdownEditor({
             paddingRight: DOCUMENT_GUTTER,
             paddingTop: 36,
             cursor: 'text'
-          }}
-          onClick={(event: EventPayload) => {
-            if ((event.clickCount ?? 1) >= 1) editSource()
           }}
         >
           {MERMAID_FENCE.test(parsed.body) ? (
