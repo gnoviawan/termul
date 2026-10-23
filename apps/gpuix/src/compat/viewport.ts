@@ -11,13 +11,19 @@
 
 import { observeWindowSize, readWindowSize } from '@gpuix/native/host'
 import type { NativeRenderer } from '@gpuix/react'
-import { WINDOW_WIDTH } from '../window'
+import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../window'
 
 let width = WINDOW_WIDTH
+let height = WINDOW_HEIGHT
 const listeners = new Set<() => void>()
 
 export function viewportWidth(): number {
   return width
+}
+
+/** Window height, for `vh` lengths. */
+export function viewportHeight(): number {
+  return height
 }
 
 export function subscribeViewport(listener: () => void): () => void {
@@ -31,15 +37,16 @@ interface ResizableWindow extends EventTarget {
 }
 
 function publish(size: { width: number; height: number }): void {
+  const widthChanged = size.width !== width
+  width = size.width
+  height = size.height
   const win = (globalThis as { window?: ResizableWindow }).window
   if (win && (win.innerWidth !== size.width || win.innerHeight !== size.height)) {
     win.innerWidth = size.width
     win.innerHeight = size.height
     win.dispatchEvent(new Event('resize'))
   }
-  if (size.width === width) return
-  width = size.width
-  for (const listener of listeners) listener()
+  if (widthChanged) for (const listener of listeners) listener()
 }
 
 export function observeViewport(renderer: NativeRenderer): () => void {

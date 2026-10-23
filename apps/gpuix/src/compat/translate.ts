@@ -8,6 +8,7 @@
 
 import type { StyleDesc } from '@gpuix/react'
 import { resolveTwTheme } from '../style/theme'
+import { viewportHeight, viewportWidth } from './viewport'
 import { type CompiledStyle, createTw, type Tw } from '../style/tw'
 import { MONO_FAMILY } from '../style/utilities'
 import type { Condition } from '../style/variants'
@@ -315,6 +316,24 @@ let active: Tw = createTw(resolveTwTheme('termul'))
 /** tag -> class string -> translation. Two levels, so a lookup hashes the class string without building a key. */
 let cache = new Map<string, Map<string, Translation>>()
 
+const VIEWPORT_LENGTH = /(-?\d*\.?\d+)(d|s|l)?(vh|vw)\b/g
+
+/**
+ * Arbitrary viewport lengths (`h-[85vh]`, `w-[90vw]`) as px of the window
+ * size when the element renders. tw() resolves lengths once per class string,
+ * so the px form is the cache key; an element shows a new window size when it
+ * next renders.
+ */
+export function resolveViewportUnits(classes: string, width: number, height: number): string {
+  if (!/\d[dsl]?v[hw]\b/.test(classes)) return classes
+  return classes.replace(/\[[^\]]*\]/g, (bracket) =>
+    bracket.replace(VIEWPORT_LENGTH, (_m, n: string, _kind: string | undefined, unit: string) => {
+      const px = (Number.parseFloat(n) / 100) * (unit === 'vh' ? height : width)
+      return `${Math.round(px * 100) / 100}px`
+    })
+  )
+}
+
 /** The cached translation of one DOM tag and class string. */
 export function translation(tag: string, className: string | undefined): Translation {
   let byClass = cache.get(tag)
@@ -322,7 +341,7 @@ export function translation(tag: string, className: string | undefined): Transla
     byClass = new Map()
     cache.set(tag, byClass)
   }
-  const classes = className ?? ''
+  const classes = resolveViewportUnits(className ?? '', viewportWidth(), viewportHeight())
   let hit = byClass.get(classes)
   if (!hit) {
     hit = translate(active, tag, classes)

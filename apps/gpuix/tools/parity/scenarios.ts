@@ -7,13 +7,18 @@
 
 import path from 'node:path'
 import { addProject, type TestServer } from './server'
+import { seedWorkspace } from './workspace'
 
-export interface Scenario {
-  name: string
-  seed(server: TestServer): Promise<void>
-  /** Test ids present in both clients once the state is on screen. */
-  readyTestIds: string[]
-}
+/** One frame once some test ids are painted, or the multi-step `workspace` run. */
+export type Scenario =
+  | {
+      kind: 'still'
+      name: string
+      seed(server: TestServer): Promise<void>
+      /** Test ids present in both clients once the state is on screen. */
+      readyTestIds: string[]
+    }
+  | { kind: 'steps'; name: string; seed(server: TestServer): Promise<void> }
 
 export const SEEDED_PROJECTS = [
   { id: 'parity-alpha', name: 'alpha' },
@@ -22,6 +27,7 @@ export const SEEDED_PROJECTS = [
 
 export const SCENARIOS: Record<string, Scenario> = {
   projects: {
+    kind: 'still',
     name: 'projects',
     async seed(server) {
       for (const project of SEEDED_PROJECTS) {
@@ -33,5 +39,6 @@ export const SCENARIOS: Record<string, Scenario> = {
       }
     },
     readyTestIds: SEEDED_PROJECTS.map((project) => `project-item-${project.id}`)
-  }
+  },
+  workspace: { kind: 'steps', name: 'workspace', seed: seedWorkspace }
 }

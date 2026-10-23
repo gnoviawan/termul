@@ -18,6 +18,7 @@ import { SCENARIOS } from './scenarios'
 import { startTestServer } from './server'
 import { shootGpuix } from './shoot-gpuix'
 import { shootWeb } from './shoot-web'
+import { runWorkspace, type StepResult } from './workspace'
 
 const TOKEN = 'parity-token'
 
@@ -56,38 +57,68 @@ const server = await startTestServer({
 })
 try {
   await scenario.seed(server)
-  const webPng = path.join(outDir, 'web.png')
-  const gpuixPng = path.join(outDir, 'gpuix.png')
-  const diffPng = path.join(outDir, 'diff.png')
   const size = { width: WINDOW_WIDTH, height: WINDOW_HEIGHT }
+  if (scenario.kind === 'steps') {
+    const results = await runWorkspace({
+      server,
+      entry: build.entry,
+      outDir,
+      clientStateDir: path.join(stateDir, 'client'),
+      ...size
+    })
+    printSteps(results)
+  } else {
+    const webPng = path.join(outDir, 'web.png')
+    const gpuixPng = path.join(outDir, 'gpuix.png')
+    const diffPng = path.join(outDir, 'diff.png')
 
-  const started = performance.now()
-  await shootWeb({ server, readyTestIds: scenario.readyTestIds, outPath: webPng, ...size })
-  const webMs = Math.round(performance.now() - started)
-  await shootGpuix({
-    server,
-    entry: build.entry,
-    readyTestIds: scenario.readyTestIds,
-    outPath: gpuixPng,
-    clientStateDir: path.join(stateDir, 'client'),
-    ...size
-  })
-  const gpuixMs = Math.round(performance.now() - started) - webMs
+    const started = performance.now()
+    await shootWeb({ server, readyTestIds: scenario.readyTestIds, outPath: webPng, ...size })
+    const webMs = Math.round(performance.now() - started)
+    await shootGpuix({
+      server,
+      entry: build.entry,
+      readyTestIds: scenario.readyTestIds,
+      outPath: gpuixPng,
+      clientStateDir: path.join(stateDir, 'client'),
+      ...size
+    })
+    const gpuixMs = Math.round(performance.now() - started) - webMs
 
-  const result = diffPngs(webPng, gpuixPng, diffPng)
-  console.log(
-    `scenario: ${scenario.name} (${size.width}x${size.height}, web shot ${webMs} ms, gpuix shot ${gpuixMs} ms)`
-  )
-  console.log(`web:   ${webPng}`)
-  console.log(`gpuix: ${gpuixPng}`)
-  console.log(`diff:  ${diffPng}`)
-  console.log(
-    `mismatch (exact):      ${result.exact.mismatched} / ${result.total} px = ${result.exact.percent.toFixed(2)}%`
-  )
-  console.log(
-    `mismatch (perceptual): ${result.perceptual.mismatched} / ${result.total} px = ${result.perceptual.percent.toFixed(2)}% (pixelmatch threshold ${PERCEPTUAL_THRESHOLD})`
-  )
+    const result = diffPngs(webPng, gpuixPng, diffPng)
+    console.log(
+      `scenario: ${scenario.name} (${size.width}x${size.height}, web shot ${webMs} ms, gpuix shot ${gpuixMs} ms)`
+    )
+    console.log(`web:   ${webPng}`)
+    console.log(`gpuix: ${gpuixPng}`)
+    console.log(`diff:  ${diffPng}`)
+    console.log(
+      `mismatch (exact):      ${result.exact.mismatched} / ${result.total} px = ${result.exact.percent.toFixed(2)}%`
+    )
+    console.log(
+      `mismatch (perceptual): ${result.perceptual.mismatched} / ${result.total} px = ${result.perceptual.percent.toFixed(2)}% (pixelmatch threshold ${PERCEPTUAL_THRESHOLD})`
+    )
+  }
 } finally {
   await server.stop()
   if (!values['keep-state']) await rm(stateDir, { recursive: true, force: true })
+}
+
+function pct(result: { mismatched: number; percent: number }): string {
+  return `${result.mismatched} px (${result.percent.toFixed(2)}%)`
+}
+
+function printSteps(results: StepResult[]): void {
+  for (const result of results) {
+    console.log(`step ${result.step}`)
+    console.log(`  web:   ${result.web}`)
+    console.log(`  gpuix: ${result.gpuix}`)
+    console.log(`  full       exact ${pct(result.full.exact)}  perceptual ${pct(result.full.perceptual)}`)
+    for (const region of result.regions) {
+      const { x, y, width, height } = region.rect
+      console.log(
+        `  ${region.name.padEnd(10)} exact ${pct(region.diff.exact)}  perceptual ${pct(region.diff.perceptual)}  [${Math.round(x)},${Math.round(y)} ${Math.round(width)}x${Math.round(height)}]`
+      )
+    }
+  }
 }
