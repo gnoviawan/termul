@@ -173,7 +173,7 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
     logFrontendError.mockReset()
   })
 
-  it('surfaces the error in the tab\'s own boundary + logFrontendError when the editor chunk fails', async () => {
+  it("surfaces the error in the tab's own boundary + logFrontendError when the editor chunk fails", async () => {
     render(
       <ErrorBoundary context="Editor Pane">
         <PaneContent pane={editorPane} />
@@ -194,7 +194,7 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
     expect(screen.queryByText('Something went wrong in Editor Pane')).not.toBeInTheDocument()
   })
 
-  it('keeps the pane\'s other tabs mounted when one tab throws', async () => {
+  it("keeps the pane's other tabs mounted when one tab throws", async () => {
     const mixedPane: LeafNode = {
       type: 'leaf',
       id: 'pane-1',

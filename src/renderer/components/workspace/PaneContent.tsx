@@ -77,7 +77,13 @@ function PaneSkeleton(): React.JSX.Element {
  * shows its fallback in place, and the pane's other tabs (a live terminal,
  * say) stay mounted instead of falling to the pane-level boundary.
  */
-function TabContent({ label, children }: { label: string; children: ReactNode }): React.JSX.Element {
+function TabContent({
+  label,
+  children
+}: {
+  label: string
+  children: ReactNode
+}): React.JSX.Element {
   return (
     <ErrorBoundary context={label}>
       <Suspense fallback={<PaneSkeleton />}>{children}</Suspense>
