@@ -4,7 +4,7 @@ use russh_sftp::client::fs::Metadata;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use super::session::Emit;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Largest file the editor opens (it holds the whole file in memory).
@@ -12,6 +12,7 @@ const MAX_EDIT_BYTES: u64 = 5 * 1024 * 1024;
 const TRANSFER_CHUNK: usize = 32 * 1024;
 /// Emit transfer progress every this many bytes.
 const PROGRESS_STEP: u64 = 256 * 1024;
+pub const EVENT_TRANSFER_PROGRESS: &str = "ssh-transfer-progress";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,7 +223,7 @@ pub async fn rename(sftp: &SftpSession, old_path: &str, new_path: &str) -> Resul
 }
 
 struct Progress<'a> {
-    app: &'a AppHandle,
+    emit: &'a Emit,
     connection_id: &'a str,
     remote_path: &'a str,
     local_path: &'a str,
@@ -242,7 +243,10 @@ impl Progress<'_> {
             status: status.to_string(),
             error,
         };
-        let _ = self.app.emit("ssh-transfer-progress", &progress);
+        match serde_json::to_value(&progress) {
+            Ok(payload) => (self.emit)(EVENT_TRANSFER_PROGRESS, payload),
+            Err(e) => log::error!("[SSH] Could not encode transfer progress: {}", e),
+        }
     }
 }
 
@@ -289,7 +293,7 @@ pub async fn download_file(
     sftp: &SftpSession,
     remote_path: &str,
     local_path: &str,
-    app: &AppHandle,
+    emit: &Emit,
     connection_id: &str,
 ) -> Result<(), String> {
     let total = sftp
@@ -299,7 +303,7 @@ pub async fn download_file(
         .size
         .unwrap_or(0);
     let progress = Progress {
-        app,
+        emit,
         connection_id,
         remote_path,
         local_path,
@@ -333,7 +337,7 @@ pub async fn upload_file(
     sftp: &SftpSession,
     local_path: &str,
     remote_path: &str,
-    app: &AppHandle,
+    emit: &Emit,
     connection_id: &str,
 ) -> Result<(), String> {
     let total = tokio::fs::metadata(local_path)
@@ -341,7 +345,7 @@ pub async fn upload_file(
         .map_err(|e| format!("Local file not found: {} ({})", local_path, e))?
         .len();
     let progress = Progress {
-        app,
+        emit,
         connection_id,
         remote_path,
         local_path,

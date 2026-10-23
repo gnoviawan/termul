@@ -164,6 +164,9 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "cancel_claude_account_login" => handle_cancel_claude_account_login(id, &req.payload, acp),
         "rename_claude_account" => handle_rename_claude_account(id, &req.payload, acp),
         "remove_claude_account" => handle_remove_claude_account(id, &req.payload, acp).await,
+        // SSH sessions, SFTP, profiles and keys (`ssh.rs`): the desktop's SSH
+        // commands under their Tauri names; `host_local` connections only.
+        t if SSH_WS_REQUESTS.contains(&t) => handle_ssh_request(id, t, &req.payload, env).await,
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
         // resolved `SupportedAcpAgentStatus`. The web client never probes

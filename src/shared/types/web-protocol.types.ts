@@ -268,6 +268,33 @@ export const WS_REQUEST_TYPES = [
   'cancel_claude_account_login',
   'rename_claude_account',
   'remove_claude_account',
+  // SSH sessions, SFTP, profiles and keys: the desktop's SSH Tauri commands
+  // under their own names, payload = the command's arguments, reply = its
+  // value; a failure carries the command's code (`SSH_AUTH_FAILED`, ...).
+  // Admitted only for a `hostLocal` connection. Events arrive on the `ssh`
+  // watch as `{ event, payload }` deltas.
+  'ssh_list_profiles',
+  'ssh_save_profile',
+  'ssh_delete_profile',
+  'ssh_duplicate_profile',
+  'ssh_import_config',
+  'ssh_inspect_key',
+  'ssh_list_keys',
+  'ssh_session_open',
+  'ssh_session_respond_host_key',
+  'ssh_session_cancel',
+  'ssh_session_close',
+  'ssh_session_list',
+  'sftp_list_dir',
+  'sftp_realpath',
+  'sftp_download',
+  'sftp_upload',
+  'sftp_delete',
+  'sftp_mkdir',
+  'sftp_rename',
+  'sftp_read_file',
+  'sftp_write_file',
+  'sftp_create_file',
   // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
   // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
   // holds (or no longer holds) a project's canvas; the host then forwards
@@ -283,6 +310,9 @@ export const WS_REQUEST_TYPES = [
 
 /** Union of all WS request `type` strings. */
 export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
+
+/** The SSH requests: the desktop's SSH command names. */
+export type SshWsRequestType = Extract<WsRequestType, `ssh_${string}` | `sftp_${string}`>
 
 /** How the host's receipt ledger treats a request type. Mirrors the Rust `ClassKind`. */
 export type WsCommandKind = 'create' | 'command' | 'idempotent' | 'read'
@@ -330,6 +360,28 @@ export const WS_COMMAND_CLASSES: Readonly<
   cancel_claude_account_login: ['idempotent', null],
   rename_claude_account: ['idempotent', null],
   remove_claude_account: ['idempotent', null],
+  ssh_list_profiles: ['read', null],
+  ssh_save_profile: ['idempotent', null],
+  ssh_delete_profile: ['idempotent', null],
+  ssh_duplicate_profile: ['command', 'payload'],
+  ssh_import_config: ['command', 'payload'],
+  ssh_inspect_key: ['read', null],
+  ssh_list_keys: ['read', null],
+  ssh_session_open: ['command', 'receipt-only'],
+  ssh_session_respond_host_key: ['idempotent', null],
+  ssh_session_cancel: ['idempotent', null],
+  ssh_session_close: ['idempotent', null],
+  ssh_session_list: ['read', null],
+  sftp_list_dir: ['read', null],
+  sftp_realpath: ['read', null],
+  sftp_download: ['idempotent', null],
+  sftp_upload: ['idempotent', null],
+  sftp_delete: ['idempotent', null],
+  sftp_mkdir: ['idempotent', null],
+  sftp_rename: ['idempotent', null],
+  sftp_read_file: ['read', null],
+  sftp_write_file: ['idempotent', null],
+  sftp_create_file: ['idempotent', null],
   kill_agent: ['idempotent', null],
   list_agents: ['read', null],
   authenticate: ['read', null],
@@ -1026,7 +1078,9 @@ export const WS_WATCH_NAMES = [
   'fs',
   'store',
   'terminals',
-  'chat_reads'
+  'chat_reads',
+  // SSH session events for a `hostLocal` connection: `{ event, payload }`.
+  'ssh'
 ] as const
 
 /** One of {@link WS_WATCH_NAMES}. */

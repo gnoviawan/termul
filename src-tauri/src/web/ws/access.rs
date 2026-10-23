@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::web::capabilities::{
-    ws_request_permitted, ws_requirement, Capabilities, CapabilityPolicy, Requirement,
+    ws_request_permitted, ws_request_requirement, Capabilities, CapabilityPolicy, Requirement,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -66,7 +66,7 @@ pub(super) fn forbidden_reply(
     if ws_request_permitted(request_type, payload, access.capabilities(), identity) {
         return None;
     }
-    let host_local = ws_requirement(request_type) == Requirement::HostLocal;
+    let host_local = ws_request_requirement(request_type, payload) == Requirement::HostLocal;
     // Boundary log: request type + carrier + device label only — never the
     // payload (it can carry prompt text or store values).
     warn!(

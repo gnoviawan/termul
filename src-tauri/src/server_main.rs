@@ -339,6 +339,18 @@ fn main() -> ExitCode {
         ws_relay.set_rendezvous(rendezvous);
         let question_rendezvous = Arc::new(QuestionRendezvous::new(Arc::clone(&acp)));
         ws_relay.set_question_rendezvous(question_rendezvous);
+        // SSH for host-local clients: profiles in `<state dir>/ssh-profiles.json`
+        // (the desktop's file when the state dir is its app data dir), events
+        // to the `ssh` watch.
+        let relay_for_ssh = Arc::downgrade(&ws_relay);
+        ws_relay.set_ssh(Arc::new(termul_manager_lib::ssh::SSHManager::new(
+            &data_paths.state_dir,
+            Arc::new(move |event, payload| {
+                if let Some(relay) = relay_for_ssh.upgrade() {
+                    termul_manager_lib::web::watch::publish_ssh_event(&relay, event, payload);
+                }
+            }),
+        )));
         // The host's ONE project registry, durable at the resolved projects
         // file. `cfg.projects_file` is resolved by `ServerConfig::from_args`
         // from --projects-file / $TERMUL_PROJECTS_FILE / the state-dir default

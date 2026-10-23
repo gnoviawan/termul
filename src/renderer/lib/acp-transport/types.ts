@@ -20,6 +20,7 @@ import {
   type PersistedSessionSummary,
   type ProjectBusyDetails,
   type SessionSnapshotEvent,
+  type SshWsRequestType,
   WS_ERROR_CODES,
   type WsAgentSummary
 } from '@shared/types/web-protocol.types'
@@ -251,6 +252,14 @@ export interface AcpTransport {
   renameClaudeAccount?(accountId: string, name: string): Promise<void>
   /** Resolves to the ids of the Projects that moved to the Default Account. */
   removeClaudeAccount?(accountId: string): Promise<string[]>
+  /**
+   * Run one of the desktop's SSH commands on the host over `/ws` (request
+   * type = command name, payload = its arguments), admitted only for a
+   * `hostLocal` connection. Resolves to the command's value; a failure
+   * rejects with an `AcpTransportError` carrying the command's code. Web
+   * carriers only.
+   */
+  sshRequest?<T>(command: SshWsRequestType, args?: Record<string, unknown>): Promise<T>
   /** `projectId` selects the Claude Account of a managed Claude agent. */
   spawnAgent(
     config: AgentConfig,

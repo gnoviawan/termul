@@ -263,7 +263,8 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
     }
 }
 
-/// `/ws` request types that act with the host's own credentials.
+/// `/ws` request types that act with the host's own credentials, besides
+/// the SSH requests ([`crate::web::ws::SSH_WS_REQUESTS`]).
 pub const HOST_LOCAL_WS_REQUESTS: &[&str] = &[
     "add_claude_account",
     "login_claude_account",
@@ -274,6 +275,19 @@ pub const HOST_LOCAL_WS_REQUESTS: &[&str] = &[
 
 fn is_host_local_request(request_type: &str) -> bool {
     HOST_LOCAL_WS_REQUESTS.contains(&request_type)
+        || crate::web::ws::SSH_WS_REQUESTS.contains(&request_type)
+}
+
+/// [`ws_requirement`] refined by the payload: a `watch` of the `ssh` watch
+/// needs [`Requirement::HostLocal`], because SSH session events (host-key
+/// questions, remote paths) go only to the connections that may run the
+/// sessions.
+#[must_use]
+pub fn ws_request_requirement(request_type: &str, payload: &serde_json::Value) -> Requirement {
+    if request_type == "watch" && payload["watch"].as_str() == Some("ssh") {
+        return Requirement::HostLocal;
+    }
+    ws_requirement(request_type)
 }
 
 /// Whether `caps` may run a `/ws` request of `request_type` whose payload is
@@ -285,7 +299,7 @@ pub fn ws_request_permitted(
     caps: Capabilities,
     identity: Option<&ClientIdentity>,
 ) -> bool {
-    match ws_requirement(request_type) {
+    match ws_request_requirement(request_type, payload) {
         Requirement::View => true,
         Requirement::Write => caps.write,
         Requirement::HostLocal => caps.host_local,

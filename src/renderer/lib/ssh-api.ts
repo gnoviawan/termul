@@ -17,7 +17,10 @@ import type {
   SSHSessionProgressEvent,
   TransferProgressCallback
 } from '@shared/types/ssh.types'
+import type { SshWsRequestType } from '@shared/types/web-protocol.types'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getAcpTransport } from './acp-transport'
+import type { AcpTransport } from './acp-transport/types'
 import { invokeIpc as invokeTauriIpc } from './ipc/tauri'
 import { persistenceApi } from './persistence-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
@@ -92,30 +95,103 @@ const SSH_COMMANDS = {
   DUPLICATE_PROFILE: 'ssh_duplicate_profile',
   INSPECT_KEY: 'ssh_inspect_key',
   LIST_KEYS: 'ssh_list_keys'
+} as const satisfies Record<string, SshCommand>
+
+/** The SSH commands; port forwarding stays desktop-only (no renderer caller). */
+type SshCommand = SshWsRequestType | 'ssh_port_forward_start' | 'ssh_port_forward_stop'
+
+const WEB_UNSUPPORTED = {
+  success: false,
+  error: 'SSH is not available in the web client',
+  code: 'WEB_UNSUPPORTED'
 } as const
 
-async function invokeIpc<T>(
-  command: string,
-  args?: Record<string, unknown>
-): Promise<IpcResult<T>> {
-  // Web/remote mode: SSH/SFTP/port-forwarding are desktop-only. Return an
-  // explicit `WEB_UNSUPPORTED` result instead of invoking a Tauri-only
-  // command whose stub throws `tauriUnavailable`. All SSH command methods
-  // (profile CRUD, sessions, port forwarding, SFTP) delegate through this
-  // function, so the guard is applied once for the whole API.
-  if (!isTauriContext()) {
-    return {
-      success: false,
-      error: 'SSH is not available in the web client',
-      code: 'WEB_UNSUPPORTED'
+/**
+ * The web transport when the host runs SSH for this connection: only a
+ * `hostLocal` one (a client on the host itself holding the server token,
+ * such as the GPUIX desktop client). The grant is known after the
+ * handshake, so a call made before it waits for the connection.
+ */
+async function hostTransport(): Promise<AcpTransport | null> {
+  const transport = getAcpTransport()
+  if (!transport.sshRequest || !transport.connectionCapabilities) return null
+  if (transport.connectionCapabilities() === null) {
+    try {
+      await transport.connect()
+    } catch {
+      return null
     }
   }
-  return invokeTauriIpc<T>(command, args)
+  return transport.connectionCapabilities()?.hostLocal === true ? transport : null
 }
 
-/** Subscribe to a Tauri event; a no-op outside the desktop runtime. */
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : 'SSH_INTERNAL'
+}
+
+/**
+ * Desktop: the Tauri command. Web: the same command over `/ws` when the host
+ * runs SSH for this connection, else an explicit `WEB_UNSUPPORTED` result
+ * (never the stubbed Tauri `invoke`, which throws on web). Every SSH command
+ * method delegates through here.
+ */
+async function invokeIpc<T>(
+  command: SshCommand,
+  args?: Record<string, unknown>
+): Promise<IpcResult<T>> {
+  if (isTauriContext()) return invokeTauriIpc<T>(command, args)
+  if (command === 'ssh_port_forward_start' || command === 'ssh_port_forward_stop') {
+    return WEB_UNSUPPORTED
+  }
+  const transport = await hostTransport()
+  if (!transport?.sshRequest) return WEB_UNSUPPORTED
+  try {
+    return { success: true, data: await transport.sshRequest<T>(command, args) }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      code: errorCode(error)
+    }
+  }
+}
+
+/** Whether profiles live with the host's SSH (desktop, host-local web). */
+async function hostOwnsProfiles(): Promise<boolean> {
+  return isTauriContext() || (await hostTransport()) !== null
+}
+
+interface SshWatchDelta {
+  event?: string
+  payload?: unknown
+}
+
+/**
+ * Subscribe to one SSH event: a Tauri event on desktop, a delta of the host's
+ * `ssh` watch on a host-local web connection, a no-op otherwise.
+ */
+function listenSsh<T>(event: string, callback: (payload: T) => void): () => void {
+  if (isTauriContext()) return listenDesktop(event, callback)
+  let stopped = false
+  let stop: (() => void) | undefined
+  void hostTransport().then((transport) => {
+    if (stopped || !transport?.watches) return
+    stop = transport.watches.subscribe<unknown, SshWatchDelta>('ssh', {
+      onState: () => {},
+      onDelta: (delta) => {
+        if (delta?.event === event) callback(delta.payload as T)
+      }
+    })
+  })
+  return () => {
+    stopped = true
+    stop?.()
+  }
+}
+
+/** Subscribe to a Tauri event. */
 function listenDesktop<T>(event: string, callback: (payload: T) => void): () => void {
-  if (!isTauriContext()) return () => {}
   let unlisten: Promise<UnlistenFn> | undefined
   try {
     unlisten = listen<T>(event, ({ payload }) => callback(payload))
@@ -129,15 +205,16 @@ function listenDesktop<T>(event: string, callback: (payload: T) => void): () => 
 
 export function createSSHApi(): SSHApi {
   return {
-    // Profile management — CRUD works in web mode via the server-side store;
-    // sessions/SFTP/port-forwarding remain desktop-only (`WEB_UNSUPPORTED`).
+    // Profiles live with the host's SSH on desktop and on a host-local web
+    // connection; any other web client keeps them in the server-side store
+    // (it cannot open sessions).
     async listProfiles(): Promise<IpcResult<SSHProfile[]>> {
-      if (!isTauriContext()) return readProfilesFromStore()
+      if (!(await hostOwnsProfiles())) return readProfilesFromStore()
       return invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
     },
 
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {
-      if (!isTauriContext()) {
+      if (!(await hostOwnsProfiles())) {
         for (let attempt = 0; attempt < PROFILE_WRITE_ATTEMPTS; attempt++) {
           const list = await readProfilesSnapshot()
           if (!list.success) return list
@@ -160,7 +237,7 @@ export function createSSHApi(): SSHApi {
     },
 
     async deleteProfile(profileId: string): Promise<IpcResult<void>> {
-      if (!isTauriContext()) {
+      if (!(await hostOwnsProfiles())) {
         for (let attempt = 0; attempt < PROFILE_WRITE_ATTEMPTS; attempt++) {
           const list = await readProfilesSnapshot()
           if (!list.success) return list
@@ -321,26 +398,26 @@ export function createSSHApi(): SSHApi {
 
     // Event listeners
     onPortForwardStatusChanged(callback: PortForwardStatusCallback): () => void {
-      return listenDesktop<[string, ActivePortForward]>(
+      return listenSsh<[string, ActivePortForward]>(
         SSH_EVENTS.PORT_FORWARD_STATUS_CHANGED,
         (payload) => callback(payload[0], payload[1])
       )
     },
 
     onTransferProgress(callback: TransferProgressCallback): () => void {
-      return listenDesktop<SFTPTransferProgress>(SSH_EVENTS.TRANSFER_PROGRESS, callback)
+      return listenSsh<SFTPTransferProgress>(SSH_EVENTS.TRANSFER_PROGRESS, callback)
     },
 
     onSessionProgress(callback: (event: SSHSessionProgressEvent) => void): () => void {
-      return listenDesktop<SSHSessionProgressEvent>(SSH_EVENTS.SESSION_PROGRESS, callback)
+      return listenSsh<SSHSessionProgressEvent>(SSH_EVENTS.SESSION_PROGRESS, callback)
     },
 
     onSessionHostKey(callback: (prompt: SSHHostKeyPrompt) => void): () => void {
-      return listenDesktop<SSHHostKeyPrompt>(SSH_EVENTS.SESSION_HOST_KEY, callback)
+      return listenSsh<SSHHostKeyPrompt>(SSH_EVENTS.SESSION_HOST_KEY, callback)
     },
 
     onSessionEnded(callback: (event: SSHSessionEndedEvent) => void): () => void {
-      return listenDesktop<SSHSessionEndedEvent>(SSH_EVENTS.SESSION_ENDED, callback)
+      return listenSsh<SSHSessionEndedEvent>(SSH_EVENTS.SESSION_ENDED, callback)
     }
   }
 }

@@ -1,16 +1,19 @@
 //! SSH Profile Manager
 //!
-//! CRUD operations for SSH connection profiles, persisted via tauri-plugin-store.
-//! Sensitive credentials (password, passphrase) are stored in the OS keychain
-//! via the credential_store module — they are never written to disk.
+//! CRUD operations for SSH connection profiles, persisted in
+//! `<data dir>/ssh-profiles.json` as `{"profiles": [...]}`: the file and
+//! format tauri-plugin-store wrote under the desktop's `app_data_dir`, which
+//! is also the standalone server's `--state-dir` when the desktop client
+//! runs on it. Sensitive credentials (password, passphrase) are stored in the
+//! OS keychain via the credential_store module — they are never written to
+//! disk.
 
 use super::credential_store;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::AppHandle;
-use tauri_plugin_store::StoreExt;
 
-const STORE_FILE: &str = "ssh-profiles.json";
+pub const STORE_FILE: &str = "ssh-profiles.json";
 const STORE_KEY: &str = "profiles";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,27 +174,49 @@ impl From<&SSHProfile> for StoredSSHProfile {
 }
 
 pub struct ProfileManager {
-    app_handle: AppHandle,
+    path: PathBuf,
     /// In-memory cache of profiles for fast access
     cache: Mutex<Option<Vec<SSHProfile>>>,
 }
 
+/// The whole store file: `{"profiles": [...]}` plus any key another writer
+/// kept there, which a rewrite preserves.
+fn read_store_file(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::Map::new()),
+        Err(e) => return Err(format!("Failed to open SSH store: {}", e)),
+    };
+    serde_json::from_slice(&bytes).map_err(|e| format!("Failed to deserialize SSH profiles: {}", e))
+}
+
+/// Write through a sibling temp file and a rename, so a crash leaves either
+/// the old file or the new one.
+fn write_store_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 impl ProfileManager {
-    pub fn new(app_handle: AppHandle) -> Self {
+    /// Profiles kept in `data_dir/ssh-profiles.json`.
+    pub fn new(data_dir: &Path) -> Self {
         Self {
-            app_handle,
+            path: data_dir.join(STORE_FILE),
             cache: Mutex::new(None),
         }
     }
 
     /// Load profiles from store (secrets are NOT loaded here)
     fn load_from_store(&self) -> Result<Vec<SSHProfile>, String> {
-        let store = self
-            .app_handle
-            .store(STORE_FILE)
-            .map_err(|e| format!("Failed to open SSH store: {}", e))?;
-
-        let value = store.get(STORE_KEY).unwrap_or(serde_json::json!([]));
+        let value = read_store_file(&self.path)?
+            .remove(STORE_KEY)
+            .unwrap_or(serde_json::json!([]));
 
         let stored: Vec<StoredSSHProfile> = serde_json::from_value(value)
             .map_err(|e| format!("Failed to deserialize SSH profiles: {}", e))?;
@@ -201,22 +226,19 @@ impl ProfileManager {
 
     /// Save profiles to store (only non-secret fields)
     fn save_to_store(&self, profiles: &[SSHProfile]) -> Result<(), String> {
-        let store = self
-            .app_handle
-            .store(STORE_FILE)
-            .map_err(|e| format!("Failed to open SSH store: {}", e))?;
-
         let stored: Vec<StoredSSHProfile> = profiles.iter().map(StoredSSHProfile::from).collect();
 
         let value = serde_json::to_value(&stored)
             .map_err(|e| format!("Failed to serialize profiles: {}", e))?;
 
-        store.set(STORE_KEY, value);
-        store
-            .save()
-            .map_err(|e| format!("Failed to save SSH store: {}", e))?;
-
-        Ok(())
+        let mut file = read_store_file(&self.path)?;
+        file.insert(STORE_KEY.to_string(), value);
+        let bytes = serde_json::to_vec_pretty(&file)
+            .map_err(|e| format!("Failed to serialize profiles: {}", e))?;
+        write_store_file(&self.path, &bytes).map_err(|e| {
+            log::error!("[SSH] Failed to write the profile store: {}", e);
+            format!("Failed to save SSH store: {}", e)
+        })
     }
 
     /// Get all profiles (uses cache). Secrets are NOT included in the returned profiles.

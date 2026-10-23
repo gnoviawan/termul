@@ -133,6 +133,24 @@ pub fn publish_chat_read(relay: &WsRelaySink, session_id: &str) {
     });
 }
 
+/// Full state of the `ssh` watch. Its deltas are events, not state, so a
+/// (re)subscribe starts from nothing; live sessions are listed with
+/// `ssh_session_list`.
+#[must_use]
+pub fn ssh_state() -> Value {
+    json!({})
+}
+
+/// One SSH event (`ssh-session-progress`, `ssh-session-host-key`,
+/// `ssh-session-ended`, `ssh-transfer-progress`,
+/// `ssh-port-forward-status-changed`) to every `ssh` watcher, as
+/// `{ event, payload }`.
+pub fn publish_ssh_event(relay: &WsRelaySink, event: &str, payload: Value) {
+    relay
+        .watches()
+        .publish(WatchKind::Ssh, "", || json!({ "event": event, "payload": payload }));
+}
+
 /// Full state of the `fs` watch: the canonical root being watched.
 #[must_use]
 pub fn fs_state(root: &std::path::Path) -> Value {

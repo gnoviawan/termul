@@ -19,7 +19,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
+import { WS_ERROR_CODES, WS_REQUEST_TYPES, WS_WATCH_NAMES } from '@shared/types/web-protocol.types'
 import { describe, expect, it } from 'vitest'
 import { mapTauriVerdict } from '../acp-transport/tauri-verdicts'
 import { AcpTransportError } from '../acp-transport/types'
@@ -2254,5 +2254,48 @@ describe('Desktop host seam parity (GPUIX)', () => {
       )
       expect(content).toMatch(/getDesktopHost\(\)/)
     }
+  })
+})
+
+describe('SSH parity (desktop Tauri commands and host-local /ws)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const wsSsh = read('web', 'ws', 'ssh.rs')
+  const tauriSsh = read('commands', 'ssh.rs')
+  const requests = [...wsSsh.matchAll(/^ {4}"((?:ssh|sftp)_[a-z_]+)",$/gm)].map((m) => m[1])
+
+  it('every SSH command the desktop registers is a host-local /ws request, except port forwards', () => {
+    const lib = read('lib.rs')
+    const registered = [...lib.matchAll(/commands::((?:ssh|sftp)_[a-z_]+),/g)].map((m) => m[1])
+    expect(requests).toHaveLength(22)
+    expect([...registered].sort()).toEqual(
+      [...requests, 'ssh_port_forward_start', 'ssh_port_forward_stop'].sort()
+    )
+    for (const request of requests) {
+      expect(WS_REQUEST_TYPES).toContain(request)
+    }
+    expect(read('web', 'capabilities.rs')).toMatch(
+      /HOST_LOCAL_WS_REQUESTS\.contains\(&request_type\)\s*\|\| crate::web::ws::SSH_WS_REQUESTS\.contains/
+    )
+  })
+
+  it('both transports call the same ssh::service operation for each command', () => {
+    for (const request of requests) {
+      const tauri = new RegExp(`pub async fn ${request}\\([^]*?service::([a-z_]+)\\(`).exec(
+        tauriSsh
+      )
+      const ws = new RegExp(`"${request}" => \\{?[^]*?service::([a-z_]+)\\(`).exec(wsSsh)
+      expect(tauri?.[1], request).toBeDefined()
+      expect(ws?.[1], request).toBe(tauri?.[1])
+    }
+  })
+
+  it('the SSH core has no Tauri dependency; the desktop and the server each give it an event sink', () => {
+    for (const file of ['mod.rs', 'service.rs', 'sftp.rs', 'profile_manager.rs', 'session.rs']) {
+      expect(read('ssh', file), file).not.toMatch(/\btauri(_plugin_store)?::/)
+    }
+    expect(read('lib.rs')).toMatch(/ssh::SSHManager::new\(\s*&ssh_data_dir,[^;]*emitter\.emit/s)
+    expect(read('server_main.rs')).toMatch(/SSHManager::new\([^;]*publish_ssh_event/s)
+    expect(WS_WATCH_NAMES).toContain('ssh')
   })
 })

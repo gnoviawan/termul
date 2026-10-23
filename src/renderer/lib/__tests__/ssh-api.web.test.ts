@@ -2,24 +2,38 @@
  * Web-branch tests for ssh-api.ts.
  *
  * Pins `isTauriContext()` to FALSE and asserts:
- * - profile CRUD (list/save/delete) reads/writes the server-side store
- *   (issue #613) instead of invoking Tauri commands,
- * - connection/SFTP/askpass methods still return an explicit
- *   `WEB_UNSUPPORTED` result instead of invoking the stubbed
- *   `@tauri-apps/api/core` `invoke()` (which throws `tauriUnavailable` on web).
+ * - on a connection the host does not run SSH for, profile CRUD
+ *   (list/save/delete) reads/writes the server-side store (issue #613), and
+ *   session/SFTP/key methods return an explicit `WEB_UNSUPPORTED` result
+ *   instead of invoking the stubbed `@tauri-apps/api/core` `invoke()`,
+ * - on a `hostLocal` connection every command, profile CRUD included, runs
+ *   over `/ws` under its Tauri name and arguments, and events arrive from the
+ *   host's `ssh` watch.
  * The desktop path is covered by direct invoke assertions in sibling tests.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockIsTauriContext, mockInvoke, mockListen, mockPersistenceApi } = vi.hoisted(() => ({
-  mockIsTauriContext: vi.fn(),
-  mockInvoke: vi.fn(),
-  mockListen: vi.fn(),
-  mockPersistenceApi: {
-    read: vi.fn(),
-    write: vi.fn()
-  }
+const { mockIsTauriContext, mockInvoke, mockListen, mockPersistenceApi, transport } = vi.hoisted(
+  () => ({
+    mockIsTauriContext: vi.fn(),
+    mockInvoke: vi.fn(),
+    mockListen: vi.fn(),
+    mockPersistenceApi: {
+      read: vi.fn(),
+      write: vi.fn()
+    },
+    transport: {
+      connect: vi.fn(),
+      connectionCapabilities: vi.fn(),
+      sshRequest: vi.fn(),
+      watches: { subscribe: vi.fn() }
+    }
+  })
+)
+
+vi.mock('../acp-transport', () => ({
+  getAcpTransport: () => transport
 }))
 
 vi.mock('../tauri-runtime', () => ({
@@ -62,6 +76,8 @@ describe('sshApi (web branch)', () => {
     mockPersistenceApi.read.mockReset()
     mockPersistenceApi.write.mockReset()
     mockPersistenceApi.write.mockResolvedValue({ success: true, data: undefined })
+    transport.connect.mockResolvedValue(undefined)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: false })
   })
 
   it('listProfiles returns stored profiles from the server-side store', async () => {
@@ -235,6 +251,7 @@ describe('sshApi (web branch)', () => {
       unlisten()
     }
     expect(mockListen).not.toHaveBeenCalled()
+    expect(transport.watches.subscribe).not.toHaveBeenCalled()
   })
 
   it('sftpListDir returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
@@ -246,5 +263,154 @@ describe('sshApi (web branch)', () => {
       expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     expect(mockInvoke).not.toHaveBeenCalled()
+    expect(transport.sshRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe('sshApi (host-local web connection)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connect.mockResolvedValue(undefined)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
+    transport.sshRequest.mockResolvedValue(null)
+  })
+
+  it('sends each command over /ws under its Tauri name and arguments', async () => {
+    const api = createSSHApi()
+    await api.openSession({ sessionId: 's', profileId: 'p-1', cols: 80, rows: 24 })
+    await api.respondHostKey('s', true)
+    await api.sftpListDir('s', '/remote')
+    await api.sftpUpload('s', '/tmp/a.txt', '/remote/a.txt')
+    await api.duplicateProfile('p-1')
+    await api.listKeys()
+    expect(transport.sshRequest.mock.calls).toEqual([
+      ['ssh_session_open', { request: { sessionId: 's', profileId: 'p-1', cols: 80, rows: 24 } }],
+      ['ssh_session_respond_host_key', { sessionId: 's', trust: true }],
+      ['sftp_list_dir', { request: { connectionId: 's', remotePath: '/remote' } }],
+      [
+        'sftp_upload',
+        { request: { connectionId: 's', remotePath: '/remote/a.txt', localPath: '/tmp/a.txt' } }
+      ],
+      ['ssh_duplicate_profile', { profileId: 'p-1' }],
+      ['ssh_list_keys', undefined]
+    ])
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('answers the host value and maps a refusal to its code', async () => {
+    const api = createSSHApi()
+    transport.sshRequest.mockResolvedValueOnce('/home/deploy')
+    expect(await api.sftpRealpath('s', '.')).toEqual({ success: true, data: '/home/deploy' })
+    transport.sshRequest.mockRejectedValueOnce(
+      Object.assign(new Error('Authentication failed'), { code: 'SSH_AUTH_FAILED' })
+    )
+    expect(await api.openSession({ sessionId: 's', profileId: 'p', cols: 1, rows: 1 })).toEqual({
+      success: false,
+      error: 'Authentication failed',
+      code: 'SSH_AUTH_FAILED'
+    })
+  })
+
+  it('keeps profiles with the host SSH, not the server-side store', async () => {
+    const api = createSSHApi()
+    transport.sshRequest.mockResolvedValueOnce([profile()])
+    expect(await api.listProfiles()).toEqual({ success: true, data: [profile()] })
+    await api.saveProfile(profile({ password: 'secret' }))
+    await api.deleteProfile('p-1')
+    expect(transport.sshRequest.mock.calls.map((c) => c[0])).toEqual([
+      'ssh_list_profiles',
+      'ssh_save_profile',
+      'ssh_delete_profile'
+    ])
+    expect(transport.sshRequest.mock.calls[1][1]).toEqual({
+      profile: profile({ password: 'secret' })
+    })
+    expect(mockPersistenceApi.read).not.toHaveBeenCalled()
+    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
+  })
+
+  it('waits for the handshake when the grant is not known yet', async () => {
+    transport.connectionCapabilities
+      .mockReturnValueOnce(null)
+      .mockReturnValue({ write: true, hostLocal: true })
+    const api = createSSHApi()
+    await api.listSessions()
+    expect(transport.connect).toHaveBeenCalledTimes(1)
+    expect(transport.sshRequest).toHaveBeenCalledWith('ssh_session_list', undefined)
+  })
+
+  it('keeps port forwarding desktop-only', async () => {
+    const api = createSSHApi()
+    const result = await api.stopPortForward('s', 'f')
+    expect(result).toMatchObject({ success: false, code: 'WEB_UNSUPPORTED' })
+    expect(transport.sshRequest).not.toHaveBeenCalled()
+  })
+
+  it('delivers each ssh watch event to its own listener', async () => {
+    const handlers: Array<{ onDelta: (delta: unknown) => void }> = []
+    const off = vi.fn()
+    transport.watches.subscribe.mockImplementation((_watch, h) => {
+      handlers.push(h)
+      return off
+    })
+    const api = createSSHApi()
+    const progress = vi.fn()
+    const ended = vi.fn()
+    const stopProgress = api.onSessionProgress(progress)
+    api.onSessionEnded(ended)
+    await vi.waitFor(() => expect(handlers).toHaveLength(2))
+    expect(transport.watches.subscribe.mock.calls.map((c) => c[0])).toEqual(['ssh', 'ssh'])
+    for (const h of handlers) {
+      h.onDelta({ event: 'ssh-session-progress', payload: { sessionId: 's', stage: 'auth' } })
+    }
+    expect(progress).toHaveBeenCalledWith({ sessionId: 's', stage: 'auth' })
+    expect(ended).not.toHaveBeenCalled()
+    stopProgress()
+    expect(off).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('sshApi desktop and host-local web parity', () => {
+  const calls = (api: ReturnType<typeof createSSHApi>) => [
+    () => api.listProfiles(),
+    () => api.saveProfile(profile()),
+    () => api.deleteProfile('p-1'),
+    () => api.duplicateProfile('p-1'),
+    () => api.importConfig(),
+    () => api.inspectKey('/k'),
+    () => api.listKeys(),
+    () => api.openSession({ sessionId: 's', profileId: 'p-1', cols: 80, rows: 24, secret: 'x' }),
+    () => api.respondHostKey('s', false),
+    () => api.cancelSession('s'),
+    () => api.closeSession('s'),
+    () => api.listSessions(),
+    () => api.sftpListDir('s', '/'),
+    () => api.sftpRealpath('s', '.'),
+    () => api.sftpDownload('s', '/r', '/l'),
+    () => api.sftpUpload('s', '/l', '/r'),
+    () => api.sftpDelete('s', '/r'),
+    () => api.sftpMkdir('s', '/r'),
+    () => api.sftpRename('s', '/a', '/b'),
+    () => api.sftpReadFile('s', '/r'),
+    () => api.sftpWriteFile('s', '/r', 'text'),
+    () => api.sftpCreateFile('s', '/r')
+  ]
+
+  it('every method sends the same command and arguments on both paths', async () => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValue({ success: true, data: null })
+    for (const call of calls(createSSHApi())) await call()
+    const desktop = mockInvoke.mock.calls.map(([command, args]) => [command, args])
+
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
+    transport.sshRequest.mockResolvedValue(null)
+    for (const call of calls(createSSHApi())) await call()
+    const web = transport.sshRequest.mock.calls.map(([command, args]) => [command, args])
+
+    expect(desktop).toHaveLength(22)
+    expect(web).toEqual(desktop)
   })
 })

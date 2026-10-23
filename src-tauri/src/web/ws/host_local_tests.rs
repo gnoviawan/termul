@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//! Requests that act with the host's own credentials are refused `forbidden`
+//! Requests that act with the host's own credentials (Claude account
+//! management, SSH sessions, SFTP, profiles, keys and the `ssh` event watch)
+//! are refused `forbidden`
 //! for every connection that is not `host_local`, and the `authenticate`
 //! reply tells the client what it was granted.
 
@@ -10,6 +12,20 @@ use crate::web::capabilities::HOST_LOCAL_WS_REQUESTS;
 fn frame(type_: &str) -> String {
     json!({ "id": "h", "type": type_, "payload": { "accountId": "ab12", "name": "Work" } })
         .to_string()
+}
+
+/// Every request that acts with the host's credentials: Claude account
+/// management, every SSH request, and the `ssh` event watch.
+fn host_local_frames() -> Vec<(String, String)> {
+    HOST_LOCAL_WS_REQUESTS
+        .iter()
+        .chain(SSH_WS_REQUESTS)
+        .map(|type_| ((*type_).to_string(), frame(type_)))
+        .chain(std::iter::once((
+            "watch ssh".to_string(),
+            json!({ "id": "h", "type": "watch", "payload": { "watch": "ssh" } }).to_string(),
+        )))
+        .collect()
 }
 
 fn code(reply: &WsReply) -> String {
@@ -37,18 +53,18 @@ fn run(policy: CapabilityPolicy, gated: bool) -> (Value, Vec<(String, String)>) 
         gate.as_ref(),
     );
     assert!(auth.ok, "authenticate: {:?}", auth.err);
-    let codes = HOST_LOCAL_WS_REQUESTS
-        .iter()
-        .map(|type_| {
+    let codes = host_local_frames()
+        .into_iter()
+        .map(|(type_, text)| {
             let mut authed = true;
             let reply = handle_sync_with_access(
-                &frame(type_),
+                &text,
                 &mut authed,
                 &mut None,
                 &mut access,
                 gate.as_ref(),
             );
-            ((*type_).to_string(), code(&reply))
+            (type_, code(&reply))
         })
         .collect();
     (auth.payload.unwrap(), codes)
@@ -115,4 +131,20 @@ fn the_refusal_names_the_host_local_requirement() {
         reply.err.unwrap().message,
         "`rename_claude_account` uses this host's credentials; only a client on the host itself that presented the server token may send it"
     );
+}
+
+#[test]
+fn a_remote_writer_cannot_watch_ssh_events() {
+    let mut access = ConnectionAccess::granted(gated_policy([192, 168, 1, 50], true, false, true));
+    let mut authed = true;
+    let reply = handle_sync_with_access(
+        r#"{"id":"w","type":"watch","payload":{"watch":"ssh"}}"#,
+        &mut authed,
+        &mut None,
+        &mut access,
+        None,
+    );
+    let err = reply.err.unwrap();
+    assert_eq!(err.code, "forbidden");
+    assert!(err.message.contains("uses this host's credentials"), "{}", err.message);
 }

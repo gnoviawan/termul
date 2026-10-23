@@ -28,6 +28,7 @@ import {
   type SessionCursorReply,
   type SessionSnapshotEvent,
   type SessionSubscribeReply,
+  type SshWsRequestType,
   type UpdateProjectPayload,
   WS_CANVAS_CALL_FRAME_TYPE,
   WS_CANVAS_LEASE_LOST_FRAME_TYPE,
@@ -993,6 +994,10 @@ export class WsAcpTransport implements AcpTransport {
       accountId
     })
     return reply?.movedProjectIds ?? []
+  }
+
+  sshRequest<T>(command: SshWsRequestType, args: Record<string, unknown> = {}): Promise<T> {
+    return this.request<T>(command, args)
   }
 
   async spawnAgent(

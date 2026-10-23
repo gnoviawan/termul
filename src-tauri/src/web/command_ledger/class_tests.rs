@@ -103,6 +103,9 @@ fn every_routed_request_type_has_a_class() {
         .collect();
     names.remove("panic_for_test");
     names.insert("send_prompt");
+    // The SSH requests route through one guarded arm.
+    assert!(DISPATCH.contains("t if SSH_WS_REQUESTS.contains(&t) => handle_ssh_request("));
+    names.extend(crate::web::ws::SSH_WS_REQUESTS);
 
     for name in &names {
         assert!(class_of(name).is_some(), "`{name}` is routed but has no class");
@@ -140,6 +143,9 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
             "record_agent_switch",
             "add_claude_account",
             "login_claude_account",
+            "ssh_duplicate_profile",
+            "ssh_import_config",
+            "ssh_session_open",
         ])
     );
     assert!(!class_of("send_prompt").unwrap().1.ledgered(), "TurnWatermark owns prompts");
@@ -147,7 +153,13 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
 
 #[test]
 fn credential_bearing_kinds_are_receipt_only() {
-    for name in ["authenticate_agent", "respond_elicitation", "acp_deliver_auth_redirect"] {
+    for name in [
+        "authenticate_agent",
+        "respond_elicitation",
+        "acp_deliver_auth_redirect",
+        "login_claude_account",
+        "ssh_session_open",
+    ] {
         assert!(!class_of(name).unwrap().1.stores_payload(), "{name}");
     }
 }
