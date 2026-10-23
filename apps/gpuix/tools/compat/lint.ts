@@ -40,6 +40,7 @@ export interface Verdict {
 
 export const DEFAULT_ROOT = path.resolve(import.meta.dir, '../../../../src/renderer')
 export const DEFAULT_OVERRIDES = path.join(import.meta.dir, 'overrides.json')
+export const DEFAULT_OVERRIDES_DIR = path.resolve(import.meta.dir, '../../src/overrides')
 
 const FIX =
   'add a native override under apps/gpuix/src/overrides and list it in tools/compat/overrides.json, or use a supported API'
@@ -210,11 +211,20 @@ export function parseAllowlist(raw: unknown, source: string): Allowlist {
   return out
 }
 
-export function judge(scans: FileScan[], allowlist: Allowlist): Verdict {
+/** Shared files that already have a native twin under `src/overrides` (see build.ts). */
+export function overriddenFiles(overridesDir: string): Set<string> {
+  if (!existsSync(overridesDir)) return new Set()
+  const glob = new Bun.Glob('**/*.{ts,tsx}')
+  return new Set([...glob.scanSync({ cwd: overridesDir })].map((rel) => rel.split(path.sep).join('/')))
+}
+
+export function judge(scans: FileScan[], allowlist: Allowlist, overridden: ReadonlySet<string> = new Set()): Verdict {
   const byPath = new Map(scans.map((s) => [s.path, s]))
   const verdict: Verdict = { unlisted: [], vanished: [], stale: [], drifted: [] }
   for (const scan of scans) {
-    if (scan.status === 'needs-override' && !(scan.path in allowlist)) verdict.unlisted.push(scan)
+    if (scan.status === 'needs-override' && !(scan.path in allowlist) && !overridden.has(scan.path)) {
+      verdict.unlisted.push(scan)
+    }
   }
   for (const [listed, { reasons }] of Object.entries(allowlist)) {
     const scan = byPath.get(listed)
@@ -332,12 +342,13 @@ export function run(argv: string[], log: (line: string) => void = console.log): 
       write: { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
       root: { type: 'string', default: DEFAULT_ROOT },
-      overrides: { type: 'string', default: DEFAULT_OVERRIDES }
+      overrides: { type: 'string', default: DEFAULT_OVERRIDES },
+      'overrides-dir': { type: 'string', default: DEFAULT_OVERRIDES_DIR }
     }
   })
   const scans = scanTree(values.root)
   if (values.write) writeFileSync(values.overrides, formatAllowlist(allowlistFrom(scans)))
-  const verdict = judge(scans, readAllowlist(values.overrides))
+  const verdict = judge(scans, readAllowlist(values.overrides), overriddenFiles(values['overrides-dir']))
   const summary = summarize(scans)
   const failed = verdict.unlisted.length > 0 || verdict.vanished.length > 0
   if (values.json) {

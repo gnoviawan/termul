@@ -9,7 +9,10 @@ export type Support = 'full' | 'partial' | 'none'
 
 export interface DomApi {
   id: string
-  /** Matched against source with comments and strings blanked. */
+  /**
+   * Matched against source with comments blanked. Strings are blanked too,
+   * except for a pattern whose source contains a quote (it names an event).
+   */
   pattern: RegExp
   support: Support
   note: string
@@ -21,7 +24,7 @@ export const DOM_APIS: readonly DomApi[] = [
   { id: 'focus()', pattern: /\.focus\(/g, support: 'full', note: 'renderer.focusElement' },
   { id: 'blur()', pattern: /\.blur\(/g, support: 'full', note: 'renderer.blur when focused' },
   { id: 'contains()', pattern: /\.contains\(/g, support: 'full', note: 'tree mirror from getAutomationTree' },
-  { id: 'dom-query', pattern: /\.closest\(|\bquerySelector(All)?\(|\bgetElementById\(/g, support: 'partial', note: 'tag, #id, [attr], [attr=v], :not(), lists; no combinators' },
+  { id: 'dom-query', pattern: /\.closest\(|\bquerySelector(All)?\(|\bgetElementById\(/g, support: 'partial', note: 'tag, #id, .class, [attr], [attr=v], :not(), lists, descendant and child combinators; untracked elements answer as div' },
   { id: 'scroll-offset', pattern: /\b(scrollTop|scrollLeft)\b/g, support: 'full', note: 'getScrollOffset / scrollTo' },
   { id: 'scroll-size', pattern: /\b(scrollHeight|scrollWidth)\b/g, support: 'partial', note: 'children bounds extent' },
   { id: 'scroll-method', pattern: /\.scroll(To|By)\(/g, support: 'full', note: 'renderer.scrollTo' },
@@ -36,11 +39,11 @@ export const DOM_APIS: readonly DomApi[] = [
   { id: 'IntersectionObserver', pattern: /\bIntersectionObserver\b/g, support: 'none', note: 'no-op stub: never reports' },
   { id: 'MutationObserver', pattern: /\bMutationObserver\b/g, support: 'none', note: 'no-op stub: never reports' },
   { id: 'getComputedStyle', pattern: /\bgetComputedStyle\b/g, support: 'none', note: 'returns empty strings' },
-  { id: 'element.addEventListener', pattern: /(?<!window|document|globalThis|media|mql|query|socket|ws|source|controller|signal|transport|channel|worker|emitter|target)\.addEventListener\(\s*['"](?!message|open|close|error|change|abort)/g, support: 'none', note: 'element listeners are not wired; use JSX handlers' },
+  { id: 'element.addEventListener', pattern: /(?<!(?:window|document|globalThis|media|mql|query|socket|ws|source|controller|signal|transport|channel|worker|emitter|target|fonts|viewport|Viewport)\??)\??\.addEventListener\(\s*['"](?!message|open|close|error|change|abort|loadingdone|resize|scroll)/g, support: 'none', note: 'element listeners are not wired; use JSX handlers' },
   { id: 'text-selection', pattern: /\b(selectionStart|selectionEnd|setSelectionRange|getSelection)\b/g, support: 'none', note: 'GPUIX inputs expose no selection API' },
   { id: 'contentEditable', pattern: /\bcontentEditable\b/g, support: 'none', note: 'no editable host' },
   { id: 'dangerouslySetInnerHTML', pattern: /\bdangerouslySetInnerHTML\b/g, support: 'none', note: 'no HTML parser' },
-  { id: 'html5-dnd', pattern: /\b(dataTransfer|DataTransfer|onDrag[A-Za-z]*|onDrop)\b/g, support: 'none', note: 'GPUIX has file drop only' },
+  { id: 'html5-dnd', pattern: /\b(dataTransfer|DataTransfer|DragEvent|draggable|onDrop)\b/g, support: 'none', note: 'GPUIX has file drop only' },
   { id: 'execCommand', pattern: /\bexecCommand\b/g, support: 'none', note: 'no document editing' },
   { id: 'dom-create', pattern: /\bdocument\.create(Element|TextNode|Range|DocumentFragment)\b/g, support: 'none', note: 'no DOM nodes outside React' },
   { id: 'canvas-media', pattern: /<(canvas|video|iframe|webview)\b/g, support: 'none', note: 'no host element' },

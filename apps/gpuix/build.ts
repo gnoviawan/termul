@@ -19,6 +19,7 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { BunPlugin } from 'bun'
+import { gpuixUiAliases } from './tools/ui/alias'
 
 export const APP_DIR = import.meta.dir
 export const REPO_DIR = path.resolve(APP_DIR, '../..')
@@ -97,8 +98,6 @@ export function termulResolver(reactResolves?: ReactResolve[]): BunPlugin {
 }
 
 const COMPAT_DIR = path.join(APP_DIR, 'src/compat')
-const UI_OVERRIDE_DIR = path.join(APP_DIR, 'src/ui')
-const RENDERER_UI_DIR = path.join(RENDERER_DIR, 'components/ui')
 
 /** DOM-bound packages -> compat stand-ins with the same exports. */
 export const PACKAGE_ALIASES: Record<string, string> = {
@@ -138,13 +137,19 @@ export function isNativeImporter(importer: string): boolean {
   return !DOM_DIRS.some((dir) => importer.startsWith(dir))
 }
 
-/** `@/components/ui/<name>` -> `apps/gpuix/src/ui/<name>` when a native one exists. */
-function uiOverride(resolved: string): string | null {
-  if (!resolved.startsWith(RENDERER_UI_DIR + path.sep)) return null
-  const name = path.basename(resolved).replace(/\.(tsx?|jsx?)$/, '')
+export const OVERRIDES_DIR = path.join(APP_DIR, 'src/overrides')
+
+/**
+ * A native override of a shared file lives at `src/overrides/<path relative to
+ * src/renderer>` and exports the same names; it replaces the shared file for
+ * every importer except itself.
+ */
+export function overrideFor(resolved: string, importer: string): string | null {
+  if (!resolved.startsWith(RENDERER_DIR + path.sep)) return null
+  const rel = path.relative(RENDERER_DIR, resolved).replace(/\.(tsx?|jsx?)$/, '')
   for (const ext of ['.tsx', '.ts']) {
-    const candidate = path.join(UI_OVERRIDE_DIR, name + ext)
-    if (existsSync(candidate)) return candidate
+    const candidate = path.join(OVERRIDES_DIR, rel + ext)
+    if (candidate !== importer && existsSync(candidate)) return candidate
   }
   return null
 }
@@ -176,15 +181,23 @@ export function compatPlugin(aliases?: CompatResolve[]): BunPlugin {
         aliases?.push({ specifier: args.path, target })
         return { path: path.join(COMPAT_DIR, target) }
       })
-      build.onResolve({ filter: /^(@\/|@renderer\/)components\/ui\// }, (args) => {
-        const rel = args.path.replace(/^@(renderer)?\//, '')
-        const resolved = Bun.resolveSync(`./${rel}`, RENDERER_DIR)
-        return { path: uiOverride(resolved) ?? resolved }
+    }
+  }
+}
+
+/** Swap shared files for `src/overrides/**` twins, for `@/` and relative imports alike. */
+export function overridesPlugin(): BunPlugin {
+  return {
+    name: 'termul-gpuix-overrides',
+    setup(build) {
+      build.onResolve({ filter: /^(@\/|@renderer\/)/ }, (args) => {
+        const resolved = Bun.resolveSync(`./${args.path.replace(/^@(renderer)?\//, '')}`, RENDERER_DIR)
+        return { path: overrideFor(resolved, args.importer) ?? resolved }
       })
       build.onResolve({ filter: /^\.\.?\// }, (args) => {
-        if (!args.importer.startsWith(RENDERER_DIR)) return undefined
+        if (!args.importer.startsWith(RENDERER_DIR + path.sep)) return undefined
         const resolved = Bun.resolveSync(args.path, path.dirname(args.importer))
-        const override = uiOverride(resolved)
+        const override = overrideFor(resolved, args.importer)
         return override ? { path: override } : undefined
       })
     }
@@ -212,7 +225,7 @@ export async function buildClient(
     sourcemap: 'linked',
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
-    plugins: [compatPlugin(), termulResolver(reactResolves)],
+    plugins: [compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
     naming: '[name].[ext]'
   })
   return {

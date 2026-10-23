@@ -211,3 +211,11 @@ test('scanTree skips test files and declaration files', () => {
   })
   expect(scanTree(root).map((s) => s.path)).toEqual(['a.tsx'])
 })
+
+describe('native overrides', () => {
+  test('a needs-override file with a twin under src/overrides passes without an allowlist entry', () => {
+    const scan = scanSource('lib/canvas.ts', "document.createElement('canvas')\n")
+    expect(judge([scan], {}).unlisted.map((s) => s.path)).toEqual(['lib/canvas.ts'])
+    expect(judge([scan], {}, new Set(['lib/canvas.ts'])).unlisted).toEqual([])
+  })
+})

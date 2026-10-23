@@ -44,9 +44,6 @@
   "components/chat/ThinkingStatus.tsx": {
     "reasons": ["getComputedStyle"]
   },
-  "components/chat/ThoughtGroup.tsx": {
-    "reasons": ["element.addEventListener"]
-  },
   "components/chat/ToolCallCard.tsx": {
     "reasons": ["dangerouslySetInnerHTML"]
   },
@@ -60,13 +57,13 @@
     "reasons": ["tiptap"]
   },
   "components/chat/composer/CommandPillNode.tsx": {
-    "reasons": ["tiptap"]
+    "reasons": ["html5-dnd", "tiptap"]
   },
   "components/chat/composer/FilePillNode.tsx": {
-    "reasons": ["tiptap"]
+    "reasons": ["html5-dnd", "tiptap"]
   },
   "components/chat/composer/SkillPillNode.tsx": {
-    "reasons": ["tiptap"]
+    "reasons": ["html5-dnd", "tiptap"]
   },
   "components/chat/composer/insert-composer-trigger.ts": {
     "reasons": ["tiptap"]
@@ -88,23 +85,20 @@
       "mermaid"
     ]
   },
-  "components/editor/TocPanel.tsx": {
-    "reasons": ["element.addEventListener"]
-  },
   "components/editor/codemirror-theme.ts": {
     "reasons": ["codemirror"]
   },
   "components/editor/mermaid-block-spec.tsx": {
     "reasons": ["blocknote"]
   },
-  "components/editor/outline/use-scroll-progress.ts": {
-    "reasons": ["element.addEventListener"]
-  },
   "components/file-explorer/FileTreeNode.tsx": {
     "reasons": ["html5-dnd"]
   },
+  "components/file-explorer/MaterialFileIcon.tsx": {
+    "reasons": ["html5-dnd"]
+  },
   "components/file-explorer/explorer-inline-input.tsx": {
-    "reasons": ["html5-dnd", "text-selection"]
+    "reasons": ["text-selection"]
   },
   "components/git/GitChangeList.tsx": {
     "reasons": ["html5-dnd"]
@@ -113,9 +107,6 @@
     "reasons": ["text-selection"]
   },
   "components/git/StashSection.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/git/history/use-detail-pane-resize.ts": {
     "reasons": ["html5-dnd"]
   },
   "components/settings/AcpAgentsSettings.tsx": {
@@ -129,15 +120,6 @@
   },
   "components/shell/ChatsList.tsx": {
     "reasons": ["tanstack-virtual"]
-  },
-  "components/shell/use-rail-resize.ts": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/shell/use-side-panel-resize.ts": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/sidebar/project-list.tsx": {
-    "reasons": ["html5-dnd"]
   },
   "components/sidebar/ssh-section.tsx": {
     "reasons": ["element-style-write"]
@@ -172,12 +154,6 @@
   "components/ui/animated-menu-content.tsx": {
     "reasons": ["getComputedStyle"]
   },
-  "components/ui/marquee-text.tsx": {
-    "reasons": ["element.addEventListener"]
-  },
-  "components/ui/message-scroller.tsx": {
-    "reasons": ["element.addEventListener"]
-  },
   "components/ui/resizable.tsx": {
     "reasons": ["react-resizable-panels"]
   },
@@ -185,9 +161,6 @@
     "reasons": ["html5-dnd"]
   },
   "components/workspace/EditorTab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/PaneRenderer.tsx": {
     "reasons": ["html5-dnd"]
   },
   "components/workspace/WorkspaceTabBar.tsx": {
@@ -235,11 +208,8 @@
   "hooks/use-codemirror.ts": {
     "reasons": ["MutationObserver", "codemirror"]
   },
-  "hooks/use-dock-clearance.ts": {
-    "reasons": ["element.addEventListener"]
-  },
   "hooks/use-osk-viewport.ts": {
-    "reasons": ["element-style-write", "element.addEventListener"]
+    "reasons": ["element-style-write"]
   },
   "hooks/use-pane-dnd.tsx": {
     "reasons": ["html5-dnd"]
@@ -248,7 +218,7 @@
     "reasons": ["html5-dnd"]
   },
   "hooks/use-resize-handle.ts": {
-    "reasons": ["element-style-write", "html5-dnd"]
+    "reasons": ["element-style-write"]
   },
   "hooks/use-terminal-clipboard.ts": {
     "reasons": ["text-selection"]
