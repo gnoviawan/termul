@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { toast } from 'sonner'
+import { canUseHostSsh } from '@/lib/ssh-api'
 import { openSSHSession } from '@/lib/ssh-sessions'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   useActiveSSHProfile,
   useActiveSSHProfileId,
@@ -24,10 +24,10 @@ export function useSSHWorkspace() {
     void loadProfiles()
   }, [loadProfiles])
 
-  /** Open a new session tab for a host (desktop). */
+  /** Open a new session tab for a host where the host runs SSH for this client. */
   const handleSSHConnect = useCallback(
     (profileId: string) => {
-      if (!isTauriContext()) {
+      if (!canUseHostSsh()) {
         selectProfile(profileId)
         toast.info('SSH connections run in the Termul desktop app.')
         return

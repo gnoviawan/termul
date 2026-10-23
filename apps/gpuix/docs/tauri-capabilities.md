@@ -210,26 +210,28 @@ The script's `detail` column breaks each row down by binding name and matched te
 ### SSH sessions, SFTP and port forwarding
 
 - **What it does.** It runs SSH terminal sessions with host-key prompts, a remote file browser and editor, uploads and downloads, and port forwards.
-- **Facade.** `sshApi` in `lib/ssh-api.ts`. The `invokeIpc` wrapper returns `WEB_UNSUPPORTED` for every command when `!isTauriContext()` (`:97-113`). Profile CRUD has a web path through the server-side store (`:134-180`).
-- **Call sites.**
-  - **Sessions (13).** All are in `lib/ssh-sessions.ts:97-395`.
-  - **SFTP (15).** Examples are `components/ssh/SSHFileExplorer.tsx:116-196`, `hooks/use-sftp-browser.ts:58-136` and `hooks/use-sftp-transfers.ts:138,178,274`.
-  - **Port forwarding (0).** `startPortForward`, `stopPortForward` and `onPortForwardStatusChanged` have no renderer callers (measured). They exist only at `ssh-api.ts:188,205,323`.
-  - **Keys, import and duplicate (4).** These are at `components/ssh/SSHHostEditor.tsx:178,195` and `stores/ssh-store.ts:213,227`. They return `WEB_UNSUPPORTED` on web.
-- **Destination: (c).** The Rust SSH module is tied to Tauri. `ssh/mod.rs:22,31` takes an `AppHandle` and uses `tauri::Emitter`. `ssh/sftp.rs:7` and `ssh/profile_manager.rs:10,180` are tied the same way. The commands are in `src-tauri/src/commands/ssh.rs`. Serving SSH from termul-server needs these steps:
-  1. Move event emission behind a sink that both transports implement.
-  2. Expose sessions over `/terminal/ws` or `/ws`.
-  3. Add SFTP routes.
-
-  Port forwarding can wait because nothing in the renderer calls it.
+- **Facade.** `sshApi` in `lib/ssh-api.ts`. Desktop runs each command as a Tauri command. A web client runs the same command over `/ws` (`sshRequest`) when the host granted the connection `hostLocal`, else it gets `WEB_UNSUPPORTED`. Events arrive from the host's `ssh` watch.
+- **Status: (c), done.** termul-server serves every SSH command but port forwarding over `/ws` for `hostLocal` connections (`src-tauri/src/web/ws/ssh.rs`), on the Tauri-free `ssh::service` both transports call. Sessions attach over `/terminal/ws` with the claim the open returns. Ledgered requests (`ssh_session_open`, `ssh_duplicate_profile`, `ssh_import_config`, and the SFTP delete, mkdir, rename and create) carry a `commandId` the transport stamps from `WS_COMMAND_CLASSES`.
+- **UI gates.** `SSHPanel`, `SSHHostsView`, `SSHHostEditor`, the sidebar SSH section and the command palette read `useHostGate(canUseHostSsh)`, so the SSH UI appears once the handshake grants `hostLocal`. The host-key browser in `SSHHostEditor` and SFTP upload, download and file drop in `SSHFileExplorer` stay on `isTauriContext()`: they need a local file dialog, which is a Tauri plugin (`lib/dialog-api.ts`). GPUIX needs a native file dialog **(d)** for them.
+- **Profiles.** A host-local client keeps profiles in the host's `ssh-profiles.json`. On its first list it moves profiles that an earlier web session kept in the server-side store (`ssh/profiles`) to the host and empties that key.
+- **Port forwarding.** Still desktop-only; nothing in the renderer calls it.
 
 ### Claude account management
 
 - **What it does.** It adds, signs in, cancels sign-in, renames and removes Claude accounts. Listing accounts, showing usage and choosing accounts already work everywhere.
-- **Facade.** `claudeAccountsApi` in `lib/claude-accounts-api.ts`. `desktopOnly` rejects with `ClaudeAccountsUnsupportedError` (`:49-52`), and `canManageAccounts` returns `isTauriContext()` (`:56`).
-- **Call sites (11).** Examples are `components/settings/provider/ProviderSettings.tsx:51,74,101,180,263`, `components/settings/provider/AddAccountDialog.tsx:134,154,166`, `components/settings/provider/ProjectProviderSettings.tsx:262,375` and `components/chat/claude-account/ClaudeLimitNotice.tsx:258`.
-- **Web today.** Management rejects, and the UI hides it through `canManageAccounts()`. termul-server serves only `list_claude_accounts`, `set_default_claude_account` and `set_project_claude_account` over `/ws` (`src-tauri/src/web/ws/claude_accounts.rs:26,61,89`).
-- **Destination: (c).** Add `/ws` requests that mirror the Tauri commands `claude_accounts_add`, `claude_accounts_login`, `claude_accounts_login_cancel`, `claude_accounts_rename` and `claude_accounts_remove`. Those commands are registered at `src-tauri/src/lib.rs:1947-1949` and implemented in `src-tauri/src/acp/commands/claude_accounts.rs:31,40`. Admit the new requests only for local clients. The same operations already exist as a local CLI: `termul-server claude account add|login|rename|remove` (`src-tauri/src/acp/claude_admin.rs:239-248`). The Bun side could run that CLI as a (b) stopgap. That is risky, because the CLI may change state that the running server holds in memory (guess, not checked).
+- **Facade.** `claudeAccountsApi` in `lib/claude-accounts-api.ts`. Desktop runs the Tauri commands; a web client runs the `/ws` requests (`add_claude_account`, `login_claude_account`, `cancel_claude_account_login`, `rename_claude_account`, `remove_claude_account`) only on a `hostLocal` connection, else it rejects with `ClaudeAccountsUnsupportedError`.
+- **Status: (c), done.** `src-tauri/src/web/ws/claude_accounts.rs` calls the same `ClaudeAgentService` methods as the Tauri commands. The settings and limit-notice gates read `useHostGate(claudeAccountsApi.canManageAccounts)`.
+
+### Who is `hostLocal`
+
+Both features act with the host user's own credentials, so the peer address is not enough: a reverse proxy or tunnel on the host makes every remote client a loopback peer. A `/ws` connection is `hostLocal` only when all of these hold (`src-tauri/src/web/capabilities.rs`, `web/host_local.rs`):
+
+1. The peer is loopback and the deployment allows writes (not shared-live).
+2. The server is token-gated and the client presented the token.
+3. The upgrade request has no `Forwarded`, `X-Forwarded-For`, `X-Real-IP` or `CF-Connecting-IP` header.
+4. The client presented the host-local credential. termul-server writes a fresh one to `<state dir>/host-local.token` (mode 0600) at each start.
+
+The GPUIX launcher spawns the server on the app's data dir, so `main.tsx` passes `BootOptions.hostLocalToken`, a reader of that file, and the renderer presents it at each handshake (`lib/web-auth-token.ts` `setHostLocalTokenSource`). A browser never has the file, so a browser tab, local or not, is never `hostLocal`. When the app attaches to a server through `TERMUL_SERVER_URL`, it does not present the credential. An IPv4-mapped loopback peer (`::ffff:127.0.0.1`) is not loopback to `is_loopback()`, so such a client is refused (fails closed).
 
 ### Streaming content search
 

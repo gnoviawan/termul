@@ -2300,4 +2300,23 @@ describe('SSH parity (desktop Tauri commands and host-local /ws)', () => {
     expect(read('server_main.rs')).toMatch(/SSHManager::new\([^;]*publish_ssh_event/s)
     expect(WS_WATCH_NAMES).toContain('ssh')
   })
+
+  it('the SSH UI shows wherever the host runs SSH for the client, re-read when the grant arrives', () => {
+    const renderer = join(LIB_DIR, '..')
+    const ui = (path: string): string => readFileSync(join(renderer, path), 'utf-8')
+    for (const path of [
+      'components/ssh/SSHPanel.tsx',
+      'components/ssh/SSHHostsView.tsx',
+      'components/ssh/SSHHostEditor.tsx',
+      'components/sidebar/ssh-section.tsx',
+      'components/CommandPalette.tsx'
+    ]) {
+      expect(ui(path), path).toContain('useHostGate(canUseHostSsh)')
+    }
+    expect(ui('layouts/workspace-layout/use-ssh-workspace.ts')).toContain('if (!canUseHostSsh())')
+    // Local file pickers are Tauri dialogs: the key browser and SFTP
+    // upload/download stay desktop-only.
+    expect(ui('components/ssh/SSHHostEditor.tsx')).toMatch(/disabled=\{!desktop\}/)
+    expect(ui('components/ssh/SSHFileExplorer.tsx')).toContain('const desktop = isTauriContext()')
+  })
 })

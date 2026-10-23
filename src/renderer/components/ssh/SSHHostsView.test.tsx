@@ -1,6 +1,8 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { _resetAcpTransportForTests, _setAcpTransportForTests } from '@/lib/acp-transport'
+import type { AcpTransport } from '@/lib/acp-transport/types'
 import { type SSHSession, useSSHStore } from '@/stores/ssh-store'
 import type { SSHHostActions } from './SSHHostRow'
 import { groupHosts, matchesHostQuery, SSHHostsView } from './SSHHostsView'
@@ -187,6 +189,33 @@ describe('SSHHostsView', () => {
     expect(props.actions.edit).toHaveBeenCalledWith(profiles[2])
     expect(props.actions.connect).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Import' })).toBeNull()
+  })
+
+  it('connects and imports on a web client the host runs SSH for, once the grant arrives', () => {
+    tauriRef.current = false
+    let hostLocal = false
+    const listeners = new Set<() => void>()
+    _setAcpTransportForTests({
+      connectionCapabilities: () => ({ write: true, hostLocal }),
+      subscribeCapabilities: (listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+      sshRequest: vi.fn(),
+      dispose() {}
+    } as unknown as AcpTransport)
+    try {
+      renderView()
+      expect(screen.queryByRole('button', { name: 'Import' })).toBeNull()
+      act(() => {
+        hostLocal = true
+        for (const listener of listeners) listener()
+      })
+      expect(screen.getByRole('button', { name: 'Import' })).toBeInTheDocument()
+      expect(screen.queryByText(/Connecting to them works in the Termul desktop app/)).toBeNull()
+    } finally {
+      _resetAcpTransportForTests()
+    }
   })
 
   it('guides the first run with New host and Import', () => {
