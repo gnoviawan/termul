@@ -1,0 +1,21 @@
+{
+  "name": "@termul/gpuix",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "style:scan": "bun tools/style/scan-classes.ts",
+    "style:gen": "bun tools/style/gen-color-vars.ts",
+    "style:fonts": "bun tools/style/build-fonts.ts",
+    "style:showcase": "bun tools/style/showcase/run.ts"
+  },
+  "dependencies": {
+    "@gpuix/native": "0.11.0",
+    "@gpuix/react": "0.11.0",
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@babel/parser": "7.29.7",
+    "@types/bun": "1.4.3"
+  }
+}
