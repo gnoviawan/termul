@@ -2,8 +2,29 @@
   "extends": "./tsconfig.tools.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "jsxImportSource": "@gpuix/react"
+    "jsxImportSource": "@gpuix/react",
+    "paths": {
+      "@/components/chat/AgentConnectionLamp": ["./src/terminal/dom-components.d.ts"],
+      "@/components/workspace/tabs/terminal-tab": ["./src/terminal/dom-components.d.ts"],
+      "@/components/terminal/ConnectedTerminal": ["./src/overrides/components/terminal/ConnectedTerminal.tsx"],
+      "@/components/terminal/TerminalAssistPanel": ["./src/overrides/components/terminal/TerminalAssistPanel.tsx"],
+      "@/hooks/use-terminal-clipboard": ["./src/overrides/hooks/use-terminal-clipboard.ts"],
+      "@/components/ui/*": ["./src/ui/*"],
+      "@/components/icons": ["./src/icons/index.tsx"],
+      "@/*": ["../../src/renderer/*"],
+      "@renderer/*": ["../../src/renderer/*"],
+      "@shared/*": ["../../src/shared/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "#app/boot": ["./src/boot-contract.ts"]
+    }
   },
-  "include": ["src/terminal", "tools/terminal", "../../src/renderer/vite-env.d.ts"],
+  "include": [
+    "src/terminal",
+    "tools/terminal",
+    "src/overrides/components/terminal",
+    "src/overrides/hooks/use-terminal-clipboard.ts",
+    "../../src/renderer/vite-env.d.ts"
+  ],
   "exclude": []
 }

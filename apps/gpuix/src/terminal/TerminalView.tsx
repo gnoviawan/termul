@@ -7,7 +7,7 @@
  */
 
 import { type EventPayload, type KeyEvent, type PublicInstance, useGpuix } from '@gpuix/react'
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, type Ref, useCallback, useEffect, useRef, useState } from 'react'
 import { log } from '../log'
 import { copyText, pasteText } from './clipboard'
 import {
@@ -17,9 +17,11 @@ import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_SIZE,
   TERMINAL_FONT_WEIGHT_BOLD,
-  TERMINAL_LINE_HEIGHT
+  TERMINAL_LINE_HEIGHT,
+  terminalCharHeight
 } from './fonts'
 import { encodeKey, encodePaste } from './keys'
+import { encodeMouse, type MouseAction, type MouseButton, type MouseTracking } from './mouse'
 import type { CellPoint, ScreenFrame, ScreenRow, TerminalScreen } from './screen'
 
 export type CursorStyle = 'block' | 'bar' | 'underline'
@@ -34,7 +36,22 @@ export interface TerminalViewProps {
   onMetrics?: (metrics: CellMetrics) => void
   cursorStyle?: CursorStyle
   cursorBlink?: boolean
+  /** Overrides the element's own focus state for the cursor shape (fixtures pin it). */
   focused?: boolean
+  /**
+   * False while the pane is hidden: no fit and no repaint. Showing it again
+   * paints the screen's current frame at once, with no replay.
+   */
+  visible?: boolean
+  hostRef?: Ref<PublicInstance>
+  onAuxClick?: (event: EventPayload) => void
+  /** Runs before the keymap. Return true when the caller took the key. */
+  onKeyIntercept?: (event: KeyEvent) => boolean
+  /** Copy and paste actions; the defaults use `clipboard.ts` directly. */
+  onCopy?: (text: string) => void
+  onPaste?: () => void
+  /** A Ctrl/Cmd click on a cell. Return true when a link there was opened. */
+  onLinkClick?: (point: CellPoint, event: EventPayload) => boolean
   autoFocus?: boolean
   testId?: string
   fontSize?: number
@@ -42,12 +59,19 @@ export interface TerminalViewProps {
   /**
    * Fixed cell geometry, for example the one xterm.js measured in Chromium.
    * Without it the cell is derived from the font the way xterm.js does it:
-   * `floor(advance)` wide and `floor(charHeight * lineHeight)` tall.
+   * `floor(advance)` wide and `floor(ceil(charHeight) * lineHeight)` tall.
    */
   cell?: CellMetrics
   /** Pixels between the element edge and the grid, like `.xterm` padding. */
   padding?: number
+  /**
+   * Width kept free at the right edge, as xterm's FitAddon keeps it for the
+   * scrollbar (`DEFAULT_SCROLL_BAR_WIDTH`), so both clients fit the same grid.
+   */
+  scrollbarWidth?: number
 }
+
+const XTERM_SCROLL_BAR_WIDTH = 14
 
 /**
  * xterm.js packs its glyphs into the floored cell with a negative
@@ -60,21 +84,27 @@ export interface Geometry {
   glyphSize: number
 }
 
+interface MeasuredGeometry extends Geometry {
+  fontSize: number
+  lineHeight: number
+}
+
 export function geometryFor(
-  probe: { width: number; height: number; chars: number },
+  probe: { width: number; chars: number },
   fontSize: number,
   lineHeight: number,
   fixed?: CellMetrics
 ): Geometry {
   const advance = probe.width / probe.chars
-  const measured = cellMetrics(probe, lineHeight)
-  const cell = fixed ?? { width: Math.floor(measured.width), height: measured.height }
+  const cell = fixed ?? cellMetrics(advance, terminalCharHeight(fontSize), lineHeight)
   return { cell, glyphSize: fontSize * (cell.width / advance) }
 }
 
 const PROBE_CHARS = 100
 const RESIZE_DEBOUNCE_MS = 50
 const BLINK_MS = 600
+const FOCUS_POLL_MS = 150
+const MOUSE_BUTTONS: Record<number, MouseButton> = { 0: 'left', 1: 'middle', 2: 'right' }
 
 interface RowProps {
   row: ScreenRow
@@ -241,25 +271,45 @@ export function TerminalView(props: TerminalViewProps) {
     onMetrics,
     cursorStyle = 'block',
     cursorBlink = false,
-    focused = true,
+    focused: focusedProp,
+    visible = true,
     autoFocus = true,
     testId = 'terminal',
     fontSize = TERMINAL_FONT_SIZE,
     lineHeight = TERMINAL_LINE_HEIGHT,
     cell: fixedCell,
-    padding = 0
+    padding = 0,
+    scrollbarWidth = XTERM_SCROLL_BAR_WIDTH,
+    hostRef,
+    onAuxClick,
+    onKeyIntercept,
+    onCopy,
+    onPaste,
+    onLinkClick
   } = props
   const { renderer } = useGpuix()
   const host = useRef<PublicInstance | null>(null)
   const [frame, setFrame] = useState<ScreenFrame>(() => screen.frame())
-  const [geometry, setGeometry] = useState<Geometry | null>(null)
+  const [measured, setMeasured] = useState<MeasuredGeometry | null>(null)
+  // A font size or line height change measures again.
+  const geometry =
+    measured && measured.fontSize === fontSize && measured.lineHeight === lineHeight
+      ? measured
+      : null
   const cell = geometry?.cell ?? null
+  if (cell) screen.cellSize = cell
   const glyphSize = geometry?.glyphSize ?? fontSize
+  const [hasFocus, setHasFocus] = useState(false)
+  const focused = focusedProp ?? hasFocus
   const [blinkOn, setBlinkOn] = useState(true)
   const hostSize = useRef<{ width: number; height: number } | null>(null)
   const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wheelRemainder = useRef(0)
   const dragging = useRef(false)
+  /** The button held since the last press; simulated moves may not report one. */
+  const pressed = useRef<MouseButton | null>(null)
+  const lastMoveCell = useRef<string | null>(null)
+  const lastClipboardOp = useRef(0)
   const palette = screen.palette
 
   // GPUI caches a family's resolution at first use, so nothing names Paper
@@ -271,29 +321,61 @@ export function TerminalView(props: TerminalViewProps) {
     setFontsReady(true)
   }, [renderer, fontsReady])
 
-  useEffect(() => screen.onFrame(setFrame), [screen])
+  useEffect(() => {
+    if (!visible) return
+    setFrame(screen.frame())
+    return screen.onFrame(setFrame)
+  }, [screen, visible])
 
   useEffect(() => {
     setBlinkOn(true)
-    if (!cursorBlink || !focused) return
+    if (!cursorBlink || !focused || !visible) return
     const timer = setInterval(() => setBlinkOn((on) => !on), BLINK_MS)
     return () => clearInterval(timer)
-  }, [cursorBlink, focused])
+  }, [cursorBlink, focused, visible])
 
   const fit = useCallback(() => {
     const size = hostSize.current
-    if (!size || !cell) return
-    const cols = Math.max(2, Math.floor((size.width - padding * 2) / cell.width))
+    if (!size || !cell || !visible) return
+    // A hidden or collapsing host reports a box smaller than one cell; keep the PTY size.
+    const width = size.width - padding * 2 - scrollbarWidth
+    if (width < cell.width || size.height < cell.height + padding * 2) return
+    const cols = Math.max(2, Math.floor(width / cell.width))
     const rows = Math.max(1, Math.floor((size.height - padding * 2) / cell.height))
     if (cols === screen.cols && rows === screen.rows) return
     screen.resize(cols, rows)
     onResize?.(cols, rows)
     log.info('terminal', `terminal.resize ${JSON.stringify({ cols, rows })}`)
-  }, [cell, padding, screen, onResize])
+  }, [cell, padding, scrollbarWidth, screen, onResize, visible])
 
   useEffect(() => {
     fit()
   }, [fit])
+
+  const onFocus = useCallback(() => setHasFocus(true), [])
+  const onBlur = useCallback(() => setHasFocus(false), [])
+  // GPUIX did not deliver onFocus/onBlur for this host while
+  // getFocusedElementId() named it (measured 2026-10-23, Xvfb and lavapipe),
+  // so the focused cursor also follows the renderer's focus directly.
+  useEffect(() => {
+    if (!visible || focusedProp !== undefined || !renderer?.getFocusedElementId) return
+    const sync = () => {
+      const id = host.current?.id
+      setHasFocus(id !== undefined && renderer.getFocusedElementId?.() === id)
+    }
+    sync()
+    const timer = setInterval(sync, FOCUS_POLL_MS)
+    return () => clearInterval(timer)
+  }, [visible, focusedProp, renderer])
+
+  const setHost = useCallback(
+    (instance: PublicInstance | null) => {
+      host.current = instance
+      if (typeof hostRef === 'function') hostRef(instance)
+      else if (hostRef) hostRef.current = instance
+    },
+    [hostRef]
+  )
 
   const onLayout = (event: EventPayload) => {
     hostSize.current = { width: event.width ?? 0, height: event.height ?? 0 }
@@ -301,18 +383,33 @@ export function TerminalView(props: TerminalViewProps) {
     resizeTimer.current = setTimeout(fit, RESIZE_DEBOUNCE_MS)
   }
 
-  const cellAt = (event: EventPayload): CellPoint | null => {
+  const gridPoint = (event: EventPayload): { x: number; y: number } | null => {
     const bounds = host.current && renderer?.getElementBounds?.(host.current.id)
     if (!bounds || !cell || event.x === undefined || event.y === undefined) return null
-    const col = Math.max(
-      0,
-      Math.min(screen.cols, Math.round((event.x - bounds.x - padding) / cell.width))
-    )
-    const y = Math.max(
-      0,
-      Math.min(screen.rows - 1, Math.floor((event.y - bounds.y - padding) / cell.height))
-    )
+    return { x: event.x - bounds.x - padding, y: event.y - bounds.y - padding }
+  }
+
+  /** Selection boundary: the nearest column edge. */
+  const cellAt = (event: EventPayload): CellPoint | null => {
+    const point = gridPoint(event)
+    if (!point || !cell) return null
+    const col = Math.max(0, Math.min(screen.cols, Math.round(point.x / cell.width)))
+    const y = Math.max(0, Math.min(screen.rows - 1, Math.floor(point.y / cell.height)))
     return { row: screen.rowAt(y), col }
+  }
+
+  /** The cell under the pointer, as a link hit or a mouse report uses it. */
+  const cellUnder = (event: EventPayload) => {
+    const point = gridPoint(event)
+    if (!point || !cell) return null
+    const col = Math.max(0, Math.min(screen.cols - 1, Math.floor(point.x / cell.width)))
+    const row = Math.max(0, Math.min(screen.rows - 1, Math.floor(point.y / cell.height)))
+    return {
+      col,
+      row,
+      x: Math.max(0, Math.floor(point.x)),
+      y: Math.max(0, Math.floor(point.y))
+    }
   }
 
   const send = (data: string) => {
@@ -320,11 +417,59 @@ export function TerminalView(props: TerminalViewProps) {
     onInput(data)
   }
 
+  /**
+   * xterm.js mouse reporting: while a program tracks the mouse, events go to
+   * the PTY, and Shift keeps the pointer for selection.
+   */
+  const reportMouse = (event: EventPayload, button: MouseButton, action: MouseAction): boolean => {
+    const tracking = screen.modes.mouseTrackingMode as MouseTracking
+    if (tracking === 'none' || event.modifiers?.shift) return false
+    const at = cellUnder(event)
+    if (!at) return true
+    if (action === 'move') {
+      const key = `${at.col},${at.row},${button}`
+      if (key === lastMoveCell.current) return true
+      lastMoveCell.current = key
+    }
+    const data = encodeMouse(
+      {
+        ...at,
+        button,
+        action,
+        shift: false,
+        alt: !!event.modifiers?.alt,
+        ctrl: !!event.modifiers?.ctrl
+      },
+      tracking,
+      screen.mouseEncoding
+    )
+    if (data) send(data)
+    return true
+  }
+
+  const copy = (text: string) => {
+    if (onCopy) onCopy(text)
+    else void copyText(text)
+  }
+  const paste = () => {
+    if (onPaste) {
+      onPaste()
+      return
+    }
+    void pasteText().then((text) => {
+      if (text) send(encodePaste(text, screen.modes.bracketedPasteMode))
+    })
+  }
+
   const onKeyDown = (event: KeyEvent) => {
+    if (onKeyIntercept?.(event)) return
+    const now = Date.now()
     const action = encodeKey(event, {
       applicationCursor: screen.modes.applicationCursorKeysMode,
       hasSelection: screen.selectedText() !== '',
-      mac: process.platform === 'darwin'
+      mac: process.platform === 'darwin',
+      now,
+      lastClipboardOp: lastClipboardOp.current
     })
     if (action.type === 'none') return
     event.preventDefault()
@@ -337,11 +482,13 @@ export function TerminalView(props: TerminalViewProps) {
       screen.scrollLines(action.direction * screen.rows)
     } else if (action.type === 'copy') {
       const text = screen.selectedText()
-      if (text) void copyText(text)
+      if (text) {
+        lastClipboardOp.current = now
+        copy(text)
+      }
     } else if (action.type === 'paste') {
-      void pasteText().then((text) => {
-        if (text) send(encodePaste(text, screen.modes.bracketedPasteMode))
-      })
+      lastClipboardOp.current = now
+      paste()
     }
   }
 
@@ -352,6 +499,11 @@ export function TerminalView(props: TerminalViewProps) {
     const lines = Math.trunc(wheelRemainder.current)
     if (!lines) return
     wheelRemainder.current -= lines
+    if (screen.modes.mouseTrackingMode !== 'none' && !event.modifiers?.shift) {
+      for (let i = 0; i < Math.abs(lines); i++)
+        reportMouse(event, 'wheel', lines < 0 ? 'up' : 'down')
+      return
+    }
     if (screen.terminal.buffer.active.type === 'alternate') {
       // xterm.js turns the wheel into cursor keys on the alternate screen, so
       // less, vim and man scroll their own view.
@@ -364,9 +516,23 @@ export function TerminalView(props: TerminalViewProps) {
 
   const onMouseDown = (event: EventPayload) => {
     if (host.current) renderer?.focusElement?.(host.current.id)
-    if (event.button !== 0) return
+    const button = MOUSE_BUTTONS[event.button ?? 0]
+    pressed.current = button ?? null
+    // The DOM view opens a link on Ctrl or Meta click on every platform.
+    const linkModifier = event.modifiers?.ctrl || event.modifiers?.cmd
+    if (event.button === 0 && linkModifier && onLinkClick) {
+      const at = cellUnder(event)
+      if (at && onLinkClick({ row: screen.rowAt(at.row), col: at.col }, event)) return
+    }
+    if (button && reportMouse(event, button, 'down')) return
     const point = cellAt(event)
     if (!point) return
+    if (event.button === 2) {
+      // rightClickSelectsWord: a right press outside the selection selects the word under it.
+      if (!screen.isSelected(point)) screen.setSelection(screen.wordAt(point))
+      return
+    }
+    if (event.button !== 0) return
     if ((event.clickCount ?? 1) >= 2) {
       screen.setSelection(screen.wordAt(point))
       dragging.current = false
@@ -380,12 +546,20 @@ export function TerminalView(props: TerminalViewProps) {
     )
   }
   const onMouseMove = (event: EventPayload) => {
-    if (!dragging.current || event.pressedButton !== 0) return
+    const held =
+      event.pressedButton === undefined
+        ? (pressed.current ?? 'none')
+        : (MOUSE_BUTTONS[event.pressedButton] ?? 'none')
+    if (reportMouse(event, held, 'move')) return
+    if (!dragging.current || held !== 'left') return
     const point = cellAt(event)
     const selection = screen.getSelection()
     if (point && selection) screen.setSelection({ anchor: selection.anchor, head: point })
   }
-  const onMouseUp = () => {
+  const onMouseUp = (event: EventPayload) => {
+    const button = MOUSE_BUTTONS[event.button ?? 0]
+    pressed.current = null
+    if (button && reportMouse(event, button, 'up')) return
     dragging.current = false
     const selection = screen.getSelection()
     if (
@@ -400,10 +574,17 @@ export function TerminalView(props: TerminalViewProps) {
   const cursorShape: CursorStyle | 'outline' = focused ? cursorStyle : 'outline'
   const showCursor = frame.cursor.visible && (!cursorBlink || !focused || blinkOn)
 
+  // A hidden pane renders no interactive element. GPUI dispatches the mouse to
+  // a visibility: hidden box, and GPUIX does not re-register listeners a
+  // render removed, so the pane gets a fresh host each time it is shown; the
+  // screen keeps its state, so the first shown frame is the current one.
+  if (!visible) return <div key="hidden" style={{ flexGrow: 1 }} />
+
   return (
     // biome-ignore lint/a11y/useSemanticElements: GPUIX has no terminal element; a <textarea> would take the keys meant for the PTY
     <div
-      ref={host}
+      key="shown"
+      ref={setHost}
       testId={testId}
       role="textbox"
       aria-label="Terminal"
@@ -416,6 +597,9 @@ export function TerminalView(props: TerminalViewProps) {
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
+      onAuxClick={onAuxClick}
+      onFocus={onFocus}
+      onBlur={onBlur}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -434,7 +618,7 @@ export function TerminalView(props: TerminalViewProps) {
           <text
             onLayout={(event) => {
               const next = geometryFor(
-                { width: event.width ?? 0, height: event.height ?? 0, chars: PROBE_CHARS },
+                { width: event.width ?? 0, chars: PROBE_CHARS },
                 fontSize,
                 lineHeight,
                 fixedCell
@@ -443,13 +627,13 @@ export function TerminalView(props: TerminalViewProps) {
                 'terminal',
                 `terminal.geometry ${JSON.stringify({
                   advance: (event.width ?? 0) / PROBE_CHARS,
-                  charHeight: event.height ?? 0,
+                  charHeight: terminalCharHeight(fontSize),
                   cellWidth: next.cell.width,
                   cellHeight: next.cell.height,
                   glyphSize: next.glyphSize
                 })}`
               )
-              setGeometry(next)
+              setMeasured({ ...next, fontSize, lineHeight })
               onMetrics?.(next.cell)
             }}
             style={{

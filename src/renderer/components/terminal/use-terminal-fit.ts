@@ -1,13 +1,19 @@
 import type { FitAddon } from '@xterm/addon-fit'
 import type { Terminal } from '@xterm/xterm'
-import { type MutableRefObject, type RefObject, useCallback, useEffect, useRef } from 'react'
+import {
+  type MutableRefObject,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState
+} from 'react'
 import { systemApi } from '@/lib/api'
-import { useTerminalStore } from '@/stores/terminal-store'
 import { restoreScrollPosition } from '../../utils/terminal-registry'
+import { activityTerminalId, createTerminalActivity } from './terminal-activity'
 
 const VISIBILITY_RECOVERY_DELAY_MS = 150
 const POWER_RESUME_RECOVERY_DELAY_MS = 300
-const ACTIVITY_DEBOUNCE_MS = 1000
 
 export interface UseTerminalFitOptions {
   /** Ref to the xterm.js Terminal instance (updated lazily) */
@@ -71,9 +77,6 @@ export function useTerminalFit(options: UseTerminalFitOptions): UseTerminalFitRe
   // Track last fitted container dimensions to avoid redundant fit() calls
   const lastContainerWidthRef = useRef<number>(0)
   const lastContainerHeightRef = useRef<number>(0)
-  const activityTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const lastActivityUpdateRef = useRef<number>(0)
-  const pendingActivityUpdateRef = useRef<{ id: string } | null>(null)
 
   const performFit = useCallback(
     (force = false): boolean => {
@@ -104,60 +107,16 @@ export function useTerminalFit(options: UseTerminalFitOptions): UseTerminalFitRe
     [containerRef, fitAddonRef, terminalRef]
   )
 
-  const noteTerminalActivity = useCallback((terminalId: string): void => {
-    const now = Date.now()
-    const timeSinceLastUpdate = now - lastActivityUpdateRef.current
-
-    // If enough time has passed since last update, update immediately
-    if (timeSinceLastUpdate >= ACTIVITY_DEBOUNCE_MS) {
-      useTerminalStore.getState().updateTerminalActivityBatch(terminalId, true, now)
-      lastActivityUpdateRef.current = now
-    } else {
-      // Otherwise, store pending update for later
-      pendingActivityUpdateRef.current = { id: terminalId }
-    }
-
-    // Clear existing activity timeout and set new one
-    if (activityTimeoutRef.current) {
-      clearTimeout(activityTimeoutRef.current)
-    }
-    activityTimeoutRef.current = setTimeout(() => {
-      // Flush any pending activity update
-      if (pendingActivityUpdateRef.current) {
-        useTerminalStore
-          .getState()
-          .updateTerminalActivityBatch(pendingActivityUpdateRef.current.id, false, Date.now())
-        pendingActivityUpdateRef.current = null
-      } else {
-        // Clear activity after 2 seconds of inactivity
-        useTerminalStore.getState().updateTerminalActivityBatch(terminalId, false, Date.now())
-      }
-      activityTimeoutRef.current = null
-      lastActivityUpdateRef.current = 0
-    }, 2000)
-  }, [])
+  const [activity] = useState(createTerminalActivity)
+  const noteTerminalActivity = useCallback(
+    (terminalId: string): void => activity.note(terminalId),
+    [activity]
+  )
 
   /** Clear sidebar activity indicator when this view unmounts (e.g. tab switch). */
   const clearTerminalActivityOnUnmount = useCallback((): void => {
-    if (activityTimeoutRef.current) {
-      clearTimeout(activityTimeoutRef.current)
-      activityTimeoutRef.current = null
-    }
-    pendingActivityUpdateRef.current = null
-    lastActivityUpdateRef.current = 0
-
-    const store = useTerminalStore.getState()
-    const storeTerminalId =
-      (ptyIdRef.current ? store.findTerminalByPtyId(ptyIdRef.current)?.id : undefined) ??
-      (targetId
-        ? (store.terminals.find((t) => t.id === targetId)?.id ??
-          store.findTerminalByPtyId(targetId)?.id)
-        : undefined)
-
-    if (storeTerminalId) {
-      store.updateTerminalActivityBatch(storeTerminalId, false, Date.now())
-    }
-  }, [ptyIdRef, targetId])
+    activity.clear(activityTerminalId(ptyIdRef.current, targetId))
+  }, [activity, ptyIdRef, targetId])
 
   // Trigger fit + PTY resize when terminal becomes visible
   // Uses the two-stage resize pipeline via forceResizeFit,
