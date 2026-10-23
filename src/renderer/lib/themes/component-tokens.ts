@@ -33,6 +33,8 @@ export const COMPONENT_TOKEN_DEFAULTS = {
   '--switch-disabled-opacity': '0.5',
   /** Loading placeholder block. */
   '--skeleton': 'oklch(var(--muted))',
+  /** Ghost and outline button text on the hover wash. */
+  '--ghost-hover-foreground': 'oklch(var(--accent-foreground))',
   /** Elevation ladder behind Tailwind's `shadow-*` scale. */
   '--elevation-2xs': '0 1px rgb(0 0 0 / 0.05)',
   '--elevation-xs': '0 1px 2px 0 rgb(0 0 0 / 0.05)',

@@ -22,9 +22,9 @@ const buttonVariants = cva(
         default: primaryEmboss,
         destructive: 'bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90',
         outline:
-          'border border-input bg-background hover:bg-secondary hover:text-accent-foreground',
+          'border border-input bg-background hover:bg-secondary hover:text-ghost-hover-foreground',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-        ghost: 'hover:bg-secondary hover:text-accent-foreground',
+        ghost: 'hover:bg-secondary hover:text-ghost-hover-foreground',
         link: 'text-primary underline-offset-4 hover:underline',
         composer: primaryEmboss
       },

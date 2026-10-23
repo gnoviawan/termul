@@ -48,6 +48,7 @@ export default {
         },
         // Component tokens are complete CSS colors; no alpha modifier.
         skeleton: 'var(--skeleton)',
+        'ghost-hover-foreground': 'var(--ghost-hover-foreground)',
         'diff-modified': 'oklch(var(--diff-modified) / <alpha-value>)',
         'diff-added': 'oklch(var(--diff-added) / <alpha-value>)',
         overlay: 'oklch(var(--overlay) / <alpha-value>)',

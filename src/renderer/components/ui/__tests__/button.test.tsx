@@ -178,4 +178,14 @@ describe('Button size="touch" (44px touch-target floor)', () => {
     expect(a).toHaveClass('after:absolute')
     unmount()
   })
+
+  it('ghost and outline hover text reads the per-theme token, not accent-foreground', () => {
+    for (const variant of ['ghost', 'outline'] as const) {
+      const { unmount } = render(<Button variant={variant}>Label</Button>)
+      const className = screen.getByRole('button').className
+      expect(className).toContain('hover:text-ghost-hover-foreground')
+      expect(className).not.toContain('hover:text-accent-foreground')
+      unmount()
+    }
+  })
 })

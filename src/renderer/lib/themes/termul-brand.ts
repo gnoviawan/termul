@@ -28,7 +28,10 @@ const SHARED_BRAND_TOKENS = {
   '--switch-track-on-active': TERMUL_BLUE.fill,
   '--switch-thumb-on': '#ffffff',
   '--switch-thumb-off': '#ffffff',
-  '--switch-disabled-opacity': '1'
+  '--switch-disabled-opacity': '1',
+  // Accent foreground is white on the brand fill, so it cannot sit on the
+  // grey hover wash. Ink keeps ghost/outline labels readable.
+  '--ghost-hover-foreground': 'oklch(var(--foreground))'
 } as const satisfies ThemeComponentTokens
 
 /** Interfere s-default. One hairline plus a short drop. */

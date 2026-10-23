@@ -132,6 +132,17 @@ describe('apply-color-theme', () => {
       expect(cssVarToHex('--border')).toBe('#ededed')
       expect(cssVarToHex('--input')).toBe('#d9d9d9')
       expect(cssVarToHex('--muted-foreground')).toBe('#646464')
+      // QA 1: ghost/outline hover label on the hover wash.
+      expect(document.documentElement.style.getPropertyValue('--ghost-hover-foreground')).toBe(
+        'oklch(var(--foreground))'
+      )
+      expect(
+        contrastRatio(cssVarToHex('--foreground'), cssVarToHex('--secondary'))
+      ).toBeGreaterThanOrEqual(4.5)
+      // QA 3: icon actions rest at muted-foreground on the shell.
+      expect(
+        contrastRatio(cssVarToHex('--muted-foreground'), cssVarToHex('--sidebar-background'))
+      ).toBeGreaterThanOrEqual(4.5)
       expect(document.documentElement.dataset.flatElevation).toBeUndefined()
       expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0d74ce')
       expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.accent).toBe('#0d74ce')
