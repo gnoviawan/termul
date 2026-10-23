@@ -32,7 +32,9 @@
     "src/compat",
     "src/ui",
     "src/icons",
+    "src/composer",
+    "src/overrides",
     "../../src/renderer/vite-env.d.ts"
   ],
-  "exclude": ["src/style/fonts.ts", "src/style/__tests__", "src/compat/radix", "src/compat/shims"]
+  "exclude": ["src/style/fonts.ts", "src/style/__tests__", "src/composer/__tests__", "src/compat/radix", "src/compat/shims"]
 }

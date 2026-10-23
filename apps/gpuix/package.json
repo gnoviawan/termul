@@ -21,7 +21,7 @@
     "perf": "bun tools/perf/run.ts",
     "perf:report": "bun tools/perf/report.ts",
     "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json && tsc -p tsconfig.ui.json && tsc -p tsconfig.compat.json && tsc -p tsconfig.compat-app.json",
-    "test": "bun test src/style src/terminal src/ui tools/ui tools/launcher tools/compat",
+    "test": "bun test src/style src/terminal src/ui src/composer tools/ui tools/launcher tools/compat tools/composer",
     "style:scan": "bun tools/style/scan-classes.ts",
     "style:gen": "bun tools/style/gen-color-vars.ts",
     "style:fonts": "uv run --with fonttools --with brotli python -I tools/style/build-fonts.py",
