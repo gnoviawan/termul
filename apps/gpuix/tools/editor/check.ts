@@ -30,6 +30,7 @@ import {
   READY_TEXT,
   SIZE,
   STATE_ROOT,
+  gpuixOpenFile as openFromExplorer,
   seedEditorProject
 } from './scenario'
 
@@ -87,20 +88,6 @@ async function painted(app: App): Promise<string[]> {
 
 const keys = (text: string) =>
   [...text].map((ch) => (ch === ' ' ? 'space' : ch)).join(' ')
-
-/** Click the Explorer tab, then each tree row by its label, in the side panel column. */
-async function openFromExplorer(app: App, segments: readonly string[]): Promise<void> {
-  const inPanel = async (label: string) => {
-    const nodes = await app.getByText(label).all()
-    return nodes.find((n) => (n.bounds?.x ?? 0) > 200 && (n.bounds?.x ?? 0) < 470)?.bounds
-  }
-  const tab = await until('Explorer tab', () => inPanel('Explorer'))
-  await app.mouse.click({ x: tab.x + tab.width / 2, y: tab.y + tab.height / 2 })
-  for (const name of segments) {
-    const row = await until(`tree row ${name}`, () => inPanel(name), 10_000)
-    await app.mouse.click({ x: row.x + row.width / 2, y: row.y + row.height / 2 })
-  }
-}
 
 process.env.TERMUL_GPUIX_TEST_HOOKS = '1'
 process.env.TERMUL_GPUIX_EDITOR_PERF = '1'
@@ -260,7 +247,7 @@ try {
         const before = await viewState(app)
         const wheelStart = performance.now()
         for (let i = 0; i < 60; i++) {
-          await app.mouse.wheel(center, 0, -3)
+          await app.mouse.wheel(center, 0, -60)
           await Bun.sleep(16)
         }
         const scrolled = await until('scrolled', async () => {
@@ -271,17 +258,18 @@ try {
         await Bun.sleep(500)
         const afterScroll = (await viewState(app)) as ViewState & { perf?: { frames?: unknown; renderMs?: number[] } }
         await grab(path.join(OUT, 'big-scrolled.png'))
-        const typed: number[] = []
         await app.mouse.click({ x: box.x + 200, y: box.y + 100 })
         await Bun.sleep(200)
-        for (let i = 0; i < 10; i++) {
-          const prev = (await viewState(app)).caret.col
-          const t0 = performance.now()
+        const startCol = (await viewState(app)).caret.col
+        for (let i = 0; i < 20; i++) {
           await app.call('keystrokes', { keys: 'q' })
-          await until('keystroke applied', async () => ((await viewState(app)).caret.col !== prev ? true : null))
-          typed.push(Math.round(performance.now() - t0))
+          await Bun.sleep(60)
         }
-        const end = (await viewState(app)) as ViewState & { perf?: { frames?: unknown; renderMs?: number[] } }
+        await until('typed run applied', async () => ((await viewState(app)).caret.col === startCol + 20 ? true : null))
+        const end = (await viewState(app)) as ViewState & {
+          perf?: { frames?: unknown; renderMs?: number[]; keyToCommitMs?: number[] }
+        }
+        const typed = (end.perf?.keyToCommitMs ?? []).slice(-20)
         const renders = (afterScroll.perf?.renderMs ?? []).slice(-60).sort((a, b) => a - b)
         const p = (q: number) => renders[Math.min(renders.length - 1, Math.floor(q * renders.length))]
         check('big.ts (5,000 lines): first paint, wheel scroll and typing timed', scrolled.lines === BIG_LINES + 1, {
@@ -292,7 +280,7 @@ try {
           scrollTopAfter: afterScroll.scrollTop,
           frameStatsDuringScroll: afterScroll.perf?.frames,
           renderJsMs: { p50: p(0.5), p90: p(0.9), max: renders.at(-1), samples: renders.length },
-          keystrokeToStateMs: typed,
+          keyToCommitJsMs: typed,
           frameStatsAfterTyping: end.perf?.frames
         })
         await app.call('keystrokes', { keys: 'ctrl-z' })

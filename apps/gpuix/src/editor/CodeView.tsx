@@ -33,7 +33,7 @@ import { copyText, pasteText } from '../terminal/clipboard'
 import { CHUNK_LINES, chunksBetween, chunkStarts } from './chunks'
 import { type KeyIntent, keyIntent } from './keymap'
 import { loadLanguage, nativeGrammar } from './languages'
-import { CRASH_SUFFIX, perfSnapshot, recordRender, testHooksEnabled } from './test-hooks'
+import { CRASH_SUFFIX, markKey, perfSnapshot, recordRender, testHooksEnabled } from './test-hooks'
 import {
   caretPoint,
   contentHeight,
@@ -378,6 +378,7 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
     (event: KeyEvent) => {
       const intent = keyIntent({ key: event.key ?? '', keyChar: event.keyChar, modifiers: event.modifiers })
       if (!intent) return
+      markKey()
       event.preventDefault()
       event.stopPropagation()
       switch (intent.kind) {

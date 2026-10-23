@@ -21,12 +21,24 @@ export function testHooksEnabled(): boolean {
 }
 
 const renderMs: number[] = []
+const keyToCommitMs: number[] = []
+let keyAt: number | null = null
+
+/** A key reached the view; the next commit closes the measurement. */
+export function markKey(): void {
+  if (env.TERMUL_GPUIX_EDITOR_PERF === '1') keyAt = performance.now()
+}
 let statsOn = false
 
 export function recordRender(ms: number): void {
   if (env.TERMUL_GPUIX_EDITOR_PERF !== '1') return
   renderMs.push(Math.round(ms * 100) / 100)
   if (renderMs.length > 200) renderMs.shift()
+  if (keyAt !== null) {
+    keyToCommitMs.push(Math.round((performance.now() - keyAt) * 100) / 100)
+    keyAt = null
+    if (keyToCommitMs.length > 200) keyToCommitMs.shift()
+  }
 }
 
 export function perfSnapshot(renderer: NativeRenderer, large: boolean): unknown {
@@ -35,5 +47,9 @@ export function perfSnapshot(renderer: NativeRenderer, large: boolean): unknown 
     statsOn = true
     renderer.setDebugFrameOverlay?.('minimal')
   }
-  return { renderMs: [...renderMs], frames: renderer.getDebugFrameOverlayStats?.() }
+  return {
+    renderMs: [...renderMs],
+    keyToCommitMs: [...keyToCommitMs],
+    frames: renderer.getDebugFrameOverlayStats?.()
+  }
 }

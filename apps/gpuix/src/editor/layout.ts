@@ -9,7 +9,7 @@
  * mapping between a document position and a point is arithmetic.
  */
 
-import type { EditorState } from '@codemirror/state'
+import { countColumn, type EditorState } from '@codemirror/state'
 import { columnAt, posAtColumn } from './model'
 
 export const FONT_SIZE = 13
@@ -128,9 +128,9 @@ export function followCaret(
 /** Widest line, in columns. */
 export function maxColumns(state: EditorState): number {
   let widest = 0
-  for (let n = 1; n <= state.doc.lines; n++) {
-    const line = state.doc.line(n)
-    if (line.length > widest) widest = columnAt(state, line.to)
+  for (const text of state.doc.iterLines()) {
+    const columns = text.includes('\t') ? countColumn(text, state.tabSize) : text.length
+    if (columns > widest) widest = columns
   }
   return widest
 }

@@ -64,7 +64,7 @@ try {
       }
     })
     await writeFile(path.join(OUT, 'geometry.json'), JSON.stringify(geometry, null, 2))
-    await webOpenFile(page, ['README.md'])
+    await webOpenFile(page, ['README.md'], false)
     await page.waitForTimeout(1500)
     await grab(path.join(OUT, 'readme.png'))
   })
