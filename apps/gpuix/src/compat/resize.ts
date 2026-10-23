@@ -5,7 +5,7 @@
  */
 
 import type { EventPayload } from '@gpuix/react'
-import { compatRenderer, nodeFor, type CompatElement } from './dom-node'
+import { compatReads, nodeFor, type CompatElement } from './dom-node'
 
 type Callback = (entries: ResizeEntry[], observer: CompatResizeObserver) => void
 
@@ -55,7 +55,7 @@ export class CompatResizeObserver {
       observers.set(id, set)
     }
     set.add(this)
-    const bounds = compatRenderer()?.getElementBounds(id)
+    const bounds = compatReads()?.bounds(id)
     if (bounds) queueMicrotask(() => this.deliver([entry(nodeFor(id), bounds.width, bounds.height)]))
   }
 

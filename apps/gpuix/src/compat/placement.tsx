@@ -17,7 +17,7 @@
 import type { PublicInstance, StyleDesc } from '@gpuix/react'
 import { type ReactElement, useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { jsx } from 'react/jsx-runtime'
-import { compatRenderer, treeIndex } from './dom-node'
+import { compatReads, treeIndex } from './dom-node'
 import { subscribeViewport, viewportWidth } from './viewport'
 
 export interface Placement {
@@ -116,7 +116,7 @@ function useParentWidth(stretch: boolean): [(instance: PublicInstance | null) =>
   useLayoutEffect(() => {
     if (!stretch || id === null) return
     const parent = treeIndex().parent.get(id)
-    const bounds = parent === undefined ? null : compatRenderer()?.getElementBounds(parent)
+    const bounds = parent === undefined ? null : compatReads()?.bounds(parent)
     if (bounds) setWidth(bounds.width)
   }, [stretch, id, viewport])
   return [ref, width]

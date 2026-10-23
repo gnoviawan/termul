@@ -10,7 +10,7 @@ import { type CompatRenderer, bindCompatRenderer } from './dom-node'
 import { windowKeyEvent } from './events'
 import { setOverlayLayer } from './react-dom'
 import { compatThemeId, compatTw, subscribeCompatTheme } from './translate'
-import { observeViewport } from './viewport'
+import { syncViewport } from './viewport'
 
 const OVERLAY = {
   position: 'absolute',
@@ -34,12 +34,9 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
   useLayoutEffect(() => {
     bindCompatRenderer(renderer as unknown as CompatRenderer)
     onRenderer?.(renderer)
-    const unobserve = observeViewport(renderer)
+    syncViewport(renderer)
     setReady(true)
-    return () => {
-      unobserve()
-      bindCompatRenderer(null)
-    }
+    return () => bindCompatRenderer(null)
   }, [renderer, onRenderer])
   useLayoutEffect(() => {
     setOverlayLayer(layer)
@@ -49,7 +46,7 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
   const themeId = useSyncExternalStore(subscribeCompatTheme, compatThemeId)
   const root = compatTw()('relative h-full w-full bg-background text-foreground font-sans')
   return (
-    <div style={{ ...root, fontSize: 16, lineHeight: 24 }}>
+    <div style={{ ...root, fontSize: 16, lineHeight: 24 }} onLayout={() => syncViewport(renderer)}>
       {ready && layer ? <Fragment key={themeId}>{children}</Fragment> : null}
       <div ref={setLayer} style={OVERLAY} />
     </div>
