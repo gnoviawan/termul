@@ -165,3 +165,29 @@ Tools:
   rows. Add `--loop mount` or `--loop rerender` to repeat one phase with no
   sleeps and compare JS-thread CPU time, which other load on the host
   inflates less than wall time.
+
+## Chat transcript (`src/overrides/components/chat`, `src/chat`, `tools/chat`)
+
+The transcript is native. `ChatMessageList` puts the shared timeline rows
+into `<virtual-list alignment="bottom" followTail>`; an agent reply becomes
+one row per block (`AgentReplyRows`), each block a native `<markdown>`, a
+`<code>` card (`CodeCard`) or a table card, spaced with the web stylesheet's
+collapsed margins (`prose-flow.ts`). `AgentProse`, `ThoughtGroup` and
+`highlighted-code` have native twins; tool rows, activity and user bubbles
+render the shared components through compat. `tsconfig.chat.json` checks
+this code; shared DOM components it renders are typed through
+`src/chat/dom-components.d.ts`.
+
+```sh
+bun run chat:seed -- --port 8190 --hold   # a server with one scripted chat
+bun run chat:parity                       # web vs GPUIX at bottom/middle/top -> parity-out/chat/
+bun run chat:check                        # follow, jump-to-latest, thought expansion
+bun run chat:perf -- --runs 3             # stream-storm cost, GPUIX vs Chromium -> perf-out/chat/
+```
+
+The scripted chat comes from `tools/chat/scenario-agent.ts` (an ACP stdio
+agent playing `script.ts`: prose, code, a table, tool calls, thoughts, an
+edit diff, mermaid). A prompt `storm <seconds> <rate> <chars>` makes it
+stream at the perf toolkit's stream-storm shape and log each chunk.
+`tools/chat/scene` is the GPUIX side: the transcript at the box the web
+gives its viewport, driven through a control file (scroll, prompt, perf flush).
