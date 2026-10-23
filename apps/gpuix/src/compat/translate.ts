@@ -8,6 +8,7 @@
 
 import type { StyleDesc } from '@gpuix/react'
 import { resolveTwTheme } from '../style/theme'
+import { liftPlacement, type Placement } from './placement'
 import { viewportHeight, viewportWidth } from './viewport'
 import { type CompiledStyle, createTw, type Tw } from '../style/tw'
 import { MONO_FAMILY } from '../style/utilities'
@@ -61,6 +62,8 @@ export interface Translation {
   readonly listInside: boolean
   /** `[&_svg]:x` / `[&>svg]:x` tokens, provided to icons below. */
   readonly svgClasses: string | null
+  /** Centering or popup placement rebuilt in `placement.tsx`. */
+  readonly placement: Placement | null
 }
 
 const PHRASING = new Set([
@@ -138,6 +141,7 @@ interface Lifted {
   display: 'inline' | 'block' | null
   scope: ScopeName | null
   svg: string[]
+  placement: Placement | null
 }
 
 /** Pull out the tokens tw() has no StyleDesc for. Variant-prefixed ones stay with tw(). */
@@ -152,9 +156,12 @@ function lift(className: string): Lifted {
     listInside: false,
     display: null,
     scope: null,
-    svg: []
+    svg: [],
+    placement: null
   }
-  for (const raw of className.split(/\s+/)) {
+  const placed = liftPlacement(className.split(/\s+/))
+  lifted.placement = placed.placement
+  for (const raw of placed.rest) {
     if (!raw) continue
     // `group-hover/name:` binds to the nearest group, whatever its name.
     const token = raw.includes('/') ? raw.replace(NAMED_GROUP_VARIANT, '$1$2') : raw
@@ -271,7 +278,10 @@ function translate(tw: Tw, tag: string, className: string): Translation {
   const lifted = lift(className)
   const compiled = tw.compile(lifted.classes)
   const defaults = TAG_DEFAULTS[tag]
-  const merged: StyleDesc = defaults ? { ...defaults, ...compiled.base } : compiled.base
+  // A button centres its content only as an inline-block; `flex` / `grid` on it
+  // lay the content out from the start, like any flex container.
+  const ownLayout = tag === 'button' && compiled.base.display !== undefined && compiled.base.display !== 'none'
+  const merged: StyleDesc = defaults && !ownLayout ? { ...defaults, ...compiled.base } : compiled.base
   const base = layoutFixes(merged)
   let ruleMode: RuleMode = 'static'
   for (const rule of compiled.rules) {
@@ -308,7 +318,8 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     hoverable: base.hover !== undefined || base.active !== undefined,
     scope: lifted.scope,
     listInside: lifted.listInside,
-    svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null
+    svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null,
+    placement: lifted.placement
   }
 }
 

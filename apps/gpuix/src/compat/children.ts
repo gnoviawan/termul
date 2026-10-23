@@ -103,7 +103,17 @@ function placeAutoMargin(node: ReactElement, info: NonNullable<ChildInfo['autoMa
   const h = horizontal(info.margin)
   const v = vertical(info.margin)
   const style = h ? COLUMN_PUSH[h] : v ? COLUMN_PUSH[v] : undefined
-  return style ? cloneElement(node as ReactElement<{ style?: StyleDesc }>, { style }) : node
+  if (!style) return node
+  // In block flow a block box with `mx-auto` is as wide as the line allows (up
+  // to its max-width) and the auto margins split what is left; in the flex
+  // wrapper that is a growing item.
+  const inner = info.inner as ReactElement<{ style?: StyleDesc }>
+  const innerStyle = inner.props.style
+  const fills = h !== null && childInfo.get(inner)?.inline !== true && innerStyle?.width === undefined
+  if (!fills) return cloneElement(node as ReactElement<{ style?: StyleDesc }>, { style })
+  const grown = cloneElement(inner, { style: { ...innerStyle, flexGrow: 1, flexShrink: 1, minWidth: 0 } })
+  childInfo.set(grown, childInfo.get(inner) ?? { inline: false })
+  return cloneElement(node as ReactElement<{ style?: StyleDesc }>, { style }, grown)
 }
 
 function words(text: string, key: number, leading: boolean, trailing: boolean): ReactElement[] {

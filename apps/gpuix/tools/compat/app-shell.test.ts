@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { jsx } from 'react/jsx-runtime'
+import { hasContainerClasses, resolveContainerClasses } from '../../src/compat/container'
+import { type Placement, placeStyle } from '../../src/compat/placement'
 import { defaultFilter, splitPartClasses } from '../../src/compat/shims/cmdk-model'
-import { resolveViewportUnits } from '../../src/compat/translate'
+import { resolveViewportUnits, translation } from '../../src/compat/translate'
 
 describe('viewport lengths', () => {
   test('arbitrary vh and vw values become px of the window', () => {
@@ -35,5 +38,66 @@ describe('cmdk stand-in', () => {
     expect(defaultFilter('New Terminal', '')).toBe(1)
     expect(defaultFilter('New Terminal', 'xyz')).toBe(0)
     expect(defaultFilter('alpha', 'repo', ['repository'])).toBe(1)
+  })
+})
+
+describe('container queries', () => {
+  test('@[w]: variants are kept at or above the container width and dropped below it', () => {
+    const classes = '@container flex flex-col @[35rem]:flex-row @[400px]:px-5 gap-2'
+    expect(resolveContainerClasses(classes, 624)).toBe('flex flex-col flex-row px-5 gap-2')
+    expect(resolveContainerClasses(classes, 500)).toBe('flex flex-col px-5 gap-2')
+    expect(resolveContainerClasses(classes, 399)).toBe('flex flex-col gap-2')
+    expect(resolveContainerClasses(classes, null)).toBe('flex flex-col gap-2')
+  })
+
+  test('only container classes route through the host', () => {
+    expect(hasContainerClasses('px-3 @[400px]:px-5')).toBe(true)
+    expect(hasContainerClasses('@container flex')).toBe(true)
+    expect(hasContainerClasses('flex gap-2')).toBe(false)
+    expect(hasContainerClasses('after:content-["@"]')).toBe(false)
+  })
+})
+
+describe('placement idioms', () => {
+  test('a vertically centred icon keeps its right inset on a centring wrapper', () => {
+    const tr = translation('span', 'absolute right-1.5 top-1/2 size-5 -translate-y-1/2')
+    expect(tr.placement).toEqual({ centerX: false, centerY: true, popup: null })
+    const placed = placeStyle(tr.base, tr.placement as Placement)
+    expect(placed?.inner).toMatchObject({ position: 'relative', width: 20, height: 20 })
+    expect(placed?.inner).not.toHaveProperty('right')
+    const wrapper = placed?.wrap(jsx('div', {}))
+    expect((wrapper?.props as { style: unknown }).style).toEqual({
+      position: 'absolute',
+      display: 'flex',
+      pointerEvents: 'none',
+      right: 6,
+      top: 0,
+      bottom: 0,
+      alignItems: 'center'
+    })
+  })
+
+  test('a bottom-full menu becomes an anchored popup on the top side with its margin as the gap', () => {
+    const tr = translation('div', 'absolute bottom-full left-2 right-2 mb-1 rounded-xl bg-popover p-1')
+    expect(tr.placement).toEqual({ centerX: false, centerY: false, popup: 'top' })
+    const placed = placeStyle(tr.base, tr.placement as Placement)
+    expect(placed?.inner).not.toHaveProperty('marginBottom')
+    expect(placed?.inner).not.toHaveProperty('position')
+    const popup = placed?.wrap(jsx('div', {}))
+    expect(popup?.props).toMatchObject({ side: 'top', gap: 4, offsets: { left: 8, right: 8 } })
+  })
+
+  test('half an idiom is left to tw()', () => {
+    expect(translation('div', 'absolute top-1/2 left-0').placement).toBeNull()
+  })
+})
+
+describe('button layout', () => {
+  test('a plain button centres its content; a flex button lays it out from the start', () => {
+    expect(translation('button', 'px-2').base).toMatchObject({ display: 'flex', justifyContent: 'center', alignItems: 'center' })
+    const flex = translation('button', 'flex gap-2 px-2').base
+    expect(flex.display).toBe('flex')
+    expect(flex.justifyContent).toBeUndefined()
+    expect(flex.alignItems).toBeUndefined()
   })
 })

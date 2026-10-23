@@ -7,19 +7,19 @@
 import type { ReactElement } from 'react'
 import { Fragment, jsx as reactJsx, jsxs as reactJsxs } from 'react/jsx-runtime'
 import { dropBlockWhitespace } from './children'
-import { createDomElement, type DomProps } from './create'
-import { hostElement } from './host'
+import { compatElement } from './container'
+import type { DomProps } from './create'
 
 type Props = Record<string, unknown>
 
 export function jsx(type: unknown, props: Props, key?: string): ReactElement {
-  if (typeof type === 'string') return createDomElement(type, props as DomProps, key, false, hostElement)
+  if (typeof type === 'string') return compatElement(type, props as DomProps, key, false)
   if (type === Fragment) return reactJsx(Fragment, { ...props, children: dropBlockWhitespace(props.children) }, key)
   return reactJsx(type as never, props, key)
 }
 
 export function jsxs(type: unknown, props: Props, key?: string): ReactElement {
-  if (typeof type === 'string') return createDomElement(type, props as DomProps, key, true, hostElement)
+  if (typeof type === 'string') return compatElement(type, props as DomProps, key, true)
   if (type === Fragment) return reactJsxs(Fragment, { ...props, children: dropBlockWhitespace(props.children) }, key)
   return reactJsxs(type as never, props, key)
 }

@@ -10,8 +10,8 @@
 
 import * as React from 'react'
 import type { ReactElement } from 'react'
-import { createDomElement, type DomProps, domSource } from './create'
-import { hostElement } from './host'
+import { compatElement } from './container'
+import { type DomProps, domSource } from './create'
 
 type Props = Record<string, unknown> | null
 
@@ -27,7 +27,7 @@ export function createElement(type: unknown, props: Props, ...children: unknown[
   if (typeof type !== 'string') return React.createElement(type as never, props as never, ...(children as never[]))
   const { props: merged, isStatic } = withChildren(props, children)
   const key = props?.key === undefined || props.key === null ? undefined : String(props.key)
-  return createDomElement(type, merged as DomProps, key, isStatic, hostElement)
+  return compatElement(type, merged as DomProps, key, isStatic)
 }
 
 export function cloneElement(element: ReactElement, props?: Props, ...children: unknown[]): ReactElement {
@@ -39,7 +39,7 @@ export function cloneElement(element: ReactElement, props?: Props, ...children: 
   else if (children.length > 1) merged.children = children
   const key = props?.key === undefined ? source.key : String(props.key)
   const isStatic = Array.isArray(merged.children) && children.length > 1
-  return createDomElement(source.tag, merged as DomProps, key, isStatic, hostElement)
+  return compatElement(source.tag, merged as DomProps, key, isStatic)
 }
 
 export const {
