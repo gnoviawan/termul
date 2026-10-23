@@ -1,5 +1,6 @@
 import { TERMUL_LIGHT_CHROME } from './termul-light-chrome'
 import { TERMUL_LIGHT_SYNTAX } from './termul-syntax'
+import { TERMUL_LIGHT_TERMINAL } from './termul-terminal'
 import type { ColorThemeDefinition } from './types'
 
 /** Light appearance twins (`{family}-light`). Syntax: opencode light + vscode fallback. */
@@ -19,7 +20,8 @@ export const BUNDLED_LIGHT_COLOR_THEMES: Record<string, ColorThemeDefinition> = 
         success: '#098658',
         warning: '#cd9731',
         error: '#cd3131',
-        info: '#0598bc'
+        info: '#0598bc',
+        terminal: TERMUL_LIGHT_TERMINAL
       },
       overrides: TERMUL_LIGHT_SYNTAX,
       chrome: TERMUL_LIGHT_CHROME

@@ -301,7 +301,8 @@ export function paletteToXtermTheme(
     brightBlue: isLight ? darkenHex(palette.primary, 0.1) : lightenHex(palette.primary, 0.15),
     brightMagenta: isLight ? darkenHex(palette.accent, 0.1) : lightenHex(palette.accent, 0.15),
     brightCyan: isLight ? darkenHex(palette.info, 0.1) : lightenHex(palette.info, 0.15),
-    brightWhite: isLight ? darkenHex(palette.ink, 0.15) : lightenHex(palette.ink, 0.1)
+    brightWhite: isLight ? darkenHex(palette.ink, 0.15) : lightenHex(palette.ink, 0.1),
+    ...palette.terminal
   }
 }
 

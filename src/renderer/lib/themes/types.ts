@@ -12,7 +12,37 @@ export interface ThemePalette {
   diffAdd?: string
   diffDelete?: string
   interactive?: string
+  /**
+   * Pinned terminal colors. Keys set here win over the palette-derived
+   * defaults, so brand changes to `primary` or `accent` cannot shift
+   * terminal output.
+   */
+  terminal?: ThemeTerminalColors
 }
+
+/** ANSI and selection colors the terminal reads instead of the brand. */
+export type ThemeTerminalColors = Partial<
+  Record<
+    | 'selectionBackground'
+    | 'selectionInactiveBackground'
+    | 'black'
+    | 'red'
+    | 'green'
+    | 'yellow'
+    | 'blue'
+    | 'magenta'
+    | 'cyan'
+    | 'brightBlack'
+    | 'brightRed'
+    | 'brightGreen'
+    | 'brightYellow'
+    | 'brightBlue'
+    | 'brightMagenta'
+    | 'brightCyan'
+    | 'brightWhite',
+    string
+  >
+>
 
 export type ThemeSyntaxOverrides = Partial<{
   'syntax-comment': string
