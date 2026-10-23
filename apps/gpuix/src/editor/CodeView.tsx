@@ -505,8 +505,9 @@ export function CodeView(props: CodeViewProps): React.JSX.Element {
   const vp = viewport
   const contentWidth = Math.max(0, vp.width - gutter)
   const [first, last] = visibleLines(lines, vp)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: chunk starts depend on the text only, not the selection
-  const starts = useMemo(() => chunkStarts(state), [state.doc])
+  const parseTo = state.doc.line(Math.min(lines, last + CHUNK_LINES)).to
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chunk starts depend on the text and how far down it is painted, not the selection
+  const starts = useMemo(() => chunkStarts(state, parseTo), [state.doc, parseTo])
   const chunks = chunksBetween(starts, lines, first, last)
   const chunkTexts = chunks.map((chunk) =>
     state

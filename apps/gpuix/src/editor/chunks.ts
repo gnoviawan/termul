@@ -43,10 +43,11 @@ function insideMultilineToken(tree: Tree, pos: number): boolean {
 /**
  * Every chunk start line, ascending, beginning with 1. `syntaxTree(state)`
  * keeps the tree the state was created with, so the parse is advanced here
- * (`ensureSyntaxTree`), within a budget.
+ * (`ensureSyntaxTree`) up to `upto` (the view passes the end of what it
+ * paints), within a budget.
  */
-export function chunkStarts(state: EditorState): number[] {
-  const tree = ensureSyntaxTree(state, state.doc.length, PARSE_BUDGET_MS) ?? syntaxTree(state)
+export function chunkStarts(state: EditorState, upto = state.doc.length): number[] {
+  const tree = ensureSyntaxTree(state, upto, PARSE_BUDGET_MS) ?? syntaxTree(state)
   const starts = [1]
   const lines = state.doc.lines
   let next = 1 + CHUNK_LINES
