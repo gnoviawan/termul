@@ -5,6 +5,7 @@
  * else is built directly by `createDomElement`.
  */
 
+import type { StyleDesc } from '@gpuix/react'
 import {
   createContext,
   type ReactElement,
@@ -28,6 +29,12 @@ interface GroupSnapshot {
   attrs: Readonly<Record<string, unknown>>
 }
 
+function attrValues(attrs: Readonly<Record<string, unknown>>, names: string[]): string {
+  let out = ''
+  for (const name of names) out += `|${String(attrs[name])}`
+  return out
+}
+
 /** A `group` element's live state. Consumers subscribe; the group itself never re-renders for it. */
 class GroupStore {
   private snapshot: GroupSnapshot
@@ -47,6 +54,12 @@ class GroupStore {
   }
 
   get = (): GroupSnapshot => this.snapshot
+
+  /** What a consumer reads, as a value: it re-renders only when this changes. */
+  keyFor(attrNames: string[]): string {
+    const { hovered, focused, attrs } = this.snapshot
+    return `${hovered ? 1 : 0}${focused ? 1 : 0}${attrValues(attrs, attrNames)}`
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -68,6 +81,9 @@ interface Needs {
   group: boolean
   focus: boolean
   viewport: boolean
+  /** Attributes the rules read, on the element itself and on its group. */
+  selfAttrs: string[]
+  groupAttrs: string[]
 }
 
 const needsCache = new WeakMap<Translation, Needs>()
@@ -75,16 +91,47 @@ const needsCache = new WeakMap<Translation, Needs>()
 function needsOf(tr: Translation): Needs {
   let needs = needsCache.get(tr)
   if (needs) return needs
-  needs = { group: false, focus: false, viewport: false }
+  const out: Needs = { group: false, focus: false, viewport: false, selfAttrs: [], groupAttrs: [] }
   const visit = (c: Condition) => {
-    if (c.kind === 'viewport') needs!.viewport = true
-    else if (c.kind === 'attr' && c.scope === 'group') needs!.group = true
-    else if (c.kind === 'flag' && c.flag.startsWith('group')) needs!.group = true
-    else if (c.kind === 'flag' && (c.flag === 'focus' || c.flag === 'focusWithin')) needs!.focus = true
+    if (c.kind === 'viewport') out.viewport = true
+    else if (c.kind === 'attr' && c.scope === 'group') {
+      out.group = true
+      if (!out.groupAttrs.includes(c.attr)) out.groupAttrs.push(c.attr)
+    } else if (c.kind === 'attr' && !out.selfAttrs.includes(c.attr)) out.selfAttrs.push(c.attr)
+    else if (c.kind === 'flag' && c.flag.startsWith('group')) out.group = true
+    else if (c.kind === 'flag' && (c.flag === 'focus' || c.flag === 'focusWithin')) out.focus = true
   }
   for (const rule of tr.compiled.rules) rule.when.forEach(visit)
+  needs = out
   needsCache.set(tr, needs)
   return needs
+}
+
+const styleCache = new WeakMap<Translation, Map<string, StyleDesc>>()
+
+/**
+ * The resolved style for one state. A host re-renders with its parent, so the
+ * same state recurs; returning the same object also lets GPUIX skip the
+ * style diff.
+ */
+function hostStyle(tr: Translation, needs: Needs, state: TwState, dark: boolean): StyleDesc {
+  if (tr.compiled.rules.length === 0) return tr.base
+  const flags = [dark, state.disabled, state.focus, state.focusWithin, state.groupHover, state.groupFocus]
+  const key =
+    flags.map((flag) => (flag ? '1' : '0')).join('') +
+    `${needs.viewport ? state.viewportWidth : ''}${attrValues(state.attrs ?? {}, needs.selfAttrs)}` +
+    attrValues(state.groupAttrs ?? {}, needs.groupAttrs)
+  let byState = styleCache.get(tr)
+  if (!byState) {
+    byState = new Map()
+    styleCache.set(tr, byState)
+  }
+  let style = byState.get(key)
+  if (!style) {
+    style = applyRules({ ...tr.compiled, base: tr.base }, state, dark)
+    byState.set(key, style)
+  }
+  return style
 }
 
 const noSubscribe = () => () => {}
@@ -100,7 +147,8 @@ export interface CompatHostProps {
 function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactElement {
   const needs = needsOf(tr)
   const parentGroup = useContext(GroupContext) ?? NO_GROUP
-  const group = useSyncExternalStore(needs.group ? parentGroup.subscribe : noSubscribe, parentGroup.get)
+  useSyncExternalStore(needs.group ? parentGroup.subscribe : noSubscribe, () => parentGroup.keyFor(needs.groupAttrs))
+  const group = parentGroup.get()
   const [focus, setFocus] = useState({ self: false, within: false })
   const width = useSyncExternalStore(needs.viewport ? subscribeViewport : noSubscribe, viewportWidth)
   const attrs = domAttrs(dom)
@@ -124,9 +172,7 @@ function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactE
     groupAttrs: group.attrs as TwState['groupAttrs'],
     viewportWidth: width
   }
-  const style = tr.compiled.rules.length
-    ? applyRules({ ...tr.compiled, base: tr.base }, state, compatDark())
-    : tr.base
+  const style = hostStyle(tr, needs, state, compatDark())
 
   const handlers = useMemo(() => {
     const out: Record<string, unknown> = {}

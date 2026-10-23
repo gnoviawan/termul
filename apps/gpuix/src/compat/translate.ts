@@ -312,15 +312,21 @@ function translate(tw: Tw, tag: string, className: string): Translation {
 }
 
 let active: Tw = createTw(resolveTwTheme('termul'))
-let cache = new Map<string, Translation>()
+/** tag -> class string -> translation. Two levels, so a lookup hashes the class string without building a key. */
+let cache = new Map<string, Map<string, Translation>>()
 
 /** The cached translation of one DOM tag and class string. */
 export function translation(tag: string, className: string | undefined): Translation {
-  const key = className ? `${tag} ${className}` : tag
-  let hit = cache.get(key)
+  let byClass = cache.get(tag)
+  if (!byClass) {
+    byClass = new Map()
+    cache.set(tag, byClass)
+  }
+  const classes = className ?? ''
+  let hit = byClass.get(classes)
   if (!hit) {
-    hit = translate(active, tag, className ?? '')
-    cache.set(key, hit)
+    hit = translate(active, tag, classes)
+    byClass.set(classes, hit)
   }
   return hit
 }
@@ -338,7 +344,9 @@ export function setCompatTheme(themeId: string): void {
 
 /** Cache size, for the bench report. */
 export function translationCount(): number {
-  return cache.size
+  let n = 0
+  for (const byClass of cache.values()) n += byClass.size
+  return n
 }
 
 export function applyTextTransform(text: string, transform: Translation['transform']): string {
