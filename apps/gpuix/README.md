@@ -162,4 +162,6 @@ Tools:
   `parity-out/compat/`.
 - `bun tools/compat/bench/run.ts --runs N --rows N` times the real
   `ProjectItem` through compat against a direct GPUIX version of the same
-  rows.
+  rows. Add `--loop mount` or `--loop rerender` to repeat one phase with no
+  sleeps and compare JS-thread CPU time, which other load on the host
+  inflates less than wall time.
