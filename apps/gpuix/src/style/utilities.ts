@@ -452,7 +452,13 @@ function withSize(s: number | string | undefined, build: (s: number | string) =>
 
 function withSpace(v: Value, axis: 'x' | 'y'): UtilityResult | undefined {
   const px = spacing(v)
-  return px === undefined ? undefined : frag({ space: { axis, px } })
+  if (px === undefined) return undefined
+  return {
+    kind: 'style',
+    frag: { space: { axis, px } },
+    rank: 0,
+    approx: 'child margins lowered to a flex gap on the parent'
+  }
 }
 
 function leadingOf(v: Value): Leading | undefined {
@@ -528,7 +534,7 @@ const KEYWORDS: Record<string, UtilityResult> = {
     ])
   ),
   'overflow-hidden': ok({ overflow: 'hidden' }),
-  'overflow-clip': ok({ overflow: 'hidden' }),
+  'overflow-clip': approx({ overflow: 'hidden' }, 'clip paints like hidden'),
   'overflow-visible': ok({ overflow: 'visible' }),
   'overflow-auto': ok({ overflow: 'scroll' }),
   'overflow-scroll': ok({ overflow: 'scroll' }),

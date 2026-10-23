@@ -7,7 +7,8 @@
     "style:scan": "bun tools/style/scan-classes.ts",
     "style:gen": "bun tools/style/gen-color-vars.ts",
     "style:fonts": "bun tools/style/build-fonts.ts",
-    "style:showcase": "bun tools/style/showcase/run.ts"
+    "style:showcase": "bun tools/style/showcase/run.ts",
+    "style:oracle": "bun tools/style/oracle.ts"
   },
   "dependencies": {
     "@gpuix/native": "0.11.0",

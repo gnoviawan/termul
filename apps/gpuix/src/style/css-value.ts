@@ -249,6 +249,10 @@ export function withAlpha(color: Rgba, alpha: number): Rgba {
 /** A length in px: px, rem, em (against `fontSize`), unitless 0, calc(). */
 export function parseLength(value: string, vars: CssVars = {}, fontSize = ROOT_FONT_SIZE): number {
   const text = substituteVars(value.trim(), vars).trim()
+  for (const [, unit] of text.matchAll(/[\d.]([a-z%]+)/g)) {
+    if (unit !== 'px' && unit !== 'rem' && unit !== 'em')
+      throw new Error(`unsupported length unit ${unit} in ${value}`)
+  }
   if (text.startsWith('calc('))
     return evalCalc(text.slice(5, matchingParen(text, 4)), vars, fontSize)
   const match = text.match(/^(-?[\d.]+)(px|rem|em)?$/)
