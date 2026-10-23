@@ -181,6 +181,7 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
 
 function autoStatus(surface: Surface, web?: ClientRun, gpuix?: ClientRun, diffs: StepDiff[] = []): AutoStatus {
   if (surface.pending) return 'pending-unit'
+  if (surface.blocked) return 'blocked'
   if (!web?.ok) return 'unverified'
   if (!gpuix?.ok) return 'broken'
   const last = diffs.at(-1)
@@ -250,8 +251,9 @@ async function main(): Promise<void> {
   try {
     for (const surface of surfaces) {
       const result: SurfaceResult = { id: surface.id, ranAt: new Date().toISOString(), auto: 'pending-unit', diffs: [] }
-      if (surface.pending) {
+      if (surface.pending || surface.blocked) {
         result.pending = surface.pending
+        result.blocked = surface.blocked
       } else {
         const points = new Map<string, Point>()
         let started = performance.now()

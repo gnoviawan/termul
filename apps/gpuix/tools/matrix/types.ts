@@ -72,6 +72,8 @@ export interface Surface {
   roi?: string
   /** Not driven: the surface waits on another unit. */
   pending?: { unit: string; reason: string }
+  /** Not driven: no reference to compare against, for the reason given. */
+  blocked?: string
   /** Server-side setup run before each client's run (re-seeds what an earlier run changed). */
   prepare?(world: import('./world').World): Promise<void>
 }
@@ -109,7 +111,7 @@ export interface StepDiff {
   diffPng: string
 }
 
-export type AutoStatus = 'ported' | 'partial' | 'broken' | 'unverified' | 'pending-unit'
+export type AutoStatus = 'ported' | 'partial' | 'broken' | 'blocked' | 'unverified' | 'pending-unit'
 
 export interface SurfaceResult {
   id: string
@@ -119,4 +121,5 @@ export interface SurfaceResult {
   gpuix?: ClientRun
   diffs: StepDiff[]
   pending?: Surface['pending']
+  blocked?: string
 }

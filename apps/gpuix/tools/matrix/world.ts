@@ -36,6 +36,8 @@ export interface World {
   dirs: Record<ProjectKey, string>
   agent: AgentConfig
   chat: { agentId: string; sessionId: string }
+  /** alpha's seeded HEAD, so a surface that commits can be rewound. */
+  alphaHead: string
   /** HTTP call to the server with the token. */
   fetch(route: string, init?: RequestInit): Promise<Response>
 }
@@ -70,7 +72,7 @@ Alpha is the matrix's seeded project.
 - Run the tests
 `
 
-function seedAlphaRepo(dir: string): void {
+function seedAlphaRepo(dir: string): string {
   write(dir, 'README.md', '# alpha\n\nThe matrix project.\n')
   write(dir, 'src/app.ts', APP_TS)
   write(dir, 'docs/guide.md', GUIDE_MD)
@@ -83,13 +85,15 @@ function seedAlphaRepo(dir: string): void {
   git(dir, 'branch', 'feature/login')
   write(dir, 'README.md', '# alpha\n\nThe matrix project.\n\nSee docs/guide.md.\n')
   git(dir, 'commit', '-q', '-am', 'link the guide')
-  resetAlphaChanges(dir)
+  const head = git(dir, 'rev-parse', 'HEAD')
+  resetAlphaChanges(dir, head)
+  return head
 }
 
 /** Put alpha's working tree back to the seeded changes: one staged, one unstaged, one untracked. */
-export function resetAlphaChanges(dir: string): void {
-  git(dir, 'checkout', '-q', 'main')
-  git(dir, 'reset', '-q', '--hard', 'HEAD')
+export function resetAlphaChanges(dir: string, head: string): void {
+  git(dir, 'checkout', '-q', '-f', 'main')
+  git(dir, 'reset', '-q', '--hard', head)
   git(dir, 'clean', '-fdq')
   write(dir, 'src/app.ts', APP_TS.replace("'1.0.0'", "'1.1.0'"))
   git(dir, 'add', 'src/app.ts')
@@ -114,7 +118,7 @@ export async function createWorld(opts: { port: number; root: string }): Promise
     for (const key of Object.keys(PROJECTS) as ProjectKey[]) {
       await addProject(server, { ...PROJECTS[key], path: dirs[key] })
     }
-    seedAlphaRepo(dirs.alpha)
+    const alphaHead = seedAlphaRepo(dirs.alpha)
     write(dirs.beta, 'index.js', "console.log('beta')\n")
     write(dirs.gamma, 'todo.md', '# gamma\n')
 
@@ -133,7 +137,7 @@ export async function createWorld(opts: { port: number; root: string }): Promise
       { commandId: commandId('session') }
     )
     for (const prompt of SCRIPT_PROMPTS) await sendPrompt(ws, { agentId, sessionId }, prompt)
-    return { server, ws, root: opts.root, dirs, agent, chat: { agentId, sessionId }, fetch: fetchServer }
+    return { server, ws, root: opts.root, dirs, agent, chat: { agentId, sessionId }, alphaHead, fetch: fetchServer }
   } catch (error) {
     await server.stop()
     throw error
@@ -163,5 +167,21 @@ export async function ensureProject(world: World, key: ProjectKey): Promise<void
   await world.fetch(`/projects/${project.id}`, {
     method: 'PUT',
     body: JSON.stringify({ name: project.name, color: project.color })
+  })
+}
+
+/** Rewind alpha to the seeded commit and working-tree changes. */
+export async function resetAlpha(world: World): Promise<void> {
+  resetAlphaChanges(world.dirs.alpha, world.alphaHead)
+}
+
+/** Set the shared colour theme (a theme family and dark or light), the way the settings store writes it. */
+export async function setTheme(world: World, family: string, mode: 'dark' | 'light'): Promise<void> {
+  const key = 'shared/lww/settings/app'
+  const current = await world.ws.request<{ revision?: number; value?: { data?: Record<string, unknown> } }>('store_read', { key })
+  await world.ws.request('store_write', {
+    key,
+    value: { _version: 1, data: { ...(current.value?.data ?? {}), colorTheme: family, appearanceMode: mode } },
+    baseRevision: current.revision ?? 0
   })
 }
