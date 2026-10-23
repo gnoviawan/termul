@@ -75,7 +75,7 @@ function saveCode(code: string, language: string): string {
   return file
 }
 
-function CopyAction({ code, disabled }: { code: string; disabled: boolean }) {
+export function CopyAction({ code, disabled }: { code: string; disabled: boolean }) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -102,7 +102,7 @@ function CopyAction({ code, disabled }: { code: string; disabled: boolean }) {
   )
 }
 
-function DownloadAction({ code, language, disabled }: { code: string; language: string; disabled: boolean }) {
+export function DownloadAction({ code, language, disabled }: { code: string; language: string; disabled: boolean }) {
   const download = useCallback(() => {
     if (!code || disabled) return
     try {
@@ -153,7 +153,7 @@ function CodeCardComponent({ code, language, open, streaming }: CodeCardProps) {
         code={code}
         {...(grammar ? { language: grammar } : {})}
         theme={themes.code}
-        style={{ ...BODY, ...tw('font-mono text-sm text-foreground'), lineHeight: 21.7 }}
+        style={{ ...BODY, ...tw('font-mono text-foreground'), fontSize: 13, lineHeight: 20 }}
       />
       {language === 'mermaid' ? (
         <text style={NOTE}>Mermaid diagrams are shown as source in this client.</text>

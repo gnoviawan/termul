@@ -18,7 +18,7 @@ import { setWebAuthToken } from '@/lib/web-auth-token'
 import { ensureClientIdentity } from '@/lib/web-client-identity'
 import { useAcpStore } from '@/stores/acp-store'
 import type { ClientConfig } from '../../../src/client-config'
-import type { SceneBox, SceneCommand, SceneOptions } from './contract'
+import type { ControlIo, SceneBox, SceneOptions, SceneTarget } from './contract'
 import { useSessionTimeline } from '../../../src/chat/use-session-timeline'
 import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
 import { log } from '../../../src/log'
@@ -26,54 +26,90 @@ import { tw } from '../../../src/style/tw'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
 
 
+/** ChatRoute's open: a live session is already known; a persisted one opens from history, retried while the index loads. */
+function openExisting(sessionId: string): () => void {
+  const started = performance.now()
+  let cancelled = false
+  let attempt = 0
+  const tryOpen = async (): Promise<void> => {
+    if (cancelled) return
+    const existing = useAcpStore.getState().sessions[sessionId]
+    if (existing && existing.status !== 'closed') return
+    attempt++
+    try {
+      await useAcpStore.getState().openHistorySession(sessionId)
+      log.info('chat-scene', `opened ${sessionId} in ${Math.round(performance.now() - started)} ms`)
+    } catch (error) {
+      if (attempt >= 10) log.warn('chat-scene', `open ${sessionId} failed: ${String(error)}`)
+      else setTimeout(tryOpen, 500)
+    }
+  }
+  setTimeout(tryOpen, 300)
+  return () => {
+    cancelled = true
+  }
+}
+
+/** The launcher's start: the client spawns the agent and owns the live session, as a user's chat does. */
+async function startChat(target: Extract<SceneTarget, { kind: 'start' }>): Promise<string> {
+  const store = useAcpStore.getState()
+  await store.loadAgentConfigs()
+  const started = performance.now()
+  const sessionId = await useAcpStore.getState().startChat(target.configId, target.cwd, undefined, target.projectId)
+  log.info('chat-scene', `started ${sessionId} in ${Math.round(performance.now() - started)} ms`)
+  return sessionId
+}
+
+function useSceneSession(target: SceneTarget): string | null {
+  const [started, setStarted] = useState<string | null>(null)
+  useEffect(() => {
+    if (target.kind === 'session') return openExisting(target.sessionId)
+    let cancelled = false
+    startChat(target).then(
+      (id) => {
+        if (!cancelled) setStarted(id)
+      },
+      (error: unknown) => log.warn('chat-scene', `start failed: ${String(error)}`)
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [target])
+  return target.kind === 'session' ? target.sessionId : started
+}
+
 function Transcript({ sessionId, box }: { sessionId: string; box: SceneBox }) {
+  const timeline = useSessionTimeline(sessionId)
+  return (
+    <div
+      testId={timeline.items.length > 0 ? 'chat-scene-ready' : 'chat-scene-loading'}
+      style={{ position: 'absolute', left: box.x, top: box.y, width: box.width, height: box.height, display: 'flex', flexDirection: 'column' }}
+    >
+      {timeline.showRunningIndicator ? <div testId="chat-scene-turn-active" style={{ position: 'absolute', width: 1, height: 1 }} /> : null}
+      {timeline.items.length > 0 ? (
+        <ChatMessageList
+          items={timeline.items}
+          sessionId={sessionId}
+          showRunningIndicator={timeline.showRunningIndicator}
+          filePathContext={timeline.filePathContext}
+          onEditMessage={() => {}}
+          onRetry={timeline.showRunningIndicator ? undefined : () => {}}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function Scene({ options, renderer }: { options: SceneOptions<NativeRenderer>; renderer: NativeRenderer | null }) {
   useProjectRegistry()
   useAcpListeners()
   useAcpHistory()
   useAcpSessionResume()
-  // ChatRoute's open: a live session is already known from the socket; a
-  // persisted one opens from history, retried while the index loads.
-  useEffect(() => {
-    const started = performance.now()
-    let cancelled = false
-    let attempt = 0
-    const tryOpen = async (): Promise<void> => {
-      if (cancelled) return
-      const existing = useAcpStore.getState().sessions[sessionId]
-      if (existing && existing.status !== 'closed') {
-        log.info('chat-scene', `live ${sessionId} after ${Math.round(performance.now() - started)} ms`)
-        return
-      }
-      attempt++
-      try {
-        await useAcpStore.getState().openHistorySession(sessionId)
-        log.info('chat-scene', `opened ${sessionId} in ${Math.round(performance.now() - started)} ms`)
-      } catch (error) {
-        if (attempt >= 10) log.warn('chat-scene', `open ${sessionId} failed: ${String(error)}`)
-        else setTimeout(tryOpen, 500)
-      }
-    }
-    setTimeout(tryOpen, 300)
-    return () => {
-      cancelled = true
-    }
-  }, [sessionId])
-  const timeline = useSessionTimeline(sessionId)
+  const sessionId = useSceneSession(options.target)
+  useSceneControl(renderer, options.control, sessionId)
   return (
     <div style={{ ...tw('bg-terminal-bg'), position: 'absolute', left: 0, top: 0, width: WINDOW_WIDTH, height: WINDOW_HEIGHT }}>
-      <div
-        testId={timeline.items.length > 0 ? 'chat-scene-ready' : 'chat-scene-loading'}
-        style={{ position: 'absolute', left: box.x, top: box.y, width: box.width, height: box.height, display: 'flex', flexDirection: 'column' }}
-      >
-        {timeline.items.length > 0 ? (
-          <ChatMessageList
-            items={timeline.items}
-            sessionId={sessionId}
-            showRunningIndicator={timeline.showRunningIndicator}
-            filePathContext={timeline.filePathContext}
-          />
-        ) : null}
-      </div>
+      {sessionId ? <Transcript sessionId={sessionId} box={options.box} /> : null}
     </div>
   )
 }
@@ -98,14 +134,22 @@ function findTestId(node: TreeNode, testId: string): TreeNode | null {
  * a `SceneCommand`. The automation protocol has no scroll call, so the scene
  * applies it with the renderer's own list scrolling.
  */
-function useSceneControl(renderer: NativeRenderer | null, file: string | undefined): void {
+function useSceneControl(renderer: NativeRenderer | null, file: string | undefined, sessionId: string | null): void {
   useEffect(() => {
     if (!renderer || !file) return
     let last = 0
     const timer = setInterval(() => {
-      const raw = readControl(file)
+      const raw = io.read(file)
       if (!raw || raw.seq <= last) return
       last = raw.seq
+      if ('prompt' in raw) {
+        if (!sessionId) return
+        void useAcpStore
+          .getState()
+          .sendPrompt(sessionId, raw.prompt)
+          .catch((error: unknown) => log.warn('chat-scene', `prompt failed: ${String(error)}`))
+        return
+      }
       if (!('getAutomationTree' in renderer) || typeof renderer.getAutomationTree !== 'function') return
       const tree = JSON.parse(renderer.getAutomationTree()) as TreeNode
       const list = findTestId(tree, 'chat-transcript-list')
@@ -116,19 +160,17 @@ function useSceneControl(renderer: NativeRenderer | null, file: string | undefin
       log.info('chat-scene', `control ${JSON.stringify(raw)} rows=${count}`)
     }, 100)
     return () => clearInterval(timer)
-  }, [renderer, file])
+  }, [renderer, file, sessionId])
 }
 
-let readControl: (file: string) => SceneCommand | null = () => null
+let io: ControlIo = { read: () => null }
 
-/** The harness side passes a reader so this app-side file stays free of node:fs types. */
-export function setControlReader(reader: (file: string) => SceneCommand | null): void {
-  readControl = reader
+export function setControlIo(next: ControlIo): void {
+  io = next
 }
 
 function SceneRoot({ options }: { options: SceneOptions<NativeRenderer> }) {
   const [renderer, setRenderer] = useState<NativeRenderer | null>(null)
-  useSceneControl(renderer, options.control)
   // CompatRoot rebinds on a new callback, so it must be stable.
   const onRenderer = useCallback(
     (r: NativeRenderer) => {
@@ -139,7 +181,7 @@ function SceneRoot({ options }: { options: SceneOptions<NativeRenderer> }) {
   )
   return (
     <CompatRoot onRenderer={onRenderer}>
-      <Transcript sessionId={options.sessionId} box={options.box} />
+      <Scene options={options} renderer={renderer} />
     </CompatRoot>
   )
 }

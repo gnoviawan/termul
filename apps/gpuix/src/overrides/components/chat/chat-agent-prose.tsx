@@ -33,7 +33,8 @@ import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/
 import { logFrontendError } from '@/lib/log-api'
 import { useColorTheme } from '@/stores/app-settings-store'
 import { CodeCard } from '../../../chat/CodeCard'
-import { type FlowBlock, flowGap } from '../../../chat/prose-flow'
+import { TableCard } from '../../../chat/TableCard'
+import { type FlowBlock, flowGap, leadingMargin, trailingMargin } from '../../../chat/prose-flow'
 import { type ProsePart, proseParts } from '../../../chat/prose-parts'
 import { fileLinkPath, proseBlocks } from '../../../chat/prose-source'
 import { transcriptThemes } from '../../../chat/theme'
@@ -171,25 +172,43 @@ function LinkSafetyDialog({ url, onClose }: { url: string; onClose: () => void }
   )
 }
 
+/** `.chat-streamdown` lists: `padding-left: 1.25rem`. */
+const LIST_INDENT = 20
+
 const MarkdownBlock = memo(function MarkdownBlock({
   source,
+  block,
   marginTop,
+  streaming,
   onLink
 }: {
   source: string
+  block: FlowBlock['kind']
   marginTop: number
+  streaming: boolean
   onLink: (url: string) => void
 }) {
   const themes = transcriptThemes(useColorTheme())
-  return (
+  const markdown = (
     <markdown
       source={source}
       theme={themes.prose}
-      style={{ marginTop, minWidth: 0 }}
+      style={{ minWidth: 0, ...(block === 'list' ? { paddingLeft: LIST_INDENT } : {}) }}
       onLinkClick={(event) => {
         if (event.value) onLink(event.value)
       }}
     />
+  )
+  return (
+    <div style={{ marginTop, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      {block === 'table' ? (
+        <TableCard source={source} streaming={streaming}>
+          {markdown}
+        </TableCard>
+      ) : (
+        markdown
+      )}
+    </div>
   )
 })
 
@@ -233,7 +252,7 @@ export function AgentProse({
   return (
     <div style={tw('flex min-w-0 flex-col text-sm leading-normal text-foreground')} testId="agent-prose">
       {rows.map((row, i) => {
-        const marginTop = i === 0 ? 0 : flowGap(rows[i - 1].flow, row.flow)
+        const marginTop = i === 0 ? leadingMargin(row.flow) : flowGap(rows[i - 1].flow, row.flow)
         if (row.kind === 'fence') {
           return (
             <div key={row.key} style={{ marginTop }}>
@@ -253,8 +272,18 @@ export function AgentProse({
             </div>
           )
         }
-        return <MarkdownBlock key={row.key} source={row.source} marginTop={marginTop} onLink={onLink} />
+        return (
+          <MarkdownBlock
+            key={row.key}
+            source={row.source}
+            block={row.flow.kind}
+            marginTop={marginTop}
+            streaming={streaming}
+            onLink={onLink}
+          />
+        )
       })}
+      {rows.length > 0 ? <div style={{ height: trailingMargin(rows[rows.length - 1].flow) }} /> : null}
       {externalUrl ? <LinkSafetyDialog url={externalUrl} onClose={() => setExternalUrl(null)} /> : null}
     </div>
   )

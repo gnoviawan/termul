@@ -43,8 +43,11 @@ import { tw } from '../../../style/tw'
 const FOLLOW_POLL_MS = 120
 /** `max-w-3xl`. */
 const COLUMN_MAX = 768
-/** `px-5` on a pane at least 400px wide (`CHAT_GUTTER_X`). */
-const GUTTER = 20
+/**
+ * `px-5` on a pane at least 400px wide (`CHAT_GUTTER_X`), plus the web
+ * viewport's `scrollbar-gutter: stable both-edges` (10px each side in Chromium).
+ */
+const GUTTER = 30
 /** `py-4` on the viewport. */
 const EDGE_PAD = 16
 

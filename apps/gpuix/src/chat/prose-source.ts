@@ -124,6 +124,24 @@ function blockKind(node: RootContent): BlockKind {
   }
 }
 
+/**
+ * GFM task items: native markdown prints `[x]` literally, so the marker
+ * becomes a ballot box glyph, the nearest it can paint to the web's checkbox.
+ */
+function taskEdits(source: string, node: Nodes, edits: Edit[]): void {
+  if (node.type === 'listItem' && typeof node.checked === 'boolean') {
+    const at = span(node)
+    if (at) {
+      const match = /^([-*+]|\d+[.)])[ \t]+\[[ xX]\]/.exec(source.slice(at[0], at[1]))
+      if (match) {
+        const box = node.checked ? '\u2611' : '\u2610'
+        edits.push({ start: at[0], end: at[0] + match[0].length, text: `${match[1]} ${box}` })
+      }
+    }
+  }
+  if ('children' in node) for (const child of (node as Parent).children) taskEdits(source, child as Nodes, edits)
+}
+
 function applyEdits(source: string, start: number, end: number, edits: Edit[]): string {
   let out = ''
   let cursor = start
@@ -168,6 +186,7 @@ export function proseBlocks(source: string, linkFiles: boolean): ProseBlock[] {
       continue
     }
     const edits: Edit[] = []
+    if (child.type === 'list') taskEdits(source, child, edits)
     if (mayLink) walk(source, child, edits)
     edits.sort((a, b) => a.start - b.start)
     const text = applyEdits(source, at[0], at[1], edits)

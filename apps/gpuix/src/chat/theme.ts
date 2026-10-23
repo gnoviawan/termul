@@ -54,10 +54,14 @@ function syntaxTheme(themeId: string): SyntaxTheme {
 const cache = new Map<string, { prose: GpuixTheme; thought: GpuixTheme; code: GpuixTheme }>()
 
 /**
- * - `prose`: an agent reply block (`.chat-streamdown`): 14/21 body, headings
- *   at 1em (h1 1.08em) with line-height 1.25, inline code chips on muted/55.
+ * - `prose`: an agent reply block (`.chat-streamdown`): 14/21 body, inline
+ *   code chips on muted/55. Headings take Streamdown's utility sizes
+ *   (`text-3xl` .. `text-lg`): utilities beat index.css's components layer.
+ *   Native markdown tints list markers and the quote rail with `accent`; the
+ *   web's markers are the text colour, so accent is the foreground.
  * - `thought`: the reasoning body (`.thought-markdown`), 12px muted.
- * - `code`: a fenced block body, `text-sm` at line-height 1.55.
+ * - `code`: a fenced block body. Shiki's `<pre>` paints 13px mono at 20px
+ *   rows (measured in Chromium; the 1.55 line-height applies to the body div).
  */
 export function transcriptThemes(themeId: string) {
   const hit = cache.get(themeId)
@@ -71,7 +75,7 @@ export function transcriptThemes(themeId: string) {
     textMuted: tokenColor('muted-foreground'),
     textFaint: tokenColor('muted-foreground'),
     textDim: tokenColor('muted-foreground'),
-    accent: tokenColor('primary'),
+    accent: tokenColor('foreground'),
     border: tokenColor('border/45'),
     bg: tokenColor('sidebar'),
     codeText: tokenColor('foreground'),
@@ -86,9 +90,9 @@ export function transcriptThemes(themeId: string) {
         mdTextSize: PROSE_TEXT,
         mdLineHeight: PROSE_LINE,
         mdBlockGap: 4,
-        mdHeadingSizes: [15.12, 14, 14, 14],
-        mdHeadingLineHeights: [18.9, 17.5, 17.5, 17.5],
-        mdTableCellPadding: 8,
+        mdHeadingSizes: [30, 24, 20, 18],
+        mdHeadingLineHeights: [36, 32, 28, 28],
+        mdTableCellPadding: 5,
         mdInlineCodeRadius: 4,
         mdCodePaddingX: 16,
         mdCodePaddingY: 16,
@@ -110,7 +114,7 @@ export function transcriptThemes(themeId: string) {
     },
     code: {
       ...base,
-      metrics: { codeTextSize: PROSE_TEXT, codeLineHeight: 21.7 }
+      metrics: { codeTextSize: 13, codeLineHeight: 20 }
     }
   }
   cache.set(themeId, themes)

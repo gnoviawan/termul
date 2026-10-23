@@ -23,12 +23,14 @@ import { commandId, connectWs, type WsClient } from './ws.ts'
 export const CHAT_TOKEN = 'gpuix-chat-token'
 export const CHAT_DEVICE_ID = 'gpuix-chat'
 export const CHAT_AGENT_CONFIG_ID = 'custom-chat-scenario'
-const CHAT_PROJECT_ID = 'chat-project'
+export const CHAT_PROJECT_ID = 'chat-project'
 const STATE_ROOT = '/tmp/gpuix-o2'
 const PORT_RANGE = [8190, 8199] as const
 const TURN_TIMEOUT_MS = 120_000
 
 export interface SeededChat {
+  /** The project's folder: the agent's cwd. */
+  root: string
   baseUrl: string
   token: string
   /** The web client must run as this device to see the seeded agent config. */
@@ -43,6 +45,8 @@ export interface SeededChat {
 export interface ChatServer {
   chat: SeededChat
   stateDir: string
+  /** The seeding socket, kept open with `keepSocket` so the agent session stays live. */
+  ws: WsClient | null
   /** Stops the server (and the agent it spawned) and deletes the state dir. */
   stop(): Promise<void>
 }
@@ -118,18 +122,19 @@ function note(message: string): void {
 }
 
 export async function seedChat(
-  opts: { port?: number; root?: string; prompts?: number } = {}
+  opts: { port?: number; root?: string; prompts?: number; keepSocket?: boolean } = {}
 ): Promise<ChatServer> {
   const root = opts.root ?? REPO_DIR
   const port = await pickPort(opts.port)
   const stateDir = path.join(STATE_ROOT, `chat-${port}`)
   const server = await startTestServer({ port, token: CHAT_TOKEN, stateDir })
+  let ws: WsClient | null = null
   const stop = async () => {
+    ws?.close()
     await server.stop()
     await rm(stateDir, { recursive: true, force: true })
   }
   note(`server ${server.baseUrl} state ${stateDir}`)
-  let ws: WsClient | null = null
   try {
     await addProject(server, {
       id: CHAT_PROJECT_ID,
@@ -161,6 +166,7 @@ export async function seedChat(
       note(`turn "${prompt.slice(0, 40)}" -> ${stopReason}`)
     }
     const chat: SeededChat = {
+      root,
       baseUrl: server.baseUrl,
       token: CHAT_TOKEN,
       deviceId: CHAT_DEVICE_ID,
@@ -169,12 +175,14 @@ export async function seedChat(
       agentId,
       webUrl: `${server.baseUrl}/#/c/${encodeURIComponent(sessionId)}`
     }
-    return { chat, stateDir, stop }
+    if (!opts.keepSocket) {
+      ws.close()
+      ws = null
+    }
+    return { chat, stateDir, ws, stop }
   } catch (error) {
     await stop()
     throw error
-  } finally {
-    ws?.close()
   }
 }
 
@@ -191,7 +199,8 @@ if (import.meta.main) {
   const seeded = await seedChat({
     port: values.port ? Number(values.port) : undefined,
     root: values.root ? path.resolve(values.root) : undefined,
-    prompts: values.prompts ? Number(values.prompts) : undefined
+    prompts: values.prompts ? Number(values.prompts) : undefined,
+    keepSocket: values.hold
   })
   const json = JSON.stringify(seeded.chat, null, 2)
   console.log(json)

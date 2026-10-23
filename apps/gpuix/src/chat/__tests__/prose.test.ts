@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { proseChunks, proseParts } from '../prose-parts'
-import { flowGap } from '../prose-flow'
+import { flowGap, leadingMargin, trailingMargin } from '../prose-flow'
 import { fileLinkPath, proseBlocks } from '../prose-source'
 
 describe('proseParts', () => {
@@ -118,7 +118,22 @@ describe('flowGap', () => {
     expect(flowGap({ kind: 'paragraph' }, { kind: 'list' })).toBe(22.75)
     expect(flowGap({ kind: 'list' }, { kind: 'paragraph' })).toBeCloseTo(7.7)
     expect(flowGap({ kind: 'list' }, { kind: 'fence' })).toBe(16)
-    expect(flowGap({ kind: 'heading', depth: 2 }, { kind: 'paragraph' })).toBeCloseTo(4.2)
-    expect(flowGap({ kind: 'paragraph' }, { kind: 'heading', depth: 2 })).toBe(22.75)
+    expect(flowGap({ kind: 'heading', depth: 2 }, { kind: 'paragraph' })).toBe(8)
+    expect(flowGap({ kind: 'paragraph' }, { kind: 'heading', depth: 2 })).toBe(24)
+  })
+
+  test('only utility-classed blocks keep their margin at the edges of a reply', () => {
+    expect(leadingMargin({ kind: 'paragraph' })).toBe(0)
+    expect(leadingMargin({ kind: 'heading', depth: 3 })).toBe(24)
+    expect(trailingMargin({ kind: 'list' })).toBe(0)
+    expect(trailingMargin({ kind: 'fence' })).toBe(16)
+  })
+})
+
+describe('task lists', () => {
+  test('checked and open task markers become ballot boxes', () => {
+    expect(proseBlocks('- [x] done\n- [ ] todo', false)).toEqual([
+      { kind: 'markdown', block: 'list', depth: 0, source: '- ☑ done\n- ☐ todo' }
+    ])
   })
 })
