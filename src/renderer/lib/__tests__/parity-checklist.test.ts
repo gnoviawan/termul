@@ -2019,20 +2019,29 @@ describe('Claude Accounts parity (ADR-0004)', () => {
     }
   })
 
-  it('add, sign-in, rename and remove are desktop-only and gated in the facade', () => {
+  it('add, sign-in, rename and remove reach the same service on both paths, host-local on web', () => {
+    // Desktop: the Tauri commands. Web: the /ws requests, admitted only for a
+    // `host_local` connection. Both call the same ClaudeAgentService method.
     const dispatch = read('web', 'ws', 'dispatch.rs')
-    for (const command of [
-      'claude_accounts_add',
-      'claude_accounts_login',
-      'claude_accounts_login_cancel',
-      'claude_accounts_rename',
-      'claude_accounts_remove'
+    const ws = read('web', 'ws', 'claude_accounts.rs')
+    const tauri = read('acp', 'commands', 'claude_accounts.rs')
+    const capabilities = read('web', 'capabilities.rs')
+    for (const [command, request, method] of [
+      ['claude_accounts_add', 'add_claude_account', 'add_account'],
+      ['claude_accounts_login', 'login_claude_account', 'login_account'],
+      ['claude_accounts_login_cancel', 'cancel_claude_account_login', 'cancel_login'],
+      ['claude_accounts_rename', 'rename_claude_account', 'rename_account'],
+      ['claude_accounts_remove', 'remove_claude_account', 'remove_account']
     ]) {
       expect(facade).toContain(`'${command}'`)
       expect(read('lib.rs')).toContain(`acp::commands::${command}`)
+      expect(wsTransport).toContain(`'${request}'`)
+      expect(dispatch).toContain(`"${request}" => handle_${request}`)
+      expect(capabilities).toMatch(new RegExp(`HOST_LOCAL_WS_REQUESTS[^;]*"${request}"`, 's'))
+      expect(tauri).toContain(`service.${method}(`)
+      expect(ws).toContain(`claude_agent().${method}(`)
     }
-    expect(dispatch).not.toMatch(/"(add|login|rename|remove)_claude_account"/)
-    expect(facade).toMatch(/if \(!isTauriContext\(\)\) return Promise\.reject/)
+    expect(facade).toMatch(/connectionCapabilities\?\.\(\)\?\.hostLocal === true/)
   })
 
   it('the spawn sends the projectId that selects the account on every carrier', () => {

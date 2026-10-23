@@ -239,7 +239,7 @@ impl ClaudeAgentService {
     pub fn run_account_cli_login(&self, id: &str) -> Result<(), String> {
         let store = self.account_store()?;
         if !store.snapshot()?.profiles.iter().any(|row| row.id == id) {
-            return Err("That Claude account does not exist".to_string());
+            return Err(crate::acp::claude_accounts::UNKNOWN_ACCOUNT.to_string());
         }
         let dir = store.config_dir(id);
         log::info!("[claude-accounts] terminal login started");
@@ -256,7 +256,7 @@ impl ClaudeAgentService {
         } else {
             let known = store.snapshot()?.profiles.iter().any(|row| row.id == id);
             if !known {
-                return Err("That Claude account does not exist".to_string());
+                return Err(crate::acp::claude_accounts::UNKNOWN_ACCOUNT.to_string());
             }
             store.config_dir(id)
         };

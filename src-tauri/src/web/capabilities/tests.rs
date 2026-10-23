@@ -23,6 +23,12 @@ const VIEW_ONLY: Capabilities = Capabilities::none(Carrier::Ws);
 const WRITER: Capabilities = Capabilities {
     carrier: Carrier::Ws,
     write: true,
+    host_local: false,
+};
+const HOST_LOCAL: Capabilities = Capabilities {
+    carrier: Carrier::Ws,
+    write: true,
+    host_local: true,
 };
 
 #[test]
@@ -57,10 +63,10 @@ fn write_decision_matrix() {
 #[test]
 fn capabilities_follow_the_write_decision() {
     let lan = peer([10, 0, 0, 9]);
-    assert!(Capabilities::resolve(Carrier::Ws, peer([127, 0, 0, 1]), flags(false, false)).write);
-    assert!(!Capabilities::resolve(Carrier::Ws, lan, flags(false, false)).write);
-    assert!(Capabilities::resolve(Carrier::TerminalWs, lan, flags(true, false)).write);
-    let shared_live = Capabilities::resolve(Carrier::TerminalWs, peer([127, 0, 0, 1]), flags(true, true));
+    assert!(Capabilities::resolve(Carrier::Ws, peer([127, 0, 0, 1]), flags(false, false), false).write);
+    assert!(!Capabilities::resolve(Carrier::Ws, lan, flags(false, false), false).write);
+    assert!(Capabilities::resolve(Carrier::TerminalWs, lan, flags(true, false), false).write);
+    let shared_live = Capabilities::resolve(Carrier::TerminalWs, peer([127, 0, 0, 1]), flags(true, true), false);
     assert!(!shared_live.write);
     assert_eq!(shared_live.carrier, Carrier::TerminalWs);
 }
@@ -213,4 +219,36 @@ fn terminal_view_allow_list_excludes_every_mutation() {
     ] {
         assert!(!terminal_request_is_view(mutation), "{mutation}");
     }
+}
+
+#[test]
+fn host_local_needs_a_loopback_peer_on_a_token_gated_host_that_allows_writes() {
+    let local = peer([127, 0, 0, 1]);
+    let lan = peer([192, 168, 1, 50]);
+    let host_local = |peer, flags, gated| Capabilities::resolve(Carrier::Ws, peer, flags, gated).host_local;
+    assert!(host_local(local, flags(false, false), true));
+    assert!(
+        !host_local(local, flags(false, false), false),
+        "an ungated host cannot tell who connected"
+    );
+    assert!(
+        !host_local(lan, flags(true, false), true),
+        "--allow-remote-writes admits writes, never the host's credentials"
+    );
+    assert!(
+        !host_local(local, flags(false, true), true),
+        "shared-live forwards tunnel traffic from loopback"
+    );
+}
+
+#[test]
+fn account_management_needs_host_local_and_every_other_request_is_unchanged() {
+    for kind in HOST_LOCAL_WS_REQUESTS {
+        assert_eq!(ws_requirement(kind), Requirement::HostLocal, "{kind}");
+        assert!(!ws_request_permitted(kind, &json!({}), VIEW_ONLY, None), "{kind}");
+        assert!(!ws_request_permitted(kind, &json!({}), WRITER, None), "{kind}");
+        assert!(ws_request_permitted(kind, &json!({}), HOST_LOCAL, None), "{kind}");
+    }
+    assert_eq!(ws_requirement("set_default_claude_account"), Requirement::Write);
+    assert_eq!(ws_requirement("list_claude_accounts"), Requirement::View);
 }

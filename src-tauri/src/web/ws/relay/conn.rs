@@ -336,12 +336,17 @@ fn pre_auth_reply(request: &WsRequest, conn: &mut ConnState, env: &HandlerEnv) -
     // First authenticate wins; the connection is authed from here on.
     let _ = conn.identity.set(validated);
     conn.authed = true;
+    let capabilities = conn.access.capabilities();
     WsReply::ok(
         id,
         Some(json!({
             "historyMode": env.history_mode,
             "runtimePolicy": RuntimePolicy::resolved(),
             "protocolVersion": WS_PROTOCOL_VERSION,
+            "capabilities": {
+                "write": capabilities.write,
+                "hostLocal": capabilities.host_local,
+            },
         })),
     )
 }

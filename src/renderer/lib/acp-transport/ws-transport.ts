@@ -10,6 +10,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
@@ -19,6 +20,7 @@ import {
   type AcpRuntimePolicy,
   type AddProjectPayload,
   type ChatReadMark,
+  type ConnectionCapabilities,
   type DeleteSessionPayload,
   type HistoryMode,
   type PersistedSessionSummary,
@@ -219,6 +221,7 @@ export class WsAcpTransport implements AcpTransport {
   private authed = false
   private negotiatedHistoryMode: HistoryMode = 'live_only'
   private runtimePolicy: AcpRuntimePolicy | null = null
+  private grantedCapabilities: ConnectionCapabilities | null = null
   private connecting: Promise<void> | null = null
   private disposed = false
   private reconnectAttempt = 0
@@ -956,6 +959,40 @@ export class WsAcpTransport implements AcpTransport {
 
   async setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void> {
     await this.request('set_project_claude_account', { projectId, accountId })
+  }
+
+  connectionCapabilities(): ConnectionCapabilities | null {
+    return this.grantedCapabilities
+  }
+
+  addClaudeAccount(name: string): Promise<ClaudeAccount> {
+    return this.request<ClaudeAccount>('add_claude_account', { name }, undefined, {
+      commandId: randomUUID()
+    })
+  }
+
+  async loginClaudeAccount(accountId: string): Promise<void> {
+    await this.request('login_claude_account', { accountId }, undefined, {
+      commandId: randomUUID()
+    })
+  }
+
+  async cancelClaudeAccountLogin(accountId: string): Promise<boolean> {
+    const reply = await this.request<{ cancelled: boolean }>('cancel_claude_account_login', {
+      accountId
+    })
+    return reply?.cancelled === true
+  }
+
+  async renameClaudeAccount(accountId: string, name: string): Promise<void> {
+    await this.request('rename_claude_account', { accountId, name })
+  }
+
+  async removeClaudeAccount(accountId: string): Promise<string[]> {
+    const reply = await this.request<{ movedProjectIds: string[] }>('remove_claude_account', {
+      accountId
+    })
+    return reply?.movedProjectIds ?? []
   }
 
   async spawnAgent(
@@ -2169,6 +2206,10 @@ export class WsAcpTransport implements AcpTransport {
         )
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
+        this.grantedCapabilities = {
+          write: auth?.capabilities?.write === true,
+          hostLocal: auth?.capabilities?.hostLocal === true
+        }
         this.authed = true
         // Issue #907 (F3): the handshake succeeded — any prior token-class
         // halt is over; normal reconnect semantics resume from here.

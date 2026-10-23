@@ -458,9 +458,12 @@ fn validate_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+/// The error text for an Account id the store does not know.
+pub const UNKNOWN_ACCOUNT: &str = "That Claude account does not exist";
+
 fn unknown_account(_id: &str) -> String {
     log::warn!("[claude-accounts] unknown profile");
-    "That Claude account does not exist".to_string()
+    UNKNOWN_ACCOUNT.to_string()
 }
 
 fn remove_account_dir(dir: &Path) {

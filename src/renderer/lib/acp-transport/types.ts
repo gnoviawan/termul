@@ -7,6 +7,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
@@ -14,6 +15,7 @@ import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
   type ChatReadMark,
+  type ConnectionCapabilities,
   type HistoryMode,
   type PersistedSessionSummary,
   type ProjectBusyDetails,
@@ -231,6 +233,24 @@ export interface AcpTransport {
   setDefaultClaudeAccount(accountId: string): Promise<void>
   /** `null` returns the Project to the Default Account. */
   setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void>
+  /**
+   * What the host granted this connection at `authenticate`; `null` before
+   * the first handshake. Web carriers only.
+   */
+  connectionCapabilities?(): ConnectionCapabilities | null
+  /**
+   * Claude Account management over `/ws`, admitted only for a `hostLocal`
+   * connection. Web carriers only: the desktop manages Accounts through its
+   * Tauri commands.
+   */
+  addClaudeAccount?(name: string): Promise<ClaudeAccount>
+  /** Resolves when the host's browser login finishes. */
+  loginClaudeAccount?(accountId: string): Promise<void>
+  /** `false` when no sign-in of that Account was running. */
+  cancelClaudeAccountLogin?(accountId: string): Promise<boolean>
+  renameClaudeAccount?(accountId: string, name: string): Promise<void>
+  /** Resolves to the ids of the Projects that moved to the Default Account. */
+  removeClaudeAccount?(accountId: string): Promise<string[]>
   /** `projectId` selects the Claude Account of a managed Claude agent. */
   spawnAgent(
     config: AgentConfig,

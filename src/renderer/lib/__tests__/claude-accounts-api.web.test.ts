@@ -1,7 +1,9 @@
 /**
  * Claude Accounts facade on both surfaces: list/default/project go through the
- * ACP transport everywhere; add/login/rename/remove invoke Tauri on desktop
- * and reject with `ClaudeAccountsUnsupportedError` on web without a request.
+ * ACP transport everywhere; add/login/rename/remove invoke Tauri on desktop,
+ * run over `/ws` on a web connection the host reports `hostLocal`, and reject
+ * with `ClaudeAccountsUnsupportedError` on any other web connection without a
+ * request.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -12,7 +14,13 @@ const { mockIsTauriContext, mockInvoke, transport } = vi.hoisted(() => ({
     listClaudeAccounts: vi.fn(),
     listClaudeUsage: vi.fn(),
     setDefaultClaudeAccount: vi.fn(),
-    setProjectClaudeAccount: vi.fn()
+    setProjectClaudeAccount: vi.fn(),
+    connectionCapabilities: vi.fn(),
+    addClaudeAccount: vi.fn(),
+    loginClaudeAccount: vi.fn(),
+    cancelClaudeAccountLogin: vi.fn(),
+    renameClaudeAccount: vi.fn(),
+    removeClaudeAccount: vi.fn()
   }
 }))
 
@@ -35,6 +43,7 @@ beforeEach(() => {
   transport.listClaudeUsage.mockResolvedValue([])
   transport.setDefaultClaudeAccount.mockResolvedValue(undefined)
   transport.setProjectClaudeAccount.mockResolvedValue(undefined)
+  transport.connectionCapabilities.mockReturnValue(null)
 })
 
 describe.each([
@@ -94,20 +103,67 @@ describe('claudeAccountsApi management on desktop', () => {
   })
 })
 
-describe('claudeAccountsApi management on web', () => {
-  beforeEach(() => mockIsTauriContext.mockReturnValue(false))
+const MANAGEMENT_CALLS = [
+  () => claudeAccountsApi.add('Work'),
+  () => claudeAccountsApi.login('abc'),
+  () => claudeAccountsApi.cancelLogin('abc'),
+  () => claudeAccountsApi.rename('abc', 'Office'),
+  () => claudeAccountsApi.remove('abc')
+]
+
+describe.each([
+  ['before the handshake', null],
+  ['for a view-only connection', { write: false, hostLocal: false }],
+  ['for a remote writer', { write: true, hostLocal: false }]
+])('claudeAccountsApi management on web %s', (_case, capabilities) => {
+  beforeEach(() => {
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connectionCapabilities.mockReturnValue(capabilities)
+  })
 
   it('rejects add, login, rename and remove without a request', async () => {
-    for (const call of [
-      () => claudeAccountsApi.add('Work'),
-      () => claudeAccountsApi.login('abc'),
-      () => claudeAccountsApi.cancelLogin('abc'),
-      () => claudeAccountsApi.rename('abc', 'Office'),
-      () => claudeAccountsApi.remove('abc')
-    ]) {
+    for (const call of MANAGEMENT_CALLS) {
       await expect(call()).rejects.toBeInstanceOf(ClaudeAccountsUnsupportedError)
     }
     expect(mockInvoke).not.toHaveBeenCalled()
+    expect(transport.addClaudeAccount).not.toHaveBeenCalled()
+    expect(transport.removeClaudeAccount).not.toHaveBeenCalled()
     expect(claudeAccountsApi.canManageAccounts()).toBe(false)
+  })
+})
+
+describe('claudeAccountsApi management on a host-local web connection', () => {
+  beforeEach(() => {
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
+  })
+
+  it('sends every management request over the transport', async () => {
+    transport.addClaudeAccount.mockResolvedValue({ id: 'abc', name: 'Work', createdAt: 1 })
+    transport.loginClaudeAccount.mockResolvedValue(undefined)
+    transport.cancelClaudeAccountLogin.mockResolvedValue(true)
+    transport.renameClaudeAccount.mockResolvedValue(undefined)
+    transport.removeClaudeAccount.mockResolvedValue(['p1'])
+    expect(claudeAccountsApi.canManageAccounts()).toBe(true)
+    await expect(claudeAccountsApi.add('Work')).resolves.toEqual({
+      id: 'abc',
+      name: 'Work',
+      createdAt: 1
+    })
+    await expect(claudeAccountsApi.login('abc')).resolves.toBeUndefined()
+    await expect(claudeAccountsApi.cancelLogin('abc')).resolves.toBe(true)
+    await expect(claudeAccountsApi.rename('abc', 'Office')).resolves.toBeUndefined()
+    await expect(claudeAccountsApi.remove('abc')).resolves.toEqual(['p1'])
+    expect(transport.addClaudeAccount).toHaveBeenCalledWith('Work')
+    expect(transport.loginClaudeAccount).toHaveBeenCalledWith('abc')
+    expect(transport.cancelClaudeAccountLogin).toHaveBeenCalledWith('abc')
+    expect(transport.renameClaudeAccount).toHaveBeenCalledWith('abc', 'Office')
+    expect(transport.removeClaudeAccount).toHaveBeenCalledWith('abc')
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('passes the host refusal through', async () => {
+    transport.loginClaudeAccount.mockRejectedValue(new Error('Sign-in was cancelled'))
+    await expect(claudeAccountsApi.login('abc')).rejects.toThrow('Sign-in was cancelled')
   })
 })

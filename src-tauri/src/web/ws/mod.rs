@@ -800,6 +800,8 @@ mod canvas_tests;
 #[cfg(test)]
 mod capability_tests;
 #[cfg(test)]
+mod host_local_tests;
+#[cfg(test)]
 mod project_binding_tests;
 #[cfg(test)]
 mod project_command_tests;

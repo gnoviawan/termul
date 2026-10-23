@@ -9,6 +9,11 @@
 //! A connection without [`Capabilities::write`] is *view-only*: it may read,
 //! ping, subscribe and write `device/<its deviceId>/…` store keys, and every
 //! other mutation is refused with the stable `forbidden` code.
+//!
+//! [`Capabilities::host_local`] is the narrower grant for requests that act
+//! with the host's own credentials (Claude account management, SSH keys and
+//! sessions): a loopback peer on a token-gated deployment that does not deny
+//! writes. `--allow-remote-writes` never grants it.
 
 use std::net::SocketAddr;
 
@@ -119,6 +124,9 @@ pub struct Capabilities {
     pub carrier: Carrier,
     /// May mutate host state (otherwise view-only).
     pub write: bool,
+    /// A same-host peer that presented the bearer token: may act with the
+    /// host's own credentials. Implies `write`.
+    pub host_local: bool,
 }
 
 impl Capabilities {
@@ -128,14 +136,16 @@ impl Capabilities {
         Self {
             carrier,
             write: false,
+            host_local: false,
         }
     }
 
-    /// Resolve a connection's capabilities from its carrier, deployment flags
-    /// and peer address. Logs the decision at the connection boundary (peer +
-    /// carrier only — never a token).
+    /// Resolve a connection's capabilities from its carrier, deployment flags,
+    /// peer address and whether the host gates connections on a bearer token.
+    /// Logs the decision at the connection boundary (peer + carrier only —
+    /// never a token).
     #[must_use]
-    pub fn resolve(carrier: Carrier, peer: SocketAddr, flags: WriteFlags) -> Self {
+    pub fn resolve(carrier: Carrier, peer: SocketAddr, flags: WriteFlags, token_gated: bool) -> Self {
         let decision = write_decision(peer, flags);
         match decision {
             WriteDecision::Allowed => {}
@@ -156,6 +166,7 @@ impl Capabilities {
         Self {
             carrier,
             write: decision.is_allowed(),
+            host_local: decision == WriteDecision::Allowed && token_gated,
         }
     }
 }
@@ -167,6 +178,8 @@ pub struct CapabilityPolicy {
     pub carrier: Carrier,
     pub peer: SocketAddr,
     pub flags: WriteFlags,
+    /// The host requires the bearer token on `authenticate`.
+    pub token_gated: bool,
 }
 
 impl CapabilityPolicy {
@@ -177,13 +190,14 @@ impl CapabilityPolicy {
             carrier,
             peer,
             flags: WriteFlags::from_state(state),
+            token_gated: state.web_auth.is_some(),
         }
     }
 
     /// Resolve the connection's capabilities (called once, at authenticate).
     #[must_use]
     pub fn resolve(&self) -> Capabilities {
-        Capabilities::resolve(self.carrier, self.peer, self.flags)
+        Capabilities::resolve(self.carrier, self.peer, self.flags, self.token_gated)
     }
 }
 
@@ -211,6 +225,8 @@ pub enum Requirement {
     DeviceStore,
     /// Every other mutation: needs [`Capabilities::write`].
     Write,
+    /// Acts with the host's own credentials: needs [`Capabilities::host_local`].
+    HostLocal,
 }
 
 /// Classify a `/ws` request type. Allow-list of the view-level types; every
@@ -242,8 +258,22 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "store_read"
         | "mark_chat_read" => Requirement::View,
         "store_write" | "store_delete" => Requirement::DeviceStore,
+        t if is_host_local_request(t) => Requirement::HostLocal,
         _ => Requirement::Write,
     }
+}
+
+/// `/ws` request types that act with the host's own credentials.
+pub const HOST_LOCAL_WS_REQUESTS: &[&str] = &[
+    "add_claude_account",
+    "login_claude_account",
+    "cancel_claude_account_login",
+    "rename_claude_account",
+    "remove_claude_account",
+];
+
+fn is_host_local_request(request_type: &str) -> bool {
+    HOST_LOCAL_WS_REQUESTS.contains(&request_type)
 }
 
 /// Whether `caps` may run a `/ws` request of `request_type` whose payload is
@@ -258,6 +288,7 @@ pub fn ws_request_permitted(
     match ws_requirement(request_type) {
         Requirement::View => true,
         Requirement::Write => caps.write,
+        Requirement::HostLocal => caps.host_local,
         Requirement::DeviceStore => {
             caps.write
                 || payload["key"]

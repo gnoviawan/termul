@@ -121,3 +121,69 @@ async fn usage_in_api_key_mode_lists_every_account_without_a_probe() {
     assert_eq!(ids, vec!["default", "ab12"]);
     assert_eq!(usage[0]["status"], "unavailable");
 }
+
+#[tokio::test]
+async fn add_rename_and_remove_change_the_host_account_list() {
+    let (root, acp) = manager_with_account(&[]);
+    let reply = handle_add_claude_account("1".into(), &json!({ "name": "Side" }), &acp);
+    assert!(reply.ok, "{:?}", reply.err);
+    let added = reply.payload.unwrap();
+    assert_eq!(added["name"], "Side");
+    let new_id = added["id"].as_str().unwrap().to_string();
+
+    let reply = handle_rename_claude_account(
+        "2".into(),
+        &json!({ "accountId": new_id, "name": "Personal" }),
+        &acp,
+    );
+    assert!(reply.ok, "{:?}", reply.err);
+    let names: Vec<String> = stored(&root)["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, vec!["Default", "Work", "Personal"]);
+
+    let reply = handle_set_project_claude_account(
+        "3".into(),
+        &json!({ "projectId": "office", "accountId": new_id }),
+        &acp,
+    )
+    .await;
+    assert!(reply.ok);
+    let reply = handle_remove_claude_account("4".into(), &json!({ "accountId": new_id }), &acp).await;
+    assert!(reply.ok, "{:?}", reply.err);
+    assert_eq!(reply.payload.unwrap(), json!({ "movedProjectIds": ["office"] }));
+    assert_eq!(stored(&root)["accounts"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn management_refusals_carry_the_host_text() {
+    let (_root, acp) = manager_with_account(&[]);
+    let reply = handle_add_claude_account("1".into(), &json!({ "name": "Work" }), &acp);
+    let err = reply.err.unwrap();
+    assert_eq!(err.code, "unsupported");
+    assert_eq!(err.message, "An account named \"Work\" already exists");
+
+    let reply = handle_rename_claude_account(
+        "2".into(),
+        &json!({ "accountId": "ffff", "name": "X" }),
+        &acp,
+    );
+    assert_eq!(reply.err.unwrap().code, "not_found");
+    let reply = handle_login_claude_account("3".into(), &json!({ "accountId": "ffff" }), &acp).await;
+    let err = reply.err.unwrap();
+    assert_eq!((err.code.as_str(), err.message.as_str()), ("not_found", "That Claude account does not exist"));
+    let reply = handle_remove_claude_account("4".into(), &json!({ "accountId": "default" }), &acp).await;
+    assert_eq!(reply.err.unwrap().message, "The built-in account cannot be removed");
+    let reply = handle_add_claude_account("5".into(), &json!({}), &acp);
+    assert!(reply.err.unwrap().message.starts_with("malformed add_claude_account payload (want name)"));
+}
+
+#[test]
+fn cancelling_without_a_running_sign_in_reports_false() {
+    let (_root, acp) = manager_with_account(&[]);
+    let reply = handle_cancel_claude_account_login("1".into(), &json!({ "accountId": "ab12" }), &acp);
+    assert_eq!(reply.payload.unwrap(), json!({ "cancelled": false }));
+}

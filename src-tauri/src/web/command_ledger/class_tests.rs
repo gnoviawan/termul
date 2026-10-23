@@ -138,6 +138,8 @@ fn only_creates_and_non_prompt_commands_enter_the_ledger() {
             "install_acp_agent",
             "acp_deliver_auth_redirect",
             "record_agent_switch",
+            "add_claude_account",
+            "login_claude_account",
         ])
     );
     assert!(!class_of("send_prompt").unwrap().1.ledgered(), "TurnWatermark owns prompts");

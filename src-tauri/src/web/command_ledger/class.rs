@@ -127,6 +127,15 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("list_claude_usage", CommandClass::read()),
     ("set_default_claude_account", CommandClass::idempotent()),
     ("set_project_claude_account", CommandClass::idempotent()),
+    // A resend of an add must not mint a second Account.
+    ("add_claude_account", CommandClass::command(Replay::Payload)),
+    (
+        "login_claude_account",
+        CommandClass::command(Replay::ReceiptOnly),
+    ),
+    ("cancel_claude_account_login", CommandClass::idempotent()),
+    ("rename_claude_account", CommandClass::idempotent()),
+    ("remove_claude_account", CommandClass::idempotent()),
     ("kill_agent", CommandClass::idempotent()),
     ("list_agents", CommandClass::read()),
     ("authenticate", CommandClass::read()),

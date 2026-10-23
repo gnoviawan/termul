@@ -249,13 +249,25 @@ export const WS_REQUEST_TYPES = [
   'set_default_project',
   // Claude Accounts (ADR-0004): list `{}` → `ClaudeAccountsSnapshot`; choose
   // the Default `{ accountId }` or a Project Account `{ projectId, accountId |
-  // null }` → `{}`. Add, sign-in, rename and remove stay host-local.
+  // null }` → `{}`.
   'list_claude_accounts',
   // `{ force? }` → `{ usage: ClaudeAccountUsage[] }`; reads are cached 5 min
   // on the host (a forced read still reuses one younger than 60 s).
   'list_claude_usage',
   'set_default_claude_account',
   'set_project_claude_account',
+  // Account management, admitted only for a `hostLocal` connection (a client
+  // on the host itself that presented the server token; anything else is
+  // `forbidden`). `add_claude_account { name }` → `ClaudeAccount`;
+  // `login_claude_account { accountId }` → `{}` when the host's browser login
+  // finishes; `cancel_claude_account_login { accountId }` → `{ cancelled }`;
+  // `rename_claude_account { accountId, name }` → `{}`;
+  // `remove_claude_account { accountId }` → `{ movedProjectIds }`.
+  'add_claude_account',
+  'login_claude_account',
+  'cancel_claude_account_login',
+  'rename_claude_account',
+  'remove_claude_account',
   // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
   // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
   // holds (or no longer holds) a project's canvas; the host then forwards
@@ -313,6 +325,11 @@ export const WS_COMMAND_CLASSES: Readonly<
   list_claude_usage: ['read', null],
   set_default_claude_account: ['idempotent', null],
   set_project_claude_account: ['idempotent', null],
+  add_claude_account: ['command', 'payload'],
+  login_claude_account: ['command', 'receipt-only'],
+  cancel_claude_account_login: ['idempotent', null],
+  rename_claude_account: ['idempotent', null],
+  remove_claude_account: ['idempotent', null],
   kill_agent: ['idempotent', null],
   list_agents: ['read', null],
   authenticate: ['read', null],
@@ -744,11 +761,24 @@ export interface AcpAuthenticatePayload {
   clientInstanceId: string
 }
 
+/**
+ * What the host granted this connection at `authenticate`. `write`: may
+ * mutate host state (else view-only). `hostLocal`: a client on the host
+ * itself that presented the server token; may manage Claude accounts and use
+ * the host's SSH keys and sessions.
+ */
+export interface ConnectionCapabilities {
+  write: boolean
+  hostLocal: boolean
+}
+
 export interface AcpAuthenticateReply {
   historyMode?: HistoryMode
   runtimePolicy?: AcpRuntimePolicy
   /** The protocol version the host speaks. */
   protocolVersion?: number
+  /** Absent on hosts that predate the field: treat as nothing granted. */
+  capabilities?: ConnectionCapabilities
 }
 
 /**
