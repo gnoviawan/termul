@@ -1,0 +1,2763 @@
+{
+  "machine": {
+    "cpu": "AMD EPYC Processor (with IBPB)",
+    "cores": 8,
+    "memGB": 23,
+    "kernel": "6.8.0-147-generic",
+    "bun": "1.4.0"
+  },
+  "meta": {
+    "scenario": "idle",
+    "run": 2,
+    "client": "chromium",
+    "clientVersion": "Chromium 153.0.8010.12",
+    "backend": "ANGLE (Mesa, Vulkan 1.4.318 (llvmpipe (LLVM 20.1.2 256 bits) (0x00000000)), llvmpipe)",
+    "gl": "lavapipe",
+    "seed": 42,
+    "flags": {
+      "settle": 20,
+      "measure": 20
+    },
+    "viewport": "1440x900",
+    "startedAt": "2026-10-23T06:23:26.144Z",
+    "gitCommit": "e93d49b016c7972a5264db6b916378b1781e47b3",
+    "quietWaitS": 35,
+    "preRunBusyPct": 115,
+    "load1Before": 4.46,
+    "load1After": 4.23,
+    "status": "ok"
+  },
+  "metrics": {
+    "startup.processUpMs": 1076,
+    "startup.projectListMs": 2940,
+    "startup.launcherReadyMs": 3492,
+    "startup.proc.total.rssMedianMB": 1219.8,
+    "startup.proc.total.rssMaxMB": 1219.8,
+    "startup.proc.total.pssMedianMB": 532.8,
+    "startup.proc.total.pssMaxMB": 532.8,
+    "startup.proc.total.cpuMeanPct": 228.4,
+    "startup.proc.browser.rssMedianMB": 259.9,
+    "startup.proc.browser.rssMaxMB": 259.9,
+    "startup.proc.browser.pssMedianMB": 123.7,
+    "startup.proc.browser.pssMaxMB": 123.7,
+    "startup.proc.browser.cpuMeanPct": 26.1,
+    "startup.proc.zygote.rssMedianMB": 138.1,
+    "startup.proc.zygote.rssMaxMB": 138.1,
+    "startup.proc.zygote.pssMedianMB": 31.5,
+    "startup.proc.zygote.pssMaxMB": 31.5,
+    "startup.proc.zygote.cpuMeanPct": 0,
+    "startup.proc.network.rssMedianMB": 121.5,
+    "startup.proc.network.rssMaxMB": 121.5,
+    "startup.proc.network.pssMedianMB": 43.4,
+    "startup.proc.network.pssMaxMB": 43.4,
+    "startup.proc.network.cpuMeanPct": 9.6,
+    "startup.proc.gpu-process.rssMedianMB": 245.7,
+    "startup.proc.gpu-process.rssMaxMB": 245.7,
+    "startup.proc.gpu-process.pssMedianMB": 141.5,
+    "startup.proc.gpu-process.pssMaxMB": 141.5,
+    "startup.proc.gpu-process.cpuMeanPct": 71.8,
+    "startup.proc.utility.rssMedianMB": 50.2,
+    "startup.proc.utility.rssMaxMB": 50.2,
+    "startup.proc.utility.pssMedianMB": 9.7,
+    "startup.proc.utility.pssMaxMB": 9.7,
+    "startup.proc.utility.cpuMeanPct": 0,
+    "startup.proc.chrome-ui.rssMedianMB": 140.1,
+    "startup.proc.chrome-ui.rssMaxMB": 140.1,
+    "startup.proc.chrome-ui.pssMedianMB": 59.1,
+    "startup.proc.chrome-ui.pssMaxMB": 59.1,
+    "startup.proc.chrome-ui.cpuMeanPct": 0,
+    "startup.proc.renderer.rssMedianMB": 264.3,
+    "startup.proc.renderer.rssMaxMB": 264.3,
+    "startup.proc.renderer.pssMedianMB": 123.9,
+    "startup.proc.renderer.pssMaxMB": 123.9,
+    "startup.proc.renderer.cpuMeanPct": 121,
+    "startup.proc.page-renderer.rssMedianMB": 193.3,
+    "startup.proc.page-renderer.rssMaxMB": 193.3,
+    "startup.proc.page-renderer.pssMedianMB": 106.3,
+    "startup.proc.page-renderer.pssMaxMB": 106.3,
+    "startup.proc.page-renderer.cpuMeanPct": 121,
+    "startup.page.frames": 28,
+    "startup.page.fps": 7.9,
+    "startup.page.frameP50Ms": 16.7,
+    "startup.page.frameP95Ms": 266.7,
+    "startup.page.frameP99Ms": 766.7,
+    "startup.page.framesOver25Ms": 12,
+    "startup.page.framesOver50Ms": 9,
+    "startup.page.longtasks": 7,
+    "startup.page.longtaskMs": 951,
+    "startup.page.longtaskMsPerSec": 269.6,
+    "startup.page.loafCount": 7,
+    "startup.page.loafBlockingMs": 445.4,
+    "startup.page.heapEndMB": 23.3,
+    "startup.page.domNodes": 567,
+    "startup.server.cpuMeanPct": 10.3,
+    "startup.machine.cpuBusyPct": 481,
+    "startup.machine.foreignCpuPct": 242,
+    "startup.durationS": 3.5,
+    "startup.bytesDownKBps": 13,
+    "startup.bytesUpKBps": 6,
+    "settle.proc.total.rssMedianMB": 1246.3,
+    "settle.proc.total.rssMaxMB": 1250.4,
+    "settle.proc.total.pssMedianMB": 560.2,
+    "settle.proc.total.pssMaxMB": 576.2,
+    "settle.proc.total.cpuMeanPct": 35.1,
+    "settle.proc.browser.rssMedianMB": 260,
+    "settle.proc.browser.rssMaxMB": 260.1,
+    "settle.proc.browser.pssMedianMB": 124.2,
+    "settle.proc.browser.pssMaxMB": 128.5,
+    "settle.proc.browser.cpuMeanPct": 1.8,
+    "settle.proc.zygote.rssMedianMB": 138.1,
+    "settle.proc.zygote.rssMaxMB": 138.1,
+    "settle.proc.zygote.pssMedianMB": 31.7,
+    "settle.proc.zygote.pssMaxMB": 31.8,
+    "settle.proc.zygote.cpuMeanPct": 0,
+    "settle.proc.network.rssMedianMB": 121.9,
+    "settle.proc.network.rssMaxMB": 121.9,
+    "settle.proc.network.pssMedianMB": 43.4,
+    "settle.proc.network.pssMaxMB": 43.5,
+    "settle.proc.network.cpuMeanPct": 0.4,
+    "settle.proc.gpu-process.rssMedianMB": 265.5,
+    "settle.proc.gpu-process.rssMaxMB": 270.7,
+    "settle.proc.gpu-process.pssMedianMB": 161.9,
+    "settle.proc.gpu-process.pssMaxMB": 176.1,
+    "settle.proc.gpu-process.cpuMeanPct": 16.7,
+    "settle.proc.utility.rssMedianMB": 51.3,
+    "settle.proc.utility.rssMaxMB": 51.3,
+    "settle.proc.utility.pssMedianMB": 10.2,
+    "settle.proc.utility.pssMaxMB": 10.2,
+    "settle.proc.utility.cpuMeanPct": 0.1,
+    "settle.proc.chrome-ui.rssMedianMB": 138.9,
+    "settle.proc.chrome-ui.rssMaxMB": 140.1,
+    "settle.proc.chrome-ui.pssMedianMB": 57.8,
+    "settle.proc.chrome-ui.pssMaxMB": 59,
+    "settle.proc.chrome-ui.cpuMeanPct": 0.1,
+    "settle.proc.renderer.rssMedianMB": 270.5,
+    "settle.proc.renderer.rssMaxMB": 270.7,
+    "settle.proc.renderer.pssMedianMB": 129.9,
+    "settle.proc.renderer.pssMaxMB": 130.1,
+    "settle.proc.renderer.cpuMeanPct": 16.1,
+    "settle.proc.page-renderer.rssMedianMB": 199.7,
+    "settle.proc.page-renderer.rssMaxMB": 199.9,
+    "settle.proc.page-renderer.pssMedianMB": 112.5,
+    "settle.proc.page-renderer.pssMaxMB": 112.7,
+    "settle.proc.page-renderer.cpuMeanPct": 16.1,
+    "settle.page.frames": 1010,
+    "settle.page.fps": 50.5,
+    "settle.page.frameP50Ms": 16.7,
+    "settle.page.frameP95Ms": 33.3,
+    "settle.page.frameP99Ms": 116.5,
+    "settle.page.framesOver25Ms": 64,
+    "settle.page.framesOver50Ms": 22,
+    "settle.page.longtasks": 3,
+    "settle.page.longtaskMs": 225,
+    "settle.page.longtaskMsPerSec": 11.3,
+    "settle.page.loafCount": 17,
+    "settle.page.loafBlockingMs": 274.4,
+    "settle.page.heapEndMB": 24.5,
+    "settle.page.domNodes": 627,
+    "settle.server.cpuMeanPct": 9.9,
+    "settle.machine.cpuBusyPct": 250,
+    "settle.machine.foreignCpuPct": 205,
+    "settle.durationS": 20,
+    "settle.bytesDownKBps": 0,
+    "settle.bytesUpKBps": 0,
+    "measure.proc.total.rssMedianMB": 1213.4,
+    "measure.proc.total.rssMaxMB": 1247.2,
+    "measure.proc.total.pssMedianMB": 537.5,
+    "measure.proc.total.pssMaxMB": 576.4,
+    "measure.proc.total.cpuMeanPct": 45.8,
+    "measure.proc.browser.rssMedianMB": 260.5,
+    "measure.proc.browser.rssMaxMB": 260.6,
+    "measure.proc.browser.pssMedianMB": 124.6,
+    "measure.proc.browser.pssMaxMB": 128.7,
+    "measure.proc.browser.cpuMeanPct": 3.1,
+    "measure.proc.zygote.rssMedianMB": 138.1,
+    "measure.proc.zygote.rssMaxMB": 138.1,
+    "measure.proc.zygote.pssMedianMB": 31.8,
+    "measure.proc.zygote.pssMaxMB": 31.8,
+    "measure.proc.zygote.cpuMeanPct": 0,
+    "measure.proc.network.rssMedianMB": 122.4,
+    "measure.proc.network.rssMaxMB": 122.4,
+    "measure.proc.network.pssMedianMB": 43.5,
+    "measure.proc.network.pssMaxMB": 43.6,
+    "measure.proc.network.cpuMeanPct": 0.8,
+    "measure.proc.gpu-process.rssMedianMB": 242.3,
+    "measure.proc.gpu-process.rssMaxMB": 265.5,
+    "measure.proc.gpu-process.pssMedianMB": 150.8,
+    "measure.proc.gpu-process.pssMaxMB": 174.3,
+    "measure.proc.gpu-process.cpuMeanPct": 8.5,
+    "measure.proc.utility.rssMedianMB": 51.3,
+    "measure.proc.utility.rssMaxMB": 51.3,
+    "measure.proc.utility.pssMedianMB": 10.2,
+    "measure.proc.utility.pssMaxMB": 10.2,
+    "measure.proc.utility.cpuMeanPct": 0,
+    "measure.proc.chrome-ui.rssMedianMB": 136.9,
+    "measure.proc.chrome-ui.rssMaxMB": 138.9,
+    "measure.proc.chrome-ui.pssMedianMB": 53.6,
+    "measure.proc.chrome-ui.pssMaxMB": 57.8,
+    "measure.proc.chrome-ui.cpuMeanPct": 12.8,
+    "measure.proc.renderer.rssMedianMB": 261.8,
+    "measure.proc.renderer.rssMaxMB": 270.7,
+    "measure.proc.renderer.pssMedianMB": 119.3,
+    "measure.proc.renderer.pssMaxMB": 130.1,
+    "measure.proc.renderer.cpuMeanPct": 20.6,
+    "measure.proc.page-renderer.rssMedianMB": 191.1,
+    "measure.proc.page-renderer.rssMaxMB": 200,
+    "measure.proc.page-renderer.pssMedianMB": 102,
+    "measure.proc.page-renderer.pssMaxMB": 112.8,
+    "measure.proc.page-renderer.cpuMeanPct": 20.6,
+    "measure.page.frames": 936,
+    "measure.page.fps": 46.8,
+    "measure.page.frameP50Ms": 16.7,
+    "measure.page.frameP95Ms": 50,
+    "measure.page.frameP99Ms": 100,
+    "measure.page.framesOver25Ms": 93,
+    "measure.page.framesOver50Ms": 33,
+    "measure.page.longtasks": 4,
+    "measure.page.longtaskMs": 433,
+    "measure.page.longtaskMsPerSec": 21.6,
+    "measure.page.loafCount": 9,
+    "measure.page.loafBlockingMs": 155.1,
+    "measure.page.heapEndMB": 21.6,
+    "measure.page.domNodes": 627,
+    "measure.server.cpuMeanPct": 0.5,
+    "measure.machine.cpuBusyPct": 266,
+    "measure.machine.foreignCpuPct": 219,
+    "measure.durationS": 20,
+    "measure.bytesDownKBps": 0,
+    "measure.bytesUpKBps": 0
+  },
+  "errors": [],
+  "notes": {
+    "client": "Chromium 153.0.8010.12",
+    "backend": "ANGLE (Mesa, Vulkan 1.4.318 (llvmpipe (LLVM 20.1.2 256 bits) (0x00000000)), llvmpipe)",
+    "pageRendererPid": 1491027,
+    "serverSamples": 85,
+    "serverProc": {
+      "startup": {
+        "server.total.rssMedianMB": 51.4,
+        "server.total.rssMaxMB": 134.6,
+        "server.total.pssMedianMB": 24,
+        "server.total.pssMaxMB": 104.1,
+        "server.total.cpuMeanPct": 10.3,
+        "server.server.rssMedianMB": 51.4,
+        "server.server.rssMaxMB": 57.1,
+        "server.server.pssMedianMB": 24,
+        "server.server.pssMaxMB": 28.8,
+        "server.server.cpuMeanPct": 4,
+        "server.other.rssMedianMB": 0,
+        "server.other.rssMaxMB": 77.5,
+        "server.other.pssMedianMB": 0,
+        "server.other.pssMaxMB": 75.2,
+        "server.other.cpuMeanPct": 6.3
+      },
+      "settle": {
+        "server.total.rssMedianMB": 84.1,
+        "server.total.rssMaxMB": 235.5,
+        "server.total.pssMedianMB": 50.1,
+        "server.total.pssMaxMB": 206,
+        "server.total.cpuMeanPct": 9.9,
+        "server.server.rssMedianMB": 59.5,
+        "server.server.rssMaxMB": 59.5,
+        "server.server.pssMedianMB": 31.3,
+        "server.server.pssMaxMB": 41.2,
+        "server.server.cpuMeanPct": 0.2,
+        "server.other.rssMedianMB": 0,
+        "server.other.rssMaxMB": 178.3,
+        "server.other.pssMedianMB": 0,
+        "server.other.pssMaxMB": 177,
+        "server.other.cpuMeanPct": 9.2,
+        "server.agent.rssMedianMB": 24.6,
+        "server.agent.rssMaxMB": 25,
+        "server.agent.pssMedianMB": 9.1,
+        "server.agent.pssMaxMB": 11.1,
+        "server.agent.cpuMeanPct": 0.5
+      },
+      "measure": {
+        "server.total.rssMedianMB": 84.4,
+        "server.total.rssMaxMB": 84.4,
+        "server.total.pssMedianMB": 51.1,
+        "server.total.pssMaxMB": 52.3,
+        "server.total.cpuMeanPct": 0.5,
+        "server.server.rssMedianMB": 59.5,
+        "server.server.rssMaxMB": 59.5,
+        "server.server.pssMedianMB": 41.1,
+        "server.server.pssMaxMB": 41.3,
+        "server.server.cpuMeanPct": 0.4,
+        "server.agent.rssMedianMB": 24.9,
+        "server.agent.rssMaxMB": 24.9,
+        "server.agent.pssMedianMB": 10,
+        "server.agent.pssMaxMB": 11.1,
+        "server.agent.cpuMeanPct": 0.1
+      }
+    }
+  },
+  "processes": [
+    {
+      "pid": 1490860,
+      "role": "browser",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windo"
+    },
+    {
+      "pid": 1490876,
+      "role": "zygote",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=zygote --no-zygote-sandbox --no-sandbox --crashpad-handler-pid=1490870 --enable-crash-reporter=, --user-data-dir=/tmp/playwright_c"
+    },
+    {
+      "pid": 1490877,
+      "role": "zygote",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=zygote --no-sandbox --crashpad-handler-pid=1490870 --enable-crash-reporter=, --user-data-dir=/tmp/playwright_chromiumdev_profile-9"
+    },
+    {
+      "pid": 1490920,
+      "role": "network",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none --no-sandbox --disable-dev-shm-us"
+    },
+    {
+      "pid": 1490919,
+      "role": "gpu-process",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=gpu-process --no-sandbox --disable-dev-shm-usage --disable-breakpad --ozone-platform=x11 --use-angle=vulkan --enable-unsafe-swifts"
+    },
+    {
+      "pid": 1490933,
+      "role": "utility",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --no-sandbox --disable-dev-shm"
+    },
+    {
+      "pid": 1491004,
+      "role": "chrome-ui",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=renderer --top-chrome-webui --crashpad-handler-pid=1490870 --enable-crash-reporter=, --user-data-dir=/tmp/playwright_chromiumdev_p"
+    },
+    {
+      "pid": 1491020,
+      "role": "renderer",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=renderer --crashpad-handler-pid=1490870 --enable-crash-reporter=, --user-data-dir=/tmp/playwright_chromiumdev_profile-9GKB9y --cha"
+    },
+    {
+      "pid": 1491027,
+      "role": "renderer",
+      "cmd": "/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome --type=renderer --crashpad-handler-pid=1490870 --enable-crash-reporter=, --user-data-dir=/tmp/playwright_chromiumdev_profile-9GKB9y --cha"
+    }
+  ],
+  "procSeries": [
+    {
+      "t": 1792736564394,
+      "roles": {
+        "browser": {
+          "rss": 270245888,
+          "pss": 127968256,
+          "cpu": 22.14650766609881,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33078272,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127303680,
+          "pss": 45425664,
+          "cpu": 5.110732538330494,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 219021312,
+          "pss": 117455872,
+          "cpu": 25.553662691652473,
+          "count": 1
+        },
+        "utility": {
+          "rss": 52604928,
+          "pss": 10207232,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146853888,
+          "pss": 61920256,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 262721536,
+          "pss": 116104192,
+          "cpu": 91.9931856899489,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 188268544,
+          "pss": 97625088,
+          "cpu": 91.9931856899489,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1223536640,
+        "pss": 512159744,
+        "cpu": 144.80408858603067,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736565397,
+      "roles": {
+        "browser": {
+          "rss": 271273984,
+          "pss": 128317440,
+          "cpu": 13.916500994035786,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33071104,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127442944,
+          "pss": 45483008,
+          "cpu": 1.9880715705765408,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 263307264,
+          "pss": 154909696,
+          "cpu": 47.713717693836976,
+          "count": 1
+        },
+        "utility": {
+          "rss": 52604928,
+          "pss": 10207232,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61865984,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 277688320,
+          "pss": 130416640,
+          "cpu": 9.940357852882704,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 203235328,
+          "pss": 111944704,
+          "cpu": 9.940357852882704,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1283960832,
+        "pss": 564271104,
+        "cpu": 73.558648111332,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736566453,
+      "roles": {
+        "browser": {
+          "rss": 271286272,
+          "pss": 128234496,
+          "cpu": 1.8148820326678763,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33016832,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127442944,
+          "pss": 45467648,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 281993216,
+          "pss": 172667904,
+          "cpu": 67.15063520871144,
+          "count": 1
+        },
+        "utility": {
+          "rss": 52604928,
+          "pss": 10207232,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61867008,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 277786624,
+          "pss": 130506752,
+          "cpu": 7.259528130671505,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 203333632,
+          "pss": 112033792,
+          "cpu": 7.259528130671505,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1302757376,
+        "pss": 581967872,
+        "cpu": 76.22504537205083,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736567456,
+      "roles": {
+        "browser": {
+          "rss": 271220736,
+          "pss": 129216512,
+          "cpu": 4,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33281024,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127332352,
+          "pss": 45444096,
+          "cpu": 2,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 283475968,
+          "pss": 182193152,
+          "cpu": 92,
+          "count": 1
+        },
+        "utility": {
+          "rss": 52678656,
+          "pss": 10221568,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61854720,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283697152,
+          "pss": 136399872,
+          "cpu": 34,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209244160,
+          "pss": 117925888,
+          "cpu": 34,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1310048256,
+        "pss": 598610944,
+        "cpu": 132,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736568457,
+      "roles": {
+        "browser": {
+          "rss": 271220736,
+          "pss": 129135616,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33278976,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127332352,
+          "pss": 45386752,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 281600000,
+          "pss": 172949504,
+          "cpu": 12,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53346304,
+          "pss": 10382336,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61819904,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283815936,
+          "pss": 136370176,
+          "cpu": 12,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209362944,
+          "pss": 117902336,
+          "cpu": 12,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1308958720,
+        "pss": 589323264,
+        "cpu": 24,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736569461,
+      "roles": {
+        "browser": {
+          "rss": 271220736,
+          "pss": 127140864,
+          "cpu": 1.996007984031936,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33257472,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127332352,
+          "pss": 45339648,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 164848640,
+          "cpu": 7.984031936127744,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53698560,
+          "pss": 10685440,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61833216,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283672576,
+          "pss": 136418304,
+          "cpu": 11.976047904191617,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209219584,
+          "pss": 117950464,
+          "cpu": 11.976047904191617,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306001408,
+        "pss": 579523584,
+        "cpu": 21.956087824351297,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736570461,
+      "roles": {
+        "browser": {
+          "rss": 272400384,
+          "pss": 128088064,
+          "cpu": 14.000000000000002,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33256448,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127754240,
+          "pss": 45524992,
+          "cpu": 8,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 164804608,
+          "cpu": 6,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53698560,
+          "pss": 10674176,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61811712,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283697152,
+          "pss": 136377344,
+          "cpu": 10,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209244160,
+          "pss": 117911552,
+          "cpu": 10,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307627520,
+        "pss": 580537344,
+        "cpu": 38,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736571463,
+      "roles": {
+        "browser": {
+          "rss": 272400384,
+          "pss": 130061312,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33277952,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127754240,
+          "pss": 45538304,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169700352,
+          "cpu": 7.984031936127744,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53698560,
+          "pss": 10674176,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61811712,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283725824,
+          "pss": 136407040,
+          "cpu": 11.976047904191617,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209272832,
+          "pss": 117940224,
+          "cpu": 11.976047904191617,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307656192,
+        "pss": 587470848,
+        "cpu": 19.96007984031936,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736572466,
+      "roles": {
+        "browser": {
+          "rss": 272633856,
+          "pss": 130210816,
+          "cpu": 4,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33274880,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45524992,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169535488,
+          "cpu": 10,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10686464,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 146857984,
+          "pss": 61808640,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283746304,
+          "pss": 136423424,
+          "cpu": 28.000000000000004,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209293312,
+          "pss": 117957632,
+          "cpu": 28.000000000000004,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1308028928,
+        "pss": 587464704,
+        "cpu": 42,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736573479,
+      "roles": {
+        "browser": {
+          "rss": 272633856,
+          "pss": 128274432,
+          "cpu": 1.949317738791423,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33256448,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45517824,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 164837376,
+          "cpu": 27.290448343079927,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10684416,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60619776,
+          "cpu": 3.898635477582846,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283475968,
+          "pss": 136089600,
+          "cpu": 19.493177387914233,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209321984,
+          "pss": 117981184,
+          "cpu": 19.493177387914233,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306574848,
+        "pss": 579279872,
+        "cpu": 52.631578947368425,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736574481,
+      "roles": {
+        "browser": {
+          "rss": 272633856,
+          "pss": 128256000,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33256448,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45517824,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 164805632,
+          "cpu": 3.9840637450199203,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10684416,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60606464,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283492352,
+          "pss": 136093696,
+          "cpu": 13.944223107569723,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209338368,
+          "pss": 117985280,
+          "cpu": 13.944223107569723,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306591232,
+        "pss": 579220480,
+        "cpu": 17.928286852589643,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736575485,
+      "roles": {
+        "browser": {
+          "rss": 272633856,
+          "pss": 130245632,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33277952,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45530112,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169692160,
+          "cpu": 7.984031936127744,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10684416,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60619776,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283541504,
+          "pss": 136156160,
+          "cpu": 13.972055888223553,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209387520,
+          "pss": 118047744,
+          "cpu": 13.972055888223553,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306640384,
+        "pss": 586206208,
+        "cpu": 21.956087824351297,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736576493,
+      "roles": {
+        "browser": {
+          "rss": 272633856,
+          "pss": 134512640,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33306624,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45545472,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 182744064,
+          "cpu": 5.9880239520958085,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10685440,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60607488,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283566080,
+          "pss": 136103936,
+          "cpu": 29.94011976047904,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209412096,
+          "pss": 117994496,
+          "cpu": 29.94011976047904,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306664960,
+        "pss": 603505664,
+        "cpu": 35.92814371257485,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736577494,
+      "roles": {
+        "browser": {
+          "rss": 272633856,
+          "pss": 130489344,
+          "cpu": 1.996007984031936,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33356800,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45572096,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169725952,
+          "cpu": 5.9880239520958085,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10685440,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60621824,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283590656,
+          "pss": 136208384,
+          "cpu": 7.984031936127744,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209436672,
+          "pss": 118097920,
+          "cpu": 7.984031936127744,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306689536,
+        "pss": 586659840,
+        "cpu": 15.968063872255488,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736578496,
+      "roles": {
+        "browser": {
+          "rss": 272699392,
+          "pss": 130333696,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33217536,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45499392,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169675776,
+          "cpu": 25.94810379241517,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10682368,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60618752,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283607040,
+          "pss": 136221696,
+          "cpu": 27.944111776447105,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209453056,
+          "pss": 118113280,
+          "cpu": 27.944111776447105,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306771456,
+        "pss": 586249216,
+        "cpu": 53.89221556886228,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736579498,
+      "roles": {
+        "browser": {
+          "rss": 272699392,
+          "pss": 134762496,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33383424,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45587456,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 182766592,
+          "cpu": 9.980039920159681,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10684416,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60607488,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283623424,
+          "pss": 136161280,
+          "cpu": 17.964071856287426,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209469440,
+          "pss": 118051840,
+          "cpu": 17.964071856287426,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306787840,
+        "pss": 603953152,
+        "cpu": 27.94411177644711,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736580642,
+      "roles": {
+        "browser": {
+          "rss": 272699392,
+          "pss": 130716672,
+          "cpu": 1.5527950310559007,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33224704,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45495296,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 179735552,
+          "cpu": 1.5527950310559007,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10684416,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60619776,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283635712,
+          "pss": 136252416,
+          "cpu": 24.84472049689441,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209481728,
+          "pss": 118142976,
+          "cpu": 24.84472049689441,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306800128,
+        "pss": 596728832,
+        "cpu": 27.950310559006212,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736581922,
+      "roles": {
+        "browser": {
+          "rss": 272699392,
+          "pss": 130478080,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33358848,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45573120,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169812992,
+          "cpu": 14.23027166882277,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10685440,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60621824,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283664384,
+          "pss": 136282112,
+          "cpu": 12.936610608020699,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209510400,
+          "pss": 118171648,
+          "cpu": 12.936610608020699,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306828800,
+        "pss": 586812416,
+        "cpu": 27.166882276843467,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736582930,
+      "roles": {
+        "browser": {
+          "rss": 272699392,
+          "pss": 130478080,
+          "cpu": 1.9880715705765408,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33358848,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127803392,
+          "pss": 45573120,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169716736,
+          "cpu": 1.9880715705765408,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10685440,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60620800,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283676672,
+          "pss": 136293376,
+          "cpu": 9.940357852882704,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209522688,
+          "pss": 118183936,
+          "cpu": 9.940357852882704,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306841088,
+        "pss": 586726400,
+        "cpu": 13.916500994035786,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736583935,
+      "roles": {
+        "browser": {
+          "rss": 272699392,
+          "pss": 134772736,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33388544,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45614080,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 182757376,
+          "cpu": 3.9761431411530817,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10667008,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60621824,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283705344,
+          "pss": 136323072,
+          "cpu": 11.928429423459244,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209551360,
+          "pss": 118212608,
+          "cpu": 11.928429423459244,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306935296,
+        "pss": 604144640,
+        "cpu": 15.904572564612327,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736585006,
+      "roles": {
+        "browser": {
+          "rss": 272699392,
+          "pss": 134753280,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33388544,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45614080,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 182757376,
+          "cpu": 3.8834951456310676,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10667008,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60608512,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283721728,
+          "pss": 136260608,
+          "cpu": 42.71844660194174,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209567744,
+          "pss": 118150144,
+          "cpu": 42.71844660194174,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1306951680,
+        "pss": 604049408,
+        "cpu": 46.60194174757281,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736586007,
+      "roles": {
+        "browser": {
+          "rss": 272896000,
+          "pss": 130683904,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33355776,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45595648,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 174956544,
+          "cpu": 10,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10665984,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60620800,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283660288,
+          "pss": 136275968,
+          "cpu": 14.000000000000002,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209506304,
+          "pss": 118166528,
+          "cpu": 14.000000000000002,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307086848,
+        "pss": 592154624,
+        "cpu": 24,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736587023,
+      "roles": {
+        "browser": {
+          "rss": 272896000,
+          "pss": 130668544,
+          "cpu": 13.944223107569723,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33353728,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45594624,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169700352,
+          "cpu": 11.95219123505976,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10664960,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60620800,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283676672,
+          "pss": 136291328,
+          "cpu": 25.89641434262948,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209522688,
+          "pss": 118181888,
+          "cpu": 25.89641434262948,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307103232,
+        "pss": 586894336,
+        "cpu": 51.79282868525897,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736588155,
+      "roles": {
+        "browser": {
+          "rss": 272896000,
+          "pss": 130527232,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33219584,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45517824,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169650176,
+          "cpu": 3.992015968063872,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10664960,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60619776,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283746304,
+          "pss": 136359936,
+          "cpu": 9.980039920159681,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209592320,
+          "pss": 118251520,
+          "cpu": 9.980039920159681,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307172864,
+        "pss": 586559488,
+        "cpu": 13.972055888223554,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736589271,
+      "roles": {
+        "browser": {
+          "rss": 272896000,
+          "pss": 134967296,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33385472,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45613056,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 182756352,
+          "cpu": 3.9761431411530817,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10665984,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60621824,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283766784,
+          "pss": 136382464,
+          "cpu": 25.844930417495032,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209612800,
+          "pss": 118273024,
+          "cpu": 25.844930417495032,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307193344,
+        "pss": 604392448,
+        "cpu": 29.821073558648113,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736590295,
+      "roles": {
+        "browser": {
+          "rss": 272896000,
+          "pss": 134935552,
+          "cpu": 3.9761431411530817,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33388544,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45614080,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 182757376,
+          "cpu": 21.868787276341948,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10667008,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60608512,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283774976,
+          "pss": 136274944,
+          "cpu": 43.737574552683895,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209620992,
+          "pss": 118164480,
+          "cpu": 43.737574552683895,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307201536,
+        "pss": 604246016,
+        "cpu": 69.58250497017892,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736591365,
+      "roles": {
+        "browser": {
+          "rss": 272896000,
+          "pss": 130688000,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33357824,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 127868928,
+          "pss": 45597696,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 177161216,
+          "cpu": 7.029876977152901,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10665984,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60620800,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283795456,
+          "pss": 136411136,
+          "cpu": 15.817223198594025,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209641472,
+          "pss": 118301696,
+          "cpu": 15.817223198594025,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307222016,
+        "pss": 594502656,
+        "cpu": 22.847100175746924,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736592409,
+      "roles": {
+        "browser": {
+          "rss": 272990208,
+          "pss": 130621440,
+          "cpu": 17.408123791102515,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33357824,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128323584,
+          "pss": 45741056,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 278433792,
+          "pss": 169675776,
+          "cpu": 25.145067698259187,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10660864,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 145674240,
+          "pss": 60600320,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 283820032,
+          "pss": 136404992,
+          "cpu": 21.27659574468085,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 209666048,
+          "pss": 118298624,
+          "cpu": 21.27659574468085,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1307795456,
+        "pss": 587062272,
+        "cpu": 63.829787234042556,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736593580,
+      "roles": {
+        "browser": {
+          "rss": 273211392,
+          "pss": 130599936,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33349632,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45663232,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 270897152,
+          "pss": 145054720,
+          "cpu": 1.4903129657228018,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56181760,
+          "cpu": 427.7198211624441,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 275034112,
+          "pss": 125785088,
+          "cpu": 38.74813710879285,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200880128,
+          "pss": 107679744,
+          "cpu": 38.74813710879285,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1289601024,
+        "pss": 547280896,
+        "cpu": 467.9582712369597,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736594641,
+      "roles": {
+        "browser": {
+          "rss": 273195008,
+          "pss": 134810624,
+          "cpu": 1.8348623853211006,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33386496,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128385024,
+          "pss": 45581312,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 158094336,
+          "cpu": 5.504587155963303,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56176640,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274350080,
+          "pss": 124896256,
+          "cpu": 11.009174311926605,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200196096,
+          "pss": 106788864,
+          "cpu": 11.009174311926605,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272070144,
+        "pss": 563592192,
+        "cpu": 18.34862385321101,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736595718,
+      "roles": {
+        "browser": {
+          "rss": 273195008,
+          "pss": 134774784,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33385472,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45592576,
+          "cpu": 3.4662045060658584,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 158092288,
+          "cpu": 3.4662045060658584,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10645504,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56161280,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274382848,
+          "pss": 124809216,
+          "cpu": 10.398613518197573,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200228864,
+          "pss": 106702848,
+          "cpu": 10.398613518197573,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272111104,
+        "pss": 563461120,
+        "cpu": 17.33102253032929,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736596719,
+      "roles": {
+        "browser": {
+          "rss": 273199104,
+          "pss": 130530304,
+          "cpu": 2,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33353728,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45571072,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 150326272,
+          "cpu": 10,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10645504,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56174592,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274415616,
+          "pss": 124958720,
+          "cpu": 24,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200261632,
+          "pss": 106852352,
+          "cpu": 24,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272147968,
+        "pss": 551560192,
+        "cpu": 36,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736597723,
+      "roles": {
+        "browser": {
+          "rss": 273199104,
+          "pss": 130524160,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33353728,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45571072,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 145038336,
+          "cpu": 7.952286282306163,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10645504,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56174592,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274436096,
+          "pss": 124979200,
+          "cpu": 9.940357852882704,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200282112,
+          "pss": 106872832,
+          "cpu": 9.940357852882704,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272168448,
+        "pss": 546286592,
+        "cpu": 17.892644135188867,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736598734,
+      "roles": {
+        "browser": {
+          "rss": 273264640,
+          "pss": 134863872,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33386496,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45573120,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 158094336,
+          "cpu": 5.964214711729622,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56176640,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274460672,
+          "pss": 125006848,
+          "cpu": 9.940357852882704,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200306688,
+          "pss": 106899456,
+          "cpu": 9.940357852882704,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272258560,
+        "pss": 563747840,
+        "cpu": 15.904572564612327,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736599750,
+      "roles": {
+        "browser": {
+          "rss": 273264640,
+          "pss": 134843392,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33391616,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45575168,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 158116864,
+          "cpu": 9.72762645914397,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10647552,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56155136,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274493440,
+          "pss": 124954624,
+          "cpu": 40.856031128404666,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200339456,
+          "pss": 106846208,
+          "cpu": 40.856031128404666,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272291328,
+        "pss": 563684352,
+        "cpu": 50.583657587548636,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736600757,
+      "roles": {
+        "browser": {
+          "rss": 273264640,
+          "pss": 130601984,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33359872,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45558784,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 152410112,
+          "cpu": 5.928853754940711,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56176640,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274526208,
+          "pss": 125072384,
+          "cpu": 11.857707509881422,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200372224,
+          "pss": 106964992,
+          "cpu": 11.857707509881422,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272324096,
+        "pss": 553826304,
+        "cpu": 17.786561264822133,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736601772,
+      "roles": {
+        "browser": {
+          "rss": 273264640,
+          "pss": 130569216,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33359872,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45558784,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 145059840,
+          "cpu": 3.968253968253968,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 143511552,
+          "pss": 56163328,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 274558976,
+          "pss": 125092864,
+          "cpu": 9.920634920634921,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 200404992,
+          "pss": 106985472,
+          "cpu": 9.920634920634921,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1272356864,
+        "pss": 546450432,
+        "cpu": 13.88888888888889,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736602781,
+      "roles": {
+        "browser": {
+          "rss": 273268736,
+          "pss": 130516992,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33359872,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45558784,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 145056768,
+          "cpu": 11.811023622047244,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 141471744,
+          "pss": 54091776,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 273059840,
+          "pss": 123602944,
+          "cpu": 90.55118110236221,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 198905856,
+          "pss": 105494528,
+          "cpu": 90.55118110236221,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1268822016,
+        "pss": 542833664,
+        "cpu": 102.36220472440945,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736603783,
+      "roles": {
+        "browser": {
+          "rss": 273268736,
+          "pss": 134866944,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33391616,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45575168,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 158113792,
+          "cpu": 3.9840637450199203,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10647552,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 141471744,
+          "pss": 54078464,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 273063936,
+          "pss": 123528192,
+          "cpu": 3.9840637450199203,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 198909952,
+          "pss": 105419776,
+          "cpu": 3.9840637450199203,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1268826112,
+        "pss": 560201728,
+        "cpu": 7.968127490039841,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736604788,
+      "roles": {
+        "browser": {
+          "rss": 273268736,
+          "pss": 130600960,
+          "cpu": 0,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33360896,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45557760,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 150286336,
+          "cpu": 5.952380952380952,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 141471744,
+          "pss": 54090752,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 273084416,
+          "pss": 123625472,
+          "cpu": 19.841269841269842,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 198930432,
+          "pss": 105518080,
+          "cpu": 19.841269841269842,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1268846592,
+        "pss": 548168704,
+        "cpu": 25.793650793650794,
+        "count": 9
+      }
+    },
+    {
+      "t": 1792736605534,
+      "roles": {
+        "browser": {
+          "rss": 273510400,
+          "pss": 130819072,
+          "cpu": 36.734693877551024,
+          "count": 1
+        },
+        "zygote": {
+          "rss": 144785408,
+          "pss": 33360896,
+          "cpu": 0,
+          "count": 2
+        },
+        "network": {
+          "rss": 128393216,
+          "pss": 45557760,
+          "cpu": 0,
+          "count": 1
+        },
+        "gpu-process": {
+          "rss": 254074880,
+          "pss": 145063936,
+          "cpu": 4.081632653061225,
+          "count": 1
+        },
+        "utility": {
+          "rss": 53768192,
+          "pss": 10646528,
+          "cpu": 0,
+          "count": 1
+        },
+        "chrome-ui": {
+          "rss": 141471744,
+          "pss": 54090752,
+          "cpu": 0,
+          "count": 1
+        },
+        "renderer": {
+          "rss": 273211392,
+          "pss": 123752448,
+          "cpu": 24.489795918367346,
+          "count": 2
+        },
+        "page-renderer": {
+          "rss": 199057408,
+          "pss": 105645056,
+          "cpu": 24.489795918367346,
+          "count": 1
+        }
+      },
+      "total": {
+        "rss": 1269215232,
+        "pss": 543291392,
+        "cpu": 65.3061224489796,
+        "count": 9
+      }
+    }
+  ]
+}

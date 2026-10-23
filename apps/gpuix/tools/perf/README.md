@@ -23,9 +23,12 @@ The `browser` lane of `tools/perf` (`tools/perf/browser/`) is not used. It regis
 From `apps/gpuix`:
 
 ```bash
-bun run perf --scenarios stream-storm,pty-flood --runs 5 --gl lavapipe --out tools/perf/baseline/linux-chromium
-bun run perf:report chromium=tools/perf/baseline/linux-chromium
+bun run perf --scenarios idle,stream-storm,pty-flood --runs 3 --page-metrics off --out tools/perf/baseline/chromium-proc
+bun run perf --scenarios stream-storm,pty-flood --runs 5 --out tools/perf/baseline/chromium-page
+bun run perf:report proc=tools/perf/baseline/chromium-proc page=tools/perf/baseline/chromium-page
 ```
+
+The page observers run a `requestAnimationFrame` loop that keeps the page drawing, which costs CPU. At idle they raised client CPU from about 8% to 34% of a core. So take process, startup, chat, and probe numbers from a run with `--page-metrics off`, and take frame and long-task numbers from a run with them on. [`baseline-linux.md`](baseline-linux.md) has the measured baseline.
 
 The runner alternates the scenarios (stream-storm 1, pty-flood 1, stream-storm 2, and so on), so slow drift on a shared machine hits both scenarios equally. Every run starts a fresh Xvfb, a fresh server state directory under `/tmp/gpuix-b0/`, and a fresh browser profile.
 
@@ -38,13 +41,14 @@ Output goes to `apps/gpuix/tools/perf/results/linux-<timestamp>/` unless you pas
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--scenarios` | `stream-storm,pty-flood` | Comma-separated list of scenarios. |
+| `--scenarios` | `stream-storm,pty-flood` | Comma-separated list of scenarios: `idle`, `stream-storm`, `pty-flood`. |
 | `--runs` | `3` | Runs per scenario. |
 | `--gl` | `lavapipe` | Chromium rasterizer. `lavapipe` is ANGLE on Mesa's Vulkan driver, the same driver that the GPUIX lane uses. `swiftshader` is Chromium's default on a machine with no GPU. `cpu` passes `--disable-gpu`. |
 | `--port` | `8196` | Server port. The relay listens on `port + 1`. The runner fails if the port is taken. |
 | `--display` | `:181` | Xvfb display. |
 | `--width`, `--height` | `1440`, `900` | Window and screen size. |
 | `--seed` | `42` | Seed for the fake agent and the probe content. |
+| `--page-metrics` | `on` | `off` skips the in-page observers. The `page.*` keys are then absent. |
 | `--quiet-below` | `150` | Quiet-gate threshold, in percent of one core. |
 | `--quiet-wait` | `600` | Longest quiet-gate wait, in seconds. |
 | `--server-bin`, `--dist-web`, `--out` | see above | Paths. |
@@ -54,6 +58,8 @@ Any other `--<flag> <number>` overrides a scenario default, for example `--agent
 ## Scenarios
 
 The scenarios keep the shape of `tools/perf`, so the numbers line up with the Windows desktop lane.
+
+**idle.** The client boots, then 20 s pass in `settle` and 20 s in `measure`, with no input and no chats. Run it with `--scenarios idle`. It is not in the default list.
 
 **stream-storm.** The runner registers the fake ACP agent from `tools/perf/fake-agent/fake-agent.ts` in the server store, with seed 42, 20 updates per second per chat, 120-character chunks, and streaming until cancelled. `PERF_AGENT_UNIQUE_SESSIONS=1` gives each agent process its own session id, because `termul-server` starts one agent process per chat. The scenario opens `agents × sessions-per-agent` chats (default 4 × 2 = 8) through the launcher UI, the way a user does. The phases are:
 
@@ -99,6 +105,22 @@ For Chromium, `browser` is the root process. `renderer` is every page renderer, 
 
 `terminal-probe.ts` runs inside the terminal through the real PTY path. It sends a cursor position request (`CSI 6n`). A terminal emulator answers the request only after it has parsed every byte written before it. The answer travels back over the client's input path: xterm.js `onData`, the WebSocket, the server, and the PTY. So the reply time means "the client processed all output and replied". The method works the same way for xterm.js and for a GPUIX terminal, and it needs no access to the canvas.
 
+## Measure the shipped Linux app
+
+The shipped desktop app is Tauri on WebKitGTK. It uses Tauri IPC instead of `termul-server`, and WebKitGTK has no automation hook on this machine, so `webkit-startup.ts` measures only startup and idle cost. Build the app with the dev identifier and the shared target directory, then run the script from `apps/gpuix`:
+
+```bash
+CARGO_TARGET_DIR=/root/termul-wt/gpuix/src-tauri/target bun x tauri build --config src-tauri/tauri.conf.dev.json --no-bundle
+bun tools/perf/webkit-startup.ts --runs 5 --out tools/perf/baseline/webkitgtk
+```
+
+Run the build at the repository root. Each run starts a fresh Xvfb (default `:182`) and a fresh `HOME` under `/tmp/gpuix-b0/webkit/`, with one seeded project in `$XDG_DATA_HOME/com.termul-manager.app.dev/projects.json`. The script grabs the X screen with `ffmpeg` about every 100 ms:
+
+- `firstPaintMs` is the first grab with any pixel brighter than 16 of 255.
+- `projectListMs` is the first grab with at least 100 pixels of the seeded project's avatar color, `rgb(60, 131, 246)`, in the sidebar. This is the time to first project list.
+
+After the project list shows, the script waits `--settle` seconds (default 20) and samples the process tree for `--idle` seconds (default 20). The roles are `app` (the Tauri process), `web-process`, `network`, and `other`. `other` is the child processes that the app starts, such as the login shell and the agent `--version` checks. The script writes `webkit-startup.json` and one PNG per run.
+
 ## Point the runner at the GPUIX client
 
 The scenarios call only the `ClientDriver` interface in `clients/client.ts`: `waitForProjectList`, `waitForLauncher`, `startChat`, `chatCount`, `switchToChat`, `openTerminal`, `runInTerminal`, and the phase hooks. To add the GPUIX lane:
@@ -107,7 +129,7 @@ The scenarios call only the `ClientDriver` interface in `clients/client.ts`: `wa
 2. Return `null` from `endPhase` until the GPUIX client exposes frame timing. When it does, map its frame intervals into `PageMetrics.frames`, so the `page.frame*` keys line up.
 3. Add a `--client gpuix` branch next to `launchChromium` in `run.ts`, with a role function that names the app process `app`.
 
-Then run the same command with `--client gpuix` and compare the two `aggregate.json` files with `bun run perf:report chromium=<dir> gpuix=<dir>`. These keys do not depend on the client and form the comparison set:
+Then run the `chromium-proc` command with `--client gpuix` and compare the two `aggregate.json` files with `bun run perf:report chromium=tools/perf/baseline/chromium-proc gpuix=<dir>`. These keys do not depend on the client and form the comparison set:
 
 - `startup.projectListMs` and `startup.launcherReadyMs`
 - `<phase>.proc.total.pssMedianMB` and `<phase>.proc.total.cpuMeanPct`
