@@ -13,7 +13,11 @@ bin="${1:-src-tauri/target/debug/termul-server}"
 [ -f "$bin" ] || { echo "error: $bin not found; build termul-server first" >&2; exit 2; }
 
 gui='libwebkit2gtk|libjavascriptcoregtk|libgtk-|libgdk-|libsoup-|libgdk_pixbuf|libpango|libcairo|libatk|libharfbuzz'
-leaked="$(readelf -d "$bin" | awk '/\(NEEDED\)/ {print $5}' | tr -d '[]' | grep -E "$gui" || true)"
+# Inspect first so a readelf failure (missing tool, not an ELF) fails the check
+# under `set -e`; only grep's "no match" below counts as success.
+needed="$(readelf -d "$bin" | awk '/\(NEEDED\)/ {print $5}' | tr -d '[]')"
+[ -n "$needed" ] || { echo "error: no NEEDED entries found in $bin; is it a dynamic ELF?" >&2; exit 2; }
+leaked="$(printf '%s\n' "$needed" | grep -E "$gui" || true)"
 
 if [ -n "$leaked" ]; then
   echo "error: $bin links GUI libraries:" >&2
