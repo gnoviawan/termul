@@ -1,9 +1,13 @@
-import type { Editor } from '@tiptap/core'
 import { useCallback, useEffect, useRef } from 'react'
 import type { MentionMatch } from '@/components/chat/mention-menu-model'
 import type { ComposerMentions } from '@/components/chat/use-composer-mentions'
-import { displayOffsetToDocOffset, docOffsetToDisplayOffset } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
+import {
+  type ComposerEditor,
+  composerEditorCaret,
+  isComposerEditorLive,
+  setComposerEditorCaret
+} from './composer/editor-ops'
 
 /**
  * Schedule a caret restore after a programmatic value splice, with cleanup.
@@ -22,7 +26,7 @@ import { logFrontendError } from '@/lib/log-api'
  * hook's `handleSelect` + the host's `onMentionSelect`/seed share ONE rAF ref
  * (only the latest restore wins; no double-restore).
  */
-export function useComposerCaretRestore(editorRef: React.MutableRefObject<Editor | null>): {
+export function useComposerCaretRestore(editorRef: React.MutableRefObject<ComposerEditor | null>): {
   scheduleRestoreCaret: (displayOffset: number) => void
 } {
   const handleRef = useRef<number | null>(null)
@@ -37,10 +41,9 @@ export function useComposerCaretRestore(editorRef: React.MutableRefObject<Editor
         const ed = editorRef.current
         // Editor destroyed/unmounted before the frame fired — safe noop (no
         // throw, no swallowed error).
-        if (!ed || ed.isDestroyed) return
-        const docPos = displayOffsetToDocOffset(ed.state.doc, displayOffset)
+        if (!isComposerEditorLive(ed)) return
         try {
-          ed.chain().focus(undefined, { scrollIntoView: false }).setTextSelection(docPos).run()
+          setComposerEditorCaret(ed, displayOffset)
         } catch (err) {
           // ProseMirror may reject an out-of-range pos (e.g. the doc re-parsed
           // to a shorter length between schedule + fire). Focus is restored by
@@ -73,7 +76,7 @@ export function useComposerCaretRestore(editorRef: React.MutableRefObject<Editor
 interface UseComposerMentionSelectOptions {
   value: string
   setValue: (value: string) => void
-  editorRef: React.MutableRefObject<Editor | null>
+  editorRef: React.MutableRefObject<ComposerEditor | null>
   mentions: Pick<ComposerMentions, 'select' | 'update'>
   scheduleRestoreCaret: (displayOffset: number) => void
 }
@@ -87,10 +90,7 @@ export function useComposerMentionSelect({
 }: UseComposerMentionSelectOptions): (match: MentionMatch) => void {
   return useCallback(
     (match: MentionMatch) => {
-      const editor = editorRef.current
-      const caret = editor
-        ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.head)
-        : value.length
+      const caret = composerEditorCaret(editorRef.current, value.length, 'head')
       const outcome = mentions.select(value, caret, match)
       if (!outcome) return
       setValue(outcome.value)

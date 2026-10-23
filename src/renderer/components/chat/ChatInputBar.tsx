@@ -1,4 +1,3 @@
-import type { Editor } from '@tiptap/core'
 import { useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -46,6 +45,7 @@ import { CHAT_COMPACT_LABEL, CHAT_GUTTER_X, useComposerToolbarMode } from './cha
 import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
+import { type ComposerEditor, composerEditorElement } from './composer/editor-ops'
 import { blurComposerEditor, insertComposerTrigger } from './composer/insert-composer-trigger'
 import { FileMentionMenu, MENTION_EMPTY_LABEL, MENTION_SEARCHING_LABEL } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
@@ -239,7 +239,7 @@ export function ChatInputBar({
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
   const rootRef = useRef<HTMLDivElement>(null)
   const toolbarMode = useComposerToolbarMode(rootRef)
-  const editorRef = useRef<Editor | null>(null)
+  const editorRef = useRef<ComposerEditor | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
   const slashMenuRef = useRef<SlashMenuHandle>(null)
@@ -490,8 +490,7 @@ export function ChatInputBar({
     const wasOpen = prevOskOpenRef.current
     prevOskOpenRef.current = osk.isOskOpen
     if (!wasOpen && osk.isOskOpen && isMobileShell) {
-      const ed = editorRef.current
-      const el = ed?.view.dom ?? null
+      const el = composerEditorElement(editorRef.current)
       if (el) {
         requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
       }

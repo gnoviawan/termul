@@ -1,7 +1,7 @@
-import type { Editor } from '@tiptap/core'
 import { Selection } from '@tiptap/pm/state'
 import { docToDisplayText } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
+import type { ComposerEditor } from './editor-ops'
 
 const LOG_SOURCE = 'composer-add-sheet'
 
@@ -9,7 +9,7 @@ const LOG_SOURCE = 'composer-add-sheet'
  * Blur the composer editor synchronously (dismisses the on-screen keyboard).
  * Non-critical: a missing, unmounted or destroyed editor is a no-op.
  */
-export function blurComposerEditor(editor: Editor | null): void {
+export function blurComposerEditor(editor: ComposerEditor | null): void {
   if (!editor || editor.isDestroyed) return
   try {
     editor.view.dom.blur()
@@ -34,7 +34,7 @@ export function blurComposerEditor(editor: Editor | null): void {
  * missing, destroyed or not editable, or when the insertion throws, so the
  * caller can fall back to returning focus to its own trigger.
  */
-export function insertComposerTrigger(editor: Editor | null, trigger: '@' | '/'): boolean {
+export function insertComposerTrigger(editor: ComposerEditor | null, trigger: '@' | '/'): boolean {
   if (!editor || editor.isDestroyed || !editor.isEditable) {
     void logFrontendError({
       level: 'warn',
