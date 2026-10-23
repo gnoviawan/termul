@@ -76,6 +76,42 @@ export const FILE_PILL_NODE = 'filePill'
  */
 export const SKILL_PAD_DEFAULT = SKILL_PAD_CHAR
 
+export type PillNodeType = typeof SKILL_PILL_NODE | typeof CMD_PILL_NODE | typeof FILE_PILL_NODE
+
+const PILL_SEGMENT_KIND = {
+  [SKILL_PILL_NODE]: 'pill',
+  [CMD_PILL_NODE]: 'commandPill',
+  [FILE_PILL_NODE]: 'filePill'
+} as const satisfies Record<PillNodeType, DocSegment['kind']>
+
+export function isPillNodeType(type: string): type is PillNodeType {
+  return type === SKILL_PILL_NODE || type === CMD_PILL_NODE || type === FILE_PILL_NODE
+}
+
+/**
+ * The display-string token of one pill node, from its type name and attrs.
+ *
+ * - Skill: `\uE000<name>\uE001` plus the padding block, re-emitted so the
+ *   on-disk draft schema (`\uE002..\uE003`) survives load/save round-trips.
+ *   The content is a fixed single figure-space; only the presence is load-bearing.
+ * - Command: `\uE004<name>\uE005`, no padding block. The sentinel pair is
+ *   distinct from the skill sentinels so the skill wire framer and the
+ *   timeline renderer never see command tokens.
+ * - File: `\uE006<display>\u001F<absPath>\uE007`, no padding block. The
+ *   unit separator splits display from absPath so the wire builder resolves
+ *   the path at send time without an external lookup map.
+ */
+export function pillTokenText(type: PillNodeType, attrs: Record<string, unknown>): string {
+  switch (type) {
+    case SKILL_PILL_NODE:
+      return `${SKILL_TOKEN_START}${String(attrs.name ?? '')}${SKILL_TOKEN_END}${SKILL_PAD_START}${SKILL_PAD_DEFAULT}${SKILL_PAD_END}`
+    case CMD_PILL_NODE:
+      return `${CMD_TOKEN_START}${String(attrs.name ?? '')}${CMD_TOKEN_END}`
+    case FILE_PILL_NODE:
+      return `${FILE_TOKEN_START}${String(attrs.display ?? '')}${FILE_TOKEN_SEP}${String(attrs.absPath ?? '')}${FILE_TOKEN_END}`
+  }
+}
+
 export interface DocSegment {
   kind: 'text' | 'pill' | 'commandPill' | 'filePill'
   /** Visible text for a `text` segment; the padded token (`\uE000<name>\uE001\uE002<pad>\uE003`)
@@ -122,34 +158,9 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
         if (node.isText) {
           displayText = node.text ?? ''
           blockEndedInHardBreak = false
-        } else if (node.type.name === SKILL_PILL_NODE) {
-          const name = String(node.attrs.name ?? '')
-          // Re-emit the padding block so the on-disk draft schema
-          // (\uE002..\uE003) survives load/save round-trips. The content is a
-          // fixed single figure-space; only the presence is load-bearing.
-          displayText = `${SKILL_TOKEN_START}${name}${SKILL_TOKEN_END}${SKILL_PAD_START}${SKILL_PAD_DEFAULT}${SKILL_PAD_END}`
-          kind = 'pill'
-          blockEndedInHardBreak = false
-        } else if (node.type.name === CMD_PILL_NODE) {
-          const name = String(node.attrs.name ?? '')
-          // Command pill: no padding block (the pill is a real DOM node, so
-          // there is no caret-alignment deficit to compensate). The sentinel
-          // pair is distinct from the skill sentinels so the skill wire framer
-          // / timeline renderer never see command tokens.
-          displayText = `${CMD_TOKEN_START}${name}${CMD_TOKEN_END}`
-          kind = 'commandPill'
-          blockEndedInHardBreak = false
-        } else if (node.type.name === FILE_PILL_NODE) {
-          const display = String(node.attrs.display ?? '')
-          const absPath = String(node.attrs.absPath ?? '')
-          // File pill: no padding block (the pill is a real DOM node). The
-          // sentinel pair is distinct from skill/command sentinels so the
-          // skill wire framer / timeline renderer / command walk never see
-          // file tokens. The token carries display + absPath split by the
-          // unit separator `\u001F` so the wire builder can resolve the path
-          // at send time without an external lookup map.
-          displayText = `${FILE_TOKEN_START}${display}${FILE_TOKEN_SEP}${absPath}${FILE_TOKEN_END}`
-          kind = 'filePill'
+        } else if (isPillNodeType(node.type.name)) {
+          displayText = pillTokenText(node.type.name, node.attrs)
+          kind = PILL_SEGMENT_KIND[node.type.name]
           blockEndedInHardBreak = false
         } else if (node.type.name === 'hardBreak') {
           displayText = '\n'
