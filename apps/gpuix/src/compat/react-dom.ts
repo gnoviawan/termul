@@ -39,6 +39,14 @@ export function findDOMNode(): null {
   return null
 }
 
+/** A second React root on a DOM container (BlockNote's menus): GPUIX has one root per window, so it renders nothing. */
+export function createRoot(_container: unknown): { render(children: ReactNode): void; unmount(): void } {
+  compatWarn('dom-method-noop', 'createRoot')
+  return { render() {}, unmount() {} }
+}
+
+export const hydrateRoot = createRoot
+
 export function preload(): void {}
 export function preconnect(): void {}
 export function prefetchDNS(): void {}
@@ -46,4 +54,4 @@ export function preinit(): void {}
 
 export const version = '19.3.1'
 
-export default { createPortal, flushSync, unstable_batchedUpdates, findDOMNode, version }
+export default { createPortal, createRoot, hydrateRoot, flushSync, unstable_batchedUpdates, findDOMNode, version }

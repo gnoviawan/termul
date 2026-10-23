@@ -16,7 +16,8 @@
  * Run `bun build.ts` for one build, or `bun tools/dev.ts` to rebuild on change.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import type { BunPlugin } from 'bun'
 import { gpuixUiAliases } from './tools/ui/alias'
@@ -118,10 +119,16 @@ export const PACKAGE_ALIASES: Record<string, string> = {
   '@radix-ui/react-hover-card': 'radix/generic.tsx',
   '@radix-ui/react-switch': 'radix/generic.tsx',
   '@radix-ui/react-select': 'radix/generic.tsx',
+  '@radix-ui/react-radio-group': 'radix/radio-group.tsx',
   'framer-motion': 'shims/framer-motion.tsx',
   cmdk: 'shims/cmdk.tsx',
-  '@streamdown/mermaid': 'shims/streamdown-mermaid.ts'
+  '@streamdown/mermaid': 'shims/streamdown-mermaid.ts',
+  '@tiptap/react': 'shims/tiptap-react.tsx',
+  dompurify: 'shims/dompurify.ts'
 }
+
+/** Stand-ins only shared code gets; libraries built on the real package keep it (BlockNote on tiptap). */
+const RENDERER_ONLY_ALIASES = new Set(['@tiptap/react', 'dompurify'])
 
 /**
  * Files written against GPUIX directly keep the real JSX runtime and React:
@@ -172,14 +179,83 @@ export function compatPlugin(aliases?: CompatResolve[]): BunPlugin {
         if (isNativeImporter(args.importer)) return { path: 'react', external: true }
         return { path: path.join(COMPAT_DIR, 'react.ts') }
       })
-      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid)$/ }, (args) => {
+      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid|@tiptap\/react|dompurify)$/ }, (args) => {
         if (args.path.startsWith('react-dom') && isNativeImporter(args.importer)) {
           return { path: args.path, external: true }
         }
+        if (RENDERER_ONLY_ALIASES.has(args.path) && !args.importer.startsWith(RENDERER_DIR + path.sep)) return undefined
         const target = PACKAGE_ALIASES[args.path]
         if (!target) throw new Error(`compat: no stand-in for ${args.path} (imported by ${args.importer})`)
         aliases?.push({ specifier: args.path, target })
         return { path: path.join(COMPAT_DIR, target) }
+      })
+    }
+  }
+}
+
+const RAW = 'vite-raw'
+
+/** Vite's `?raw` suffix: the file's text as the default export (agent icon SVGs). */
+export function rawPlugin(): BunPlugin {
+  return {
+    name: 'termul-gpuix-raw',
+    setup(build) {
+      build.onResolve({ filter: /\?raw$/ }, (args) => {
+        const bare = args.path.slice(0, -'?raw'.length)
+        const resolved = /^@(renderer)?\//.test(bare)
+          ? path.join(RENDERER_DIR, bare.replace(/^@(renderer)?\//, ''))
+          : path.resolve(path.dirname(args.importer), bare)
+        return { path: resolved, namespace: RAW }
+      })
+      build.onLoad({ filter: /.*/, namespace: RAW }, (args) => ({
+        loader: 'js',
+        contents: `export default ${JSON.stringify(readFileSync(args.path, 'utf8'))}`
+      }))
+    }
+  }
+}
+
+const MATERIAL_ICONS_DIR = path.join(
+  path.dirname(createRequire(path.join(REPO_DIR, 'package.json')).resolve('material-icon-theme/package.json')),
+  'icons'
+)
+
+/** `vite.config.web.ts` aliases a glob pattern may start with. */
+function globDir(pattern: string): { dir: string; suffix: string } {
+  const dirPart = path.dirname(pattern)
+  const suffix = path.basename(pattern).replace(/^\*/, '')
+  if (dirPart === '@material-icons') return { dir: MATERIAL_ICONS_DIR, suffix }
+  if (dirPart.startsWith('@/')) return { dir: path.join(RENDERER_DIR, dirPart.slice(2)), suffix }
+  throw new Error(`import.meta.glob: unsupported pattern ${pattern}`)
+}
+
+const GLOB_CALL =
+  /import\.meta\.glob(?:<[^>]*>)?\(\s*'([^']+)'\s*,\s*\{\s*eager:\s*true,\s*query:\s*'\?raw',\s*import:\s*'default'\s*\}\s*\)/g
+
+/**
+ * Vite's eager raw `import.meta.glob` (agent and file icons), inlined as an
+ * object of file texts keyed like Vite keys them (root-relative paths).
+ */
+export function viteGlobPlugin(): BunPlugin {
+  return {
+    name: 'termul-gpuix-vite-glob',
+    setup(build) {
+      build.onLoad({ filter: /\/src\/renderer\/.*\.tsx?$/ }, (args) => {
+        const text = readFileSync(args.path, 'utf8')
+        if (!text.includes('import.meta.glob')) return undefined
+        const contents = text.replace(GLOB_CALL, (_call, pattern: string) => {
+          const { dir, suffix } = globDir(pattern)
+          const entries = readdirSync(dir)
+            .filter((name) => name.endsWith(suffix))
+            .sort()
+            .map((name) => {
+              const file = path.join(dir, name)
+              return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
+            })
+          return `({${entries.join(',\n')}})`
+        })
+        if (/import\.meta\.glob\s*[<(]/.test(contents)) throw new Error(`import.meta.glob: unhandled call in ${args.path}`)
+        return { contents, loader: args.path.endsWith('.tsx') ? 'tsx' : 'ts' }
       })
     }
   }
@@ -226,7 +302,7 @@ export async function buildClient(
     sourcemap: 'linked',
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
-    plugins: [compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
+    plugins: [rawPlugin(), viteGlobPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
     naming: '[name].[ext]',
     // React's production build has no jsxDEV, so a production bundle needs jsx().
     ...(options.production

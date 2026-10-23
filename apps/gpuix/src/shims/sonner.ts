@@ -1,8 +1,9 @@
 /**
  * `sonner` for the GPUIX client. The real package injects a stylesheet into
  * `document.head` on import and renders DOM, neither of which exists here.
- * Shared code only calls `toast(...)`, so this keeps that call surface and
- * records every toast in an observable queue a native toaster will render.
+ * Shared code calls `toast(...)` and mounts `<Toaster />`; this keeps that
+ * call surface and publishes every toast to the native toaster in
+ * `toaster.tsx`.
  */
 
 import type { ExternalToast } from 'sonner'
@@ -14,9 +15,12 @@ export interface ToastRecord {
   kind: ToastKind
   message: string
   description?: string
+  duration?: number
 }
 
-type Listener = (toast: ToastRecord) => void
+export type ToastEvent = { type: 'show'; toast: ToastRecord } | { type: 'dismiss'; id?: string | number }
+
+type Listener = (event: ToastEvent) => void
 
 const listeners = new Set<Listener>()
 let nextId = 1
@@ -37,8 +41,13 @@ function publish(kind: ToastKind, message: unknown, opts?: ExternalToast): strin
   const record: ToastRecord = { id, kind, message: text(message) }
   const description = opts?.description
   if (typeof description === 'string') record.description = description
-  for (const listener of listeners) listener(record)
+  if (typeof opts?.duration === 'number') record.duration = opts.duration
+  emit({ type: 'show', toast: record })
   return id
+}
+
+function emit(event: ToastEvent): void {
+  for (const listener of listeners) listener(event)
 }
 
 function toastFn(message: unknown, opts?: ExternalToast): string | number {
@@ -51,7 +60,9 @@ export const toast = Object.assign(toastFn, {
   info: (message: unknown, opts?: ExternalToast) => publish('info', message, opts),
   warning: (message: unknown, opts?: ExternalToast) => publish('warning', message, opts),
   loading: (message: unknown, opts?: ExternalToast) => publish('loading', message, opts),
-  dismiss: (_id?: string | number) => undefined,
+  dismiss: (id?: string | number) => emit({ type: 'dismiss', id }),
   promise: <T>(promise: Promise<T> | (() => Promise<T>), _opts?: unknown) =>
     typeof promise === 'function' ? promise() : promise
 })
+
+export { Toaster } from './toaster'

@@ -1,11 +1,15 @@
 /**
- * The window width breakpoint variants read. One observer for the whole
- * tree (`CompatRoot` starts it): GPUIX's `useWindowSize` polls the native
- * window every 100 ms per hook, and a hook per stateful host blocked the
+ * The window size breakpoint variants and the env seam read. One observer for
+ * the whole tree (`CompatRoot` starts it): GPUIX's `useWindowSize` polls the
+ * native window every 100 ms per hook, and a hook per stateful host blocked the
  * JS thread for seconds in the bench (cpuprofile: 12 s in getWindowSize).
+ *
+ * A size change reaches `window` the way a browser reports it: `innerWidth`
+ * and `innerHeight` take the new size, then `resize` fires (the env seam
+ * re-evaluates `matchMedia` lists on it).
  */
 
-import { observeWindowSize } from '@gpuix/native/host'
+import { observeWindowSize, readWindowSize } from '@gpuix/native/host'
 import type { NativeRenderer } from '@gpuix/react'
 import { WINDOW_WIDTH } from '../window'
 
@@ -21,10 +25,25 @@ export function subscribeViewport(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
+interface ResizableWindow extends EventTarget {
+  innerWidth: number
+  innerHeight: number
+}
+
+function publish(size: { width: number; height: number }): void {
+  const win = (globalThis as { window?: ResizableWindow }).window
+  if (win && (win.innerWidth !== size.width || win.innerHeight !== size.height)) {
+    win.innerWidth = size.width
+    win.innerHeight = size.height
+    win.dispatchEvent(new Event('resize'))
+  }
+  if (size.width === width) return
+  width = size.width
+  for (const listener of listeners) listener()
+}
+
 export function observeViewport(renderer: NativeRenderer): () => void {
-  return observeWindowSize(renderer, (size) => {
-    if (size.width === width) return
-    width = size.width
-    for (const listener of listeners) listener()
-  })
+  const initial = readWindowSize(renderer)
+  if (initial.width > 0 && initial.height > 0) publish(initial)
+  return observeWindowSize(renderer, publish)
 }

@@ -140,18 +140,8 @@ export function installDom(viewport: Viewport, options: DomEnvOptions): void {
   const raf = (callback: (time: number) => void) =>
     setTimeout(() => callback(performance.now()), 16) as unknown as number
   const caf = (handle: number) => clearTimeout(handle as unknown as ReturnType<typeof setTimeout>)
-  const matchMedia = (query: string) => ({
-    get matches() {
-      return evaluateMediaQuery(query, size, options.reducedMotion)
-    },
-    media: query,
-    onchange: null,
-    addEventListener() {},
-    removeEventListener() {},
-    addListener() {},
-    removeListener() {},
-    dispatchEvent: () => true
-  })
+  const lists = new Set<MediaList>()
+  const matchMedia = (query: string) => new MediaList(query, () => size, options.reducedMotion, lists)
   const getComputedStyle = () => {
     compatWarn('dom-method-noop', 'getComputedStyle')
     return new Proxy({ getPropertyValue: () => '' }, { get: (target, key) => (key in target ? target[key as 'getPropertyValue'] : '') })
@@ -169,8 +159,65 @@ export function installDom(viewport: Viewport, options: DomEnvOptions): void {
     getSelection: () => null
   }
   Object.assign(g, globals)
-  Object.assign(win, globals, { navigator: g.navigator })
+  if (win !== g) Object.assign(win, globals, { navigator: g.navigator })
   win.addEventListener('resize', () => {
     size = { width: Number(win.innerWidth), height: Number(win.innerHeight) }
+    for (const list of lists) list.reevaluate()
   })
+}
+
+/**
+ * A `MediaQueryList` that fires `change` when a window resize flips its
+ * answer. The seam tracks it only while it has listeners.
+ */
+class MediaList extends EventTarget {
+  onchange: ((event: Event) => void) | null = null
+  private last: boolean
+  private readonly handlers = new Map<unknown, EventListener>()
+  private listening = 0
+
+  constructor(
+    readonly media: string,
+    private readonly size: () => Viewport,
+    private readonly reducedMotion: boolean,
+    private readonly lists: Set<MediaList>
+  ) {
+    super()
+    this.last = this.matches
+  }
+
+  get matches(): boolean {
+    return evaluateMediaQuery(this.media, this.size(), this.reducedMotion)
+  }
+
+  reevaluate(): void {
+    const matches = this.matches
+    if (matches === this.last) return
+    this.last = matches
+    const event = Object.assign(new Event('change'), { matches, media: this.media })
+    this.onchange?.(event)
+    this.dispatchEvent(event)
+  }
+
+  override addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void {
+    super.addEventListener(type, listener)
+    if (type === 'change' && listener && ++this.listening === 1) this.lists.add(this)
+  }
+
+  override removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void {
+    super.removeEventListener(type, listener)
+    if (type === 'change' && listener && this.listening > 0 && --this.listening === 0) this.lists.delete(this)
+  }
+
+  addListener(listener: (event: Event) => void): void {
+    const handler: EventListener = (event) => listener(event)
+    this.handlers.set(listener, handler)
+    this.addEventListener('change', handler)
+  }
+
+  removeListener(listener: (event: Event) => void): void {
+    const handler = this.handlers.get(listener)
+    if (handler) this.removeEventListener('change', handler)
+    this.handlers.delete(listener)
+  }
 }

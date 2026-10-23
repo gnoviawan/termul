@@ -24,8 +24,6 @@
     "noEmit": true
   },
   "include": [
-    "src/boot.tsx",
-    "src/App.tsx",
     "src/window.ts",
     "src/shims",
     "src/style",

@@ -335,11 +335,23 @@ export function compatTw(): Tw {
   return active
 }
 
-/** Switch the theme every translation resolves against. */
+const themeListeners = new Set<() => void>()
+
+/** Switch the theme every translation resolves against. Subscribers re-render the tree. */
 export function setCompatTheme(themeId: string): void {
   if (active.theme.id === themeId) return
   active = createTw(resolveTwTheme(themeId))
   cache = new Map()
+  for (const listener of themeListeners) listener()
+}
+
+export function compatThemeId(): string {
+  return active.theme.id
+}
+
+export function subscribeCompatTheme(listener: () => void): () => void {
+  themeListeners.add(listener)
+  return () => themeListeners.delete(listener)
 }
 
 /** Cache size, for the bench report. */

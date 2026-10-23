@@ -1,54 +1,45 @@
 /**
- * Boot the shared renderer services the way `src/renderer/App.tsx` does for
- * the browser, then open the window. Implements `#app/boot` (see
- * `boot-contract.ts`). The services start on the server's first `ready`, so a
- * window opened on a failed start shows the failure instead of a dead app.
+ * Open the window and mount Termul's browser root in it once the server is
+ * ready. Implements `#app/boot` (see `boot-contract.ts`). Everything the web
+ * root starts (client identity, the auth gate, the `/ws` socket) starts from
+ * its own hooks; this file adds only what `src/renderer/main.tsx` does before
+ * it renders, and the window itself.
  */
 
-import { render } from '@gpuix/react'
-import { getAcpTransport } from '@/lib/acp-transport'
+import { type NativeRenderer, render } from '@gpuix/react'
 import { registerDesktopHost } from '@/lib/desktop-host'
-import { checkWebAuthGate } from '@/lib/web-auth-gate'
+import { installGlobalErrorForwarding } from '@/lib/log-api'
 import { setWebAuthToken } from '@/lib/web-auth-token'
-import { ensureClientIdentity } from '@/lib/web-client-identity'
 import { App } from './App'
 import type { BootFn } from './boot-contract'
+import { compatRenderOptions } from './compat/root'
 import { ServerGate } from './launcher/ServerGate'
 import { log } from './log'
-import { WINDOW_HEIGHT, WINDOW_WIDTH } from './window'
-
-function startServices(): void {
-  ensureClientIdentity()
-  checkWebAuthGate()
-  // The browser root opens the `/ws` socket when its first event listener is
-  // registered (`useAcpListeners`). Until those hooks are mounted here, open it
-  // directly: the `projects` watch waits for the socket to be live.
-  getAcpTransport()
-    .connect()
-    .catch((error: unknown) =>
-      log.warn(
-        'boot',
-        `ws connect failed: ${error instanceof Error ? error.message : String(error)}`
-      )
-    )
-}
+import { DESKTOP_WINDOW } from './window'
 
 export const boot: BootFn = (config, options) => {
   if (config.token) setWebAuthToken(config.token)
   registerDesktopHost(options.desktopHost)
+  const registerFonts = (renderer: NativeRenderer) => {
+    for (const font of options.fonts) renderer.registerFont?.(font as Parameters<NonNullable<NativeRenderer['registerFont']>>[0])
+    log.info('boot', `registered ${options.fonts.length} font faces`)
+  }
   render(
     <ServerGate
       status={options.server}
       onFocusRequest={options.onFocusRequest}
-      onFirstReady={startServices}
+      onFirstReady={installGlobalErrorForwarding}
     >
-      <App />
+      <App onRenderer={registerFonts} />
     </ServerGate>,
     {
-      title: 'Termul',
-      width: WINDOW_WIDTH,
-      height: WINDOW_HEIGHT,
-      focus: options.focus
+      title: DESKTOP_WINDOW.title,
+      width: options.window.width,
+      height: options.window.height,
+      minWidth: DESKTOP_WINDOW.minWidth,
+      minHeight: DESKTOP_WINDOW.minHeight,
+      focus: options.focus,
+      ...compatRenderOptions
     }
   )
 }

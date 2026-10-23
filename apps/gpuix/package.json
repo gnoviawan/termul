@@ -6,6 +6,7 @@
   "description": "Termul desktop client rendered natively with GPUIX (React on Zed's GPUI)",
   "imports": {
     "#app/boot": "./src/boot.tsx",
+    "#app/web-root": "./src/app/web-root.ts",
     "#compat/fixture-boot": "./tools/compat/fixtures/boot.tsx",
     "#compat/fixture-dom": "./tools/compat/fixtures/dom/index.tsx",
     "#compat/bench-app": "./tools/compat/bench/app.tsx",
