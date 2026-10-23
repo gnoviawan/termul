@@ -18,6 +18,11 @@ button = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 dpy = display.Display()
 xtest.fake_input(dpy, X.MotionNotify, x=x, y=y)
 dpy.sync()
+# No window manager runs under Xvfb, so nothing gives the window focus on a click.
+pointer = dpy.screen().root.query_pointer()
+if pointer.child:
+    pointer.child.set_input_focus(X.RevertToParent, X.CurrentTime)
+    dpy.sync()
 time.sleep(0.05)
 xtest.fake_input(dpy, X.ButtonPress, button)
 dpy.sync()

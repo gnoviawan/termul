@@ -25,7 +25,7 @@ import { type Driver, gpuixDriver, type Point, webDriver } from './drive'
 import { writeReport } from './report'
 import { SURFACES } from './surfaces'
 import type { AutoStatus, Client, ClientRun, StepDiff, Surface, SurfaceResult } from './types'
-import { createWorld, prepareDevice, TOKEN, type World } from './world'
+import { createWorld, prepareDevice, setTheme, TOKEN, type World } from './world'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -109,6 +109,7 @@ function failedRun(error: unknown, started: number): ClientRun {
 async function runWeb(browser: Browser, world: World, surface: Surface, points: Map<string, Point>) {
   const deviceId = `m1-${slug(surface.id)}-web`
   await prepareDevice(world, deviceId)
+  await setTheme(world, 'termul', 'dark')
   await surface.prepare?.(world)
   const context = await browser.newContext({
     viewport: SIZE,
@@ -166,6 +167,7 @@ async function runWeb(browser: Browser, world: World, surface: Surface, points: 
 async function runGpuix(entry: string, world: World, surface: Surface, points: Map<string, Point>) {
   const deviceId = `m1-${slug(surface.id)}-gpuix`
   await prepareDevice(world, deviceId)
+  await setTheme(world, 'termul', 'dark')
   await surface.prepare?.(world)
   const clientStateDir = path.join(values.state as string, 'clients', slug(surface.id))
   await rm(clientStateDir, { recursive: true, force: true })

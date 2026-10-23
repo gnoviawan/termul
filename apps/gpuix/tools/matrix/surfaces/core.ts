@@ -295,8 +295,8 @@ const GIT: Surface[] = [
     title: 'Working copies switcher: search or create a worktree',
     steps: [
       DASHBOARD,
-      step('b-switcher', [click(label('Workspace'))], see('Working copies')),
-      step('c-typed', [type('feat-matrix')], see('feat-matrix'))
+      step('b-switcher', [click(label('Workspace'))], see('main')),
+      step('c-typed', [type('feat-matrix'), wait(800)])
     ]
   }
 ]
@@ -317,7 +317,7 @@ const CHAT: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-open', [openChat, wait(1500)], see('One more place parses it')),
-      step('c-top', [wheel(txt('One more place parses it', false), -20000), wait(1200)], see('How workspace routes are chosen'))
+      step('c-top', [wheel(txt('One more place parses it', false), -20000), wait(1200)], see('Three call sites depend on it'))
     ]
   },
   {
@@ -330,7 +330,7 @@ const CHAT: Surface[] = [
     id: 'chat.agent-launcher',
     area: 'chat',
     title: 'Agent launcher menu',
-    steps: [DASHBOARD, step('b-menu', [click(css('button[aria-label^="Agent and model"]'))], see('Chat Scenario Agent', 'Codex'))]
+    steps: [DASHBOARD, step('b-menu', [click(css('button[aria-label^="Agent and model"]'))], see('This agent gives no model'))]
   },
   {
     id: 'chat.send',
@@ -376,7 +376,7 @@ const COMPOSER: Surface[] = [
     id: 'composer.mention',
     area: 'composer',
     title: 'Mention menu (@)',
-    steps: [DASHBOARD, step('b-menu', [composer, type('@')], see('README.md'))]
+    steps: [DASHBOARD, step('b-menu', [composer, type('@')], see('No files or folders match'))]
   },
   {
     id: 'composer.slash',

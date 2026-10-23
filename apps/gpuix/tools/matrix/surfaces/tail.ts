@@ -6,7 +6,7 @@
 
 import type { Surface } from '../types'
 import { setTheme } from '../world'
-import { click, DASHBOARD, label, press, see, step, txt, type, wait } from './dsl'
+import { click, DASHBOARD, gone, label, press, see, step, txt, type, wait } from './dsl'
 
 const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string]> = [
   ['interface', 'Interface', 'Interface zoom'],
@@ -73,7 +73,7 @@ const PALETTE: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-open', [press('ctrl-k')], see('App Preferences', 'New Terminal')),
-      step('c-filter', [type('theme')], see('Change Color Theme')),
+      step('c-filter', [type('theme')], [...see('Change Color Theme'), gone('New Terminal')]),
       step('d-escape', [press('escape')], [{ text: 'Change Color Theme', gone: true }])
     ]
   },
@@ -84,7 +84,7 @@ const PALETTE: Surface[] = [
       title: `Palette command: ${command}`,
       steps: [
         DASHBOARD,
-        step('b-filtered', [press('ctrl-k'), type(command)], see(command)),
+        step('b-filtered', [press('ctrl-k'), type(command)], [...see(command), ...(command === 'New Terminal' ? [] : [gone('New Terminal')])]),
         step('c-run', [commandId === 'switch-project' ? press('enter') : click(txt(command)), wait(1200)], see(expect))
       ]
     })
@@ -169,4 +169,4 @@ const LONG_TAIL: Surface[] = [
   }
 ]
 
-export const TAIL: Surface[] = [...SETTINGS, ...THEMES, ...PALETTE, ...LONG_TAIL]
+export const TAIL: Surface[] = [...SETTINGS, ...PALETTE, ...LONG_TAIL, ...THEMES]

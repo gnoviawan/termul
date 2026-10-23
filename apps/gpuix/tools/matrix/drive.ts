@@ -20,6 +20,8 @@ export interface Point {
 }
 
 const PRESENT_TIMEOUT_MS = 15_000
+/** GPUIX runs after the web client on the same server, so its data is already there. */
+const GPUIX_PRESENT_TIMEOUT_MS = 8_000
 const GONE_TIMEOUT_MS = 6_000
 const SETTLE_AFTER_ACTION_MS = 250
 
@@ -255,13 +257,13 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
     let native: Point | null = null
     let via: ActionLog['via'] = 'web-point'
     if ('testId' in target) {
-      native = await poll(async () => (await app.getByTestId(target.testId).count()) > 0, 5000).then(async () =>
+      native = await poll(async () => (await app.getByTestId(target.testId).count()) > 0, 2500).then(async () =>
         nearest(await app.getByTestId(target.testId).all(), web)
       )
       via = 'testid'
     } else if ('text' in target) {
       const exact = target.exact ?? true
-      await poll(async () => (await app.getByText(target.text).count()) > 0, 5000)
+      await poll(async () => (await app.getByText(target.text).count()) > 0, 2500)
       const nodes = (await app.getByText(target.text).all()).filter((node) =>
         exact ? normalize(node.text ?? '') === normalize(target.text) : true
       )
@@ -343,7 +345,7 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
           const scope = app.getByTestId(check.within)
           return (await scope.count()) > 0 && ordered(subtreeText(await scope.element()), order)
         }
-        return { step, text: order.join(' < '), expect: 'present', pass: await poll(inOrder, PRESENT_TIMEOUT_MS) }
+        return { step, text: order.join(' < '), expect: 'present', pass: await poll(inOrder, GPUIX_PRESENT_TIMEOUT_MS) }
       }
       const want = normalize(check.text)
       const painted = async () => {
@@ -359,7 +361,7 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
       }
       const pass = check.gone
         ? await poll(async () => !(await painted()), GONE_TIMEOUT_MS)
-        : await poll(painted, PRESENT_TIMEOUT_MS)
+        : await poll(painted, GPUIX_PRESENT_TIMEOUT_MS)
       return { step, text: check.text, expect: check.gone ? 'gone' : 'present', pass }
     }
   }
