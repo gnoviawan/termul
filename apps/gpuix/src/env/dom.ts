@@ -2,7 +2,7 @@
  * The DOM members shared components read beyond P0's location/storage/event
  * targets: `document.activeElement` and focus events, the element classes
  * `instanceof` checks name, tree queries, `requestAnimationFrame`,
- * `matchMedia`, the observers and `getComputedStyle`. Element-level behaviour
+ * `matchMedia`, the observers, `getComputedStyle` and `CSS.escape`. Element-level behaviour
  * lives in `src/compat/dom-node.ts`; this file only puts it on the globals.
  */
 
@@ -27,6 +27,24 @@ const MEDIA_FEATURES: Readonly<Record<string, string>> = {
   'any-pointer': 'fine',
   'display-mode': 'standalone',
   'prefers-contrast': 'no-preference'
+}
+
+/** `CSS.escape` (CSSOM): an identifier safe inside a selector, as `#${CSS.escape(id)}`. */
+export function cssEscape(value: string): string {
+  let out = ''
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    const ch = value[i]
+    const digit = code >= 0x30 && code <= 0x39
+    if (code === 0) out += '\uFFFD'
+    else if ((code >= 0x1 && code <= 0x1f) || code === 0x7f) out += `\\${code.toString(16)} `
+    else if (digit && (i === 0 || (i === 1 && value.charCodeAt(0) === 0x2d))) {
+      out += `\\${code.toString(16)} `
+    } else if (i === 0 && ch === '-' && value.length === 1) out += '\\-'
+    else if (code >= 0x80 || ch === '-' || ch === '_' || /[0-9A-Za-z]/.test(ch)) out += ch
+    else out += `\\${ch}`
+  }
+  return out
 }
 
 /** A desktop window: size features against the window, input features as mouse and keyboard. */
@@ -156,7 +174,8 @@ export function installDom(viewport: Viewport, options: DomEnvOptions): void {
     MutationObserver: NoopObserver,
     devicePixelRatio: 1,
     scrollTo: () => {},
-    getSelection: () => null
+    getSelection: () => null,
+    CSS: { escape: cssEscape, supports: () => false }
   }
   Object.assign(g, globals)
   if (win !== g) Object.assign(win, globals, { navigator: g.navigator })
