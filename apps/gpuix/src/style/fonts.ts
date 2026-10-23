@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { styleLog } from './log'
+import { log } from '../log'
 
 const FONT_DIR = join(import.meta.dir, '../../assets/fonts')
 const WEIGHTS = ['Regular', 'Medium', 'SemiBold', 'Bold'] as const
@@ -16,10 +16,10 @@ export const FONT_FILES: readonly string[] = ['Inter', 'InterTabular', 'PaperMon
 /** Register Inter Variable, its tabular-figure twin and Paper Mono. Returns the count. */
 export function registerTermulFonts(renderer: { registerFont?: (data: Buffer) => void }): number {
   if (!renderer.registerFont) {
-    styleLog.warn('registerFont unavailable; text falls back to system fonts')
+    log.warn('fonts', 'registerFont unavailable; text falls back to system fonts')
     return 0
   }
   for (const file of FONT_FILES) renderer.registerFont(readFileSync(file))
-  styleLog.info('fonts registered', { count: FONT_FILES.length })
+  log.info('fonts', `registered ${FONT_FILES.length} faces`)
   return FONT_FILES.length
 }

@@ -1,18 +1,52 @@
 {
   "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
     "jsx": "react-jsx",
     "jsxImportSource": "@gpuix/react",
-    "module": "esnext",
-    "target": "esnext",
-    "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true,
-    "types": ["bun"],
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": [],
     "paths": {
-      "@/*": ["./../../src/renderer/*"],
-      "@shared/*": ["./../../src/shared/*"]
-    }
+      "@/*": [
+        "../../src/renderer/*"
+      ],
+      "@renderer/*": [
+        "../../src/renderer/*"
+      ],
+      "@shared/*": [
+        "../../src/shared/*"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react/*": [
+        "./node_modules/@types/react/*"
+      ]
+    },
+    "noEmit": true
   },
-  "include": ["src", "tools"]
+  "include": [
+    "src/boot.tsx",
+    "src/App.tsx",
+    "src/window.ts",
+    "src/shims",
+    "src/style",
+    "../../src/renderer/vite-env.d.ts"
+  ],
+  "exclude": [
+    "src/style/fonts.ts",
+    "src/style/__tests__"
+  ]
 }

@@ -11,7 +11,7 @@
  */
 import type { StyleDesc } from '@gpuix/react'
 import { type CssShadow, formatColor, type Rgba } from './css-value'
-import { styleLog } from './log'
+import { log } from '../log'
 import { INHERITED_LEADING, ROOT_FONT_SIZE } from './scale'
 import { resolveTwTheme, type TwTheme } from './theme'
 import { type BoxShadow, type Fragment, type Ring, resolveUtility, toBoxShadow } from './utilities'
@@ -328,7 +328,7 @@ function logIssues(issues: ClassIssue[]): void {
   for (const issue of issues) {
     if (issue.kind === 'approximate' || loggedIssues.has(issue.token)) continue
     loggedIssues.add(issue.token)
-    styleLog.warn(`tw: ${issue.kind} class "${issue.token}"`, { reason: issue.reason })
+    log.warn('style', `tw ${issue.kind} class "${issue.token}": ${issue.reason}`)
   }
 }
 
