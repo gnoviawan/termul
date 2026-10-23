@@ -374,7 +374,7 @@ async function main() {
       const record = await runOnce(opts, scenario, run)
       writeFileSync(
         path.join(opts.outDir, `${scenario}-run${run}.json`),
-        JSON.stringify({ machine, ...record }, null, 1)
+        JSON.stringify({ machine, ...record })
       )
       console.log(
         `[perf]   status=${record.meta.status} errors=${record.errors.length} preRunBusy=${record.meta.preRunBusyPct}% waited=${record.meta.quietWaitS}s`
