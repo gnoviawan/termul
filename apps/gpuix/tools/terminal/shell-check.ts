@@ -11,27 +11,24 @@
  *
  * bun tools/terminal/shell-check.ts [--port N] [--out DIR] [--state-dir DIR]
  */
-import { copyFile, mkdir, rm } from 'node:fs/promises'
+
 import { existsSync, readFileSync } from 'node:fs'
+import { copyFile, mkdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { buildClient } from '../../build'
+import { cropPng, diffPngs } from '../parity/diff'
 import { startTestServer } from '../parity/server'
 import { grabFrame, READY_TIMEOUT_MS, windowOrigin, withGpuix } from '../parity/shoot-gpuix'
 import { seedWorkspace } from '../parity/workspace'
 import {
+  freePort,
   openStatusBarTerminal,
   resizeWindow,
   rowMatching,
   terminals,
   until
 } from './shell-tree'
-
-function freePort(): number {
-  const listening = Bun.spawnSync(['ss', '-ltnH']).stdout.toString()
-  for (let port = 8190; port <= 8199; port++) if (!listening.includes(`:${port} `)) return port
-  throw new Error('no free port in 8190-8199')
-}
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -219,6 +216,42 @@ try {
           switchBackTerminalPaintedMs: backMs,
           oneTreeReadMs
         }
+      )
+
+      // The rail's activity spinner has no text, so it is read from pixels: the
+      // alpha row while the hidden terminal prints, against the same row once idle.
+      const alphaRow = await app.getByTestId('project-item-parity-alpha').bounds()
+      const rowRect = {
+        x: Math.round(alphaRow.x),
+        y: Math.round(alphaRow.y),
+        width: Math.round(alphaRow.width),
+        height: Math.round(alphaRow.height)
+      }
+      await type('clear')
+      await type('sleep 1; for i in $(seq 1 40); do echo tick$i; sleep 0.1; done')
+      await app.getByTestId('project-item-parity-beta').click()
+      await app.getByText('What should we do in beta?').waitFor({ timeoutMs: 10_000 })
+      await Bun.sleep(1500)
+      await grab(path.join(OUT, 'activity.png'))
+      await Bun.sleep(6000)
+      await grab(path.join(OUT, 'activity-idle.png'))
+      cropPng(path.join(OUT, 'activity.png'), rowRect, path.join(OUT, 'activity-row.png'))
+      cropPng(path.join(OUT, 'activity-idle.png'), rowRect, path.join(OUT, 'activity-idle-row.png'))
+      const rowDiff = diffPngs(
+        path.join(OUT, 'activity-row.png'),
+        path.join(OUT, 'activity-idle-row.png'),
+        path.join(OUT, 'activity-row-diff.png')
+      )
+      await app.getByTestId('project-item-parity-alpha').click()
+      const lastTick = await until(
+        'output parsed while hidden',
+        async () => rowMatching(await term(), /^tick40$/),
+        10_000
+      ).catch(() => null)
+      check(
+        'hidden terminal output marks the project row active, then idles; the screen kept parsing',
+        rowDiff.exact.mismatched > 20 && !!lastTick,
+        { rowRect, rowPixelsChanged: rowDiff.exact.mismatched, lastTickPainted: !!lastTick }
       )
 
       await type('clear')

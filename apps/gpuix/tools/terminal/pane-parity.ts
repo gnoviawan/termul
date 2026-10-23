@@ -20,7 +20,7 @@ import { READY_TIMEOUT_MS, withGpuix } from '../parity/shoot-gpuix'
 import { withWeb } from '../parity/shoot-web'
 import { seedWorkspace } from '../parity/workspace'
 import { FIXTURE_BYTES, FIXTURE_CHECKPOINTS } from './fixture'
-import { openStatusBarTerminal, terminals } from './shell-tree'
+import { freePort, openStatusBarTerminal, terminals } from './shell-tree'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -36,12 +36,6 @@ const SIZE = { width: 1280, height: 800 }
 const COMMAND = 'clear; cat fixture.out'
 const SETTLE_MS = 2500
 const READY_TEXT = 'What should we do in alpha?'
-
-function freePort(): number {
-  const listening = Bun.spawnSync(['ss', '-ltnH']).stdout.toString()
-  for (let port = 8190; port <= 8199; port++) if (!listening.includes(`:${port} `)) return port
-  throw new Error('no free port in 8190-8199')
-}
 
 const offsets = JSON.parse(await readFile(FIXTURE_CHECKPOINTS, 'utf8')) as Record<string, number>
 const limit = offsets[values.checkpoint!]

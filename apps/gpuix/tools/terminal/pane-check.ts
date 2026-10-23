@@ -15,9 +15,16 @@ import { launch } from '@gpuix/react/automation'
 import { APP_DIR } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { addProject, startTestServer } from '../parity/server'
-import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, windowOrigin } from '../parity/shoot-gpuix'
+import {
+  grabFrame,
+  LAVAPIPE_ICD,
+  SCREEN_MARGIN,
+  startXvfb,
+  windowOrigin
+} from '../parity/shoot-gpuix'
 import { buildScene } from './scene/build'
 import type { PaneCommand, PaneSceneState, PaneTerminalState } from './scene/contract'
+import { freePort, resizeWindow } from './shell-tree'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -30,40 +37,6 @@ const { values } = parseArgs({
 const OUT = values.out!
 const ROOT = values.root!
 mkdirSync(OUT, { recursive: true })
-
-function freePort(): number {
-  const listening = Bun.spawnSync(['ss', '-ltnH']).stdout.toString()
-  for (let port = 8190; port <= 8199; port++) if (!listening.includes(`:${port} `)) return port
-  throw new Error('no free port in 8190-8199')
-}
-
-function freeDisplay(): number {
-  for (let n = 150; n < 250; n++)
-    if (!existsSync(`/tmp/.X${n}-lock`) && !existsSync(`/tmp/.X11-unix/X${n}`)) return n
-  throw new Error('no free X display in :150-:249')
-}
-
-async function startXvfb(width: number, height: number) {
-  const display = `:${freeDisplay()}`
-  const child = Bun.spawn(['Xvfb', display, '-nocursor', '-screen', '0', `${width}x${height}x24`], {
-    stdout: 'ignore',
-    stderr: 'ignore'
-  })
-  const socket = `/tmp/.X11-unix/X${display.slice(1)}`
-  const deadline = Date.now() + 5000
-  while (!existsSync(socket)) {
-    if (Date.now() > deadline) throw new Error(`Xvfb ${display} did not come up`)
-    await Bun.sleep(50)
-  }
-  return { display, stop: () => child.kill() }
-}
-
-function windowId(display: string): string {
-  const tree = Bun.spawnSync(['xwininfo', '-root', '-tree', '-display', display]).stdout.toString()
-  const match = tree.match(/(0x[0-9a-f]+) "Termul terminal pane"/)
-  if (!match) throw new Error(`no scene window on ${display}`)
-  return match[1]!
-}
 
 const results: Record<string, unknown> = {}
 const failures: string[] = []
@@ -238,16 +211,9 @@ try {
   })
   check('pty-size-matches-screen', sizeBefore.pty === sizeBefore.screen, sizeBefore)
 
-  const win = windowId(xvfb.display)
-  Bun.spawnSync([
-    'python3',
-    '-I',
-    path.join(import.meta.dir, 'scripts/xresize.py'),
-    xvfb.display,
-    win,
-    '1000',
-    '640'
-  ])
+  const FULL = { width: WINDOW_WIDTH, height: WINDOW_HEIGHT }
+  const SMALL = { width: 1000, height: 640 }
+  resizeWindow(xvfb.display, FULL, SMALL)
   const resized = await until('screen refit after window resize', (s) => {
     const t = s.terminals.find((x) => x.storeId === id)
     return t && `${t.rows} ${t.cols}` !== sizeBefore.screen ? t : null
@@ -273,15 +239,7 @@ try {
       screen: [resized.cols, resized.rows]
     }
   )
-  Bun.spawnSync([
-    'python3',
-    '-I',
-    path.join(import.meta.dir, 'scripts/xresize.py'),
-    xvfb.display,
-    win,
-    String(WINDOW_WIDTH),
-    String(WINDOW_HEIGHT)
-  ])
+  resizeWindow(xvfb.display, SMALL, FULL)
   await until('screen refit at full size', (s) => {
     const t = s.terminals.find((x) => x.storeId === id)
     return t && `${t.rows} ${t.cols}` === sizeBefore.screen
@@ -432,7 +390,7 @@ try {
   await type(id, `python3 ${path.join(a.path, 'mouse-echo.py')}`)
   const ready = await until('mouse program ready', (s) => {
     const t = s.terminals.find((x) => x.storeId === id)
-    return t?.visibleText.some((r) => r.includes('MOUSE-READY')) ? t : null
+    return t?.grid && t.visibleText.some((r) => r.includes('MOUSE-READY')) ? t : null
   })
   const col = 10
   const row = 5

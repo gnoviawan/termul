@@ -118,3 +118,10 @@ export function resizeWindow(display: string, from: Size, to: Size): void {
     sizeArg(to)
   )
 }
+
+/** The first port in the test range 8190-8199 nothing listens on. */
+export function freePort(): number {
+  const listening = Bun.spawnSync(['ss', '-ltnH']).stdout.toString()
+  for (let port = 8190; port <= 8199; port++) if (!listening.includes(`:${port} `)) return port
+  throw new Error('no free port in 8190-8199')
+}
