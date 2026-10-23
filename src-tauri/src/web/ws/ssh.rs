@@ -78,10 +78,22 @@ struct HostKeyArg {
 fn args<T: DeserializeOwned>(request_type: &str, payload: &Value) -> SshResult<T> {
     serde_json::from_value(payload.clone()).map_err(|error| {
         SshFailure::new(
-            format!("malformed {request_type} payload: {error}"),
+            format!("malformed {request_type} payload: {}", payload_error(&error)),
             "SSH_INVALID_REQUEST",
         )
     })
+}
+
+/// A payload parse error that never repeats a value the client sent: serde
+/// quotes the offending value in a type or value error, and the field may be
+/// a password or passphrase. A missing field names only the field.
+pub(super) fn payload_error(error: &serde_json::Error) -> String {
+    let text = error.to_string();
+    if text.starts_with("missing field") {
+        text
+    } else {
+        "a field has the wrong type or value".to_string()
+    }
 }
 
 fn value<T: serde::Serialize>(result: SshResult<T>) -> SshResult<Value> {

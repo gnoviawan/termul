@@ -155,7 +155,10 @@ fn parse<T: serde::de::DeserializeOwned>(
         WsReply::err(
             id.to_string(),
             WsErrorCode::Unsupported,
-            format!("malformed {request} payload (want {want}): {error}"),
+            format!(
+                "malformed {request} payload (want {want}): {}",
+                super::ssh::payload_error(&error)
+            ),
         )
     })
 }

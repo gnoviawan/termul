@@ -152,6 +152,22 @@ async fn a_malformed_payload_names_the_field_and_never_echoes_a_secret() {
 }
 
 #[tokio::test]
+async fn a_wrongly_typed_field_is_refused_without_echoing_its_value() {
+    let host = Host::new(true);
+    let profile = json!({
+        "id": "p", "name": "n", "host": "h", "port": "hunter2-secret", "username": "u",
+        "authMethod": "password", "password": "hunter2-secret", "portForwards": []
+    });
+    let reply = host.send("ssh_save_profile", json!({ "profile": profile })).await;
+    let err = reply.err.unwrap();
+    assert_eq!(err.code, "SSH_INVALID_REQUEST");
+    assert_eq!(
+        err.message,
+        "malformed ssh_save_profile payload: a field has the wrong type or value"
+    );
+}
+
+#[tokio::test]
 async fn a_host_without_ssh_answers_unsupported() {
     let host = Host::new(false);
     for type_ in SSH_WS_REQUESTS {
