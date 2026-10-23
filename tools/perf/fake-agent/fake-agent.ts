@@ -86,6 +86,13 @@ export interface AgentKnobs {
   mock: boolean
   /** Events between a tool_call open and its completing tool_call_update. */
   toolUpdateDelay: number
+  /**
+   * PERF_AGENT_UNIQUE_SESSIONS=1 suffixes each wire sessionId with the pid.
+   * termul-server spawns one agent process per chat, so without it every
+   * chat answers `perf-sess-1` and the client folds them into one session.
+   * Content stays keyed on the unsuffixed id, so streams stay deterministic.
+   */
+  uniqueSessionIds: boolean
 }
 
 const DEFAULTS: AgentKnobs = {
@@ -103,7 +110,8 @@ const DEFAULTS: AgentKnobs = {
   replayPath: null,
   trace: false,
   mock: false,
-  toolUpdateDelay: 4
+  toolUpdateDelay: 4,
+  uniqueSessionIds: false
 }
 
 function parseIntEnv(name: string, fallback: number): number {
@@ -137,7 +145,8 @@ export function readKnobs(argv: string[] = process.argv.slice(2)): AgentKnobs {
     replayPath: Bun.env.PERF_AGENT_REPLAY ?? null,
     trace: Bun.env.PERF_AGENT_TRACE === '1',
     mock: Bun.env.PERF_AGENT_MOCK === '1' || Bun.env.PERF_AGENT_MOCK === 'true',
-    toolUpdateDelay: parseIntEnv('PERF_AGENT_TOOL_UPDATE_DELAY', DEFAULTS.toolUpdateDelay)
+    toolUpdateDelay: parseIntEnv('PERF_AGENT_TOOL_UPDATE_DELAY', DEFAULTS.toolUpdateDelay),
+    uniqueSessionIds: Bun.env.PERF_AGENT_UNIQUE_SESSIONS === '1'
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -543,18 +552,19 @@ function startStream(agent: FakeAgent, id: number | string, sessionId: string): 
     return
   }
   const knobs = agent.knobs
+  const contentKey = sessionId.replace(/\.\d+$/, '')
   agent.inFlight = {
     id,
     sessionId,
     timer: null,
     timeout: null,
     eventIndex: 0,
-    hash: fnv1a(`${knobs.seed}:${knobs.instance}:${sessionId}`),
+    hash: fnv1a(`${knobs.seed}:${knobs.instance}:${contentKey}`),
     emitted: 0,
     openTools: [],
     // Mock mode: reseed per session so concurrent chats stream distinct
     // content — the incident shape is N different agents, not N copies.
-    rng: knobs.mock ? mulberry32(fnvSeed(knobs.seed, knobs.instance, sessionId)) : undefined
+    rng: knobs.mock ? mulberry32(fnvSeed(knobs.seed, knobs.instance, contentKey)) : undefined
   }
   const intervalMs = knobs.rate > 0 ? Math.max(1, Math.round(1000 / knobs.rate)) : 0
   const emitTick = () => {
@@ -640,7 +650,9 @@ function handle(agent: FakeAgent, msg: JsonRpcMessage): void {
   }
   if (method === 'session/new') {
     agent.sessionCounter += 1
-    respond(id, { sessionId: `perf-sess-${agent.sessionCounter}`, modes: [] })
+    const logical = `perf-sess-${agent.sessionCounter}`
+    const sessionId = agent.knobs.uniqueSessionIds ? `${logical}.${process.pid}` : logical
+    respond(id, { sessionId, modes: [] })
     return
   }
   if (method === 'session/prompt') {
