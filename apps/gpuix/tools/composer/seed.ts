@@ -5,20 +5,17 @@
  */
 
 import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import net from 'node:net'
 import path from 'node:path'
-import { scopedKey } from '../../../../src/shared/types/persistence.types.ts'
 import { REPO_DIR } from '../../build'
 import { addProject, startTestServer, type TestServer } from '../parity/server'
-import { stateRoot } from '../shared/seed'
-import { connectWs } from './ws'
+import { pickPort, registerAgent, stateRoot } from '../shared/seed'
+import { connectWs } from '../shared/ws'
 
 export const STATE_ROOT = stateRoot('/tmp/gpuix-o3')
 export const COMPOSER_TOKEN = 'gpuix-composer-token'
 export const COMPOSER_DEVICE_ID = 'gpuix-composer'
 export const COMPOSER_AGENT_ID = 'custom-composer-agent'
 export const COMPOSER_PROJECT_ID = 'composer-project'
-const PORTS = [8190, 8199] as const
 
 export const PROJECT_FILES = ['src/app.ts', 'src/api.ts', 'README.md', 'docs/guide.md']
 
@@ -30,19 +27,6 @@ export interface ComposerServer {
   agentConfigId: string
   projectId: string
   stop(): Promise<void>
-}
-
-function isPortFree(port: number): Promise<boolean> {
-  const probe = net.createServer()
-  return new Promise((resolve) => {
-    probe.once('error', () => resolve(false))
-    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)))
-  })
-}
-
-async function pickPort(): Promise<number> {
-  for (let port = PORTS[0]; port <= PORTS[1]; port++) if (await isPortFree(port)) return port
-  throw new Error(`no free port in ${PORTS.join('-')}`)
 }
 
 /**
@@ -90,27 +74,17 @@ export async function seedComposerServer(): Promise<ComposerServer> {
     const ws = await connectWs({
       baseUrl: server.baseUrl,
       token: COMPOSER_TOKEN,
-      deviceId: COMPOSER_DEVICE_ID
+      deviceId: COMPOSER_DEVICE_ID,
+      clientInstanceId: 'composer-seed'
     })
     await ws.request('set_default_project', { projectId: COMPOSER_PROJECT_ID })
-    const agentsKey = scopedKey('acp/agents', COMPOSER_DEVICE_ID)
-    const config = {
+    await registerAgent(ws, COMPOSER_DEVICE_ID, {
       configId: COMPOSER_AGENT_ID,
       name: 'Composer Agent',
       command: 'bun',
       args: [path.join(import.meta.dir, 'prompt-agent.ts')],
       env: { COMPOSER_PROMPT_LOG: promptLog },
       allowTerminal: false
-    }
-    const current = await ws.request<{ revision?: number }>('store_read', { key: agentsKey })
-    await ws.request('store_write', {
-      key: agentsKey,
-      value: { _version: 1, data: [{ id: COMPOSER_AGENT_ID, ...config }] },
-      baseRevision: current.revision ?? 0
-    })
-    await ws.request('store_write', {
-      key: scopedKey('agents/last-selected', COMPOSER_DEVICE_ID),
-      value: { _version: 1, data: { mode: 'acp', agentId: COMPOSER_AGENT_ID } }
     })
     ws.close()
     return {

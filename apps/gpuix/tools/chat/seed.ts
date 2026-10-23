@@ -11,15 +11,13 @@
 
 import { writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
-import net from 'node:net'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
-import { scopedKey } from '../../../../src/shared/types/persistence.types.ts'
 import { REPO_DIR } from '../../build.ts'
 import { addProject, startTestServer } from '../parity/server.ts'
-import { stateRoot } from '../shared/seed.ts'
+import { type AgentConfig, pickPort, registerAgent, stateRoot } from '../shared/seed.ts'
+import { commandId, connectWs, type WsClient } from '../shared/ws.ts'
 import { SCRIPT_PROMPTS } from './script.ts'
-import { commandId, connectWs, type WsClient } from './ws.ts'
 
 export const CHAT_TOKEN = 'gpuix-chat-token'
 export const CHAT_DEVICE_ID = 'gpuix-chat'
@@ -27,7 +25,6 @@ export const CHAT_AGENT_CONFIG_ID = 'custom-chat-scenario'
 export const CHAT_AGENT_NAME = 'Chat Scenario Agent'
 export const CHAT_PROJECT_ID = 'chat-project'
 const STATE_ROOT = stateRoot('/tmp/gpuix-o2')
-const PORT_RANGE = [8190, 8199] as const
 const TURN_TIMEOUT_MS = 120_000
 
 export interface SeededChat {
@@ -53,27 +50,7 @@ export interface ChatServer {
   stop(): Promise<void>
 }
 
-function isPortFree(port: number): Promise<boolean> {
-  const probe = net.createServer()
-  return new Promise((resolve) => {
-    probe.once('error', () => resolve(false))
-    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)))
-  })
-}
-
-async function pickPort(requested?: number): Promise<number> {
-  if (requested !== undefined) {
-    if (!(await isPortFree(requested))) throw new Error(`port ${requested} is taken`)
-    return requested
-  }
-  for (let port = PORT_RANGE[0]; port <= PORT_RANGE[1]; port++) {
-    if (await isPortFree(port)) return port
-  }
-  throw new Error(`no free port in ${PORT_RANGE.join('-')}`)
-}
-
-/** The spawn config; the stored copy adds `id` (equal to `configId`, as the persistence migration backfills it). */
-export function agentConfig(env: Record<string, string> = {}) {
+export function agentConfig(env: Record<string, string> = {}): AgentConfig {
   return {
     configId: CHAT_AGENT_CONFIG_ID,
     name: CHAT_AGENT_NAME,
@@ -82,21 +59,6 @@ export function agentConfig(env: Record<string, string> = {}) {
     env,
     allowTerminal: false
   }
-}
-
-/** Saves the agent the way the app stores a custom agent, so the launcher lists it. */
-async function registerAgentConfig(ws: WsClient, env: Record<string, string>): Promise<void> {
-  const agentsKey = scopedKey('acp/agents', CHAT_DEVICE_ID)
-  const current = await ws.request<{ revision?: number }>('store_read', { key: agentsKey })
-  await ws.request('store_write', {
-    key: agentsKey,
-    value: { _version: 1, data: [{ id: CHAT_AGENT_CONFIG_ID, ...agentConfig(env) }] },
-    baseRevision: current.revision ?? 0
-  })
-  await ws.request('store_write', {
-    key: scopedKey('agents/last-selected', CHAT_DEVICE_ID),
-    value: { _version: 1, data: { mode: 'acp', agentId: CHAT_AGENT_CONFIG_ID } }
-  })
 }
 
 export async function sendPrompt(
@@ -158,7 +120,7 @@ export async function seedChat(
       clientInstanceId: 'chat-seed'
     })
     await ws.request('set_default_project', { projectId: CHAT_PROJECT_ID })
-    await registerAgentConfig(ws, opts.agentEnv ?? {})
+    await registerAgent(ws, CHAT_DEVICE_ID, agentConfig(opts.agentEnv))
     const { agentId } = await ws.request<{ agentId: string }>(
       'spawn_agent',
       { config: agentConfig(opts.agentEnv), projectId: CHAT_PROJECT_ID },

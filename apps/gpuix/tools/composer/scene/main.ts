@@ -1,6 +1,6 @@
 /**
  * `COMPOSER_START=<configId>|<projectId>|<cwd> COMPOSER_BOX=x,y,w COMPOSER_DEVICE=<id>
- *  [COMPOSER_SESSION_OUT=<file>] bun dist-composer/main.js`, with the usual
+ *  [COMPOSER_SESSION_OUT=<file>] bun dist/composer-scene/main.js`, with the usual
  * TERMUL_SERVER_URL / TERMUL_SERVER_TOKEN / TERMUL_GPUIX_STATE_DIR.
  */
 
@@ -26,7 +26,7 @@ if (process.env.COMPOSER_DEVICE)
 // Non-literal: boot.tsx is app-side code, checked by tsconfig.composer.json, not this Bun-typed program.
 const BOOT: string = './boot'
 const { boot } = (await import(BOOT)) as { boot: ComposerSceneBoot }
-const FONT_DIR = path.join(import.meta.dir, '../assets/fonts')
+const FONT_DIR = path.join(import.meta.dir, '../../assets/fonts')
 const sessionOut = process.env.COMPOSER_SESSION_OUT
 boot(config, {
   start: { configId, projectId, cwd },
