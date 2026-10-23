@@ -4,8 +4,9 @@
  * - alpha: a git repo with three commits, a second branch, a staged edit, an
  *   unstaged edit and an untracked file, plus source and markdown files for
  *   the explorer and the editors.
- * - beta: a plain folder. gamma: a plain folder the remove-project surface
- *   deletes (each run re-adds it).
+ * - beta: a plain folder. gamma: a plain folder the rename surface renames.
+ *   delta: a plain folder only the remove-project surface touches (each run
+ *   re-adds it), so no chat another surface started there blocks the delete.
  * - a chat session in alpha with the scripted agent's three turns.
  *
  * Every client run uses a fresh device id, so device-scoped UI state (open
@@ -25,7 +26,8 @@ export const TOKEN = 'gpuix-m1-matrix'
 export const PROJECTS = {
   alpha: { id: 'm1-alpha', name: 'alpha', color: 'blue' },
   beta: { id: 'm1-beta', name: 'beta', color: 'green' },
-  gamma: { id: 'm1-gamma', name: 'gamma', color: 'purple' }
+  gamma: { id: 'm1-gamma', name: 'gamma', color: 'purple' },
+  delta: { id: 'm1-delta', name: 'delta', color: 'orange' }
 } as const
 export type ProjectKey = keyof typeof PROJECTS
 
@@ -121,6 +123,7 @@ export async function createWorld(opts: { port: number; root: string }): Promise
     const alphaHead = seedAlphaRepo(dirs.alpha)
     write(dirs.beta, 'index.js', "console.log('beta')\n")
     write(dirs.gamma, 'todo.md', '# gamma\n')
+    write(dirs.delta, 'todo.md', '# delta\n')
 
     const ws = await connectWs({ baseUrl: server.baseUrl, token: TOKEN, deviceId: 'm1-seed', clientInstanceId: 'm1-seed' })
     await ws.request('set_default_project', { projectId: PROJECTS.alpha.id })

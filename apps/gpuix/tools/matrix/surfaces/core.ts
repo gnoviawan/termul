@@ -21,7 +21,7 @@ const RAIL: Surface[] = [
     title: 'Project list and switching',
     roi: '[data-testid="shell-rail"]',
     steps: [
-      step('a-dashboard', [], see('alpha', 'beta', 'gamma', 'What should we do in alpha?')),
+      step('a-dashboard', [], see('alpha', 'beta', 'gamma', 'delta', 'What should we do in alpha?')),
       step('b-switch-beta', [click(id('project-item-m1-beta'))], see('What should we do in beta?'))
     ]
   },
@@ -58,11 +58,11 @@ const RAIL: Surface[] = [
     id: 'rail.project-remove',
     area: 'rail',
     title: 'Remove a project',
-    prepare: (world) => ensureProject(world, 'gamma'),
+    prepare: (world) => ensureProject(world, 'delta'),
     steps: [
       DASHBOARD,
-      step('b-confirm', [rclick(id('project-item-m1-gamma')), click(txt('Delete'))], see('Delete')),
-      step('c-removed', [click(label('Delete'))], [gone('gamma')])
+      step('b-confirm', [rclick(id('project-item-m1-delta')), click(txt('Delete'))], see('Delete Project')),
+      step('c-removed', [click(label('Delete'))], [gone('delta')])
     ]
   },
   {

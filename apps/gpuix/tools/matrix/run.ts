@@ -18,7 +18,7 @@ import { type Browser, chromium } from 'playwright'
 import { APP_DIR, buildClient } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { cropPng, diffPngs, type Rect } from '../parity/diff'
-import { READY_TIMEOUT_MS, withGpuix } from '../parity/shoot-gpuix'
+import { READY_TIMEOUT_MS, windowOrigin, withGpuix } from '../parity/shoot-gpuix'
 import { DIST_WEB } from '../parity/shoot-web'
 import { pickPort } from '../shared/seed'
 import { type Driver, gpuixDriver, type Point, webDriver } from './drive'
@@ -36,6 +36,8 @@ const { values } = parseArgs({
     out: { type: 'string', default: path.join(APP_DIR, 'parity-out/matrix') },
     state: { type: 'string', default: process.env.GPUIX_STATE_ROOT ?? '/tmp/gpuix-m1' },
     'web-only': { type: 'boolean', default: false },
+    /** Send GPUIX clicks as real X input (XTEST) instead of GPUIX automation's simulated events. */
+    'x11-input': { type: 'boolean', default: false },
     'report-only': { type: 'boolean', default: false }
   }
 })
@@ -173,9 +175,10 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
     path.join(clientStateDir, 'web-storage', `${host}.json`),
     JSON.stringify({ 'termul.deviceId': deviceId })
   )
-  return withGpuix({ server: world.server, entry, clientStateDir, ...SIZE }, async ({ app, grab }) => {
+  return withGpuix({ server: world.server, entry, clientStateDir, ...SIZE }, async ({ app, display, grab }) => {
     await app.getByText(BOOT_TEXT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
-    return runSteps(surface, 'gpuix', gpuixDriver(app, points), grab)
+    const x11 = values['x11-input'] ? { display, origin: await windowOrigin(display, SIZE.width, SIZE.height) } : undefined
+    return runSteps(surface, 'gpuix', gpuixDriver(app, points, x11), grab)
   })
 }
 

@@ -8,6 +8,7 @@
  * says which way every GPUIX action went.
  */
 
+import path from 'node:path'
 import type { Locator, Page } from 'playwright'
 import type { withGpuix } from '../parity/shoot-gpuix'
 import type { Action, ActionLog, Check, CheckLog, Target } from './types'
@@ -232,7 +233,23 @@ function nearest(nodes: Node[], to: Point | undefined): Point | null {
   return centres.reduce((best, c) => (Math.hypot(c.x - to.x, c.y - to.y) < Math.hypot(best.x - to.x, best.y - to.y) ? c : best))
 }
 
-export function gpuixDriver(app: GpuixApp, points: Map<string, Point>): Driver {
+/** Real X input for clicks: the Xvfb display and the window's origin on it. */
+export interface X11Input {
+  display: string
+  origin: Point
+}
+
+const X11_CLICK = path.join(import.meta.dir, 'x11-click.py')
+
+async function x11Click(x11: X11Input, point: Point, button: 1 | 3): Promise<void> {
+  const proc = Bun.spawn(
+    ['uv', 'run', '--quiet', '--with', 'python-xlib==0.33', 'python', '-I', X11_CLICK, String(x11.origin.x + point.x), String(x11.origin.y + point.y), String(button)],
+    { env: { ...process.env, DISPLAY: x11.display }, stdout: 'ignore', stderr: 'pipe' }
+  )
+  if ((await proc.exited) !== 0) throw new Error(`x11-click failed: ${await new Response(proc.stderr).text()}`)
+}
+
+export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11Input): Driver {
   const resolve = async (target: Target, key: string): Promise<{ point: Point; via: ActionLog['via'] }> => {
     const web = points.get(key)
     let native: Point | null = null
@@ -264,11 +281,14 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>): Driver {
           case 'click': {
             const { point, via } = await resolve(action.target, key)
             log.via = via
-            await app.call('click', {
-              ...point,
-              button: action.button === 'right' ? 2 : 0,
-              ...(action.modifiers && { modifiers: action.modifiers })
-            })
+            if (x11 && !action.modifiers) await x11Click(x11, point, action.button === 'right' ? 3 : 1)
+            else {
+              await app.call('click', {
+                ...point,
+                button: action.button === 'right' ? 2 : 0,
+                ...(action.modifiers && { modifiers: action.modifiers })
+              })
+            }
             break
           }
           case 'dblclick': {

@@ -1,0 +1,90 @@
+# GPUIX parity matrix
+
+This page measures how close the GPUIX desktop client is to the DOM web
+client, one user-facing surface at a time. Every number on it comes from
+`bun run parity:matrix`, which drives both clients through the same steps
+against one seeded `termul-server` and records what each client painted and
+did. The tables between the `matrix:begin` and `matrix:end` markers are
+generated. The prose around them is written by hand from the PNG pairs.
+
+## Run it
+
+```sh
+bun run build:web                        # at the repo root: the web client under test
+cd apps/gpuix
+bun run parity:matrix                    # every surface, about 40 minutes
+bun run parity:matrix --only git.diff,chat.send
+bun run parity:matrix --area terminal
+bun run parity:matrix --report-only      # regenerate this page from results.json and review.ts
+bun tools/matrix/probe.ts <surface-id>   # web only: what the DOM offers to act on, per step
+bun tools/matrix/pair.ts [surface-id]    # web | GPUIX side by side, for review
+```
+
+Output goes to `parity-out/matrix/<surface>/<step>/` (`web.png`, `gpuix.png`,
+`diff.png`, the region crops and `pair.png`) and `parity-out/matrix/results.json`.
+A partial run updates only the surfaces it ran. Server and client state live
+under `/tmp/gpuix-m1` (`--state` or `GPUIX_STATE_ROOT` moves them) and are
+deleted at the end of the run.
+
+## What a run does
+
+1. `world.ts` starts one test server on a free port in 8190-8199 and seeds
+   it. alpha is a git repo with three commits, a second branch
+   (`feature/login`), a staged edit (`src/app.ts`), an unstaged edit
+   (`README.md`) and an untracked file (`notes.txt`). beta, gamma and delta
+   are plain folders. A chat in alpha holds the scripted agent's three turns
+   (`tools/chat/scenario-agent.ts`): prose, code, a table, mermaid, tool
+   calls, thoughts and an edit with a diff.
+2. Each surface in `surfaces/` runs in the web client (Playwright chromium,
+   1280x800, dark, reduced motion) and then in GPUIX (Xvfb, lavapipe,
+   automation). Both start on the dashboard as a fresh device, so per-device
+   UI state never leaks between runs. A surface's `prepare` re-seeds what an
+   earlier run changed (git state, a renamed or deleted project, the theme).
+3. Every action is logged with how GPUIX found its element. `testid` and
+   `text` mean GPUIX resolved it natively, picking the match nearest the
+   point where the web client acted. `web-point` means it clicked where the
+   web client painted that element, which happens for targets only the DOM can
+   name (accessible labels, CSS selectors) and for native lookups that found
+   nothing.
+4. A check passes when its text is painted. On the web that means
+   `innerText` of the page or of the `within` test id. On GPUIX it means a
+   node's text or the joined tree text (`getAllText`, because
+   `getPaintedText()` is empty on Linux). An ordered check asserts a list
+   order after a drag.
+5. One frame is grabbed per step in each client. `diff.ts` counts exact and
+   perceptual (pixelmatch 0.1) mismatches for the full frame and for the
+   surface's region.
+
+## Statuses and scores
+
+| Status | Meaning |
+| --- | --- |
+| ported | Every action and check passes in GPUIX, and the pair shows no difference a user would notice beyond font rasterization. |
+| partial | The interactions work, but the pair shows visible or behavioral differences. |
+| broken | An action or check that passes on the web fails in GPUIX, or GPUIX shows the wrong thing. |
+| blocked | There is no web reference to compare (a Tauri-only surface), or a missing platform capability stops it. |
+| pending-unit | Waits on another unit (named in the table). |
+| unverified | The web reference itself failed; the harness needs work before the surface counts. |
+
+The automatic status in `results.json` only knows the checks and a 2 %
+perceptual threshold on the region. The reviewed status in `review.ts` comes
+from looking at every pair and overrides it.
+
+A surface scores 1 when ported, 0.5 when partial and 0 otherwise. The
+unweighted score is the mean over surfaces. The usage-weighted score gives
+each area a weight (`weights.ts`, summing to 100), averages the surfaces
+inside an area, and weights the area means.
+
+The weights follow what a Termul user does all day. Agent chat is the
+product's centre, so chat (17) and the composer that feeds it (14) carry the
+most. The terminal (14) is the other primary work surface. The project rail
+(9) and git changes (9) are touched many times an hour, the explorer (7) and
+the editor (7) a little less. The side panel (5), settings (4), status bar
+(3) and palette (3) are daily but brief. Themes (2) are set once and seen
+always. Shortcuts, dialogs, toasts and the browser pane get 1 each, and the
+canvas, SSH, remote access and snapshots get 0.5 each because few sessions
+open them. Settings has 13 sections, so a per-surface weight would let it
+dominate; weighting by area avoids that.
+
+<!-- matrix:begin (generated by `bun run parity:matrix`; edit tools/matrix/review.ts, not this block) -->
+<!-- matrix:end -->
