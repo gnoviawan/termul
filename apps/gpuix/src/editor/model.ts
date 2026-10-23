@@ -33,6 +33,7 @@ import {
   undo
 } from '@codemirror/commands'
 import { indentUnit } from '@codemirror/language'
+import type { Command } from '@codemirror/view'
 import {
   CharCategory,
   countColumn,
@@ -63,9 +64,16 @@ export type Motion =
   | 'docStart'
   | 'docEnd'
 
+/**
+ * `deleteCharBackward`/`Forward` are typed as view commands, but they read only
+ * `state` and `dispatch` (their atomic-range step runs only for an
+ * `EditorView`), which the model tests pin.
+ */
+const viewFree = (command: Command): StateCommand => command as unknown as StateCommand
+
 const STATE_COMMANDS = {
-  deleteCharBackward,
-  deleteCharForward,
+  deleteCharBackward: viewFree(deleteCharBackward),
+  deleteCharForward: viewFree(deleteCharForward),
   deleteGroupBackward,
   deleteGroupForward,
   insertNewlineAndIndent,
