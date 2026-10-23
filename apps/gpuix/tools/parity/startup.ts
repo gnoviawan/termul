@@ -17,6 +17,11 @@
  * `startup.projectListMs` lands next to the GPUIX numbers.
  * `--profile` writes a `bun --cpu-prof-md` profile per run into `<out>/profile`;
  * profiled runs are slower, so do not report their times.
+ *
+ * Every probe is a GPUIX automation tree query, which paints a frame and
+ * blocks the app's JS thread until it has; Playwright's probes cost Chromium
+ * nothing like it. `--poll-ms` (default 25, A1's setting) trades that load
+ * against how late the clock may stop.
  */
 
 import { readdirSync, readFileSync } from 'node:fs'
@@ -41,14 +46,15 @@ const { values } = parseArgs({
     chromium: { type: 'boolean', default: false },
     'chromium-port': { type: 'string', default: '8193' },
     'chromium-display': { type: 'string', default: ':183' },
-    profile: { type: 'boolean', default: false }
+    profile: { type: 'boolean', default: false },
+    'poll-ms': { type: 'string', default: '25' }
   }
 })
 
 const WIDTH = 1280
 const HEIGHT = 800
 const HEADING = 'What should we do in alpha?'
-const POLL_MS = 25
+const POLL_MS = Number(values['poll-ms'])
 const TIMEOUT_MS = 60_000
 const CLOCK_TICK_MS = 10
 

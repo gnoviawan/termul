@@ -12,7 +12,7 @@
 
 import { appliedBatchCount } from '@gpuix/native/host'
 import type { DomHandlers } from './events'
-import { type CompatRenderer, type LiveReads, liveReads } from './live-reads'
+import { type CompatRenderer, type LiveReads, liveReads, type TreeJson } from './live-reads'
 import { compatWarn } from './log'
 
 export type { CompatRenderer } from './live-reads'
@@ -103,7 +103,7 @@ export function treeIndex(): TreeIndex {
   const parent = new Map<number, number>()
   const children = new Map<number, number[]>()
   const json = reads.tree().root
-  const walk = (node: NonNullable<typeof json>) => {
+  const walk = (node: TreeJson) => {
     if (!node.children?.length) return
     const ids: number[] = []
     for (const child of node.children) {
