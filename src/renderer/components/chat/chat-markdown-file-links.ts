@@ -1,4 +1,4 @@
-import { findFilePathMatches } from '@/lib/file-path-links'
+import { findFilePathMatches } from '@/lib/file-path-match'
 
 /**
  * Escape `& < > "` so interpolated path/alt/url values cannot break out of
@@ -77,7 +77,7 @@ function fileUrlPath(decodableRest: string): string | null {
  * protocol-relative `//host`, remote `file://host/…`, malformed escapes).
  * A `#L<n>` fragment becomes a `:<n>` line suffix; other fragments are dropped.
  */
-function localLinkPath(url: string): string | null {
+export function localLinkPath(url: string): string | null {
   const trimmed = url.trim()
   if (!trimmed || trimmed.startsWith('#')) return null
 

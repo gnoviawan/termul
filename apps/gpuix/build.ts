@@ -12,12 +12,13 @@
  * - `react` and `react-dom` stay external, so the bundle, `@gpuix/react` and
  *   every vendored library load the single copy in `apps/gpuix/node_modules`.
  * - `@gpuix/*` stays external: the native addon is loaded by file path.
+ * - Vite's `?raw` suffix and eager raw `import.meta.glob` (agent and material
+ *   icons, reached by the chat rows) become inlined file text.
  *
  * Run `bun build.ts` for one build, or `bun tools/dev.ts` to rebuild on change.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { BunPlugin } from 'bun'
 import { gpuixUiAliases } from './tools/ui/alias'
@@ -193,74 +194,6 @@ export function compatPlugin(aliases?: CompatResolve[]): BunPlugin {
   }
 }
 
-const RAW = 'vite-raw'
-
-/** Vite's `?raw` suffix: the file's text as the default export (agent icon SVGs). */
-export function rawPlugin(): BunPlugin {
-  return {
-    name: 'termul-gpuix-raw',
-    setup(build) {
-      build.onResolve({ filter: /\?raw$/ }, (args) => {
-        const bare = args.path.slice(0, -'?raw'.length)
-        const resolved = /^@(renderer)?\//.test(bare)
-          ? path.join(RENDERER_DIR, bare.replace(/^@(renderer)?\//, ''))
-          : path.resolve(path.dirname(args.importer), bare)
-        return { path: resolved, namespace: RAW }
-      })
-      build.onLoad({ filter: /.*/, namespace: RAW }, (args) => ({
-        loader: 'js',
-        contents: `export default ${JSON.stringify(readFileSync(args.path, 'utf8'))}`
-      }))
-    }
-  }
-}
-
-const MATERIAL_ICONS_DIR = path.join(
-  path.dirname(createRequire(path.join(REPO_DIR, 'package.json')).resolve('material-icon-theme/package.json')),
-  'icons'
-)
-
-/** `vite.config.web.ts` aliases a glob pattern may start with. */
-function globDir(pattern: string): { dir: string; suffix: string } {
-  const dirPart = path.dirname(pattern)
-  const suffix = path.basename(pattern).replace(/^\*/, '')
-  if (dirPart === '@material-icons') return { dir: MATERIAL_ICONS_DIR, suffix }
-  if (dirPart.startsWith('@/')) return { dir: path.join(RENDERER_DIR, dirPart.slice(2)), suffix }
-  throw new Error(`import.meta.glob: unsupported pattern ${pattern}`)
-}
-
-const GLOB_CALL =
-  /import\.meta\.glob(?:<[^>]*>)?\(\s*'([^']+)'\s*,\s*\{\s*eager:\s*true,\s*query:\s*'\?raw',\s*import:\s*'default'\s*\}\s*\)/g
-
-/**
- * Vite's eager raw `import.meta.glob` (agent and file icons), inlined as an
- * object of file texts keyed like Vite keys them (root-relative paths).
- */
-export function viteGlobPlugin(): BunPlugin {
-  return {
-    name: 'termul-gpuix-vite-glob',
-    setup(build) {
-      build.onLoad({ filter: /\/src\/renderer\/.*\.tsx?$/ }, (args) => {
-        const text = readFileSync(args.path, 'utf8')
-        if (!text.includes('import.meta.glob')) return undefined
-        const contents = text.replace(GLOB_CALL, (_call, pattern: string) => {
-          const { dir, suffix } = globDir(pattern)
-          const entries = readdirSync(dir)
-            .filter((name) => name.endsWith(suffix))
-            .sort()
-            .map((name) => {
-              const file = path.join(dir, name)
-              return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
-            })
-          return `({${entries.join(',\n')}})`
-        })
-        if (/import\.meta\.glob\s*[<(]/.test(contents)) throw new Error(`import.meta.glob: unhandled call in ${args.path}`)
-        return { contents, loader: args.path.endsWith('.tsx') ? 'tsx' : 'ts' }
-      })
-    }
-  }
-}
-
 /** Swap shared files for `src/overrides/**` twins, for `@/` and relative imports alike. */
 export function overridesPlugin(): BunPlugin {
   return {
@@ -275,6 +208,59 @@ export function overridesPlugin(): BunPlugin {
         const resolved = Bun.resolveSync(args.path, path.dirname(args.importer))
         const override = overrideFor(resolved, args.importer)
         return override ? { path: override } : undefined
+      })
+    }
+  }
+}
+
+/** `import svg from './x.svg?raw'` -> the file's text as the default export. */
+export function rawPlugin(): BunPlugin {
+  return {
+    name: 'vite-raw-suffix',
+    setup(build) {
+      build.onResolve({ filter: /\?raw$/ }, (args) => {
+        const file = args.path.slice(0, -'?raw'.length)
+        return {
+          path: file.startsWith('@/')
+            ? path.join(RENDERER_DIR, file.slice(2))
+            : path.resolve(path.dirname(args.importer), file),
+          namespace: 'raw'
+        }
+      })
+      build.onLoad({ filter: /.*/, namespace: 'raw' }, (args) => ({
+        loader: 'js',
+        contents: `export default ${JSON.stringify(readFileSync(args.path, 'utf8'))}`
+      }))
+    }
+  }
+}
+
+const GLOB_CALL = /import\.meta\.glob(?:<[^>]*>)?\(\s*'([^']+)'\s*,\s*\{[^}]*\}\s*\)/g
+
+/**
+ * Vite's eager raw `import.meta.glob(pattern, { eager, query: '?raw', import: 'default' })`
+ * -> an object literal of file text keyed by repo-relative path, the shape Vite returns.
+ */
+export function globPlugin(): BunPlugin {
+  return {
+    name: 'vite-eager-raw-glob',
+    setup(build) {
+      const roots: Record<string, string> = {
+        '@/': `${RENDERER_DIR}/`,
+        '@material-icons/': `${path.join(path.dirname(Bun.resolveSync('material-icon-theme/package.json', REPO_DIR)), 'icons')}/`
+      }
+      build.onLoad({ filter: /(agent-icon-catalog|material-icon-catalog)\.ts$/ }, (args) => {
+        const source = readFileSync(args.path, 'utf8').replace(GLOB_CALL, (_call, pattern: string) => {
+          const prefix = Object.keys(roots).find((key) => pattern.startsWith(key))
+          const absolute = prefix ? roots[prefix] + pattern.slice(prefix.length) : pattern
+          const dir = path.dirname(absolute)
+          const entries = [...new Bun.Glob(path.basename(absolute)).scanSync({ cwd: dir })].map((name) => {
+            const file = path.join(dir, name)
+            return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
+          })
+          return `({${entries.join(',')}})`
+        })
+        return { loader: 'ts', contents: source }
       })
     }
   }
@@ -302,7 +288,7 @@ export async function buildClient(
     sourcemap: 'linked',
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
-    plugins: [rawPlugin(), viteGlobPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
+    plugins: [rawPlugin(), globPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
     naming: '[name].[ext]',
     // React's production build has no jsxDEV, so a production bundle needs jsx().
     ...(options.production

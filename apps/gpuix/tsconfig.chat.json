@@ -1,0 +1,74 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "bun"
+    ],
+    "paths": {
+      "@/components/chat/MessageActions": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/ChatMessageList": [
+        "./src/overrides/components/chat/ChatMessageList.tsx"
+      ],
+      "@/components/chat/AgentSwitchSeparator": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/ChatEmptyState": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/ChatMessage": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/RowReveal": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/SubagentDetailsDialog": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/ToolCallCard": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/TurnActivity": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/WorktreeCreationCard": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/ChatMarkdownPlanFence": [
+        "./src/chat/dom-components.d.ts"
+      ],
+      "@/components/chat/ThoughtGroup": [
+        "./src/overrides/components/chat/ThoughtGroup.tsx"
+      ],
+      "@/components/ui/*": [
+        "./src/ui/*"
+      ],
+      "@/components/icons": [
+        "./src/icons/index.tsx"
+      ],
+      "@/*": [
+        "../../src/renderer/*"
+      ],
+      "@renderer/*": [
+        "../../src/renderer/*"
+      ],
+      "@shared/*": [
+        "../../src/shared/*"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react/*": [
+        "./node_modules/@types/react/*"
+      ]
+    }
+  },
+  "include": [
+    "src/chat",
+    "src/overrides/components/chat",
+    "tools/chat/scene/boot.tsx",
+    "../../src/renderer/vite-env.d.ts"
+  ],
+  "exclude": []
+}

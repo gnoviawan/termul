@@ -2,6 +2,20 @@ import { filesystemApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
+import {
+  findFilePathMatches,
+  LINE_POSITION_SUFFIX_REGEX,
+  normalizePathSeparators,
+  stripLinePosition,
+  WRAPPER_PAIRS
+} from './file-path-match'
+
+export {
+  type FilePathMatch,
+  findFilePathMatches,
+  hasPathEvidence,
+  stripLinePosition
+} from './file-path-match'
 
 /** Resolves relative terminal paths against the terminal cwd and active project root. */
 export interface FilePathResolutionContext {
@@ -39,142 +53,8 @@ export interface TerminalPathLink {
   activate: (event: MouseEvent, text: string) => void | Promise<void>
 }
 
-const FILE_PATH_LINK_REGEX =
-  /(?:\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\|\/)?(?:[^\s\\/:*?"<>|`]+[\\/])+[^\s\\/:*?"<>|`]+(?:\.[A-Za-z0-9_-]+)?(?::\d+(?::\d+)?)?/g
-
-const URI_SCHEME_REGEX = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
-
-const PATH_PREFIX_REGEX = /^(?:\.{1,2}\/|~\/|[A-Za-z]:\/|\/)/
-
-const DOT_DIRECTORY_REGEX = /^\.[A-Za-z]/
-
-const LINE_POSITION_SUFFIX_REGEX =
-  /(?::(?<line>\d+)(?::(?<column>\d+))?|#L(?<fragmentLine>\d+)(?:C(?<fragmentColumn>\d+))?(?:-L?\d+(?:C\d+)?)?)$/i
-
-const FILE_EXTENSION_REGEX = /\.[^.]+$/
-
 /** OS "path does not exist" read errors — the only probe failure that may skip a root. */
 const MISSING_PATH_ERROR_REGEX = /no such file|cannot find the (file|path)|the system cannot find/i
-
-const WRAPPER_PAIRS: Array<[string, string]> = [
-  ['`', '`'],
-  ['"', '"'],
-  ["'", "'"],
-  ['(', ')'],
-  ['[', ']']
-]
-
-function normalizePathSeparators(value: string): string {
-  return value.replace(/\\/g, '/')
-}
-
-function looksLikeFilePath(text: string): boolean {
-  if (URI_SCHEME_REGEX.test(text)) {
-    return false
-  }
-
-  return text.includes('/') || text.includes('\\') || /^[A-Za-z]:/.test(text)
-}
-
-/**
- * Requires at least one strong path-likeness signal so prose slash-pairs like
- * `text/text` or `2.5/3.0` do not linkify: an explicit path prefix (including
- * `~/`), a `:line[:col]` suffix, a lettered file extension on the final
- * segment (computed after stripping the line suffix), a dot-directory first
- * segment like `.git`, or at least three segments where at least one segment
- * contains a letter.
- */
-export function hasPathEvidence(text: string): boolean {
-  const normalized = normalizePathSeparators(text)
-
-  if (PATH_PREFIX_REGEX.test(normalized)) {
-    return true
-  }
-
-  if (LINE_POSITION_SUFFIX_REGEX.exec(normalized)?.groups?.line !== undefined) {
-    return true
-  }
-
-  const segments = stripLinePosition(normalized).split('/').filter(Boolean)
-  const lastSegment = segments[segments.length - 1] ?? ''
-  const extension = lastSegment.match(FILE_EXTENSION_REGEX)?.[0]
-
-  if (extension && /\p{L}/u.test(extension)) {
-    return true
-  }
-
-  const firstSegment = segments[0] ?? ''
-
-  if (DOT_DIRECTORY_REGEX.test(firstSegment)) {
-    return true
-  }
-
-  return segments.length >= 3 && segments.some((segment) => /[A-Za-z]/.test(segment))
-}
-
-function trimTrailingPathPunctuation(value: string): string {
-  let result = value.replace(/[.,;!?]+$/, '')
-
-  for (const [opening, closing] of WRAPPER_PAIRS) {
-    while (result.endsWith(closing) && !result.includes(opening)) {
-      result = result.slice(0, -1)
-    }
-  }
-
-  return result
-}
-
-function isUrlAdjacentPathMatch(line: string, start: number, text: string): boolean {
-  const tokenStart = line.slice(0, start).search(/\S+$/)
-  if (tokenStart < 0) {
-    return false
-  }
-
-  const tokenPrefix = line
-    .slice(tokenStart, start + (text.startsWith('/') ? 1 : 0))
-    .replace(/^[`"'([{]+/, '')
-  return URI_SCHEME_REGEX.test(tokenPrefix)
-}
-
-export interface FilePathMatch {
-  text: string
-  start: number
-}
-
-/** Finds file-like path tokens while excluding URL host/path fragments. */
-export function findFilePathMatches(line: string): FilePathMatch[] {
-  if (!line.includes('/') && !line.includes('\\') && !line.includes(':')) {
-    return []
-  }
-
-  const matches: FilePathMatch[] = []
-
-  for (const match of line.matchAll(FILE_PATH_LINK_REGEX)) {
-    let text = trimTrailingPathPunctuation(match[0])
-    let start = match.index ?? -1
-    const wrapper = WRAPPER_PAIRS.find(
-      ([opening, closing]) => text.startsWith(opening) && line[start + text.length] === closing
-    )
-    if (wrapper) {
-      text = text.slice(wrapper[0].length)
-      start += wrapper[0].length
-    }
-
-    if (
-      !text ||
-      !looksLikeFilePath(text) ||
-      !hasPathEvidence(text) ||
-      start < 0 ||
-      isUrlAdjacentPathMatch(line, start, text)
-    ) {
-      continue
-    }
-
-    matches.push({ text, start })
-  }
-
-  return matches
-}
 
 /** Extracts file-like links from a rendered terminal line for Ctrl/Cmd+Click activation. */
 // Range x-coordinates are based on JavaScript string indices. Wide or combining
@@ -344,10 +224,6 @@ export function trimWrappedPath(value: string): string {
   }
 
   return result
-}
-
-export function stripLinePosition(value: string): string {
-  return value.replace(LINE_POSITION_SUFFIX_REGEX, '')
 }
 
 function parseLinePosition(value: string): { line?: number; column?: number } {
