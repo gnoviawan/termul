@@ -3,12 +3,22 @@
  * does not track: `group-*` variants, `focus:` / `focus-within:`, viewport
  * breakpoints, and the `group` element those variants watch. Everything
  * else is built directly by `createDomElement`.
+ *
+ * A `group-*` consumer created in the same render as its group (the usual
+ * `<div className="group">…<span className="group-hover:…">` in one
+ * component) is resolved by the group: the group walks the elements it built
+ * and builds those consumers with its own state, so a row re-render runs one
+ * host instead of one per consumer. Consumers below a component or another
+ * stateful host subscribe to the group through context, as before.
  */
 
 import type { StyleDesc } from '@gpuix/react'
 import {
+  cloneElement,
   createContext,
+  isValidElement,
   type ReactElement,
+  type ReactNode,
   useContext,
   useLayoutEffect,
   useMemo,
@@ -19,7 +29,7 @@ import {
 import { jsx } from 'react/jsx-runtime'
 import { applyRules } from '../style/tw'
 import type { Condition, TwState } from '../style/variants'
-import { buildElement, compatDark, type DomProps, domAttrs } from './create'
+import { buildElement, compatDark, type DomProps, domAttrs, domSource } from './create'
 import type { Translation } from './translate'
 import { subscribeViewport, viewportWidth } from './viewport'
 
@@ -136,6 +146,61 @@ function hostStyle(tr: Translation, needs: Needs, state: TwState, dark: boolean)
 
 const noSubscribe = () => () => {}
 
+/** Consumers that read only their group's state (no focus or viewport rules of their own). */
+function groupOnly(tr: Translation): boolean {
+  const needs = needsOf(tr)
+  return needs.group && !needs.focus && !needs.viewport && tr.group === null
+}
+
+/** A consumer's element as its own `CompatHost` would build it for this group state. */
+function consumerElement(props: CompatHostProps, key: string | null, group: GroupSnapshot): ReactElement {
+  const { tag, tr, dom, isStatic } = props
+  const attrs = domAttrs(dom)
+  const state: TwState = {
+    disabled: Boolean(dom.disabled),
+    attrs: attrs as TwState['attrs'],
+    focus: false,
+    focusWithin: false,
+    groupHover: group.hovered,
+    groupFocus: group.focused,
+    groupFocusVisible: group.focused,
+    groupAttrs: group.attrs as TwState['groupAttrs']
+  }
+  const style = hostStyle(tr, needsOf(tr), state, compatDark())
+  const built = buildElement(tag, tr, dom, key ?? undefined, isStatic, { style, handlers: NO_HANDLERS })
+  domSource.set(built, { tag, props: dom, key: key ?? undefined })
+  return claimConsumers(built, group) as ReactElement
+}
+
+const NO_HANDLERS: Record<string, unknown> = {}
+
+/**
+ * Replace the group-only consumers in built GPUIX elements with their own
+ * built elements. Layout already ran with the consumer as an opaque host, so
+ * the tree is the one the consumer's `CompatHost` would have rendered. The
+ * walk stops at components and other hosts (they render their children
+ * later) and at nested groups. Returns `node` itself when nothing changed.
+ */
+function claimConsumers(node: ReactNode, group: GroupSnapshot): ReactNode {
+  if (Array.isArray(node)) {
+    let out: ReactNode[] | null = null
+    for (let i = 0; i < node.length; i++) {
+      const next = claimConsumers(node[i], group)
+      if (next !== node[i]) (out ??= node.slice())[i] = next
+    }
+    return out ?? node
+  }
+  if (!isValidElement(node)) return node
+  if (node.type === CompatHost) {
+    const host = node.props as CompatHostProps
+    return groupOnly(host.tr) ? consumerElement(host, node.key, group) : node
+  }
+  const props = node.props as { children?: ReactNode }
+  if (typeof node.type !== 'string' || props.children === undefined) return node
+  const children = claimConsumers(props.children, group)
+  return children === props.children ? node : cloneElement(node, { children } as { children: ReactNode })
+}
+
 export interface CompatHostProps {
   tag: string
   tr: Translation
@@ -156,6 +221,8 @@ function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactE
   const ownStore = useRef<GroupStore | null>(null)
   if (tr.group !== null && !ownStore.current) ownStore.current = new GroupStore(attrs, attrsKey)
   const store = ownStore.current
+  // The group re-renders for its own hover and focus: it builds the consumers in its children.
+  useSyncExternalStore(store ? store.subscribe : noSubscribe, () => (store ? store.keyFor([]) : ''))
   const disabled = Boolean(dom.disabled)
   useLayoutEffect(() => {
     store?.setAttrs(attrs, attrsKey)
@@ -205,7 +272,7 @@ function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactE
 
   const built = buildElement(tag, tr, dom, undefined, isStatic, { style, handlers })
   if (!store) return built
-  return jsx(GroupContext.Provider, { value: store, children: built })
+  return jsx(GroupContext.Provider, { value: store, children: claimConsumers(built, { ...store.get(), attrs }) })
 }
 
 export function hostElement(
