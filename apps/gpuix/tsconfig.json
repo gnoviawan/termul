@@ -1,11 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "moduleDetection": "force",
@@ -19,21 +15,11 @@
     "noFallthroughCasesInSwitch": true,
     "types": [],
     "paths": {
-      "@/*": [
-        "../../src/renderer/*"
-      ],
-      "@renderer/*": [
-        "../../src/renderer/*"
-      ],
-      "@shared/*": [
-        "../../src/shared/*"
-      ],
-      "react": [
-        "./node_modules/@types/react"
-      ],
-      "react/*": [
-        "./node_modules/@types/react/*"
-      ]
+      "@/*": ["../../src/renderer/*"],
+      "@renderer/*": ["../../src/renderer/*"],
+      "@shared/*": ["../../src/shared/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
     },
     "noEmit": true
   },
@@ -45,8 +31,5 @@
     "src/style",
     "../../src/renderer/vite-env.d.ts"
   ],
-  "exclude": [
-    "src/style/fonts.ts",
-    "src/style/__tests__"
-  ]
+  "exclude": ["src/style/fonts.ts", "src/style/__tests__"]
 }

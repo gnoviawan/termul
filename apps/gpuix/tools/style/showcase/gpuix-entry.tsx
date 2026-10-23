@@ -1,7 +1,7 @@
 /**
  * GPUIX side of the showcase: the same swatch tree, styled only by tw().
  *   SHOWCASE_THEME=termul bun tools/style/showcase/gpuix-entry.tsx
- * Prints "showcase ready" once fonts are registered and the tree is mounted.
+ * The root gains testId "showcase-ready" once fonts are registered and the swatches mount.
  */
 import { render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState } from 'react'
@@ -35,11 +35,9 @@ function Showcase() {
     registerTermulFonts(renderer)
     setReady(true)
   }, [renderer])
-  useEffect(() => {
-    if (ready) setTimeout(() => console.log('showcase ready'), 500)
-  }, [ready])
   return (
     <div
+      testId={ready ? 'showcase-ready' : undefined}
       style={{
         ...tw('bg-background'),
         position: 'relative',

@@ -51,11 +51,15 @@ function rootDefaults(): Record<string, string> {
 
 /** Format with the repo's Biome so the checked-in file passes `biome ci`. */
 function biomeFormat(source: string): string {
-  const out = spawnSync(join(REPO, 'node_modules/.bin/biome'), ['format', `--stdin-file-path=${OUT}`], {
-    input: source,
-    encoding: 'utf8',
-    cwd: REPO
-  })
+  const out = spawnSync(
+    join(REPO, 'node_modules/.bin/biome'),
+    ['format', `--stdin-file-path=${OUT}`],
+    {
+      input: source,
+      encoding: 'utf8',
+      cwd: REPO
+    }
+  )
   if (out.status !== 0) throw new Error(`biome format failed: ${out.stderr}`)
   return out.stdout
 }

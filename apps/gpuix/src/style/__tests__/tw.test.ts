@@ -520,7 +520,9 @@ describe('tw() bookkeeping', () => {
   })
 
   test('calc() over % or viewport units is reported, not painted at a wrong width', () => {
-    const compiled = tw.compile('w-[calc(100%-2.75rem)] max-w-[calc(100vw-2rem)] w-[calc(100%+1rem)]')
+    const compiled = tw.compile(
+      'w-[calc(100%-2.75rem)] max-w-[calc(100vw-2rem)] w-[calc(100%+1rem)]'
+    )
     expect(compiled.base).toEqual({})
     expect(compiled.issues.map((i) => i.kind)).toEqual(['unknown', 'unknown', 'unknown'])
   })

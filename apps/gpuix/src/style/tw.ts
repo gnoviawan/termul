@@ -10,8 +10,8 @@
  * silently.
  */
 import type { StyleDesc } from '@gpuix/react'
-import { type CssShadow, formatColor, type Rgba } from './css-value'
 import { log } from '../log'
+import { type CssShadow, formatColor, type Rgba } from './css-value'
 import { INHERITED_LEADING, ROOT_FONT_SIZE } from './scale'
 import { resolveTwTheme, type TwTheme } from './theme'
 import { type BoxShadow, type Fragment, type Ring, resolveUtility, toBoxShadow } from './utilities'
