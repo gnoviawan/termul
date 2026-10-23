@@ -13,17 +13,21 @@
     "start": "bun build.ts && bun dist/main.js",
     "check:react": "bun tools/check-react.ts",
     "parity": "bun tools/parity/index.ts",
-    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json",
-    "test": "bun test src/style",
+    "typecheck": "tsc -p . && tsc -p tsconfig.tools.json && tsc -p tsconfig.terminal.json",
+    "test": "bun test src/style src/terminal",
     "style:scan": "bun tools/style/scan-classes.ts",
     "style:gen": "bun tools/style/gen-color-vars.ts",
     "style:fonts": "uv run --with fonttools --with brotli python -I tools/style/build-fonts.py",
     "style:showcase": "bun tools/style/showcase/run.ts",
-    "style:oracle": "bun tools/style/oracle.ts"
+    "style:oracle": "bun tools/style/oracle.ts",
+    "terminal:demo": "bun tools/terminal/demo.ts",
+    "terminal:parity": "bun tools/terminal/parity.ts",
+    "terminal:throughput": "bun tools/terminal/throughput.ts"
   },
   "dependencies": {
     "@gpuix/native": "0.11.0",
     "@gpuix/react": "0.11.0",
+    "@xterm/headless": "6.1.0-beta.287",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
@@ -33,7 +37,9 @@
     "@types/pngjs": "6.0.5",
     "@types/react": "19.2.14",
     "pixelmatch": "7.1.0",
+    "playwright": "1.63.0",
     "pngjs": "7.0.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "wawoff2": "2.0.1"
   }
 }
