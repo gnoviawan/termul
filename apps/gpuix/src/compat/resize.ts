@@ -31,8 +31,12 @@ function entry(target: CompatElement, width: number, height: number): ResizeEntr
 export function layoutListener(payload: EventPayload): void {
   const set = observers.get(payload.elementId)
   if (!set) return
+  const { x, y, width, height } = payload
+  if (x !== undefined && y !== undefined && width !== undefined && height !== undefined) {
+    compatReads()?.remember(payload.elementId, { x, y, width, height })
+  }
   const target = nodeFor(payload.elementId)
-  const e = entry(target, payload.width ?? 0, payload.height ?? 0)
+  const e = entry(target, width ?? 0, height ?? 0)
   for (const observer of set) observer.deliver([e])
 }
 

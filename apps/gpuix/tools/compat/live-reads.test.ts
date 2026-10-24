@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { bindCompatRenderer, nodeFor } from '../../src/compat/dom-node'
 import { type Bounds, type CompatRenderer, liveReads, type TreeJson } from '../../src/compat/live-reads'
+import { CompatResizeObserver, layoutListener } from '../../src/compat/resize'
 
 /** A renderer whose painted tree is a row (id 1) of three 100 px tabs scrolled 20 px. */
 function fakeRenderer() {
@@ -77,6 +78,34 @@ describe('scroll size', () => {
       expect(row.scrollWidth).toBe(300)
       expect(row.clientWidth).toBe(250)
       expect(calls).toEqual({ bounds: 0, tree: 1, scroll: 1 })
+    } finally {
+      bindCompatRenderer(null)
+    }
+  })
+})
+
+describe('layout reports', () => {
+  test('a ResizeObserver callback that measures its target reads the reported box, not a frame', async () => {
+    const { renderer, calls } = fakeRenderer()
+    bindCompatRenderer(renderer)
+    try {
+      const tab = nodeFor(3)
+      const seen: { x: number; width: number }[] = []
+      const observer = new CompatResizeObserver(() => {
+        const box = tab.getBoundingClientRect()
+        seen.push({ x: box.x, width: box.width })
+      })
+      observer.observe(tab)
+      await nextTask()
+      expect(seen).toEqual([{ x: 90, width: 100 }])
+      const before = calls.bounds
+      layoutListener({ elementId: 3, x: 60, y: 0, width: 130, height: 30 } as never)
+      expect(seen[1]).toEqual({ x: 60, width: 130 })
+      expect(calls.bounds).toBe(before)
+      await nextTask()
+      expect(tab.getBoundingClientRect().x).toBe(90)
+      expect(calls.bounds).toBe(before + 1)
+      observer.disconnect()
     } finally {
       bindCompatRenderer(null)
     }

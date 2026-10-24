@@ -56,6 +56,11 @@ export interface LiveReads {
   scrollOffset(id: number): number[] | null
   /** The retained tree with the boxes of the last painted frame. */
   tree(): PaintedTree
+  /**
+   * A box GPUIX just reported for `id` (`onLayout`), so a read in the same task skips the frame
+   * round trip: a ResizeObserver callback that measures its target answers at once.
+   */
+  remember(id: number, box: Bounds): void
   /** Drop the memo after a write that moves layout (scrolling). */
   invalidate(): void
 }
@@ -106,6 +111,10 @@ export function liveReads(renderer: CompatRenderer): LiveReads {
         bounds.set(id, hit)
       }
       return hit
+    },
+    remember(id, box) {
+      fresh()
+      if (!tree) bounds.set(id, box)
     },
     scrollOffset(id) {
       fresh()
