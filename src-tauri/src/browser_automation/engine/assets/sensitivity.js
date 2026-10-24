@@ -18,7 +18,7 @@ if (target === bodyOf(doc)) return facts;
 var tag = tagOf(target);
 // Keys without a ref reach focus inside a frame these helpers cannot read;
 // what is focused there is unknown, so it counts as a credential form.
-if (!p.path && (tag === 'IFRAME' || tag === 'FRAME') && !frameDocOf(target)) {
+if (!p.path && FRAME_TAGS.indexOf(tag) >= 0 && !frameDocOf(target)) {
   facts.targetInForm = facts.regionHasPassword = facts.regionHasPayment = facts.pageHasPayment =
     facts.isSubmitter = true;
   return facts;

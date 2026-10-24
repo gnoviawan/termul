@@ -6,12 +6,21 @@ function getter(proto, name) {
   var d = Object.getOwnPropertyDescriptor(proto, name);
   return function (obj) { return d.get.call(obj); };
 }
+function setter(proto, name) {
+  var d = Object.getOwnPropertyDescriptor(proto, name);
+  return function (obj, value) { d.set.call(obj, value); };
+}
 function method(proto, name) {
   var f = proto[name];
-  return function (obj, a, b) { return f.call(obj, a, b); };
+  return function (obj, a, b, c) { return f.call(obj, a, b, c); };
 }
 var nodeTypeOf = getter(Node.prototype, 'nodeType');
 var parentOf = getter(Node.prototype, 'parentNode');
+var firstNodeOf = getter(Node.prototype, 'firstChild');
+var nextNodeOf = getter(Node.prototype, 'nextSibling');
+var nodeValueOf = getter(Node.prototype, 'nodeValue');
+var containsOf = method(Node.prototype, 'contains');
+var dispatchOf = method(EventTarget.prototype, 'dispatchEvent');
 var ownerDocOf = getter(Node.prototype, 'ownerDocument');
 var connectedOf = getter(Node.prototype, 'isConnected');
 var baseOf = getter(Node.prototype, 'baseURI');
@@ -29,11 +38,18 @@ var rectOf = method(Element.prototype, 'getBoundingClientRect');
 var scrollIntoViewOf = method(Element.prototype, 'scrollIntoView');
 var docElOf = getter(Document.prototype, 'documentElement');
 var bodyOf = getter(Document.prototype, 'body');
+var titleOf = getter(Document.prototype, 'title');
+var createRangeOf = method(Document.prototype, 'createRange');
 var viewOf = getter(Document.prototype, 'defaultView');
 var urlOf = getter(Document.prototype, 'URL');
 var pointOf = method(Document.prototype, 'elementFromPoint');
 var hostOf = getter(ShadowRoot.prototype, 'host');
 var formElements = getter(HTMLFormElement.prototype, 'elements');
+var hrefOf = getter(HTMLAnchorElement.prototype, 'href');
+var checkedOf = getter(HTMLInputElement.prototype, 'checked');
+var optionsOf = getter(HTMLSelectElement.prototype, 'options');
+var clickOf = method(HTMLElement.prototype, 'click');
+var assignedOf = HTMLSlotElement.prototype.assignedElements ? method(HTMLSlotElement.prototype, 'assignedElements') : null;
 var FIRST = {
   1: getter(Element.prototype, 'firstElementChild'),
   9: getter(Document.prototype, 'firstElementChild'),
@@ -52,10 +68,14 @@ var FRAME_DOC = {
 };
 var EDITABLE = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'isContentEditable');
 var INNER_TEXT = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText');
-var cloneOf = method(Node.prototype, 'cloneNode');
-var removeOf = method(Element.prototype, 'remove');
 var textContentOf = getter(Node.prototype, 'textContent');
+var setTextContentOf = setter(Node.prototype, 'textContent');
 var inputValueOf = getter(HTMLInputElement.prototype, 'value');
+var VALUE = {
+  INPUT: inputValueOf,
+  TEXTAREA: getter(HTMLTextAreaElement.prototype, 'value'),
+  SELECT: getter(HTMLSelectElement.prototype, 'value')
+};
 var LABELS = {
   INPUT: getter(HTMLInputElement.prototype, 'labels'),
   SELECT: getter(HTMLSelectElement.prototype, 'labels'),
@@ -68,9 +88,21 @@ var LABELS = {
 function firstChildOf(node) {
   return FIRST[nodeTypeOf(node)](node);
 }
+// The element children of an element, document or shadow root.
+function elementsIn(parent) {
+  var out = [];
+  for (var c = firstChildOf(parent); c; c = nextOf(c)) out.push(c);
+  return out;
+}
+function fieldValueOf(el) {
+  var read = VALUE[tagOf(el)];
+  return read ? read(el) : '';
+}
 function all(root, selector) {
   return Array.prototype.slice.call(QSA[nodeTypeOf(root)](root, selector));
 }
+// Elements whose focus can sit in a document of their own.
+var FRAME_TAGS = ['IFRAME', 'FRAME', 'OBJECT', 'EMBED'];
 // The document of a same-origin frame element; null for anything else.
 function frameDocOf(el) {
   var read = FRAME_DOC[tagOf(el)];
@@ -124,7 +156,7 @@ function roleOf(el) {
 }
 function checkState(el) {
   var t = tagOf(el) === 'INPUT' ? inputType(el) : '';
-  if (t === 'checkbox' || t === 'radio') return { checked: !!el.checked, radio: t === 'radio' };
+  if (t === 'checkbox' || t === 'radio') return { checked: !!checkedOf(el), radio: t === 'radio' };
   var role = attr(el, 'role');
   if (role === 'checkbox' || role === 'switch' || role === 'radio' || role === 'menuitemcheckbox') {
     return { checked: attr(el, 'aria-checked') === 'true', radio: role === 'radio' };
@@ -142,12 +174,17 @@ function labelledText(el) {
   }
   return out.trim();
 }
-// The text of a <label>, without the controls it wraps.
-function labelText(label) {
-  var copy = cloneOf(label, true);
-  var inner = all(copy, 'input, select, textarea, script, style');
-  for (var i = 0; i < inner.length; i++) removeOf(inner[i]);
-  return textContentOf(copy) || '';
+var LABEL_SKIP = ['INPUT', 'SELECT', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+// The text of a <label>, without the controls it wraps. Read in place: a
+// copy would construct the label's custom elements, running page code.
+function labelText(node) {
+  var out = '';
+  for (var c = firstNodeOf(node); c; c = nextNodeOf(c)) {
+    var type = nodeTypeOf(c);
+    if (type === 3) out += nodeValueOf(c);
+    else if (type === 1 && LABEL_SKIP.indexOf(tagOf(c)) < 0) out += labelText(c);
+  }
+  return out;
 }
 function labelsText(el) {
   var read = LABELS[tagOf(el)];
@@ -326,7 +363,7 @@ function deepActive() {
     var inner = null;
     var shadow = a && shadowOf(a);
     if (shadow && SHADOW_ACTIVE(shadow)) inner = SHADOW_ACTIVE(shadow);
-    else if (a && tagOf(a) === 'IFRAME') {
+    else if (a && FRAME_DOC[tagOf(a)]) {
       var doc = frameDocOf(a);
       inner = doc && ACTIVE(doc);
       if (inner && inner === bodyOf(ownerDocOf(inner))) inner = null;
@@ -337,7 +374,7 @@ function deepActive() {
 }
 function setValue(el, value) {
   if (editableOf(el)) {
-    el.textContent = value;
+    setTextContentOf(el, value);
     return;
   }
   var tag = tagOf(el);
@@ -347,7 +384,7 @@ function setValue(el, value) {
   if (desc && desc.set) desc.set.call(el, value); else el.value = value;
 }
 function changed(el) {
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
+  dispatchOf(el, new Event('input', { bubbles: true }));
+  dispatchOf(el, new Event('change', { bubbles: true }));
 }
 var STALE = { error: 'stale_ref' };

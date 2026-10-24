@@ -1,8 +1,8 @@
 var el = byPath(p.path);
 if (!el) return STALE;
-if (el.tagName !== 'SELECT') return { error: 'not_a_select' };
+if (tagOf(el) !== 'SELECT') return { error: 'not_a_select' };
 var want = String(p.value);
-var options = Array.prototype.slice.call(el.options);
+var options = Array.prototype.slice.call(optionsOf(el));
 var pick = options.filter(function (o) { return o.value === want; })[0] ||
   options.filter(function (o) { return String(o.label || o.text).trim() === want.trim(); })[0];
 if (!pick) return { error: 'no_such_option' };

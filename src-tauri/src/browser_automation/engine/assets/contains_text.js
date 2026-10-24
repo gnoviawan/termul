@@ -1,1 +1,1 @@
-return ((document.body && document.body.innerText) || '').indexOf(p.text) >= 0;
+return textOf(bodyOf(document)).indexOf(p.text) >= 0;

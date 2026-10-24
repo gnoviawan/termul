@@ -464,8 +464,10 @@ async fn stale_ref(c: &Ctx<'_>) -> CaseResult {
     )
 }
 
-/// A page that overrides the prototypes and globals helpers would use, and
-/// traps any helper state that reaches its world, changes no result.
+/// A page that overrides the prototypes and globals helpers would use,
+/// traps any helper state that reaches its world, and names elements after
+/// document and form properties (`title`, `body`, `children`), changes no
+/// result.
 async fn tamper(c: &Ctx<'_>) -> CaseResult {
     c.open("/tamper.html", TAMPER_READY).await?;
     let snap = c.snapshot().await?;
@@ -488,6 +490,7 @@ async fn tamper(c: &Ctx<'_>) -> CaseResult {
         .ok_or_else(|| mismatch("no Secret field ref"))?;
     c.call("fill", json!({ "ref": field, "value": "Ada" })).await?;
     c.click("button", "Real button").await?;
+    c.call("wait", json!({ "text": "Result: clicked real [Ada]" })).await?;
     let after = c.snapshot().await?;
     for line in ["Result: clicked real [Ada]", "Leaks: none"] {
         if !after.text.contains(line) {

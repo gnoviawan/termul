@@ -11,6 +11,9 @@
 <main>
 <h1>Tamper fixture</h1>
 <form id="f" onsubmit="return false">
+<input type="hidden" name="children" value="shadows form.children">
+<input type="hidden" name="tagName" value="shadows form.tagName">
+<input type="hidden" name="shadowRoot" value="shadows form.shadowRoot">
 <label for="secret">Secret field</label>
 <input id="secret" name="secret" type="text" aria-label="Secret field">
 <button id="real" type="button">Real button</button>
@@ -20,7 +23,12 @@
 <p id="status">Tamper fixture loading</p>
 </main>
 <button id="decoy" type="button">Decoy button</button>
+<img name="title" alt="">
+<img name="body" alt="">
+<img name="documentElement" alt="">
 <script>
+// The images and hidden inputs named like document and form properties
+// shadow those properties in every world, the helpers' included.
 // The page world tries to forge helper results and to see helper state.
 // Helpers that ran in this world would read the forged values, click the
 // decoy, write "FORGED" into the field, or trip a trap; each trap names

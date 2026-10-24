@@ -1,2 +1,2 @@
 var a = deepActive();
-return { editable: !!a && a !== a.ownerDocument.body && (a.matches(':read-write') || a.isContentEditable) };
+return { editable: !!a && a !== bodyOf(ownerDocOf(a)) && (matchesOf(a, ':read-write') || editableOf(a)) };

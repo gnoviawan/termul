@@ -1,4 +1,4 @@
 var el = byPath(p.path);
-if (!el || el.tagName !== 'INPUT' || inputType(el) !== 'file') return false;
-el.click();
+if (!el || tagOf(el) !== 'INPUT' || inputType(el) !== 'file') return false;
+clickOf(el);
 return true;

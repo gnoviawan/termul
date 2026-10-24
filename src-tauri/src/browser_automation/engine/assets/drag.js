@@ -3,7 +3,7 @@ var to = byPath(p.to);
 if (!from || !to) return STALE;
 var STEPS = 6;
 function mid(el) {
-  var r = el.getBoundingClientRect();
+  var r = rectOf(el);
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 }
 function fire(type, target, at, buttons) {
@@ -17,7 +17,7 @@ function fire(type, target, at, buttons) {
     init.pointerType = 'mouse';
     init.isPrimary = true;
   }
-  target.dispatchEvent(pointer ? new PointerEvent(type, init) : new MouseEvent(type, init));
+  dispatchOf(target, pointer ? new PointerEvent(type, init) : new MouseEvent(type, init));
 }
 var a = mid(from);
 var b = mid(to);
@@ -27,7 +27,7 @@ function advance() {
   step += 1;
   var t = step / STEPS;
   var at = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-  var target = from.ownerDocument.elementFromPoint(at.x, at.y) || from;
+  var target = pointOf(ownerDocOf(from), at.x, at.y) || from;
   fire('pointermove', target, at, 1);
   fire('mousemove', target, at, 1);
   return frame().then(advance);
