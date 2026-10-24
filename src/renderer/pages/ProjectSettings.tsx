@@ -451,6 +451,9 @@ export function ProjectSettingsModal() {
         variant="danger"
         onConfirm={() => {
           setIsCloseConfirmOpen(false)
+          // The modal stays mounted while closed, so drop the edits here or they
+          // reappear the next time it opens.
+          handleDiscard()
           close()
         }}
         onCancel={() => setIsCloseConfirmOpen(false)}

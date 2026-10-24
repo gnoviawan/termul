@@ -36,7 +36,22 @@ vi.mock('@/components/settings/SettingsLayout', () => ({
 }))
 
 vi.mock('@/components/NewProjectModal', () => ({ NewProjectModal: () => null }))
-vi.mock('@/components/ConfirmDialog', () => ({ ConfirmDialog: () => null }))
+vi.mock('@/components/ConfirmDialog', () => ({
+  ConfirmDialog: ({
+    isOpen,
+    confirmLabel,
+    onConfirm
+  }: {
+    isOpen: boolean
+    confirmLabel?: string
+    onConfirm: () => void
+  }) =>
+    isOpen ? (
+      <button type="button" onClick={onConfirm}>
+        {confirmLabel}
+      </button>
+    ) : null
+}))
 
 const firstProject: Project = {
   id: 'project-1',
@@ -449,6 +464,20 @@ describe('ProjectSettings discard', () => {
     })
 
     expect(screen.queryByDisplayValue('LATE')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+  })
+
+  it('drops unsaved edits when the user leaves through the close prompt', async () => {
+    renderSettings()
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave' }))
+    expect(useSettingsModalStore.getState().view).not.toBe('project')
+
+    act(() => useSettingsModalStore.getState().openProject())
+
+    expect(await screen.findByLabelText('Name')).toHaveValue('First Project')
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
   })
 })
