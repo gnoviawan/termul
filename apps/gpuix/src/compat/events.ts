@@ -23,7 +23,7 @@ import {
   trackedInstance,
   treeIndex
 } from './dom-node'
-import { dragSuppressesClick, fileDrop, moveSource, pressSource, releaseSource } from './dnd'
+import { dragSuppressesClick, fileDrop, hitTest, moveSource, pressSource, releaseSource } from './dnd'
 import { compatWarn } from './log'
 
 type Handler = (event: CompatEvent) => void
@@ -267,6 +267,17 @@ const clickBubbling = bubbling((h, p) => [
   ['click', h.onClick],
   ['dblclick', p.clickCount === 2 ? h.onDoubleClick : undefined]
 ])
+/**
+ * The click of a press an ancestor captured (a pointer-driven drag source
+ * released without dragging). GPUIX delivers no click then, so this
+ * dispatches it as the DOM does, from the deepest element under `point`.
+ */
+export function clickWithheldByCapture(point: { x: number; y: number }): void {
+  const target = hitTest(point)
+  if (target === null) return
+  onClick({ eventType: 'click', elementId: target, x: point.x, y: point.y, clickCount: 1, button: 0 } as EventPayload)
+}
+
 function onClick(payload: EventPayload): void {
   if (dragSuppressesClick(payload)) return
   const events = clickBubbling(payload)

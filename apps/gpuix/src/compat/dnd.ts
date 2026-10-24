@@ -148,6 +148,15 @@ function setPreview(next: DragPreview | null): void {
   for (const listener of previewListeners) listener()
 }
 
+/**
+ * A pointer drag compat drives outside this module (framer-motion Reorder)
+ * ended at `point`; the click GPUIX delivers with that release is dropped,
+ * as for an HTML5 drag.
+ */
+export function notePointerDragRelease(point: Point): void {
+  lastRelease = { ...point, at: performance.now() }
+}
+
 /** Whether a click GPUIX is delivering belongs to the release of a drag. */
 export function dragSuppressesClick(payload: EventPayload): boolean {
   if (session?.phase === 'dragging') return true
@@ -208,7 +217,7 @@ function deepest(node: TreeJson, p: Point, inheritedNone: boolean): number | nul
   return node.id
 }
 
-function hitTest(point: Point): number | null {
+export function hitTest(point: Point): number | null {
   const tree = treeIndex().tree
   return tree ? deepest(tree, point, false) : null
 }

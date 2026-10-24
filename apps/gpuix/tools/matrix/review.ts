@@ -62,13 +62,11 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Change Color opens the Select Color popover with the same nine swatches and the current one ringed.']
   },
   'rail.project-reorder': {
-    status: 'broken',
+    status: 'ported',
     differences: [
-      'Dragging gamma onto alpha reorders the web list to alpha, gamma, beta; GPUIX keeps alpha, beta, gamma. D1 emulates HTML5 drag and drop, but the rail reorders through framer-motion Reorder pointer gestures, which the framer-motion shim does not drive.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C3 framer-motion Reorder drag',
-    impact: 1
+      'Dragging gamma onto alpha reorders the list to alpha, gamma, beta in both (C3 fixed in G3: the framer-motion shim drives Reorder from pointer moves with framer\'s one-neighbour-per-move rule). The dragged row does not follow the pointer in GPUIX, which has no transforms; the list reorders live under it.',
+      'After the drop the web paints alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2); GPUIX shows alpha\'s diff stat with no hover.'
+    ]
   },
   'rail.add-menu': {
     status: 'partial',

@@ -384,7 +384,11 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
             const from = await resolve(action.from, key)
             const to = await resolve(action.to, `${key}/to`)
             log.via = from.via
-            await app.mouse.drag(from.point, to.point, { steps: 12 })
+            // The web drives a drop onto a whole element with Playwright's dragTo, one
+            // move from press to target; a move-driven reorder (framer-motion Reorder)
+            // steps once per move, so the GPUIX drag sends the same single move.
+            const steps = 'css' in action.to && action.to.frac ? 12 : 1
+            await app.mouse.drag(from.point, to.point, { steps })
             break
           }
           case 'press':
