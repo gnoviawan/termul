@@ -12,7 +12,7 @@ The automation-tree census proves it in the real app. In the base bundle's secon
 
 `src/compat/park.ts` wraps the renderer's `applyBatch`. When an element's style becomes a hidden full-bleed overlay (`visibility: hidden`, `position: absolute`, all four insets 0), the element moves under a native node that is not reachable from the root, and an empty placeholder takes its slot among its siblings. Ops that place a sibling before the parked element, or move it, are rewritten to the placeholder. When the style turns visible, the element returns to the placeholder's slot. React state, terminals, scroll offsets and list state stay as they were. A parked pane is not under its React ancestors in the native tree, so when an ancestor is destroyed, park frees the pane whose placeholder went with it. `tools/compat/park.test.tsx` drives real React through GPUIX's reconciler into a model of the retained tree and checks state, sibling order, moves, and frees of the pane and of its ancestors.
 
-`src/compat/busy-ui.ts` makes compat's synchronous DOM reads (focus, scroll offset, bounds, tree) answer "none" when GPUIX's 2 s UI-thread timeout fires. Without it, the base bundle crashed under the 8-chat load from a key handler's focus read and from TanStack Virtual's `scrollLeft`, the same failure class as the transcript's `getListScrollTop` crash.
+Under the 8-chat load, the base bundle also crashed when a synchronous read (a key handler's focus read, TanStack Virtual's `scrollLeft`, the transcript's `getListScrollTop`) hit GPUIX's 2 s UI-thread timeout. F3 first guarded compat's reads in a `busy-ui.ts` adapter. G2's `src/native-guard.ts`, merged from `exp/gpuix-client` at `8523c582`, guards the same reads at the renderer, so F3 deleted its adapter.
 
 ## Results
 
@@ -27,9 +27,35 @@ The automation-tree census proves it in the real app. In the base bundle's secon
 | 4 | 70.1 | 19.4 | 11.2 |
 | 8 | 86.0 | 13.6 | 18.5 |
 
-### stream-storm, 8 chats
+### stream-storm, 8 chats, with G2's transcript changes
 
-`bun tools/perf/build-variants.ts`, then `bun tools/perf/ab.ts --variants base=gpuix:dist-sbase,park=gpuix:dist,nopoll=gpuix:dist-snopoll,chromium=chromium --runs 4 -- --scenarios stream-storm --page-metrics off --quiet-wait 300`, stopped after 3 rounds for time. `base` is this branch without parking, `park` is this branch, and `nopoll` is this branch with the transcript's 120 ms `getListScrollTop` poll removed (an experiment for G2, not a proposed build). All GPUIX bundles carry G2's `getListScrollTop` try/catch, which `build-variants.ts` applies at bundle time without touching G2's file. Other units ran builds and benchmarks during every run (load average 5 to 16). Records are in [`results-f3/storm8/`](results-f3/storm8/).
+`bun tools/perf/build-variants.ts`, then `bun tools/perf/ab.ts --variants base=gpuix:dist-sbase,park=gpuix:dist,chromium=chromium --runs 3 --out tools/perf/results-f3/storm8-merged -- --scenarios stream-storm --page-metrics off --quiet-wait 400 --port 8192 --display :184`, on this branch after merging `exp/gpuix-client` at `8523c582` (G2's native-guard, and a transcript that reads its follow state once per settled scroll instead of polling). `base` is the same build with `parkHiddenPanes` replaced by a no-op at bundle time. The machine was not quiet: other units ran benchmarks throughout, and the quiet gate let runs start at a load average of 2.3 to 10.3. Records are in [`results-f3/storm8-merged/`](results-f3/storm8-merged/). With 3 runs per variant, the smallest two-sided rank-sum p is 0.1, so read these as consistent differences, not tested ones.
+
+Each cell lists the runs in order. PSS is the client's process tree (Chromium: browser, renderer and GPU process).
+
+| Metric | base | park | Chromium |
+|---|---|---|---|
+| Runs that finished | 2 of 3 | 3 of 3 | 3 of 3 |
+| Chats open at the end (of 8) | 7, 7, - | 8, 6, 8 | 8, 8, 8 |
+| Elements reachable from the root, measure | 42,780, 65,682, - | 4,804, 22,045, 4,380 | |
+| Of those, hidden and never painted | 39,365, 23,448, - | 36, 20, 26 | |
+| Chat start while others stream, p50 (s) | 120.9, 121.3, - | 9.4, 20.0, 11.4 | 10.1, 14.9, 11.1 |
+| Typing part of that start, p50 (s) | 84.8, 88.3, - | 7.2, 15.6, 8.1 | 6.0, 9.4, 7.0 |
+| Frames on screen while switching chats | 0.3, 0.2, - | 2.1, 0.8, 2.9 | 6.3, 11.4, 11.1 |
+| Frames on screen, measure phase | 0.2, 0.1, - | 2.3, 0.4, 1.9 | 5.4, 3.4, 4.3 |
+| Client PSS, measure, median (MB) | 1,908, 2,760, - | 1,046, 3,902, 997 | 1,480, 1,329, 1,332 |
+| Client PSS, measure, peak (MB) | 1,960, 2,786, - | 1,081, 4,010, 1,047 | 1,609, 1,383, 1,391 |
+| Client RSS, measure, peak (MB) | 2,015, 2,887, - | 1,135, 4,078, 1,102 | 2,274, 2,061, 2,061 |
+| `gpuix-ui` CPU, measure (% of a core) | 95, 79, - | 81, 86, 69 | |
+| Mutation JSON sent, measure (KB/s) | 5,126, 2,217, - | 5,184, 1,656, 3,608 | |
+
+Base's third run never finished. After 30 minutes its client still ran at 175% CPU with a PSS of 3,788 MB (read from `/proc/<pid>/smaps_rollup`), and the driver waited on it with no deadline, so the run was stopped by hand and left no record. Its first two runs each lost one chat start ("launcher composer never accepted"), and park's second run lost two.
+
+Parking keeps the hidden part of the tree at 20 to 36 elements, against 23,000 to 39,000 without it. Starting a chat while 7 others stream drops from about 2 minutes to 9 to 20 s, against Chromium's 10 to 15 s. Memory follows the reachable tree. In park's first and third runs, PSS in the measure phase was about 1,000 MB, below Chromium's 1,330 to 1,480 MB. Base used 1,908 and 2,760 MB, and 3,788 MB in the run that never finished. Park's second run used 3,902 MB because of one row, described below. GPUIX still draws fewer frames than Chromium, 0.4 to 2.3 fps in the measure phase against 3.4 to 5.4.
+
+### stream-storm, 8 chats, before G2's transcript changes
+
+These runs predate the merge of `8523c582`. They used `--runs 4`, stopped after 3 rounds for time, and `--quiet-wait 300`. All three GPUIX bundles carried G2's `getListScrollTop` try/catch, applied locally. `nopoll` removed the transcript's 120 ms `getListScrollTop` poll as an experiment, which G2 has since replaced. Other units ran builds and benchmarks during every run (load average 5 to 16). Records are in [`results-f3/storm8/`](results-f3/storm8/).
 
 Each cell lists the runs. A dash means the run did not reach that point.
 
@@ -57,10 +83,9 @@ STORM4
 
 ## What still limits it
 
-- **The visible transcript's live turn.** With parking, about 2,700 elements stay reachable. In every park and nopoll run of the 8-chat set, one `virtual-list` row, `chat-row-activity:turn:<id>`, held 2,216 to 2,387 of them: the live turn's activity, with 149 to 161 `Thought · 1 line` children. A `virtual-list` culls whole rows only, so that row is built every frame and grows while the turn streams. This is G2's code.
-- **Synchronous scroll polling.** `useListFollow` calls `getListScrollTop` every 120 ms from each mounted transcript. Each call waits for the UI thread to finish its frame, so the JS thread spent 850 to 950 ms of every second blocked there. Removing the poll (`nopoll`) freed that time but did not raise the frame rate, so it is not the frame limiter. It still blocks input handling, and a pushed follow state would remove it. This is G2's code.
-- **Mutation volume.** The client sent 0.8 to 1.0 MB of mutation JSON per second for about 19 KB/s of streamed text (8 chats, 20 updates of 120 characters per second), 40 to 55 times the text. A guess: each chunk resends the whole growing markdown source of its block.
-- **Whole-scene rendering.** GPUIX rebuilds and lays out the whole reachable tree on every frame and has no cached subtrees. F2 found that every present covers the whole window. With 2,700 elements, `gpuix-ui` used 55% to 65% of a core and lavapipe about 85%.
+- **The visible transcript's live turn.** After parking, one transcript row holds nearly all of the reachable tree: the live turn's activity row (`chat-row-activity:<id>`) with one `Thought · 1 line` child per streamed thought. In the post-merge 8-chat runs it held 4,346, 21,668 and 3,922 of the 4,804, 22,045 and 4,380 reachable elements. Before the merge it held 2,216 to 2,387. A `virtual-list` culls whole rows only, so this row is built and laid out on every frame and grows for as long as the turn streams. It decides both the frame rate and the memory: the run where it reached 21,668 elements drew 0.4 fps and used 3.9 GB. This is G2's code. The fix belongs in the activity row: virtualize its children (a nested `virtual-list`), or build only the visible part of a long thought group.
+- **Mutation volume.** The client sent 1.7 to 5.2 MB of mutation JSON per second in the measure phase for about 19 KB/s of streamed text (8 chats, 20 updates of 120 characters per second), up from 0.8 to 1.0 MB before the merge. The volume is the same with and without parking. See the op breakdown below.
+- **Whole-scene rendering.** GPUIX rebuilds and lays out the whole reachable tree on every frame and has no cached subtrees. F2 found that every present covers the whole window. With about 4,500 reachable elements, `gpuix-ui` used 69% to 86% of a core.
 
 ## Upstream asks for GPUIX
 
