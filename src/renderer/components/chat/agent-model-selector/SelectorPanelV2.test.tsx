@@ -587,6 +587,15 @@ describe('SelectorPanelV2 Thinking level on the selected row', () => {
       expect(row).toHaveAttribute('aria-label', 'Claude Opus, thinking High')
       expect(row).toHaveAccessibleName('Claude Opus, thinking High')
       expect(row.querySelector('[data-row-thinking]')).toHaveTextContent('High')
+      // `aria-label` names the whole subtree: the star and Edit sit beside
+      // the row button, never inside it.
+      expect(row.querySelector('button, [role="button"]')).toBeNull()
+    }
+    const [favoriteRow] = selected
+    const entry = favoriteRow?.closest('[data-favorite-entry]') as HTMLElement
+    expect(within(entry).getByTestId('selector-favorite').parentElement).toBe(entry)
+    for (const edit of screen.getAllByTestId('selector-edit')) {
+      expect(selected.some((row) => row.contains(edit))).toBe(false)
     }
   })
 })
