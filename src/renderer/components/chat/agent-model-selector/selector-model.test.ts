@@ -17,6 +17,7 @@ import {
   orderAgentTabs,
   resolveFavorites,
   rowAccessibleName,
+  rowTooltip,
   spacingPx,
   splitAgentTabs,
   splitContextOption,
@@ -558,6 +559,21 @@ describe('editButtonAccessibleName', () => {
     )
     expect(editButtonAccessibleName({ name: 'Claude Opus', sections: 'Fast mode' })).toBe(
       'Edit Fast mode for Claude Opus'
+    )
+  })
+})
+
+describe('rowTooltip', () => {
+  it('leads with the full, trimmed model name', () => {
+    expect(rowTooltip({ name: '  Claude 4.7 Opus Thinking ' })).toBe('Claude 4.7 Opus Thinking')
+  })
+
+  it('then the agent, then the description', () => {
+    expect(
+      rowTooltip({ name: 'Claude Opus', agentName: 'Claude Agent', details: 'Most capable' })
+    ).toBe('Claude Opus\n\nClaude Agent\n\nMost capable')
+    expect(rowTooltip({ name: 'Claude Opus', details: 'Most capable' })).toBe(
+      'Claude Opus\n\nMost capable'
     )
   })
 })

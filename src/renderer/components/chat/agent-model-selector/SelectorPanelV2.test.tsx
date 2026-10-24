@@ -435,6 +435,34 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
   })
 })
 
+describe('SelectorPanelV2 row tooltip', () => {
+  it('leads with the full model name, and leaves the row and Edit names alone', async () => {
+    const long = 'Claude 4.7 Opus Thinking Max with Extended 1M Context Window Preview Build'
+    const model = select('model', 'Model', 'opus', [
+      ['opus', `  ${long} `],
+      ['sonnet', 'Claude Sonnet']
+    ])
+    render(<Panel {...props({ modelOption: model })} />)
+    const row = screen.getByRole('button', { name: long, pressed: true })
+    fireEvent.focus(row)
+    const tip = await screen.findByRole('tooltip')
+    expect(tip.textContent?.split('\n\n')[0]).toBe(long)
+    // Every row gets it, not just a truncated one.
+    fireEvent.blur(row)
+    const sonnet = screen.getByRole('button', { name: 'Claude Sonnet' })
+    fireEvent.focus(sonnet)
+    await waitFor(() =>
+      expect(screen.getByRole('tooltip').textContent?.startsWith('Claude Sonnet')).toBe(true)
+    )
+    // Visual only: the names stay as they were.
+    expect(row).toHaveAttribute('aria-label', long)
+    expect(screen.getByTestId('selector-edit')).toHaveAttribute(
+      'aria-label',
+      `Edit ${long}, thinking High`
+    )
+  })
+})
+
 describe('SelectorPanelV2 Thinking level on the Edit button', () => {
   const edit = (): HTMLElement => screen.getByTestId('selector-edit')
   /** Edit's visible text, chevron aside (it is an aria-hidden svg). */
@@ -651,6 +679,14 @@ describe('SelectorPanelV2 Edit flyout keyboard', () => {
     expect(onOpenChange).not.toHaveBeenCalled()
     await waitFor(() => expect(row).toHaveFocus())
 
+    // Focus back on the row shows its name tooltip; Escape dismisses that
+    // first (WCAG 1.4.13), keeping focus, then closes the picker.
+    if (screen.queryByRole('tooltip')) {
+      fireEvent.keyDown(row, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+      expect(onOpenChange).not.toHaveBeenCalled()
+      expect(row).toHaveFocus()
+    }
     fireEvent.keyDown(row, { key: 'Escape' })
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })

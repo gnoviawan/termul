@@ -38,6 +38,7 @@ import {
   type FavoriteModel,
   type ModelCatalog,
   rowAccessibleName,
+  rowTooltip,
   splitContextOption
 } from './selector-model'
 import { PICKER_ICON, PICKER_LABEL } from './selector-tokens'
@@ -127,8 +128,9 @@ function DenseModelRow({
         />
       </button>
     )
-    const tip = [agentName, tooltip].filter(Boolean).join('\n\n')
-    if (!tip || touch) return button
+    // Leads with the full name, which a long one truncates in the row.
+    const tip = rowTooltip({ name, agentName, details: tooltip })
+    if (touch) return button
     return (
       <Tooltip>
         <TooltipTrigger asChild>{button}</TooltipTrigger>
