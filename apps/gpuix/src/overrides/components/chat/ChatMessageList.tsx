@@ -11,9 +11,10 @@
  * Agent replies span one row per block (`AgentReplyRows`), so GPUI lays out
  * only the blocks near the viewport while a reply streams.
  *
- * Follow state comes from `getListScrollTop`: a bottom-aligned list resting
- * at its end reports the at-end sentinel (index === host row count). Anywhere
- * else the reader has scrolled away, so the jump-to-latest button shows.
+ * Follow state comes from `getListScrollTop`, read after each list scroll: a
+ * bottom-aligned list resting at its end reports the at-end sentinel (index
+ * === host row count). Anywhere else the reader has scrolled away, so the
+ * jump-to-latest button shows.
  */
 
 import { type PublicInstance, useGpuixRequired } from '@gpuix/react'
@@ -46,8 +47,8 @@ import { RowCountContext, RowShell } from '../../../chat/row-shell'
 import { log } from '../../../log'
 import { tw } from '../../../style/tw'
 
-/** How often the follow state is read back from the native list. */
-const FOLLOW_POLL_MS = 120
+/** Delay from a list scroll to reading its anchor, so a queued `scrollToItem` has applied. */
+const FOLLOW_READ_DELAY_MS = 120
 
 type ListAnchor = [index: number, offset: number]
 
@@ -214,7 +215,14 @@ function JumpToLatest({ newCount, onJump }: { newCount: number; onJump: () => vo
   )
 }
 
-/** Follow state of a native list: pinned at the live edge, or the reader's anchor. */
+/**
+ * Follow state of a native list: pinned at the live edge, or the reader's anchor.
+ *
+ * The anchor is read once after the list reports a scroll (`onVisibleRange`
+ * fires for the wheel and for `scrollToItem`), never on a timer: a mounted
+ * transcript nobody scrolls costs nothing, and a hidden one never asks the
+ * UI thread. A read that times out (`native-guard.ts`) keeps the last state.
+ */
 function useListFollow(
   listRef: React.RefObject<PublicInstance | null>,
   hostRows: () => number,
@@ -225,20 +233,30 @@ function useListFollow(
   const anchorRef = useRef<ListAnchor | null>(null)
   const countRef = useRef(hostRows)
   countRef.current = hostRows
+  const readTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useEffect(() => {
-    const read = () => {
-      const id = listRef.current?.id
-      if (id === undefined) return
-      const top = renderer.getListScrollTop?.(id)
-      if (!top) return
-      const atEnd = top[0] >= countRef.current()
-      anchorRef.current = atEnd ? null : [top[0], top[1]]
-      setPinned(atEnd)
-    }
-    const timer = setInterval(read, FOLLOW_POLL_MS)
-    return () => clearInterval(timer)
+  const read = useCallback(() => {
+    readTimer.current = null
+    const id = listRef.current?.id
+    if (id === undefined) return
+    const top = renderer.getListScrollTop?.(id)
+    if (!top) return
+    const atEnd = top[0] >= countRef.current()
+    anchorRef.current = atEnd ? null : [top[0], top[1]]
+    setPinned(atEnd)
   }, [renderer, listRef])
+
+  /** Called on every list scroll; reads the anchor once the scroll has been applied. */
+  const onScrolled = useCallback(() => {
+    if (readTimer.current === null) readTimer.current = setTimeout(read, FOLLOW_READ_DELAY_MS)
+  }, [read])
+
+  useEffect(
+    () => () => {
+      if (readTimer.current !== null) clearTimeout(readTimer.current)
+    },
+    []
+  )
 
   // Session switch: keep the old reader's place, restore the new one's.
   useLayoutEffect(() => {
@@ -248,6 +266,7 @@ function useListFollow(
       renderer.scrollToItem?.(id, saved[0], saved[1])
       log.info('chat', `transcript.restore ${JSON.stringify({ sessionId, index: saved[0] })}`)
     }
+    anchorRef.current = saved ?? null
     setPinned(!saved)
     return () => {
       if (anchorRef.current) savedAnchors.set(sessionId, anchorRef.current)
@@ -264,7 +283,7 @@ function useListFollow(
     setPinned(true)
   }, [renderer, listRef])
 
-  return { pinned, jumpToLatest }
+  return { pinned, jumpToLatest, onScrolled }
 }
 
 /** Items appended while the reader is away from the live edge. */
@@ -324,7 +343,7 @@ export function ChatMessageList({
     () => itemsRef.current.reduce((sum, item) => sum + (rowCounts.get(item.key) ?? 1), 0),
     [rowCounts]
   )
-  const { pinned, jumpToLatest } = useListFollow(listRef, hostRows, sessionId)
+  const { pinned, jumpToLatest, onScrolled } = useListFollow(listRef, hostRows, sessionId)
   const newCount = useUnread(count, pinned)
 
   useEffect(() => {
@@ -336,6 +355,7 @@ export function ChatMessageList({
   const loadingOlderRef = useRef(false)
   const onVisibleRange = useCallback(
     (event: { startIndex?: number }) => {
+      onScrolled()
       if ((event.startIndex ?? 1) > 0 || pinned || loadingOlderRef.current || count === 0) return
       loadingOlderRef.current = true
       void useAcpStore
@@ -345,7 +365,7 @@ export function ChatMessageList({
           loadingOlderRef.current = false
         })
     },
-    [pinned, count, sessionId]
+    [pinned, count, sessionId, onScrolled]
   )
 
   if (items.length === 0 && !showRunningIndicator) {
