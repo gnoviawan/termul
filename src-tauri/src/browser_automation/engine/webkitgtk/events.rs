@@ -16,6 +16,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use gtk::glib::prelude::*;
+use gtk::glib::ControlFlow;
 use gtk::prelude::WidgetExt;
 use tauri::webview::PlatformWebview;
 use tauri::Url;
@@ -24,7 +25,7 @@ use webkit2gtk::{
 };
 
 use super::{chooser, dialogs};
-use crate::browser_automation::engine::events::{TabEvents, TabRole};
+use crate::browser_automation::engine::events::{DownloadSize, TabEvents, TabRole};
 
 pub fn attach(platform: &PlatformWebview, events: TabEvents) -> bool {
     let webview = platform.inner();
@@ -119,20 +120,45 @@ fn take_download(
         // The response is in by now: a length past the cap is refused
         // before any byte lands.
         let length = download.response().map_or(0, |r| r.content_length());
-        if !announced.download_progress(&announced_url, length) {
+        let size = DownloadSize {
+            received: 0,
+            announced: Some(length),
+        };
+        if !announced.download_progress(&announced_url, size) {
             download.cancel();
             return true;
         }
         download.set_destination(&destination);
         true
     });
-    let progress = events.clone();
-    let progress_url = url.clone();
-    let cancelled = Cell::new(false);
-    download.connect_received_data(move |download, _| {
-        if !cancelled.get() && !progress.download_progress(&progress_url, download.received_data_length()) {
-            cancelled.set(true);
-            download.cancel();
+    // Set once the download is cancelled or finished: nothing more to check.
+    let ended = Rc::new(Cell::new(false));
+    let check = {
+        let events = events.clone();
+        let url = url.clone();
+        let ended = ended.clone();
+        move |download: &Download| {
+            let size = DownloadSize {
+                received: download.received_data_length(),
+                announced: None,
+            };
+            if !ended.get() && !events.download_progress(&url, size) {
+                ended.set(true);
+                download.cancel();
+            }
+        }
+    };
+    let on_data = check.clone();
+    download.connect_received_data(move |download, _| on_data(download));
+    // While no byte arrives, the host's idle timeout and deadline still run.
+    let ticking = download.clone();
+    let tick_ended = ended.clone();
+    let _ = gtk::glib::timeout_add_seconds_local(1, move || {
+        check(&ticking);
+        if tick_ended.get() {
+            ControlFlow::Break
+        } else {
+            ControlFlow::Continue
         }
     });
     let failed = Rc::new(Cell::new(false));
@@ -141,6 +167,7 @@ fn take_download(
     let finished = events.clone();
     let url = url.clone();
     download.connect_finished(move |download| {
+        ended.set(true);
         reissued.borrow_mut().retain(|d| d != download);
         finished.download_finished(&url, !failed.get());
     });

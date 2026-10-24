@@ -4,6 +4,7 @@
 
 use super::super::ports::{ActionClass, AppPolicyOp, ProjectPolicyOp, TicketFile};
 use super::super::test_support::InMemoryPolicyStore;
+use crate::browser_automation::engine::events::DownloadSize;
 use super::*;
 use crate::acp::browser_policy::{
     AppPreapproval, CanonicalOrigin, OriginPattern, ProjectPreapproval,
@@ -542,8 +543,12 @@ async fn a_download_past_the_size_cap_is_cancelled_while_it_streams() {
         .download_starting(&url, std::path::Path::new("big.bin"))
         .expect("admitted");
     let cap = super::super::downloads::MAX_DOWNLOAD_BYTES;
-    assert!(events.download_progress(&url, cap), "at the cap");
-    assert!(!events.download_progress(&url, cap + 1), "past the cap");
+    let announced = |bytes| DownloadSize {
+        received: 0,
+        announced: Some(bytes),
+    };
+    assert!(events.download_progress(&url, announced(cap)), "at the cap");
+    assert!(!events.download_progress(&url, announced(cap + 1)), "past the cap");
     std::fs::write(&path, b"partial").unwrap();
     events.download_finished(&url, false);
     until(|| !path.exists()).await;

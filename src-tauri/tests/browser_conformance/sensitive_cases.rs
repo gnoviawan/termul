@@ -438,13 +438,6 @@ pub async fn download_preapproved(c: &Ctx<'_>) -> CaseResult {
 /// length once it grows past the cap. Pre-approved, so only the cap stops
 /// them, and nothing is left under app data.
 pub async fn download_size_cap(c: &Ctx<'_>) -> CaseResult {
-    if cfg!(target_os = "macos") {
-        return Err(Failure {
-            code: "capability_unavailable".into(),
-            reason: Some("download_progress".into()),
-            message: "tauri's WKWebView hook reports no download progress; the cap applies when it finishes".into(),
-        });
-    }
     preapprove(c, Scope::App, ActionClass::Download).await?;
     c.open("/download-big.html", "Big download fixture").await?;
     let dir = c.engine.downloads_dir(&c.session);

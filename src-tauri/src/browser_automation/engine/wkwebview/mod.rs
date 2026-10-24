@@ -3,6 +3,7 @@
 //! panels held for the core, file inputs set through the file panel, and
 //! viewport snapshots.
 
+mod downloads;
 mod eval;
 pub mod events;
 pub mod input;
