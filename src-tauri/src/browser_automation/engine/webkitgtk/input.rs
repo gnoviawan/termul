@@ -22,7 +22,9 @@ use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 use tokio::sync::oneshot;
 
+use super::eval;
 use super::super::input::NativeInput;
+use super::super::string_eval;
 use super::super::{
     CapabilityId, EngineError, EngineErrorKind, EngineFuture, Key, KeyInput, NamedKey, Point,
     Support,
@@ -369,6 +371,22 @@ impl NativeInput for GdkInput {
     }
 
     fn key<'a>(&'a self, tab: &'a str, input: KeyInput<'a>) -> EngineFuture<'a, ()> {
-        self.run(tab, key_steps(input))
+        Box::pin(async move {
+            let steps = key_steps(input);
+            let events = steps.len();
+            self.run(tab, steps).await?;
+            // WebKit hands the page one key event at a time, each after the
+            // page acknowledged the one before, so most are still queued in
+            // this process now and a click sent next would overtake them.
+            // The page acknowledges an event before it answers an eval sent
+            // after it, so each round trip lets at least one more through.
+            for _ in 0..events {
+                string_eval::call(&self.tabs, tab, |platform, done| {
+                    eval::call(platform, "return 'null';", "{}", done)
+                })
+                .await?;
+            }
+            Ok(())
+        })
     }
 }
