@@ -15,6 +15,7 @@ import type { BootFn } from './boot-contract'
 import { compatRenderOptions } from './compat/root'
 import { ServerGate } from './launcher/ServerGate'
 import { log } from './log'
+import { recordRendererStats } from './renderer-stats'
 import { DESKTOP_WINDOW } from './window'
 
 export const boot: BootFn = (config, options) => {
@@ -25,6 +26,7 @@ export const boot: BootFn = (config, options) => {
     for (const font of options.fonts)
       renderer.registerFont?.(font as Parameters<NonNullable<NativeRenderer['registerFont']>>[0])
     log.info('boot', `registered ${options.fonts.length} font faces`)
+    recordRendererStats(renderer, process.env.TERMUL_GPUIX_STATS)
   }
   render(
     <ServerGate

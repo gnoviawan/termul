@@ -9,6 +9,8 @@ import { treeCensus } from '../tree-census.ts'
 import { PERF_AGENT_NAME, PERF_DEVICE_ID, PERF_PROJECT_NAME, PERF_TOKEN } from '../server.ts'
 import type { ChatStartPart, ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
 
+export const RENDERER_STATS_FILE = 'renderer-stats.jsonl'
+
 type App = Awaited<ReturnType<typeof launch>>
 
 export interface GpuixHandle extends ClientHandle {
@@ -26,7 +28,7 @@ export const GPUIX_ENTRY = path.join(APP_DIR, 'dist', 'main.js')
  * Chromium lane uses, so both clients read the same device-scoped agent config.
  */
 export async function launchGpuix(
-  opts: ClientLaunchOptions & { clientStateDir: string }
+  opts: ClientLaunchOptions & { clientStateDir: string; entry?: string }
 ): Promise<GpuixHandle> {
   if (opts.gl !== 'lavapipe') throw new Error('the GPUIX lane renders with lavapipe only')
   const origin = new URL(opts.url)
@@ -44,7 +46,7 @@ export async function launchGpuix(
   const t0 = performance.now()
   const app = await launch({
     command: process.execPath,
-    args: [GPUIX_ENTRY],
+    args: [opts.entry ?? GPUIX_ENTRY],
     cwd: APP_DIR,
     env: {
       ...process.env,
@@ -55,11 +57,12 @@ export async function launchGpuix(
       TERMUL_SERVER_URL: opts.url,
       TERMUL_SERVER_TOKEN: PERF_TOKEN,
       TERMUL_GPUIX_STATE_DIR: opts.clientStateDir,
-      TERMUL_GPUIX_DATA_DIR: path.join(opts.clientStateDir, 'data')
+      TERMUL_GPUIX_DATA_DIR: path.join(opts.clientStateDir, 'data'),
+      TERMUL_GPUIX_STATS: path.join(opts.clientStateDir, RENDERER_STATS_FILE)
     }
   })
   const launchedMs = performance.now() - t0
-  const rootPid = appPid()
+  const rootPid = appPid(opts.entry ?? GPUIX_ENTRY)
   return {
     kind: 'gpuix',
     rootPid,
@@ -73,9 +76,9 @@ export async function launchGpuix(
 }
 
 /** launch() spawns the app as a direct child of this process. */
-function appPid(): number {
+function appPid(entry: string): number {
   for (const pid of descendants(process.pid)) {
-    if (pid !== process.pid && readCmdline(pid).includes(GPUIX_ENTRY)) return pid
+    if (pid !== process.pid && readCmdline(pid).includes(entry)) return pid
   }
   throw new Error('could not find the launched GPUIX app process')
 }

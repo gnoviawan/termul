@@ -18,6 +18,12 @@ export interface TreeCensus {
   hidden: number
   /** The largest hidden subtrees, with test ids and text to tell what they are. */
   topHidden: Array<{ size: number; type: string; testIds: string[]; text: string }>
+  /**
+   * The heaviest chain from the root: each step is the child holding most of
+   * its parent's elements, down to the first node whose elements spread over
+   * its children. That node is what dominates the per-frame build.
+   */
+  heaviest: Array<{ size: number; type: string; children: number; testId?: string; text: string }>
 }
 
 interface Counted {
@@ -51,7 +57,7 @@ function sample(root: Counted): { testIds: string[]; text: string } {
 }
 
 export function treeCensus(tree: TreeNode | null, top = 6): TreeCensus {
-  const out: TreeCensus = { reachable: 0, painted: 0, listCulled: 0, hidden: 0, topHidden: [] }
+  const out: TreeCensus = { reachable: 0, painted: 0, listCulled: 0, hidden: 0, topHidden: [], heaviest: [] }
   if (!tree) return out
   const root = count(tree)
   out.reachable = root.size
@@ -73,5 +79,11 @@ export function treeCensus(tree: TreeNode | null, top = 6): TreeCensus {
     .sort((a, b) => b.size - a.size)
     .slice(0, top)
     .map((c) => ({ size: c.size, type: c.node.type, ...sample(c) }))
+  for (let at: Counted | undefined = root; at; ) {
+    const largest: Counted | undefined = at.children.reduce<Counted | undefined>((a, b) => (a && a.size >= b.size ? a : b), undefined)
+    const step = { size: at.size, type: at.node.type, children: at.children.length, text: sample(at).text }
+    out.heaviest.push(at.node.testId ? { ...step, testId: at.node.testId } : step)
+    at = largest && largest.size * 2 >= at.size ? largest : undefined
+  }
   return out
 }

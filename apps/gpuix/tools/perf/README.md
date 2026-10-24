@@ -144,4 +144,15 @@ The runner adds three things for this comparison:
 - **`notes.threads`.** Per-thread CPU of the client tree per phase, from two `/proc/<pid>/task/*/stat` snapshots (`thread-sampler.ts`).
 - **`chat.typeUnderLoadP50Ms` and `chat.openUnderLoadP50Ms`.** The typing part of a chat start, and the part from the **Start** click until the chat shows.
 
+- **`tree.*` keys (GPUIX).** After each phase the runner reads the automation tree (`tree-census.ts`). `tree.reachable` is every element reachable from the window root, which GPUI builds and lays out on every frame unless a `virtual-list` culls it. `tree.painted` has a box in the last frame, and `tree.hidden` is reachable, outside a list, and never painted. `notes.census` also names the largest hidden subtrees and the heaviest chain from the root.
+- **`ui.*` keys (GPUIX).** The app writes per-second counts of its synchronous renderer calls to `TERMUL_GPUIX_STATS` (`src/renderer-stats.ts`). `ui.<method>PerS` is calls per second and `ui.<method>BlockedMsPerS` the milliseconds per second the JS thread waited on the GPUI UI thread for them. `ui.batchKBPerS` is the mutation JSON sent per second.
+
+`--gpuix-dist <dir>` runs another GPUIX bundle than `dist/`. `ab.ts` interleaves several bundles and Chromium, one run of each per round, and labels each record with its variant:
+
+```bash
+bun tools/perf/ab.ts --variants base=gpuix:dist-sbase,new=gpuix:dist,chromium=chromium --runs 5 --out <dir> \
+  -- --scenarios stream-storm --page-metrics off --quiet-wait 300
+bun run perf:runs <dir> measure sustained-stream
+```
+
 A run whose client replaced its UI with a crash report (the GPUIX runtime-error overlay) is recorded with a `fatal: app crashed: ...` error and status `failed`, and stays out of `aggregate.json`.

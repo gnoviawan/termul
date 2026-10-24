@@ -14,7 +14,8 @@ import { DIST_WEB } from '../parity/shoot-web.ts'
 import { startByteProxy } from './byte-proxy.ts'
 import { chromiumDriver, launchChromium } from './clients/chromium.ts'
 import type { ChatStartPart, ClientDriver, ClientKind } from './clients/client.ts'
-import { gpuixDriver, launchGpuix } from './clients/gpuix.ts'
+import { APP_DIR } from '../../build.ts'
+import { GPUIX_ENTRY, gpuixDriver, launchGpuix, RENDERER_STATS_FILE } from './clients/gpuix.ts'
 import {
   chromiumRole,
   type MachineSample,
@@ -31,6 +32,7 @@ import { startPerfServer } from './server.ts'
 import { aggregate, median, type Numbers, summarizePage, summarizeProc } from './stats.ts'
 import { snapshotThreads, type ThreadSnapshot, threadCpu } from './thread-sampler.ts'
 import type { TreeCensus } from './tree-census.ts'
+import { summarizeRendererStats } from './renderer-stats.ts'
 
 const HERE = import.meta.dir
 
@@ -54,6 +56,8 @@ interface Options {
   /** Per-run server state, client state and probe files go under here. */
   stateRoot: string
   distWeb: string
+  /** The GPUIX bundle to run: `<dir>/main.js`. */
+  gpuixEntry: string
   outDir: string
   overrides: Flags
 }
@@ -88,6 +92,7 @@ function parseArgs(argv: string[]): Options {
     screenFrames: take('screen-frames', 'on') !== 'off',
     stateRoot: path.resolve(take('state-root', process.env.GPUIX_STATE_ROOT ?? '/tmp/gpuix-b0')),
     distWeb: path.resolve(take('dist-web', DIST_WEB)),
+    gpuixEntry: path.join(path.resolve(take('gpuix-dist', path.dirname(GPUIX_ENTRY))), 'main.js'),
     outDir: path.resolve(take('out', path.join(HERE, 'results', `linux-${stamp}`))),
     overrides: {}
   }
@@ -100,7 +105,10 @@ function parseArgs(argv: string[]): Options {
 const CLIENTS: ClientKind[] = ['chromium', 'gpuix']
 
 /** The GPUIX client is one Bun process; anything it starts would be `other`. */
-const gpuixRole: RoleOf = (_pid, cmd) => (cmd.includes('dist/main.js') ? 'app' : 'other')
+const gpuixRole =
+  (entry: string): RoleOf =>
+  (_pid, cmd) =>
+    cmd.includes(entry) ? 'app' : 'other'
 
 const serverRole: RoleOf = (_pid, cmd) => {
   if (cmd.includes('termul-server')) return 'server'
@@ -193,9 +201,10 @@ async function runOnce(
     if (client === 'gpuix') {
       const handle = await launchGpuix({
         ...launchOpts,
-        clientStateDir: path.join(scratch, 'client')
+        clientStateDir: path.join(scratch, 'client'),
+        entry: opts.gpuixEntry
       })
-      sampler = startProcSampler(handle.rootPid, gpuixRole)
+      sampler = startProcSampler(handle.rootPid, gpuixRole(opts.gpuixEntry))
       driver = gpuixDriver(handle)
     } else {
       const handle = await launchChromium(launchOpts)
@@ -312,6 +321,10 @@ async function runOnce(
     metrics[`${w.name}.durationS`] = Math.round(seconds * 10) / 10
     metrics[`${w.name}.bytesDownKBps`] = Math.round(w.bytes.down / 1024 / seconds)
     metrics[`${w.name}.bytesUpKBps`] = Math.round(w.bytes.up / 1024 / seconds)
+    Object.assign(
+      metrics,
+      prefixed(w.name, summarizeRendererStats(path.join(scratch, 'client', RENDERER_STATS_FILE), w.from, w.to))
+    )
     const tree = census[w.name]
     if (tree) {
       metrics[`${w.name}.tree.reachable`] = tree.reachable
@@ -342,6 +355,7 @@ async function runOnce(
       run: runIndex,
       client,
       clientVersion: notes.client,
+      ...(client === 'gpuix' ? { gpuixEntry: path.relative(APP_DIR, opts.gpuixEntry) } : {}),
       backend: notes.backend,
       gl: opts.gl,
       pageMetrics: client === 'chromium' && !opts.noPageMetrics,
