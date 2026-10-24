@@ -53,6 +53,7 @@ pub const LOCATION: Helper = helper!("location");
 pub const CHECKED_STATE: Helper = helper!("checked_state");
 pub const SELECT_OPTION: Helper = helper!("select_option");
 pub const FRAME_ORIGIN: Helper = helper!("frame_origin");
+pub const FOCUSED_FRAME: Helper = helper!("focused_frame");
 #[cfg(any(test, target_os = "windows"))]
 pub const OWNER_PATH: Helper = helper!("owner_path");
 #[cfg_attr(target_os = "windows", allow(dead_code, reason = "WebView2 reads the console through CDP"))]
@@ -100,6 +101,12 @@ pub fn snapshot() -> Script {
 /// each node path also pins the frame's current document.
 pub fn frame_snapshot() -> Script {
     Script::new(SNAPSHOT, json!({ "inFrame": true }))
+}
+
+/// The path of the frame element holding focus when its document is out
+/// of this frame's reach (another origin); null otherwise.
+pub fn focused_frame() -> Script {
+    Script::new(FOCUSED_FRAME, json!({}))
 }
 
 /// Where the content box of the frame element at `path` starts, in this
