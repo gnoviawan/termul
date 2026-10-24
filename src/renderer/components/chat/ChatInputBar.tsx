@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
 import { Paperclip } from '@/components/icons'
+import { COMPOSER_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -43,7 +44,12 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
-import { CHAT_COMPACT_LABEL, CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
+import {
+  CHAT_COMPACT_LABEL,
+  CHAT_GUTTER_X,
+  COMPOSER_CARD_CLASS,
+  useComposerToolbarMode
+} from './chat-layout'
 import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
@@ -649,8 +655,9 @@ export function ChatInputBar({
             // the editor (and the OSK), after an approval prompt resolves.
             tabIndex={isMobileShell ? -1 : undefined}
             className={cn(
-              'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
-              'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
+              'relative',
+              COMPOSER_CARD_CLASS,
+              COMPOSER_FOCUS_CLASS,
               dragActive && 'border-primary/70',
               isMobileShell && 'outline-none'
             )}

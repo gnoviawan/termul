@@ -8,6 +8,7 @@ import {
 } from './bundled-themes'
 import {
   darkenHex,
+  hexToOklch,
   hexToOklchComponents,
   lightenHex,
   mixHex,
@@ -16,6 +17,7 @@ import {
   TEXT_CONTRAST_MIN,
   UI_CONTRAST_MIN
 } from './color-utils'
+import { componentTokenVars } from './component-tokens'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
 import { fillInkComponents, solidFillComponents } from './solid-fills'
@@ -34,6 +36,12 @@ let lastAppliedThemeId = DEFAULT_COLOR_THEME_ID
 
 export function getLastAppliedColorThemeId(): string {
   return lastAppliedThemeId
+}
+
+/** Four decimals so a named brand hex survives the round trip exactly. */
+function exactComponents(hex: string): string {
+  const { l, c, h } = hexToOklch(hex)
+  return `${l.toFixed(4)} ${c.toFixed(4)} ${h.toFixed(1)}`
 }
 
 function applyDocumentAppearance(appearance: ThemeAppearance): void {
@@ -140,8 +148,9 @@ function applyCssVariables(
   const baseNeutralSurface = chrome
     ? emittedSurface(chrome.background)
     : brandTintedNeutral(palette)
+  // Chrome themes name their page exactly; only derived light canvases darken.
   const tintedNeutralSurface =
-    appearance === 'light'
+    appearance === 'light' && !chrome
       ? emittedSurface(darkenHex(baseNeutralSurface.hex, LIGHT_CANVAS_DARKEN))
       : baseNeutralSurface
   const tintedNeutral = chrome ? chrome.background : tintedNeutralSurface.hex
@@ -169,16 +178,19 @@ function applyCssVariables(
     TEXT_TOKENS.map((token) => [token, readable(readableSources[token])])
   )
   const warningFillHex = oklchComponentsToHex(readableTokens['--warning'])
-  const primaryFill = solidFillComponents(palette.primary)
-  const accentFill = solidFillComponents(palette.accent)
+  const brandFill = chrome?.brandFill ? exactComponents(chrome.brandFill) : undefined
+  const primaryFill = brandFill ?? solidFillComponents(palette.primary)
+  const accentFill = brandFill ?? solidFillComponents(palette.accent)
   const successFill = solidFillComponents(palette.success)
   const destructiveFill = solidFillComponents(palette.error)
-  const primaryForeground =
-    appearance === 'light'
+  const primaryForeground = brandFill
+    ? '1 0 0'
+    : appearance === 'light'
       ? hexToOklchComponents(lightenHex(palette.primary, 0.98))
       : hexToOklchComponents(lightenHex(palette.primary, 0.95))
-  const accentForeground =
-    appearance === 'light'
+  const accentForeground = brandFill
+    ? '1 0 0'
+    : appearance === 'light'
       ? hexToOklchComponents(lightenHex(palette.accent, 0.98))
       : hexToOklchComponents(lightenHex(palette.accent, 0.95))
   const secondaryForeground = chrome
@@ -223,7 +235,7 @@ function applyCssVariables(
     '--glow-blue': GLOW_BLUE_COMPONENTS,
     '--glow-purple': GLOW_PURPLE_COMPONENTS,
     '--border': hexToOklchComponents(border),
-    '--input': hexToOklchComponents(border),
+    '--input': hexToOklchComponents(chrome?.input ?? border),
     '--field-border': readableUiComponents(border, [
       card,
       tintedNeutralSurface.emittedHex,
@@ -249,17 +261,12 @@ function applyCssVariables(
     '--search-match': hexToOklchComponents(
       appearance === 'light' ? darkenHex(muted, 0.08) : lightenHex(muted, 0.12)
     ),
-    '--search-match-active': readableTokens['--warning']
+    '--search-match-active': readableTokens['--warning'],
+    ...componentTokenVars(chrome?.tokens)
   }
 
   for (const [key, value] of Object.entries(vars)) {
     root.style.setProperty(key, value)
-  }
-
-  if (chrome?.flatElevation) {
-    root.dataset.flatElevation = 'true'
-  } else {
-    delete root.dataset.flatElevation
   }
 
   applyDocumentAppearance(appearance)
@@ -274,7 +281,8 @@ export function paletteToXtermTheme(
   const baseSurface = chrome
     ? emittedSurface(chrome.background).emittedHex
     : brandTintedNeutral(palette).emittedHex
-  const surface = appearance === 'light' ? darkenHex(baseSurface, LIGHT_CANVAS_DARKEN) : baseSurface
+  const surface =
+    appearance === 'light' && !chrome ? darkenHex(baseSurface, LIGHT_CANVAS_DARKEN) : baseSurface
   const foreground = chrome?.foreground ?? palette.ink
   return {
     background: surface,
@@ -301,7 +309,8 @@ export function paletteToXtermTheme(
     brightBlue: isLight ? darkenHex(palette.primary, 0.1) : lightenHex(palette.primary, 0.15),
     brightMagenta: isLight ? darkenHex(palette.accent, 0.1) : lightenHex(palette.accent, 0.15),
     brightCyan: isLight ? darkenHex(palette.info, 0.1) : lightenHex(palette.info, 0.15),
-    brightWhite: isLight ? darkenHex(palette.ink, 0.15) : lightenHex(palette.ink, 0.1)
+    brightWhite: isLight ? darkenHex(palette.ink, 0.15) : lightenHex(palette.ink, 0.1),
+    ...palette.terminal
   }
 }
 

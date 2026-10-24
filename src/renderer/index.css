@@ -129,10 +129,11 @@
     --popover: 0.204 0.003 248;
     --popover-foreground: 0.922 0.001 286.4;
 
-    /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55). */
-    --primary: 0.623 0.188 259.8;
-    --primary-fill: 0.551 0.188 259.9;
-    --primary-foreground: 0.981 0.009 258.3;
+    /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55;
+       Termul pins it to brand blue-11 #0d74ce, 4.77:1 with white). */
+    --primary: 0.688 0.169 251.4;
+    --primary-fill: 0.5558 0.1622 252.2;
+    --primary-foreground: 1 0 0;
 
     /* Secondary - Muted surface */
     --secondary: 0.204 0.003 248;
@@ -145,8 +146,8 @@
     --disabled-foreground: 0.607 0.001 286.4;
 
     /* Accent for highlights — same fill step as primary */
-    --accent: 0.551 0.188 259.9;
-    --accent-foreground: 0.981 0.009 258.3;
+    --accent: 0.5558 0.1622 252.2;
+    --accent-foreground: 1 0 0;
 
     /* Status colors. --destructive / --success are text-on-card (AA).
        Solid buttons use --*-fill (L ≤ 0.55) + --*-foreground. */
@@ -253,7 +254,7 @@
     --surface-darker: 0.139 0.003 246.3;
 
     /* Status bar (VS Code style) */
-    --status-bar: 0.508 0.149 259.6;
+    --status-bar: 0.559 0.134 250.8;
 
     /* Shimmer text (transitions.dev) */
     --shimmer-dur: 2000ms;
@@ -320,7 +321,7 @@
     /* Sidebar — obsidian, one step above the void canvas */
     --sidebar-background: 0.204 0.003 248;
     --sidebar-foreground: 0.874 0.015 260.7;
-    --sidebar-primary: 0.551 0.188 259.9;
+    --sidebar-primary: 0.5558 0.1622 252.2;
     --sidebar-primary-foreground: 1 0 0;
     --sidebar-accent: 0.204 0.003 248;
     --sidebar-accent-foreground: 0.922 0.001 286.4;
@@ -329,6 +330,49 @@
 
     /* Modal / drawer scrim. Always near-black; alpha is applied at the call site. */
     --overlay: 0 0 0;
+
+    /* Component tokens. Full CSS values read as var(--token); see component-tokens.ts. */
+    --primary-fill-hover: #0e6abe;
+    --primary-fill-active: #0e60ae;
+    --shadow-emboss:
+      0 0 0 0.5px #000000, 0 1px 3px #000000b3, inset 0 0 0 0.5px #ffffff1f,
+      inset 0 1px 0 #ffffff66, inset 0 -2px 0 #00000059;
+    --shadow-emboss-hover:
+      0 0 0 0.5px #000000, 0 2px 4px #000000cc, inset 0 0 0 0.5px #ffffff29,
+      inset 0 1px 0 #ffffff80, inset 0 -2px 0 #00000066;
+    --switch-track-on: #0090ff;
+    --switch-track-on-hover: #0588f0;
+    --switch-track-on-active: #0d74ce;
+    --switch-track-off: #ffffff12;
+    --switch-track-off-hover: #ffffff1b;
+    --switch-track-off-active: #ffffff22;
+    --switch-track-on-disabled: #ffffff09;
+    --switch-track-off-disabled: #ffffff09;
+    --switch-thumb-on: #ffffff;
+    --switch-thumb-off: #ffffff;
+    --switch-thumb-on-disabled: #ffffff55;
+    --switch-thumb-off-disabled: #ffffff55;
+    --switch-thumb-shadow: none;
+    --switch-disabled-opacity: 1;
+    --skeleton: oklch(var(--muted));
+    --ghost-hover-foreground: oklch(var(--foreground));
+    --elevation-2xs: 0 1px rgb(0 0 0 / 0.05);
+    --elevation-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --elevation-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --elevation-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --elevation-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --elevation-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+    --elevation-2xl: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+    --elevation-pill: 0 4px 16px oklch(0 0 0 / 0.4);
+    --elevation-panel: 0 12px 32px oklch(0 0 0 / 0.45);
+    --elevation-menu: 0 12px 32px oklch(0 0 0 / 0.6);
+    --composer-shadow: 0 0 #0000;
+    --prompt-panel-shadow: var(--elevation-panel);
+    --keycap-fill: oklch(var(--muted));
+    --keycap-shadow: inset 0 1px 0 oklch(var(--ring) / 0.08), 0 1px 2px #00000040;
+    --rail-keycap-fill: var(--rail-keycap);
+    --rail-keycap-shadow: var(--keycap-shadow);
+    --focus-ring: oklch(var(--ring));
   }
 }
 
@@ -809,26 +853,80 @@
 }
 
 /* ------------------------------------------------------------
+ * Switch: track and thumb read per-theme tokens (component-tokens.ts).
+ * Every rule names its data-state so hover on one state never paints
+ * the other state's color. Defaults reproduce the neutral switch.
+ * ------------------------------------------------------------ */
+@layer components {
+  .switch-track[data-state="unchecked"] {
+    background-color: var(--switch-track-off);
+  }
+  .switch-track[data-state="checked"] {
+    background-color: var(--switch-track-on);
+  }
+  @media (hover: hover) {
+    .switch-track[data-state="unchecked"]:enabled:hover {
+      background-color: var(--switch-track-off-hover);
+    }
+    .switch-track[data-state="checked"]:enabled:hover {
+      background-color: var(--switch-track-on-hover);
+    }
+  }
+  .switch-track[data-state="unchecked"]:enabled:active {
+    background-color: var(--switch-track-off-active);
+  }
+  .switch-track[data-state="checked"]:enabled:active {
+    background-color: var(--switch-track-on-active);
+  }
+  .switch-track:disabled {
+    opacity: var(--switch-disabled-opacity);
+  }
+  .switch-track[data-state="unchecked"]:disabled {
+    background-color: var(--switch-track-off-disabled);
+  }
+  .switch-track[data-state="checked"]:disabled {
+    background-color: var(--switch-track-on-disabled);
+  }
+  .switch-thumb {
+    box-shadow: var(--switch-thumb-shadow);
+  }
+  .switch-thumb[data-state="unchecked"] {
+    background-color: var(--switch-thumb-off);
+  }
+  .switch-thumb[data-state="checked"] {
+    background-color: var(--switch-thumb-on);
+  }
+  .switch-thumb[data-state="unchecked"][data-disabled] {
+    background-color: var(--switch-thumb-off-disabled);
+  }
+  .switch-thumb[data-state="checked"][data-disabled] {
+    background-color: var(--switch-thumb-on-disabled);
+  }
+}
+
+/* ------------------------------------------------------------
  * Keycap: the raised "you are here" surface.
  *
  * One look for the active tab, project, file, outline heading and
  * rail view on bg-background / bg-card, and on the Rail's bg-sidebar
- * surface (`[data-rail-surface]`), where it fills with --rail-keycap:
- * `muted` in dark themes, a slightly darker step in light themes so it
- * reads on the sidebar mist. Inside a popover use a foreground wash
+ * surface (`[data-rail-surface]`), where it takes --rail-keycap-fill and
+ * --rail-keycap-shadow. By default those are --rail-keycap (`muted` in dark
+ * themes, a slightly darker step in light themes so it reads on the sidebar
+ * mist) and --keycap-shadow. Off the Rail it takes --keycap-fill (`muted`)
+ * and --keycap-shadow. Termul Light sets a white container with its
+ * s-default shadow for both. Inside a popover use a foreground wash
  * instead (see components/ui/menu-styles.ts): `muted` sits too close to
  * `popover` to read there.
  * Fill and shadow only — radius stays at the call site.
  * ------------------------------------------------------------ */
 @layer components {
   .keycap {
-    background-color: oklch(var(--muted));
-    box-shadow:
-      inset 0 1px 0 oklch(var(--ring) / 0.08),
-      0 1px 2px #00000040;
+    background-color: var(--keycap-fill);
+    box-shadow: var(--keycap-shadow);
   }
   [data-rail-surface] .keycap {
-    background-color: var(--rail-keycap);
+    background-color: var(--rail-keycap-fill);
+    box-shadow: var(--rail-keycap-shadow);
   }
 }
 
@@ -1730,12 +1828,4 @@
     opacity: 1;
     filter: none;
   }
-}
-
-/* Termul light only. Hairline borders carry surface elevation.
-   Real buttons and `data-keep-shadow` (Button asChild, switch thumb)
-   keep their emboss. Ring shadows stay. */
-html[data-flat-elevation="true"] [class*="shadow-"]:not(button):not([data-keep-shadow]) {
-  --tw-shadow: 0 0 #0000;
-  --tw-shadow-colored: 0 0 #0000;
 }

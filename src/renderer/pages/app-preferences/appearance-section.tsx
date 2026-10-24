@@ -1,3 +1,4 @@
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsRow, settingsDescriptionId } from '@/components/settings/SettingsRow'
@@ -12,7 +13,6 @@ import {
   TERMINAL_URL_OPEN_MODE_OPTIONS,
   type TerminalUrlOpenMode
 } from '@/types/settings'
-import { rowId } from './categories'
 
 interface AppearanceSectionProps {
   fontSize: number

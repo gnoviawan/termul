@@ -404,7 +404,7 @@ describe('ProjectSidebar', () => {
     const idleActions = within(screen.getByTestId('project-item-2')).getByTestId(
       'project-row-actions'
     )
-    expect(activeActions).toHaveClass('from-[var(--rail-keycap)]')
+    expect(activeActions).toHaveClass('from-[var(--rail-keycap-fill)]')
     expect(idleActions).toHaveClass('from-row-hover-solid')
     expect(idleActions).toHaveClass('group-hover:flex', 'group-focus-within:flex')
   })

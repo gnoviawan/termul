@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.web.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "types": ["vite/client"]
+  },
+  "include": ["src/**/*", "../src/renderer/**/*", "../src/shared/**/*"],
+  "exclude": [
+    "../src/renderer/**/*.test.ts",
+    "../src/renderer/**/*.test.tsx",
+    "../src/renderer/**/__tests__/**/*"
+  ]
+}

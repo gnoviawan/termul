@@ -5,6 +5,7 @@ import type {
 } from '@shared/types/claude-accounts.types'
 import { AlertCircle, ChevronDown } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { Spinner } from '@/components/ui/spinner'
 import {
   formatUsageChecked,
@@ -260,7 +261,7 @@ export function ClaudeAccountRow({
         <button
           type="button"
           onClick={onRetryUsage}
-          className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+          className={`font-medium text-foreground underline-offset-2 hover:underline ${FOCUS_RING_CLASS}`}
         >
           Try again
         </button>
@@ -280,7 +281,7 @@ export function ClaudeAccountRow({
         onClick={onToggle}
         aria-expanded={expanded}
         aria-label={`${expanded ? 'Hide' : 'Show'} all limits for ${account.name}`}
-        className="-mx-2 -my-1.5 block w-[calc(100%+1rem)] rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/[0.03] focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+        className={`-mx-2 -my-1.5 block w-[calc(100%+1rem)] rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/[0.03] ${FOCUS_RING_CLASS}`}
       >
         {meter}
       </button>
