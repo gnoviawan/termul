@@ -39,7 +39,7 @@ import {
   type ModelCatalog,
   splitContextOption
 } from './selector-model'
-import { PICKER_ICON, PICKER_LABEL } from './selector-tokens'
+import { PICKER_ICON, PICKER_LABEL, PICKER_ROW_VALUE } from './selector-tokens'
 import { useRejectedOptionValues } from './use-option-values'
 import { useSelectorPanelState } from './use-selector-panel-state'
 
@@ -70,6 +70,7 @@ function DenseModelRow({
   agentId,
   agentName,
   edit,
+  thinking,
   disabled,
   touch,
   onPick
@@ -84,6 +85,8 @@ function DenseModelRow({
   agentName?: string
   /** Session options of the active model; adds the Edit button. */
   edit?: ChoiceSection[]
+  /** The selected model's current Thinking level, shown after the name. */
+  thinking?: string
   disabled: boolean
   touch: boolean
   onPick: () => void
@@ -118,7 +121,14 @@ function DenseModelRow({
         <span data-row-name="" className="relative min-w-0 flex-1 truncate">
           {name}
           {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
+          {thinking ? <span className="sr-only">{`, thinking ${thinking}`}</span> : null}
         </span>
+        {/* Read once, from the sr-only text in the name. */}
+        {thinking ? (
+          <span data-row-thinking="" aria-hidden="true" className={PICKER_ROW_VALUE}>
+            {thinking}
+          </span>
+        ) : null}
         <Check
           size={PICKER_ICON.check}
           aria-hidden="true"
@@ -357,6 +367,18 @@ function optionChoices(option: SessionConfigOption, isRejected?: IsRejected): Op
   })
 }
 
+/**
+ * The current Thinking level's label, read from the Edit flyout's own
+ * Thinking section so the row and the flyout can never disagree. Undefined
+ * when the model has no thinking option or no current value is known: the
+ * row never shows a guessed default.
+ */
+function thinkingLabel(sections: readonly ChoiceSection[]): string | undefined {
+  const section = sections.find((s) => s.id === 'thinking')
+  if (section?.kind !== 'radio' || section.value === undefined) return undefined
+  return section.choices.find((choice) => choice.value === section.value)?.name
+}
+
 /** A rejected set is already toasted, and its value marked unavailable. */
 const alreadyReported = (): void => {}
 
@@ -535,6 +557,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   )
   const { context, rest } = splitContextOption(props.genericOptions)
   const edit = editSections(props, context, isRejected, trySet)
+  const thinking = thinkingLabel(edit)
   // The Edit flyout hangs off the active model's row. With no such row on
   // screen (no model list, or a value outside it) the footer takes its rows.
   const activeShown =
@@ -571,6 +594,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         edit={
           configId === effectiveId && model.value === selectedValue && !keyPrefix ? edit : undefined
         }
+        // The level shows on the selected model wherever it is listed, Favorites too.
+        thinking={configId === effectiveId && model.value === selectedValue ? thinking : undefined}
         disabled={disabled}
         touch={touch}
         onPick={() => state.pick(configId, catalog, model.value)}
