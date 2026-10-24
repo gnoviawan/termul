@@ -110,6 +110,7 @@ function DenseModelRow({
   agentName,
   edit,
   favorite,
+  inFavorites = false,
   disabled,
   touch,
   onPick
@@ -126,6 +127,8 @@ function DenseModelRow({
   edit?: ChoiceSection[]
   /** Adds the star. `entry` marks a row in the Favorites section (for focus). */
   favorite?: { on: boolean; entry?: string; onToggle: () => void }
+  /** A row in Favorites: its Edit is named apart from the list row's. */
+  inFavorites?: boolean
   disabled: boolean
   touch: boolean
   onPick: () => void
@@ -252,6 +255,7 @@ function DenseModelRow({
   return (
     <EditableRow
       modelName={name}
+      inFavorites={inFavorites}
       sections={edit}
       disabled={disabled}
       touch={touch}
@@ -768,6 +772,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           // Only the active model has session options. Each of its rows (the list
           // row, its Favorites copy) gets the same Edit over that one session state.
           edit={configId === effectiveId && model.value === selectedValue ? edit : undefined}
+          inFavorites={inFavorites}
           favorite={
             key
               ? {

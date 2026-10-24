@@ -472,12 +472,15 @@ export interface EditRowHandle {
  */
 export function EditableRow({
   modelName,
+  inFavorites = false,
   sections,
   disabled,
   touch,
   renderRow
 }: {
   modelName: string
+  /** The row is the Favorites copy: Edit's name says so. */
+  inFavorites?: boolean
   sections: ChoiceSection[]
   disabled: boolean
   touch: boolean
@@ -506,7 +509,12 @@ export function EditableRow({
     <button
       type="button"
       data-testid="selector-edit"
-      aria-label={editButtonAccessibleName({ name: modelName, thinking: level, sections: what })}
+      aria-label={editButtonAccessibleName({
+        name: modelName,
+        thinking: level,
+        sections: what,
+        inFavorites
+      })}
       // The flyout is a Popover (a sheet on touch): a dialog holding the menu.
       aria-haspopup="dialog"
       aria-expanded={open}

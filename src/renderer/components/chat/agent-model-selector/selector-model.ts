@@ -88,16 +88,25 @@ export function rowHasDescription(description: string): boolean {
 export function editButtonAccessibleName({
   name,
   thinking,
-  sections
+  sections,
+  inFavorites = false
 }: {
   name: string
   /** The current Thinking level, as the button shows it. */
   thinking?: string
   /** What the flyout sets, e.g. `Thinking and Context`. */
   sections: string
+  /**
+   * The button sits on the Favorites copy of the row, so its name says so and
+   * differs from the list row's. The level stays last: the visible text is in the name.
+   */
+  inFavorites?: boolean
 }): string {
   const model = name.trim()
-  return thinking ? `Edit ${model}, thinking ${thinking}` : `Edit ${sections} for ${model}`
+  const where = inFavorites ? ' in Favorites' : ''
+  return thinking
+    ? `Edit ${model}${where}, thinking ${thinking}`
+    : `Edit ${sections} for ${model}${where}`
 }
 
 export interface CatalogModel {
