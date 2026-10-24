@@ -23,7 +23,7 @@ const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
         status: 'ported',
         differences: [
           'Background, panel, card, border, text and accent colours match the web dashboard.',
-          'The differences left are not the theme: the overlapping chat cards (chat.send) and the outline connection lamp (statusbar.items).'
+          'The differences left are not the theme: the overlapping chat cards (chat.send).'
         ]
       }
     ])

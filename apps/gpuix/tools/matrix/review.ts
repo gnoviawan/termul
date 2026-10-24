@@ -310,7 +310,7 @@ export const REVIEWS: Record<string, Review> = {
       'The status-bar Terminal button\'s title tooltip paints under the pointer after the click; the web frame shows none.'
     ],
     cause: 'compat translator gap',
-    unit: 'C7 svg fill utilities',
+    unit: 'title tooltips (unassigned)',
     impact: 1
   },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
@@ -335,22 +335,20 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'statusbar.items': {
-    status: 'partial',
-    differences: ['Branch, path, Terminal and settings items line up.', LAMP],
-    cause: 'compat translator gap',
-    unit: 'C7 svg fill utilities',
-    impact: 1
+    status: 'ported',
+    differences: [
+      'Branch, path, Terminal and settings items line up.',
+      LAMP,
+      'The rest of the region diff is glyph antialiasing: Chromium draws the status bar text with subpixel (LCD) colour fringes, and GPUIX draws it in grayscale (C8).'
+    ]
   },
   'statusbar.context-bar': {
     status: 'ported',
     differences: ['The Show in Context Bar popover opens with the same five toggles and states.']
   },
   'statusbar.connection': {
-    status: 'partial',
-    differences: ['Hovering the connection lamp shows the Connected tooltip in both.', LAMP],
-    cause: 'compat translator gap',
-    unit: 'C7 svg fill utilities',
-    impact: 1
+    status: 'ported',
+    differences: ['Hovering the connection lamp shows the Connected tooltip in both.', LAMP]
   },
   'remote.access-popover': {
     status: 'blocked',

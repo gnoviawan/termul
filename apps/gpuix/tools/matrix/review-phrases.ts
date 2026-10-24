@@ -1,7 +1,7 @@
 /** Difference sentences more than one review repeats. */
 
 export const LAMP =
-  'The status-bar connection lamp is an outline ring instead of a filled dot (fill-current on the icon is ignored).'
+  'The status-bar connection lamp is a filled dot as on the web (C7 fixed in G3: fill-current fills the icon), 1 px higher.'
 
 export const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
