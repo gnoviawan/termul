@@ -128,6 +128,34 @@ export function renderMatrix(results: Record<string, SurfaceResult>): string {
     )
   }
 
+  out.push('', '### Proposed units', '')
+  out.push(
+    'Each unit with the surfaces its gaps name. Gain is the usage-weighted score (all surfaces) the matrix would report if every one of those surfaces became ported, everything else unchanged.',
+    ''
+  )
+  out.push('| # | Unit | Root cause class | Surfaces | Summed rank | Gain |')
+  out.push('| ---: | --- | --- | ---: | ---: | ---: |')
+  const base = weighted(byArea, () => true)
+  const units = new Map<string, { cause: string; rows: Row[]; rank: number }>()
+  for (const { row, rank } of gaps) {
+    const unit = row.review?.unit ?? 'unassigned'
+    const entry = units.get(unit) ?? { cause: row.review?.cause ?? '', rows: [], rank: 0 }
+    entry.rows.push(row)
+    entry.rank += rank
+    units.set(unit, entry)
+  }
+  const gainOf = (fixed: Set<Row>) => {
+    const flipped = new Map<AreaId, Row[]>()
+    for (const [area, list] of byArea) flipped.set(area, list.map((r) => (fixed.has(r) ? { ...r, status: 'ported' as Status } : r)))
+    return weighted(flipped, () => true) - base
+  }
+  const ranked = [...units].map(([unit, entry]) => ({ unit, ...entry, gain: gainOf(new Set(entry.rows)) }))
+  ranked.sort((a, b) => b.rank - a.rank)
+  for (const [i, u] of ranked.entries()) {
+    out.push(`| ${i + 1} | ${u.unit} | ${u.cause} | ${u.rows.length} | ${u.rank} | +${u.gain.toFixed(1)} |`)
+  }
+  out.push('', `If every listed unit landed and fixed its surfaces, the usage-weighted score would be ${pct(base + gainOf(new Set(gaps.map((g) => g.row))))}.`)
+
   out.push('', '### Surfaces', '')
   out.push(
     'Web and GPUIX columns count passed actions plus checks over the total. Mismatch is exact / perceptual for the last step: the full 1280x800 frame, and the region the surface names (measured in the web client, cropped from both frames).',

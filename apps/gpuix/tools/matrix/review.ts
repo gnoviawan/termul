@@ -31,6 +31,7 @@ const RIGHT_CLICK =
 const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
 const CHECKBOX = 'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
+const BACKDROP = 'The modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
 const OVERLAY = 'the modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
 const OVERLAP =
   'In the Chats list two chat cards paint on top of each other once a second chat exists, and GPUIX lists only the seeded chat where the web lists all three.'
@@ -68,16 +69,16 @@ const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
 
 export const REVIEWS: Record<string, Review> = {
   'rail.project-list': { status: 'ported', differences: ['Same layout and order; switching to beta works by click.', LAMP] },
-  'rail.project-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 context menus', impact: 3 },
+  'rail.project-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 3 },
   'rail.project-rename': {
     status: 'broken',
     differences: [RIGHT_CLICK, 'With no menu, the replayed clicks land on the row and the typed name goes into the composer instead.'],
     cause: 'compat translator gap',
-    unit: 'C2 context menus',
+    unit: 'C2 menus and popovers',
     impact: 2
   },
-  'rail.project-remove': { status: 'broken', differences: [RIGHT_CLICK, 'No delete confirmation, so the project stays.'], cause: 'compat translator gap', unit: 'C2 context menus', impact: 2 },
-  'rail.project-colour': { status: 'broken', differences: [RIGHT_CLICK, 'The Select Color popover never appears.'], cause: 'compat translator gap', unit: 'C2 context menus', impact: 1 },
+  'rail.project-remove': { status: 'broken', differences: [RIGHT_CLICK, 'No delete confirmation, so the project stays.'], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 2 },
+  'rail.project-colour': { status: 'broken', differences: [RIGHT_CLICK, 'The Select Color popover never appears.'], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 1 },
   'rail.project-reorder': {
     status: 'broken',
     differences: ['Dragging gamma onto alpha reorders the web list to alpha, gamma, beta; GPUIX keeps alpha, beta, gamma (no drag-and-drop through compat).'],
@@ -111,7 +112,7 @@ export const REVIEWS: Record<string, Review> = {
     impact: 3
   },
   'side.chats-search': { status: 'ported', differences: ['Filtering to no match and back matches, including the No matches. text.'] },
-  'side.chat-card-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 context menus', impact: 2 },
+  'side.chat-card-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 2 },
   'side.workspace-switcher': { status: 'ported', differences: ['The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover.'] },
   'side.hide': { status: 'ported', differences: ['Side panel hides; the expand chevron sits in the same place.'] },
   'explorer.tree': { status: 'ported', differences: ['Tree, git colours and status letters match.'] },
@@ -119,10 +120,10 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [TITLE_TIP + ' It covers the chevron and the open-folder icon of the expanded row.'],
     cause: 'compat translator gap',
-    unit: 'C4 title tooltips',
+    unit: 'C4 tooltips',
     impact: 1
   },
-  'explorer.context-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 context menus', impact: 2 },
+  'explorer.context-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 2 },
   'explorer.drag': {
     status: 'unverified',
     differences: ['Playwright dragTo did not move notes.txt in the web client either (HTML5 drag events), so there is no reference; GPUIX treated the drag as a click and expanded docs.']
@@ -188,7 +189,7 @@ export const REVIEWS: Record<string, Review> = {
       'One wheel event of -20000 px over the transcript scrolls the web to the first turn; GPUIX stays at the bottom. chat:check scrolls through its control file, so wheel scrolling in the full app is not covered elsewhere.'
     ],
     cause: 'needs diagnosis',
-    unit: 'O6 transcript wheel scroll',
+    unit: 'O6 transcript scroll and anchoring',
     impact: 3
   },
   'chat.new-chat': { status: 'ported', differences: ['New chat opens the launcher composer in place.'] },
@@ -269,7 +270,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'blocked',
     differences: ['Not compared: the popover renders only under isTauriContext(), so the web client has no reference.'],
     cause: 'server route needed',
-    unit: 'R2 desktop host role over the server',
+    unit: 'R4 desktop host role over the server',
     impact: 1
   },
   'settings.interface': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 },
@@ -323,7 +324,7 @@ export const REVIEWS: Record<string, Review> = {
   'settings.reset': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 },
   'shortcuts.menu': {
     status: 'partial',
-    differences: ['Shortcut Menu rows, descriptions and key chips match, including the blank Command History chip in both.', `The ${OVERLAY}`],
+    differences: ['Shortcut Menu rows, descriptions and key chips match, including the blank Command History chip in both.', BACKDROP],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -358,14 +359,14 @@ export const REVIEWS: Record<string, Review> = {
       'The canvas is a figcraft iframe (CanvasMountLayer), which GPUIX 0.11 cannot host.'
     ],
     cause: 'missing GPUIX capability',
-    unit: 'X1 canvas host',
+    unit: 'V1 canvas host',
     impact: 2
   },
   'browser.pane': {
     status: 'blocked',
     differences: ['Not compared: browser tabs are Tauri webviews with no web-client reference, and GPUIX 0.11 has no webview element. Replacing Tauri loses the browser pane until a native webview exists.'],
     cause: 'missing GPUIX capability',
-    unit: 'X2 native webview',
+    unit: 'V2 native webview',
     impact: 2
   },
   'update.toast': {
@@ -435,7 +436,7 @@ export const REVIEWS: Record<string, Review> = {
   'palette.agent-launcher': { status: 'ported', differences: ['Agent Launcher shows the launcher with its close button in both.'] },
   'palette.save-snapshot': {
     status: 'partial',
-    differences: ['The Create Snapshot modal matches.', `The ${OVERLAY}`, TINT],
+    differences: ['The Create Snapshot modal matches.', BACKDROP, TINT],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -444,19 +445,19 @@ export const REVIEWS: Record<string, Review> = {
     status: 'blocked',
     differences: ['Opens the canvas tab in both; see canvas.open for why the canvas itself is not compared.'],
     cause: 'missing GPUIX capability',
-    unit: 'X1 canvas host',
+    unit: 'V1 canvas host',
     impact: 1
   },
   'palette.project-settings': {
     status: 'partial',
-    differences: ['Project settings opens on General with the same fields.', `The ${OVERLAY}`],
+    differences: ['Project settings opens on General with the same fields.', BACKDROP],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
   'palette.app-preferences': {
     status: 'partial',
-    differences: ['Preferences opens on Interface.', `The ${OVERLAY}`],
+    differences: ['Preferences opens on Interface.', BACKDROP],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -470,7 +471,7 @@ export const REVIEWS: Record<string, Review> = {
   },
   'palette.command-history': {
     status: 'partial',
-    differences: ['The Command History modal, its scope picker and empty state match.', `The ${OVERLAY}`, 'No focus ring on the search field.'],
+    differences: ['The Command History modal, its scope picker and empty state match.', BACKDROP, 'No focus ring on the search field.'],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -478,7 +479,7 @@ export const REVIEWS: Record<string, Review> = {
   'palette.color-theme': { status: 'ported', differences: ['Change Color Theme opens the Color Themes popover in both; see theme.picker for its tint.'] },
   'palette.shortcut-menu': {
     status: 'partial',
-    differences: ['Opens the Shortcut Menu in both.', `The ${OVERLAY}`],
+    differences: ['Opens the Shortcut Menu in both.', BACKDROP],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
