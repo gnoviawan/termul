@@ -107,6 +107,35 @@ export function ProjectSettingsModal() {
     }
   }, [settingsProject, resetForm])
 
+  // The project the modal was opened for can be deleted or archived while the
+  // modal is open (the registry keeps archived projects in the list with a
+  // flag). Drop the edits and close once, so Save never runs against a project
+  // that is gone. The active-project fallback (no target, no active project)
+  // is left as is.
+  const claudeDraftRef = useRef(claudeAccountDraft)
+  claudeDraftRef.current = claudeAccountDraft
+  const removedHandledRef = useRef<string | null>(null)
+  const targetGone =
+    isOpen && Boolean(targetProjectId) && (!settingsProject || Boolean(settingsProject.isArchived))
+  useEffect(() => {
+    if (!targetGone || !targetProjectId) {
+      removedHandledRef.current = null
+      return
+    }
+    if (removedHandledRef.current === targetProjectId) return
+    removedHandledRef.current = targetProjectId
+    claudeDraftRef.current.reset()
+    envImportRequestRef.current += 1
+    // Forget the initialized project so the next open re-reads its fields.
+    symlinkInitProjectRef.current = null
+    setImportError(null)
+    setImportWarnings(null)
+    setHasChanges(false)
+    setIsCloseConfirmOpen(false)
+    close()
+    toast.info('Project was removed, settings closed.')
+  }, [targetGone, targetProjectId, close])
+
   const handleDiscard = () => {
     claudeAccountDraft.reset()
     if (settingsProject) resetForm(settingsProject)

@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
@@ -522,5 +523,89 @@ describe('ProjectSettings for a project that is not active', () => {
 
     expect(await screen.findByLabelText('Name')).toHaveValue('Second Project')
     expect(useSettingsModalStore.getState().projectId).toBeNull()
+  })
+})
+
+describe('ProjectSettings when the edited project disappears', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.restoreAllMocks()
+    apiMocks.getAvailableShells.mockResolvedValue({ success: true, data: null })
+    apiMocks.parseGitignore.mockResolvedValue({ success: true, data: [] })
+  })
+
+  function removeSecondProject() {
+    act(() =>
+      useProjectStore.setState((state) => ({
+        projects: state.projects.filter((p) => p.id !== secondProject.id)
+      }))
+    )
+  }
+
+  it('closes without saving when the project is deleted', async () => {
+    const info = vi.spyOn(toast, 'info')
+    const updateProject = vi.fn()
+    renderSettings([firstProject, secondProject], firstProject.id, secondProject.id)
+    useProjectStore.setState({ updateProject })
+    expect(await screen.findByLabelText('Name')).toHaveValue('Second Project')
+
+    removeSecondProject()
+
+    expect(useSettingsModalStore.getState().view).toBeNull()
+    expect(useSettingsModalStore.getState().projectId).toBeNull()
+    expect(updateProject).not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledTimes(1)
+    expect(info).toHaveBeenCalledWith('Project was removed, settings closed.')
+  })
+
+  it('drops pending edits so reopening shows no stale save bar', async () => {
+    const info = vi.spyOn(toast, 'info')
+    const updateProject = vi.fn()
+    renderSettings([firstProject, secondProject], firstProject.id, secondProject.id)
+    useProjectStore.setState({ updateProject })
+
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Renamed' } })
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+
+    removeSecondProject()
+
+    expect(useSettingsModalStore.getState().view).toBeNull()
+    expect(updateProject).not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledTimes(1)
+
+    act(() => useSettingsModalStore.getState().openProject(undefined, firstProject.id))
+
+    expect(await screen.findByLabelText('Name')).toHaveValue('First Project')
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument()
+    expect(info).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an archived project as gone', async () => {
+    const info = vi.spyOn(toast, 'info')
+    const updateProject = vi.fn()
+    renderSettings([firstProject, secondProject], firstProject.id, secondProject.id)
+    useProjectStore.setState({ updateProject })
+    expect(await screen.findByLabelText('Name')).toHaveValue('Second Project')
+
+    act(() =>
+      useProjectStore.setState((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === secondProject.id ? { ...p, isArchived: true } : p
+        )
+      }))
+    )
+
+    expect(useSettingsModalStore.getState().view).toBeNull()
+    expect(updateProject).not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays open when opened without a target and there is no active project', () => {
+    const info = vi.spyOn(toast, 'info')
+    renderSettings([], '', null)
+
+    expect(useSettingsModalStore.getState().view).toBe('project')
+    expect(info).not.toHaveBeenCalled()
   })
 })
