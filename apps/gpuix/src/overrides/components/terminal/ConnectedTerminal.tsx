@@ -182,18 +182,22 @@ type TerminalHostProps = React.ComponentProps<typeof TerminalView>
  * `ContextMenuTrigger asChild` target: GPUI clicks do not bubble, so the
  * terminal element itself takes the right press the trigger listens for.
  */
-const TerminalHost = forwardRef<PublicInstance, TerminalHostProps & { onAuxClick?: unknown }>(
-  function TerminalHost({ onAuxClick, ...props }, ref) {
-    const forward = onAuxClick as ((event: UiMouseEvent) => void) | undefined
-    return (
-      <TerminalView
-        {...props}
-        hostRef={ref as Ref<PublicInstance>}
-        onAuxClick={forward ? (event: EventPayload) => forward(toMouseEvent(event)) : undefined}
-      />
-    )
-  }
-)
+const TerminalHost = forwardRef<
+  PublicInstance,
+  TerminalHostProps & { onAuxClick?: unknown; onContextMenu?: unknown }
+>(function TerminalHost({ onAuxClick, onContextMenu, ...props }, ref) {
+  const aux = onAuxClick as ((event: UiMouseEvent) => void) | undefined
+  const menu = onContextMenu as ((event: UiMouseEvent) => void) | undefined
+  const forward =
+    aux || menu
+      ? (event: EventPayload) => {
+          const mouse = toMouseEvent(event)
+          aux?.(mouse)
+          if (mouse.button === 2) menu?.(mouse)
+        }
+      : undefined
+  return <TerminalView {...props} hostRef={ref as Ref<PublicInstance>} onAuxClick={forward} />
+})
 
 function ConnectedTerminalComponent({
   terminalId: externalTerminalId,
