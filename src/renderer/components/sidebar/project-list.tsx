@@ -121,10 +121,10 @@ export function ProjectList({
         value={project}
         drag="y"
         layout="position"
-        className="list-none"
+        className="list-none rounded-lg"
         whileDrag={{
           scale: 1.02,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          boxShadow: 'var(--elevation-md)',
           pointerEvents: 'none'
         }}
         onDrag={(_event, info) => {

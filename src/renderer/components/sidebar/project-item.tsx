@@ -141,7 +141,7 @@ export const ProjectItem = memo(function ProjectItem({
                     // under the same conditions as the wash (hover and
                     // focus-within).
                     isActive
-                      ? 'from-[var(--rail-keycap)] from-60%'
+                      ? 'from-[var(--rail-keycap-fill)] from-60%'
                       : 'from-row-hover-solid from-60%'
                   )}
                   data-testid="project-row-actions"

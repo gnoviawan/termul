@@ -60,7 +60,12 @@ function termulLightChrome(): ThemeChrome {
       '--elevation-2xl': S_EXTRA_LARGE,
       '--elevation-pill': S_LARGE,
       '--elevation-panel': S_EXTRA_LARGE,
-      '--elevation-menu': S_EXTRA_LARGE
+      '--elevation-menu': S_EXTRA_LARGE,
+      /** The composer is white on the white chat card: lift it with s-default. */
+      '--composer-shadow': S_DEFAULT,
+      /** Active Rail row: a white container raised off the shell, as in Interfere. */
+      '--rail-keycap-fill': CONTAINER,
+      '--rail-keycap-shadow': S_DEFAULT
     }
   }
 }

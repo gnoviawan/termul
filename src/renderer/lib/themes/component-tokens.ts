@@ -49,7 +49,13 @@ export const COMPONENT_TOKEN_DEFAULTS = {
   /** Question panel that replaces the composer. */
   '--elevation-panel': '0 12px 32px oklch(0 0 0 / 0.45)',
   /** Subagent pill menu. */
-  '--elevation-menu': '0 12px 32px oklch(0 0 0 / 0.6)'
+  '--elevation-menu': '0 12px 32px oklch(0 0 0 / 0.6)',
+  /** Chat composer card at rest. Flat by default; its border separates it. */
+  '--composer-shadow': 'none',
+  /** Rail keycap fill (active row on the sidebar). Defaults to the computed --rail-keycap. */
+  '--rail-keycap-fill': 'var(--rail-keycap)',
+  /** Rail keycap depth. Defaults to the shared .keycap shadow. */
+  '--rail-keycap-shadow': 'inset 0 1px 0 oklch(var(--ring) / 0.08), 0 1px 2px #00000040'
 } as const
 
 export type ComponentToken = keyof typeof COMPONENT_TOKEN_DEFAULTS

@@ -157,6 +157,7 @@ export default {
         pill: 'var(--elevation-pill)',
         panel: 'var(--elevation-panel)',
         menu: 'var(--elevation-menu)',
+        composer: 'var(--composer-shadow)',
         emboss: 'var(--shadow-emboss)',
         'emboss-hover': 'var(--shadow-emboss-hover)',
         // Alpha kept inline here (single place); the hue components come from

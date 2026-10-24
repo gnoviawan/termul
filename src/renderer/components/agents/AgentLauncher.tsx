@@ -1956,7 +1956,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               ref={composerCardRef}
               data-agent-launcher-composer="true"
               className={cn(
-                'relative z-10 rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
+                'relative z-10 rounded-2xl border border-border/60 bg-card shadow-composer transition-[border-color,box-shadow]',
                 // Same focus affordance as the chat composer card
                 // (ChatInputBar) — the two cards are one visual family.
                 'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',

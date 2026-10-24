@@ -649,7 +649,7 @@ export function ChatInputBar({
             // the editor (and the OSK), after an approval prompt resolves.
             tabIndex={isMobileShell ? -1 : undefined}
             className={cn(
-              'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
+              'relative rounded-2xl border border-border/60 bg-card shadow-composer transition-[border-color,box-shadow]',
               'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
               dragActive && 'border-primary/70',
               isMobileShell && 'outline-none'
