@@ -29,7 +29,7 @@ The automation-tree census proves it in the real app. In the base bundle's secon
 
 ### stream-storm, 8 chats
 
-`bun tools/perf/ab.ts --variants base=gpuix:dist-sbase,park=gpuix:dist,nopoll=gpuix:dist-snopoll,chromium=chromium --runs 4 -- --scenarios stream-storm --page-metrics off --quiet-wait 300`, stopped after 3 rounds for time. `base` is this branch without parking, `park` is this branch, and `nopoll` is this branch with the transcript's 120 ms `getListScrollTop` poll removed (an experiment for G2, not a proposed build). All GPUIX bundles carry G2's `getListScrollTop` try/catch, applied locally and not committed. Other units ran builds and benchmarks during every run (load average 5 to 16). Records are in [`results-f3/storm8/`](results-f3/storm8/).
+`bun tools/perf/build-variants.ts`, then `bun tools/perf/ab.ts --variants base=gpuix:dist-sbase,park=gpuix:dist,nopoll=gpuix:dist-snopoll,chromium=chromium --runs 4 -- --scenarios stream-storm --page-metrics off --quiet-wait 300`, stopped after 3 rounds for time. `base` is this branch without parking, `park` is this branch, and `nopoll` is this branch with the transcript's 120 ms `getListScrollTop` poll removed (an experiment for G2, not a proposed build). All GPUIX bundles carry G2's `getListScrollTop` try/catch, which `build-variants.ts` applies at bundle time without touching G2's file. Other units ran builds and benchmarks during every run (load average 5 to 16). Records are in [`results-f3/storm8/`](results-f3/storm8/).
 
 Each cell lists the runs. A dash means the run did not reach that point.
 
