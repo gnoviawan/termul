@@ -264,7 +264,11 @@ export function Canvas({
     return () => {
       html.style.overscrollBehaviorX = previous.html
       body.style.overscrollBehaviorX = previous.body
-      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current)
+        // StrictMode remounts reuse this ref: a stale id would block every later write().
+        frameRef.current = null
+      }
       window.clearTimeout(settleTimer.current)
       wheelGestureRef.current = null
     }
