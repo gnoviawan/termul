@@ -52,7 +52,7 @@ import {
   windowOrigin
 } from '../../tools/parity/shoot-gpuix'
 import { freePort, rowMatching, terminals, until } from '../../tools/terminal/shell-tree'
-import { INSTALL_DIR, PACKAGE_NAME } from './layout'
+import { APP_ID, INSTALL_DIR, PACKAGE_NAME } from './layout'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -415,6 +415,12 @@ async function mainScenario(): Promise<void> {
   await app.getByText('New browser tab').click()
   const helperPid = Number((await run.logged(/started webview host (\d+)/))[1])
   const parent = (await run.logged(/attached to window (0x[0-9a-f]+)/))[1]
+  const wmClass = Bun.spawnSync(['xprop', '-display', xvfb.display, '-id', parent, 'WM_CLASS'])
+    .stdout.toString()
+    .trim()
+  check('the window class is the .desktop StartupWMClass', wmClass.includes(`"${APP_ID}"`), {
+    wmClass
+  })
   await run.logged(/created tab \S+/)
   const slot = await until('webview mapped in the GPUIX window', async () => {
     const child = childWindows(xvfb.display, parent)[0]

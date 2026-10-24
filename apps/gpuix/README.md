@@ -37,6 +37,9 @@ Scripts:
 - `bun run build` writes the production bundle (`dist/main.js` sets `NODE_ENV=production`, then loads the minified `dist/main.bundle.js`; `--dev` builds React's development bundle instead); `bun run start` builds and runs it once.
 - `bun run build` also builds the browser-pane helper on Linux (see Browser
   panes below); `bun run build:webview-host` builds only the helper.
+- `bun run package:linux` builds the installable `.deb` (Bun, the bundle, `termul-server`, the
+  helper), and `bun run package:verify` runs it from `env -i` under Xvfb. See
+  [docs/packaging.md](./docs/packaging.md).
 - `bun run typecheck` runs both tsc projects (see below).
 - `bun run check:react` proves the bundle shares one React 19 with `@gpuix/react`.
 - `bun run parity <scenario>` runs the pixel-parity harness.
