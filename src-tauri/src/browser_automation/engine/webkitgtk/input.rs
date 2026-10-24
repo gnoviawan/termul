@@ -324,19 +324,10 @@ unsafe fn build(
 /// # Safety
 /// GTK main thread.
 unsafe fn hardware_keycode(display: *mut gdk_sys::GdkDisplay, keyval: u32) -> u16 {
-    let keymap = gdk_sys::gdk_keymap_get_for_display(display);
-    let mut keys: *mut gdk_sys::GdkKeymapKey = std::ptr::null_mut();
-    let mut n: i32 = 0;
-    let mut code = 0u16;
-    let found = gdk_sys::gdk_keymap_get_entries_for_keyval(keymap, keyval, &mut keys, &mut n) != 0;
-    if keys.is_null() {
-        return 0;
-    }
-    if found && n > 0 {
-        code = (*keys).keycode as u16;
-    }
-    glib::ffi::g_free(keys.cast());
-    code
+    let display: gtk::gdk::Display = glib::translate::from_glib_none(display);
+    gtk::gdk::Keymap::for_display(&display)
+        .and_then(|keymap| keymap.entries_for_keyval(keyval).first().map(|key| key.keycode() as u16))
+        .unwrap_or(0)
 }
 
 impl NativeInput for GdkInput {
