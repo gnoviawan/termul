@@ -22,6 +22,7 @@ import { Switch, switchClasses } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { editButtonAccessibleName } from './selector-model'
 import {
+  PICKER_EDIT_MOTION,
   PICKER_ICON,
   PICKER_LABEL,
   PICKER_ROW,
@@ -451,6 +452,85 @@ export function OptionSwitchRow({
   )
 }
 
+/** The box around a row and its Edit; the row's hover fills both. */
+export const EDIT_ROW_BOX =
+  'flex min-w-0 items-center rounded-md transition-colors duration-150 ease-out hover:bg-row-hover'
+
+/** Edit's own box, shared by the button and the copy a pick leaves behind. */
+function editBox(touch: boolean): string {
+  return cn(
+    // 2px less on the chevron side so the label and chevron look centred.
+    'group/edit flex shrink-0 items-center gap-0.5 rounded-md pl-1.5 pr-1 text-xs',
+    touch ? 'min-h-11' : 'h-7'
+  )
+}
+
+/** What Edit shows: the Thinking level, or "Edit" when there is none. */
+export interface EditFace {
+  level: string | undefined
+}
+
+/**
+ * Edit's motion on one row. `face` is what the row's Edit shows, or null with
+ * no Edit. Edit enters only when it arrives after the row's first render (a
+ * pick), never on the panel's first paint. When it goes, `exiting` keeps what
+ * it showed until its fade ends. Reduced motion: neither.
+ */
+export function useEditMotion(
+  face: EditFace | null,
+  reduced: boolean
+): { entering: boolean; exiting: EditFace | null } {
+  const [last, setLast] = useState(face)
+  const [entering, setEntering] = useState(false)
+  const [exiting, setExiting] = useState<EditFace | null>(null)
+  if ((face === null) !== (last === null) || face?.level !== last?.level) {
+    // Set while rendering, so the pick's first frame already has it: the old
+    // Edit is never in the tree as a live button beside the new one.
+    setLast(face)
+    if (face && !last) {
+      setEntering(!reduced)
+      setExiting(null)
+    } else if (!face && last) {
+      setEntering(false)
+      setExiting(reduced ? null : last)
+    }
+  }
+  useEffect(() => {
+    if (!exiting) return
+    const timer = setTimeout(() => setExiting(null), PICKER_EDIT_MOTION.exitMs)
+    return () => clearTimeout(timer)
+  }, [exiting])
+  return { entering, exiting: face ? null : exiting }
+}
+
+/** React 18 has no `inert` prop; an empty string renders the attribute. */
+const INERT = { inert: '' } as Record<string, string>
+
+/**
+ * The look of Edit, left beside the old row by a pick while it fades out.
+ * Inert and hidden from its first frame: no focus, no click, no flyout, and
+ * the row beside it is already the plain unselected row.
+ */
+export function ExitingEdit({
+  face,
+  touch
+}: {
+  face: EditFace
+  touch: boolean
+}): React.JSX.Element {
+  return (
+    <span
+      data-edit-exiting=""
+      aria-hidden="true"
+      {...INERT}
+      className={cn(editBox(touch), 'text-muted-foreground', PICKER_EDIT_MOTION.exit)}
+    >
+      {face.level ? <span className={PICKER_ROW_VALUE}>{face.level}</span> : 'Edit'}
+      <ChevronRight size={12} aria-hidden="true" />
+    </span>
+  )
+}
+
 export interface EditRowHandle {
   ref: RefObject<HTMLButtonElement>
   open: boolean
@@ -473,6 +553,7 @@ export interface EditRowHandle {
 export function EditableRow({
   modelName,
   inFavorites = false,
+  entering = false,
   sections,
   disabled,
   touch,
@@ -481,6 +562,8 @@ export function EditableRow({
   modelName: string
   /** The row is the Favorites copy: Edit's name says so. */
   inFavorites?: boolean
+  /** A pick just made this row the active one: Edit slides in as it mounts. */
+  entering?: boolean
   sections: ChoiceSection[]
   disabled: boolean
   touch: boolean
@@ -519,11 +602,12 @@ export function EditableRow({
       aria-haspopup="dialog"
       aria-expanded={open}
       disabled={disabled}
+      data-entering={entering ? '' : undefined}
       className={cn(
-        // 2px less on the chevron side so the label and chevron look centred.
-        'group/edit flex shrink-0 items-center gap-0.5 rounded-md pl-1.5 pr-1 text-xs transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
+        editBox(touch),
+        entering ? PICKER_EDIT_MOTION.enter : 'transition-colors duration-150 ease-out',
+        'disabled:cursor-not-allowed disabled:opacity-60',
         open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-        touch ? 'min-h-11' : 'h-7',
         ROW_FOCUS
       )}
     >
@@ -544,12 +628,7 @@ export function EditableRow({
     </button>
   )
   const row = (trigger: ReactNode): React.JSX.Element => (
-    <div
-      className={cn(
-        'flex min-w-0 items-center rounded-md transition-colors duration-150 ease-out hover:bg-row-hover',
-        open && 'bg-row-hover'
-      )}
-    >
+    <div className={cn(EDIT_ROW_BOX, open && 'bg-row-hover')}>
       {renderRow({
         ref: rowRef,
         open,

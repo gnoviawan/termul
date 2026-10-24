@@ -39,6 +39,22 @@ export const PICKER_SURFACE = {
   separator: 'border-t border-border'
 } as const
 
+/**
+ * Edit's motion when a pick moves it to another row. It enters by sliding 6px
+ * in from the right as it fades in (200ms, `--ease-drawer`). It leaves faster
+ * and more quietly: a 4px nudge and fade (150ms ease-in), then it unmounts.
+ * Only transform and opacity animate, through transitions from
+ * `@starting-style`, so a second quick pick retargets them. Nothing moves on
+ * the panel's first paint or under reduced motion. Class strings stay literal
+ * so Tailwind finds them; `exitMs` must match the `duration-150` in `exit`.
+ */
+export const PICKER_EDIT_MOTION = {
+  exitMs: 150,
+  enter:
+    'transition-[color,opacity,translate] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] starting:translate-x-1.5 starting:opacity-0 motion-reduce:transition-none',
+  exit: 'pointer-events-none translate-x-1 opacity-0 transition-[opacity,translate] duration-150 ease-[cubic-bezier(0.4,0,1,1)] starting:translate-x-0 starting:opacity-100 motion-reduce:hidden'
+} as const
+
 export function pickerRowHeight(touch: boolean): string {
   return touch ? PICKER_ROW.heightTouch : PICKER_ROW.height
 }

@@ -18,14 +18,17 @@ import {
   type ChoiceSection,
   DENSE_ROW,
   denseRowSize,
+  EDIT_ROW_BOX,
   EditableRow,
   type EditRowHandle,
+  ExitingEdit,
   moveFocus,
   type OptionChoice,
   OptionRow,
   OptionSwitchRow,
   ROW_FOCUS,
-  thinkingLabel
+  thinkingLabel,
+  useEditMotion
 } from './SelectorOptionRows'
 import type { SelectorPanelProps } from './SelectorPanel'
 import {
@@ -94,6 +97,7 @@ function DenseModelRow({
   inFavorites = false,
   disabled,
   touch,
+  reduced,
   onPick
 }: {
   name: string
@@ -110,6 +114,8 @@ function DenseModelRow({
   inFavorites?: boolean
   disabled: boolean
   touch: boolean
+  /** Prefers reduced motion: Edit neither enters nor leaves. */
+  reduced: boolean
   onPick: () => void
 }): React.JSX.Element {
   const name = rawName.trim()
@@ -124,7 +130,10 @@ function DenseModelRow({
   // Edit showing the level marks the selected row (its list row and its
   // Favorites copy alike); it replaces the check there. A selected row with no
   // level on Edit keeps it.
-  const levelOnEdit = editable && edit !== undefined && thinkingLabel(edit) !== undefined
+  const level = editable && edit !== undefined ? thinkingLabel(edit) : undefined
+  const levelOnEdit = level !== undefined
+  // A pick moves Edit: in on the picked row, out (inert) on the old one.
+  const { entering, exiting } = useEditMotion(editable ? { level } : null, reduced)
   // Controlled, so a focus handed back by the closing flyout can skip it.
   const [tipOpen, setTipOpen] = useState(false)
   const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
@@ -149,11 +158,11 @@ function DenseModelRow({
         // its agent) drops the trigger's `aria-describedby` (the row's props win
         // over the Slot's).
         {...(rowHasDescription(description) ? {} : { 'aria-describedby': undefined })}
-        // On an editable row the hover belongs to the row around both buttons.
+        // Beside an Edit (or one leaving) the hover belongs to the box around both.
         className={cn(
           DENSE_ROW,
           denseRowSize(touch),
-          editable && 'min-w-0 flex-1 hover:bg-transparent'
+          (editable || exiting) && 'min-w-0 flex-1 hover:bg-transparent'
         )}
       >
         <span
@@ -204,11 +213,21 @@ function DenseModelRow({
       </Tooltip>
     )
   }
-  if (!edit || !editable) return renderRow()
+  if (!edit || !editable) {
+    // The old Edit fades out beside the plain row. The box stays mounted
+    // (`contents` at rest), so the row keeps its node, and focus, when it ends.
+    return (
+      <div className={exiting ? EDIT_ROW_BOX : 'contents'}>
+        {renderRow()}
+        {exiting ? <ExitingEdit face={exiting} touch={touch} /> : null}
+      </div>
+    )
+  }
   return (
     <EditableRow
       modelName={name}
       inFavorites={inFavorites}
+      entering={entering}
       sections={edit}
       disabled={disabled}
       touch={touch}
@@ -642,6 +661,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         inFavorites={keyPrefix === FAVORITES_KEY_PREFIX}
         disabled={disabled}
         touch={touch}
+        reduced={reduced}
         onPick={() => state.pick(configId, catalog, model.value)}
       />
     ))

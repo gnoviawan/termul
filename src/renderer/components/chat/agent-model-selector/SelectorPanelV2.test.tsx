@@ -15,7 +15,13 @@ import {
   type ModelCatalog
 } from './selector-model'
 import type { SelectorSource } from './selector-source'
-import { PICKER_LABEL, PICKER_ROW, PICKER_ROW_NAME_PULL, PICKER_SURFACE } from './selector-tokens'
+import {
+  PICKER_EDIT_MOTION,
+  PICKER_LABEL,
+  PICKER_ROW,
+  PICKER_ROW_NAME_PULL,
+  PICKER_SURFACE
+} from './selector-tokens'
 
 // jsdom omits `document.elementFromPoint`; floating-ui calls it.
 if (typeof document.elementFromPoint !== 'function') {
@@ -26,11 +32,18 @@ if (typeof document.elementFromPoint !== 'function') {
   })
 }
 
-const { knownCatalogs, stored } = vi.hoisted(() => ({
+const { knownCatalogs, stored, reducedMotion } = vi.hoisted(() => ({
   knownCatalogs: { current: new Map<string, ModelCatalog>() },
   /** The persistence store: rejected option values per agent. */
-  stored: new Map<string, unknown>()
+  stored: new Map<string, unknown>(),
+  /** What `useReducedMotion` reports; framer reads the media query once per process. */
+  reducedMotion: { current: false }
 }))
+
+vi.mock('framer-motion', async (importActual) => {
+  const actual = await importActual<typeof import('framer-motion')>()
+  return { ...actual, useReducedMotion: () => reducedMotion.current }
+})
 
 vi.mock('@/lib/api', async (importActual) => {
   const actual = await importActual<typeof import('@/lib/api')>()
@@ -219,6 +232,7 @@ afterEach(() => {
   cleanup()
   knownCatalogs.current = new Map()
   stored.clear()
+  reducedMotion.current = false
 })
 
 const FAST = {
@@ -1039,6 +1053,209 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
     arrowRightOpensNothing(
       within(favoritesOf()).getByRole('button', { name: 'Opus via Claude · Claude Agent' })
     )
+  })
+})
+
+describe('SelectorPanelV2 Edit motion on a pick', () => {
+  const THREE = select('model', 'Model', 'opus', [
+    ['opus', 'Claude Opus'],
+    ['sonnet', 'Claude Sonnet'],
+    ['haiku', 'Claude Haiku']
+  ])
+  const favoritesOf = (): HTMLElement => screen.getByRole('group', { name: 'Favorites' })
+  /** A model's row in the list (not its Favorites copy). */
+  const listed = (name: string): HTMLElement => {
+    const group = screen.queryByRole('group', { name: 'Favorites' })
+    return screen
+      .getAllByRole('button', { name })
+      .find((row) => !group?.contains(row)) as HTMLElement
+  }
+  /** Edit buttons a screen reader can reach. */
+  const editButtons = (): HTMLElement[] => screen.queryAllByRole('button', { name: /^Edit / })
+  /** Edits on their way out: inert copies left beside the old row. */
+  const exiting = (): HTMLElement[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-edit-exiting]'))
+  const pressed = (): string[] =>
+    screen
+      .getAllByRole('button', { pressed: true })
+      .map((row) => row.getAttribute('aria-label') ?? '')
+  const settle = (): void => {
+    act(() => {
+      vi.advanceTimersByTime(PICKER_EDIT_MOTION.exitMs)
+    })
+  }
+
+  /** The panel holding the picked model, as the composer does. */
+  function PickPanel(p: SelectorPanelV2Props): React.JSX.Element {
+    const [model, setModel] = useState(p.modelValue)
+    return (
+      <Panel
+        {...p}
+        modelValue={model}
+        onPickModel={(value) => {
+          p.onPickModel(value)
+          setModel(value)
+        }}
+      />
+    )
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("on open, the selected rows' Edits are at rest: no entrance, nothing leaving", () => {
+    render(<PickPanel {...props({ favorites: [{ configId: CURSOR.id, value: 'opus' }] })} />)
+    const edits = screen.getAllByTestId('selector-edit')
+    expect(edits).toHaveLength(2)
+    for (const edit of edits) {
+      expect(edit).not.toHaveAttribute('data-entering')
+      expect(classes(edit).some((name) => name.startsWith('starting:'))).toBe(false)
+    }
+    expect(exiting()).toHaveLength(0)
+  })
+
+  it('arrow keys move focus only: no Edit enters or leaves', () => {
+    render(<PickPanel {...props({ modelOption: THREE })} />)
+    const opus = activeRow()
+    act(() => opus.focus())
+    fireEvent.keyDown(opus, { key: 'ArrowDown' })
+    expect(listed('Claude Sonnet')).toHaveFocus()
+    expect(pressed()).toEqual(['Claude Opus'])
+    expect(screen.getByTestId('selector-edit')).not.toHaveAttribute('data-entering')
+    expect(exiting()).toHaveLength(0)
+  })
+
+  it("the picked row's Edit enters; the old one leaves inert and hidden, then unmounts", () => {
+    vi.useFakeTimers()
+    const onPickModel = vi.fn()
+    render(
+      <PickPanel
+        {...props({
+          onPickModel,
+          favorites: [
+            { configId: CURSOR.id, value: 'opus' },
+            { configId: CURSOR.id, value: 'sonnet' }
+          ]
+        })}
+      />
+    )
+    expect(editButtons()).toHaveLength(2)
+    fireEvent.click(listed('Claude Sonnet'))
+    expect(onPickModel).toHaveBeenCalledWith('sonnet')
+
+    // The new list row and its Favorites copy: the only Edits in the a11y tree.
+    expect(editButtons().map((edit) => edit.getAttribute('aria-label'))).toEqual([
+      'Edit Claude Sonnet in Favorites, thinking High',
+      'Edit Claude Sonnet, thinking High'
+    ])
+    for (const edit of editButtons()) expect(edit).toHaveAttribute('data-entering')
+    expect(within(favoritesOf()).getAllByRole('button', { name: /^Edit / })).toHaveLength(1)
+
+    // From the first render of the exit: inert, hidden, unreachable.
+    const old = exiting()
+    expect(old).toHaveLength(2)
+    for (const edit of old) {
+      expect(edit).toHaveAttribute('inert')
+      expect(edit).toHaveAttribute('aria-hidden', 'true')
+      expect(edit).toHaveTextContent('High')
+      act(() => edit.focus())
+      expect(document.activeElement).not.toBe(edit)
+      fireEvent.click(edit)
+    }
+    expect(screen.queryByTestId('selector-edit-flyout')).toBeNull()
+    expect(onPickModel).toHaveBeenCalledTimes(1)
+
+    // The old rows are the plain unselected row, check slot and all.
+    for (const row of screen.getAllByRole('button', { name: 'Claude Opus' })) {
+      expect(row).toHaveAttribute('aria-pressed', 'false')
+      expect(row.querySelector('[data-row-check]')?.getAttribute('class')).toContain('opacity-0')
+    }
+    expect(pressed()).toEqual(['Claude Sonnet', 'Claude Sonnet'])
+
+    settle()
+    expect(exiting()).toHaveLength(0)
+    for (const edit of old) expect(edit).not.toBeInTheDocument()
+    expect(editButtons()).toHaveLength(2)
+  })
+
+  it('quick picks mid-animation end on the last pick, with nothing left leaving', () => {
+    vi.useFakeTimers()
+    render(
+      <PickPanel
+        {...props({ modelOption: THREE, favorites: [{ configId: CURSOR.id, value: 'haiku' }] })}
+      />
+    )
+    fireEvent.click(listed('Claude Sonnet'))
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
+    fireEvent.click(listed('Claude Haiku'))
+    // Opus is still leaving; Sonnet's Edit, cut off mid-entrance, leaves too.
+    expect(exiting()).toHaveLength(2)
+    expect(pressed()).toEqual(['Claude Haiku', 'Claude Haiku'])
+    expect(editButtons().map((edit) => edit.getAttribute('aria-label'))).toEqual([
+      'Edit Claude Haiku in Favorites, thinking High',
+      'Edit Claude Haiku, thinking High'
+    ])
+
+    settle()
+    expect(exiting()).toHaveLength(0)
+    expect(pressed()).toEqual(['Claude Haiku', 'Claude Haiku'])
+    expect(editButtons()).toHaveLength(2)
+  })
+
+  it('picking the old row back mid-exit gives it the real Edit and drops its copy', () => {
+    vi.useFakeTimers()
+    render(<PickPanel {...props({ modelOption: THREE })} />)
+    fireEvent.click(listed('Claude Sonnet'))
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
+    fireEvent.click(listed('Claude Opus'))
+    expect(pressed()).toEqual(['Claude Opus'])
+    const opusEdit = editBeside(activeRow()) as HTMLElement
+    expect(opusEdit).toHaveAccessibleName('Edit Claude Opus, thinking High')
+    // Only Sonnet's copy is leaving; none sits beside Opus.
+    expect(exiting()).toHaveLength(1)
+    expect(opusEdit.parentElement?.querySelector('[data-edit-exiting]')).toBeNull()
+    expect(listed('Claude Sonnet').parentElement).toContainElement(exiting()[0] ?? null)
+
+    settle()
+    expect(exiting()).toHaveLength(0)
+    expect(editButtons()).toEqual([opusEdit])
+  })
+
+  it('unmounting mid-exit leaves no timer behind', () => {
+    vi.useFakeTimers()
+    const { unmount } = render(<PickPanel {...props()} />)
+    const before = vi.getTimerCount()
+    fireEvent.click(listed('Claude Sonnet'))
+    expect(exiting()).toHaveLength(1)
+    expect(vi.getTimerCount()).toBeGreaterThan(before)
+    unmount()
+    expect(vi.getTimerCount()).toBe(before)
+  })
+
+  it('reduced motion: no entrance, and the old Edit goes at once', () => {
+    reducedMotion.current = true
+    render(
+      <PickPanel
+        {...props({
+          favorites: [
+            { configId: CURSOR.id, value: 'opus' },
+            { configId: CURSOR.id, value: 'sonnet' }
+          ]
+        })}
+      />
+    )
+    fireEvent.click(listed('Claude Sonnet'))
+    expect(exiting()).toHaveLength(0)
+    expect(editButtons()).toHaveLength(2)
+    for (const edit of editButtons()) {
+      expect(edit).not.toHaveAttribute('data-entering')
+      expect(classes(edit).some((name) => name.startsWith('starting:'))).toBe(false)
+    }
   })
 })
 
