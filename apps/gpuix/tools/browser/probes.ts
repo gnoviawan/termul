@@ -240,3 +240,43 @@ export function stripFrames(
       return { divider, page }
     })
 }
+
+/**
+ * For each strip frame, how many GPUIX divider positions the page trails: the distinct divider
+ * positions seen so far that lie between where the page sits (`page - 1`) and the divider.
+ * 0 is flush, 1 is one GPUIX frame behind. A position GPUIX painted between two captures is not
+ * seen, so capture faster than GPUIX paints.
+ */
+export function gpuixFramesBehind(
+  frames: { divider: number | null; page: number | null }[]
+): number[] {
+  const seen = new Set<number>()
+  const behind: number[] = []
+  for (const { divider, page } of frames) {
+    if (divider === null || page === null) continue
+    seen.add(divider)
+    const trailing = page - 1
+    const lo = Math.min(trailing, divider)
+    const hi = Math.max(trailing, divider)
+    let count = 0
+    for (const position of seen)
+      if (position !== trailing && position >= lo && position <= hi) count++
+    behind.push(trailing === divider ? 0 : Math.max(count, 1))
+  }
+  return behind
+}
+
+/** Lengths of the runs of consecutive `true`s. */
+export function runLengths(flags: boolean[]): number[] {
+  const runs: number[] = []
+  let run = 0
+  for (const flag of flags) {
+    if (flag) run += 1
+    else if (run) {
+      runs.push(run)
+      run = 0
+    }
+  }
+  if (run) runs.push(run)
+  return runs
+}

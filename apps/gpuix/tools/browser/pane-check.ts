@@ -16,6 +16,7 @@ import { buildClient, OUT_DIR } from '../../build'
 import { WEBVIEW_HOST_BIN } from '../../src/browser/support'
 import { startTestServer } from '../parity/server'
 import { READY_TIMEOUT_MS } from '../parity/shoot-gpuix'
+import { waitForQuiet } from '../perf/proc-sampler'
 import { seedWorkspace } from '../parity/workspace'
 import { freePort, openStatusBarTerminal, until } from '../terminal/shell-tree'
 import { startPages } from './pages'
@@ -24,12 +25,14 @@ import {
   childWindows,
   closeWindow,
   descendants,
+  gpuixFramesBehind,
   isPageGreen,
   mapState,
   pixelAt,
   processTable,
   type Rect,
   recordStrip,
+  runLengths,
   stats,
   stripFrames,
   xinput
@@ -43,6 +46,7 @@ const { values } = parseArgs({
 const OUT = values.out!
 const SIZE = { width: 1280, height: 800 }
 const STRIP_FPS = 30
+const SWEEP_FPS = 60
 const sameRect = (a: Rect, b: Rect) =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
 const results: { check: string; ok: boolean; detail: unknown }[] = []
@@ -246,6 +250,8 @@ try {
   const stripDir = path.join(OUT, 'divider-strip')
   await mkdir(stripDir, { recursive: true })
   const stripLeft = 520
+  const quiet = await waitForQuiet(200, 120)
+  measures.machineBusyPctBeforeDivider = quiet
   const recording = recordStrip(
     s.display,
     { x: origin.x + stripLeft, y: origin.y + r.y + 300, width: SIZE.width - stripLeft - 20 },
@@ -275,16 +281,7 @@ try {
     (f) => f.divider !== null && f.page !== null
   )
   // A run of consecutive captured frames with the page not flush against the divider.
-  const runs: number[] = []
-  let run = 0
-  for (const frame of frames) {
-    if (frame.page !== (frame.divider as number) + 1) run += 1
-    else if (run) {
-      runs.push(run)
-      run = 0
-    }
-  }
-  if (run) runs.push(run)
+  const runs = runLengths(frames.map((f) => f.page !== (f.divider as number) + 1))
   const dividerPositions = new Set(frames.map((f) => f.divider)).size
   measures.dividerFrames = {
     capturedFps: STRIP_FPS,
@@ -319,6 +316,53 @@ try {
       settled,
       pageViewport: viewport?.slice(1)
     }
+  )
+
+  // Continuous drags right then back, one move per automation round trip with no settling,
+  // captured faster than GPUIX paints under lavapipe. Only the drag that grows the pane is
+  // observable: shrinking it moves GPUIX's divider under a lagging webview, out of sight.
+  const sweepDivider = async (name: string, dx: number) => {
+    const dir = path.join(OUT, `divider-sweep-${name}`)
+    await mkdir(dir, { recursive: true })
+    const recorder = recordStrip(
+      s.display,
+      { x: origin.x + stripLeft, y: origin.y + r.y + 300, width: SIZE.width - stripLeft - 20 },
+      SWEEP_FPS,
+      dir
+    )
+    await Bun.sleep(500)
+    const from = (await slot()).x - 1
+    await app.mouse.down({ x: from, y: 400 })
+    for (let i = 1; i <= 40; i++) await app.mouse.move({ x: from + i * dx, y: 400 })
+    await app.mouse.up({ x: from + 40 * dx, y: 400 })
+    await Bun.sleep(1500)
+    await recorder.stop()
+    const sweepFrames = stripFrames(dir, [36, 37, 38])
+    const behind = gpuixFramesBehind(sweepFrames)
+    const end = { gpuix: await gpuixBounds(), x: await slot() }
+    return {
+      settledOnSlot: sameRect(end.gpuix, end.x) && Math.sign(end.x.x - from - 1) === Math.sign(dx),
+      maxBehind: behind.length ? Math.max(...behind) : null,
+      capturedFps: SWEEP_FPS,
+      framesWithBoth: behind.length,
+      gpuixDividerPositions: new Set(sweepFrames.map((f) => f.divider)).size,
+      gpuixFramesBehind: stats(behind),
+      framesOutOfStep: behind.filter((n) => n > 0).length,
+      outOfStepMs: stats(
+        runLengths(behind.map((n) => n > 0)).map((n) => Math.round((n * 1000) / SWEEP_FPS))
+      ),
+      settled: end
+    }
+  }
+  const sweeps = { right: await sweepDivider('right', 5), left: await sweepDivider('left', -5) }
+  measures.dividerSweeps = sweeps
+  check(
+    'continuous divider drags: the webview never trails GPUIX by more than one frame',
+    sweeps.right.settledOnSlot &&
+      sweeps.left.settledOnSlot &&
+      sweeps.left.maxBehind !== null &&
+      sweeps.left.maxBehind <= 1,
+    sweeps
   )
 
   // 5. Preferences over the webview, and a dropdown inside it.
