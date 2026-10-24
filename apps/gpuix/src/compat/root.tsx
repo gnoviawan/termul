@@ -6,7 +6,7 @@
 
 import { type PublicInstance, type RenderOptions, useGpuixRequired } from '@gpuix/react'
 import { Fragment, type ReactNode, useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
-import { tolerateBusyFocusReads } from './busy-ui'
+import { busyTolerantReads } from './busy-ui'
 import { dragPreview, hitTransparent, subscribeDragPreview } from './dnd'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
 import { parkHiddenPanes } from './park'
@@ -39,14 +39,12 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
     return hitTransparent(instance as { id: number } | null)
   }, [])
   useLayoutEffect(() => {
-    bindCompatRenderer(renderer as unknown as CompatRenderer)
+    bindCompatRenderer(busyTolerantReads(renderer as unknown as CompatRenderer))
     const parking = parkHiddenPanes(renderer)
-    const restoreFocusReads = tolerateBusyFocusReads(renderer)
     onRenderer?.(renderer)
     syncViewport(renderer)
     setReady(true)
     return () => {
-      restoreFocusReads()
       parking.uninstall()
       bindCompatRenderer(null)
     }
