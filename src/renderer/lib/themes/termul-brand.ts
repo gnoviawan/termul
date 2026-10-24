@@ -55,7 +55,7 @@ const DARK_EMBOSS_HOVER =
 /**
  * Light: gray-a9/a10/a11 off track. gray-a9 flattens to oklch(0.643 0 0) on
  * the white card, 3.32:1 against it and against the white thumb (WCAG
- * 1.4.11), and stays at or above 3.25:1 on every Light surface. Disabled
+ * 1.4.11), and stays at or above 3.24:1 on every Light surface. Disabled
  * drops to a gray-a4 track with a grey thumb: no white thumb and no blue, so
  * it reads as off-limits, while the thumb still outlines the control.
  */
