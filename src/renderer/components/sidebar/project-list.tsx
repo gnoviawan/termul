@@ -1,5 +1,5 @@
 import { LayoutGroup, Reorder } from 'framer-motion'
-import { type Dispatch, type MutableRefObject, type SetStateAction, useState } from 'react'
+import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { ChevronDown, ChevronRight, FolderPlus } from '@/components/icons'
 import { RailTooltip } from '@/components/shell/rail-button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
@@ -12,6 +12,7 @@ import type { ProjectRowStatus } from './indicators'
 import { RailGroupRow } from './rail-group-row'
 import { RailProjectItem } from './rail-project-item'
 import { RAIL_SECTION_BUTTON_CLASS, RailSectionHeader } from './rail-section-header'
+import { useDragLift } from './use-drag-lift'
 
 export interface ProjectListProps {
   projects: Project[]
@@ -117,7 +118,7 @@ export function ProjectList({
   // Motion can't interpolate a var() shadow, so whileDrag would snap it.
   // The lift (opaque bg) holds until the row lands, and `relative` lets
   // Reorder's own zIndex apply, so neighbours never show through it.
-  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const { liftedId, lift, release, settle } = useDragLift()
   const renderProjectRow = (project: Project): React.JSX.Element => {
     const shortcutIndex = activeIndexById.get(project.id) ?? -1
     return (
@@ -126,13 +127,13 @@ export function ProjectList({
         value={project}
         drag="y"
         layout="position"
-        data-dragging={draggingId === project.id || undefined}
+        data-dragging={liftedId === project.id || undefined}
         className="relative list-none rounded-lg transition-shadow duration-[110ms] ease-out motion-reduce:transition-none data-[dragging]:bg-sidebar data-[dragging]:shadow-md data-[dragging]:duration-150"
         whileDrag={{
           scale: 1.02,
           pointerEvents: 'none'
         }}
-        onDragStart={() => setDraggingId(project.id)}
+        onDragStart={() => lift(project.id)}
         onDrag={(_event, info) => {
           const element = document.elementFromPoint(info.point.x, info.point.y)
           const container = element?.closest('[data-group-container-id]')
@@ -153,15 +154,16 @@ export function ProjectList({
             const currentGroup = groups.find((g) => g.projectIds.includes(project.id))
             const currentGroupId = currentGroup?.id ?? null
             if (nextGroupId !== currentGroupId) {
+              // The row changes lists, so its snap-back (and settle) never runs.
+              settle(project.id)
               moveProjectToGroup(project.id, nextGroupId)
             }
           }
           setActiveDragOverGroupId(null)
           activeDragOverGroupIdRef.current = null
+          release(project.id)
         }}
-        onDragTransitionEnd={() =>
-          setDraggingId((current) => (current === project.id ? null : current))
-        }
+        onDragTransitionEnd={() => settle(project.id)}
       >
         <RailProjectItem
           project={project}
