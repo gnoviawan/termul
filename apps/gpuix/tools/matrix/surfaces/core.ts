@@ -382,7 +382,7 @@ const CHAT: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-holding', [composer, type(MATRIX_PROMPTS.hold), press('enter'), wait(2500)], see(HOLD_REPLY)),
-      step('c-queued', [type('queued follow-up'), press('enter'), wait(1200)], see('Queued', 'queued follow-up'))
+      step('c-queued', [composer, type('queued follow-up'), press('enter'), wait(1200)], see('Queued', 'queued follow-up'))
     ]
   }
 ]
@@ -455,7 +455,7 @@ const TERMINAL: Surface[] = [
     title: 'Split panes: drag a second terminal tab to the pane edge',
     steps: [
       DASHBOARD,
-      step('b-two', [openTerminal, wait(2000), press('ctrl-t'), wait(2000)], see('Terminal 1', 'Terminal 2')),
+      step('b-two', [openTerminal, wait(2000), click(label('New tab')), click(label('Bash', 'menuitem')), wait(2000)], see('Terminal 1', 'Terminal 2')),
       step('c-split', [drag(txt('Terminal 2'), paneAt(0.92, 0.5)), wait(2000)], see('Terminal 1', 'Terminal 2'))
     ]
   }

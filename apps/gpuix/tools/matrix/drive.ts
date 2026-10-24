@@ -158,10 +158,14 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
             break
           }
           case 'drag': {
-            // Mouse steps rather than dragTo: HTML5 drags (tabs, explorer rows) need a
-            // drag start before the drop zones they reveal exist under the pointer.
+            // A drop onto a pane spot uses mouse steps rather than dragTo: HTML5 drags
+            // (tabs, explorer rows) reveal the pane's drop zones only once they start.
             const from = await pointOf(key, action.from)
             const to = await pointOf(`${key}/to`, action.to)
+            if (!('css' in action.to && action.to.frac)) {
+              await webLocator(page, action.from).dragTo(webLocator(page, action.to))
+              break
+            }
             await page.mouse.move(from.x, from.y)
             await page.mouse.down()
             await page.mouse.move(from.x + 12, from.y + 4, { steps: 4 })

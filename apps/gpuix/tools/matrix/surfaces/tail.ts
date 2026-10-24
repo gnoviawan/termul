@@ -64,13 +64,18 @@ const PALETTE_COMMANDS: Array<[id: string, command: string, expect: string]> = [
   ['report-bug', 'Report a Bug', 'Report a bug']
 ]
 
+const TOAST_BRANCH = 'toast-branch'
+
+/**
+ * Pressed after a click on the rail's Projects label, so no text field holds
+ * focus. Keys are the web defaults (settings.ts WEB_DEFAULT_KEY_OVERRIDES),
+ * which GPUIX inherits because it is not a Tauri context.
+ */
 const SHORTCUTS: Array<[id: string, keys: string, title: string, expect: Check[]]> = [
   ['toggle-projects', 'ctrl-shift-b', 'collapse the project rail', [gone('gamma')]],
-  ['toggle-explorer', 'ctrl-b', 'file explorer', see('notes.txt')],
-  ['new-terminal', 'ctrl-t', 'new terminal', see('Terminal 1')],
-  ['command-history', 'ctrl-r', 'command history', see('Command History')],
+  ['toggle-side-panel', 'ctrl-b', 'hide the side panel', [gone('Explorer')]],
   ['theme-picker', 'ctrl-alt-t', 'theme picker', see('Color Themes')],
-  ['zoom-in', 'ctrl-=', 'zoom in', see('What should we do in alpha?')]
+  ['zoom-in', 'alt-=', 'zoom in', see('What should we do in alpha?')]
 ]
 
 const PALETTE: Surface[] = [
@@ -125,9 +130,16 @@ const LONG_TAIL: Surface[] = [
       id: `shortcuts.${shortcutId}`,
       area: 'shortcuts',
       title: `Default shortcut ${keys}: ${title}`,
-      steps: [DASHBOARD, step('b-pressed', [press(keys), wait(1000)], expect)]
+      steps: [DASHBOARD, step('b-pressed', [click(txt('Projects')), press(keys), wait(1000)], expect)]
     })
   ),
+  {
+    id: 'shortcuts.desktop-keymap',
+    area: 'shortcuts',
+    title: 'Desktop key bindings (Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+, and Ctrl+=)',
+    blocked: 'No web reference: the web client swaps browser-reserved keys for Alt combos, and GPUIX inherits that keymap because it is not a Tauri context',
+    steps: []
+  },
   {
     id: 'theme.picker',
     area: 'theme',
@@ -156,12 +168,15 @@ const LONG_TAIL: Surface[] = [
   {
     id: 'notifications.toast',
     area: 'notifications',
-    title: 'Toast after switching branch',
-    prepare: resetAlpha,
+    title: 'Toast after creating a branch',
+    prepare: async (world) => {
+      await resetAlpha(world)
+      Bun.spawnSync(['git', 'branch', '-D', TOAST_BRANCH], { cwd: world.dirs.alpha })
+    },
     steps: [
       DASHBOARD,
-      step('b-picker', [click(label('Switch git branch'))], see('feature/login')),
-      step('c-toast', [click(txt('feature/login')), wait(800)], see('Switched to feature/login'))
+      step('b-picker', [click(label('Switch git branch')), click(txt('Create branch from', false))], []),
+      step('c-toast', [type(TOAST_BRANCH), press('enter'), wait(800)], see(`Created and checked out ${TOAST_BRANCH}`))
     ]
   },
   {
