@@ -80,9 +80,15 @@ impl PtyManager {
         Ok(())
     }
 
-    /// Kill a terminal
-    /// This is async because cleanup_terminal_resources_sync uses blocking_lock()
-    /// on AsyncMutex fields, which is forbidden inside tokio async runtime.
+    /// Kill a terminal.
+    ///
+    /// The terminal is removed from the registry and its child signalled to
+    /// exit synchronously, so the caller (a user closing a tab) returns at
+    /// once and the terminal is immediately unlisted and unattachable. The
+    /// slow part of the teardown — the child-exit poll and the reader/flusher
+    /// thread joins — plus the per-terminal tracker cleanup run on a detached
+    /// background task (#1300). Kept `async` because the child is signalled
+    /// under its async mutex (and to preserve the caller's `.await`).
     ///
     /// When app window is hidden, kill is deferred to prevent ConPTY lifecycle
     /// issues on Windows where minimize can cause terminal processes to die.
@@ -105,24 +111,7 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        let project_id = instance.project_id.clone();
-
-        // Wrap blocking cleanup in spawn_blocking to avoid panic
-        let instance_clone = instance.clone();
-        tokio::task::spawn_blocking(move || {
-            Self::cleanup_terminal_resources_sync(instance_clone, true);
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failed for terminal {}: {}", id, e))?;
-
-        // Stop tracking (sync operations, safe to run after spawn_blocking)
-        self.cwd_tracker.stop_tracking(id);
-        self.git_tracker.remove_terminal(id);
-        self.exit_code_tracker.remove_terminal(id);
-        self.terminal_events.remove(id);
-        self.claims.remove(id);
-        self.set_observer.notify(project_id.as_deref());
-
+        self.detach_and_teardown(id.to_string(), instance).await;
         Ok(())
     }
 
@@ -130,6 +119,11 @@ impl PtyManager {
     /// handler so that closing a terminal from a browser actually terminates
     /// the process even when the desktop window is minimized. Desktop callers
     /// continue to use [`kill`](Self::kill) which preserves the hide behavior.
+    ///
+    /// Like [`kill`](Self::kill), the slow teardown runs in the background so
+    /// the caller returns promptly (#1300). The terminal is removed from the
+    /// registry before this returns, so project remove/archive and spawn
+    /// rollback callers observe it gone immediately.
     pub async fn force_kill(&self, id: &str) -> Result<(), String> {
         let instance = self
             .terminals
@@ -137,23 +131,77 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        let project_id = instance.project_id.clone();
-
-        let instance_clone = instance.clone();
-        tokio::task::spawn_blocking(move || {
-            Self::cleanup_terminal_resources_sync(instance_clone, true);
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failed for terminal {}: {}", id, e))?;
-
-        self.cwd_tracker.stop_tracking(id);
-        self.git_tracker.remove_terminal(id);
-        self.exit_code_tracker.remove_terminal(id);
-        self.terminal_events.remove(id);
-        self.claims.remove(id);
-        self.set_observer.notify(project_id.as_deref());
-
+        self.detach_and_teardown(id.to_string(), instance).await;
         Ok(())
+    }
+
+    /// Signal a removed terminal's child to exit now, then finish its teardown
+    /// off the caller's path (#1300).
+    ///
+    /// The child is killed synchronously so a closed terminal's process is
+    /// always signalled before the caller returns — even if the app exits
+    /// before the background task runs. Everything slow — the child-exit poll
+    /// and reap, the reader/flusher thread joins, and the per-terminal tracker
+    /// cleanup — happens on the detached task spawned here, matching the
+    /// sweeper's teardown (`ExitSweep::remove_expired`) so the ordering and
+    /// semantics are identical apart from the removed `await`.
+    ///
+    /// `instance` must already be removed from `terminals` so the terminal is
+    /// unlisted and unattachable the moment this is reached.
+    async fn detach_and_teardown(&self, id: String, instance: Arc<TerminalInstance>) {
+        // Quick kill syscall under the async mutex: the process is signalled
+        // before we return; the (slow) exit poll, reap and thread joins happen
+        // in the background task below. cleanup_terminal_resources_sync's own
+        // kill is then idempotent (a second kill of a dead child is a no-op).
+        if let Some(child) = instance.child.lock().await.as_mut() {
+            let _ = child.kill();
+        }
+
+        // The terminal is already out of the registry, so announce the set
+        // change NOW — the project's listing update must not wait on the
+        // background teardown. The remaining per-terminal cleanup stays in the
+        // teardown so the exit event the reader emits on EOF is still delivered
+        // before the event hub entry is removed.
+        self.set_observer.notify(instance.project_id.as_deref());
+
+        self.spawn_background_teardown(id, instance);
+    }
+
+    /// Run the blocking PTY teardown and the per-terminal tracker cleanup on a
+    /// detached task. See [`detach_and_teardown`](Self::detach_and_teardown).
+    /// The set-observer notification already fired synchronously there, so it
+    /// is deliberately not repeated here.
+    fn spawn_background_teardown(&self, id: String, instance: Arc<TerminalInstance>) {
+        let cwd_tracker = self.cwd_tracker.clone();
+        let git_tracker = self.git_tracker.clone();
+        let exit_code_tracker = self.exit_code_tracker.clone();
+        let terminal_events = self.terminal_events.clone();
+        let claims = self.claims.clone();
+
+        tokio::spawn(async move {
+            let cleanup = instance.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                Self::cleanup_terminal_resources_sync(cleanup, true);
+            })
+            .await
+            {
+                log::warn!(
+                    "[PtyManager] background teardown failed for terminal {}: {}",
+                    id,
+                    e
+                );
+            }
+
+            // Mirror the foreground tail the awaited kill used to run (minus the
+            // already-fired notify): clear the per-terminal trackers, drop the
+            // event hub entry once the exit event has been emitted, and remove
+            // the claim record.
+            cwd_tracker.stop_tracking(&id);
+            git_tracker.remove_terminal(&id);
+            exit_code_tracker.remove_terminal(&id);
+            terminal_events.remove(&id);
+            claims.remove(&id);
+        });
     }
 
     pub fn terminal_events(&self) -> TerminalEventHub {

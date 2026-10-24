@@ -305,6 +305,8 @@ impl ExitSweep {
 }
 
 #[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
 mod lifetime_tests;
 #[cfg(test)]
 mod limit_tests;
