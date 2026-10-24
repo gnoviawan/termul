@@ -10,6 +10,7 @@ import {
   LAMP,
   PROSE,
   RUN_ORDER,
+  TAB_TRUNC,
   TEXTAREA_GAP,
   TAB_TITLE,
   TITLE_TIP,
@@ -43,11 +44,15 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Same layout and order; switching to beta works by click.', LAMP]
   },
   'rail.project-menu': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete, at the same place (G3: the menu opens 2 px right of the pointer as Radix\'s sideOffset does, and a row\'s " Label" text after its icon no longer keeps its leading space, which had pushed every label 3 px right).',
+      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete. The menu box now sits where the web puts it (G3: Radix opens a context menu 2 px right of the pointer).',
+      'Every row label sits 3 px right of the web one: a row\'s children reach layout as a nested array ({indicator}{children}{after}), so the " Label" text after the icon keeps its leading space. Laying nested arrays out like the parent\'s own slots fixed the menu (region perceptual 1.75%) but broke the editor check\'s README preview click, so it was reverted.',
       'Under the open menu GPUIX keeps the hovered beta row\'s gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page.'
-    ]
+    ],
+    cause: 'compat translator gap',
+    unit: 'nested children text runs (unassigned)',
+    impact: 1
   },
   'rail.project-rename': {
     status: 'ported',
@@ -162,10 +167,10 @@ export const REVIEWS: Record<string, Review> = {
   'editor.tabs': {
     status: 'partial',
     differences: [
-      'Switching tabs works; README preview shows the same outline and typography gaps as editor.markdown. The tab titles read README.md and app.ts in full, as on the web (C15 fixed in G3).'
+      'Switching tabs works; the README preview matches the web, outline included. The tab title truncates to "READ...".'
     ],
-    cause: 'native override needed',
-    unit: 'E2 markdown preview parity',
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
     impact: 1
   },
   'git.changes': {
@@ -304,13 +309,14 @@ export const REVIEWS: Record<string, Review> = {
   'terminal.open': {
     status: 'partial',
     differences: [
-      'Terminal tab, its full "Terminal 1" title and the prompt match (C15 fixed in G3).',
+      'Terminal tab and prompt match.',
+      TAB_TRUNC,
       LAMP,
       'The status-bar Terminal button\'s title tooltip paints under the pointer after the click; the web frame shows none.'
     ],
     cause: 'compat translator gap',
-    unit: 'title tooltips (unassigned)',
-    impact: 1
+    unit: 'C15 tab title width',
+    impact: 2
   },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
   'terminal.file-link': {
@@ -322,16 +328,24 @@ export const REVIEWS: Record<string, Review> = {
   },
   'terminal.new-tab-menu': { status: 'ported', differences: ['The new tab menu matches.'] },
   'terminal.tab-reorder': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G3).'
-    ]
+      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both; in GPUIX the active tab moves to the front, but both titles read "Ter...", so the order is inferred from the active tab, not read.',
+      TAB_TRUNC
+    ],
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
+    impact: 1
   },
   'terminal.split': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title (C15 fixed in G3)."
-    ]
+      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1).",
+      TAB_TRUNC
+    ],
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
+    impact: 1
   },
   'statusbar.items': {
     status: 'ported',

@@ -50,15 +50,6 @@ describe('inline text', () => {
   })
 })
 
-describe('nested children arrays', () => {
-  test("a flex row's nested array trims its text runs like the row's own", () => {
-    const icon = jsx('span', { className: 'mr-2 size-4' })
-    const row = jsxs('div', { className: 'flex items-center', children: [null, [icon, ' Project Settings'], null] })
-    const children = (shape(row) as Shape).children as (Shape | string)[]
-    expect(children.filter((child) => typeof child === 'string' && child !== 'null')).toEqual(['Project Settings'])
-  })
-})
-
 describe('lists', () => {
   test('an inside marker sits below the item top padding, on its first line', () => {
     const ul = jsxs('ul', {

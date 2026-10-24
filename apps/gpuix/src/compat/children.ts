@@ -291,12 +291,6 @@ export function layoutChildren(
         for (let j = first + 1; j < i; j++) out[j] = null
         first = -1
       }
-      // A nested array (a component's `{icon}{children}{after}` row) is the
-      // same box's content in CSS: its text runs are trimmed flex items too.
-      if (Array.isArray(slot)) {
-        out[i] = layoutChildren(tr, style, slot, true).children
-        continue
-      }
       const info = i < out.length ? infoOf(slot) : undefined
       if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row)
     }
