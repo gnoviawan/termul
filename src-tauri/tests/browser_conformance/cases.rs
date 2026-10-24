@@ -18,6 +18,8 @@ use crate::fixture_server::{FixtureServer, REDIRECT_PATH, REDIRECT_TARGET_PATH};
 
 #[path = "event_cases.rs"]
 mod events;
+#[path = "form_cases.rs"]
+mod forms;
 #[path = "frame_cases.rs"]
 mod frames;
 #[path = "observe_cases.rs"]
@@ -59,6 +61,7 @@ pub const CAPABILITIES: &[Capability] = &[
     cap("reload", &["snapshot"]),
     cap("stale_ref", &["snapshot"]),
     cap("tamper", &["snapshot"]),
+    cap("labelled_form", &["fill", "click"]),
     cap("actionability_covered", &["snapshot"]),
     cap("actionability_moving", &["snapshot"]),
     cap("actionability_hidden", &["snapshot"]),
@@ -259,12 +262,20 @@ impl Ctx<'_> {
 
 /// `- button "Submit" @e2` -> `@e2`.
 pub fn find_ref(snapshot: &str, role: &str, name: &str) -> Option<String> {
+    find_refs(snapshot, role, name).into_iter().next()
+}
+
+/// Every ref the snapshot prints for `role` named exactly `name`.
+pub fn find_refs(snapshot: &str, role: &str, name: &str) -> Vec<String> {
     let prefix = format!("- {role} \"{name}\" @e");
-    snapshot.lines().find_map(|line| {
-        let rest = line.trim_start().strip_prefix(&prefix)?;
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        (!digits.is_empty()).then(|| format!("@e{digits}"))
-    })
+    snapshot
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim_start().strip_prefix(&prefix)?;
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            (!digits.is_empty()).then(|| format!("@e{digits}"))
+        })
+        .collect()
 }
 
 pub fn expect_code_reason(result: Result<Value, Failure>, code: &str, reason: &str, what: &str) -> CaseResult {
@@ -563,6 +574,7 @@ pub async fn run(
         "reload" => reload(&ctx).await,
         "stale_ref" => stale_ref(&ctx).await,
         "tamper" => tamper(&ctx).await,
+        "labelled_form" => forms::labelled_form(&ctx).await,
         "screenshot" => screenshot(&ctx).await,
         "actionability_covered" => input_cases::actionability_covered(&ctx).await,
         "actionability_moving" => input_cases::actionability_moving(&ctx).await,

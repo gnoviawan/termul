@@ -21,6 +21,9 @@ const MAX_REPORT: usize = 64 * 1024;
 pub const REDIRECT_PATH: &str = "/redirect";
 pub const REDIRECT_TARGET_PATH: &str = "/redirect-target.html";
 pub const REPORT_PATH: &str = "/report";
+/// Where `labelled-form.html` posts. The urlencoded body is kept as a
+/// `{"formPost": body}` report and the reply is the form-done page.
+pub const FORM_POST_PATH: &str = "/labelled-submit";
 pub const DOWNLOAD_PATH: &str = "/fixture-download.bin";
 /// The fake file `DOWNLOAD_PATH` serves as an attachment.
 pub const DOWNLOAD_BODY: &str = "fake download for the conformance suite\n";
@@ -59,6 +62,7 @@ fn route(path: &str) -> Reply {
         "/" | "/index.html" => Reply::Page(include_str!("pages/index.html")),
         "/form.html" => Reply::Page(include_str!("pages/form.html")),
         "/form-done.html" => Reply::Page(include_str!("pages/form-done.html")),
+        "/labelled-form.html" => Reply::Page(include_str!("pages/labelled-form.html")),
         "/delayed.html" => Reply::Page(include_str!("pages/delayed.html")),
         "/tamper.html" => Reply::Page(include_str!("pages/tamper.html")),
         "/chat.html" => Reply::Page(include_str!("pages/chat.html")),
@@ -216,6 +220,17 @@ fn serve(mut stream: TcpStream, reports: &Reports) -> io::Result<()> {
         stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
         return stream.flush();
     }
+
+    let path = if method == "POST" && path == FORM_POST_PATH {
+        let body = read_body(&mut stream, &head, rest)?;
+        let report = serde_json::json!({ "formPost": String::from_utf8_lossy(&body) });
+        if let Ok(mut all) = reports.lock() {
+            all.push(report.to_string());
+        }
+        "/form-done.html"
+    } else {
+        path
+    };
 
     if path == BIG_DOWNLOAD_PATH {
         let announced = target.contains("length=announced");

@@ -6,7 +6,9 @@ mod server;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use server::{FixtureServer, DOWNLOAD_BODY, DOWNLOAD_PATH, REDIRECT_PATH, REDIRECT_TARGET_PATH, REPORT_PATH};
+use server::{
+    FixtureServer, DOWNLOAD_BODY, DOWNLOAD_PATH, FORM_POST_PATH, REDIRECT_PATH, REDIRECT_TARGET_PATH, REPORT_PATH,
+};
 
 fn get(server: &FixtureServer, path: &str) -> (u16, String, String) {
     let mut stream = TcpStream::connect(("127.0.0.1", server.port())).unwrap();
@@ -122,4 +124,22 @@ fn posted_reports_are_kept_in_order_as_json() {
             serde_json::json!({ "ev": "input" }),
         ]
     );
+}
+
+#[test]
+fn a_form_post_is_kept_as_a_report_and_answered_with_the_done_page() {
+    let server = FixtureServer::start(&[]).unwrap();
+    let body = "first=Ada&note1=Analytical";
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port())).unwrap();
+    write!(
+        stream,
+        "POST {FORM_POST_PATH} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).unwrap();
+    assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+    assert!(raw.contains("<title>Form done</title>"), "{raw}");
+    assert_eq!(server.reports(), [serde_json::json!({ "formPost": body })]);
 }
