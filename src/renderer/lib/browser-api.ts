@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { getBrowserHost } from './browser-host'
+
 export interface BrowserBounds {
   x: number
   y: number
@@ -43,10 +45,14 @@ export async function browserTabCreate(
   url: string,
   bounds: BrowserBounds
 ): Promise<IpcResult<BrowserTabInfo>> {
+  const host = getBrowserHost()
+  if (host) return host.create(tabId, url, bounds)
   return invoke('browser_tab_create', { tabId, url, bounds })
 }
 
 export async function browserTabNavigate(tabId: string, url: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.navigate(tabId, url)
   return invoke('browser_tab_navigate', { tabId, url })
 }
 
@@ -54,38 +60,56 @@ export async function browserTabResize(
   tabId: string,
   bounds: BrowserBounds
 ): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.resize(tabId, bounds)
   return invoke('browser_tab_resize', { tabId, bounds })
 }
 
 export async function browserTabShow(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.show(tabId)
   return invoke('browser_tab_show', { tabId })
 }
 
 export async function browserTabHide(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.hide(tabId)
   return invoke('browser_tab_hide', { tabId })
 }
 
 export async function browserTabDestroy(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.destroy(tabId)
   return invoke('browser_tab_destroy', { tabId })
 }
 
 export async function browserTabGoBack(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.goBack(tabId)
   return invoke('browser_tab_go_back', { tabId })
 }
 
 export async function browserTabGoForward(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.goForward(tabId)
   return invoke('browser_tab_go_forward', { tabId })
 }
 
 export async function browserTabReload(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.reload(tabId)
   return invoke('browser_tab_reload', { tabId })
 }
 
 export async function browserTabOpenDevtools(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.openDevtools(tabId)
   return invoke('browser_tab_open_devtools', { tabId })
 }
 
 export async function browserTabInjectAgentation(tabId: string): Promise<IpcResult<void>> {
+  const host = getBrowserHost()
+  if (host) return host.injectAgentation(tabId)
   if (!isTauriContext()) {
     return {
       success: false,
@@ -113,17 +137,23 @@ function createBrowserEventSubscription<T>(
 export function onBrowserTabNavigated(
   callback: (payload: BrowserTabNavigatedPayload) => void
 ): BrowserEventSubscription {
+  const host = getBrowserHost()
+  if (host) return host.onNavigated(callback)
   return createBrowserEventSubscription('browser-tab-navigated', callback)
 }
 
 export function onBrowserTabLoaded(
   callback: (payload: BrowserTabLoadedPayload) => void
 ): BrowserEventSubscription {
+  const host = getBrowserHost()
+  if (host) return host.onLoaded(callback)
   return createBrowserEventSubscription('browser-tab-loaded', callback)
 }
 
 export function onBrowserTabTitleChanged(
   callback: (payload: BrowserTabTitleChangedPayload) => void
 ): BrowserEventSubscription {
+  const host = getBrowserHost()
+  if (host) return host.onTitleChanged(callback)
   return createBrowserEventSubscription('browser-tab-title-changed', callback)
 }

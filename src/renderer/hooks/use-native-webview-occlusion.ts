@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { nativeBrowserPanesAvailable } from '@/lib/browser-host'
 
 /**
  * Native browser webviews paint above the DOM, so an overlay would be drawn
@@ -39,13 +39,13 @@ function isOverlayOpen(): boolean {
   return occluderCounts.overlay > 0
 }
 
-/** Registers the caller as an occluder while `open` is true. No-op outside Tauri. */
+/** Registers the caller as an occluder while `open` is true. No-op where no native webview can exist. */
 export function useNativeWebviewOcclusion(
   open: boolean,
   kind: NativeWebviewOccluderKind = 'overlay'
 ): void {
   useEffect(() => {
-    if (!open || !isTauriContext()) return
+    if (!open || !nativeBrowserPanesAvailable()) return
     occluderCounts[kind] += 1
     emit()
     return () => {
