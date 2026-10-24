@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.tools.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@gpuix/react",
+    "paths": {
+      "@/components/editor/EditorTocLayout": ["./src/overrides/components/editor/EditorTocLayout.tsx"],
+      "@/components/editor/TocPanel": ["./src/editor/dom-components.d.ts"],
+      "@/components/editor/FrontmatterProperties": ["./src/editor/dom-components.d.ts"],
+      "@/hooks/use-codemirror": ["./src/overrides/hooks/use-codemirror.ts"],
+      "@/components/ui/*": ["./src/ui/*"],
+      "@/components/icons": ["./src/icons/index.tsx"],
+      "@/*": ["../../src/renderer/*"],
+      "@renderer/*": ["../../src/renderer/*"],
+      "@shared/*": ["../../src/shared/*"],
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "#app/boot": ["./src/boot-contract.ts"]
+    }
+  },
+  "include": [
+    "src/editor",
+    "tools/editor",
+    "src/overrides/components/editor",
+    "src/overrides/hooks/use-codemirror.ts",
+    "../../src/renderer/vite-env.d.ts"
+  ],
+  "exclude": ["tools/editor/probe"]
+}
