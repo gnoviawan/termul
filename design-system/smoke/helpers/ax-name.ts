@@ -79,10 +79,11 @@ export async function readAxNodes(
 }
 
 /**
- * Whitespace before a comma or period that ends a word (followed by whitespace
- * or the end): the Chrome-only bug from #1512. Not '.env', '...' or '.x'.
+ * The Chrome-only bug from #1512: whitespace before any comma ('Opus ,High'
+ * too), or before a period that ends a word (followed by whitespace or the
+ * end). Not '.env', '...' or '.x'.
  */
-export const SPACE_BEFORE_PUNCTUATION = /\s[,.](?=\s|$)/
+export const SPACE_BEFORE_PUNCTUATION = /\s,|\s\.(?=\s|$)/
 
 /** Names that read wrong to a screen reader. Empty when every name is clean. */
 export function nameProblems(name: string): string[] {

@@ -36,6 +36,7 @@ test('nameProblems flags spaces before punctuation and at the edges', () => {
 
 test('nameProblems flags a stray space before ending punctuation only', () => {
   expect(nameProblems('Opus , High')).toEqual(['space before comma or period'])
+  expect(nameProblems('Opus ,High')).toEqual(['space before comma or period'])
   expect(nameProblems('Opus . Copy')).toEqual(['space before comma or period'])
   expect(nameProblems('Name .')).toEqual(['space before comma or period'])
   expect(nameProblems('Open .env')).toEqual([])
