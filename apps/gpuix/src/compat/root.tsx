@@ -8,6 +8,7 @@ import { type PublicInstance, type RenderOptions, useGpuixRequired } from '@gpui
 import { Fragment, type ReactNode, useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { dragPreview, hitTransparent, subscribeDragPreview } from './dnd'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
+import { parkHiddenPanes } from './park'
 import { windowKeyEvent } from './events'
 import { setOverlayLayer } from './react-dom'
 import { compatThemeId, compatTw, subscribeCompatTheme } from './translate'
@@ -38,10 +39,14 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
   }, [])
   useLayoutEffect(() => {
     bindCompatRenderer(renderer as unknown as CompatRenderer)
+    const parking = parkHiddenPanes(renderer)
     onRenderer?.(renderer)
     syncViewport(renderer)
     setReady(true)
-    return () => bindCompatRenderer(null)
+    return () => {
+      parking.uninstall()
+      bindCompatRenderer(null)
+    }
   }, [renderer, onRenderer])
   useLayoutEffect(() => {
     setOverlayLayer(layer)

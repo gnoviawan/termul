@@ -8,14 +8,17 @@
  *   layer emits for Tailwind's `absolute inset-0 invisible`.
  * - `parked`: the same panes, with each pane's content moved under a native
  *   node that is not reachable from the window root.
+ * - `compat`: the same hidden panes, with the compat layer's
+ *   `parkHiddenPanes` installed on the renderer.
  *
  * bun tools/perf/hidden/scene.tsx <mode> <panes> <rows> <seconds> <hz> <out.json>
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { parkHiddenPanes } from '../../../src/compat/park'
 
-type Mode = 'none' | 'hidden' | 'parked'
+type Mode = 'none' | 'hidden' | 'parked' | 'compat'
 const [mode, panesArg, rowsArg, secondsArg, hzArg, out] = process.argv.slice(2) as [Mode, string, string, string, string, string]
 const panes = mode === 'none' ? 0 : Number(panesArg)
 const rows = Number(rowsArg)
@@ -72,6 +75,14 @@ function Pane({ index }: { index: number }) {
 }
 
 function App() {
+  const renderer = useGpuixRequired()
+  const [ready, setReady] = useState(mode !== 'compat')
+  useLayoutEffect(() => {
+    if (mode !== 'compat') return
+    const parking = parkHiddenPanes(renderer)
+    setReady(true)
+    return parking.uninstall
+  }, [renderer])
   const [tick, setTick] = useState(0)
   useEffect(() => {
     const timer = setInterval(() => setTick((t) => t + 1), 1000 / hz)
@@ -82,9 +93,7 @@ function App() {
       <div style={{ padding: 24 }}>
         <text style={{ color: FG, fontSize: 24 }}>{`tick ${tick}`}</text>
       </div>
-      {Array.from({ length: panes }, (_, i) => (
-        <Pane key={i} index={i} />
-      ))}
+      {ready && Array.from({ length: panes }, (_, i) => <Pane key={i} index={i} />)}
     </div>
   )
 }

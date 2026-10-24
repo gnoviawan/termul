@@ -30,6 +30,7 @@ import { type ScreenLog, startScreenLog, summarizeScreen } from './screen-frames
 import { startPerfServer } from './server.ts'
 import { aggregate, median, type Numbers, summarizePage, summarizeProc } from './stats.ts'
 import { snapshotThreads, type ThreadSnapshot, threadCpu } from './thread-sampler.ts'
+import type { TreeCensus } from './tree-census.ts'
 
 const HERE = import.meta.dir
 
@@ -146,6 +147,8 @@ async function runOnce(
   const errors: string[] = []
   const notes: Record<string, unknown> = {}
   const windows: PhaseWindow[] = []
+  const census: Record<string, TreeCensus> = {}
+  notes.census = census
   const quiet = await waitForQuiet(opts.quietBelowPct, opts.quietWaitS)
   const load1Before = os.loadavg()[0]
 
@@ -228,6 +231,11 @@ async function runOnce(
         const after = snapshotThreads(d.handle.rootPid)
         const bytes = proxy.counters()
         const page = await d.endPhase(name)
+        const tree = await d.census?.().catch((err: unknown) => {
+          errors.push(`census ${name}: ${String(err).split('\n')[0]}`)
+          return undefined
+        })
+        if (tree) census[name] = tree
         windows.push({
           name,
           from,
@@ -304,6 +312,12 @@ async function runOnce(
     metrics[`${w.name}.durationS`] = Math.round(seconds * 10) / 10
     metrics[`${w.name}.bytesDownKBps`] = Math.round(w.bytes.down / 1024 / seconds)
     metrics[`${w.name}.bytesUpKBps`] = Math.round(w.bytes.up / 1024 / seconds)
+    const tree = census[w.name]
+    if (tree) {
+      metrics[`${w.name}.tree.reachable`] = tree.reachable
+      metrics[`${w.name}.tree.painted`] = tree.painted
+      metrics[`${w.name}.tree.hidden`] = tree.hidden
+    }
   }
   Object.assign(metrics, probeMetrics(notes))
   if (typeof notes.chatsOpen === 'number') metrics.chatsOpen = notes.chatsOpen

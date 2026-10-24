@@ -51,7 +51,7 @@ async function once(mode: string, panes: number, run: number): Promise<Sample> {
 const paneCounts = values.panes.split(',').map(Number)
 const samples: Sample[] = []
 for (let run = 0; run < Number(values.runs); run++) {
-  const order = [['none', 0], ...paneCounts.flatMap((n) => [['hidden', n], ['parked', n]])] as Array<[string, number]>
+  const order = [['none', 0], ...paneCounts.flatMap((n) => [['hidden', n], ['parked', n], ['compat', n]])] as Array<[string, number]>
   if (run % 2 === 1) order.reverse()
   for (const [mode, panes] of order) {
     const sample = await once(mode, panes, run)
@@ -65,4 +65,6 @@ console.log(`\nmedian gpuix-ui CPU, % of one core (${values.rows} rows per pane,
 const cell = (mode: string, panes: number) =>
   median(samples.filter((s) => s.mode === mode && s.panes === panes).map((s) => s.uiCpuPct)).toFixed(1)
 console.log(`no panes: ${cell('none', 0)}`)
-for (const n of paneCounts) console.log(`${n} panes: hidden ${cell('hidden', n)}, parked ${cell('parked', n)}`)
+for (const n of paneCounts) {
+  console.log(`${n} panes: hidden ${cell('hidden', n)}, parked ${cell('parked', n)}, compat ${cell('compat', n)}`)
+}

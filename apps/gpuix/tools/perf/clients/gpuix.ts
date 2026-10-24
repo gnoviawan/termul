@@ -5,6 +5,7 @@ import { launch } from '@gpuix/react/automation'
 import { APP_DIR } from '../../../build.ts'
 import { LAVAPIPE_ICD } from '../../parity/shoot-gpuix.ts'
 import { descendants, readCmdline } from '../proc-sampler.ts'
+import { treeCensus } from '../tree-census.ts'
 import { PERF_AGENT_NAME, PERF_DEVICE_ID, PERF_PROJECT_NAME, PERF_TOKEN } from '../server.ts'
 import type { ChatStartPart, ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
 
@@ -377,6 +378,7 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       )
     },
     beginPhase: async () => undefined,
-    endPhase: async () => null
+    endPhase: async () => null,
+    census: async () => treeCensus(await tree())
   }
 }
