@@ -273,7 +273,7 @@ Rank is the reviewed impact (1 to 3) times the area weight.
 | 29 | `settings.shortcuts` | partial | missing GPUIX capability | C6 overlay backdrop | 4 | The section content and navigation match. The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp. |
 | 30 | `settings.diagnostics` | partial | needs diagnosis | O9 server version source | 4 | The section content and navigation match. The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp. Server version reads termul-server v0.1.0 in GPUIX and v0.4.52 on the web against the same server. |
 | 31 | `settings.reset` | partial | missing GPUIX capability | C6 overlay backdrop | 4 | The section content and navigation match. The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp. |
-| 32 | `palette.type-ahead` | partial | compat translator gap | C16 cmdk ranking | 3 | Typing "theme" straight after Ctrl+K filters the palette in both. The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first, and the GPUIX search field has no focus underline. |
+| 32 | `palette.type-ahead` | partial | compat translator gap | focus ring on focused fields (unassigned) | 3 | Typing "theme" straight after Ctrl+K filters the palette in both, and the rows rank the same (C16 fixed in G3: the cmdk shim scores with cmdk's command-score and sorts as cmdk does), Open Canvas first under Workspace. The step races in both clients: in some runs the web drops the first key ("heme") and in some GPUIX does (an empty filter); GPUIX failed this check in 5 of 9 G3 runs, 3 of 6 with the C16 change and 2 of 3 without it. The GPUIX search field has no focus underline. |
 | 33 | `palette.open-canvas` | blocked | missing GPUIX capability | V1 canvas host | 3 | Opens the canvas tab in both; see canvas.open for why the canvas itself is not compared. |
 | 34 | `palette.project-settings` | partial | missing GPUIX capability | C6 overlay backdrop | 3 | Project settings opens on General with the same fields. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
 | 35 | `palette.app-preferences` | partial | missing GPUIX capability | C6 overlay backdrop | 3 | Preferences opens on Interface. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
@@ -308,15 +308,14 @@ Each unit with the surfaces its gaps name. Gain is the usage-weighted score (all
 | 8 | settings row layout (unassigned) | compat translator gap | 3 | 12 | +0.4 |
 | 9 | O4 toasts | native override needed | 2 | 10 | +0.8 |
 | 10 | C9 dialog body layout | compat translator gap | 2 | 8 | +0.3 |
-| 11 | O9 server version source | needs diagnosis | 1 | 4 | +0.1 |
-| 12 | V1 canvas host | missing GPUIX capability | 2 | 4 | +0.8 |
-| 13 | C16 cmdk ranking | compat translator gap | 1 | 3 | +0.1 |
+| 11 | focus ring on focused fields (unassigned) | compat translator gap | 2 | 5 | +0.2 |
+| 12 | O9 server version source | needs diagnosis | 1 | 4 | +0.1 |
+| 13 | V1 canvas host | missing GPUIX capability | 2 | 4 | +0.8 |
 | 14 | O10 UI zoom | native override needed | 1 | 2 | +0.1 |
 | 15 | K2 desktop keymap for GPUIX | native override needed | 1 | 2 | +0.1 |
-| 16 | focus ring on focused fields (unassigned) | compat translator gap | 1 | 2 | +0.0 |
-| 17 | V2 native webview | missing GPUIX capability | 1 | 2 | +1.0 |
-| 18 | U1 GPUIX updater and what's new | native override needed | 1 | 1 | +0.5 |
-| 19 | R4 desktop host role over the server | server route needed | 1 | 0.5 | +0.5 |
+| 16 | V2 native webview | missing GPUIX capability | 1 | 2 | +1.0 |
+| 17 | U1 GPUIX updater and what's new | native override needed | 1 | 1 | +0.5 |
+| 18 | R4 desktop host role over the server | server route needed | 1 | 0.5 | +0.5 |
 
 If every listed unit landed and fixed its surfaces, the usage-weighted score would be 98.0%.
 
@@ -393,15 +392,15 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 | `settings.shortcuts` Settings: Keyboard shortcuts | settings | partial | partial | 5/5 | 5/5 | 34.8% / 2.00% | 8.6% / 2.57% | The section content and navigation match. The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp. |
 | `settings.diagnostics` Settings: Logs | settings | partial | partial | 5/5 | 5/5 | 35.5% / 1.79% | 9.6% / 2.26% | The section content and navigation match. The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp. Server version reads termul-server v0.1.0 in GPUIX and v0.4.52 on the web against the same server. |
 | `settings.reset` Settings: Reset | settings | partial | ported | 5/5 | 5/5 | 31.2% / 1.12% | 3.3% / 1.27% | The section content and navigation match. The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp. |
-| `palette.open` Command palette (Ctrl+K) and filtering | palette | ported | ported | 9/9 | 9/9 | 7.6% / 1.82% |  |  |
-| `palette.type-ahead` Typing straight after Ctrl+K reaches the palette filter | palette | partial | ported | 5/5 | 5/5 | 75.1% / 1.81% |  | Typing "theme" straight after Ctrl+K filters the palette in both. The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first, and the GPUIX search field has no focus underline. |
+| `palette.open` Command palette (Ctrl+K) and filtering | palette | ported | ported | 9/9 | 9/9 | 6.1% / 1.06% |  |  |
+| `palette.type-ahead` Typing straight after Ctrl+K reaches the palette filter | palette | partial | ported | 5/5 | 5/5 | 75.0% / 1.59% |  | Typing "theme" straight after Ctrl+K filters the palette in both, and the rows rank the same (C16 fixed in G3: the cmdk shim scores with cmdk's command-score and sorts as cmdk does), Open Canvas first under Workspace. The step races in both clients: in some runs the web drops the first key ("heme") and in some GPUIX does (an empty filter); GPUIX failed this check in 5 of 9 G3 runs, 3 of 6 with the C16 change and 2 of 3 without it. The GPUIX search field has no focus underline. |
 | `palette.new-terminal` Palette command: New Terminal | palette | ported | ported | 8/8 | 8/8 | 3.7% / 1.28% |  | New Terminal opens Terminal 1 in both. |
 | `palette.agent-launcher` Palette command: Agent Launcher | palette | ported | ported | 9/9 | 9/9 | 48.6% / 1.75% |  | Agent Launcher shows the launcher with its close button in both. |
 | `palette.save-snapshot` Palette command: Save Workspace Snapshot | snapshots | partial | ported | 9/9 | 9/9 | 83.2% / 1.34% |  | The Create Snapshot modal matches. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
 | `palette.open-canvas` Palette command: Open Canvas | palette | blocked | partial | 9/9 | 9/9 | 5.7% / 2.92% |  | Opens the canvas tab in both; see canvas.open for why the canvas itself is not compared. |
 | `palette.project-settings` Palette command: Project Settings | palette | partial | ported | 9/9 | 9/9 | 30.8% / 0.85% |  | Project settings opens on General with the same fields. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
 | `palette.app-preferences` Palette command: App Preferences | palette | partial | ported | 9/9 | 9/9 | 32.0% / 1.37% |  | Preferences opens on Interface. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
-| `palette.switch-project` Palette command: beta | rail | ported | ported | 9/9 | 9/9 | 5.7% / 1.00% |  | Typing beta filters to the beta row and Enter switches to beta in both. |
+| `palette.switch-project` Palette command: beta | rail | ported | ported | 9/9 | 9/9 | 5.6% / 0.93% |  | Typing beta filters to the beta row and Enter switches to beta in both. |
 | `palette.command-history` Palette command: Command History | palette | partial | ported | 9/9 | 9/9 | 81.7% / 1.48% |  | The Command History modal, its scope picker and empty state match. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. No focus ring on the search field. |
 | `palette.color-theme` Palette command: Change Color Theme | palette | ported | ported | 9/9 | 9/9 | 19.5% / 1.51% |  | Change Color Theme opens the Color Themes popover in both; see theme.picker for its tint. |
 | `palette.shortcut-menu` Palette command: Open Shortcut Menu | palette | partial | ported | 9/9 | 9/9 | 78.3% / 1.79% |  | Opens the Shortcut Menu in both. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
@@ -687,12 +686,12 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-open`: click [Settings] (web ok; gpuix ok via web-point); present "Interface zoom": web pass, gpuix pass
   - `c-section`: click "Reset" (web ok; gpuix ok via text); present "Reset all settings": web pass, gpuix pass
-- `palette.open` (frames `/root/termul-wt/gpuix-m1/apps/gpuix/parity-out/matrix/palette-open/`):
+- `palette.open` (frames `/root/termul-wt/gpuix-g3/apps/gpuix/parity-out/matrix/palette-open/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-open`: press ctrl-k (web ok; gpuix ok via key); present "App Preferences": web pass, gpuix pass; present "New Terminal": web pass, gpuix pass
   - `c-filter`: type "theme" (web ok; gpuix ok via key); present "Change Color Theme": web pass, gpuix pass; gone "New Terminal": web pass, gpuix pass
   - `d-escape`: press escape (web ok; gpuix ok via key); gone "Change Color Theme": web pass, gpuix pass
-- `palette.type-ahead` (frames `/root/termul-wt/gpuix-g1/apps/gpuix/parity-out/matrix/palette-type-ahead/`):
+- `palette.type-ahead` (frames `/root/termul-wt/gpuix-g3/apps/gpuix/parity-out/matrix/palette-type-ahead/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-typed`: press ctrl-k (web ok; gpuix ok via key); type "theme" (web ok; gpuix ok via key); present "Change Color Theme": web pass, gpuix pass; gone "New Terminal": web pass, gpuix pass
 - `palette.new-terminal` (frames `/root/termul-wt/gpuix-m1/apps/gpuix/parity-out/matrix/palette-new-terminal/`):
@@ -719,7 +718,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-filtered`: press ctrl-k (web ok; gpuix ok via key); wait 800 ms (web ok; gpuix ok via none); type "App Preferences" (web ok; gpuix ok via key); present "App Preferences": web pass, gpuix pass; gone "New Terminal": web pass, gpuix pass
   - `c-run`: click "App Preferences" (web ok; gpuix ok via text); wait 1200 ms (web ok; gpuix ok via none); present "Interface zoom": web pass, gpuix pass
-- `palette.switch-project` (frames `/root/termul-wt/gpuix-g1/apps/gpuix/parity-out/matrix/palette-switch-project/`):
+- `palette.switch-project` (frames `/root/termul-wt/gpuix-g3/apps/gpuix/parity-out/matrix/palette-switch-project/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-filtered`: press ctrl-k (web ok; gpuix ok via key); wait 800 ms (web ok; gpuix ok via none); type "beta" (web ok; gpuix ok via key); present "beta": web pass, gpuix pass; gone "New Terminal": web pass, gpuix pass
   - `c-run`: press enter (web ok; gpuix ok via key); wait 1200 ms (web ok; gpuix ok via none); present "What should we do in beta?": web pass, gpuix pass

@@ -35,11 +35,12 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'palette.type-ahead': {
     status: 'partial',
     differences: [
-      'Typing "theme" straight after Ctrl+K filters the palette in both.',
-      'The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first, and the GPUIX search field has no focus underline.'
+      'Typing "theme" straight after Ctrl+K filters the palette in both, and the rows rank the same (C16 fixed in G3: the cmdk shim scores with cmdk\'s command-score and sorts as cmdk does), Open Canvas first under Workspace.',
+      'The step races in both clients: in some runs the web drops the first key ("heme") and in some GPUIX does (an empty filter); GPUIX failed this check in 5 of 9 G3 runs, 3 of 6 with the C16 change and 2 of 3 without it.',
+      'The GPUIX search field has no focus underline.'
     ],
     cause: 'compat translator gap',
-    unit: 'C16 cmdk ranking',
+    unit: 'focus ring on focused fields (unassigned)',
     impact: 1
   },
   'palette.new-terminal': {
