@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "open-design": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "od", "start", "--mcp"],
+      "env": {
+        "OD_PROJECT_ROOT": "${workspaceFolder}",
+        "TERMUL_CANVAS_PORT": "${TERMUL_CANVAS_PORT:-37291}"
+      }
+    },
+    "termul": {
+      "type": "stdio",
+      "command": "termul-server",
+      "args": ["--internal-mcp-plan-server"],
+      "env": {
+        "TERMUL_PLAN_PORT": "${TERMUL_PLAN_PORT:-37291}",
+        "TERMUL_PLAN_TOKEN": "${TERMUL_PLAN_TOKEN}",
+        "TERMUL_PLAN_SESSION_ID": "${TERMUL_PLAN_SESSION_ID}",
+        "TERMUL_PLAN_AGENT_ID": "${TERMUL_PLAN_AGENT_ID}"
+      }
+    }
+  }
+}
