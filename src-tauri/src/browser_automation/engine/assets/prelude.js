@@ -11,6 +11,8 @@ var TAG_ROLE = {
   HEADER: 'banner', FOOTER: 'contentinfo', FORM: 'form', IMG: 'img',
   UL: 'list', OL: 'list', LI: 'listitem', TABLE: 'table'
 };
+var BUTTON_TYPES = ['button', 'submit', 'reset', 'image'];
+var FIELD_ROLES = ['textbox', 'searchbox', 'combobox', 'listbox', 'slider', 'spinbutton'];
 function oneLine(value, max) {
   return String(value).replace(/\s+/g, ' ').trim().slice(0, max);
 }
@@ -24,7 +26,7 @@ function roleOf(el) {
     var t = inputType(el);
     if (t === 'checkbox') return 'checkbox';
     if (t === 'radio') return 'radio';
-    if (t === 'submit' || t === 'button') return 'button';
+    if (BUTTON_TYPES.indexOf(t) >= 0) return 'button';
     if (t === 'search') return 'searchbox';
     return 'textbox';
   }
@@ -49,16 +51,40 @@ function labelledText(el) {
   }
   return out.trim();
 }
+// The text of a <label>, without the controls it wraps.
+function labelText(label) {
+  var copy = label.cloneNode(true);
+  var inner = copy.querySelectorAll('input, select, textarea, script, style');
+  for (var i = 0; i < inner.length; i++) inner[i].remove();
+  return copy.textContent;
+}
+function labelsText(el) {
+  var labels = el.labels;
+  var out = '';
+  for (var i = 0; labels && i < labels.length; i++) out += labelText(labels[i]) + ' ';
+  return out;
+}
+// A field never takes its name from what it holds: the value changes as
+// the agent fills it, and the name is how a ref recognises its element.
+// That also keeps a password out of every snapshot.
+function contentText(el) {
+  if (el.tagName === 'INPUT') {
+    var t = inputType(el);
+    if (t === 'submit') return el.value || 'Submit';
+    if (t === 'reset') return el.value || 'Reset';
+    return t === 'button' ? el.value : '';
+  }
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable) return '';
+  return FIELD_ROLES.indexOf(roleOf(el)) >= 0 ? '' : el.innerText;
+}
+function named(raw) {
+  return oneLine(raw || '', 100);
+}
 function nameOf(el) {
-  // A password value never leaves the page: snapshots reach the agent's
-  // model provider, and autofill would put credentials in the transcript.
-  var secret = el.tagName === 'INPUT' && inputType(el) === 'password';
-  var raw = el.getAttribute('aria-label') ||
-    (el.getAttribute('aria-labelledby') ? labelledText(el) : '') ||
-    el.getAttribute('title') || el.getAttribute('placeholder') ||
-    el.getAttribute('alt') || el.innerText ||
-    (secret ? (el.value ? '[redacted]' : '') : el.value) || '';
-  return oneLine(raw, 100);
+  return named(el.getAttribute('aria-labelledby') ? labelledText(el) : '') ||
+    named(el.getAttribute('aria-label')) || named(labelsText(el)) || named(contentText(el)) ||
+    named(el.getAttribute('title')) || named(el.getAttribute('placeholder')) ||
+    named(el.getAttribute('alt'));
 }
 function visible(el) {
   if (!el.isConnected) return false;
