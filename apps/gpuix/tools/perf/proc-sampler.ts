@@ -210,3 +210,23 @@ export function startMachineSampler(cadenceMs = 500): { stop(): MachineSample[] 
     }
   }
 }
+
+/**
+ * Other units share this machine. Before a run, poll 5 s windows of
+ * whole-machine CPU until one falls under the threshold or time runs out.
+ * The run goes ahead either way; the record says how quiet it was.
+ */
+export async function waitForQuiet(
+  belowPct: number,
+  waitS: number
+): Promise<{ waitedS: number; busyPct: number }> {
+  const started = Date.now()
+  for (;;) {
+    const sampler = startMachineSampler()
+    await Bun.sleep(5000)
+    const busy = sampler.stop().map((m) => m.busy)
+    const busyPct = Math.round(busy.reduce((a, b) => a + b, 0) / busy.length)
+    const waitedS = Math.round((Date.now() - started) / 1000)
+    if (busyPct < belowPct || waitedS >= waitS) return { waitedS, busyPct }
+  }
+}

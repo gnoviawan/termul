@@ -17,7 +17,8 @@ import {
   type ProcSample,
   type RoleOf,
   startMachineSampler,
-  startProcSampler
+  startProcSampler,
+  waitForQuiet
 } from './proc-sampler.ts'
 import { aggregate, type Numbers, summarizeProc } from './stats.ts'
 
@@ -34,7 +35,10 @@ const { values } = parseArgs({
     height: { type: 'string', default: '900' },
     settle: { type: 'string', default: '20' },
     idle: { type: 'string', default: '20' },
-    out: { type: 'string', default: path.join(import.meta.dir, 'results', 'webkit-startup') }
+    out: { type: 'string', default: path.join(import.meta.dir, 'results', 'webkit-startup') },
+    'state-root': { type: 'string', default: '/tmp/gpuix-b0/webkit' },
+    'quiet-below': { type: 'string', default: '150' },
+    'quiet-wait': { type: 'string', default: '600' }
   }
 })
 
@@ -97,7 +101,7 @@ function avatarPixels(rgb: Buffer): number {
 const painted = (rgb: Buffer) => rgb.some((v) => v > 16)
 
 async function runOnce(index: number) {
-  const home = path.join('/tmp/gpuix-b0/webkit', `run${index}`)
+  const home = path.join(values['state-root']!, `run${index}`)
   rmSync(home, { recursive: true, force: true })
   const dataDir = path.join(home, '.local/share', IDENTIFIER)
   const projectDir = path.join(home, 'perf-project')
@@ -210,9 +214,11 @@ const webkit = spawnSync('dpkg-query', [
 ]).stdout.toString()
 const runs = []
 for (let i = 1; i <= Number(values.runs); i++) {
-  const record = await runOnce(i)
+  const quiet = await waitForQuiet(Number(values['quiet-below']), Number(values['quiet-wait']))
+  const load1Before = os.loadavg()[0]
+  const record = { ...(await runOnce(i)), quiet: { ...quiet, load1Before } }
   console.log(
-    `[webkit] run ${i}: projectListMs=${record.metrics.projectListMs} pss=${record.metrics['idle.proc.total.pssMedianMB']} errors=${record.errors.length}`
+    `[webkit] run ${i}: projectListMs=${record.metrics.projectListMs} pss=${record.metrics['idle.proc.total.pssMedianMB']} errors=${record.errors.length} preRunBusy=${quiet.busyPct}% load1=${load1Before.toFixed(1)}`
   )
   runs.push(record)
 }

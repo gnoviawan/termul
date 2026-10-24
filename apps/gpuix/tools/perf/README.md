@@ -43,6 +43,9 @@ Output goes to `apps/gpuix/tools/perf/results/linux-<timestamp>/` unless you pas
 |---|---|---|
 | `--scenarios` | `stream-storm,pty-flood` | Comma-separated list of scenarios: `idle`, `stream-storm`, `pty-flood`. |
 | `--runs` | `3` | Runs per scenario. |
+| `--client` | `chromium` | Comma-separated clients: `chromium`, `gpuix`. Several clients are interleaved per run. |
+| `--state-root` | `/tmp/gpuix-b0` (or `GPUIX_STATE_ROOT`) | Parent of every run's server state, client state, and probe files. |
+| `--screen-frames` | `on` | `off` skips the X DAMAGE frame log, and the `screen.*` keys are then absent. |
 | `--gl` | `lavapipe` | Chromium rasterizer. `lavapipe` is ANGLE on Mesa's Vulkan driver, the same driver that the GPUIX lane uses. `swiftshader` is Chromium's default on a machine with no GPU. `cpu` passes `--disable-gpu`. |
 | `--port` | `8196` | Server port. The relay listens on `port + 1`. The runner fails if the port is taken. |
 | `--display` | `:181` | Xvfb display. |
@@ -121,20 +124,24 @@ Run the build at the repository root. Each run starts a fresh Xvfb (default `:18
 
 After the project list shows, the script waits `--settle` seconds (default 20) and samples the process tree for `--idle` seconds (default 20). The roles are `app` (the Tauri process), `web-process`, `network`, and `other`. `other` is the child processes that the app starts, such as the login shell and the agent `--version` checks. The script writes `webkit-startup.json` and one PNG per run.
 
-## Point the runner at the GPUIX client
+## Compare the GPUIX client
 
-The scenarios call only the `ClientDriver` interface in `clients/client.ts`: `waitForProjectList`, `waitForLauncher`, `startChat`, `chatCount`, `switchToChat`, `openTerminal`, `runInTerminal`, and the phase hooks. To add the GPUIX lane:
+`clients/gpuix.ts` drives the GPUIX production bundle (`dist/main.js`, from `bun run build`) through `@gpuix/react/automation` on the run's display, with lavapipe and the relay URL and perf token in `TERMUL_SERVER_URL` and `TERMUL_SERVER_TOKEN`. Its web storage and data dir live under the run's scratch dir, so it never opens the real desktop data dir. Pass several clients to interleave them:
 
-1. Add `clients/gpuix.ts`. Start the GPUIX app with `@gpuix/react/automation` `launch()` on the run's display, with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. Give it the relay URL (`proxy.url`) as its server origin and `PERF_TOKEN` as its token. Return a `ClientHandle` whose `rootPid` is the app process. Implement the driver methods with the automation API's wait, click, and type calls on the same labels that the Chromium driver uses: `Project: perf-project`, `Start agent chat`, `New chat`, the chat card title, `New tab`, and `Bash`.
-2. Return `null` from `endPhase` until the GPUIX client exposes frame timing. When it does, map its frame intervals into `PageMetrics.frames`, so the `page.frame*` keys line up.
-3. Add a `--client gpuix` branch next to `launchChromium` in `run.ts`, with a role function that names the app process `app`.
+```bash
+bun run build
+bun run perf --client gpuix,chromium --scenarios idle,stream-storm,pty-flood --runs 5 \
+  --page-metrics off --state-root /tmp/gpuix-<unit>/state --out <dir>
+bun run perf:report gpuix=<dir>/gpuix chromium=<dir>/chromium
+bun run perf:runs <dir> measure sustained-stream flood burst
+```
 
-Then run the `chromium-proc` command with `--client gpuix` and compare the two `aggregate.json` files with `bun run perf:report chromium=tools/perf/baseline/chromium-proc gpuix=<dir>`. These keys do not depend on the client and form the comparison set:
+With more than one client, each client gets its own directory under `<dir>`, and even runs reverse the client order. `perf:runs` (`runs-report.ts`) prints the load and errors of every run, per-thread CPU per phase, and a rank-sum p for the headline keys. [`gpuix-vs-baseline.md`](gpuix-vs-baseline.md) has the measured comparison.
 
-- `startup.projectListMs` and `startup.launcherReadyMs`
-- `<phase>.proc.total.pssMedianMB` and `<phase>.proc.total.cpuMeanPct`
-- `<phase>.bytesDownKBps`
-- the `chat.*` keys
-- the `probe.*` keys
+The runner adds three things for this comparison:
 
-For a like-for-like comparison, run Chromium with `--gl lavapipe`. Then both clients rasterize with the same Mesa Vulkan driver.
+- **`screen.*` keys.** `x-frames.py` logs X DAMAGE events on every top-level window, and `screen-frames.ts` groups events less than 3 ms apart into frames. This counts presents on screen the same way for every client. It needs `uv` for `python-xlib`. Pass `--screen-frames off` to skip it.
+- **`notes.threads`.** Per-thread CPU of the client tree per phase, from two `/proc/<pid>/task/*/stat` snapshots (`thread-sampler.ts`).
+- **`chat.typeUnderLoadP50Ms` and `chat.openUnderLoadP50Ms`.** The typing part of a chat start, and the part from the **Start** click until the chat shows.
+
+A run whose client replaced its UI with a crash report (the GPUIX runtime-error overlay) is recorded with a `fatal: app crashed: ...` error and status `failed`, and stays out of `aggregate.json`.
