@@ -17,6 +17,7 @@ import {
   orderAgentTabs,
   resolveFavorites,
   rowAccessibleName,
+  rowHasDescription,
   rowTooltip,
   rowTooltipDescription,
   spacingPx,
@@ -581,13 +582,38 @@ describe('rowTooltip', () => {
 
 describe('rowTooltipDescription', () => {
   it('leaves the name out: the row is already named by it', () => {
-    expect(rowTooltipDescription({ agentName: 'Claude Agent', details: 'Most capable' })).toBe(
-      'Claude Agent\n\nMost capable'
+    expect(rowTooltipDescription({ accessibleName: 'Opus', details: 'Most capable' })).toBe(
+      'Most capable'
     )
-    expect(rowTooltipDescription({ details: 'Most capable' })).toBe('Most capable')
+  })
+
+  it('leaves the agent out when the row name already ends with it', () => {
+    const accessibleName = rowAccessibleName({ name: 'Opus', agentName: 'Claude Agent' })
+    expect(
+      rowTooltipDescription({ accessibleName, agentName: 'Claude Agent', details: 'Most capable' })
+    ).toBe('Most capable')
+    expect(rowTooltipDescription({ accessibleName, agentName: 'Claude Agent' })).toBe(' ')
+  })
+
+  it('keeps the agent when the row name does not say it', () => {
+    expect(
+      rowTooltipDescription({
+        accessibleName: 'Opus',
+        agentName: 'Claude Agent',
+        details: 'Most capable'
+      })
+    ).toBe('Claude Agent\n\nMost capable')
   })
 
   it('is blank, not empty, with nothing more to say', () => {
-    expect(rowTooltipDescription({})).toBe(' ')
+    expect(rowTooltipDescription({ accessibleName: 'Opus' })).toBe(' ')
+  })
+})
+
+describe('rowHasDescription', () => {
+  it('is false for the blank copy, true for any text', () => {
+    expect(rowHasDescription(' ')).toBe(false)
+    expect(rowHasDescription('')).toBe(false)
+    expect(rowHasDescription('Most capable')).toBe(true)
   })
 })

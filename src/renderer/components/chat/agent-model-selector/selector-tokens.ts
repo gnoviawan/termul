@@ -13,6 +13,12 @@ export const PICKER_ROW = {
 } as const
 
 /**
+ * The model name's pull toward the agent glyph: 2px less than `PICKER_ROW.gap`,
+ * so a long name like "Claude 4.7 Opus Thinking" fits beside Extra High.
+ */
+export const PICKER_ROW_NAME_PULL = '-ml-0.5'
+
+/**
  * A value on the selected row (its Thinking level, on the Edit button):
  * smaller and muted, and it never shrinks, so the name truncates first.
  */

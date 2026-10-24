@@ -29,12 +29,6 @@ export function rowAccessibleName({
 }
 
 /**
- * The active row's Edit button name. With a Thinking level the button shows
- * that level, so the name carries it (WCAG 2.5.3, label in name):
- * `Edit <name>, thinking <level>`. Without one it says what it edits:
- * `Edit <sections> for <name>`.
- */
-/**
  * The row's visual tooltip: the full model name first (a long name truncates in
  * the row), then the agent, then the description. Never part of the accessible
  * name; the row keeps `rowAccessibleName`.
@@ -52,20 +46,36 @@ export function rowTooltip({
 }
 
 /**
- * What the row tooltip adds for screen readers: everything but the name, which
- * the row's `aria-label` already says. A blank string, not '', when there is
+ * What the row tooltip adds for screen readers: everything the row's
+ * `aria-label` (`accessibleName`) does not already say. The name is always
+ * there; the agent is too on another agent's row (`rowAccessibleName`), so it
+ * is left out rather than read twice. A blank string, not '', when there is
  * nothing more, since Radix falls back to the visible text for a falsy label.
  */
 export function rowTooltipDescription({
+  accessibleName,
   agentName,
   details
 }: {
+  accessibleName: string
   agentName?: string
   details?: string
 }): string {
-  return [agentName, details].filter(Boolean).join('\n\n') || ' '
+  const agentSaid = agentName ? accessibleName.endsWith(` · ${agentName}`) : true
+  return [agentSaid ? undefined : agentName, details].filter(Boolean).join('\n\n') || ' '
 }
 
+/** Whether the row tooltip says anything the row's name does not (else no `aria-describedby`). */
+export function rowHasDescription(description: string): boolean {
+  return description.trim() !== ''
+}
+
+/**
+ * The active row's Edit button name. With a Thinking level the button shows
+ * that level, so the name carries it (WCAG 2.5.3, label in name):
+ * `Edit <name>, thinking <level>`. Without one it says what it edits:
+ * `Edit <sections> for <name>`.
+ */
 export function editButtonAccessibleName({
   name,
   thinking,

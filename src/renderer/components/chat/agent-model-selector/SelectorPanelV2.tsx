@@ -39,11 +39,12 @@ import {
   type FavoriteModel,
   type ModelCatalog,
   rowAccessibleName,
+  rowHasDescription,
   rowTooltip,
   rowTooltipDescription,
   splitContextOption
 } from './selector-model'
-import { PICKER_ICON, PICKER_LABEL } from './selector-tokens'
+import { PICKER_ICON, PICKER_LABEL, PICKER_ROW_NAME_PULL } from './selector-tokens'
 import { useRejectedOptionValues } from './use-option-values'
 import { useSelectorPanelState } from './use-selector-panel-state'
 
@@ -94,6 +95,8 @@ function DenseModelRow({
 }): React.JSX.Element {
   const name = rawName.trim()
   const label = rowAccessibleName({ name, agentName })
+  // The tooltip's screen-reader copy: only what `label` does not already say.
+  const description = rowTooltipDescription({ accessibleName: label, agentName, details: tooltip })
   const editable = Boolean(edit && edit.length > 0)
   // Edit showing the level marks the selected row; it replaces the check there.
   // Every other selected row (the Favorites copy, a row without a level) keeps it.
@@ -118,9 +121,10 @@ function DenseModelRow({
         onPointerMove={quiet}
         onPointerEnter={quiet}
         onBlur={quiet}
-        // A name-only tooltip adds nothing for screen readers: the trigger's
-        // `aria-describedby` is dropped (the row's props win over the Slot's).
-        {...(agentName || tooltip ? {} : { 'aria-describedby': undefined })}
+        // A tooltip that adds nothing to the row's name (name only, or name and
+        // its agent) drops the trigger's `aria-describedby` (the row's props win
+        // over the Slot's).
+        {...(rowHasDescription(description) ? {} : { 'aria-describedby': undefined })}
         // On an editable row the hover belongs to the row around both buttons.
         className={cn(
           DENSE_ROW,
@@ -135,8 +139,11 @@ function DenseModelRow({
           {glyph}
         </span>
         {/* The row is named by `aria-label`; the visible text stays out of it. */}
-        {/* 2px tighter to the agent glyph than the row's gap. */}
-        <span data-row-name="" aria-hidden="true" className="-ml-0.5 min-w-0 flex-1 truncate">
+        <span
+          data-row-name=""
+          aria-hidden="true"
+          className={cn(PICKER_ROW_NAME_PULL, 'min-w-0 flex-1 truncate')}
+        >
           {name}
         </span>
         {levelOnEdit ? null : (
@@ -166,7 +173,7 @@ function DenseModelRow({
           className="max-w-64 whitespace-pre-line"
           // Visual only for the name: the description skips it, so a screen
           // reader does not hear the row's name twice.
-          aria-label={rowTooltipDescription({ agentName, details: tooltip })}
+          aria-label={description}
         >
           {tip}
         </TooltipContent>
