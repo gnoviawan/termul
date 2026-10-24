@@ -43,9 +43,10 @@ use crate::browser_tab_manager::BrowserTabManager;
 use assets::Script;
 
 pub use input::{
-    ActionabilityFacts, ControlKind, ElementState, InputMode, Key, KeyInput, KeyKind, NamedKey,
-    Point,
+    ActionabilityFacts, ControlKind, ElementState, InputMode, Key, KeyInput, KeyKind, Point,
 };
+#[cfg_attr(target_os = "macos", allow(unused_imports, reason = "WKWebView sends keys as page events"))]
+pub use input::NamedKey;
 
 /// Closed set of engine capabilities. Verbs name the capabilities they
 /// need; adapters declare a tier for each one.

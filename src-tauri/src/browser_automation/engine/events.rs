@@ -45,6 +45,7 @@ pub enum DialogKind {
     Alert,
     Confirm,
     Prompt,
+    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "WKWebView raises no beforeunload panel"))]
     BeforeUnload,
 }
 
@@ -117,6 +118,7 @@ pub enum TabEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code, reason = "WebKit engines read the console through a page shim"))]
     Console(ConsoleEntry),
     /// A request the page made completed or failed (page-derived).
+    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "WKWebView offers no network observation"))]
     Network(NetworkEntry),
     /// The engine destroyed the webview.
     Closed,
