@@ -173,3 +173,70 @@ export function pixelAt(file: string, x: number, y: number): [number, number, nu
 export function isPageGreen([r, g, b]: [number, number, number]): boolean {
   return Math.abs(r - 0x1f) < 12 && Math.abs(g - 0x6f) < 12 && Math.abs(b - 0x43) < 12
 }
+
+/** Record a one-pixel-high strip of the screen as numbered PNGs until `stop()`. */
+export function recordStrip(
+  display: string,
+  at: { x: number; y: number; width: number },
+  fps: number,
+  dir: string
+): { stop(): Promise<void> } {
+  const ffmpeg = Bun.spawn(
+    [
+      'ffmpeg',
+      '-loglevel',
+      'error',
+      '-y',
+      '-f',
+      'x11grab',
+      '-draw_mouse',
+      '0',
+      '-framerate',
+      String(fps)
+    ].concat([
+      '-video_size',
+      `${at.width}x1`,
+      '-i',
+      `${display}+${at.x},${at.y}`,
+      path.join(dir, '%05d.png')
+    ]),
+    { stdout: 'ignore', stderr: 'ignore', stdin: 'pipe' }
+  )
+  return {
+    stop: async () => {
+      ffmpeg.stdin.write('q')
+      ffmpeg.stdin.end()
+      await Promise.race([ffmpeg.exited, Bun.sleep(3000).then(() => ffmpeg.kill())])
+    }
+  }
+}
+
+/**
+ * Per recorded frame: where GPUIX painted the pane divider (its 1px border colour) and where the
+ * webview's page starts (the page green), both relative to the strip. A frame where the page does
+ * not start right after the divider shows the webview out of step with GPUIX.
+ */
+export function stripFrames(
+  dir: string,
+  border: [number, number, number]
+): { divider: number | null; page: number | null }[] {
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.png'))
+    .sort()
+    .map((name) => {
+      const png = PNG.sync.read(readFileSync(path.join(dir, name)))
+      let divider: number | null = null
+      let page: number | null = null
+      const at = (x: number): [number, number, number] => [
+        png.data[x * 4],
+        png.data[x * 4 + 1],
+        png.data[x * 4 + 2]
+      ]
+      for (let x = 0; x < png.width && page === null; x++) if (isPageGreen(at(x))) page = x
+      // The divider is the last border-coloured pixel left of the page (the gap between is the slot).
+      for (let x = (page ?? png.width) - 1; x >= 0 && divider === null; x--) {
+        if (at(x).every((v, i) => Math.abs(v - border[i]) <= 2)) divider = x
+      }
+      return { divider, page }
+    })
+}

@@ -29,7 +29,9 @@ import {
   pixelAt,
   processTable,
   type Rect,
+  recordStrip,
   stats,
+  stripFrames,
   xinput
 } from './probes'
 import { type App, startSession } from './session'
@@ -40,6 +42,7 @@ const { values } = parseArgs({
 })
 const OUT = values.out!
 const SIZE = { width: 1280, height: 800 }
+const STRIP_FPS = 30
 const sameRect = (a: Rect, b: Rect) =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
 const results: { check: string; ok: boolean; detail: unknown }[] = []
@@ -240,6 +243,16 @@ try {
     (await app.call('getBounds', { elementId: split.element })).bounds as Rect
   const steps: { gpuixMs: number; xMs: number; lagMs: number }[] = []
   const divider = r.x - 1
+  const stripDir = path.join(OUT, 'divider-strip')
+  await mkdir(stripDir, { recursive: true })
+  const stripLeft = 520
+  const recording = recordStrip(
+    s.display,
+    { x: origin.x + stripLeft, y: origin.y + r.y + 300, width: SIZE.width - stripLeft - 20 },
+    STRIP_FPS,
+    stripDir
+  )
+  await Bun.sleep(500)
   await app.mouse.down({ x: divider, y: 400 })
   for (let i = 1; i <= 10; i++) {
     const before = r.x
@@ -257,6 +270,33 @@ try {
   }
   await app.mouse.up({ x: divider - 200, y: 400 })
   await Bun.sleep(1000)
+  await recording.stop()
+  const frames = stripFrames(stripDir, [36, 37, 38]).filter(
+    (f) => f.divider !== null && f.page !== null
+  )
+  // A run of consecutive captured frames with the page not flush against the divider.
+  const runs: number[] = []
+  let run = 0
+  for (const frame of frames) {
+    if (frame.page !== (frame.divider as number) + 1) run += 1
+    else if (run) {
+      runs.push(run)
+      run = 0
+    }
+  }
+  if (run) runs.push(run)
+  const dividerPositions = new Set(frames.map((f) => f.divider)).size
+  measures.dividerFrames = {
+    capturedFps: STRIP_FPS,
+    framesWithBoth: frames.length,
+    framesOutOfStep: frames.filter((f) => f.page !== (f.divider as number) + 1).length,
+    outOfStepRuns: stats(runs),
+    gpuixDividerPositions: dividerPositions,
+    maxGapPx: Math.max(
+      0,
+      ...frames.map((f) => Math.abs((f.page as number) - (f.divider as number) - 1))
+    )
+  }
   measures.dividerSteps = steps
   measures.dividerLagMs = stats(steps.map((step) => step.lagMs))
   measures.dividerMoveToGpuixPaintMs = stats(steps.map((step) => step.gpuixMs))
@@ -268,11 +308,14 @@ try {
   check(
     'dragging the divider: the webview follows each step and settles on the slot exactly',
     steps.every((step) => step.gpuixMs > 0 && step.xMs > 0) &&
+      // Never more than the step in flight behind GPUIX's divider.
+      (measures.dividerFrames as { maxGapPx: number }).maxGapPx <= 20 &&
       sameRect(settled.gpuix, settled.x) &&
       viewport?.[1] === String(settled.x.width),
     {
       lagMs: measures.dividerLagMs,
       moveToGpuixPaintMs: measures.dividerMoveToGpuixPaintMs,
+      frames: measures.dividerFrames,
       settled,
       pageViewport: viewport?.slice(1)
     }
