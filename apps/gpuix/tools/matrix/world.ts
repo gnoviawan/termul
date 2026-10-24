@@ -179,13 +179,17 @@ export async function resetAlpha(world: World): Promise<void> {
   resetAlphaChanges(world.dirs.alpha, world.alphaHead)
 }
 
-/** Set the shared colour theme (a theme family and dark or light), the way the settings store writes it. */
+/**
+ * Set the shared colour theme (a theme family and dark or light), the way the
+ * settings store writes it, and put the UI zoom back to 100 %, so a surface
+ * that zooms does not leak its zoom into the next client run.
+ */
 export async function setTheme(world: World, family: string, mode: 'dark' | 'light'): Promise<void> {
   const key = 'shared/lww/settings/app'
   const current = await world.ws.request<{ revision?: number; value?: { data?: Record<string, unknown> } }>('store_read', { key })
   await world.ws.request('store_write', {
     key,
-    value: { _version: 1, data: { ...(current.value?.data ?? {}), colorTheme: family, appearanceMode: mode } },
+    value: { _version: 1, data: { ...(current.value?.data ?? {}), colorTheme: family, appearanceMode: mode, uiZoomLevel: 1 } },
     baseRevision: current.revision ?? 0
   })
 }
