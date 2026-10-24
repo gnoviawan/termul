@@ -25,6 +25,17 @@ fn store(f: &Fixture) -> ClaudeAccountStore {
     ClaudeAccountStore::new(&f.state, f.shared.clone())
 }
 
+/// Backdate a file so the in-use guard does not mistake it for a live write.
+fn age(path: &Path) {
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+}
+
 fn is_link_to(link: &Path, target: &Path) -> bool {
     fs::symlink_metadata(link).is_ok_and(|m| m.file_type().is_symlink())
         && fs::read_link(link).is_ok_and(|t| t == target)
@@ -224,6 +235,192 @@ fn merge_dir_never_overwrites_an_existing_shared_name() {
     assert_eq!(fs::read(dst.join("sub").join("new.jsonl")).unwrap(), b"new");
 }
 
+#[test]
+fn a_clashing_private_file_is_kept_next_to_the_shared_one() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("private");
+    let dst = root.path().join("shared");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::create_dir_all(dst.join("sub")).unwrap();
+    fs::write(src.join("same.jsonl"), b"private").unwrap();
+    fs::write(dst.join("same.jsonl"), b"shared").unwrap();
+    fs::write(src.join("sub").join("deep.jsonl"), b"private deep").unwrap();
+    fs::write(dst.join("sub").join("deep.jsonl"), b"shared deep").unwrap();
+
+    links::merge_dir(&src, &dst).unwrap();
+
+    // Both versions survive; the shared name keeps the shared content.
+    assert_eq!(fs::read(dst.join("same.jsonl")).unwrap(), b"shared");
+    assert_eq!(
+        fs::read(dst.join("same.jsonl.private-backup")).unwrap(),
+        b"private"
+    );
+    assert_eq!(
+        fs::read(dst.join("sub").join("deep.jsonl")).unwrap(),
+        b"shared deep"
+    );
+    assert_eq!(
+        fs::read(dst.join("sub").join("deep.jsonl.private-backup")).unwrap(),
+        b"private deep"
+    );
+}
+
+#[test]
+fn an_identical_private_file_is_not_duplicated() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("private");
+    let dst = root.path().join("shared");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&dst).unwrap();
+    fs::write(src.join("same.jsonl"), b"identical").unwrap();
+    fs::write(dst.join("same.jsonl"), b"identical").unwrap();
+
+    links::merge_dir(&src, &dst).unwrap();
+
+    assert!(!dst.join("same.jsonl.private-backup").exists());
+    assert_eq!(fs::read(dst.join("same.jsonl")).unwrap(), b"identical");
+}
+
+#[test]
+fn a_taken_backup_name_gets_a_numeric_suffix_and_a_rerun_adds_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("private");
+    let dst = root.path().join("shared");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&dst).unwrap();
+    fs::write(src.join("a.jsonl"), b"private").unwrap();
+    fs::write(dst.join("a.jsonl"), b"shared").unwrap();
+    fs::write(dst.join("a.jsonl.private-backup"), b"someone else's backup").unwrap();
+
+    links::merge_dir(&src, &dst).unwrap();
+
+    assert_eq!(
+        fs::read(dst.join("a.jsonl.private-backup")).unwrap(),
+        b"someone else's backup"
+    );
+    assert_eq!(
+        fs::read(dst.join("a.jsonl.private-backup-2")).unwrap(),
+        b"private"
+    );
+
+    // An interrupted migration runs again over the same private dir.
+    links::merge_dir(&src, &dst).unwrap();
+    assert!(!dst.join("a.jsonl.private-backup-3").exists());
+}
+
+#[test]
+fn a_private_file_clashing_with_a_shared_directory_is_kept_under_a_backup_name() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("private");
+    let dst = root.path().join("shared");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(dst.join("name")).unwrap();
+    fs::write(src.join("name"), b"private file").unwrap();
+
+    links::merge_dir(&src, &dst).unwrap();
+
+    assert!(dst.join("name").is_dir());
+    assert_eq!(
+        fs::read(dst.join("name.private-backup")).unwrap(),
+        b"private file"
+    );
+}
+
+#[test]
+fn migration_keeps_both_versions_of_a_clashing_file_and_removes_the_private_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("account").join("projects");
+    let shared = root.path().join("shared").join("projects");
+    fs::create_dir_all(&private).unwrap();
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(private.join("s.jsonl"), b"private").unwrap();
+    fs::write(private.join("only.jsonl"), b"only private").unwrap();
+    fs::write(shared.join("s.jsonl"), b"shared").unwrap();
+    age(&private.join("s.jsonl"));
+    age(&private.join("only.jsonl"));
+
+    assert!(links::merge_private_dir_into_shared(
+        &private, &shared, "projects"
+    ));
+
+    assert!(!private.exists());
+    assert_eq!(fs::read(shared.join("s.jsonl")).unwrap(), b"shared");
+    assert_eq!(
+        fs::read(shared.join("s.jsonl.private-backup")).unwrap(),
+        b"private"
+    );
+    assert_eq!(
+        fs::read(shared.join("only.jsonl")).unwrap(),
+        b"only private"
+    );
+}
+
+#[test]
+fn a_failed_merge_keeps_the_private_dir_and_every_file_in_it() {
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("account").join("projects");
+    let shared = root.path().join("shared").join("projects");
+    fs::create_dir_all(private.join("sub")).unwrap();
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(private.join("top.jsonl"), b"top").unwrap();
+    fs::write(private.join("sub").join("deep.jsonl"), b"deep").unwrap();
+    // A shared FILE where the private side has a directory: the merge cannot
+    // create `sub` and stops with an error.
+    fs::write(shared.join("sub"), b"a file").unwrap();
+    age(&private.join("top.jsonl"));
+    age(&private.join("sub").join("deep.jsonl"));
+
+    assert!(!links::merge_private_dir_into_shared(
+        &private, &shared, "projects"
+    ));
+
+    assert_eq!(fs::read(private.join("top.jsonl")).unwrap(), b"top");
+    assert_eq!(
+        fs::read(private.join("sub").join("deep.jsonl")).unwrap(),
+        b"deep"
+    );
+    assert_eq!(fs::read(shared.join("sub")).unwrap(), b"a file");
+}
+
+#[test]
+fn a_private_dir_with_a_recent_write_is_left_untouched() {
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("account").join("projects");
+    let shared = root.path().join("shared").join("projects");
+    fs::create_dir_all(private.join("proj")).unwrap();
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(private.join("old.jsonl"), b"old").unwrap();
+    age(&private.join("old.jsonl"));
+    // A chat in progress is appending to its session file right now.
+    fs::write(private.join("proj").join("live.jsonl"), b"live").unwrap();
+
+    assert!(!links::merge_private_dir_into_shared(
+        &private, &shared, "projects"
+    ));
+
+    assert_eq!(fs::read(private.join("old.jsonl")).unwrap(), b"old");
+    assert_eq!(
+        fs::read(private.join("proj").join("live.jsonl")).unwrap(),
+        b"live"
+    );
+    assert_eq!(
+        fs::read_dir(&shared).unwrap().count(),
+        0,
+        "nothing is merged while the dir looks in use"
+    );
+
+    // Once the write is old enough, the next round migrates it.
+    age(&private.join("proj").join("live.jsonl"));
+    assert!(links::merge_private_dir_into_shared(
+        &private, &shared, "projects"
+    ));
+    assert!(!private.exists());
+    assert_eq!(
+        fs::read(shared.join("proj").join("live.jsonl")).unwrap(),
+        b"live"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn a_directory_entry_is_linked_with_a_junction_to_the_shared_target() {
@@ -264,6 +461,8 @@ fn a_private_directory_is_merged_into_the_shared_dir_and_replaced_with_a_junctio
     )
     .unwrap();
     fs::write(f.shared.join("projects").join("existing.jsonl"), b"shared").unwrap();
+
+    age(&account.join("projects").join("proj").join("session.jsonl"));
 
     let failed = links::ensure_links(&f.shared, &account).unwrap();
     assert_eq!(failed, 0);

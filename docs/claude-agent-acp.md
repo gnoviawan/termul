@@ -142,8 +142,13 @@ built-in Account cannot be removed. On Windows, directory entries (such as
 entries use a symlink and fall back to a copy, logged, when the symlink
 privilege (Developer Mode or elevation) is missing. A private `projects`
 directory left by an earlier version is migrated — its sessions are merged into
-the shared directory (never overwriting one already there) before it becomes a
-junction.
+the shared directory before it becomes a junction. A file that is already in the
+shared directory is never overwritten; if the private copy differs, it is kept
+next to it as `<name>.private-backup` (then `-2`, `-3`, ...), and an identical
+one is skipped. The private directory is deleted only after the whole merge
+succeeded, and it is left alone, to be retried next time, when any file in it
+changed in the last 30 seconds (a best-effort sign that Claude Code is using
+it; an idle process or a write right after the check is not detected).
 
 ## Remote browser clients
 
