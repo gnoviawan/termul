@@ -52,18 +52,24 @@ const DARK_EMBOSS =
 const DARK_EMBOSS_HOVER =
   '0 0 0 0.5px #000000, 0 2px 4px #000000cc, inset 0 0 0 0.5px #ffffff29, inset 0 1px 0 #ffffff80, inset 0 -2px 0 #00000066'
 
-/** Light: gray-a3/a4/a5 off track, white thumb with a hairline so it reads on grey. */
+/**
+ * Light: gray-a9/a10/a11 off track. gray-a9 flattens to oklch(0.643 0 0) on
+ * the white card, 3.32:1 against it and against the white thumb (WCAG
+ * 1.4.11), and stays at or above 3.25:1 on every Light surface. Disabled
+ * drops to a gray-a4 track with a grey thumb: no white thumb and no blue, so
+ * it reads as off-limits, while the thumb still outlines the control.
+ */
 export const TERMUL_LIGHT_BRAND_TOKENS: ThemeComponentTokens = {
   ...SHARED_BRAND_TOKENS,
   '--shadow-emboss': LIGHT_EMBOSS,
   '--shadow-emboss-hover': LIGHT_EMBOSS_HOVER,
-  '--switch-track-off': '#0000000f',
-  '--switch-track-off-hover': '#00000017',
-  '--switch-track-off-active': '#0000001f',
-  '--switch-track-on-disabled': '#0000000f',
-  '--switch-track-off-disabled': '#0000000f',
-  '--switch-thumb-on-disabled': '#00000044',
-  '--switch-thumb-off-disabled': '#00000044',
+  '--switch-track-off': 'oklch(0 0 0 / 0.447)',
+  '--switch-track-off-hover': 'oklch(0 0 0 / 0.486)',
+  '--switch-track-off-active': 'oklch(0 0 0 / 0.608)',
+  '--switch-track-on-disabled': 'oklch(0 0 0 / 0.09)',
+  '--switch-track-off-disabled': 'oklch(0 0 0 / 0.09)',
+  '--switch-thumb-on-disabled': 'oklch(0 0 0 / 0.267)',
+  '--switch-thumb-off-disabled': 'oklch(0 0 0 / 0.267)',
   '--switch-thumb-shadow': '0 0 0 0.5px #00000026, 0 1px 2px #0000001a'
 }
 

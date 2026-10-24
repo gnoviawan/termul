@@ -7,6 +7,14 @@ function emitted(hex: string): string {
   return oklchComponentsToHex(hexToOklchComponents(hex))
 }
 
+/** Flatten a black `oklch(0 0 0 / a)` wash onto a grey surface, as the browser composites it. */
+function blackWashOn(wash: string, surface: string): string {
+  const alpha = Number(/^oklch\(0 0 0 \/ ([\d.]+)\)$/.exec(wash)?.[1])
+  expect(alpha, wash).toBeGreaterThan(0)
+  const channel = Math.round(Number.parseInt(surface.slice(1, 3), 16) * (1 - alpha))
+  return `#${channel.toString(16).padStart(2, '0').repeat(3)}`
+}
+
 describe('termul light chrome', () => {
   it('uses the Interfere gray ramp', () => {
     expect(emitted(TERMUL_LIGHT_CHROME.background)).toBe('#fcfcfc')
@@ -35,6 +43,22 @@ describe('termul light chrome', () => {
     expect(
       contrastRatio(TERMUL_LIGHT_CHROME.secondaryForeground, TERMUL_LIGHT_CHROME.background)
     ).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('gives the off switch a 3:1 boundary on every Light surface (WCAG 1.4.11)', () => {
+    const tokens = TERMUL_LIGHT_CHROME.tokens ?? {}
+    const surfaces = ['#ffffff', '#fcfcfc', '#f6f6f6', '#f2f2f2', '#f0f0f0']
+    for (const name of [
+      '--switch-track-off',
+      '--switch-track-off-hover',
+      '--switch-track-off-active'
+    ] as const) {
+      for (const surface of surfaces) {
+        const track = blackWashOn(tokens[name] ?? '', surface)
+        expect(contrastRatio(track, surface), `${name} on ${surface}`).toBeGreaterThanOrEqual(3)
+        expect(contrastRatio(track, '#ffffff'), `${name} thumb`).toBeGreaterThanOrEqual(3)
+      }
+    }
   })
 
   it('is attached only to Termul light and uses the brand blue', () => {
