@@ -248,13 +248,13 @@ function report(out: string) {
     return { run, integrity, score }
   })
   const table = [
-    '| Prompt | Mode | Score | Integrity issues | Calls | Turns |',
-    '| --- | --- | --- | --- | --- | --- |',
+    '| Prompt | Mode | Score | Integrity issues | Calls | Turns | Failed snapshots |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
     ...rows
       .sort((a, b) => a.run.id.localeCompare(b.run.id) || a.run.mode.localeCompare(b.run.mode))
       .map(
         ({ run, score }) =>
-          `| ${run.id} | ${run.mode} | ${score ?? 'not judged'} | ${run.issues.length} | ${run.calls} | ${run.turns ?? '?'} |`
+          `| ${run.id} | ${run.mode} | ${score ?? 'not judged'} | ${run.issues.length} | ${run.calls} | ${run.turns ?? '?'} | ${run.failedSnapshots ?? '?'} |`
       )
   ]
   const summary = [...new Set(rows.map((row) => row.run.mode))].map((mode) => {
