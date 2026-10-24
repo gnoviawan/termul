@@ -9,6 +9,30 @@ export const MAX_VISIBLE_AGENT_TABS = 4
 /** Value of `view` that shows the overflow agent list instead of a model list. */
 export const MORE_AGENTS_VIEW = '\0more'
 
+/**
+ * A model row's accessible name, set as the row button's `aria-label`:
+ * `<name>[ · <agent>][, thinking <level>]`. One string, not sr-only fragments:
+ * Chrome reads an absolutely positioned sr-only span as its own block and puts
+ * a space before it ("Opus , thinking High"). The name is trimmed, as agents
+ * can send edge whitespace.
+ */
+export function rowAccessibleName({
+  name,
+  agentName,
+  thinking
+}: {
+  name: string
+  /** Another agent's model: whose it is. */
+  agentName?: string
+  /** The selected model's shown Thinking level. */
+  thinking?: string
+}): string {
+  let label = name.trim()
+  if (agentName) label += ` · ${agentName}`
+  if (thinking) label += `, thinking ${thinking}`
+  return label
+}
+
 export interface CatalogModel {
   value: string
   name: string

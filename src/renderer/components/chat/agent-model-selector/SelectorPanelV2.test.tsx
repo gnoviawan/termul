@@ -399,10 +399,7 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
     const names = list.querySelectorAll('[data-row-name]')
     expect(names.length).toBeGreaterThan(0)
     for (const name of names) {
-      // `relative` holds the sr-only agent name inside the clipped span.
-      expect(classes(name)).toEqual(
-        expect.arrayContaining(['relative', 'min-w-0', 'flex-1', 'truncate'])
-      )
+      expect(classes(name)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1', 'truncate']))
     }
   })
 
@@ -417,6 +414,7 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
     render(<Panel {...props({ modelOption: model })} />)
     const row = screen.getByRole('button', { pressed: true })
     // The real name, then the level; read once.
+    expect(row).toHaveAttribute('aria-label', `${long}, thinking High`)
     expect(row).toHaveAccessibleName(`${long}, thinking High`)
     const name = row.querySelector('[data-row-name]')
     expect(classes(name)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
@@ -445,9 +443,9 @@ describe('SelectorPanelV2 Thinking level on the selected row', () => {
 
   it('reads exactly "<name>, thinking <level>" for a short name', () => {
     render(<Panel {...props()} />)
-    expect(screen.getByRole('button', { pressed: true })).toHaveAccessibleName(
-      'Claude Opus, thinking High'
-    )
+    const row = screen.getByRole('button', { pressed: true })
+    expect(row).toHaveAttribute('aria-label', 'Claude Opus, thinking High')
+    expect(row).toHaveAccessibleName('Claude Opus, thinking High')
   })
 
   it('drops edge whitespace an agent sends in a model name', () => {
@@ -458,7 +456,8 @@ describe('SelectorPanelV2 Thinking level on the selected row', () => {
     render(<Panel {...props({ modelOption: model })} />)
     const row = screen.getByRole('button', { pressed: true })
     expect(row).toHaveAccessibleName('Claude Opus, thinking High')
-    expect(row.querySelector('[data-row-name]')?.textContent).toBe('Claude Opus, thinking High')
+    expect(row).toHaveAttribute('aria-label', 'Claude Opus, thinking High')
+    expect(row.querySelector('[data-row-name]')?.textContent).toBe('Claude Opus')
     expect(screen.getByTestId('selector-edit')).toHaveAccessibleName(
       'Edit Thinking and Context for Claude Opus'
     )
@@ -526,11 +525,17 @@ describe('SelectorPanelV2 Thinking level on the selected row', () => {
       <Panel {...props({ thoughtLevel: null, effortValue: undefined })} />
     )
     expect(levels()).toHaveLength(0)
-    expect(screen.getByRole('button', { name: 'Claude Opus', pressed: true })).toBeInTheDocument()
+    expect(screen.getByRole('button', { pressed: true })).toHaveAttribute(
+      'aria-label',
+      'Claude Opus'
+    )
     // An option with no known value: no guessed default.
     rerender(<Panel {...props({ effortValue: undefined })} />)
     expect(levels()).toHaveLength(0)
-    expect(screen.getByRole('button', { name: 'Claude Opus', pressed: true })).toBeInTheDocument()
+    expect(screen.getByRole('button', { pressed: true })).toHaveAttribute(
+      'aria-label',
+      'Claude Opus'
+    )
   })
 
   it('shows on the selected model in Favorites too, never on other favorites', () => {
@@ -551,6 +556,7 @@ describe('SelectorPanelV2 Thinking level on the selected row', () => {
     expect(selected).toHaveLength(2)
     expect(levels()).toHaveLength(2)
     for (const row of selected) {
+      expect(row).toHaveAttribute('aria-label', 'Claude Opus, thinking High')
       expect(row).toHaveAccessibleName('Claude Opus, thinking High')
       expect(row.querySelector('[data-row-thinking]')).toHaveTextContent('High')
     }
@@ -674,7 +680,7 @@ describe('SelectorPanelV2 favorites', () => {
     expect(within(list).getByText('Favorites')).toBeInTheDocument()
     const names = within(list)
       .getAllByRole('button')
-      .map((b) => b.textContent?.trim())
+      .map((b) => b.getAttribute('aria-label'))
     expect(names.slice(0, 2)).toEqual(['Opus via Claude · Claude Agent', 'Claude Sonnet'])
     expect(names).not.toContain('gone')
   })
@@ -861,9 +867,8 @@ const rowAgents = (): Array<[string, string | null]> =>
   ).map((row) => {
     const slot = row.querySelector<HTMLElement>('[data-row-agent]')
     expect(slot?.firstElementChild).not.toBeNull()
-    // The name as read aloud: the visible Thinking level is aria-hidden.
-    const name = row.querySelector('[data-row-name]')
-    return [name?.textContent?.trim() ?? '', slot?.dataset.rowAgent ?? null]
+    // The name as read aloud: the row's aria-label.
+    return [row.getAttribute('aria-label') ?? '', slot?.dataset.rowAgent ?? null]
   })
 
 describe('SelectorPanelV2 agent rail', () => {
