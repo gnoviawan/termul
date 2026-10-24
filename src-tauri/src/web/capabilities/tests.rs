@@ -262,7 +262,21 @@ fn host_local_needs_loopback_a_token_gate_no_proxy_and_the_host_credential() {
 
 #[test]
 fn every_forwarding_header_names_a_proxy() {
-    for name in ["Forwarded", "X-Forwarded-For", "X-Real-IP", "CF-Connecting-IP"] {
+    let sent_as = [
+        "Forwarded",
+        "VIA",
+        "X-Forwarded-For",
+        "x-forwarded-host",
+        "X-Forwarded-Proto",
+        "X-Real-IP",
+        "X-Client-IP",
+        "True-Client-IP",
+        "CF-Connecting-IP",
+        "Cf-Ray",
+        "Tailscale-User-Login",
+    ];
+    assert_eq!(sent_as.len(), PROXY_HEADERS.len());
+    for name in sent_as {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),

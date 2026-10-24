@@ -189,10 +189,24 @@ pub struct CapabilityPolicy {
     pub proxied: bool,
 }
 
-/// Headers a reverse proxy or tunnel adds to a forwarded request. Their
-/// presence on a loopback upgrade means the client is somewhere else. nginx
-/// adds none by default, so this is defense in depth behind the credential.
-pub const PROXY_HEADERS: [&str; 4] = ["forwarded", "x-forwarded-for", "x-real-ip", "cf-connecting-ip"];
+/// Headers a reverse proxy, CDN or tunnel adds to a forwarded request (RFC
+/// 7239, the de facto `X-Forwarded-*` family, `Via`, Cloudflare, Akamai and
+/// Tailscale Serve). Their presence on a loopback upgrade means the client is
+/// somewhere else. nginx adds none by default, so this is defense in depth
+/// behind the credential. Lowercase: `HeaderMap` lookups ignore case.
+pub const PROXY_HEADERS: [&str; 11] = [
+    "forwarded",
+    "via",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "x-client-ip",
+    "true-client-ip",
+    "cf-connecting-ip",
+    "cf-ray",
+    "tailscale-user-login",
+];
 
 /// Whether `headers` carry any of [`PROXY_HEADERS`].
 #[must_use]

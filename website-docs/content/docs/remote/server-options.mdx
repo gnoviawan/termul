@@ -90,7 +90,7 @@ The server proves that a client runs on the same machine with a second secret:
 
 1. At each start, the server writes a new random value to `host-local.token` in its state folder. Only the server's user can read the file.
 2. The desktop app reads the file and sends the value when it connects.
-3. The server refuses the value when the connection comes through a proxy. A connection comes through a proxy when its request has a `Forwarded`, `X-Forwarded-For`, `X-Real-IP`, or `CF-Connecting-IP` header.
+3. The server refuses the value when the connection comes through a proxy. A connection comes through a proxy when its request has one of these headers: `Forwarded`, `Via`, `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Real-IP`, `X-Client-IP`, `True-Client-IP`, `CF-Connecting-IP`, `CF-Ray`, or `Tailscale-User-Login`. Some proxies add none of these headers (nginx by default, `ssh -L`, `socat`), so this check does not catch every proxy.
 
 Do not copy `host-local.token` to another device, and do not give it to a browser. Anyone who has it and can reach the server on `127.0.0.1` can use your SSH keys and Claude accounts. The server does not show `host-local.token`, the token file, or the Claude account files in its file browser, editor, or search.
 
