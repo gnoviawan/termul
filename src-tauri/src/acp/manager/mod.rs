@@ -1188,12 +1188,14 @@ impl AcpManager {
         outcome
     }
 
-    /// Build the MCP list for a reload-style reopen.
+    /// Build the MCP list for a reopen.
     ///
-    /// `None` leaves the request unchanged (history open, resume chat).
-    /// `Some` prepends the host plan server, injects OAuth headers, and
-    /// gates transports. The plan token is bound to the known session id.
-    /// The caller drops the token when the reopen fails.
+    /// `None` leaves the request with no client MCP list and no host plan
+    /// server. `Some` prepends the host plan server, injects OAuth headers, and
+    /// gates transports. The renderer sends `Some` on every history reopen, not
+    /// only Reload this chat, so the agent keeps the `termul` server and the
+    /// user's MCP servers (#1420). The plan token is bound to the known session
+    /// id. The caller drops the token when the reopen fails.
     async fn prepare_reopen_mcp(
         &self,
         agent_id: &AgentId,
