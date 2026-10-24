@@ -12,7 +12,7 @@
  * The desktop path is covered by direct invoke assertions in sibling tests.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mockIsTauriContext, mockInvoke, mockListen, mockPersistenceApi, transport } = vi.hoisted(
   () => ({
@@ -331,46 +331,8 @@ describe('sshApi (host-local web connection)', () => {
     expect(transport.sshRequest.mock.calls[1][1]).toEqual({
       profile: profile({ password: 'secret' })
     })
-    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
-  })
-
-  it('moves the web-store profiles the host lacks to the host once, then empties the store', async () => {
-    const api = createSSHApi()
-    const stored = [profile(), profile({ id: 'p-2', name: 'staging' })]
-    mockPersistenceApi.read.mockResolvedValueOnce({ success: true, data: stored })
-    mockPersistenceApi.write.mockResolvedValue({ success: true, data: undefined })
-    transport.sshRequest
-      .mockResolvedValueOnce([profile()])
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce([profile(), profile({ id: 'p-2', name: 'staging' })])
-
-    expect(await api.listProfiles()).toEqual({
-      success: true,
-      data: [profile(), profile({ id: 'p-2', name: 'staging' })]
-    })
-    expect(transport.sshRequest.mock.calls).toEqual([
-      ['ssh_list_profiles', undefined],
-      ['ssh_save_profile', { profile: profile({ id: 'p-2', name: 'staging' }) }],
-      ['ssh_list_profiles', undefined]
-    ])
-    expect(mockPersistenceApi.write).toHaveBeenCalledWith('ssh/profiles', [], { expected: stored })
-
-    // The store is empty now: a later list moves nothing.
-    mockPersistenceApi.read.mockResolvedValueOnce({ success: true, data: [] })
-    transport.sshRequest.mockResolvedValueOnce([profile()])
-    expect(await api.listProfiles()).toEqual({ success: true, data: [profile()] })
-    expect(transport.sshRequest).toHaveBeenCalledTimes(4)
-    expect(mockPersistenceApi.write).toHaveBeenCalledTimes(1)
-  })
-
-  it('keeps the web-store profiles when the host refuses one', async () => {
-    const api = createSSHApi()
-    mockPersistenceApi.read.mockResolvedValueOnce({ success: true, data: [profile({ id: 'p-2' })] })
-    transport.sshRequest
-      .mockResolvedValueOnce([])
-      .mockRejectedValueOnce(Object.assign(new Error('disk full'), { code: 'SSH_PROFILE_ERROR' }))
-    expect(await api.listProfiles()).toEqual({ success: true, data: [] })
-    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
+    const writtenKeys = mockPersistenceApi.write.mock.calls.map((c) => c[0])
+    expect(writtenKeys).toEqual(['ssh/profiles-migrated'])
   })
 
   it('waits for the handshake when the grant is not known yet', async () => {
@@ -422,6 +384,164 @@ describe('sshApi (host-local web connection)', () => {
   })
 })
 
+/**
+ * The one-time copy of the web store's profiles to the host, against an
+ * in-memory compare-and-set store and an in-memory host profile file. A
+ * "browser" is the same api on a connection without the hostLocal grant.
+ */
+describe('sshApi profile copy to the host', () => {
+  const p1 = profile()
+  const p2 = profile({ id: 'p-2', name: 'staging' })
+  const p3 = profile({ id: 'p-3', name: 'added-in-browser' })
+
+  let store: Map<string, unknown>
+  let host: Map<string, SSHProfile>
+  let beforeStoreWrite: ((key: string) => void) | undefined
+  let hostSaveFailsAt: number
+  let hostSaves: number
+
+  const asBrowser = () =>
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: false })
+  const asGpuix = () =>
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
+  const ids = (list: SSHProfile[] | undefined) => (list ?? []).map((p) => p.id)
+  const hostIds = () => [...host.keys()]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connect.mockResolvedValue(undefined)
+    asGpuix()
+    store = new Map()
+    host = new Map([[p1.id, p1]])
+    beforeStoreWrite = undefined
+    hostSaveFailsAt = Number.POSITIVE_INFINITY
+    hostSaves = 0
+    mockPersistenceApi.read.mockImplementation(async (key: string) =>
+      store.has(key)
+        ? { success: true, data: structuredClone(store.get(key)) }
+        : { success: false, error: `Key not found: ${key}`, code: 'KEY_NOT_FOUND' }
+    )
+    mockPersistenceApi.write.mockImplementation(
+      async (key: string, data: unknown, opts?: { expected?: unknown }) => {
+        beforeStoreWrite?.(key)
+        const current = store.has(key) ? store.get(key) : null
+        if (opts && 'expected' in opts) {
+          if (JSON.stringify(opts.expected ?? null) !== JSON.stringify(current)) {
+            return { success: false, error: 'changed', code: 'STORE_CAS_FAILED' }
+          }
+        }
+        store.set(key, structuredClone(data))
+        return { success: true, data: undefined }
+      }
+    )
+    transport.sshRequest.mockImplementation(
+      async (command: string, args?: { profile?: SSHProfile }) => {
+        if (command === 'ssh_list_profiles') return [...host.values()]
+        if (command === 'ssh_save_profile' && args?.profile) {
+          if (hostSaves >= hostSaveFailsAt) {
+            throw Object.assign(new Error('host went away'), { code: 'SSH_PROFILE_ERROR' })
+          }
+          hostSaves++
+          host.set(args.profile.id, args.profile)
+          return null
+        }
+        throw new Error(`unexpected ${command}`)
+      }
+    )
+  })
+
+  afterEach(() => {
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    transport.sshRequest.mockReset()
+  })
+
+  it('copies the stored profiles the host lacks once and leaves the store whole', async () => {
+    store.set('ssh/profiles', [p1, p2])
+    const api = createSSHApi()
+
+    const first = await api.listProfiles()
+
+    expect(ids(first.success ? first.data : undefined)).toEqual(['p-1', 'p-2'])
+    expect(hostIds()).toEqual(['p-1', 'p-2'])
+    expect(store.get('ssh/profiles')).toEqual([p1, p2])
+    expect(store.get('ssh/profiles-migrated')).toMatchObject({ count: 1 })
+
+    host.delete('p-2')
+    const second = await api.listProfiles()
+    expect(ids(second.success ? second.data : undefined)).toEqual(['p-1'])
+    expect(hostIds()).toEqual(['p-1'])
+  })
+
+  it('leaves the browser list unchanged, and later browser saves stay in the browser', async () => {
+    store.set('ssh/profiles', [p1, p2])
+    const api = createSSHApi()
+    await api.listProfiles()
+
+    asBrowser()
+    const browserList = await api.listProfiles()
+    expect(ids(browserList.success ? browserList.data : undefined)).toEqual(['p-1', 'p-2'])
+    expect((await api.saveProfile(p3)).success).toBe(true)
+
+    asGpuix()
+    await api.listProfiles()
+    expect(hostIds()).toEqual(['p-1', 'p-2'])
+
+    asBrowser()
+    const after = await api.listProfiles()
+    expect(ids(after.success ? after.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+  })
+
+  it('keeps a browser write that lands during the copy', async () => {
+    store.set('ssh/profiles', [p1, p2])
+    beforeStoreWrite = (key) => {
+      if (key !== 'ssh/profiles-migrated') return
+      beforeStoreWrite = undefined
+      store.set('ssh/profiles', [p1, { ...p2, name: 'renamed-in-browser' }, p3])
+    }
+    const api = createSSHApi()
+
+    await api.listProfiles()
+
+    expect(store.get('ssh/profiles')).toEqual([p1, { ...p2, name: 'renamed-in-browser' }, p3])
+    expect(hostIds()).toEqual(['p-1', 'p-2'])
+    expect(store.has('ssh/profiles-migrated')).toBe(true)
+  })
+
+  it('lets two host-local clients copy at once without duplicating a profile', async () => {
+    store.set('ssh/profiles', [p1, p2, p3])
+    const [a, b] = [createSSHApi(), createSSHApi()]
+
+    const [ra, rb] = await Promise.all([a.listProfiles(), b.listProfiles()])
+
+    expect(ids(ra.success ? ra.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(ids(rb.success ? rb.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(hostIds()).toEqual(['p-1', 'p-2', 'p-3'])
+    const markerWrites = mockPersistenceApi.write.mock.calls.filter(
+      (c) => c[0] === 'ssh/profiles-migrated'
+    )
+    expect(markerWrites).toHaveLength(2)
+    expect(store.get('ssh/profiles')).toEqual([p1, p2, p3])
+  })
+
+  it('resumes a copy that stopped midway at the next list', async () => {
+    store.set('ssh/profiles', [p1, p2, p3])
+    hostSaveFailsAt = 1
+    const api = createSSHApi()
+
+    const interrupted = await api.listProfiles()
+    expect(ids(interrupted.success ? interrupted.data : undefined)).toEqual(['p-1', 'p-2'])
+    expect(store.has('ssh/profiles-migrated')).toBe(false)
+
+    hostSaveFailsAt = Number.POSITIVE_INFINITY
+    const resumed = await api.listProfiles()
+    expect(ids(resumed.success ? resumed.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(store.get('ssh/profiles-migrated')).toMatchObject({ count: 1 })
+    expect(store.get('ssh/profiles')).toEqual([p1, p2, p3])
+  })
+})
+
 describe('sshApi desktop and host-local web parity', () => {
   const calls = (api: ReturnType<typeof createSSHApi>) => [
     () => api.listProfiles(),
@@ -458,6 +578,7 @@ describe('sshApi desktop and host-local web parity', () => {
     mockIsTauriContext.mockReturnValue(false)
     transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
     transport.sshRequest.mockResolvedValue(null)
+    mockPersistenceApi.read.mockResolvedValue({ success: true, data: { copiedAt: 'x', count: 0 } })
     for (const call of calls(createSSHApi())) await call()
     const web = transport.sshRequest.mock.calls.map(([command, args]) => [command, args])
 

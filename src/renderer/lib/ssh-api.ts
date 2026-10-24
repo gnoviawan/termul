@@ -176,37 +176,54 @@ async function hostOwnsProfiles(): Promise<boolean> {
 
 /**
  * A web client that is not host-local keeps profiles in the server-side store
- * (issue #613); a host-local one lists the host's SSH profiles. On the first
- * host-local list, the stored profiles the host lacks are saved to it and the
- * store is emptied (compare-and-set, so a write from another client in
- * between is kept for the next list). Saving by id makes a repeat harmless.
- * Resolves to how many profiles moved.
+ * (issue #613); a host-local one lists the host's SSH profiles. The first
+ * host-local list on a host copies the stored profiles the host lacks to it,
+ * once. The store is never written: browsers keep reading it, so their list
+ * stays whole. The create-only marker (`ssh/profiles-migrated`) is written
+ * after the copy, so a crash mid-copy resumes at the next list, and saving
+ * only the ids the host lacks makes that resume, or a second client copying
+ * at the same moment, harmless. Resolves to how many profiles were copied,
+ * so the caller re-lists when the host gained any.
  */
-async function moveStoreProfilesToHost(hostProfiles: SSHProfile[]): Promise<number> {
+async function copyStoreProfilesToHost(hostProfiles: SSHProfile[]): Promise<number> {
+  const marker = await persistenceApi.read<SshProfilesMigrated>(PersistenceKeys.sshProfilesMigrated)
+  if (marker.success || marker.code !== 'KEY_NOT_FOUND') return 0
   const stored = await readProfilesSnapshot()
-  if (!stored.success || stored.data.profiles.length === 0) return 0
+  if (!stored.success) return 0
   const known = new Set(hostProfiles.map((p) => p.id))
   const missing = stored.data.profiles.filter((p) => !known.has(p.id))
-  for (const profile of missing) {
+  for (const [copied, profile] of missing.entries()) {
     const saved = await invokeIpc<void>(SSH_COMMANDS.SAVE_PROFILE, { profile })
     if (!saved.success) {
       void logFrontendError({
         level: 'warn',
         source: 'ssh.profileMigration',
-        message: `moving web SSH profiles to the host stopped: ${saved.error}`
+        message: `copying web SSH profiles to the host stopped after ${copied}: ${saved.error}`
       })
-      return 0
+      return copied
     }
   }
-  const emptied = await persistenceApi.write(PersistenceKeys.sshProfiles, [], {
-    expected: stored.data.expected
-  })
+  const marked = await persistenceApi.write<SshProfilesMigrated>(
+    PersistenceKeys.sshProfilesMigrated,
+    { copiedAt: new Date().toISOString(), count: missing.length },
+    { expected: null }
+  )
+  const markerNote =
+    marked.success || marked.code === 'STORE_CAS_FAILED'
+      ? ''
+      : `; marker not written: ${marked.error}`
   void logFrontendError({
     level: 'info',
     source: 'ssh.profileMigration',
-    message: `moved ${missing.length} web SSH profile(s) to the host${emptied.success ? '' : `; store not emptied: ${emptied.error}`}`
+    message: `copied ${missing.length} web SSH profile(s) to the host${markerNote}`
   })
   return missing.length
+}
+
+/** Value of the `ssh/profiles-migrated` marker. */
+interface SshProfilesMigrated {
+  copiedAt: string
+  count: number
 }
 
 interface SshWatchDelta {
@@ -259,8 +276,8 @@ export function createSSHApi(): SSHApi {
       if (!(await hostOwnsProfiles())) return readProfilesFromStore()
       const listed = await invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
       if (!listed.success || isTauriContext()) return listed
-      const moved = await moveStoreProfilesToHost(listed.data)
-      return moved > 0 ? invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES) : listed
+      const copied = await copyStoreProfilesToHost(listed.data)
+      return copied > 0 ? invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES) : listed
     },
 
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {

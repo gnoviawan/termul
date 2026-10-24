@@ -36,7 +36,7 @@ pub const SHARED_LWW_KEYS: &[&str] = &[
 ];
 
 /// Logical keys that were shared across devices and are compare-and-set.
-pub const SHARED_CAS_KEYS: &[&str] = &["ssh/profiles"];
+pub const SHARED_CAS_KEYS: &[&str] = &["ssh/profiles", "ssh/profiles-migrated"];
 
 /// Parked device-key families whose logical key changed: `(old prefix, new
 /// prefix)`. The renderer reads a project's editor state from `workspace/<id>`
