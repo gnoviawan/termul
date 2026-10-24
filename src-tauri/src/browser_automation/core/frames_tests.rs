@@ -206,3 +206,39 @@ async fn a_frame_ref_acts_only_while_its_frames_origin_is_authorized() {
     );
     assert_eq!(g.h.engine.clicks.lock().len(), 1, "the refused click never ran");
 }
+
+/// Keys without a ref go to whatever has focus. Inside a cross-origin
+/// frame that is the frame's page, so its origin is authorized as a ref
+/// minted there would be.
+#[tokio::test]
+async fn keys_to_a_focused_cross_origin_frame_need_the_frames_origin() {
+    let g = gated().await;
+    *g.h.engine.focused_frame.lock() = json!(PAYMENTS);
+    let press = g.h.call_as("s1", "press", json!({ "key": "x" })).await;
+    assert_eq!((press["code"].as_str(), press["reason"].as_str()), (Some("confirmation_required"), Some("unattended")), "{press}");
+    assert_eq!(
+        g.tickets().last().cloned(),
+        Some((ActionClass::Navigate, "https://pay.example".to_string())),
+        "the focused frame's origin is asked about like a navigation there"
+    );
+
+    g.list(ProjectPolicyOp::AddOrigin).await;
+    let press = g.h.call_as("s1", "press", json!({ "key": "x" })).await;
+    assert_eq!(press["ok"], true, "{press}");
+}
+
+#[tokio::test]
+async fn keys_to_a_focused_frame_the_engine_cannot_reach_are_refused() {
+    let engine = FakeEngine::new(webview2_like());
+    *engine.focused_frame.lock() = json!("html>body>iframe:nth-of-type(2)");
+    let h = harness_with(engine);
+    h.call_as("s1", "navigate", json!({ "url": "https://example.com/shop" })).await;
+    for (verb, args) in [("press", json!({ "key": "x" })), ("type", json!({ "text": "x" }))] {
+        let reply = h.call_as("s1", verb, args).await;
+        assert_eq!(
+            (reply["code"].as_str(), reply["reason"].as_str()),
+            (Some("capability_unavailable"), Some("focused_frame_unreachable")),
+            "{verb}: {reply}"
+        );
+    }
+}

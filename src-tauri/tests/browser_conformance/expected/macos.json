@@ -5,6 +5,7 @@
     { "capability": "download_size_cap", "code": "capability_unavailable" },
     { "capability": "frame_password_submit", "code": "capability_unavailable" },
     { "capability": "frame_focused_password_submit", "code": "capability_unavailable" },
+    { "capability": "frame_focused_key", "code": "capability_unavailable" },
     { "capability": "frame_upload", "code": "capability_unavailable" },
     { "capability": "frame_file_chooser", "code": "capability_unavailable" }
   ]
