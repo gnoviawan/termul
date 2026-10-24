@@ -60,8 +60,11 @@ export async function startSession(opts: {
   const listeners: ((text: string) => void)[] = []
   const pump = async (stream: ReadableStream<Uint8Array>, tee: boolean) => {
     const decoder = new TextDecoder()
-    for await (const chunk of stream) {
-      const text = decoder.decode(chunk, { stream: true })
+    const reader = stream.getReader()
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) return
+      const text = decoder.decode(value, { stream: true })
       appendFileSync(opts.logFile, text.replace(/^(id|event|data):.*\n?/gm, ''))
       if (tee) for (const listener of listeners) listener(text)
     }

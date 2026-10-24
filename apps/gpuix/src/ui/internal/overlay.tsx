@@ -32,10 +32,10 @@ import {
   useRef,
   useState
 } from 'react'
-import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { registerPortal } from '../../compat/dom-node'
 import { tw } from '../../style/tw'
 import { SANS_FAMILY } from '../../style/utilities'
+import { useWebviewOcclusion } from './occlusion'
 
 /** index.css `body`: `font-sans text-foreground`, 16px/24px, weight 400. */
 export function bodyText(): StyleDesc {
@@ -257,7 +257,7 @@ export function Floating({
   occludes = true,
   children
 }: FloatingProps): ReactNode {
-  useNativeWebviewOcclusion(occludes && overlay.open)
+  useWebviewOcclusion(occludes && overlay.open)
   const triggerId = overlay.trigger?.id ?? null
   const offset =
     side === 'top' || side === 'bottom' ? { x: alignOffset, y: 0 } : { x: 0, y: alignOffset }

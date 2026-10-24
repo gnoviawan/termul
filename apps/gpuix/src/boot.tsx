@@ -7,6 +7,7 @@
  */
 
 import { type NativeRenderer, render } from '@gpuix/react'
+import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { installGlobalErrorForwarding } from '@/lib/log-api'
 import { setHostLocalTokenSource, setWebAuthToken } from '@/lib/web-auth-token'
 import { App } from './App'
@@ -15,9 +16,11 @@ import { compatRenderOptions } from './compat/root'
 import { ServerGate } from './launcher/ServerGate'
 import { log } from './log'
 import { guardNativeQueries } from './native-guard'
+import { provideWebviewOcclusion } from './ui/internal/occlusion'
 import { DESKTOP_WINDOW } from './window'
 
 export const boot: BootFn = (config, options) => {
+  provideWebviewOcclusion(useNativeWebviewOcclusion)
   if (config.token) setWebAuthToken(config.token)
   setHostLocalTokenSource(options.hostLocalToken)
   const onRenderer = (renderer: NativeRenderer) => {

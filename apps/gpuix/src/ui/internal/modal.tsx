@@ -13,11 +13,11 @@
 import type { PublicInstance } from '@gpuix/react'
 import * as DialogPrimitive from '@gpuix/react/dialog'
 import { createContext, forwardRef, type ReactNode, useContext, useMemo, useRef } from 'react'
-import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { cn } from '@/lib/utils'
 import { contentBasis } from '../../compat/children'
 import type { TwState } from '../../style/tw'
 import { Box, type HostProps, Inherit, mergeRefs, useTw, wrapText } from './host'
+import { useWebviewOcclusion } from './occlusion'
 import { bodyText, useControllableState, useFocusFirstTabbable } from './overlay'
 import { Slot } from './slot'
 
@@ -149,8 +149,7 @@ export const ModalContent = forwardRef<
   ref
 ) {
   const modal = useModal('DialogContent')
-  // Native browser webviews paint above GPUIX; hide them while the modal is up (web parity).
-  useNativeWebviewOcclusion(modal.open)
+  useWebviewOcclusion(modal.open)
   const attrs = { ...props, 'data-state': modal.open ? 'open' : 'closed' }
   const overlay = useTw(overlayClassName, {}, attrs).style
   const { style: popupStyle, svgClasses } = useTw(className, {}, attrs)
