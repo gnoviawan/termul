@@ -2,27 +2,30 @@
  * The comet ring (web `.tm-comet`): a ring whose alpha climbs from 0 at the
  * top, clockwise, to the full colour, with a round head at the top. GPUIX has
  * no conic gradients, masks or transforms, so the ring is SVG: wedges of
- * rising opacity, rotated by re-rendering the source in 10-degree steps. One
- * lap is 700ms; reduced motion holds it at rest, like the paused animation.
+ * rising opacity, rotated by swapping frames in 10-degree steps. One lap is
+ * 700ms; reduced motion holds it at rest, like the paused animation.
+ *
+ * A frame is about 11 KB of SVG at 16 px, and a step that resends it as
+ * `source` made spinners 98.5% of the mutation stream under the 8-chat
+ * stream-storm (tools/perf/hidden-panes.md). With a frame store installed
+ * (`internal/frame-store.ts`), each frame is written to a file once and a
+ * step sends its path as `src`. One clock steps every spinner, so all of them
+ * change in one batch and wake the window once per step.
  */
 import type { PublicInstance } from '@gpuix/react'
 import { type RefObject, useContext, useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { isOffFrame } from '../compat/visibility'
 import { useIconStyle } from '../icons/hugeicons'
+import { frameStore } from './internal/frame-store'
 import { UiEnvironmentContext } from './internal/host'
 
 const LAP_MS = 700
 const STEP_DEG = 10
 const WEDGES = 72
 
-const sources = new Map<string, string>()
-
 /** The ring for diameter `size` (px) rotated by `angle` degrees, painted black. */
 export function cometSource(size: number, angle: number): string {
-  const key = `${size}:${angle}`
-  const cached = sources.get(key)
-  if (cached) return cached
   const r = size / 2
   const stroke = size * 0.12
   const inner = r - stroke
@@ -42,29 +45,61 @@ export function cometSource(size: number, angle: number): string {
     )
   }
   const head = `<circle fill="#000" cx="${r}" cy="${stroke / 2}" r="${stroke / 2}"/>`
-  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><g transform="rotate(${angle} ${r} ${r})">${wedges.join('')}${head}</g></svg>`
-  sources.set(key, source)
-  return source
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><g transform="rotate(${angle} ${r} ${r})">${wedges.join('')}${head}</g></svg>`
+}
+
+const frames = new Map<string, { src: string }>()
+
+/** FNV-1a, so a frame file is named by its content and a stale one is never read. */
+function contentHash(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
+  return (hash >>> 0).toString(36)
+}
+
+/** The svg props for one frame: its file when a store is installed, else the markup. */
+export function cometFrame(size: number, angle: number): { src: string } | { source: string } {
+  const store = frameStore()
+  if (!store) return { source: cometSource(size, angle) }
+  const key = `${size}:${angle}`
+  const known = frames.get(key)
+  if (known) return known
+  const svg = cometSource(size, angle)
+  const frame = { src: store(`${size}-${angle}-${contentHash(svg)}.svg`, svg) }
+  frames.set(key, frame)
+  return frame
+}
+
+const STEPS = 360 / STEP_DEG
+const steppers = new Set<(step: number) => void>()
+let clock: ReturnType<typeof setInterval> | null = null
+
+function onStep(stepper: (step: number) => void): () => void {
+  steppers.add(stepper)
+  clock ??= setInterval(() => {
+    const step = Math.floor(((Date.now() % LAP_MS) / LAP_MS) * STEPS)
+    for (const each of steppers) each(step)
+  }, LAP_MS / STEPS)
+  return () => {
+    steppers.delete(stepper)
+    if (steppers.size > 0 || clock === null) return
+    clearInterval(clock)
+    clock = null
+  }
 }
 
 function useLapAngle(running: boolean, ref: RefObject<PublicInstance | null>): number {
-  const [angle, setAngle] = useState(0)
+  const [step, setStep] = useState(0)
   useEffect(() => {
     if (!running) return
-    const started = Date.now()
-    const timer = setInterval(
-      () => {
-        // Each step resends the whole ring (about 11 KB at 16 px); a parked pane never shows it.
-        const id = ref.current?.id
-        if (id !== undefined && isOffFrame(id)) return
-        const turn = ((Date.now() - started) % LAP_MS) / LAP_MS
-        setAngle(Math.floor((turn * 360) / STEP_DEG) * STEP_DEG)
-      },
-      LAP_MS / (360 / STEP_DEG)
-    )
-    return () => clearInterval(timer)
+    return onStep((next) => {
+      // A browser does not paint a hidden pane's animation; a parked pane is never drawn.
+      const id = ref.current?.id
+      if (id !== undefined && isOffFrame(id)) return
+      setStep(next)
+    })
   }, [running, ref])
-  return angle
+  return step * STEP_DEG
 }
 
 function Spinner({
@@ -88,7 +123,7 @@ function Spinner({
   return (
     <svg
       ref={ref}
-      source={cometSource(size, angle)}
+      {...cometFrame(size, angle)}
       style={style}
       role={decorative ? undefined : 'status'}
       aria-label={decorative ? undefined : label}

@@ -191,7 +191,7 @@ describe('parkHiddenPanes', () => {
     const native = tree.applyBatch.bind(tree)
     tree.applyBatch = (json) => {
       for (const op of JSON.parse(json) as unknown[][])
-        if (op[0] === 'setCustomProp' && op[2] === 'source') sources++
+        if (op[0] === 'setCustomProp' && (op[2] === 'src' || op[2] === 'source')) sources++
       return native(json)
     }
     const root = createRoot(tree as unknown as NativeRenderer)
