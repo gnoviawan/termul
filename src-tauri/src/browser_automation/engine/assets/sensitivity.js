@@ -7,10 +7,12 @@ var facts = {
   regionHasPayment: false,
   pageHasPayment: false,
   isSubmitter: false,
+  submitsByScript: false,
   isTextEntry: false,
   isFileInput: false,
   formAction: null,
-  linkTarget: null
+  linkTarget: null,
+  opaqueFrames: []
 };
 if (!target) return facts;
 var doc = ownerDocOf(target);
@@ -26,10 +28,6 @@ if (!p.path && FRAME_TAGS.indexOf(tag) >= 0 && !frameDocOf(target)) {
 function absolute(href) {
   try { return new URL(href, baseOf(doc)).href; } catch (e) { return null; }
 }
-function tokens(el) {
-  return (attr(el, 'autocomplete') || '').toLowerCase().split(/\s+/);
-}
-var CARD_NAME = /card.?num|cc.?num|cvc|cvv|csc|security.?code|expir/i;
 var NOT_TEXT = ['button', 'submit', 'reset', 'image', 'checkbox', 'radio', 'file', 'color', 'range', 'hidden'];
 function isPassword(el) {
   if (tagOf(el) === 'INPUT' && inputType(el) === 'password') return true;
@@ -37,22 +35,23 @@ function isPassword(el) {
     return t === 'current-password' || t === 'new-password' || t === 'one-time-code';
   });
 }
-function isPayment(el) {
-  if (tokens(el).some(function (t) { return t.indexOf('cc-') === 0; })) return true;
-  return CARD_NAME.test((attr(el, 'name') || '') + ' ' + (attr(el, 'id') || ''));
+function isNativeSubmitter(el) {
+  var t = tagOf(el);
+  if (t === 'BUTTON') return (attr(el, 'type') || 'submit').toLowerCase() === 'submit';
+  return t === 'INPUT' && (inputType(el) === 'submit' || inputType(el) === 'image');
 }
-var FIELDS = 'input,select,textarea,[autocomplete]';
-// Fields under root, open shadow roots and same-origin frames included.
-function deepFields(root, out) {
-  Array.prototype.push.apply(out, all(root, FIELDS));
-  all(root, '*').forEach(function (el) {
-    var shadow = shadowOf(el);
-    if (shadow) deepFields(shadow, out);
-    var inner = frameDocOf(el);
-    if (inner) deepFields(inner, out);
-  });
-  return out;
+// A shown frame of another origin: its fields are out of this helper's
+// reach. A payment provider's hosted card fields sit in one; providers
+// name the frame for what it takes.
+function isOpaqueFrame(el) {
+  return !frameDocOf(el) && visible(el);
 }
+var PAYMENT_FRAME = /payment|credit|card.?(number|field|input|frame|form)|cvc|cvv|security.?code|expir/i;
+function namesPayment(el) {
+  return /payment/i.test(attr(el, 'allow') || '') ||
+    PAYMENT_FRAME.test((attr(el, 'title') || '') + ' ' + (attr(el, 'name') || ''));
+}
+var MAX_OPAQUE_FRAMES = 8;
 var type = tag === 'INPUT' ? inputType(target) : '';
 facts.isFileInput = type === 'file';
 facts.isTextEntry = (tag === 'INPUT' && NOT_TEXT.indexOf(type) < 0) || tag === 'TEXTAREA' ||
@@ -64,8 +63,12 @@ var region;
 if (form) {
   facts.targetInForm = true;
   region = Array.prototype.slice.call(formElements(form)).concat(deepFields(form, []));
-  facts.isSubmitter = (tag === 'BUTTON' && (attr(target, 'type') || 'submit').toLowerCase() === 'submit') ||
-    (tag === 'INPUT' && (type === 'submit' || type === 'image'));
+  facts.isSubmitter = isNativeSubmitter(target);
+  // A button in a form with no submit button of its own: the page's
+  // script is what submits that form.
+  facts.submitsByScript = !facts.isSubmitter && !facts.isTextEntry &&
+    roleOf(target) === 'button' && (attr(target, 'type') || '').toLowerCase() !== 'reset' &&
+    !Array.prototype.slice.call(formElements(form)).some(isNativeSubmitter);
   var action = (facts.isSubmitter && attr(target, 'formaction')) || attr(form, 'action') || urlOf(doc);
   facts.formAction = absolute(action);
 } else {
@@ -73,12 +76,18 @@ if (form) {
   // anywhere on the page, a form included: every shown field is in reach.
   region = deepFields(doc, []).filter(visible);
 }
+var pageFrames = deepAll(doc, 'iframe,frame', []).filter(isOpaqueFrame);
+var regionFrames = form ? deepAll(form, 'iframe,frame', []).filter(isOpaqueFrame) : pageFrames;
 facts.regionHasPassword = region.some(isPassword);
-facts.regionHasPayment = region.some(isPayment);
+facts.regionHasPayment = region.some(isPayment) || regionFrames.some(namesPayment);
 // An order form without card fields can still charge the card: its script
 // reads the fields another form on the page holds.
-facts.pageHasPayment = facts.regionHasPayment ||
+facts.pageHasPayment = facts.regionHasPayment || pageFrames.some(namesPayment) ||
   (!!form && deepFields(doc, []).filter(visible).some(isPayment));
+// The host reads the other frames where its engine reaches them.
+facts.opaqueFrames = pageFrames.filter(function (f) { return !namesPayment(f); })
+  .slice(0, MAX_OPAQUE_FRAMES)
+  .map(function (f) { return { path: pathOf(f), inRegion: regionFrames.indexOf(f) >= 0 }; });
 var link = closestOf(target, 'a[href],area[href]');
 if (link) facts.linkTarget = absolute(attr(link, 'href'));
 return facts;

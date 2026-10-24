@@ -62,6 +62,7 @@ pub const OWNER_PATH: Helper = helper!("owner_path");
 #[cfg_attr(target_os = "windows", allow(dead_code, reason = "WebView2 reads the console through CDP"))]
 pub const CONSOLE_PULL: Helper = helper!("console_pull");
 pub const SENSITIVITY: Helper = helper!("sensitivity");
+pub const CARD_FIELDS: Helper = helper!("card_fields");
 /// Only CDP engines set a file input through the element itself.
 #[cfg(any(test, target_os = "windows"))]
 pub const FILE_INPUT: Helper = helper!("file_input");
@@ -179,6 +180,12 @@ pub fn drag(path: &str, to: &str) -> Script {
 /// focused element without one.
 pub fn sensitivity(path: Option<&str>) -> Script {
     Script::new(SENSITIVITY, json!({ "path": path }))
+}
+
+/// Whether the document shows a payment-card field, its open shadow roots
+/// and same-origin frames included.
+pub fn card_fields() -> Script {
+    Script::new(CARD_FIELDS, json!({}))
 }
 
 /// The file input at `path` itself, for engines that set its files by

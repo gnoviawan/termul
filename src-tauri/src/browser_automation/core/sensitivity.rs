@@ -37,6 +37,9 @@ pub struct SensitivityFacts {
     pub page_has_payment: bool,
     /// Activating the element submits its form.
     pub is_submitter: bool,
+    /// The element is a button in a form with no submit button of its
+    /// own, so the page's script submits that form when it is pressed.
+    pub submits_by_script: bool,
     /// The element takes typed text, so a click only focuses it. Unknown
     /// counts as an element a click or key activates.
     pub is_text_entry: bool,
@@ -45,6 +48,20 @@ pub struct SensitivityFacts {
     pub form_action: Option<String>,
     /// Absolute URL of the link the element sits in.
     pub link_target: Option<String>,
+    /// Shown cross-origin frames the helper could not read, whose own
+    /// attributes do not say they take card details. Where the engine
+    /// reaches them the host reads them for card fields.
+    pub opaque_frames: Vec<OpaqueFrame>,
+}
+
+/// A cross-origin frame in the target's document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OpaqueFrame {
+    /// The frame element's path, as the snapshot names frames.
+    pub path: String,
+    /// The frame sits in the target's region.
+    pub in_region: bool,
 }
 
 impl SensitivityFacts {
@@ -176,7 +193,7 @@ impl Classes {
 /// anything but a text field, Enter, Space on anything but a text field,
 /// a change of a control's state. A region holding credentials then
 /// counts it as their submit, however the page wired it up.
-fn activates(gesture: Gesture<'_>, facts: &SensitivityFacts) -> bool {
+pub fn activates(gesture: Gesture<'_>, facts: &SensitivityFacts) -> bool {
     match gesture {
         Gesture::Click | Gesture::Toggle | Gesture::Fill => !facts.is_text_entry,
         Gesture::Select => true,
@@ -207,6 +224,15 @@ fn submits_form(gesture: Gesture<'_>, facts: &SensitivityFacts) -> bool {
     facts.target_in_form && (implicit || (facts.is_submitter && activates(gesture, facts)))
 }
 
+/// Whether `gesture` presses a button its form's script submits with: a
+/// click, Enter or Space, not a change of a control's state.
+fn presses_script_submit(gesture: Gesture<'_>, facts: &SensitivityFacts) -> bool {
+    facts.target_in_form
+        && facts.submits_by_script
+        && matches!(gesture, Gesture::Click | Gesture::Key(_) | Gesture::Type(_))
+        && activates(gesture, facts)
+}
+
 /// Every sensitive class `gesture` falls in.
 pub fn classify(
     gesture: Gesture<'_>,
@@ -228,8 +254,10 @@ pub fn classify(
             out.add(ActionClass::PasswordSubmit, page_origin.clone(), page, false);
         }
         // Submitting a form with no card field still pays when the page
-        // shows card fields elsewhere ("Place order" beside the card form).
-        let pays_elsewhere = submits_form(gesture, facts) && facts.page_has_payment;
+        // shows card fields elsewhere ("Place order" beside the card form),
+        // whether the form submits natively or by its script.
+        let pays_elsewhere = facts.page_has_payment
+            && (submits_form(gesture, facts) || presses_script_submit(gesture, facts));
         if (region && facts.region_has_payment) || pays_elsewhere {
             out.add(ActionClass::PaymentSubmit, page_origin.clone(), page, false);
         }

@@ -223,6 +223,8 @@ pub(super) struct FakeEngine {
     sensitivity: Mutex<Value>,
     /// What it reports inside a reachable child frame.
     frame_sensitivity: Mutex<Value>,
+    /// Whether a reachable child frame shows card fields.
+    pub(super) frame_card_fields: Mutex<bool>,
     /// The path the focused-frame helper reports in the main frame.
     pub(super) focused_frame: Mutex<Value>,
     /// Every `set_input_files` call.
@@ -288,6 +290,7 @@ impl FakeEngine {
             frames: Mutex::new(Vec::new()),
             sensitivity: Mutex::new(json!({})),
             frame_sensitivity: Mutex::new(json!({})),
+            frame_card_fields: Mutex::new(false),
             focused_frame: Mutex::new(Value::Null),
             files_set: Mutex::new(Vec::new()),
         }
@@ -429,7 +432,11 @@ impl BrowserEngine for FakeEngine {
     }
     fn evaluate_in_frame<'a>(&'a self, _tab: &'a str, frame: &'a str, script: Script) -> EngineFuture<'a, Value> {
         let known = self.frames.lock().iter().any(|f| f.id == frame);
-        let facts = (script.helper.name == "sensitivity").then(|| self.frame_sensitivity.lock().clone());
+        let facts = match script.helper.name {
+            "sensitivity" => Some(self.frame_sensitivity.lock().clone()),
+            "card_fields" => Some(json!(*self.frame_card_fields.lock())),
+            _ => None,
+        };
         Box::pin(async move {
             match facts {
                 Some(facts) if known => Ok(facts),

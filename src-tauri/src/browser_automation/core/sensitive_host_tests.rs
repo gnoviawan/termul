@@ -406,6 +406,40 @@ async fn a_submit_inside_a_cross_origin_frame_is_classified_from_that_frame() {
     assert!(r.h.engine.clicks.lock().is_empty(), "nothing was clicked");
 }
 
+/// Pay in the main page's form, which holds the cross-origin frame.
+fn pay_beside(frame_path: &str) -> Value {
+    json!({
+        "frameOrigin": ORIGIN,
+        "targetInForm": true,
+        "isSubmitter": true,
+        "formAction": "http://127.0.0.1:4100/pay",
+        "opaqueFrames": [{ "path": frame_path, "inRegion": true }],
+    })
+}
+
+#[tokio::test]
+async fn pay_beside_a_frame_the_engine_reads_card_fields_in_is_a_payment_submit() {
+    let (r, _) = framed_rig().await;
+    *r.h.engine.frame_card_fields.lock() = true;
+    r.facts(pay_beside("html>body>iframe:nth-of-type(1)"));
+    let reply = r.h.call("click", json!({ "ref": "@e1" })).await;
+    assert_eq!(reply["code"], ERR_CONFIRMATION, "{reply}");
+    assert_eq!(r.ticket_actions()[0].0, ActionClass::PaymentSubmit);
+    assert!(r.h.engine.clicks.lock().is_empty(), "nothing was clicked");
+}
+
+#[tokio::test]
+async fn a_frame_without_card_fields_or_out_of_reach_adds_nothing() {
+    for (card_fields, path) in [(false, "html>body>iframe:nth-of-type(1)"), (true, "html>body>iframe:nth-of-type(2)")] {
+        let (r, _) = framed_rig().await;
+        *r.h.engine.frame_card_fields.lock() = card_fields;
+        r.facts(pay_beside(path));
+        let reply = r.h.call("click", json!({ "ref": "@e1" })).await;
+        assert_eq!(reply["ok"], true, "{path}: {reply}");
+        assert!(r.ticket_actions().is_empty(), "{path}");
+    }
+}
+
 #[tokio::test]
 async fn an_upload_into_a_cross_origin_frame_sets_that_frames_input() {
     let (r, tab) = framed_rig().await;

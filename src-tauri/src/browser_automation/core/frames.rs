@@ -47,7 +47,7 @@ struct Origin {
 }
 
 impl DesktopBrowserHost {
-    async fn eval_frame(&self, label: &str, frame: Option<&str>, script: Script) -> Result<Value, BrowserError> {
+    pub(super) async fn eval_frame(&self, label: &str, frame: Option<&str>, script: Script) -> Result<Value, BrowserError> {
         let Some(frame) = frame else {
             return self.eval(label, script).await;
         };

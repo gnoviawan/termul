@@ -171,10 +171,34 @@ fn submitting_an_order_form_beside_the_card_form_is_a_payment_submit() {
     for gesture in [Gesture::Key("Enter"), Gesture::Type("x\n")] {
         assert_eq!(summary(&classify(gesture, &field, &scene(false))), payment, "{gesture:?}");
     }
+    // A plain button in a form that has its own submit button.
     for gesture in [Gesture::Toggle, Gesture::Select, Gesture::Fill, Gesture::Click] {
         assert!(classify(gesture, &order, &scene(false)).is_empty(), "{gesture:?}");
     }
     assert!(classify(Gesture::Fill, &field, &scene(false)).is_empty());
+}
+
+#[test]
+fn pressing_the_button_a_form_without_a_submit_is_submitted_by_is_a_payment_submit() {
+    let place_order = SensitivityFacts {
+        frame_origin: Some("https://shop.example".into()),
+        target_in_form: true,
+        page_has_payment: true,
+        submits_by_script: true,
+        ..SensitivityFacts::default()
+    };
+    let payment = vec![(ActionClass::PaymentSubmit, Some("https://shop.example"), false)];
+    for gesture in [Gesture::Click, Gesture::Key("Enter"), Gesture::Key("Space")] {
+        assert_eq!(summary(&classify(gesture, &place_order, &scene(false))), payment, "{gesture:?}");
+    }
+    for gesture in [Gesture::Toggle, Gesture::Select, Gesture::Fill, Gesture::Key("Tab")] {
+        assert!(classify(gesture, &place_order, &scene(false)).is_empty(), "{gesture:?}");
+    }
+    let no_card = SensitivityFacts {
+        page_has_payment: false,
+        ..place_order
+    };
+    assert!(classify(Gesture::Click, &no_card, &scene(false)).is_empty());
 }
 
 #[test]
@@ -423,7 +447,7 @@ fn all_facts() -> Vec<SensitivityFacts> {
         Some("https://collect.example/a?x=1".to_string()),
     ];
     let mut out = Vec::new();
-    for bits in 0u8..128 {
+    for bits in 0u8..=255 {
         for action in &actions {
             for link in &links {
                 out.push(SensitivityFacts {
@@ -435,8 +459,10 @@ fn all_facts() -> Vec<SensitivityFacts> {
                     is_file_input: bits & 16 != 0,
                     is_text_entry: bits & 32 == 0,
                     page_has_payment: bits & 64 != 0,
+                    submits_by_script: bits & 128 != 0,
                     form_action: action.clone(),
                     link_target: link.clone(),
+                    opaque_frames: Vec::new(),
                 });
             }
         }
@@ -461,6 +487,7 @@ fn at_most(a: &SensitivityFacts, b: &SensitivityFacts) -> bool {
         && le(a.region_has_payment, b.region_has_payment)
         && le(a.page_has_payment, b.page_has_payment)
         && le(a.is_submitter, b.is_submitter)
+        && le(a.submits_by_script, b.submits_by_script)
         && le(a.is_file_input, b.is_file_input)
         && le(b.is_text_entry, a.is_text_entry)
         && rank(&actions, &a.form_action) <= rank(&actions, &b.form_action)

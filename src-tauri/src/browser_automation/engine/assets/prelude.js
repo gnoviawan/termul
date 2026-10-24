@@ -454,4 +454,28 @@ function changed(el) {
   dispatchOf(el, new Event('input', { bubbles: true }));
   dispatchOf(el, new Event('change', { bubbles: true }));
 }
+function tokens(el) {
+  return (attr(el, 'autocomplete') || '').toLowerCase().split(/\s+/);
+}
+var CARD_NAME = /card.?num|cc.?num|cvc|cvv|csc|security.?code|expir/i;
+function isPayment(el) {
+  if (tokens(el).some(function (t) { return t.indexOf('cc-') === 0; })) return true;
+  return CARD_NAME.test((attr(el, 'name') || '') + ' ' + (attr(el, 'id') || ''));
+}
+var FIELDS = 'input,select,textarea,[autocomplete]';
+// Elements matching selector under root, open shadow roots and same-origin
+// frames included.
+function deepAll(root, selector, out) {
+  Array.prototype.push.apply(out, all(root, selector));
+  all(root, '*').forEach(function (el) {
+    var shadow = shadowOf(el);
+    if (shadow) deepAll(shadow, selector, out);
+    var inner = frameDocOf(el);
+    if (inner) deepAll(inner, selector, out);
+  });
+  return out;
+}
+function deepFields(root, out) {
+  return deepAll(root, FIELDS, out);
+}
 var STALE = { error: 'stale_ref' };

@@ -9,7 +9,7 @@ use super::actions::{check_ref, check_url, tab_id_arg};
 use super::consent::SensitiveRequest;
 use super::dispatch::Verb;
 use super::reply::reported_failure;
-use super::sensitivity::{classify, Gesture, Scene, SensitivityFacts};
+use super::sensitivity::{activates, classify, Gesture, Scene, SensitivityFacts};
 use super::stop::StopToken;
 use super::tabs::stale_ref_error;
 use super::{BrowserError, DesktopBrowserHost};
@@ -18,6 +18,8 @@ use crate::browser_automation::engine::assets;
 use crate::browser_automation::BrowserCall;
 
 const BLANK: &str = "about:blank";
+/// Cross-origin frames read for card fields per action.
+const MAX_CARD_FRAMES: usize = 8;
 
 /// What the pass reads the facts from.
 #[derive(Clone, Copy)]
@@ -91,7 +93,7 @@ impl DesktopBrowserHost {
             },
             Probe::Element { needs_ref } => {
                 let label = self.resolve_tab(session_id, args)?;
-                let facts = self.sensitivity_facts(&label, args, needs_ref).await?;
+                let facts = self.sensitivity_facts(&label, args, needs_ref, gesture).await?;
                 (Some(label), facts)
             }
         };
@@ -142,6 +144,7 @@ impl DesktopBrowserHost {
         label: &str,
         args: &Value,
         needs_ref: bool,
+        gesture: Gesture<'_>,
     ) -> Result<SensitivityFacts, BrowserError> {
         let token = args.get("ref").and_then(Value::as_str);
         if let Some(token) = token {
@@ -150,6 +153,7 @@ impl DesktopBrowserHost {
             return Err(BrowserError::invalid("missing 'ref'").with_arg_keys(&["ref"]));
         }
         // A ref's facts come from the frame it was minted in.
+        let mut frame = None;
         let out = match token {
             Some(token) => {
                 let node = {
@@ -163,11 +167,47 @@ impl DesktopBrowserHost {
                         .map_err(|why| stale_ref_error(token, why))?
                         .clone()
                 };
-                self.eval_ref(label, &node, assets::sensitivity(Some(&node.path))).await?
+                let out = self.eval_ref(label, &node, assets::sensitivity(Some(&node.path))).await?;
+                frame = (!node.frame.is_empty()).then_some(node.frame);
+                out
             }
             None => self.eval(label, assets::sensitivity(None)).await?,
         };
         reported_failure(&out, token)?;
-        Ok(SensitivityFacts::from_helper(&out))
+        let mut facts = SensitivityFacts::from_helper(&out);
+        if activates(gesture, &facts) {
+            self.read_card_frames(label, frame.as_deref(), &mut facts).await;
+        }
+        Ok(facts)
+    }
+
+    /// Count card fields in the cross-origin frames the helper could not
+    /// read, reading each where the engine reaches it: a payment
+    /// provider's hosted fields in a frame that does not say what it
+    /// takes. `parent` is the engine frame the helper ran in. A frame that
+    /// cannot be read adds nothing.
+    async fn read_card_frames(&self, label: &str, parent: Option<&str>, facts: &mut SensitivityFacts) {
+        let mut unknown = std::mem::take(&mut facts.opaque_frames);
+        unknown.truncate(MAX_CARD_FRAMES);
+        unknown.retain(|f| if f.in_region { !facts.region_has_payment } else { !facts.page_has_payment });
+        if unknown.is_empty() {
+            return;
+        }
+        let Ok(children) = self.engine.child_frames(label).await else {
+            return;
+        };
+        for opaque in unknown {
+            let Some(child) = children
+                .iter()
+                .find(|c| c.parent.as_deref() == parent && c.owner_path == opaque.path)
+            else {
+                continue;
+            };
+            let shows_card = self.eval_frame(label, Some(&child.id), assets::card_fields()).await;
+            if matches!(shows_card, Ok(Value::Bool(true))) {
+                facts.page_has_payment = true;
+                facts.region_has_payment |= opaque.in_region;
+            }
+        }
     }
 }
