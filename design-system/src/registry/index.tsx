@@ -436,6 +436,14 @@ export const SECTIONS: CanvasSection[] = [
             width: 1120,
             height: 680,
             Preview: M.ModelSelectorV2
+          },
+          {
+            id: 'chat.model-selector.v2-rail',
+            name: 'Model selector v2 rail (flag)',
+            source: `${PICKER}/SelectorPanelV2.tsx`,
+            width: 1200,
+            height: 680,
+            Preview: M.ModelSelectorV2Rail
           }
         ]
       }

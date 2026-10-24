@@ -608,3 +608,105 @@ describe('SelectorPanelV2 rejected values and optimistic switches', () => {
     await waitFor(() => expect(fast).toHaveAttribute('aria-checked', 'false'))
   })
 })
+
+const CLAUDE_CATALOG = {
+  id: 'model',
+  source: 'config',
+  currentValue: null,
+  options: [{ value: 'claude-opus', name: 'Opus via Claude' }]
+} as ModelCatalog
+
+/** Each list row's agent, read from its glyph slot, by row name. */
+const rowAgents = (): Array<[string, string | null]> =>
+  Array.from(
+    screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-selector-row]')
+  ).map((row) => {
+    const slot = row.querySelector<HTMLElement>('[data-row-agent]')
+    expect(slot?.firstElementChild).not.toBeNull()
+    return [row.textContent?.trim() ?? '', slot?.dataset.rowAgent ?? null]
+  })
+
+describe('SelectorPanelV2 agent rail', () => {
+  it('agentRail="left" puts the agents in a vertical tablist beside the list', () => {
+    render(<Panel {...props({ agentRail: 'left' })} />)
+    const rail = screen.getByRole('tablist', { name: 'Agents' })
+    expect(rail).toHaveAttribute('aria-orientation', 'vertical')
+    expect(rail.nextElementSibling).toBe(screen.getByRole('tabpanel'))
+    expect(screen.getByRole('tab', { name: 'Cursor' })).toHaveAttribute('tabindex', '0')
+    expect(screen.getByRole('tab', { name: 'Claude Agent' })).toHaveAttribute('tabindex', '-1')
+  })
+
+  it('in chat, ArrowDown and ArrowUp move along the rail and open that agent', () => {
+    render(<Panel {...props({ agentRail: 'left', source: source({ selectAgent: null }) })} />)
+    const cursor = screen.getByRole('tab', { name: 'Cursor' })
+    const claude = screen.getByRole('tab', { name: 'Claude Agent' })
+    cursor.focus()
+    fireEvent.keyDown(cursor, { key: 'ArrowDown' })
+    expect(claude).toHaveFocus()
+    expect(claude).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel', { name: 'Claude Agent' })).toBeInTheDocument()
+    fireEvent.keyDown(claude, { key: 'ArrowUp' })
+    expect(cursor).toHaveFocus()
+    expect(cursor).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('in the launcher, the arrows only move focus; a click picks the agent', () => {
+    const selectAgent = vi.fn()
+    render(<Panel {...props({ agentRail: 'left', source: source({ selectAgent }) })} />)
+    const cursor = screen.getByRole('tab', { name: 'Cursor' })
+    const claude = screen.getByRole('tab', { name: 'Claude Agent' })
+    cursor.focus()
+    fireEvent.keyDown(cursor, { key: 'ArrowDown' })
+    expect(claude).toHaveFocus()
+    expect(selectAgent).not.toHaveBeenCalled()
+    fireEvent.click(claude)
+    expect(selectAgent).toHaveBeenCalledWith(expect.objectContaining({ configId: CLAUDE.id }))
+  })
+
+  it('the default top strip stays horizontal', () => {
+    render(<Panel {...props()} />)
+    expect(screen.getByRole('tablist', { name: 'Agents' })).toHaveAttribute(
+      'aria-orientation',
+      'horizontal'
+    )
+  })
+})
+
+describe('SelectorPanelV2 agent icon on every row', () => {
+  it.each([
+    'top',
+    'left'
+  ] as const)('with agentRail="%s", each row shows its own agent, not the open tab', (agentRail) => {
+    knownCatalogs.current = new Map([[CLAUDE.id, CLAUDE_CATALOG]])
+    render(
+      <Panel
+        {...props({
+          agentRail,
+          favorites: [
+            { configId: CLAUDE.id, value: 'claude-opus' },
+            { configId: CURSOR.id, value: 'sonnet' }
+          ]
+        })}
+      />
+    )
+    expect(screen.getByRole('tab', { name: 'Cursor', selected: true })).toBeInTheDocument()
+    expect(rowAgents()).toEqual([
+      ['Opus via Claude · Claude Agent', CLAUDE.id],
+      ['Claude Sonnet', CURSOR.id],
+      ['Claude Opus', CURSOR.id],
+      ['Claude Sonnet', CURSOR.id]
+    ])
+  })
+
+  it('search results from several agents each show their own agent', () => {
+    knownCatalogs.current = new Map([[CLAUDE.id, CLAUDE_CATALOG]])
+    render(<Panel {...props({ agentRail: 'left' })} />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search models and agents' }), {
+      target: { value: 'opus' }
+    })
+    expect(rowAgents()).toEqual([
+      ['Claude Opus', CURSOR.id],
+      ['Opus via Claude · Claude Agent', CLAUDE.id]
+    ])
+  })
+})

@@ -51,6 +51,8 @@ export interface SelectorPanelV2Props extends SelectorPanelProps {
    * as a section above the list. Empty until the favorites store lands.
    */
   favorites?: readonly FavoriteModel[]
+  /** Where the agent tabs sit: a strip under search, or a rail left of the list. */
+  agentRail?: 'top' | 'left'
 }
 
 function SectionLabel({ children }: { children: ReactNode }): React.JSX.Element {
@@ -62,6 +64,7 @@ function DenseModelRow({
   tooltip,
   selected,
   glyph,
+  agentId,
   agentName,
   edit,
   disabled,
@@ -71,7 +74,9 @@ function DenseModelRow({
   name: string
   tooltip?: string
   selected: boolean
-  glyph?: ReactNode
+  /** The model's own agent, as a glyph; `agentId` names that agent's config. */
+  glyph: ReactNode
+  agentId: string | null
   /** Another agent's model: named for screen readers; the glyph shows it. */
   agentName?: string
   /** Session options of the active model; adds the Edit button. */
@@ -98,7 +103,12 @@ function DenseModelRow({
           editable && 'min-w-0 flex-1 hover:bg-transparent'
         )}
       >
-        {glyph ? <span className="inline-flex shrink-0">{glyph}</span> : null}
+        <span
+          data-row-agent={agentId ?? undefined}
+          className="inline-flex w-4 shrink-0 justify-center"
+        >
+          {glyph}
+        </span>
         <span className="min-w-0 flex-1 truncate">
           {name}
           {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
@@ -142,25 +152,37 @@ interface TabItem {
   onSelect: () => void
 }
 
+const TAB_KEYS = {
+  horizontal: { next: 'ArrowRight', prev: 'ArrowLeft' },
+  vertical: { next: 'ArrowDown', prev: 'ArrowUp' }
+} as const
+
 /**
- * Agent tabs as glyphs over a hairline, the active one marked by a 2px
- * underline that slides between tabs. Tabs pattern: one tab stop (the
- * selected tab), Left/Right/Home/End move focus, Enter or Space selects.
+ * Agent tabs as glyphs, the active one marked by a 2px bar on the edge that
+ * faces the list, sliding between tabs. Horizontal: a strip over a hairline,
+ * underlined. Vertical: a rail left of the list. Tabs pattern: one tab stop
+ * (the selected tab); the arrow keys of the orientation, Home and End move
+ * focus, Enter or Space selects. With `followFocus` the arrows select too.
  */
 function AgentTabStrip({
   id,
   items,
+  orientation,
+  followFocus,
   disabled,
   touch,
   reduced
 }: {
   id: string
   items: TabItem[]
+  orientation: 'horizontal' | 'vertical'
+  followFocus: boolean
   disabled: boolean
   touch: boolean
   reduced: boolean
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  const vertical = orientation === 'vertical'
   // One tab stop: the selected tab, or the first when none is selected.
   const stop = Math.max(
     items.findIndex((item) => item.selected),
@@ -171,12 +193,13 @@ function AgentTabStrip({
     const index = tabs.indexOf(document.activeElement as HTMLElement)
     if (index < 0) return
     const last = tabs.length - 1
+    const keys = TAB_KEYS[orientation]
     const next =
-      event.key === 'ArrowRight'
+      event.key === keys.next
         ? index === last
           ? 0
           : index + 1
-        : event.key === 'ArrowLeft'
+        : event.key === keys.prev
           ? index === 0
             ? last
             : index - 1
@@ -188,14 +211,21 @@ function AgentTabStrip({
     if (next == null) return
     event.preventDefault()
     tabs[next]?.focus()
+    if (followFocus) items[next]?.onSelect()
   }
   return (
     <div
       ref={ref}
       role="tablist"
       aria-label="Agents"
+      aria-orientation={orientation}
       onKeyDown={onKeyDown}
-      className={cn('flex border-b border-border', touch ? 'px-3' : 'px-1')}
+      className={cn(
+        'flex',
+        vertical
+          ? cn('shrink-0 flex-col border-r border-border py-1', touch ? 'w-14' : 'w-10')
+          : cn('border-b border-border', touch ? 'px-3' : 'px-1')
+      )}
     >
       {items.map((item, index) => (
         <button
@@ -210,8 +240,10 @@ function AgentTabStrip({
           data-testid={`agent-tab-${item.key}`}
           onClick={item.onSelect}
           className={cn(
-            'relative flex flex-1 items-center justify-center rounded-t-md transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
-            touch ? 'h-11' : 'h-8',
+            'relative flex items-center justify-center transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
+            vertical
+              ? cn('ml-1 rounded-l-md', touch ? 'h-11' : 'h-8')
+              : cn('flex-1 rounded-t-md', touch ? 'h-11' : 'h-8'),
             item.selected
               ? 'text-foreground'
               : 'text-muted-foreground hover:bg-row-hover hover:text-foreground',
@@ -221,10 +253,13 @@ function AgentTabStrip({
           {item.glyph}
           {item.selected ? (
             <motion.span
-              layoutId={`${id}-underline`}
+              layoutId={`${id}-indicator`}
               aria-hidden="true"
               transition={quick(reduced)}
-              className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground"
+              className={cn(
+                'absolute rounded-full bg-foreground',
+                vertical ? 'inset-y-2 -right-px w-0.5' : 'inset-x-2 -bottom-px h-0.5'
+              )}
             />
           ) : null}
         </button>
@@ -404,7 +439,7 @@ function SessionOptions({
  * tokens.
  */
 export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element {
-  const { source: sw, touch, disabled, modelValue } = props
+  const { source: sw, touch, disabled, modelValue, agentRail = 'top' } = props
   const reduced = useReducedMotion() ?? false
   const state = useSelectorPanelState(props, { reserveMoreTab: false, favorites: props.favorites })
   const { query, searching, showingMore, effectiveId, viewId, viewTab, tabs, view } = state
@@ -432,11 +467,13 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     catalog: ModelCatalog | null,
     options: CatalogModel[],
     selectedValue: string | undefined,
-    tab: AgentTab | null,
-    showAgent: boolean,
+    /** Rows from several agents: another agent's row says whose it is. */
+    mixed: boolean,
     keyPrefix = ''
-  ): ReactNode =>
-    options.map((model) => (
+  ): ReactNode => {
+    // The row's own agent, never the open tab: Favorites and search mix agents.
+    const tab = tabOf(configId)
+    return options.map((model) => (
       <DenseModelRow
         key={`${keyPrefix}${configId}\0${model.value}`}
         name={model.name}
@@ -446,8 +483,9 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
             .join('\n\n') || undefined
         }
         selected={model.value === selectedValue}
-        glyph={showAgent && tab ? <TabGlyph tab={tab} /> : undefined}
-        agentName={showAgent && configId !== effectiveId ? tab?.name : undefined}
+        glyph={tab ? <TabGlyph tab={tab} /> : null}
+        agentId={configId}
+        agentName={mixed && configId !== effectiveId ? tab?.name : undefined}
         // Only the active model has session options; a favorite repeats it without Edit.
         edit={
           configId === effectiveId && model.value === selectedValue && !keyPrefix ? edit : undefined
@@ -457,6 +495,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         onPick={() => state.pick(configId, catalog, model.value)}
       />
     ))
+  }
 
   const agentRow = (tab: AgentTab, key: string, onPick: () => void): React.JSX.Element => (
     <AgentRow
@@ -477,9 +516,9 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           <ListMessage title="No models or agents match." detail="Try another name." />
         ) : (
           <>
-            {rows(effectiveId, effectiveCatalog, view.own, modelValue, tabOf(effectiveId), true)}
+            {rows(effectiveId, effectiveCatalog, view.own, modelValue, true)}
             {view.others.map(({ configId, catalog, model }) =>
-              rows(configId, catalog, [model], undefined, tabOf(configId), true)
+              rows(configId, catalog, [model], undefined, true)
             )}
             {view.agents.map((tab) =>
               agentRow(tab, `agent\0${tab.configId}`, () => {
@@ -517,7 +556,6 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
                   favorite.catalog,
                   [favorite.model],
                   favorite.configId === effectiveId ? modelValue : undefined,
-                  tabOf(favorite.configId),
                   true,
                   'favorite\0'
                 )
@@ -525,7 +563,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
               <SectionLabel>{viewTab?.name ?? 'Models'}</SectionLabel>
             </>
           ) : null}
-          {rows(effectiveId, view.catalog, view.catalog.options, modelValue, viewTab, false)}
+          {rows(effectiveId, view.catalog, view.catalog.options, modelValue, false)}
           {view.stale?.error ? (
             <StatusActions
               title={`${view.stale.error.label}. These models are from the last session.`}
@@ -547,7 +585,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       body = (
         <>
           {view.catalog ? (
-            rows(viewId, view.catalog, view.catalog.options, undefined, viewTab, false)
+            rows(viewId, view.catalog, view.catalog.options, undefined, false)
           ) : (
             <ListMessage
               title={`${nameOf(viewId)} gives no model choice.`}
@@ -561,7 +599,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     case 'other':
       body = (
         <>
-          {rows(viewId, view.catalog, view.catalog.options, undefined, viewTab, false)}
+          {rows(viewId, view.catalog, view.catalog.options, undefined, false)}
           {view.confirming ? (
             <BusyBlock
               agentName={nameOf(sw.currentConfigId)}
@@ -618,6 +656,18 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     })
   }
   const showTabs = !searching && tabItems.length > 1
+  const tabStrip = (orientation: 'horizontal' | 'vertical'): React.JSX.Element => (
+    <AgentTabStrip
+      id={`agent-tabs-${sw.key}`}
+      items={tabItems}
+      orientation={orientation}
+      // A tab in the launcher picks the agent; in chat it only opens its models.
+      followFocus={orientation === 'vertical' && sw.selectAgent == null}
+      disabled={disabled}
+      touch={touch}
+      reduced={reduced}
+    />
+  )
 
   // The list remounts per view (`key`), so this runs once per view: open on
   // the chosen model even when it sits below the fold.
@@ -655,7 +705,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     <div
       data-testid="agent-model-selector-panel"
       data-variant="v2"
-      className={cn('flex min-h-0 flex-col', !touch && 'w-75')}
+      data-agent-rail={agentRail}
+      className={cn('flex min-h-0 flex-col', !touch && (agentRail === 'left' ? 'w-85' : 'w-75'))}
     >
       <div
         className={cn(
@@ -687,29 +738,24 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{view.count}</span>
         ) : null}
       </div>
-      {showTabs ? (
-        <AgentTabStrip
-          id={`agent-tabs-${sw.key}`}
-          items={tabItems}
-          disabled={disabled}
-          touch={touch}
-          reduced={reduced}
-        />
-      ) : null}
-      <motion.div
-        ref={attachList}
-        key={state.listKey}
-        role={showTabs ? 'tabpanel' : undefined}
-        aria-label={showTabs ? (showingMore ? 'More agents' : viewTab?.name) : undefined}
-        data-testid="selector-list"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={quick(reduced)}
-        onKeyDown={onListKeyDown}
-        className={cn('max-h-72 overflow-y-auto overscroll-contain', pad, 'py-1')}
-      >
-        {body}
-      </motion.div>
+      {showTabs && agentRail === 'top' ? tabStrip('horizontal') : null}
+      <div className="flex min-h-0">
+        {showTabs && agentRail === 'left' ? tabStrip('vertical') : null}
+        <motion.div
+          ref={attachList}
+          key={state.listKey}
+          role={showTabs ? 'tabpanel' : undefined}
+          aria-label={showTabs ? (showingMore ? 'More agents' : viewTab?.name) : undefined}
+          data-testid="selector-list"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={quick(reduced)}
+          onKeyDown={onListKeyDown}
+          className={cn('max-h-72 min-w-0 flex-1 overflow-y-auto overscroll-contain', pad, 'py-1')}
+        >
+          {body}
+        </motion.div>
+      </div>
       {!searching && state.contextUsage ? (
         <>
           <div className="h-px bg-border" />

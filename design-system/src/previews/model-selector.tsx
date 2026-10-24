@@ -90,15 +90,30 @@ const MOCK_FAVORITES: FavoriteModel[] = (
   return favorite ? [favorite] : []
 })
 
-function V2Column({ id, label, model }: { id: string; label: string; model: string }) {
+function V2Column({
+  id,
+  label,
+  model,
+  agentRail
+}: {
+  id: string
+  label: string
+  model: string
+  agentRail?: 'top' | 'left'
+}) {
   const state = useMockSelector(id, model)
   const escapeRef = useRef<(() => boolean) | null>(null)
   return (
     // Room on the right for the Edit flyout.
-    <div className="flex w-130 flex-col gap-3">
+    <div className={`flex ${agentRail === 'left' ? 'w-140' : 'w-130'} flex-col gap-3`}>
       <Caption>{label}</Caption>
       <div className={`${SURFACE} self-start`}>
-        <SelectorPanelV2 {...panelProps(state)} favorites={MOCK_FAVORITES} escapeRef={escapeRef} />
+        <SelectorPanelV2
+          {...panelProps(state)}
+          favorites={MOCK_FAVORITES}
+          agentRail={agentRail}
+          escapeRef={escapeRef}
+        />
       </div>
     </div>
   )
@@ -117,6 +132,26 @@ export function ModelSelectorV2() {
         id="model-selector-v2-b"
         label="Context 256K · 500K"
         model={MOCK_NARROW_CONTEXT_MODEL}
+      />
+    </div>
+  )
+}
+
+/** Model picker v2 with the agent tabs as a rail left of the list. */
+export function ModelSelectorV2Rail() {
+  return (
+    <div className="flex gap-6 p-5">
+      <V2Column
+        id="model-selector-v2-rail-a"
+        label="Context 300K · 1M"
+        model={MOCK_DEFAULT_MODEL}
+        agentRail="left"
+      />
+      <V2Column
+        id="model-selector-v2-rail-b"
+        label="Context 256K · 500K"
+        model={MOCK_NARROW_CONTEXT_MODEL}
+        agentRail="left"
       />
     </div>
   )
