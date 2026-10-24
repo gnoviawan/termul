@@ -246,7 +246,7 @@ export function withAlpha(color: Rgba, alpha: number): Rgba {
   return { ...color, a: color.a * alpha }
 }
 
-/** A length in px: px, rem, em (against `fontSize`), unitless 0, calc(). */
+/** A length in px: px, rem, em (against `fontSize`), unitless 0, calc(), min(), max(), env(). */
 export function parseLength(value: string, vars: CssVars = {}, fontSize = ROOT_FONT_SIZE): number {
   const text = substituteVars(value.trim(), vars).trim()
   for (const [, unit] of text.matchAll(/[\d.]([a-z%]+)/g)) {
@@ -255,6 +255,14 @@ export function parseLength(value: string, vars: CssVars = {}, fontSize = ROOT_F
   }
   if (text.startsWith('calc('))
     return evalCalc(text.slice(5, matchingParen(text, 4)), vars, fontSize)
+  const fn = text.match(/^(min|max|env)\(/)
+  if (fn) {
+    const args = splitTopLevel(text.slice(fn[0].length, matchingParen(text, fn[0].length - 1)), ',')
+    // A desktop window has no safe-area insets: env() is its fallback, else 0.
+    if (fn[1] === 'env') return args[1] ? parseLength(args[1], vars, fontSize) : 0
+    const lengths = args.map((arg) => parseLength(arg, vars, fontSize))
+    return fn[1] === 'min' ? Math.min(...lengths) : Math.max(...lengths)
+  }
   const match = text.match(/^(-?[\d.]+)(px|rem|em)?$/)
   if (!match) throw new Error(`unsupported length ${value}`)
   const n = Number.parseFloat(match[1])
@@ -266,7 +274,9 @@ export function parseLength(value: string, vars: CssVars = {}, fontSize = ROOT_F
 
 /** calc() over px/rem lengths and plain numbers with + - * /. */
 function evalCalc(expr: string, vars: CssVars, fontSize: number): number {
-  const tokens = expr.match(/-?[\d.]+(?:px|rem|em)?|[-+*/()]/g) ?? []
+  // A minus is an operator token, so Tailwind's spaceless `calc(800px-2rem)`
+  // subtracts; a leading or post-operator minus negates in `factor`.
+  const tokens = expr.match(/[\d.]+(?:px|rem|em)?|[-+*/()]/g) ?? []
   let pos = 0
   const term = (): number => {
     let value = factor()
@@ -279,6 +289,7 @@ function evalCalc(expr: string, vars: CssVars, fontSize: number): number {
   }
   const factor = (): number => {
     const token = tokens[pos++]
+    if (token === '-') return -factor()
     if (token === '(') {
       const value = sum()
       pos++
