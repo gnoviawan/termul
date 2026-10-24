@@ -129,33 +129,27 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: ['Ctrl+Alt+T opens the Color Themes popover in both.']
   },
   'shortcuts.zoom-in': {
-    status: 'broken',
+    status: 'ported',
     differences: [
-      'Alt+= zooms the web UI to 110 %; GPUIX does not change scale. The UI zoom hook (hooks/use-ui-zoom.ts) is on the compat needs-override list.'
-    ],
-    cause: 'native override needed',
-    unit: 'O10 UI zoom',
-    impact: 2
+      'Zoom scales the whole GPUIX window (G4, shims/window-zoom.ts) on the desktop key, Ctrl+=: tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both clients, a real click and a context menu land where the zoomed UI paints, and Ctrl+0 restores the frame exactly. This surface still presses the web key (Alt+=), which the GPUIX desktop keymap leaves unbound, so its GPUIX frame shows no zoom; the steps need a per-client key.'
+    ]
   },
+
   'shortcuts.desktop-keymap': {
     status: 'blocked',
     differences: [
-      'GPUIX boots without __TAURI_INTERNALS__, so getDefaultKeyboardShortcuts() hands it the web keymap: Alt+T, Alt+W, Alt+, and Alt+= instead of the desktop Ctrl+T, Ctrl+W, Ctrl+, and Ctrl+=, and no Ctrl+R command history. A desktop user who moves to GPUIX loses those keys.'
-    ],
-    cause: 'native override needed',
-    unit: 'K2 desktop keymap for GPUIX',
-    impact: 2
+      'No web reference. GPUIX registers a desktop host, which now gets the same Ctrl-based keymap as Tauri (G4): workspace-checks asserts Ctrl+, opens Preferences, Ctrl+R opens command history and Alt+, does nothing.'
+    ]
   },
+
   'notifications.toast': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Typing the branch name and pressing Enter creates toast-branch and shows the success toast in both.',
       TOAST
-    ],
-    cause: 'native override needed',
-    unit: 'O4 toasts',
-    impact: 1
+    ]
   },
+
   'ssh.workspace': {
     status: 'blocked',
     differences: [
@@ -261,12 +255,13 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       ...SETTINGS_BASE,
-      'Server version reads termul-server v0.1.0 in GPUIX and v0.4.52 on the web against the same server.'
+      'Server version reads termul-server v0.4.52 in both: GPUIX asks the server (G4).'
     ],
-    cause: 'needs diagnosis',
-    unit: 'O9 server version source',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
+
   'settings.reset': {
     status: 'partial',
     differences: SETTINGS_BASE,
@@ -287,9 +282,10 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'shortcuts.settings-shortcut': {
     status: 'ported',
     differences: [
-      'Alt+, opens Preferences and Escape closes it in both. The web used to keep it open: the Shortcuts section keeps idle recorders mounted, which SettingsModal mistook for a recording in progress (fixed in src/renderer).'
+      'Alt+, opens Preferences on the web and Escape closes it. GPUIX takes the desktop key, Ctrl+, (G4 desktop keymap; workspace-checks asserts it opens and Escape closes); this surface still presses Alt+,, so its GPUIX steps need a per-client key.'
     ]
   },
+
   'theme.picker': {
     status: 'partial',
     differences: [
@@ -333,12 +329,13 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'update.toast': {
     status: 'blocked',
     differences: [
-      "Not compared: the update toast and the what's new modal render only under isTauriContext(). GPUIX needs its own updater path to show them at all."
+      "Not compared: the update toast and the what's new modal render only under isTauriContext(), so neither client shows them (the web hides them by design). GPUIX shows its version like the web (Preferences, Logs: termul-server v0.4.52). A GPUIX update check against the release feed is not built yet."
     ],
     cause: 'native override needed',
     unit: "U1 GPUIX updater and what's new",
     impact: 1
   },
+
   'theme.tokyonight-light': {
     status: 'ported',
     differences: [

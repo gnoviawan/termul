@@ -7,7 +7,6 @@
  */
 
 import { type NativeRenderer, render } from '@gpuix/react'
-import { registerDesktopHost } from '@/lib/desktop-host'
 import { installGlobalErrorForwarding } from '@/lib/log-api'
 import { setHostLocalTokenSource, setWebAuthToken } from '@/lib/web-auth-token'
 import { App } from './App'
@@ -21,7 +20,6 @@ import { DESKTOP_WINDOW } from './window'
 export const boot: BootFn = (config, options) => {
   if (config.token) setWebAuthToken(config.token)
   setHostLocalTokenSource(options.hostLocalToken)
-  registerDesktopHost(options.desktopHost)
   const onRenderer = (renderer: NativeRenderer) => {
     guardNativeQueries(renderer)
     for (const font of options.fonts)

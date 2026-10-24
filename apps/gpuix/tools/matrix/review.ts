@@ -157,12 +157,13 @@ export const REVIEWS: Record<string, Review> = {
   'editor.markdown': {
     status: 'partial',
     differences: [
-      'Preview renders, but the "On this page" outline column is missing (still missing at fce9a3e2, after D1 brought EditorTocLayout back), headings are smaller and paragraph spacing is tighter.',
+      'Preview has the "On this page" outline (G4): the heading and paragraph rows land on the web rows (126, 195, 257 px), heading sizes follow BlockNote (48/32 px). List items sit 1 px off and the bullet is the native one; the heading has no -0.018em letter spacing (GPUIX has none), so "Alpha guide" is 10 px wider.',
+      'The tab title truncates to "guid..." where the web shows "guide.md".',
       TITLE_TIP
     ],
-    cause: 'native override needed',
-    unit: 'E2 markdown preview parity',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
+    impact: 1
   },
   'editor.tabs': {
     status: 'partial',
@@ -216,11 +217,8 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'git.commit': {
-    status: 'partial',
-    differences: ['The commit lands (4 commits, bump version) in both.', TOAST],
-    cause: 'native override needed',
-    unit: 'O4 toasts',
-    impact: 1
+    status: 'ported',
+    differences: ['The commit lands (4 commits, bump version) in both.', TOAST]
   },
   'git.branch-picker': {
     status: 'ported',

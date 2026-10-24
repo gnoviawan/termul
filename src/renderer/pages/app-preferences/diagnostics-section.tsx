@@ -8,7 +8,7 @@ import { logApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useReportBugStore } from '@/stores/report-bug-store'
 import { rowId } from './categories'
-import { APP_VERSION } from './updates-section'
+import { useServerVersion } from './use-server-version'
 
 function ActionRow({
   label,
@@ -40,6 +40,7 @@ export function DiagnosticsSection(): React.JSX.Element {
   // hidden on web (host filesystem and native dialogs are unreachable from the
   // browser). Copy works over the web transport, so it stays.
   const isDesktop = isTauriContext()
+  const serverVersion = useServerVersion()
 
   return (
     <SettingsSection id="diagnostics">
@@ -104,7 +105,7 @@ export function DiagnosticsSection(): React.JSX.Element {
           <SettingsCard>
             <SettingsRow
               id={rowId('server-version')}
-              label={`termul-server ${APP_VERSION}`}
+              label={`termul-server ${serverVersion}`}
               description="The web client is served by the termul-server and updates together with it. Reload the page after the server updates."
             />
           </SettingsCard>
