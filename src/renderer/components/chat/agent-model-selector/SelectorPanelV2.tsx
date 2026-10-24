@@ -16,7 +16,8 @@ import {
   type OptionChoice,
   OptionRow,
   OptionSwitchRow,
-  ROW_FOCUS
+  ROW_FOCUS,
+  thinkingLabel
 } from './SelectorOptionRows'
 import type { SelectorPanelProps } from './SelectorPanel'
 import {
@@ -94,7 +95,15 @@ function DenseModelRow({
   const name = rawName.trim()
   const label = rowAccessibleName({ name, agentName })
   const editable = Boolean(edit && edit.length > 0)
+  // Edit showing the level marks the selected row; it replaces the check there.
+  // Every other selected row (the Favorites copy, a row without a level) keeps it.
+  const levelOnEdit = editable && edit !== undefined && thinkingLabel(edit) !== undefined
+  // Controlled, so a focus handed back by the closing flyout can skip it.
+  const [tipOpen, setTipOpen] = useState(false)
   const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
+    const quiet = (): void => {
+      if (handle) handle.suppressNextTooltip.current = false
+    }
     const button = (
       <button
         ref={handle?.ref}
@@ -105,6 +114,13 @@ function DenseModelRow({
         disabled={disabled}
         onClick={onPick}
         onKeyDown={handle?.onKeyDown}
+        // Any real pointer or focus move ends the flyout's quiet return.
+        onPointerMove={quiet}
+        onPointerEnter={quiet}
+        onBlur={quiet}
+        // A name-only tooltip adds nothing for screen readers: the trigger's
+        // `aria-describedby` is dropped (the row's props win over the Slot's).
+        {...(agentName || tooltip ? {} : { 'aria-describedby': undefined })}
         // On an editable row the hover belongs to the row around both buttons.
         className={cn(
           DENSE_ROW,
@@ -119,21 +135,31 @@ function DenseModelRow({
           {glyph}
         </span>
         {/* The row is named by `aria-label`; the visible text stays out of it. */}
-        <span data-row-name="" aria-hidden="true" className="min-w-0 flex-1 truncate">
+        {/* 2px tighter to the agent glyph than the row's gap. */}
+        <span data-row-name="" aria-hidden="true" className="-ml-0.5 min-w-0 flex-1 truncate">
           {name}
         </span>
-        <Check
-          size={PICKER_ICON.check}
-          aria-hidden="true"
-          className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
-        />
+        {levelOnEdit ? null : (
+          <Check
+            size={PICKER_ICON.check}
+            data-row-check=""
+            aria-hidden="true"
+            className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+          />
+        )}
       </button>
     )
     // Leads with the full name, which a long one truncates in the row.
     const tip = rowTooltip({ name, agentName, details: tooltip })
     if (touch) return button
     return (
-      <Tooltip>
+      <Tooltip
+        open={tipOpen}
+        onOpenChange={(next) => {
+          if (next && handle?.suppressNextTooltip.current) return
+          setTipOpen(next)
+        }}
+      >
         <TooltipTrigger asChild>{button}</TooltipTrigger>
         <TooltipContent
           side="right"
