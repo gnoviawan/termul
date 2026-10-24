@@ -35,7 +35,7 @@ const FOCUSABLE_TAGS = new Set(['button', 'input', 'textarea', 'select', 'summar
 const DISABLEABLE = new Set(['button', 'input', 'textarea', 'select', 'fieldset'])
 const SKIPPED = new Set(['script', 'style', 'template', 'noscript', 'head', 'meta', 'link'])
 const UNSUPPORTED_TAGS = new Set(['iframe', 'canvas', 'video', 'audio', 'object', 'embed', 'webview'])
-const ATTR_PROPS = new Set(['id', 'role', 'type', 'href', 'name', 'title', 'tabIndex', 'disabled', 'htmlFor', 'value', 'checked', 'placeholder'])
+const ATTR_PROPS = new Set(['id', 'role', 'type', 'href', 'name', 'title', 'tabIndex', 'disabled', 'htmlFor', 'value', 'checked', 'placeholder', 'draggable'])
 /** GPUIX ignores `display: none` (measured): a hidden element is an empty, zero-size, unpainted box. */
 const HIDDEN: StyleDesc = { position: 'absolute', width: 0, height: 0, overflow: 'hidden', visibility: 'hidden' }
 const BREAK: StyleDesc = { width: '100%', height: 0 }
@@ -191,7 +191,8 @@ export function buildElement(
   const focusable =
     !disabled &&
     (FOCUSABLE_TAGS.has(tag) || (tag === 'a' && props.href !== undefined) || props.tabIndex !== undefined)
-  const handlers = disabled ? null : adaptHandlers(source, text, focusable, listeners)
+  const draggable = source.draggable === true || source.draggable === 'true'
+  const handlers = disabled ? null : adaptHandlers(source, text, focusable, listeners, draggable)
   const interactive = handlers !== null || focusable || tr.hoverable || style.overflow === 'scroll'
   if (!interactive) style = passThrough(style)
 

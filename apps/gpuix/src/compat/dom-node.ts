@@ -39,6 +39,7 @@ let reads: LiveReads | null = null
 export function bindCompatRenderer(next: CompatRenderer | null): void {
   renderer = next
   reads = next ? liveReads(next) : null
+  indexBatch = -1
 }
 
 export function compatRenderer(): CompatRenderer | null {

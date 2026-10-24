@@ -34,6 +34,8 @@ export interface CompatRenderer {
   scrollIntoView(id: number): void
   getElementBounds(id: number): Bounds | null
   getAutomationTree(): string
+  /** Element ids under a window point, topmost first (last painted frame). */
+  getElementsAt(x: number, y: number): number[]
 }
 
 export interface TreeJson {

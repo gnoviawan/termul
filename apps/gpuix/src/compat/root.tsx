@@ -6,6 +6,7 @@
 
 import { type PublicInstance, type RenderOptions, useGpuixRequired } from '@gpuix/react'
 import { Fragment, type ReactNode, useLayoutEffect, useState, useSyncExternalStore } from 'react'
+import { dragPreview, subscribeDragPreview } from './dnd'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
 import { windowKeyEvent } from './events'
 import { setOverlayLayer } from './react-dom'
@@ -49,7 +50,28 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
     <div style={{ ...root, fontSize: 16, lineHeight: 24 }} onLayout={() => syncViewport(renderer)}>
       {ready && layer ? <Fragment key={themeId}>{children}</Fragment> : null}
       <div ref={setLayer} style={OVERLAY} />
+      <DragPreviewBox />
     </div>
+  )
+}
+
+/** The DOM's drag image, reduced to the source's outline following the pointer. */
+function DragPreviewBox(): ReactNode {
+  const box = useSyncExternalStore(subscribeDragPreview, dragPreview)
+  if (!box) return null
+  const look = compatTw()('rounded-sm border border-primary/40 bg-primary/10')
+  return (
+    <div
+      style={{
+        ...look,
+        position: 'absolute',
+        left: box.x,
+        top: box.y,
+        width: box.width,
+        height: box.height,
+        pointerEvents: 'none'
+      }}
+    />
   )
 }
 

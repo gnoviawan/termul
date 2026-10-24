@@ -4,7 +4,7 @@
     "jsx": "react-jsx",
     "jsxImportSource": "@gpuix/react",
     "paths": {
-      "@/components/editor/EditorTocLayout": ["./src/overrides/components/editor/EditorTocLayout.tsx"],
+      "@/components/editor/EditorTocLayout": ["./src/editor/dom-components.d.ts"],
       "@/components/editor/TocPanel": ["./src/editor/dom-components.d.ts"],
       "@/components/editor/FrontmatterProperties": ["./src/editor/dom-components.d.ts"],
       "@/hooks/use-codemirror": ["./src/overrides/hooks/use-codemirror.ts"],

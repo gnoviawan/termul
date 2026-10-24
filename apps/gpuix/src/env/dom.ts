@@ -17,6 +17,7 @@ import {
 import { domEvent, setFocusSink } from '../compat/events'
 import { compatWarn } from '../compat/log'
 import { CompatResizeObserver } from '../compat/resize'
+import { installFiles } from './files'
 import type { Viewport } from './index'
 
 const MEDIA_FEATURES: Readonly<Record<string, string>> = {
@@ -179,6 +180,7 @@ export function installDom(viewport: Viewport, options: DomEnvOptions): void {
   }
   Object.assign(g, globals)
   if (win !== g) Object.assign(win, globals, { navigator: g.navigator })
+  installFiles(g)
   win.addEventListener('resize', () => {
     size = { width: Number(win.innerWidth), height: Number(win.innerHeight) }
     for (const list of lists) list.reevaluate()
