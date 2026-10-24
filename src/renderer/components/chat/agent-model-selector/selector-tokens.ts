@@ -55,6 +55,19 @@ export const PICKER_EDIT_MOTION = {
   exit: 'pointer-events-none translate-x-1 opacity-0 transition-[opacity,translate] duration-150 ease-[cubic-bezier(0.4,0,1,1)] starting:translate-x-0 starting:opacity-100 motion-reduce:hidden'
 } as const
 
+/**
+ * The star's move when a pick brings Edit to its row or takes it away (a FLIP
+ * on transform only). Beside an entering Edit it slides over on Edit's own
+ * timing, as one unit. Beside a leaving one it holds still while the copy
+ * fades (`PICKER_EDIT_MOTION.exitMs`), so it never runs over that copy's text,
+ * then settles into the freed room: quicker, and ease-in-out, as it is
+ * already on screen. Nothing moves under reduced motion.
+ */
+export const PICKER_STAR_MOTION = {
+  enter: { ms: 200, ease: 'cubic-bezier(0.32, 0.72, 0, 1)' },
+  settle: { ms: 150, ease: 'cubic-bezier(0.645, 0.045, 0.355, 1)' }
+} as const
+
 export function pickerRowHeight(touch: boolean): string {
   return touch ? PICKER_ROW.heightTouch : PICKER_ROW.height
 }

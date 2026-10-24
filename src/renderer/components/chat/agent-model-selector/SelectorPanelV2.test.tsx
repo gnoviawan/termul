@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useRef, useState } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
@@ -25,6 +25,7 @@ import {
   PICKER_LABEL,
   PICKER_ROW,
   PICKER_ROW_NAME_PULL,
+  PICKER_STAR_MOTION,
   PICKER_SURFACE
 } from './selector-tokens'
 
@@ -454,10 +455,14 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
     expect(star).toBeInTheDocument()
     expect(star).not.toHaveAttribute('hidden')
     // Laid over a slot the row always reserves (shrink-0), so a long name
-    // truncates before it instead of pushing it out of the 300px panel.
-    expect(classes(star)).toEqual(expect.arrayContaining(['absolute', 'right-7.5', 'w-5']))
+    // truncates before it instead of pushing it out of the 300px panel. With
+    // the level on Edit (no check) the slot ends the row, flush with Edit.
+    expect(classes(star)).toContain('w-5')
+    expect(classes(star.parentElement)).toEqual(expect.arrayContaining(['absolute', 'right-0']))
     const slot = row.querySelector('[data-row-name] + span[aria-hidden="true"]')
     expect(classes(slot)).toEqual(expect.arrayContaining(['shrink-0', 'w-5']))
+    expect(row.lastElementChild).toBe(slot)
+    expect(classes(row)).toContain('pr-0')
     const name = row.querySelector('[data-row-name]')
     expect(classes(name)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
     const edit = screen.getByTestId('selector-edit')
@@ -810,7 +815,10 @@ describe('SelectorPanelV2 Thinking level on the Edit button', () => {
     }
     const [favoriteRow] = selected
     const entry = favoriteRow?.closest('[data-favorite-entry]') as HTMLElement
-    expect(within(entry).getByTestId('selector-favorite').parentElement).toBe(entry)
+    // The star's positioned box is the row button's sibling in the entry.
+    expect(
+      within(entry).getByTestId('selector-favorite').closest('[data-star-box]')?.parentElement
+    ).toBe(entry)
     for (const button of screen.getAllByTestId('selector-edit')) {
       expect(selected.some((row) => row.contains(button))).toBe(false)
     }
@@ -1472,6 +1480,246 @@ describe('SelectorPanelV2 Edit motion on a pick', () => {
       expect(edit).not.toHaveAttribute('data-entering')
       expect(classes(edit).some((name) => name.startsWith('starting:'))).toBe(false)
     }
+  })
+
+  describe('the star', () => {
+    /**
+     * A fake layout for star boxes (jsdom has none): a 300px row, a 20px star,
+     * the check's 30px right of it, Edit (or its leaving copy) 20px plus 6px a
+     * character, and the box's own inline translate, as a real rect has.
+     */
+    const original = HTMLElement.prototype.getBoundingClientRect
+    function starLeft(box: HTMLElement): number {
+      const beside = box.parentElement?.nextElementSibling
+      const edit = beside?.matches('[data-testid="selector-edit"], [data-edit-exiting]')
+        ? 20 + 6 * (beside.textContent?.length ?? 0)
+        : 0
+      const check = box.classList.contains('right-0') ? 0 : 30
+      const shift = Number(/translateX\((-?[\d.]+)px\)/.exec(box.style.transform)?.[1] ?? 0)
+      return 300 - edit - check - 20 + shift
+    }
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+        this: HTMLElement
+      ) {
+        if (!this.hasAttribute('data-star-box')) return original.call(this)
+        const left = starLeft(this)
+        return {
+          left,
+          x: left,
+          right: left + 20,
+          top: 0,
+          y: 0,
+          bottom: 28,
+          width: 20,
+          height: 28,
+          toJSON: () => ({})
+        } as DOMRect
+      })
+    })
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    /** Every inline style a star box has had, oldest first, ending with its current one. */
+    function watchStars(): (box: Element) => string[] {
+      const seen = new Map<Element, string[]>()
+      const take = (records: MutationRecord[]): void => {
+        for (const record of records) {
+          const box = record.target as Element
+          if (!box.hasAttribute('data-star-box')) continue
+          seen.set(box, [...(seen.get(box) ?? []), record.oldValue ?? ''])
+        }
+      }
+      const observer = new MutationObserver(take)
+      observer.observe(document.body, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style'],
+        attributeOldValue: true
+      })
+      return (box) => {
+        take(observer.takeRecords())
+        return [...(seen.get(box) ?? []), box.getAttribute('style') ?? '']
+      }
+    }
+    const starBoxes = (name?: string): HTMLElement[] =>
+      name === undefined
+        ? Array.from(document.querySelectorAll<HTMLElement>('[data-star-box]'))
+        : screen
+            .getAllByRole('button', { name })
+            .map((row) => row.parentElement?.querySelector<HTMLElement>('[data-star-box]'))
+            .filter((box): box is HTMLElement => box != null)
+    const atRest = (box: HTMLElement): void => {
+      expect(box.style.transform).toBe('')
+      expect(box.style.transition).toBe('')
+    }
+    /** A style that puts the star `px` off its place with no transition: a FLIP's first frame. */
+    const heldAt =
+      (px: number) =>
+      (style: string): boolean =>
+        style.includes(`translateX(${px}px)`) && style.includes('transition: none')
+    const BOTH: Array<[string, string]> = [
+      [CURSOR.id, 'opus'],
+      [CURSOR.id, 'sonnet']
+    ]
+
+    it('slides over with Edit on the picked rows; holds, then settles, on the old ones', () => {
+      vi.useFakeTimers()
+      render(<PickPanel {...props({ favoritesStore: storeOf(BOTH) })} />)
+      const history = watchStars()
+      fireEvent.click(listed('Claude Sonnet'))
+
+      // The picked rows: from the check's side (250) to flush before Edit
+      // (236), so it starts 14px right and transitions to rest with Edit.
+      const picked = starBoxes('Claude Sonnet')
+      expect(picked).toHaveLength(2)
+      for (const box of picked) {
+        expect(history(box).some(heldAt(14))).toBe(true)
+        expect(box.style.transform).toBe('')
+        expect(box.style.transition).toBe(
+          `transform ${PICKER_STAR_MOTION.enter.ms}ms ${PICKER_STAR_MOTION.enter.ease}`
+        )
+      }
+      expect(PICKER_STAR_MOTION.enter).toEqual({
+        ms: 200,
+        ease: 'cubic-bezier(0.32, 0.72, 0, 1)'
+      })
+
+      // The old rows: the leaving copy still holds Edit's room, so the star
+      // stays where it was (236, not its 206 there) while the copy fades.
+      const old = starBoxes('Claude Opus')
+      expect(old).toHaveLength(2)
+      for (const box of old) {
+        expect(box.style.transform).toBe('translateX(30px)')
+        expect(box.style.transition).toBe('none')
+      }
+
+      // The copy unmounts: the star moves once, right into the freed room.
+      settle()
+      for (const box of starBoxes('Claude Opus')) {
+        expect(history(box).some(heldAt(-14))).toBe(true)
+        expect(box.style.transform).toBe('')
+        expect(box.style.transition).toBe(
+          `transform ${PICKER_STAR_MOTION.settle.ms}ms ${PICKER_STAR_MOTION.settle.ease}`
+        )
+      }
+
+      // Rest: on transitionend, or by the fallback timer.
+      for (const box of picked) fireEvent.transitionEnd(box)
+      for (const box of picked) atRest(box)
+      act(() => {
+        vi.advanceTimersByTime(PICKER_STAR_MOTION.settle.ms + 100)
+      })
+      for (const box of starBoxes()) atRest(box)
+    })
+
+    it('nothing moves on open, on arrow keys, or when the level changes', () => {
+      const history = watchStars()
+      const store = storeOf(BOTH)
+      const { rerender } = render(<Panel {...props({ favoritesStore: store })} />)
+      const opus = listed('Claude Opus')
+      act(() => opus.focus())
+      fireEvent.keyDown(opus, { key: 'ArrowDown' })
+      expect(listed('Claude Sonnet')).toHaveFocus()
+      // High to Low: Edit narrows, the star with it, but nothing animates.
+      rerender(<Panel {...props({ favoritesStore: store, effortValue: 'low' })} />)
+      expect(screen.getAllByTestId('selector-edit')[0]).toHaveTextContent('Low')
+      expect(starBoxes().length).toBeGreaterThan(0)
+      for (const box of starBoxes()) expect(history(box)).toEqual([''])
+    })
+
+    it('reduced motion: the star never moves', () => {
+      reducedMotion.current = true
+      render(<PickPanel {...props({ favoritesStore: storeOf(BOTH) })} />)
+      const history = watchStars()
+      fireEvent.click(listed('Claude Sonnet'))
+      expect(starBoxes('Claude Sonnet')).toHaveLength(2)
+      for (const box of starBoxes()) expect(history(box)).toEqual([''])
+    })
+
+    it('a quick second pick retargets from where the star is, and everything ends at rest', () => {
+      vi.useFakeTimers()
+      render(
+        <PickPanel
+          {...props({ modelOption: THREE, favoritesStore: storeOf([[CURSOR.id, 'haiku']]) })}
+        />
+      )
+      fireEvent.click(listed('Claude Sonnet'))
+      const [sonnet] = starBoxes('Claude Sonnet')
+      // Halfway through its slide in: 7px of its 14px still to go.
+      act(() => {
+        vi.advanceTimersByTime(50)
+      })
+      ;(sonnet as HTMLElement).style.transform = 'translateX(7px)'
+      fireEvent.click(listed('Claude Haiku'))
+      // Sonnet's Edit leaves: its star holds from that spot (243), not from
+      // its rest (236): 37px right of its place beside the leaving copy (206).
+      const [held] = starBoxes('Claude Sonnet')
+      expect((held as HTMLElement).style.transform).toBe('translateX(37px)')
+
+      act(() => {
+        vi.advanceTimersByTime(PICKER_EDIT_MOTION.exitMs)
+      })
+      act(() => {
+        vi.advanceTimersByTime(PICKER_STAR_MOTION.enter.ms + 100)
+      })
+      expect(exiting()).toHaveLength(0)
+      expect(pressed()).toEqual(['Claude Haiku', 'Claude Haiku'])
+      for (const box of starBoxes()) atRest(box)
+    })
+  })
+})
+
+describe('SelectorPanelV2 star beside Edit', () => {
+  const starBox = (row: HTMLElement): HTMLElement | null | undefined =>
+    row.parentElement?.querySelector<HTMLElement>('[data-star-box]')
+
+  it('where Edit shows the level, the star sits flush before Edit, over a slot that ends the row', () => {
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
+    const selected = screen.getAllByRole('button', { name: 'Claude Opus', pressed: true })
+    expect(selected).toHaveLength(2)
+    for (const row of selected) {
+      const fav = row.parentElement as HTMLElement
+      const box = starBox(row)
+      // The star's box ends where the row's box ends; Edit starts there.
+      expect(box?.parentElement).toBe(fav)
+      expect(classes(box)).toEqual(expect.arrayContaining(['absolute', 'right-0']))
+      expect(classes(box)).not.toContain('right-7.5')
+      expect(fav.nextElementSibling).toBe(editBeside(row))
+      // No check: the reserved slot ends the row (no right padding), right
+      // under the star, so the name's box ends a row gap before the star's.
+      expect(row.querySelector('[data-row-check]')).toBeNull()
+      const slot = row.lastElementChild
+      expect(slot?.previousElementSibling).toHaveAttribute('data-row-name')
+      expect(classes(slot)).toEqual(expect.arrayContaining(['shrink-0', 'w-5']))
+      expect(classes(row)).toEqual(expect.arrayContaining(['pr-0', PICKER_ROW.gap]))
+      // The star's hit area is unchanged.
+      expect(classes(within(fav).getByTestId('selector-favorite'))).toContain('w-5')
+    }
+  })
+
+  it('rows that keep the check keep the star left of it', () => {
+    // An unselected row, and a selected one with no level (Edit reads "Edit").
+    render(<Panel {...props({ thoughtLevel: null, favoritesStore: storeOf([]) })} />)
+    for (const name of ['Claude Opus', 'Claude Sonnet']) {
+      const row = screen.getByRole('button', { name })
+      expect(classes(starBox(row))).toEqual(expect.arrayContaining(['absolute', 'right-7.5']))
+      expect(classes(starBox(row))).not.toContain('right-0')
+      expect(row.lastElementChild).toHaveAttribute('data-row-check')
+      expect(classes(row)).not.toContain('pr-0')
+    }
+  })
+
+  it('touch: the flush star keeps its 44px target, over a 44px slot', () => {
+    render(<Panel {...props({ touch: true, favoritesStore: storeOf([]) })} />)
+    const row = screen.getByRole('button', { name: 'Claude Opus', pressed: true })
+    expect(classes(starBox(row))).toContain('right-0')
+    expect(
+      classes(within(row.parentElement as HTMLElement).getByTestId('selector-favorite'))
+    ).toContain('w-11')
+    expect(classes(row.lastElementChild)).toEqual(expect.arrayContaining(['shrink-0', 'w-11']))
+    expect(classes(row)).toContain('pr-0')
   })
 })
 

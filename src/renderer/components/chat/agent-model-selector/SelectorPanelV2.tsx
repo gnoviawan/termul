@@ -51,6 +51,7 @@ import {
   StatusActions,
   TabGlyph
 } from './SelectorRows'
+import { StarFlip, type StarPhase } from './StarFlip'
 import {
   AGENT_TRACK_CLASS,
   type AgentTab,
@@ -135,7 +136,7 @@ function DenseModelRow({
   inFavorites?: boolean
   disabled: boolean
   touch: boolean
-  /** Prefers reduced motion: Edit neither enters nor leaves. */
+  /** Prefers reduced motion: Edit neither enters nor leaves, and the star does not move. */
   reduced: boolean
   onPick: () => void
 }): React.JSX.Element {
@@ -155,6 +156,18 @@ function DenseModelRow({
   const levelOnEdit = level !== undefined
   // A pick moves Edit: in on the picked row, out (inert) on the old one.
   const { entering, exiting } = useEditMotion(editable ? { level } : null, reduced)
+  // With no check, the star's slot ends the row and the star sits flush
+  // before Edit, at the row's own icon gap (3px glyph inset, Edit's 6px pad).
+  const flush = favorite !== undefined && levelOnEdit
+  // The star follows Edit on a pick (`StarFlip`).
+  const starRef = useRef<HTMLSpanElement>(null)
+  const starPhase: StarPhase = editable
+    ? levelOnEdit
+      ? 'level'
+      : 'edit'
+    : exiting
+      ? 'exiting'
+      : 'none'
   // Controlled, so a focus handed back by the closing flyout can skip it.
   const [tipOpen, setTipOpen] = useState(false)
   const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
@@ -183,7 +196,8 @@ function DenseModelRow({
         className={cn(
           DENSE_ROW,
           denseRowSize(touch),
-          (editable || favorite || exiting) && 'min-w-0 flex-1 hover:bg-transparent'
+          (editable || favorite || exiting) && 'min-w-0 flex-1 hover:bg-transparent',
+          flush && 'pr-0'
         )}
       >
         <span
@@ -200,7 +214,8 @@ function DenseModelRow({
         >
           {name}
         </span>
-        {/* The star's slot, always reserved so nothing moves when it shows. */}
+        {/* The star's slot, always reserved so nothing moves when it shows, and
+            the name truncates a row gap before the star, never under it. */}
         {favorite ? (
           <span aria-hidden="true" className={cn('shrink-0', touch ? 'w-11' : 'w-5')} />
         ) : null}
@@ -240,7 +255,7 @@ function DenseModelRow({
     )
     if (!favorite) return withTip
     // The star is the row button's sibling, laid over its reserved slot
-    // (right of the name, left of the check), never nested in it.
+    // (right of the name, left of the check or flush with Edit), never nested in it.
     return (
       <div
         data-favorite-entry={favorite.entry}
@@ -252,7 +267,9 @@ function DenseModelRow({
       >
         {withTip}
         <StarButton
+          boxRef={starRef}
           on={favorite.on}
+          flush={flush}
           touch={touch}
           disabled={disabled}
           onClick={favorite.onToggle}
@@ -260,26 +277,27 @@ function DenseModelRow({
       </div>
     )
   }
-  if (!edit || !editable) {
-    // The old Edit fades out beside the plain row. The box stays mounted
-    // (`contents` at rest), so the row keeps its node, and focus, when it ends.
-    return (
-      <div className={exiting ? EDIT_ROW_BOX : 'contents'}>
-        {renderRow()}
-        {exiting ? <ExitingEdit face={exiting} touch={touch} /> : null}
-      </div>
-    )
-  }
   return (
-    <EditableRow
-      modelName={name}
-      inFavorites={inFavorites}
-      entering={entering}
-      sections={edit}
-      disabled={disabled}
-      touch={touch}
-      renderRow={renderRow}
-    />
+    <StarFlip star={starRef} phase={starPhase} reduced={reduced}>
+      {!edit || !editable ? (
+        // The old Edit fades out beside the plain row. The box stays mounted
+        // (`contents` at rest), so the row keeps its node, and focus, when it ends.
+        <div className={exiting ? EDIT_ROW_BOX : 'contents'}>
+          {renderRow()}
+          {exiting ? <ExitingEdit face={exiting} touch={touch} /> : null}
+        </div>
+      ) : (
+        <EditableRow
+          modelName={name}
+          inFavorites={inFavorites}
+          entering={entering}
+          sections={edit}
+          disabled={disabled}
+          touch={touch}
+          renderRow={renderRow}
+        />
+      )}
+    </StarFlip>
   )
 }
 
@@ -289,41 +307,56 @@ function DenseModelRow({
  * rows only. On touch, with no hover, it always shows.
  */
 function StarButton({
+  boxRef,
   on,
+  flush,
   touch,
   disabled,
   onClick
 }: {
+  /** The positioned box `StarFlip` moves; the button's own fades stay its own. */
+  boxRef: React.RefObject<HTMLSpanElement>
   on: boolean
+  /** No check on the row: flush with its right edge, so with Edit. */
+  flush: boolean
   touch: boolean
   disabled: boolean
   onClick: () => void
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      data-testid="selector-favorite"
-      aria-pressed={on}
-      aria-label={on ? 'Remove from favorites' : 'Add to favorites'}
-      disabled={disabled}
-      onClick={onClick}
+    <span
+      ref={boxRef}
+      data-star-box=""
       className={cn(
-        // Right of it: the row's 8px padding, the 14px check, the 8px gap.
-        'absolute inset-y-0 right-7.5 flex items-center justify-center rounded-md',
-        'transition-[opacity,color] duration-150 ease-out motion-reduce:transition-none disabled:cursor-not-allowed',
-        touch ? 'w-11' : 'w-5',
-        on
-          ? 'text-foreground'
-          : cn(
-              'text-muted-foreground hover:text-foreground',
-              !touch &&
-                'opacity-0 focus-visible:opacity-100 group-focus-within/fav:opacity-100 group-hover/fav:opacity-100'
-            ),
-        ROW_FOCUS
+        // Else right of it: the row's 8px padding, the 14px check, the 8px gap.
+        'absolute inset-y-0 flex',
+        flush ? 'right-0' : 'right-7.5'
       )}
     >
-      <Star size={14} aria-hidden="true" className={cn(on && '[&_path]:fill-current')} />
-    </button>
+      <button
+        type="button"
+        data-testid="selector-favorite"
+        aria-pressed={on}
+        aria-label={on ? 'Remove from favorites' : 'Add to favorites'}
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          'flex items-center justify-center rounded-md',
+          'transition-[opacity,color] duration-150 ease-out motion-reduce:transition-none disabled:cursor-not-allowed',
+          touch ? 'w-11' : 'w-5',
+          on
+            ? 'text-foreground'
+            : cn(
+                'text-muted-foreground hover:text-foreground',
+                !touch &&
+                  'opacity-0 focus-visible:opacity-100 group-focus-within/fav:opacity-100 group-hover/fav:opacity-100'
+              ),
+          ROW_FOCUS
+        )}
+      >
+        <Star size={14} aria-hidden="true" className={cn(on && '[&_path]:fill-current')} />
+      </button>
+    </span>
   )
 }
 
