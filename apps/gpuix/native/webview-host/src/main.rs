@@ -175,7 +175,9 @@ impl Host {
         let (nav_id, load_id, title_id, ipc_id) = (id.clone(), id.clone(), id.clone(), id.clone());
         let view = WebViewBuilder::new()
             .with_url(&url)
-            .with_bounds(rect(&bounds))
+            // wry scales creation bounds by the screen's DPI but not later ones, and GTK then
+            // ignores a move to the unscaled spot; start tiny and place it with set_bounds.
+            .with_bounds(rect(&Bounds { x: 0.0, y: 0.0, width: 1.0, height: 1.0 }))
             .with_visible(true)
             .with_devtools(true)
             .with_initialization_script_for_main_only(INIT_JS, true)
@@ -195,6 +197,7 @@ impl Host {
             .build_as_child(&Parent(self.parent))
             .map_err(|e| format!("create webview: {e}"))?;
         let container = container_of(&view)?;
+        view.set_bounds(rect(&bounds)).map_err(|e| e.to_string())?;
         self.x.key_gate(container, false);
         self.tabs.insert(id, Tab { view, container, visible: false });
         Ok(())

@@ -79,9 +79,6 @@ const s = await startSession({
 })
 const app: App = s.app
 const shot = (name: string) => s.grab(path.join(OUT, `${name}.png`))
-const painted = async () => (await app.call('getAllText', {})).text as string[]
-const paintedHas = (text: string, ms = 15_000) =>
-  until(`painted "${text}"`, async () => (await painted()).some((t) => t.includes(text)), ms)
 const X = (...args: string[]) => xinput(s.display, ...args)
 
 try {
@@ -327,48 +324,68 @@ try {
   )
 
   // 6. Keys into the page, then back to a GPUIX field.
-  const fieldText = async () => (await painted()).join('\n')
+  const pageKeys = () => (log().match(new RegExp(`\\[${tabId}\\] log: b2-key`, 'g')) ?? []).length
+  const keyboardIsApp = () =>
+    log().lastIndexOf('keyboard -> app') > log().lastIndexOf('keyboard -> tab')
+  /** The focused GPUIX field's text, copied out with real keys (the native composer is not in the tree). */
+  const focusedFieldText = async () => {
+    X('key', 'Control_L+a')
+    X('key', 'Control_L+c')
+    await Bun.sleep(300)
+    const text = X('clipboard')
+    X('key', 'End')
+    return text
+  }
   r = await slot()
   click(r.x + r.width / 2, r.y + r.height - 60)
   await logged(new RegExp(`keyboard -> tab ${tabId}`))
   X('type', 'abc')
   await app.getByText('B2 keys abc').waitFor({ timeoutMs: 10_000 })
   await logged(new RegExp(`\\[${tabId}\\] log: b2-key c`))
-  check('a click into the page gives it the keyboard; typed keys reach the page', true, {})
+  check('a click into the page gives it the keyboard; typed keys reach the page', true, {
+    pageKeys: pageKeys()
+  })
   // The left pane's composer: open the agent launcher there.
-  await app.mouse.click({ x: 652, y: 28 })
-  await app.getByText('New chat').waitFor({ timeoutMs: 10_000 })
-  await app.getByText('New chat').click()
-  await app.getByText('What should we do in alpha?').waitFor({ timeoutMs: 10_000 })
+  await clickUntilPainted(r.x - 23, 28, 'Open canvas')
+  const newChat = await until(
+    'the left pane menu item',
+    async () =>
+      (await app.getByText('New chat').all()).find(
+        (node) =>
+          node.text === 'New chat' && (node.bounds?.x ?? 0) > 480 && (node.bounds?.x ?? 9999) < r.x
+      )?.bounds
+  )
+  await clickUntilPainted(
+    newChat.x + 10,
+    newChat.y + newChat.height / 2,
+    'What should we do in alpha?'
+  )
   const composer = await until(
     'composer field',
     async () =>
-      (await app.getByText(/Ask anything/).all()).find((node) => (node.bounds?.x ?? 0) < r.x)
+      (await app.getByText('Ask anything').all()).find((node) => (node.bounds?.x ?? 0) < r.x)
         ?.bounds
   )
-  await logged(/keyboard -> app/)
-  const keysBefore = (log().match(new RegExp(`\\[${tabId}\\] log: b2-key`, 'g')) ?? []).length
+  const keysBefore = pageKeys()
   click(composer.x + 40, composer.y + 8)
+  await until('keyboard back with the app', async () => (keyboardIsApp() ? true : null))
   await Bun.sleep(600)
   X('type', 'hello')
-  const composerGotIt = await until('composer shows typed text', async () =>
-    (await fieldText()).includes('hello') ? true : null
-  ).catch(() => false)
-  // Pointer resting over the webview must not steal keys meant for the app.
+  await Bun.sleep(800)
+  const afterHello = await focusedFieldText()
+  // A pointer resting over the webview must not take keys meant for the app (the key gate).
   X('move', ...rootPoint(r.x + r.width / 2, r.y + r.height / 2))
   X('type', 'xyz')
-  const gateHeld = await until(
-    'composer shows text typed with the pointer over the webview',
-    async () => ((await fieldText()).includes('helloxyz') ? true : null)
-  ).catch(() => false)
-  const keysAfter = (log().match(new RegExp(`\\[${tabId}\\] log: b2-key`, 'g')) ?? []).length
+  await Bun.sleep(800)
+  const afterXyz = await focusedFieldText()
+  const keysAfter = pageKeys()
   await shot('06-composer-typed')
   check(
     'a click back on the GPUIX composer returns the keyboard; the page gets no more keys',
-    composerGotIt && gateHeld && keysAfter === keysBefore,
+    afterHello === 'hello' && afterXyz === 'helloxyz' && keysAfter === keysBefore,
     {
-      composerGotIt,
-      pointerOverWebviewKeysToApp: gateHeld,
+      composer: afterHello,
+      composerWithPointerOverWebview: afterXyz,
       pageKeysBefore: keysBefore,
       pageKeysAfter: keysAfter
     }
