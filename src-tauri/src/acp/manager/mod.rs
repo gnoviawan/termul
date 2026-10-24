@@ -1128,9 +1128,11 @@ impl AcpManager {
         gate_load_session(&caps)?;
         let directories = filter_additional_directories(&caps, &cwd, &additional_directories);
         let session_key = session_id.0.clone();
+        // Resolve the command channel BEFORE a new plan token exists, so an
+        // unknown agent returns without leaving a registered token behind.
+        let tx = self.command_tx(agent_id)?;
         let (mcp_servers, plan_token) =
             self.prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers).await?;
-        let tx = self.command_tx(agent_id)?;
         let outcome = send_command(&tx, |reply| AcpCommand::LoadSession {
             session_id,
             cwd,
@@ -1167,9 +1169,11 @@ impl AcpManager {
         gate_resume_session(&caps)?;
         let directories = filter_additional_directories(&caps, &cwd, &additional_directories);
         let session_key = session_id.0.clone();
+        // Resolve the command channel BEFORE a new plan token exists, so an
+        // unknown agent returns without leaving a registered token behind.
+        let tx = self.command_tx(agent_id)?;
         let (mcp_servers, plan_token) =
             self.prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers).await?;
-        let tx = self.command_tx(agent_id)?;
         let outcome = send_command(&tx, |reply| AcpCommand::ResumeSession {
             session_id,
             cwd,
@@ -1215,7 +1219,10 @@ impl AcpManager {
         let server_count = combined.len();
         let combined = inject_oauth_tokens(combined).await;
         if let Err(error) = gate_mcp_servers(caps, &combined) {
-            self.host_plan_server.unregister_by_token(&token);
+            // The failure path of the settle: evict only the new token, so the
+            // session's earlier token, plan cache and title flags stay.
+            self.host_plan_server
+                .settle_reopen_token(session_id, &token, false);
             return Err(error);
         }
         log::info!(

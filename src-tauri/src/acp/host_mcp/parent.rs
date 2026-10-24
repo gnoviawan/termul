@@ -338,6 +338,28 @@ impl HostPlanServer {
         crate::browser_automation::session_ended(real_session_id);
     }
 
+    /// Test seam: the tokens currently bound to `real_session_id`.
+    #[cfg(test)]
+    pub(crate) fn tokens_bound_to(&self, real_session_id: &str) -> Vec<String> {
+        self.sessions
+            .lock()
+            .iter()
+            .filter(|(_, auth)| auth.real_session_id.as_deref() == Some(real_session_id))
+            .map(|(token, _)| token.clone())
+            .collect()
+    }
+
+    /// Test seam: cache a plan for `real_session_id` / whether one is cached.
+    #[cfg(test)]
+    pub(crate) fn seed_plan_for_test(&self, real_session_id: &str) {
+        self.plan_store.set(real_session_id, Vec::new());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_cached_for_test(&self, real_session_id: &str) -> bool {
+        self.plan_store.get(real_session_id).is_some()
+    }
+
     /// Drop a registration by token (used when `session/new` fails AFTER
     /// `register_session` but before `bind_session` — the real session_id
     /// isn't known, so `unregister_session` can't be keyed by it).
