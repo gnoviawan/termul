@@ -67,7 +67,7 @@ async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
         .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new("codex".to_string()));
     let mut command = tokio::process::Command::new(&resolved.program);
     // Polled every 4s by the renderer: never flash a console window.
-    crate::process_util::hide_console(&mut command);
+    crate::process_util::background_command_hygiene(&mut command);
     command
         .args(&resolved.prepend_args)
         .arg("login")
