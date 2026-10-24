@@ -423,7 +423,8 @@ function onDragSourceMove(payload: EventPayload): void {
 }
 function onDragSourceUp(payload: EventPayload): void {
   onMouseUp(payload)
-  releaseSource(payload)
+  const clicked = releaseSource(payload)
+  if (clicked !== null) clickBubbling({ ...payload, eventType: 'click', elementId: clicked, clickCount: 1 })
 }
 
 const onMouseEnter = direct((h) => [

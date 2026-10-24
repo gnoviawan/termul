@@ -8,9 +8,8 @@
 import {
   BACKDROP,
   LAMP,
-  OVERLAP,
   PROSE,
-  SHORT_TRANSCRIPT,
+  RUN_ORDER,
   TEXTAREA_GAP,
   TAB_TITLE,
   TITLE_TIP,
@@ -90,14 +89,10 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'side.chats': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'With the one seeded chat, the card title, agent, branch and age match.',
-      'Every later frame, once chat.send has started more chats, shows the overlap: ' + OVERLAP
-    ],
-    cause: 'needs diagnosis',
-    unit: 'O7 chat list sync and layout',
-    impact: 3
+      'The card title, agent, branch and age match; with more chats the cards stack one per row (G2 native ChatsList).'
+    ]
   },
   'side.chats-search': {
     status: 'ported',
@@ -234,18 +229,20 @@ export const REVIEWS: Record<string, Review> = {
       PROSE,
       TREE_TEXT
     ],
-    cause: 'native override needed',
+    cause: 'missing GPUIX capability',
     unit: 'O5 native prose styling',
     impact: 3
   },
   'chat.scroll-top': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'One wheel event of -20000 px over the transcript scrolls the web to the first turn; GPUIX stays at the bottom. chat:check scrolls through its control file, so wheel scrolling in the full app is not covered elsewhere.'
+      'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
+      PROSE,
+      TREE_TEXT
     ],
-    cause: 'needs diagnosis',
-    unit: 'O6 transcript scroll and anchoring',
-    impact: 3
+    cause: 'missing GPUIX capability',
+    unit: 'O5 native prose styling',
+    impact: 2
   },
   'chat.new-chat': {
     status: 'ported',
@@ -266,22 +263,21 @@ export const REVIEWS: Record<string, Review> = {
       'Typing and Enter start a chat and the scripted reply streams in both.',
       'Mermaid shows as source ("Mermaid diagrams are shown as source in this client") where the web draws the diagram.',
       PROSE,
-      OVERLAP
+      RUN_ORDER
     ],
-    cause: 'needs diagnosis',
-    unit: 'O7 chat list sync and layout',
-    impact: 3
+    cause: 'missing GPUIX capability',
+    unit: 'O5 native prose styling',
+    impact: 2
   },
   'chat.model-selector': {
     status: 'partial',
     differences: [
       'The running chat shows the agent chip and composer like the web.',
-      OVERLAP,
       PROSE
     ],
-    cause: 'needs diagnosis',
-    unit: 'O7 chat list sync and layout',
-    impact: 2
+    cause: 'missing GPUIX capability',
+    unit: 'O5 native prose styling',
+    impact: 1
   },
   'composer.mention': {
     status: 'ported',
@@ -360,32 +356,32 @@ export const REVIEWS: Record<string, Review> = {
   'chat.plan': {
     status: 'partial',
     differences: [
-      'The pinned Plan panel and the inline plan card match: three entries, Medium chips, the struck-through finished entry and the 1/3 count.',
-      SHORT_TRANSCRIPT,
-      TAB_TITLE
+      'The pinned Plan panel and the inline plan card match: three entries, Medium chips, the struck-through finished entry and the 1/3 count. The short transcript starts at the top in both.',
+      TAB_TITLE,
+      RUN_ORDER
     ],
-    cause: 'native override needed',
-    unit: 'O6 transcript scroll and anchoring',
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
     impact: 1
   },
   'chat.permission': {
     status: 'partial',
     differences: [
-      'The Approval needed card, its Allow and Reject buttons, the Needs you badge and the status-bar pill match; clicking Allow answers allow-once in both.',
-      SHORT_TRANSCRIPT
+      'The Approval needed card, its Allow and Reject buttons, the Needs you badge and the status-bar pill match; clicking Allow answers allow-once in both. The short transcript starts at the top in both.',
+      TAB_TITLE,
+      RUN_ORDER
     ],
-    cause: 'native override needed',
-    unit: 'O6 transcript scroll and anchoring',
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
     impact: 1
   },
   'chat.queue': {
     status: 'partial',
     differences: [
       'A prompt sent while the turn runs shows under 1 Queued in both, and the stop button replaces send.',
-      SHORT_TRANSCRIPT,
       PROSE
     ],
-    cause: 'native override needed',
+    cause: 'missing GPUIX capability',
     unit: 'O5 native prose styling',
     impact: 1
   },
