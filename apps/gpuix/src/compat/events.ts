@@ -12,6 +12,7 @@
 import type { EventPayload, KeyEvent } from '@gpuix/react'
 import {
   ancestorIds,
+  checkedValues,
   compatRenderer,
   descendantIds,
   type DomInfo,
@@ -19,7 +20,8 @@ import {
   nodeFor,
   nodeOrNull,
   onFocusCall,
-  trackedInstance
+  trackedInstance,
+  treeIndex
 } from './dom-node'
 import { dragSuppressesClick, fileDrop, moveSource, pressSource, releaseSource } from './dnd'
 import { compatWarn } from './log'
@@ -268,7 +270,49 @@ const clickBubbling = bubbling((h, p) => [
 function onClick(payload: EventPayload): void {
   if (dragSuppressesClick(payload)) return
   const events = clickBubbling(payload)
-  if (events && !events.get('click')?.defaultPrevented) submitFromButton(payload)
+  if (!events || events.get('click')?.defaultPrevented) return
+  submitFromButton(payload)
+  activateCheckable(payload)
+}
+
+const isCheckbox = (dom: DomInfo | undefined): boolean => dom?.tag === 'input' && dom.attrs.type === 'checkbox'
+
+/** The control a label activates: the one its `htmlFor` names, else the first one inside it. */
+function labelControl(label: number): number | undefined {
+  const target = domOf(label)?.attrs.htmlFor
+  if (typeof target === 'string') {
+    const root = treeIndex().root
+    return root === null ? undefined : descendantIds(root).find((at) => domOf(at)?.attrs.id === target)
+  }
+  return descendantIds(label).find((at) => LABELABLE.has(domOf(at)?.tag ?? ''))
+}
+const LABELABLE = new Set(['input', 'button', 'select', 'textarea'])
+
+/**
+ * A click on a checkbox, or on a label for one, flips it and fires `input`
+ * and `change` with `target.checked` already flipped, as the DOM does. A
+ * controlled checkbox then repaints from its new `checked` prop.
+ */
+function activateCheckable(payload: EventPayload): void {
+  const chain = [payload.elementId, ...ancestorIds(payload.elementId)]
+  let control = chain.find((at) => isCheckbox(domOf(at)))
+  const viaLabel = control === undefined
+  if (viaLabel) {
+    const label = chain.find((at) => domOf(at)?.tag === 'label')
+    control = label === undefined ? undefined : labelControl(label)
+  }
+  if (control === undefined || !isCheckbox(domOf(control)) || domOf(control)?.attrs.disabled) return
+  const handlers = handlersOf(control)
+  const node = nodeFor(control)
+  checkedValues.set(control, !node.checked)
+  try {
+    if (viaLabel) call(handlers?.onClick, new CompatEvent('click', node, payload), control)
+    const change = new CompatEvent('change', node, payload)
+    call(handlers?.onInput, change, control)
+    call(handlers?.onChange, change, control)
+  } finally {
+    checkedValues.delete(control)
+  }
 }
 
 const domOf = (id: number): DomInfo | undefined => trackedInstance(id)?.props.__dom
@@ -509,8 +553,10 @@ export interface GpuixListeners {
  * (`inputSubmit`) and a submit button submits its form on click.
  */
 export function addFormListeners(tag: string, type: unknown, out: GpuixListeners): void {
-  if (tag === 'input') out.onSubmit = inputSubmit
+  if (tag === 'input' && type !== 'checkbox') out.onSubmit = inputSubmit
   if ((tag === 'button' && (type === undefined || type === 'submit')) || (tag === 'input' && type === 'submit')) out.onClick = onClick
+  // A checkbox toggles on click, and so does the control a label names.
+  if ((tag === 'input' && type === 'checkbox') || tag === 'label') out.onClick = onClick
 }
 
 /**

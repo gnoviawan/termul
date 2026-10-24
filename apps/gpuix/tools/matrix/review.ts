@@ -7,11 +7,11 @@
 
 import {
   BACKDROP,
-  CHECKBOX,
   LAMP,
   OVERLAP,
   PROSE,
   SHORT_TRANSCRIPT,
+  TEXTAREA_GAP,
   TAB_TITLE,
   TITLE_TIP,
   TOAST,
@@ -172,25 +172,38 @@ export const REVIEWS: Record<string, Review> = {
   },
   'git.changes': {
     status: 'partial',
-    differences: ['Sections, rows, counts and history footer match.', CHECKBOX],
+    differences: [
+      'Sections, rows, counts and history footer match, and the Amend last commit checkbox draws as the Chromium box (C5, G3).',
+      TEXTAREA_GAP
+    ],
     cause: 'compat translator gap',
     unit: 'C5 form controls',
     impact: 1
   },
   'git.diff': {
     status: 'partial',
-    differences: ['Inline diff, hunk header and STAGE HUNK match closely.', CHECKBOX],
+    differences: ['Inline diff, hunk header and STAGE HUNK match closely.', TEXTAREA_GAP],
+    cause: 'compat translator gap',
+    unit: 'C5 form controls',
+    impact: 1
+  },
+  'git.amend': {
+    status: 'partial',
+    differences: [
+      'Clicking the Amend last commit label checks the box and the button reads Amend commit with the last message filled in; clicking the box clears it, in both. The box, its check and its colours are sampled from Chromium. The web frames show the box in its hover colour because the pointer rests on it; GPUIX automation clicks without moving the pointer.',
+      TEXTAREA_GAP
+    ],
     cause: 'compat translator gap',
     unit: 'C5 form controls',
     impact: 1
   },
   'git.stage': {
     status: 'partial',
-    differences: ['Staging README.md moves it to Staged 2 in both.', CHECKBOX]
+    differences: ['Staging README.md moves it to Staged 2 in both.', TEXTAREA_GAP]
   },
   'git.unstage': {
     status: 'partial',
-    differences: ['Unstaging app.ts moves it to Changes in both.', CHECKBOX]
+    differences: ['Unstaging app.ts moves it to Changes in both.', TEXTAREA_GAP]
   },
   'git.discard': {
     status: 'partial',

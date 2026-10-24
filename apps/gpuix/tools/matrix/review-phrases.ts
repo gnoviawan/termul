@@ -5,8 +5,8 @@ export const LAMP =
 
 export const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
-export const CHECKBOX =
-  'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
+export const TEXTAREA_GAP =
+  'The commit footer below the description field sits 6 px higher: in CSS a textarea is inline-block, so its line box adds the strut descent under it, and GPUIX lays it out as a block (C5 follow-up).'
 export const BACKDROP =
   'The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable.'
 export const OVERLAP =
