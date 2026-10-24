@@ -16,21 +16,11 @@
  * Usage: node mcp-router.ts --mode harness|baseline --termul <exe> --figcraft <exe> --out <dir>
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
-import { appendFileSync, createWriteStream, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-
-type Json = Record<string, unknown>
-
-interface Rpc {
-  jsonrpc: '2.0'
-  id?: number | string
-  method?: string
-  params?: Json
-  result?: Json
-  error?: Json
-}
+import { type Json, type Rpc, Upstream } from './upstream.ts'
 
 interface ToolDefinition {
   name: string
@@ -65,53 +55,6 @@ const out = resolve(flag('out'))
 const designPath = join(out, 'design.figcraft')
 const started = Date.now()
 
-class Upstream {
-  private next = 1
-  private waiting = new Map<number, (reply: Rpc) => void>()
-  private proc: ChildProcessWithoutNullStreams
-
-  constructor(proc: ChildProcessWithoutNullStreams, log: string) {
-    this.proc = proc
-    proc.stderr.pipe(createWriteStream(join(out, log), { flags: 'a' }))
-    createInterface({ input: proc.stdout }).on('line', (line) => {
-      let reply: Rpc
-      try {
-        reply = JSON.parse(line)
-      } catch {
-        return
-      }
-      if (typeof reply.id === 'number') {
-        this.waiting.get(reply.id)?.(reply)
-        this.waiting.delete(reply.id)
-      }
-    })
-  }
-
-  request(method: string, params: Json): Promise<Rpc> {
-    const id = this.next++
-    return new Promise((done) => {
-      this.waiting.set(id, done)
-      this.proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
-    })
-  }
-
-  async open(): Promise<Rpc> {
-    const hello = await this.request('initialize', {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'canvas-eval', version: '1' }
-    })
-    this.proc.stdin.write(
-      `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`
-    )
-    return hello
-  }
-
-  close() {
-    this.proc.kill()
-  }
-}
-
 /** The instructions without the sentences that name a harness tool. */
 function withoutHarness(instructions: string): string {
   return instructions
@@ -129,19 +72,21 @@ const termul = new Upstream(
       TERMUL_PLAN_SESSION_ID: 'canvas-eval'
     }
   }),
-  'termul-child.log'
+  join(out, 'termul-child.log')
 )
 const figcraft = new Upstream(
   spawn(flag('figcraft'), ['mcp', '--no-system-fonts'], { cwd: out }),
-  'figcraft.log'
+  join(out, 'figcraft.log')
 )
 
 const ready = (async () => {
   const [hello] = await Promise.all([termul.open(), figcraft.open()])
+  const listed = await termul.request('tools/list', {})
+  const failed = hello.error ?? listed.error
+  if (failed) throw new Error(String(failed.message))
   const full = String(hello.result?.instructions ?? '')
   const instructions = mode === 'baseline' ? withoutHarness(full) : full
-  const listed = (await termul.request('tools/list', {})).result?.tools as ToolDefinition[]
-  const tools = listed.filter(
+  const tools = (listed.result?.tools as ToolDefinition[]).filter(
     (tool) => !PARENT_TOOLS.has(tool.name) && (mode !== 'baseline' || !HARNESS_TOOLS.has(tool.name))
   )
   writeFileSync(
@@ -150,6 +95,8 @@ const ready = (async () => {
   )
   return { instructions, tools }
 })()
+// Every handler awaits `ready` and reports its failure, so a rejection before the first message must not kill the router.
+ready.catch(() => {})
 
 async function snapshot() {
   await figcraft.request('tools/call', { name: 'save_file', arguments: { path: designPath } })
@@ -230,7 +177,11 @@ createInterface({ input: process.stdin })
       return
     }
     queue = queue.then(async () => {
-      const answer = await handle(message)
+      const answer = await handle(message).catch((error: unknown): Rpc | undefined =>
+        message.id === undefined
+          ? undefined
+          : { jsonrpc: '2.0', id: message.id, error: { code: -32000, message: String(error) } }
+      )
       if (answer) process.stdout.write(`${JSON.stringify(answer)}\n`)
     })
   })
