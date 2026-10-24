@@ -1,4 +1,4 @@
-use super::junction::{create_junction, nt_path};
+use super::{create_junction, nt_path};
 use std::os::windows::fs::MetadataExt as _;
 use std::path::Path;
 

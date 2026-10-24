@@ -17,6 +17,9 @@ pub mod data_lock;
 // desktop and `termul-server` share it (like `data_lock`/`server_update`).
 pub mod diagnostics;
 mod exit_cleanup;
+// NTFS directory junctions (worktree symlink fallback, Claude account linker).
+#[cfg(windows)]
+mod junction;
 mod logging;
 mod migrations;
 mod path_validation;
