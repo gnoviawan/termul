@@ -1,7 +1,7 @@
 /** Reviews for settings, palette, shortcuts, themes and the long tail (see `review.ts`). */
 
 import type { Review } from './review'
-import { BACKDROP, ENTER, SELECT, SETTINGS_BASE, TINT } from './review-phrases'
+import { BACKDROP, SELECT, SETTINGS_BASE, TINT, TOAST } from './review-phrases'
 
 const THEME_FAMILIES = [
   'termul',
@@ -33,14 +33,14 @@ const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
 export const TAIL_REVIEWS: Record<string, Review> = {
   ...THEME_REVIEWS,
   'palette.type-ahead': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'Typing "theme" straight after Ctrl+K filters the web palette; GPUIX opens the palette with an empty search field, so the keystrokes typed before focus moved are lost.',
-      'The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first (seen when the filter is typed after the palette opens).'
+      'Typing "theme" straight after Ctrl+K filters the palette in both.',
+      'The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first, and the GPUIX search field has no focus underline.'
     ],
-    cause: 'needs diagnosis',
-    unit: 'C11 focus on open',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'C16 cmdk ranking',
+    impact: 1
   },
   'palette.new-terminal': {
     status: 'ported',
@@ -53,7 +53,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'palette.save-snapshot': {
     status: 'partial',
     differences: ['The Create Snapshot modal matches.', BACKDROP, TINT],
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
@@ -69,26 +69,20 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'palette.project-settings': {
     status: 'partial',
     differences: ['Project settings opens on General with the same fields.', BACKDROP],
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
   'palette.app-preferences': {
     status: 'partial',
     differences: ['Preferences opens on Interface.', BACKDROP],
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
   'palette.switch-project': {
-    status: 'broken',
-    differences: [
-      'Typing beta filters to the beta row in both, but Enter switches the web to beta and leaves the GPUIX palette open on alpha.',
-      ENTER
-    ],
-    cause: 'needs diagnosis',
-    unit: 'C12 Enter in fields and lists',
-    impact: 2
+    status: 'ported',
+    differences: ['Typing beta filters to the beta row and Enter switches to beta in both.']
   },
   'palette.command-history': {
     status: 'partial',
@@ -97,7 +91,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       BACKDROP,
       'No focus ring on the search field.'
     ],
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
@@ -110,15 +104,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'palette.shortcut-menu': {
     status: 'partial',
     differences: ['Opens the Shortcut Menu in both.', BACKDROP],
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
   'palette.report-bug': {
-    status: 'broken',
-    differences: ['Opens the Report a bug dialog, collapsed the same way as dialogs.bug-report.'],
-    cause: 'compat translator gap',
-    unit: 'C9 dialog body layout',
+    status: 'partial',
+    differences: ['Opens the Report a bug dialog, laid out as in dialogs.bug-report.'],
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'shortcuts.toggle-projects': {
@@ -152,15 +146,14 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 2
   },
   'notifications.toast': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'Create branch from main opens the name field in both. Typing the name and pressing Enter creates the branch and shows the success toast on the web; in GPUIX the name sits in the field and nothing happens.',
-      ENTER,
-      'Toast styling itself is compared on git.commit.'
+      'Typing the branch name and pressing Enter creates toast-branch and shows the success toast in both.',
+      TOAST
     ],
-    cause: 'needs diagnosis',
-    unit: 'C12 Enter in fields and lists',
-    impact: 2
+    cause: 'native override needed',
+    unit: 'O4 toasts',
+    impact: 1
   },
   'ssh.workspace': {
     status: 'blocked',
@@ -181,7 +174,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.interface': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
@@ -278,7 +271,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.reset': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
@@ -288,18 +281,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'Shortcut Menu rows, descriptions and key chips match, including the blank Command History chip in both.',
       BACKDROP
     ],
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
   'shortcuts.settings-shortcut': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Alt+, opens Preferences in both. Escape then closes the dialog in GPUIX, where the web keeps it open.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'C10 dialog Escape routing',
-    impact: 1
+      'Alt+, opens Preferences and Escape closes it in both. The web used to keep it open: the Shortcuts section keeps idle recorders mounted, which SettingsModal mistook for a recording in progress (fixed in src/renderer).'
+    ]
   },
   'theme.picker': {
     status: 'partial',
@@ -313,13 +303,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'dialogs.bug-report': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'The Report a bug dialog collapses to its header and footer: the Title field is cut off and the What happened, Screenshots and Preview sections are not painted, so no report can be written.'
+      'The Report a bug dialog paints its Title, What happened, Screenshots and Preview sections at the web width and wraps the same lines.',
+      'The Title field opens focused with a ring on the web and unringed in GPUIX.',
+      'The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp.'
     ],
-    cause: 'compat translator gap',
-    unit: 'C9 dialog body layout',
-    impact: 3
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
+    impact: 1
   },
   'canvas.open': {
     status: 'blocked',

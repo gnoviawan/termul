@@ -132,9 +132,9 @@ function Tooltip({
   )
 
   return (
-    <OverlayContext.Provider value={overlay}>
+    <OverlayContext.tooltip.Provider value={overlay}>
       <TimingContext.Provider value={timing}>{children}</TimingContext.Provider>
-    </OverlayContext.Provider>
+    </OverlayContext.tooltip.Provider>
   )
 }
 
@@ -145,11 +145,15 @@ function useTiming(): Timing {
 }
 
 const TooltipTrigger = forwardRef<PublicInstance, TriggerProps>(function TooltipTrigger(
-  { onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, ...props },
+  { onMouseEnter, onMouseLeave, onMouseDown, onClick, onFocus, onBlur, ...props },
   ref
 ) {
-  const overlay = useOverlay('TooltipTrigger')
+  const overlay = useOverlay('tooltip', 'TooltipTrigger')
   const timing = useTiming()
+  // Radix opens on keyboard focus only: focus a press moves here does not open
+  // it. GPUIX may focus after the button is released, so the flag lasts until
+  // the pointer leaves or focus moves on.
+  const pressed = useRef(false)
   return (
     <TriggerBase
       ref={ref}
@@ -161,18 +165,25 @@ const TooltipTrigger = forwardRef<PublicInstance, TriggerProps>(function Tooltip
       }}
       onMouseLeave={(event) => {
         onMouseLeave?.(event)
+        pressed.current = false
         timing.scheduleClose()
       }}
       onMouseDown={(event) => {
         onMouseDown?.(event)
+        pressed.current = true
+        timing.close()
+      }}
+      onClick={(event) => {
+        onClick?.(event)
         timing.close()
       }}
       onFocus={(event) => {
         onFocus?.(event)
-        timing.openNow()
+        if (!pressed.current) timing.openNow()
       }}
       onBlur={(event) => {
         onBlur?.(event)
+        pressed.current = false
         timing.close()
       }}
     />
@@ -199,11 +210,12 @@ const TooltipContent = forwardRef<PublicInstance, TooltipContentProps>(function 
   },
   ref
 ) {
-  const overlay = useOverlay('TooltipContent')
+  const overlay = useOverlay('tooltip', 'TooltipContent')
   const timing = useTiming()
   if (!overlay.open) return null
   return (
     <Floating
+      overlay={overlay}
       side={side}
       align={align}
       sideOffset={sideOffset}

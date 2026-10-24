@@ -10,7 +10,17 @@
  */
 
 import type { EventPayload, KeyEvent } from '@gpuix/react'
-import { ancestorIds, inputValues, nodeFor, nodeOrNull, trackedInstance, compatRenderer } from './dom-node'
+import {
+  ancestorIds,
+  compatRenderer,
+  descendantIds,
+  type DomInfo,
+  inputValues,
+  nodeFor,
+  nodeOrNull,
+  onFocusCall,
+  trackedInstance
+} from './dom-node'
 import { dragSuppressesClick, fileDrop, moveSource, pressSource, releaseSource } from './dnd'
 import { compatWarn } from './log'
 
@@ -224,10 +234,10 @@ function gestureFor(payload: EventPayload): Gesture {
 type Pick = (handlers: DomHandlers, payload: EventPayload) => [string, Handler | undefined][]
 
 function bubbling(pick: Pick) {
-  return (payload: EventPayload) => {
+  return (payload: EventPayload): Map<string, CompatEvent> | null => {
     const g = gestureFor(payload)
     const id = payload.elementId
-    if (g.stopped || g.handled.has(id)) return
+    if (g.stopped || g.handled.has(id)) return null
     const target = nodeFor(id)
     const chain = [id, ...ancestorIds(id)]
     const events = new Map<string, CompatEvent>()
@@ -247,6 +257,7 @@ function bubbling(pick: Pick) {
         if (event.propagationStopped) g.stopped = true
       }
     }
+    return events
   }
 }
 
@@ -255,7 +266,71 @@ const clickBubbling = bubbling((h, p) => [
   ['dblclick', p.clickCount === 2 ? h.onDoubleClick : undefined]
 ])
 function onClick(payload: EventPayload): void {
-  if (!dragSuppressesClick(payload)) clickBubbling(payload)
+  if (dragSuppressesClick(payload)) return
+  const events = clickBubbling(payload)
+  if (events && !events.get('click')?.defaultPrevented) submitFromButton(payload)
+}
+
+const domOf = (id: number): DomInfo | undefined => trackedInstance(id)?.props.__dom
+
+function isSubmitControl(dom: DomInfo | undefined): boolean {
+  const type = dom?.attrs.type
+  if (dom?.tag === 'button') return type === undefined || type === 'submit'
+  return dom?.tag === 'input' && type === 'submit'
+}
+
+/** The form a submit button or field belongs to: its nearest `<form>` ancestor. */
+function formOf(id: number): number | undefined {
+  return ancestorIds(id).find((at) => domOf(at)?.tag === 'form')
+}
+
+function submitForm(form: number, payload: EventPayload): void {
+  call(handlersOf(form)?.onSubmit, new CompatEvent('submit', nodeFor(form), payload), form)
+}
+
+/** A click no handler prevented on a submit button (or inside one) submits its form. */
+function submitFromButton(payload: EventPayload): void {
+  const button = [payload.elementId, ...ancestorIds(payload.elementId)].find((at) => isSubmitControl(domOf(at)))
+  if (button === undefined || domOf(button)?.attrs.disabled) return
+  const form = formOf(button)
+  if (form !== undefined) submitForm(form, payload)
+}
+
+/**
+ * HTML implicit submission: Enter in a field clicks the form's first submit
+ * button (nothing when it is disabled), or submits a form that has none.
+ */
+function submitImplicitly(field: number, payload: EventPayload): void {
+  const form = formOf(field)
+  if (form === undefined) return
+  const button = descendantIds(form).find((at) => isSubmitControl(domOf(at)))
+  if (button === undefined) {
+    submitForm(form, payload)
+    return
+  }
+  if (domOf(button)?.attrs.disabled) return
+  onClick({ ...payload, elementId: button, eventType: 'click', clickCount: 1, button: 0 })
+}
+
+/**
+ * A GPUIX `<input>` turns Enter into `submit` and reports no keyDown
+ * (tools/compat/probe/input-run.ts). Replay it as the DOM delivers it: an
+ * Enter keydown through the field and its ancestors, then `window`, then
+ * implicit submission unless a handler prevented it.
+ */
+function inputSubmit(payload: EventPayload): void {
+  const id = payload.elementId
+  const key = { ...payload, eventType: 'keyDown', key: 'enter' } as Partial<EventPayload & KeyEvent>
+  const event = new CompatEvent('keydown', nodeFor(id), key)
+  for (const at of [id, ...ancestorIds(id)]) {
+    call(handlersOf(at)?.onKeyDown, event, at)
+    if (event.propagationStopped) break
+  }
+  if (!event.propagationStopped) {
+    const windowEvent = windowKeyEvent('keydown', { ...key, preventDefault: () => event.preventDefault() } as KeyEvent)
+    ;(globalThis as { window?: EventTarget }).window?.dispatchEvent(windowEvent)
+  }
+  if (!event.defaultPrevented) submitImplicitly(id, payload)
 }
 const onAuxClick = bubbling((h, p) => [['contextmenu', p.isRightClick ? h.onContextMenu : undefined]])
 const onMouseDown = bubbling((h) => [
@@ -333,6 +408,50 @@ function inputChange(payload: EventPayload): void {
   call(handlers.onChange, event, id)
 }
 
+/**
+ * Keys typed in the same burst as a shortcut that opens a field (Ctrl+K then
+ * "theme") reach `window` with nothing focused: the field's focus() runs in a
+ * later JS turn than GPUI dispatches them, and GPUIX applies it a frame later
+ * still. In the DOM that focus lands before the next keystroke, so the field
+ * gets them. Printable keys no handler prevented are held here and given to a
+ * controlled text field that focus() targets soon before or after
+ * (palette.type-ahead). The window is wide because rendering what the
+ * shortcut opens can take over a second on a loaded host.
+ */
+const TYPE_AHEAD_MS = 3000
+let typeAhead: { text: string; at: number } | null = null
+let focusTarget: { id: number; at: number } | null = null
+
+const fresh = (entry: { at: number } | null): boolean =>
+  entry !== null && performance.now() - entry.at < TYPE_AHEAD_MS
+
+export function noteWindowKey(payload: KeyEvent, prevented: boolean): void {
+  const ch = payload.keyChar
+  const mods = payload.modifiers
+  if (prevented || !ch || ch.length !== 1 || mods?.ctrl || mods?.alt || mods?.cmd) return
+  if (compatRenderer()?.getFocusedElementId() != null) {
+    focusTarget = null
+    return
+  }
+  typeAhead = { text: (fresh(typeAhead) ? typeAhead?.text : '') + ch, at: performance.now() }
+  if (focusTarget && fresh(focusTarget)) replayTypeAhead(focusTarget.id)
+}
+
+function replayTypeAhead(id: number): void {
+  const pending = typeAhead
+  typeAhead = null
+  if (!pending || !fresh(pending)) return
+  const dom = domOf(id)
+  if ((dom?.tag !== 'input' && dom?.tag !== 'textarea') || dom.attrs.value === undefined) return
+  const current = inputValues.get(id) ?? String(dom.attrs.value)
+  inputChange({ elementId: id, value: current + pending.text } as EventPayload)
+}
+
+onFocusCall((id) => {
+  focusTarget = { id, at: performance.now() }
+  replayTypeAhead(id)
+})
+
 /** Focus moved: the element's own handler, ancestors' React onFocus (it bubbles), then document focusin. */
 export type FocusSink = (type: 'focusin' | 'focusout', target: unknown, related: unknown) => void
 
@@ -351,6 +470,8 @@ function focusListener(type: 'focus' | 'blur') {
     const related = type === 'focus' ? nodeOrNull(lastFocused) : null
     if (type === 'focus') lastFocused = id
     else if (lastFocused === id) lastFocused = null
+    // Not on focus: JS sees the field's focus before the keys GPUI dispatched ahead of it.
+    if (type === 'blur' && focusTarget?.id === id) focusTarget = null
     const event = new CompatEvent(type, target, payload, related)
     for (const at of [id, ...ancestorIds(id)]) {
       const handlers = handlersOf(at)
@@ -366,10 +487,11 @@ const onBlur = focusListener('blur')
 
 export interface GpuixListeners {
   onFileDrop?: typeof fileDrop
+  onSubmit?: typeof inputSubmit
   onClick?: typeof onClick
   onAuxClick?: typeof onAuxClick
-  onMouseDown?: typeof onMouseDown
-  onMouseUp?: typeof onMouseUp
+  onMouseDown?: (payload: EventPayload) => void
+  onMouseUp?: (payload: EventPayload) => void
   onMouseMove?: typeof onMouseMove
   onMouseEnter?: typeof onMouseEnter
   onMouseLeave?: typeof onMouseLeave
@@ -380,6 +502,15 @@ export interface GpuixListeners {
   onChange?: typeof inputChange
   onScroll?: typeof onScroll
   onScrollChange?: typeof onScrollChange
+}
+
+/**
+ * Listeners a form control needs whatever its handlers: a field replays Enter
+ * (`inputSubmit`) and a submit button submits its form on click.
+ */
+export function addFormListeners(tag: string, type: unknown, out: GpuixListeners): void {
+  if (tag === 'input') out.onSubmit = inputSubmit
+  if ((tag === 'button' && (type === undefined || type === 'submit')) || (tag === 'input' && type === 'submit')) out.onClick = onClick
 }
 
 /**
@@ -424,7 +555,6 @@ export function adaptHandlers(
     out.onMouseUp = onDragSourceUp
   }
   if (handlers.onDrop || handlers.onDragOver || handlers.onDragEnter) out.onFileDrop = fileDrop
-  if (handlers.onSubmit) compatWarn('event-partial', 'onSubmit (form submit is not emulated)')
   return handlers
 }
 

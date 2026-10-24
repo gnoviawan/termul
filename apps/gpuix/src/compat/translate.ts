@@ -289,8 +289,18 @@ export function unreverse(style: StyleDesc): StyleDesc | null {
   return hit
 }
 
-function layoutFixes(style: StyleDesc): StyleDesc {
+/** Grid tokens that need real grid tracks or cell alignment; without them a grid is one column. */
+const GRID_LAYOUT = /(^|\s|:)(grid-cols-|grid-rows-|grid-flow-|col-|row-span-|place-|justify-items-|justify-self-)/
+
+function layoutFixes(style: StyleDesc, classes: string): StyleDesc {
   const out: StyleDesc = { ...style }
+  // A grid with no column template is one column as wide as the grid. Taffy
+  // sizes that implicit track to the widest item's max-content, so a long
+  // paragraph widens the column past its container instead of wrapping
+  // (dialogs.bug-report). One explicit track (`minmax(0, 1fr)`) fits it.
+  if (out.display === 'grid' && out.gridTemplateColumns === undefined && !GRID_LAYOUT.test(classes)) {
+    out.gridTemplateColumns = 1
+  }
   // CSS resolves `min-width: auto` to 0 for scroll containers and lets a
   // `flex: 1 1 0%` item shrink to its min-content. Taffy measures text at
   // max-content, so without this a flex-1 or overflow-hidden item never shrinks.
@@ -310,7 +320,8 @@ function translate(tw: Tw, tag: string, className: string): Translation {
   // lay the content out from the start, like any flex container.
   const ownLayout = tag === 'button' && compiled.base.display !== undefined && compiled.base.display !== 'none'
   const merged: StyleDesc = defaults && !ownLayout ? { ...defaults, ...compiled.base } : compiled.base
-  const base = lifted.insets ? { ...layoutFixes(merged), ...lifted.insets } : layoutFixes(merged)
+  const fixed = layoutFixes(merged, lifted.classes)
+  const base = lifted.insets ? { ...fixed, ...lifted.insets } : fixed
   let ruleMode: RuleMode = 'static'
   for (const rule of compiled.rules) {
     if (rule.when.some(needsHost)) {

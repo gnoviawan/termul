@@ -156,11 +156,11 @@ const LONG_TAIL: Surface[] = [
   {
     id: 'shortcuts.settings-shortcut',
     area: 'shortcuts',
-    title: 'Settings shortcut (Alt+,); Escape leaves the web dialog open',
+    title: 'Settings shortcut (Alt+,); Escape closes the dialog',
     steps: [
       DASHBOARD,
       step('b-open', [press('alt-,')], see('Interface zoom')),
-      step('c-escape', [press('escape'), wait(600)], see('Interface zoom'))
+      step('c-escape', [press('escape'), wait(600)], [gone('Interface zoom')])
     ]
   },
   ...SHORTCUTS.map(

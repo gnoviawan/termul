@@ -12,12 +12,12 @@ import { cloneElement, type ReactElement, type ReactNode, type Ref } from 'react
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
-import { childInfo, layoutChildren, wrapAutoMargin } from './children'
+import { childInfo, contentBasis, layoutChildren, wrapAutoMargin } from './children'
 import { ColorContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
-import { adaptHandlers, type GpuixListeners } from './events'
+import { adaptHandlers, addFormListeners, type GpuixListeners } from './events'
 import { compatWarn } from './log'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
@@ -196,6 +196,7 @@ export function buildElement(
     (FOCUSABLE_TAGS.has(tag) || (tag === 'a' && props.href !== undefined) || props.tabIndex !== undefined)
   const draggable = source.draggable === true || source.draggable === 'true'
   const handlers = disabled ? null : adaptHandlers(source, text, focusable, listeners, draggable)
+  if (!disabled) addFormListeners(tag, props.type, listeners)
   const interactive = handlers !== null || focusable || tr.hoverable || style.overflow === 'scroll'
   if (!interactive) style = passThrough(style)
 
@@ -244,7 +245,9 @@ export function buildElement(
     if (props.dangerouslySetInnerHTML) compatWarn('prop-unsupported', 'dangerouslySetInnerHTML')
     const flipped = unreverse(style)
     if (flipped) native.style = style = flipped
-    const laid = layoutChildren(tr, style, props.children, isStatic, flipped !== null)
+    const contentSized = tr.flexDirection === 'column' && style.height === undefined && style.maxHeight !== undefined
+    const children = contentSized ? contentBasis(props.children) : props.children
+    const laid = layoutChildren(tr, style, children, isStatic, flipped !== null)
     if (laid.runStyle) native.style = { ...style, ...laid.runStyle }
     const nested = laid.children !== undefined && typeof laid.children !== 'string'
     let kids: ReactNode = laid.children

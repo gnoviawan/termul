@@ -125,15 +125,46 @@ export function treeIndex(): TreeIndex {
   return index
 }
 
-/** Ancestor ids of `id`, nearest first. */
+/**
+ * Layers portalled into their trigger (src/ui's Floating), keyed by the
+ * layer's element id. GPUIX paints them inside the trigger, but in React and
+ * the DOM the trigger is a sibling of its content: a click on a menu row must
+ * not reach the trigger's onClick, and `trigger.contains(row)` is false.
+ */
+const portalHosts = new Map<number, number>()
+
+export function registerPortal(layer: number, host: number): () => void {
+  portalHosts.set(layer, host)
+  return () => {
+    if (portalHosts.get(layer) === host) portalHosts.delete(layer)
+  }
+}
+
+let focusedByCall: ((id: number) => void) | null = null
+
+/** Called after `element.focus()` moves focus; GPUIX reports no focus event for it on a text field. */
+export function onFocusCall(listener: ((id: number) => void) | null): void {
+  focusedByCall = listener
+}
+
+/** Ancestor ids of `id`, nearest first, skipping the trigger a portalled layer sits in. */
 export function ancestorIds(id: number): number[] {
   const { parent } = treeIndex()
   const out: number[] = []
-  for (let at = parent.get(id); at !== undefined; at = parent.get(at)) out.push(at)
+  const skip = new Set<number>()
+  const host = portalHosts.get(id)
+  if (host !== undefined) skip.add(host)
+  for (let at = parent.get(id); at !== undefined; at = parent.get(at)) {
+    if (skip.delete(at)) continue
+    out.push(at)
+    const next = portalHosts.get(at)
+    if (next !== undefined) skip.add(next)
+  }
   return out
 }
 
-function descendantIds(id: number): number[] {
+/** Descendant ids of `id` in tree order. */
+export function descendantIds(id: number): number[] {
   const { children } = treeIndex()
   const out: number[] = []
   const stack = [...(children.get(id) ?? [])].reverse()
@@ -285,7 +316,9 @@ export class CompatElement {
       renderer.focusElement(this.elementId)
     } catch (error) {
       compatWarn('focus-detached', error instanceof Error ? error.message : String(error))
+      return
     }
+    focusedByCall?.(this.elementId)
   }
 
   blur(): void {

@@ -63,19 +63,21 @@ function ContextMenu({
 const ContextMenuTrigger = forwardRef<
   PublicInstance,
   HostProps & { asChild?: boolean; disabled?: boolean }
->(function ContextMenuTrigger({ asChild, disabled = false, onAuxClick, ...props }, ref) {
-  const overlay = useOverlay('ContextMenuTrigger')
+>(function ContextMenuTrigger({ asChild, disabled = false, onContextMenu, ...props }, ref) {
+  const overlay = useOverlay('menu', 'ContextMenuTrigger')
   const { setPoint } = useContext(PointContext)
   const triggerRef = useTriggerRef(overlay, ref)
-  const open: HostProps['onAuxClick'] = (event) => {
-    onAuxClick?.(event)
-    if (disabled || event.button !== 2 || event.defaultPrevented) return
+  // Radix composes the child's onContextMenu first and skips opening when it prevented default.
+  const open: HostProps['onContextMenu'] = (event) => {
+    onContextMenu?.(event)
+    if (disabled || event.defaultPrevented) return
+    event.preventDefault()
     setPoint({ x: event.clientX, y: event.clientY })
     overlay.setOpen(true, 'pointer')
   }
   const state = overlay.open ? 'open' : 'closed'
-  if (asChild) return <Slot ref={triggerRef} {...props} onAuxClick={open} data-state={state} />
-  return <Box ref={triggerRef} {...props} onAuxClick={open} data-state={state} />
+  if (asChild) return <Slot ref={triggerRef} {...props} onContextMenu={open} data-state={state} />
+  return <Box ref={triggerRef} {...props} onContextMenu={open} data-state={state} />
 })
 
 const ContextMenuGroup = MenuGroup
@@ -120,8 +122,17 @@ const ContextMenuContent = forwardRef<PublicInstance, MenuContentProps>(
 )
 ContextMenuContent.displayName = 'ContextMenuContent'
 
-const ContextMenuItem = forwardRef<PublicInstance, MenuItemProps>((props, ref) => (
-  <MenuItemBase ref={ref} rowClass={ROW_CLASS} {...props} />
+const DESTRUCTIVE_ROW_CLASS = 'text-destructive focus:bg-destructive/10 focus:text-destructive'
+
+const ContextMenuItem = forwardRef<
+  PublicInstance,
+  MenuItemProps & { variant?: 'default' | 'destructive' }
+>(({ variant = 'default', ...props }, ref) => (
+  <MenuItemBase
+    ref={ref}
+    rowClass={cn(ROW_CLASS, variant === 'destructive' && DESTRUCTIVE_ROW_CLASS)}
+    {...props}
+  />
 ))
 ContextMenuItem.displayName = 'ContextMenuItem'
 

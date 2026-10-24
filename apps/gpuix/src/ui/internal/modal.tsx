@@ -14,6 +14,7 @@ import type { PublicInstance } from '@gpuix/react'
 import * as DialogPrimitive from '@gpuix/react/dialog'
 import { createContext, forwardRef, type ReactNode, useContext, useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
+import { contentBasis } from '../../compat/children'
 import type { TwState } from '../../style/tw'
 import { Box, type HostProps, Inherit, mergeRefs, useTw, wrapText } from './host'
 import { bodyText, useControllableState, useFocusFirstTabbable } from './overlay'
@@ -185,7 +186,8 @@ export const ModalContent = forwardRef<
         }}
       >
         <Inherit color={merged.color as string | undefined} svgClasses={svgClasses}>
-          {wrapText(children)}
+          {/* The portal centres the popup, so its height is always its content's. */}
+          {wrapText(merged.height === undefined ? contentBasis(children) : children)}
           {after}
         </Inherit>
       </DialogPrimitive.Popup>

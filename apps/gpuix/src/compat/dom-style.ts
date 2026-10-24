@@ -56,6 +56,8 @@ export function normalizeShadow(value: unknown): StyleDesc['boxShadow'] {
 
 const cache = new WeakMap<object, StyleDesc>()
 
+const EQUAL_COLUMNS = /^repeat\(\s*(\d+)\s*,\s*(?:minmax\(\s*0(?:px)?\s*,\s*1fr\s*\)|1fr)\s*\)$/
+
 export function convertDomStyle(style: Readonly<Record<string, CssValue>>): StyleDesc {
   const hit = cache.get(style)
   if (hit) return hit
@@ -81,6 +83,11 @@ export function convertDomStyle(style: Readonly<Record<string, CssValue>>): Styl
     } else if (key === 'flex') {
       const n = typeof value === 'number' ? value : Number.parseFloat(value)
       if (Number.isFinite(n)) Object.assign(out, { flexGrow: n, flexShrink: 1, flexBasis: 0 })
+    } else if (key === 'gridTemplateColumns') {
+      // GPUIX takes a column count: `repeat(N, minmax(0, 1fr))` or `repeat(N, 1fr)`.
+      const n = typeof value === 'number' ? value : Number(EQUAL_COLUMNS.exec(String(value))?.[1])
+      if (Number.isInteger(n) && n > 0) out[key] = n
+      else compatWarn('style-value', `${key}: ${String(value).slice(0, 40)}`)
     } else if (PASS_STRING.has(key)) {
       out[key] = value
     } else {

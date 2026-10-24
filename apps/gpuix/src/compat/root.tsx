@@ -9,8 +9,8 @@ import { Fragment, type ReactNode, useCallback, useLayoutEffect, useState, useSy
 import { busyTolerantReads } from './busy-ui'
 import { dragPreview, hitTransparent, subscribeDragPreview } from './dnd'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
+import { noteWindowKey, windowKeyEvent } from './events'
 import { parkHiddenPanes } from './park'
-import { windowKeyEvent } from './events'
 import { setOverlayLayer } from './react-dom'
 import { compatThemeId, compatTw, subscribeCompatTheme } from './translate'
 import { syncViewport } from './viewport'
@@ -90,7 +90,9 @@ function DragPreviewBox(): ReactNode {
 export const compatRenderOptions: Pick<RenderOptions, 'onKeyDown' | 'onKeyUp' | 'keyboardFocusDim'> = {
   keyboardFocusDim: false,
   onKeyDown: (event) => {
-    ;(globalThis as { window?: EventTarget }).window?.dispatchEvent(windowKeyEvent('keydown', event))
+    const dom = windowKeyEvent('keydown', event)
+    ;(globalThis as { window?: EventTarget }).window?.dispatchEvent(dom)
+    noteWindowKey(event, dom.defaultPrevented)
   },
   onKeyUp: (event) => {
     ;(globalThis as { window?: EventTarget }).window?.dispatchEvent(windowKeyEvent('keyup', event))

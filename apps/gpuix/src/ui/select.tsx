@@ -112,9 +112,9 @@ function Select({
     [current, setCurrent, disabled, setLabel]
   )
   return (
-    <OverlayContext.Provider value={overlay}>
+    <OverlayContext.select.Provider value={overlay}>
       <SelectContext.Provider value={state}>{children}</SelectContext.Provider>
-    </OverlayContext.Provider>
+    </OverlayContext.select.Provider>
   )
 }
 
@@ -140,7 +140,7 @@ const SelectTrigger = forwardRef<PublicInstance, TriggerProps>(function SelectTr
   { className, children, onMouseDown, onKeyDown, ...props },
   ref
 ) {
-  const overlay = useOverlay('SelectTrigger')
+  const overlay = useOverlay('select', 'SelectTrigger')
   const select = useSelect('SelectTrigger')
   const disabled = select.disabled || props.disabled === true
   return (
@@ -201,7 +201,7 @@ const SelectContent = forwardRef<PublicInstance, SelectContentProps>(function Se
   { children, ...props },
   ref
 ) {
-  const overlay = useOverlay('SelectContent')
+  const overlay = useOverlay('select', 'SelectContent')
   if (!overlay.open) return <CollectContext.Provider value>{children}</CollectContext.Provider>
   return (
     <OpenSelect ref={ref} overlay={overlay} {...props}>
@@ -242,6 +242,7 @@ const OpenSelect = forwardRef<PublicInstance, SelectContentProps & { overlay: Ov
     }, [menu.highlightValue, select.value, mounted])
     return (
       <Floating
+        overlay={overlay}
         layer={node}
         side={side}
         align={align}
@@ -304,7 +305,7 @@ function OpenItem({
   ...rest
 }: SelectItemProps & { itemRef: Ref<PublicInstance> }) {
   const select = useSelect('SelectItem')
-  const overlay = useOverlay('SelectItem')
+  const overlay = useOverlay('select', 'SelectItem')
   const selected = select.value === value
   useLayoutEffect(() => select.setLabel(value, children), [select.setLabel, value, children])
   return (

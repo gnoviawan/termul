@@ -39,7 +39,7 @@ const DropdownMenuTrigger = forwardRef<PublicInstance, TriggerProps>(function Dr
   { onMouseDown, onKeyDown, disabled, ...props },
   ref
 ) {
-  const overlay = useOverlay('DropdownMenuTrigger')
+  const overlay = useOverlay('menu', 'DropdownMenuTrigger')
   return (
     <TriggerBase
       ref={ref}

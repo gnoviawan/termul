@@ -31,14 +31,16 @@ function Popover({
   modal?: boolean
 }) {
   const overlay = useOverlayState({ open, defaultOpen, onOpenChange })
-  return <OverlayContext.Provider value={overlay}>{children}</OverlayContext.Provider>
+  return (
+    <OverlayContext.popover.Provider value={overlay}>{children}</OverlayContext.popover.Provider>
+  )
 }
 
 const PopoverTrigger = forwardRef<PublicInstance, TriggerProps>(function PopoverTrigger(
   { onClick, ...props },
   ref
 ) {
-  const overlay = useOverlay('PopoverTrigger')
+  const overlay = useOverlay('popover', 'PopoverTrigger')
   return (
     <TriggerBase
       ref={ref}
@@ -104,7 +106,7 @@ export const PopoverSurface = forwardRef<
   },
   ref
 ) {
-  const overlay = useOverlay('PopoverContent')
+  const overlay = useOverlay('popover', 'PopoverContent')
   const content = useRef<PublicInstance | null>(null)
   const { node, onMouseDownOutside } = useLayer(overlay, content, () => {
     const event = dismissEvent()
@@ -117,6 +119,7 @@ export const PopoverSurface = forwardRef<
   if (!overlay.open && !forceMount) return null
   return (
     <Floating
+      overlay={overlay}
       layer={node}
       side={side}
       align={align}

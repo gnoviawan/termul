@@ -21,6 +21,7 @@ import {
   useGpuix
 } from '@gpuix/react'
 import {
+  type Context,
   createContext,
   type ReactNode,
   useCallback,
@@ -31,6 +32,7 @@ import {
   useRef,
   useState
 } from 'react'
+import { registerPortal } from '../../compat/dom-node'
 import { tw } from '../../style/tw'
 import { SANS_FAMILY } from '../../style/utilities'
 
@@ -113,10 +115,21 @@ export function useOverlayState({
   )
 }
 
-export const OverlayContext = createContext<OverlayState | null>(null)
+export type OverlayKind = 'menu' | 'popover' | 'tooltip' | 'select'
 
-export function useOverlay(part: string): OverlayState {
-  const overlay = useContext(OverlayContext)
+/**
+ * One context per primitive, as Radix scopes them: a Tooltip wrapped around a
+ * DropdownMenuTrigger must not hide the menu's Root from the trigger.
+ */
+export const OverlayContext: Record<OverlayKind, Context<OverlayState | null>> = {
+  menu: createContext<OverlayState | null>(null),
+  popover: createContext<OverlayState | null>(null),
+  tooltip: createContext<OverlayState | null>(null),
+  select: createContext<OverlayState | null>(null)
+}
+
+export function useOverlay(kind: OverlayKind, part: string): OverlayState {
+  const overlay = useContext(OverlayContext[kind])
   if (!overlay) throw new Error(`${part} must be used inside its Root`)
   return overlay
 }
@@ -199,6 +212,7 @@ export function useLayer(
 }
 
 export interface FloatingProps {
+  overlay: OverlayState
   side?: Side
   align?: Align
   sideOffset?: number
@@ -222,6 +236,7 @@ export interface FloatingProps {
 
 /** The anchored layer, portalled into the trigger (or at a window point). */
 export function Floating({
+  overlay,
   side = 'bottom',
   align = 'center',
   sideOffset = 0,
@@ -235,13 +250,18 @@ export function Floating({
   layer,
   children
 }: FloatingProps): ReactNode {
-  const overlay = useOverlay('Content')
   const triggerId = overlay.trigger?.id ?? null
   const offset =
     side === 'top' || side === 'bottom' ? { x: alignOffset, y: 0 } : { x: 0, y: alignOffset }
   // The layer sits inside the trigger in GPUI's tree, so it would inherit the
   // trigger's text style; a Radix portal inherits the body's instead.
   const surface: StyleDesc = { backgroundColor: 'transparent', ...bodyText() }
+  const portalled = position === undefined
+  const portalRef = useCallback(
+    (layer: PublicInstance | null) =>
+      layer && triggerId !== null && portalled ? registerPortal(layer.id, triggerId) : undefined,
+    [triggerId, portalled]
+  )
   const element = (
     <DismissableLayer
       onEscapeKeyDown={onDismiss}
@@ -249,6 +269,7 @@ export function Floating({
       finalFocus={(previous) => (returnFocus ? (triggerId ?? previous) : null)}
     >
       <anchored
+        ref={portalRef}
         side={side}
         align={align}
         gap={sideOffset}

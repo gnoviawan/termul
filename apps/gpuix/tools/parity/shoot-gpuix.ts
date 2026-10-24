@@ -129,9 +129,11 @@ export async function withGpuix<T>(
 ): Promise<T> {
   const xvfb = await startXvfb(opts.width + SCREEN_MARGIN, opts.height + SCREEN_MARGIN)
   try {
+    // GPUIX_STDERR_FILE appends the client's stderr there; automation pipes it and never reads it.
+    const stderrFile = process.env.GPUIX_STDERR_FILE
     const app = await launch({
-      command: 'bun',
-      args: [opts.entry],
+      command: stderrFile ? 'sh' : 'bun',
+      args: stderrFile ? ['-c', 'exec bun "$0" 2>>"$1"', opts.entry, stderrFile] : [opts.entry],
       cwd: APP_DIR,
       env: {
         ...process.env,

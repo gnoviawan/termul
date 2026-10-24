@@ -50,11 +50,11 @@ export interface MenuRootProps {
 export function MenuRoot({ children, open, defaultOpen, onOpenChange }: MenuRootProps) {
   const overlay = useOverlayState({ open, defaultOpen, onOpenChange })
   return (
-    <OverlayContext.Provider value={overlay}>
+    <OverlayContext.menu.Provider value={overlay}>
       <RootCloseContext.Provider value={() => overlay.setOpen(false)}>
         {children}
       </RootCloseContext.Provider>
-    </OverlayContext.Provider>
+    </OverlayContext.menu.Provider>
   )
 }
 
@@ -110,7 +110,7 @@ export const MenuContentBase = forwardRef<
   },
   ref
 ) {
-  const overlay = useOverlay('MenuContent')
+  const overlay = useOverlay('menu', 'MenuContent')
   if (!overlay.open) return null
   return (
     <OpenMenu
@@ -165,6 +165,7 @@ const OpenMenu = forwardRef<
   }, [menu.highlightFirst, mounted])
   return (
     <Floating
+      overlay={overlay}
       {...floating}
       layer={node}
       onDismiss={() => {
@@ -333,12 +334,12 @@ export function MenuGroup({ children, ...props }: HostProps) {
 /** A sub-menu: its own open state, anchored to its trigger row. */
 export function MenuSub({ children, open, defaultOpen, onOpenChange }: MenuRootProps) {
   const overlay = useOverlayState({ open, defaultOpen, onOpenChange })
-  return <OverlayContext.Provider value={overlay}>{children}</OverlayContext.Provider>
+  return <OverlayContext.menu.Provider value={overlay}>{children}</OverlayContext.menu.Provider>
 }
 
 export const MenuSubTriggerBase = forwardRef<PublicInstance, MenuItemProps & { rowClass: string }>(
   function MenuSubTriggerBase({ rowClass, children, ...props }, ref) {
-    const sub = useOverlay('MenuSubTrigger')
+    const sub = useOverlay('menu', 'MenuSubTrigger')
     const triggerRef = useTriggerRef(sub, ref)
     return (
       <MenuItemBase
