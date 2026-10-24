@@ -143,12 +143,6 @@ const center = (n: TreeNode) => {
 
 const keysFor = (text: string) => [...text].map((ch) => (ch === ' ' ? 'space' : ch))
 
-/**
- * The app waits at most 2 s for its GPUI UI thread to take each automation
- * command. Under load the UI thread can be busier than that; the command
- * still sits in its ordered queue and lands later, before any command sent
- * after it.
- */
 /** The app's top-level error boundary replaces the whole UI with this. */
 function crashReport(root: TreeNode): string | null {
   const overlay = find(root, byTestId('runtime-error-overlay'))
@@ -157,6 +151,12 @@ function crashReport(root: TreeNode): string | null {
   return (stack ? (stack.children ?? []).map(textOf) : [textOf(overlay)]).join(' | ')
 }
 
+/**
+ * The app waits at most 2 s for its GPUI UI thread to take each automation
+ * command. Under load the UI thread can be busier than that; the command
+ * still sits in its ordered queue and lands later, before any command sent
+ * after it.
+ */
 const isUiTimeout = (err: unknown) => /Timed out after 2 seconds waiting for/.test(String(err))
 const queued = (err: unknown) => {
   if (!isUiTimeout(err)) throw err
