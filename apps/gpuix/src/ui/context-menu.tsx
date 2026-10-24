@@ -64,7 +64,7 @@ const ContextMenuTrigger = forwardRef<
   PublicInstance,
   HostProps & { asChild?: boolean; disabled?: boolean }
 >(function ContextMenuTrigger({ asChild, disabled = false, onAuxClick, ...props }, ref) {
-  const overlay = useOverlay('ContextMenuTrigger')
+  const overlay = useOverlay('menu', 'ContextMenuTrigger')
   const { setPoint } = useContext(PointContext)
   const triggerRef = useTriggerRef(overlay, ref)
   const open: HostProps['onAuxClick'] = (event) => {

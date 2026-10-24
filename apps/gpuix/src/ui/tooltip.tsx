@@ -132,9 +132,9 @@ function Tooltip({
   )
 
   return (
-    <OverlayContext.Provider value={overlay}>
+    <OverlayContext.tooltip.Provider value={overlay}>
       <TimingContext.Provider value={timing}>{children}</TimingContext.Provider>
-    </OverlayContext.Provider>
+    </OverlayContext.tooltip.Provider>
   )
 }
 
@@ -148,7 +148,7 @@ const TooltipTrigger = forwardRef<PublicInstance, TriggerProps>(function Tooltip
   { onMouseEnter, onMouseLeave, onMouseDown, onFocus, onBlur, ...props },
   ref
 ) {
-  const overlay = useOverlay('TooltipTrigger')
+  const overlay = useOverlay('tooltip', 'TooltipTrigger')
   const timing = useTiming()
   return (
     <TriggerBase
@@ -199,11 +199,12 @@ const TooltipContent = forwardRef<PublicInstance, TooltipContentProps>(function 
   },
   ref
 ) {
-  const overlay = useOverlay('TooltipContent')
+  const overlay = useOverlay('tooltip', 'TooltipContent')
   const timing = useTiming()
   if (!overlay.open) return null
   return (
     <Floating
+      overlay={overlay}
       side={side}
       align={align}
       sideOffset={sideOffset}

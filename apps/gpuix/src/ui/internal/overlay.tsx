@@ -21,6 +21,7 @@ import {
   useGpuix
 } from '@gpuix/react'
 import {
+  type Context,
   createContext,
   type ReactNode,
   useCallback,
@@ -113,10 +114,21 @@ export function useOverlayState({
   )
 }
 
-export const OverlayContext = createContext<OverlayState | null>(null)
+export type OverlayKind = 'menu' | 'popover' | 'tooltip' | 'select'
 
-export function useOverlay(part: string): OverlayState {
-  const overlay = useContext(OverlayContext)
+/**
+ * One context per primitive, as Radix scopes them: a Tooltip wrapped around a
+ * DropdownMenuTrigger must not hide the menu's Root from the trigger.
+ */
+export const OverlayContext: Record<OverlayKind, Context<OverlayState | null>> = {
+  menu: createContext<OverlayState | null>(null),
+  popover: createContext<OverlayState | null>(null),
+  tooltip: createContext<OverlayState | null>(null),
+  select: createContext<OverlayState | null>(null)
+}
+
+export function useOverlay(kind: OverlayKind, part: string): OverlayState {
+  const overlay = useContext(OverlayContext[kind])
   if (!overlay) throw new Error(`${part} must be used inside its Root`)
   return overlay
 }
@@ -199,6 +211,7 @@ export function useLayer(
 }
 
 export interface FloatingProps {
+  overlay: OverlayState
   side?: Side
   align?: Align
   sideOffset?: number
@@ -222,6 +235,7 @@ export interface FloatingProps {
 
 /** The anchored layer, portalled into the trigger (or at a window point). */
 export function Floating({
+  overlay,
   side = 'bottom',
   align = 'center',
   sideOffset = 0,
@@ -235,7 +249,6 @@ export function Floating({
   layer,
   children
 }: FloatingProps): ReactNode {
-  const overlay = useOverlay('Content')
   const triggerId = overlay.trigger?.id ?? null
   const offset =
     side === 'top' || side === 'bottom' ? { x: alignOffset, y: 0 } : { x: 0, y: alignOffset }
