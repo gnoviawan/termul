@@ -339,6 +339,36 @@ pub async fn payment_split_forms(c: &Ctx<'_>) -> CaseResult {
     c.expect_url("/checkout-split-forms.html", "the refused order").await
 }
 
+/// A form with no submit button of its own is submitted by its script:
+/// "Place order" as `type=button` and an "Express checkout" with only a
+/// button role both charge the card the page shows. A plain button in a
+/// form that has its own submit button, and filling the order form, ask
+/// nothing.
+pub async fn payment_script_button(c: &Ctx<'_>) -> CaseResult {
+    c.open("/checkout-script-button.html", "Checkout script button fixture").await?;
+    let coupon = c.ref_of("textbox", "Coupon").await?;
+    c.call("fill", json!({ "ref": coupon, "value": "SPRING" })).await?;
+    let locate = c.ref_of("button", "Use my location").await?;
+    c.call("click", json!({ "ref": locate })).await?;
+    c.call("wait", json!({ "text": "Status: located" })).await?;
+    expect_tickets(c, &[], "filling the order form and a button beside a submit")?;
+    for name in ["Place order", "Express checkout"] {
+        let button = c.ref_of("button", name).await?;
+        expect_refusal(
+            c.call("click", json!({ "ref": button })).await,
+            "confirmation_required",
+            "unattended",
+            name,
+        )?;
+    }
+    expect_tickets(
+        c,
+        &[ActionClass::PaymentSubmit, ActionClass::PaymentSubmit],
+        "script submits beside the card form",
+    )?;
+    c.expect_url("/checkout-script-button.html", "the refused order").await
+}
+
 /// Once the agent read the page, Enter on a link that carries data to
 /// another origin is confirmed like a click on it.
 pub async fn tainted_link_enter(c: &Ctx<'_>) -> CaseResult {

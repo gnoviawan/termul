@@ -15,6 +15,7 @@ use crate::sensitive_cases::{asking_before_passwords, expect_refusal, expect_tic
 const FRAMES_READY: &str = "Frames ready";
 const SHADOW_READY: &str = "Shadow fixture ready";
 const CSP_READY: &str = "CSP fixture ready";
+const CHECKOUT_READY: &str = "Checkout ready";
 /// The outline marker for a frame the engine cannot read.
 const UNREACHABLE: &str = "(cross-origin frame, not readable on this engine)";
 const FRAME_WAIT: Duration = Duration::from_secs(10);
@@ -235,4 +236,47 @@ pub async fn csp_snapshot(c: &Ctx<'_>) -> CaseResult {
     c.click("button", "CSP submit").await?;
     c.call("wait", json!({ "text": "Form done" })).await?;
     Ok(())
+}
+
+fn hosted_checkout(c: &Ctx<'_>, kind: &str) -> String {
+    format!("/checkout-hosted.html?xo={}&kind={kind}", c.cross.port())
+}
+
+/// Pay on a checkout whose card fields sit in a payment provider's frame,
+/// named the way providers name theirs: a payment on every engine.
+pub async fn payment_hosted_fields(c: &Ctx<'_>) -> CaseResult {
+    let path = hosted_checkout(c, "labelled");
+    c.open(&path, CHECKOUT_READY).await?;
+    let email = c.ref_of("textbox", "Email").await?;
+    c.call("fill", json!({ "ref": email, "value": "ada@example.com" })).await?;
+    expect_tickets(c, &[], "filling the checkout form")?;
+    pay_refused(c, &path).await
+}
+
+/// The same checkout with an anonymous frame: only an engine that reads
+/// the frame sees its card fields.
+pub async fn payment_frame_fields(c: &Ctx<'_>) -> CaseResult {
+    let path = hosted_checkout(c, "plain");
+    c.open(&path, CHECKOUT_READY).await?;
+    let outline = c.outline_with("- textbox \"Card number\" @e").await?;
+    if outline.contains(UNREACHABLE) {
+        return Err(Failure {
+            code: "capability_unavailable".into(),
+            reason: Some("cross_origin_frame".into()),
+            message: "this engine cannot read cross-origin frames".into(),
+        });
+    }
+    pay_refused(c, &path).await
+}
+
+async fn pay_refused(c: &Ctx<'_>, path: &str) -> CaseResult {
+    let pay = c.ref_of("button", "Pay").await?;
+    expect_refusal(
+        c.call("click", json!({ "ref": pay })).await,
+        "confirmation_required",
+        "unattended",
+        "Pay beside hosted card fields",
+    )?;
+    expect_tickets(c, &[ActionClass::PaymentSubmit], "Pay beside hosted card fields")?;
+    c.expect_url(path, "the refused payment").await
 }

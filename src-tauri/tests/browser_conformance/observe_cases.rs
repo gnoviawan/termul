@@ -1,19 +1,22 @@
 //! Cases for console and network observation. Each checks the entries a
 //! fixture page produced, that a cursor pages past them, and that no URL
 //! in a reply carries the query strings the page used. And reading a page
-//! whose text is longer than the snapshot shows.
+//! whose text is longer than the snapshot shows, which must neither push
+//! controls out of the snapshot nor scroll the page.
 
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::{mismatch, CaseResult, Ctx, Failure};
+use super::{find_ref, mismatch, CaseResult, Ctx, Failure};
 
 const CONSOLE_READY: &str = "Console fixture ready";
 const NETWORK_READY: &str = "Network fixture ready";
 /// How long a case polls for entries to reach the host.
 const ENTRY_WAIT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(250);
+/// Long enough for a scroll the page made to reach its listener.
+const SCROLL_SETTLE: Duration = Duration::from_millis(500);
 
 /// Read `verb` from the start until `done` holds for the entries, or the
 /// wait runs out. Returns the last reply and its entries.
@@ -126,4 +129,40 @@ pub async fn long_text(c: &Ctx<'_>) -> CaseResult {
     } else {
         Err(mismatch(format!("read_text pages lack {missing:?}")))
     }
+}
+
+/// Forty paragraphs, each longer than a text block, before a page's
+/// navigation and comment form: the text gives way so every control keeps
+/// its ref in the snapshot.
+pub async fn long_article(c: &Ctx<'_>) -> CaseResult {
+    c.open("/long-article.html", "Long article fixture").await?;
+    let snap = c.call("snapshot", json!({})).await?;
+    let outline = snap["page"]["snapshot"].as_str().unwrap_or_default();
+    let controls = [("link", "Next page"), ("button", "Load more"), ("textbox", "Comment"), ("button", "Post comment")];
+    let missing: Vec<_> = controls
+        .iter()
+        .filter(|(role, name)| find_ref(outline, role, name).is_none())
+        .collect();
+    if !missing.is_empty() {
+        return Err(mismatch(format!("the snapshot lost the refs of {missing:?}: {outline}")));
+    }
+    if !outline.contains("Paragraph 01. the quick brown fox") || !outline.contains("Paragraph 40.") {
+        return Err(mismatch(format!("the snapshot lost the article's paragraphs: {outline}")));
+    }
+    if snap["page"]["truncated"] != true {
+        return Err(mismatch("shortened text left page.truncated false"));
+    }
+    Ok(())
+}
+
+/// Reading an element's text through its ref leaves the page where it was.
+pub async fn read_text_in_place(c: &Ctx<'_>) -> CaseResult {
+    c.open("/far-button.html", "Scrolled: no").await?;
+    let far = c.ref_of("button", "Far away").await?;
+    let page = c.call("read_text", json!({ "ref": far })).await?;
+    if page["page"]["text"] != "Far away" {
+        return Err(mismatch(format!("read_text read {}", page["page"]["text"])));
+    }
+    tokio::time::sleep(SCROLL_SETTLE).await;
+    c.expect_text("Scrolled: no").await
 }
