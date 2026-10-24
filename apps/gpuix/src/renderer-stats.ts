@@ -6,9 +6,8 @@
  * their count shows how much of the UI thread's load JS asks for.
  *
  * With `ops`, each line also counts the mutation ops by kind (`setCustomProp`
- * by key), their JSON bytes,
- * and how many distinct elements got a `setText`. It parses every batch, so
- * it is for diagnostic runs, not for the timing ones.
+ * by key), their JSON bytes, and how many distinct elements got a `setText`.
+ * It parses every batch, so it is for diagnostic runs, not for the timing ones.
  */
 
 import { appendFileSync } from 'node:fs'
