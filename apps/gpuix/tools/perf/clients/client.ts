@@ -16,6 +16,11 @@ export interface ClientLaunchOptions {
   noPageMetrics?: boolean
 }
 
+export interface ChatStartPart {
+  typeMs: number
+  openMs: number
+}
+
 /** What every client lane must expose to the scenarios. */
 export interface ClientHandle {
   kind: ClientKind
@@ -49,6 +54,13 @@ export interface ClientDriver {
   runInTerminal(command: string): Promise<void>
   /** Resolves when `marker` is visible in the focused terminal's screen. */
   waitForTerminalText(marker: string, timeoutMs: number): Promise<void>
+  /**
+   * Per chat start: ms spent typing the prompt, and ms from the Start click
+   * until the chat tab existed and the launcher closed.
+   */
+  chatStartParts(): ChatStartPart[]
+  /** The client's own crash report, when it replaced its UI with one; else null. */
+  crashed(): Promise<string | null>
   /** In-page metrics, when the client is a web page; null otherwise. */
   beginPhase(name: string): Promise<void>
   endPhase(name: string): Promise<PageMetrics | null>

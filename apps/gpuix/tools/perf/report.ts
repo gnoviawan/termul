@@ -26,6 +26,7 @@ const HEADLINE: Record<string, string[]> = {
     'measure.proc.page-renderer.cpuMeanPct',
     'measure.proc.gpu-process.cpuMeanPct',
     'measure.page.fps',
+    'measure.screen.fps',
     'measure.bytesDownKBps',
     'measure.machine.foreignCpuPct'
   ],
@@ -36,6 +37,8 @@ const HEADLINE: Record<string, string[]> = {
     'chat.firstStartMs',
     'chat.startUnderLoadP50Ms',
     'chat.startUnderLoadMaxMs',
+    'chat.typeUnderLoadP50Ms',
+    'chat.openUnderLoadP50Ms',
     'chatsOpen',
     'chat.switches',
     'measure.proc.total.pssMedianMB',
@@ -45,6 +48,9 @@ const HEADLINE: Record<string, string[]> = {
     'measure.proc.total.cpuMeanPct',
     'measure.proc.page-renderer.cpuMeanPct',
     'measure.proc.gpu-process.cpuMeanPct',
+    'measure.screen.fps',
+    'measure.screen.gapP50Ms',
+    'measure.screen.gapP95Ms',
     'measure.page.fps',
     'measure.page.frameP50Ms',
     'measure.page.frameP95Ms',
@@ -56,6 +62,8 @@ const HEADLINE: Record<string, string[]> = {
     'measure.bytesDownKBps',
     'measure.server.cpuMeanPct',
     'measure.machine.foreignCpuPct',
+    'sustained-stream.screen.fps',
+    'sustained-stream.screen.gapP95Ms',
     'sustained-stream.page.fps',
     'sustained-stream.page.frameP95Ms',
     'sustained-stream.page.longtaskMsPerSec',
@@ -71,6 +79,9 @@ const HEADLINE: Record<string, string[]> = {
     'measure.proc.total.cpuMeanPct',
     'measure.proc.page-renderer.cpuMeanPct',
     'measure.proc.gpu-process.cpuMeanPct',
+    'measure.screen.fps',
+    'measure.screen.gapP50Ms',
+    'measure.screen.gapP95Ms',
     'measure.page.fps',
     'measure.page.frameP95Ms',
     'measure.page.longtaskMsPerSec',
@@ -85,6 +96,7 @@ const HEADLINE: Record<string, string[]> = {
     'probe.burstTotalMs',
     'probe.burstMBps',
     'burst.proc.total.cpuMeanPct',
+    'burst.screen.fps',
     'burst.page.longtaskMsPerSec'
   ]
 }
