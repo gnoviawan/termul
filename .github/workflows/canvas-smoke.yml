@@ -8,7 +8,7 @@ name: Canvas smoke
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [main, develop, dev]
+    branches: [main, develop, dev, design-system-canvas]
     paths:
       - '.github/workflows/canvas-smoke.yml'
       - 'design-system/**'
