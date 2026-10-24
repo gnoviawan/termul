@@ -172,6 +172,10 @@ fn resolve_repairs_a_removed_link() {
     ));
 }
 
+// On Unix a real shared directory is user data and is left alone; on Windows it
+// is a privately created entry from a failed `symlink_dir` and gets migrated
+// (see the Windows tests below), so this behavior is Unix-only.
+#[cfg(unix)]
 #[test]
 fn links_never_replace_a_real_entry() {
     let f = fixture();
@@ -181,6 +185,99 @@ fn links_never_replace_a_real_entry() {
     let failed = links::ensure_links(&f.shared, &account).unwrap();
     assert_eq!(failed, 1);
     assert!(account.join("projects").join("own.jsonl").is_file());
+}
+
+#[test]
+fn merge_dir_copies_new_files_keeping_the_relative_layout() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("private");
+    let dst = root.path().join("shared");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::create_dir_all(&dst).unwrap();
+    fs::write(src.join("top.jsonl"), b"top").unwrap();
+    fs::write(src.join("sub").join("deep.jsonl"), b"deep").unwrap();
+
+    links::merge_dir(&src, &dst).unwrap();
+
+    assert_eq!(fs::read(dst.join("top.jsonl")).unwrap(), b"top");
+    assert_eq!(fs::read(dst.join("sub").join("deep.jsonl")).unwrap(), b"deep");
+    // merge_dir copies; the caller removes the private dir afterwards.
+    assert!(src.join("top.jsonl").is_file());
+}
+
+#[test]
+fn merge_dir_never_overwrites_an_existing_shared_name() {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("private");
+    let dst = root.path().join("shared");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    fs::create_dir_all(dst.join("sub")).unwrap();
+    fs::write(src.join("same.jsonl"), b"private").unwrap();
+    fs::write(dst.join("same.jsonl"), b"shared").unwrap();
+    fs::write(src.join("sub").join("new.jsonl"), b"new").unwrap();
+
+    links::merge_dir(&src, &dst).unwrap();
+
+    // The shared copy wins the name conflict and is never overwritten.
+    assert_eq!(fs::read(dst.join("same.jsonl")).unwrap(), b"shared");
+    // A uniquely named private file is still merged in.
+    assert_eq!(fs::read(dst.join("sub").join("new.jsonl")).unwrap(), b"new");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_directory_entry_is_linked_with_a_junction_to_the_shared_target() {
+    use std::os::windows::fs::MetadataExt as _;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    let f = fixture();
+    let account = f.state.join("acct");
+    fs::write(f.shared.join("projects").join("shared.jsonl"), b"s").unwrap();
+
+    // A junction needs no symlink privilege, so linking succeeds unprivileged.
+    let failed = links::ensure_links(&f.shared, &account).unwrap();
+    assert_eq!(failed, 0);
+
+    let link = account.join("projects");
+    let attributes = fs::symlink_metadata(&link).unwrap().file_attributes();
+    assert_ne!(
+        attributes & FILE_ATTRIBUTE_REPARSE_POINT,
+        0,
+        "projects is a reparse point (junction)"
+    );
+    assert_eq!(
+        fs::canonicalize(&link).unwrap(),
+        fs::canonicalize(f.shared.join("projects")).unwrap()
+    );
+    assert!(link.join("shared.jsonl").is_file());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_private_directory_is_merged_into_the_shared_dir_and_replaced_with_a_junction() {
+    let f = fixture();
+    let account = f.state.join("acct");
+    fs::create_dir_all(account.join("projects").join("proj")).unwrap();
+    fs::write(
+        account.join("projects").join("proj").join("session.jsonl"),
+        b"private",
+    )
+    .unwrap();
+    fs::write(f.shared.join("projects").join("existing.jsonl"), b"shared").unwrap();
+
+    let failed = links::ensure_links(&f.shared, &account).unwrap();
+    assert_eq!(failed, 0);
+
+    // The private session moved into the shared dir, keeping its layout.
+    assert_eq!(
+        fs::read(f.shared.join("projects").join("proj").join("session.jsonl")).unwrap(),
+        b"private"
+    );
+    // The private dir is now a junction that sees every shared project.
+    let link = account.join("projects");
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert!(link.join("existing.jsonl").is_file());
+    assert!(link.join("proj").join("session.jsonl").is_file());
 }
 
 #[test]

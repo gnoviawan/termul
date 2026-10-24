@@ -1,8 +1,6 @@
 mod archive;
 mod conflict;
 mod git;
-#[cfg(windows)]
-mod junction;
 mod launch;
 mod launch_registry;
 mod manager;
@@ -25,7 +23,7 @@ pub use types::{
 use conflict::{chrono_timestamp, create_dir_symlink, glob_to_regex, thirty_days_from_now};
 use git::{ensure_valid_branch_name, run_git, run_git_output, run_git_streaming, worktree_add_args};
 #[cfg(windows)]
-use junction::create_junction;
+use crate::junction::create_junction;
 use launch_registry::note_launch_created;
 use types::parse_git_stderr;
 use util::{is_excluded_dir, is_single_safe_folder_name, quiet_command};
@@ -47,9 +45,6 @@ mod conflict_analysis_tests;
 
 #[cfg(test)]
 mod create_validation_tests;
-
-#[cfg(all(test, windows))]
-mod junction_tests;
 
 #[cfg(test)]
 mod launch_registry_tests;

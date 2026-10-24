@@ -137,9 +137,13 @@ During a turn, the Claude ACP adapter also attaches the live rate-limit state
 
 `remove` signs the Claude CLI out of that Account, deletes its folder (never
 the shared folder), and moves its Projects back to the Default Account. The
-built-in Account cannot be removed. On Windows, a link that cannot be created
-(file links can need Developer Mode) is logged and left out; that entry is then
-separate for the Account.
+built-in Account cannot be removed. On Windows, directory entries (such as
+`projects`) are shared with an NTFS junction, which needs no privilege; file
+entries use a symlink and fall back to a copy, logged, when the symlink
+privilege (Developer Mode or elevation) is missing. A private `projects`
+directory left by an earlier version is migrated — its sessions are merged into
+the shared directory (never overwriting one already there) before it becomes a
+junction.
 
 ## Remote browser clients
 

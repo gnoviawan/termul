@@ -80,7 +80,7 @@ pub fn remove_links(account: &Path) {
 fn link_entry(target: &Path, link: &Path, name: &str, is_dir: bool) -> bool {
     match fs::symlink_metadata(link) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            if fs::read_link(link).is_ok_and(|current| current == target) {
+            if link_points_to(link, target) {
                 return true;
             }
             if let Err(error) = remove_link(link, is_dir) {
@@ -91,10 +91,7 @@ fn link_entry(target: &Path, link: &Path, name: &str, is_dir: bool) -> bool {
                 return false;
             }
         }
-        Ok(_) => {
-            log::warn!("[claude-accounts] shared entry {name} is a real file; leaving it");
-            return false;
-        }
+        Ok(meta) => return migrate_or_leave(target, link, name, is_dir, &meta),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
             log::warn!(
@@ -116,6 +113,114 @@ fn link_entry(target: &Path, link: &Path, name: &str, is_dir: bool) -> bool {
     }
 }
 
+/// Whether the existing link at `link` already resolves to `target`.
+#[cfg(unix)]
+fn link_points_to(link: &Path, target: &Path) -> bool {
+    fs::read_link(link).is_ok_and(|current| current == target)
+}
+
+/// Whether the existing link at `link` already resolves to `target`. A Windows
+/// directory link is a junction whose stored target is an `\??\`-prefixed NT
+/// path, so compare canonical paths instead of the raw reparse target.
+#[cfg(windows)]
+fn link_points_to(link: &Path, target: &Path) -> bool {
+    match (fs::canonicalize(link), fs::canonicalize(target)) {
+        (Ok(resolved_link), Ok(resolved_target)) => resolved_link == resolved_target,
+        _ => false,
+    }
+}
+
+/// A real file or directory Claude Code already wrote where a link belongs.
+///
+/// On Unix the entry is always left alone (the `symlink` path never fails, so a
+/// real entry is user data we must not touch). On Windows a privately created
+/// shared *directory* means an earlier `symlink_dir` failed for lack of the
+/// symlink privilege, so its contents are merged into the shared directory and
+/// it is replaced with a privilege-free junction. Returns `true` only when the
+/// entry ends up linked.
+#[cfg(unix)]
+fn migrate_or_leave(
+    _target: &Path,
+    _link: &Path,
+    name: &str,
+    _is_dir: bool,
+    _meta: &fs::Metadata,
+) -> bool {
+    log::warn!("[claude-accounts] shared entry {name} is a real file; leaving it");
+    false
+}
+
+#[cfg(windows)]
+fn migrate_or_leave(
+    target: &Path,
+    link: &Path,
+    name: &str,
+    is_dir: bool,
+    meta: &fs::Metadata,
+) -> bool {
+    if is_dir && meta.is_dir() {
+        return migrate_dir_to_link(target, link, name);
+    }
+    log::warn!("[claude-accounts] shared entry {name} is a real file; leaving it");
+    false
+}
+
+/// Merge a private shared directory into the shared one, then replace it with a
+/// junction. The private copy is removed only after every file is merged, so a
+/// failure leaves the unmerged data in place.
+#[cfg(windows)]
+fn migrate_dir_to_link(target: &Path, link: &Path, name: &str) -> bool {
+    log::info!("[claude-accounts] migrating private {name} into the shared directory");
+    if let Err(error) = merge_dir(link, target) {
+        log::warn!(
+            "[claude-accounts] could not merge private {name} into the shared dir ({:?}); leaving it",
+            error.kind()
+        );
+        return false;
+    }
+    if let Err(error) = fs::remove_dir_all(link) {
+        log::warn!(
+            "[claude-accounts] merged private {name} but could not remove it to link ({:?}); leaving it",
+            error.kind()
+        );
+        return false;
+    }
+    match create_link(target, link, true) {
+        Ok(()) => {
+            log::info!("[claude-accounts] migrated private {name} to a shared junction");
+            true
+        }
+        Err(error) => {
+            log::warn!(
+                "[claude-accounts] could not link {name} after migrating its contents: {:?}",
+                error.kind()
+            );
+            false
+        }
+    }
+}
+
+/// Copy every file under `src` into `dst`, keeping the relative layout and
+/// never overwriting a name that already exists under `dst` (the shared copy
+/// wins a conflict; a uniquely named private file is always preserved). On the
+/// first I/O error, already-copied files stay and the error is returned so the
+/// caller keeps the source rather than deleting unmerged data.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn merge_dir(src: &Path, dst: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            fs::create_dir_all(&to)?;
+            merge_dir(&from, &to)?;
+        } else if !to.exists() {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn create_link(target: &Path, link: &Path, _is_dir: bool) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
@@ -124,9 +229,23 @@ fn create_link(target: &Path, link: &Path, _is_dir: bool) -> io::Result<()> {
 #[cfg(windows)]
 fn create_link(target: &Path, link: &Path, is_dir: bool) -> io::Result<()> {
     if is_dir {
-        std::os::windows::fs::symlink_dir(target, link)
+        // A directory junction needs no symlink privilege, unlike `symlink_dir`.
+        crate::junction::create_junction(target, link).map_err(io::Error::other)
     } else {
-        std::os::windows::fs::symlink_file(target, link)
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => Ok(()),
+            // A file symlink needs Developer Mode or elevation. Without it, copy
+            // the shared file so the Account still has its contents; the copy
+            // will not track later shared edits, which we accept over failing.
+            Err(error) => {
+                log::warn!(
+                    "[claude-accounts] symlink for {} failed ({:?}); copying the shared file instead",
+                    link.display(),
+                    error.kind()
+                );
+                fs::copy(target, link).map(|_| ())
+            }
+        }
     }
 }
 
