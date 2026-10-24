@@ -151,6 +151,33 @@ fn outside_every_form_only_activating_reaches_the_pages_card_fields() {
 }
 
 #[test]
+fn submitting_an_order_form_beside_the_card_form_is_a_payment_submit() {
+    let order = SensitivityFacts {
+        frame_origin: Some("https://shop.example".into()),
+        target_in_form: true,
+        page_has_payment: true,
+        ..SensitivityFacts::default()
+    };
+    let submit = SensitivityFacts {
+        is_submitter: true,
+        ..order.clone()
+    };
+    let payment = vec![(ActionClass::PaymentSubmit, Some("https://shop.example"), false)];
+    assert_eq!(summary(&classify(Gesture::Click, &submit, &scene(false))), payment);
+    let field = SensitivityFacts {
+        is_text_entry: true,
+        ..order.clone()
+    };
+    for gesture in [Gesture::Key("Enter"), Gesture::Type("x\n")] {
+        assert_eq!(summary(&classify(gesture, &field, &scene(false))), payment, "{gesture:?}");
+    }
+    for gesture in [Gesture::Toggle, Gesture::Select, Gesture::Fill, Gesture::Click] {
+        assert!(classify(gesture, &order, &scene(false)).is_empty(), "{gesture:?}");
+    }
+    assert!(classify(Gesture::Fill, &field, &scene(false)).is_empty());
+}
+
+#[test]
 fn enter_outside_a_credential_region_submits_nothing() {
     let field = SensitivityFacts {
         is_text_entry: true,
@@ -396,7 +423,7 @@ fn all_facts() -> Vec<SensitivityFacts> {
         Some("https://collect.example/a?x=1".to_string()),
     ];
     let mut out = Vec::new();
-    for bits in 0u8..64 {
+    for bits in 0u8..128 {
         for action in &actions {
             for link in &links {
                 out.push(SensitivityFacts {
@@ -407,6 +434,7 @@ fn all_facts() -> Vec<SensitivityFacts> {
                     is_submitter: bits & 8 != 0,
                     is_file_input: bits & 16 != 0,
                     is_text_entry: bits & 32 == 0,
+                    page_has_payment: bits & 64 != 0,
                     form_action: action.clone(),
                     link_target: link.clone(),
                 });
@@ -431,6 +459,7 @@ fn at_most(a: &SensitivityFacts, b: &SensitivityFacts) -> bool {
     le(a.target_in_form, b.target_in_form)
         && le(a.region_has_password, b.region_has_password)
         && le(a.region_has_payment, b.region_has_payment)
+        && le(a.page_has_payment, b.page_has_payment)
         && le(a.is_submitter, b.is_submitter)
         && le(a.is_file_input, b.is_file_input)
         && le(b.is_text_entry, a.is_text_entry)

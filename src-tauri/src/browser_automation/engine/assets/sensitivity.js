@@ -5,6 +5,7 @@ var facts = {
   targetInForm: false,
   regionHasPassword: false,
   regionHasPayment: false,
+  pageHasPayment: false,
   isSubmitter: false,
   isTextEntry: false,
   isFileInput: false,
@@ -18,7 +19,8 @@ var tag = tagOf(target);
 // Keys without a ref reach focus inside a frame these helpers cannot read;
 // what is focused there is unknown, so it counts as a credential form.
 if (!p.path && (tag === 'IFRAME' || tag === 'FRAME') && !frameDocOf(target)) {
-  facts.targetInForm = facts.regionHasPassword = facts.regionHasPayment = facts.isSubmitter = true;
+  facts.targetInForm = facts.regionHasPassword = facts.regionHasPayment = facts.pageHasPayment =
+    facts.isSubmitter = true;
   return facts;
 }
 function absolute(href) {
@@ -73,6 +75,10 @@ if (form) {
 }
 facts.regionHasPassword = region.some(isPassword);
 facts.regionHasPayment = region.some(isPayment);
+// An order form without card fields can still charge the card: its script
+// reads the fields another form on the page holds.
+facts.pageHasPayment = facts.regionHasPayment ||
+  (!!form && deepFields(doc, []).filter(visible).some(isPayment));
 var link = closestOf(target, 'a[href],area[href]');
 if (link) facts.linkTarget = absolute(attr(link, 'href'));
 return facts;

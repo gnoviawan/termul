@@ -309,6 +309,36 @@ pub async fn payment_outside_form(c: &Ctx<'_>) -> CaseResult {
     c.expect_url("/checkout-outside-form.html", "the refused payment").await
 }
 
+/// "Place order" submits a form with no card field while the card fields
+/// sit in another form: the order's script charges the card, so the
+/// submit, by click or by Enter, is a payment. Filling the order form is
+/// not.
+pub async fn payment_split_forms(c: &Ctx<'_>) -> CaseResult {
+    c.open("/checkout-split-forms.html", "Checkout split forms fixture").await?;
+    let coupon = c.ref_of("textbox", "Coupon").await?;
+    c.call("fill", json!({ "ref": coupon, "value": "SPRING" })).await?;
+    expect_tickets(c, &[], "filling the order form")?;
+    expect_refusal(
+        c.call("press", json!({ "ref": coupon, "key": "Enter" })).await,
+        "confirmation_required",
+        "unattended",
+        "Enter in the order form",
+    )?;
+    let place = c.ref_of("button", "Place order").await?;
+    expect_refusal(
+        c.call("click", json!({ "ref": place })).await,
+        "confirmation_required",
+        "unattended",
+        "the order form's submit beside the card form",
+    )?;
+    expect_tickets(
+        c,
+        &[ActionClass::PaymentSubmit, ActionClass::PaymentSubmit],
+        "order submits beside the card form",
+    )?;
+    c.expect_url("/checkout-split-forms.html", "the refused order").await
+}
+
 /// Once the agent read the page, Enter on a link that carries data to
 /// another origin is confirmed like a click on it.
 pub async fn tainted_link_enter(c: &Ctx<'_>) -> CaseResult {

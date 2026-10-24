@@ -32,6 +32,9 @@ pub struct SensitivityFacts {
     pub region_has_password: bool,
     /// The region has a payment-card field.
     pub region_has_payment: bool,
+    /// A payment-card field is in the region, or shown anywhere in the
+    /// element's document and its same-origin frames.
+    pub page_has_payment: bool,
     /// Activating the element submits its form.
     pub is_submitter: bool,
     /// The element takes typed text, so a click only focuses it. Unknown
@@ -56,6 +59,7 @@ impl SensitivityFacts {
             target_in_form: true,
             region_has_password: true,
             region_has_payment: true,
+            page_has_payment: true,
             is_submitter: true,
             ..Self::default()
         }
@@ -223,7 +227,10 @@ pub fn classify(
         if region && facts.region_has_password {
             out.add(ActionClass::PasswordSubmit, page_origin.clone(), page, false);
         }
-        if region && facts.region_has_payment {
+        // Submitting a form with no card field still pays when the page
+        // shows card fields elsewhere ("Place order" beside the card form).
+        let pays_elsewhere = submits_form(gesture, facts) && facts.page_has_payment;
+        if (region && facts.region_has_payment) || pays_elsewhere {
             out.add(ActionClass::PaymentSubmit, page_origin.clone(), page, false);
         }
         if let Some(link) = facts.link_target.as_deref() {
