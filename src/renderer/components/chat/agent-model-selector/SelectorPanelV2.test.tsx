@@ -6,6 +6,11 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import {
+  createFavoritesStore,
+  type FavoritesStore,
+  memoryFavoritesAdapter
+} from './favorite-models'
 import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
 import {
@@ -195,6 +200,19 @@ function props(over: Partial<SelectorPanelV2Props> = {}): SelectorPanelV2Props {
   }
 }
 
+/** An in-memory favorites store, starred in the given order. */
+function storeOf(pairs: Array<[string, string]>): FavoritesStore {
+  return createFavoritesStore(
+    memoryFavoritesAdapter(
+      pairs.map(([configId, modelId], i) => ({
+        configId,
+        modelId,
+        addedAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString()
+      }))
+    )
+  )
+}
+
 function Panel(p: SelectorPanelV2Props): React.JSX.Element {
   return (
     <TooltipProvider>
@@ -357,7 +375,7 @@ describe('SelectorPanelV2 sizes: flyout matches the list', () => {
         {...props({
           fastMode: FAST,
           onToggleFast,
-          favorites: [{ configId: CURSOR.id, value: 'sonnet' }]
+          favoritesStore: storeOf([[CURSOR.id, 'sonnet']])
         })}
       />
     )
@@ -417,7 +435,7 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
     }
   })
 
-  it('a very long model name keeps its Edit button and check in the row', () => {
+  it('a very long model name keeps its star and Edit buttons in the row', () => {
     const long = Array(3)
       .fill('Claude Opus 4.7 with 1M context and extended thinking, preview build')
       .join(' ')
@@ -425,11 +443,21 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
       ['opus', long],
       ['sonnet', 'Claude Sonnet']
     ])
-    render(<Panel {...props({ modelOption: model })} />)
+    render(<Panel {...props({ modelOption: model, favoritesStore: storeOf([]) })} />)
     const row = screen.getByRole('button', { pressed: true })
     // The real name; the level is on Edit.
     expect(row).toHaveAttribute('aria-label', long)
     expect(row).toHaveAccessibleName(long)
+    const fav = row.closest<HTMLElement>('[class*="group/fav"]')
+    expect(classes(fav)).toContain('min-w-0')
+    const star = within(fav as HTMLElement).getByRole('button', { name: 'Add to favorites' })
+    expect(star).toBeInTheDocument()
+    expect(star).not.toHaveAttribute('hidden')
+    // Laid over a slot the row always reserves (shrink-0), so a long name
+    // truncates before it instead of pushing it out of the 300px panel.
+    expect(classes(star)).toEqual(expect.arrayContaining(['absolute', 'right-7.5', 'w-5']))
+    const slot = row.querySelector('[data-row-name] + span[aria-hidden="true"]')
+    expect(classes(slot)).toEqual(expect.arrayContaining(['shrink-0', 'w-5']))
     const name = row.querySelector('[data-row-name]')
     expect(classes(name)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
     const edit = screen.getByTestId('selector-edit')
@@ -483,6 +511,37 @@ describe('SelectorPanelV2 row tooltip', () => {
       'aria-label',
       `Edit ${long}, thinking High`
     )
+  })
+
+  it('the Favorites copy rows lead with the full name too', async () => {
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
+        })}
+      />
+    )
+    for (const name of ['Claude Opus', 'Claude Sonnet']) {
+      const copy = screen
+        .getAllByRole('button', { name })
+        .find((row) => row.closest('[data-favorite-entry]')) as HTMLElement
+      expect(copy).toBeDefined()
+      fireEvent.focus(copy)
+      await waitFor(() =>
+        expect(
+          (document.querySelector('[data-side]') as HTMLElement | null)?.textContent
+            ?.split('\n\n')[0]
+            .trim()
+        ).toBe(name)
+      )
+      expect(copy).toHaveAccessibleDescription('')
+      expect(copy).toHaveAttribute('aria-label', name)
+      fireEvent.blur(copy)
+      await waitFor(() => expect(document.querySelector('[data-side]')).toBeNull())
+    }
   })
 })
 
@@ -572,18 +631,18 @@ describe('SelectorPanelV2 selected-row check', () => {
   })
 
   it('the Favorites copy of the selected row shows the level on its own Edit, no check', () => {
-    render(<Panel {...props({ favorites: [{ configId: CURSOR.id, value: 'opus' }] })} />)
-    const group = screen.getByRole('group', { name: 'Favorites' })
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
     const rows = screen.getAllByRole('button', { name: 'Claude Opus', pressed: true })
-    const copy = rows.find((row) => group.contains(row)) as HTMLElement
+    const copy = rows.find((row) => row.closest('[data-favorite-entry]')) as HTMLElement
     const listed = rows.find((row) => row !== copy) as HTMLElement
     expect(copy).toBeDefined()
     expect(listed).toBeDefined()
     // Both copies of the active model carry Edit with the level, in place of the check.
-    expect(screen.getAllByTestId('selector-edit')).toHaveLength(2)
+    const edits = screen.getAllByTestId('selector-edit')
+    expect(edits).toHaveLength(2)
     for (const row of [copy, listed]) {
       expect(checkOf(row)).toBeNull()
-      expect(editBeside(row)).toBeDefined()
+      expect(edits.some((edit) => edit.parentElement?.contains(row))).toBe(true)
     }
   })
 
@@ -733,10 +792,10 @@ describe('SelectorPanelV2 Thinking level on the Edit button', () => {
     render(
       <Panel
         {...props({
-          favorites: [
-            { configId: CURSOR.id, value: 'opus' },
-            { configId: CURSOR.id, value: 'sonnet' }
-          ]
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
         })}
       />
     )
@@ -745,6 +804,15 @@ describe('SelectorPanelV2 Thinking level on the Edit button', () => {
     for (const row of selected) {
       expect(row).toHaveAttribute('aria-label', 'Claude Opus')
       expect(row.textContent?.trim()).toBe('Claude Opus')
+      // `aria-label` names the whole subtree: the star and Edit sit beside
+      // the row button, never inside it.
+      expect(row.querySelector('button, [role="button"]')).toBeNull()
+    }
+    const [favoriteRow] = selected
+    const entry = favoriteRow?.closest('[data-favorite-entry]') as HTMLElement
+    expect(within(entry).getByTestId('selector-favorite').parentElement).toBe(entry)
+    for (const button of screen.getAllByTestId('selector-edit')) {
+      expect(selected.some((row) => row.contains(button))).toBe(false)
     }
     // Two Edits, one per copy of the active model; each carries the level.
     // The copy's (first, in Favorites) says where it is; the list row's does not.
@@ -758,7 +826,7 @@ describe('SelectorPanelV2 Thinking level on the Edit button', () => {
     // The Favorites group tells them apart: only the copy's Edit is inside it.
     const group = screen.getByRole('group', { name: 'Favorites' })
     expect(edits.filter((button) => group.contains(button))).toHaveLength(1)
-    expect(group).toContainElement(selected[0] as HTMLElement)
+    expect(group).toContainElement(favoriteRow as HTMLElement)
   })
 })
 
@@ -873,25 +941,25 @@ describe('SelectorPanelV2 favorites', () => {
     render(
       <Panel
         {...props({
-          favorites: [
-            { configId: CLAUDE.id, value: 'claude-opus' },
-            { configId: CURSOR.id, value: 'sonnet' },
-            { configId: CURSOR.id, value: 'gone' }
-          ]
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'gone']
+          ])
         })}
       />
     )
     const list = screen.getByTestId('selector-list')
     expect(within(list).getByText('Favorites')).toBeInTheDocument()
-    const names = within(list)
-      .getAllByRole('button')
-      .map((b) => b.getAttribute('aria-label'))
+    const names = Array.from(list.querySelectorAll('[data-selector-row]')).map((b) =>
+      b.getAttribute('aria-label')
+    )
     expect(names.slice(0, 2)).toEqual(['Opus via Claude · Claude Agent', 'Claude Sonnet'])
     expect(names).not.toContain('gone')
   })
 
   it('hides the Favorites section while searching', () => {
-    render(<Panel {...props({ favorites: [{ configId: CURSOR.id, value: 'sonnet' }] })} />)
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'sonnet']]) })} />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Search models and agents' }), {
       target: { value: 'opus' }
     })
@@ -899,21 +967,123 @@ describe('SelectorPanelV2 favorites', () => {
   })
 })
 
+describe('SelectorPanelV2 favorite star', () => {
+  const favoriteRows = (): HTMLElement[] =>
+    Array.from(
+      screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-favorite-entry]')
+    )
+  const favoriteNames = (): string[] =>
+    // Names as read aloud: each row button's aria-label.
+    favoriteRows().map(
+      (row) => row.querySelector('[data-selector-row]')?.getAttribute('aria-label') ?? ''
+    )
+  const starOf = (row: HTMLElement): HTMLElement => within(row).getByTestId('selector-favorite')
+  const listRow = (name: string): HTMLElement => {
+    const rows = Array.from(
+      screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-selector-row]')
+    ).filter(
+      (row) => row.getAttribute('aria-label') === name && !row.closest('[data-favorite-entry]')
+    )
+    return rows[0] as HTMLElement
+  }
+
+  it('stars a model into Favorites and back out, without picking it', async () => {
+    const store = storeOf([])
+    const onPickModel = vi.fn()
+    render(<Panel {...props({ favoritesStore: store, onPickModel })} />)
+    expect(screen.queryByText('Favorites')).toBeNull()
+    const star = listRow('Claude Sonnet').parentElement?.querySelector<HTMLElement>(
+      '[data-testid="selector-favorite"]'
+    ) as HTMLElement
+    expect(star).toHaveAttribute('aria-pressed', 'false')
+    expect(star).toHaveAccessibleName('Add to favorites')
+    await act(async () => fireEvent.click(star))
+    expect(favoriteNames()).toEqual(['Claude Sonnet'])
+    expect(star).toHaveAttribute('aria-pressed', 'true')
+    expect(star).toHaveAccessibleName('Remove from favorites')
+    expect(store.list()).toEqual([
+      expect.objectContaining({ configId: CURSOR.id, modelId: 'sonnet' })
+    ])
+    // The Favorites row's own star is filled and pressed.
+    expect(starOf(favoriteRows()[0] as HTMLElement)).toHaveAttribute('aria-pressed', 'true')
+    await act(async () => fireEvent.click(star))
+    expect(screen.queryByText('Favorites')).toBeNull()
+    expect(store.list()).toEqual([])
+    expect(onPickModel).not.toHaveBeenCalled()
+    // The chosen model is still the chosen one.
+    expect(listRow('Claude Opus')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('the star is a sibling of the row button, never inside it', () => {
+    render(<Panel {...props({ favoritesStore: storeOf([]) })} />)
+    for (const star of screen.getAllByTestId('selector-favorite')) {
+      expect(star.closest('[data-selector-row]')).toBeNull()
+    }
+  })
+
+  it('after unstarring in Favorites, focus moves to the next favorite, else the previous, else the list', async () => {
+    knownCatalogs.current = new Map([[CLAUDE.id, CLAUDE_CATALOG]])
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'opus']
+          ])
+        })}
+      />
+    )
+    expect(favoriteNames()).toEqual([
+      'Opus via Claude · Claude Agent',
+      'Claude Sonnet',
+      'Claude Opus'
+    ])
+    // First: the next favorite takes focus.
+    await act(async () => fireEvent.click(starOf(favoriteRows()[0] as HTMLElement)))
+    expect(favoriteNames()).toEqual(['Claude Sonnet', 'Claude Opus'])
+    expect(favoriteRows()[0]?.querySelector('[data-selector-row]')).toHaveFocus()
+    // Last: the previous one does.
+    await act(async () => fireEvent.click(starOf(favoriteRows()[1] as HTMLElement)))
+    expect(favoriteNames()).toEqual(['Claude Sonnet'])
+    expect(favoriteRows()[0]?.querySelector('[data-selector-row]')).toHaveFocus()
+    // None left: the first list row.
+    await act(async () => fireEvent.click(starOf(favoriteRows()[0] as HTMLElement)))
+    expect(favoriteRows()).toEqual([])
+    expect(screen.getByTestId('selector-list').querySelector('[data-selector-row]')).toHaveFocus()
+  })
+
+  it('a failed write puts the star back', async () => {
+    const store = createFavoritesStore({
+      load: () => [],
+      put: () => Promise.reject(new Error('offline')),
+      remove: () => Promise.resolve()
+    })
+    render(<Panel {...props({ favoritesStore: store })} />)
+    const star = listRow('Claude Sonnet').parentElement?.querySelector<HTMLElement>(
+      '[data-testid="selector-favorite"]'
+    ) as HTMLElement
+    await act(async () => fireEvent.click(star))
+    await waitFor(() => expect(star).toHaveAttribute('aria-pressed', 'false'))
+    expect(screen.queryByText('Favorites')).toBeNull()
+  })
+})
+
 describe('SelectorPanelV2 Edit on the Favorites copy', () => {
   const favoritesOf = (): HTMLElement => screen.getByRole('group', { name: 'Favorites' })
-  /** The active model's Favorites copy, and its list row. */
+  /** The active model's row: its Favorites copy or its list row. */
   const copyRow = (): HTMLElement =>
     within(favoritesOf()).getByRole('button', { name: 'Claude Opus', pressed: true })
   const listedRow = (): HTMLElement =>
     screen
       .getAllByRole('button', { name: 'Claude Opus', pressed: true })
       .find((row) => !favoritesOf().contains(row)) as HTMLElement
+  /** The Edit button beside a row. */
   const editOf = (row: HTMLElement): HTMLElement => editBeside(row) as HTMLElement
   const levelTexts = (): string[] =>
     Array.from(document.querySelectorAll<HTMLElement>('[data-edit-thinking]')).map(
       (level) => level.textContent ?? ''
     )
-  const OPUS_FAVORITE = { favorites: [{ configId: CURSOR.id, value: 'opus' }] }
 
   /** The panel with live effort state, as the composer holds it. */
   function LivePanel(p: SelectorPanelV2Props): React.JSX.Element {
@@ -933,7 +1103,7 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
 
   it('Edit on the copy opens the flyout; a Thinking pick updates both levels', async () => {
     const onEffort = vi.fn()
-    render(<LivePanel {...props({ onEffort, ...OPUS_FAVORITE })} />)
+    render(<LivePanel {...props({ onEffort, favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
     expect(levelTexts()).toEqual(['High', 'High'])
     const edit = editOf(copyRow())
     expect(favoritesOf()).toContainElement(edit)
@@ -946,7 +1116,7 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
   })
 
   it('the copy\'s Edit has its own name, "in Favorites", with the visible level last', () => {
-    render(<Panel {...props(OPUS_FAVORITE)} />)
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
     const copyEdit = editOf(copyRow())
     const listedEdit = editOf(listedRow())
     const copyName = copyEdit.getAttribute('aria-label') ?? ''
@@ -964,13 +1134,15 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
   })
 
   it("with no level, the copy's Edit still names Favorites, as the fallback does", () => {
-    render(<Panel {...props({ thoughtLevel: null, ...OPUS_FAVORITE })} />)
+    render(
+      <Panel {...props({ thoughtLevel: null, favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />
+    )
     expect(editOf(copyRow())).toHaveAccessibleName('Edit Context for Claude Opus in Favorites')
     expect(editOf(listedRow())).toHaveAccessibleName('Edit Context for Claude Opus')
   })
 
   it("only one flyout is open: Edit on the list row closes the copy's", async () => {
-    render(<Panel {...props(OPUS_FAVORITE)} />)
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
     const copyEdit = editOf(copyRow())
     const listedEdit = editOf(listedRow())
     expect(copyEdit).not.toBe(listedEdit)
@@ -986,7 +1158,7 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
   })
 
   it('ArrowRight on the copy opens it; ArrowLeft returns focus to the copy', async () => {
-    render(<Panel {...props(OPUS_FAVORITE)} />)
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
     const copy = copyRow()
     act(() => copy.focus())
     fireEvent.keyDown(copy, { key: 'ArrowRight' })
@@ -1003,7 +1175,12 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
 
   it("Escape from the copy's flyout returns to the copy, quietly; the next closes the picker", async () => {
     const onOpenChange = vi.fn()
-    render(<InPicker {...props(OPUS_FAVORITE)} onOpenChange={onOpenChange} />)
+    render(
+      <InPicker
+        {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })}
+        onOpenChange={onOpenChange}
+      />
+    )
     const copy = await waitFor(copyRow)
     act(() => copy.focus())
     fireEvent.keyDown(copy, { key: 'ArrowRight' })
@@ -1030,29 +1207,65 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
     render(
       <Panel
         {...props({
-          favorites: [
-            { configId: CLAUDE.id, value: 'claude-opus' },
-            { configId: CURSOR.id, value: 'sonnet' },
-            { configId: CURSOR.id, value: 'opus' }
-          ]
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'opus']
+          ])
         })}
       />
     )
-    const rows = Array.from(favoritesOf().querySelectorAll<HTMLElement>('[data-selector-row]'))
-    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual([
-      'Opus via Claude · Claude Agent',
-      'Claude Sonnet',
-      'Claude Opus'
-    ])
+    const entries = Array.from(favoritesOf().querySelectorAll<HTMLElement>('[data-favorite-entry]'))
+    expect(entries).toHaveLength(3)
+    const named = entries
+      .filter((entry) => editBeside(entry) !== undefined)
+      .map((entry) => entry.querySelector('[data-selector-row]')?.getAttribute('aria-label'))
+    expect(named).toEqual(['Claude Opus'])
     expect(
-      rows
-        .filter((row) => editBeside(row) !== undefined)
-        .map((row) => row.getAttribute('aria-label'))
-    ).toEqual(['Claude Opus'])
+      within(favoritesOf()).queryByRole('button', { name: /^Edit Opus via Claude/ })
+    ).toBeNull()
     arrowRightOpensNothing(within(favoritesOf()).getByRole('button', { name: 'Claude Sonnet' }))
     arrowRightOpensNothing(
       within(favoritesOf()).getByRole('button', { name: 'Opus via Claude · Claude Agent' })
     )
+  })
+
+  it('unstarring the selected copy moves focus to the next favorite, else the previous', async () => {
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
+        })}
+      />
+    )
+    const starOfCopy = (): HTMLElement =>
+      within(copyRow().closest('[data-favorite-entry]') as HTMLElement).getByTestId(
+        'selector-favorite'
+      )
+    await act(async () => fireEvent.click(starOfCopy()))
+    expect(
+      within(favoritesOf()).queryByRole('button', { name: 'Claude Opus', pressed: true })
+    ).toBeNull()
+    expect(within(favoritesOf()).getByRole('button', { name: 'Claude Sonnet' })).toHaveFocus()
+    // Only the list row's Edit is left.
+    expect(screen.getAllByTestId('selector-edit')).toHaveLength(1)
+    cleanup()
+
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'opus']
+          ])
+        })}
+      />
+    )
+    await act(async () => fireEvent.click(starOfCopy()))
+    expect(within(favoritesOf()).getByRole('button', { name: 'Claude Sonnet' })).toHaveFocus()
   })
 })
 
@@ -1078,6 +1291,8 @@ describe('SelectorPanelV2 Edit motion on a pick', () => {
   const pressed = (): string[] =>
     screen
       .getAllByRole('button', { pressed: true })
+      // Rows only: a starred row's star is pressed too.
+      .filter((row) => row.hasAttribute('data-selector-row'))
       .map((row) => row.getAttribute('aria-label') ?? '')
   const settle = (): void => {
     act(() => {
@@ -1105,7 +1320,7 @@ describe('SelectorPanelV2 Edit motion on a pick', () => {
   })
 
   it("on open, the selected rows' Edits are at rest: no entrance, nothing leaving", () => {
-    render(<PickPanel {...props({ favorites: [{ configId: CURSOR.id, value: 'opus' }] })} />)
+    render(<PickPanel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
     const edits = screen.getAllByTestId('selector-edit')
     expect(edits).toHaveLength(2)
     for (const edit of edits) {
@@ -1133,10 +1348,10 @@ describe('SelectorPanelV2 Edit motion on a pick', () => {
       <PickPanel
         {...props({
           onPickModel,
-          favorites: [
-            { configId: CURSOR.id, value: 'opus' },
-            { configId: CURSOR.id, value: 'sonnet' }
-          ]
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
         })}
       />
     )
@@ -1183,7 +1398,7 @@ describe('SelectorPanelV2 Edit motion on a pick', () => {
     vi.useFakeTimers()
     render(
       <PickPanel
-        {...props({ modelOption: THREE, favorites: [{ configId: CURSOR.id, value: 'haiku' }] })}
+        {...props({ modelOption: THREE, favoritesStore: storeOf([[CURSOR.id, 'haiku']]) })}
       />
     )
     fireEvent.click(listed('Claude Sonnet'))
@@ -1219,7 +1434,8 @@ describe('SelectorPanelV2 Edit motion on a pick', () => {
     // Only Sonnet's copy is leaving; none sits beside Opus.
     expect(exiting()).toHaveLength(1)
     expect(opusEdit.parentElement?.querySelector('[data-edit-exiting]')).toBeNull()
-    expect(listed('Claude Sonnet').parentElement).toContainElement(exiting()[0] ?? null)
+    // The leaving copy sits in the old row's box, beside the row (and its star).
+    expect(exiting()[0]?.parentElement).toContainElement(listed('Claude Sonnet'))
 
     settle()
     expect(exiting()).toHaveLength(0)
@@ -1242,10 +1458,10 @@ describe('SelectorPanelV2 Edit motion on a pick', () => {
     render(
       <PickPanel
         {...props({
-          favorites: [
-            { configId: CURSOR.id, value: 'opus' },
-            { configId: CURSOR.id, value: 'sonnet' }
-          ]
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
         })}
       />
     )
@@ -1671,10 +1887,10 @@ describe('SelectorPanelV2 agent icon on every row', () => {
       <Panel
         {...props({
           agentRail,
-          favorites: [
-            { configId: CLAUDE.id, value: 'claude-opus' },
-            { configId: CURSOR.id, value: 'sonnet' }
-          ]
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet']
+          ])
         })}
       />
     )

@@ -5,15 +5,25 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState
 } from 'react'
-import { Check, MoreHorizontal, Search, Zap } from '@/components/icons'
+import { toast } from 'sonner'
+import { Check, MoreHorizontal, Search, Star, Zap } from '@/components/icons'
 import { BAND_FOCUS_CLASS, INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { flattenConfigOptionValues } from '../chat-input-bar-config'
+import {
+  type FavoriteKey,
+  type FavoritesStore,
+  favoriteId,
+  useFavoriteModels,
+  useFavoritesStore
+} from './favorite-models'
 import {
   type ChoiceSection,
   DENSE_ROW,
@@ -48,7 +58,6 @@ import {
   agentTrackCapacity,
   type CatalogModel,
   entryDisableReason,
-  type FavoriteModel,
   type ModelCatalog,
   rowAccessibleName,
   rowHasDescription,
@@ -61,22 +70,31 @@ import { useRejectedOptionValues } from './use-option-values'
 import { useSelectorPanelState } from './use-selector-panel-state'
 
 const LIST_ROW = '[data-selector-row]'
+/** Key prefix of the Favorites section's rows (the same model shows again below). */
+const FAVORITES_PREFIX = 'favorite\0'
+
+/** A favorite as a DOM attribute value (ids hold `:`, `/` and maybe more). */
+function favoriteEntryId(key: FavoriteKey): string {
+  return `${encodeURIComponent(key.configId)}/${encodeURIComponent(key.modelId)}`
+}
+
+/** The Favorites section's rows, top to bottom. */
+function favoriteEntries(list: HTMLElement | null): HTMLElement[] {
+  return Array.from(list?.querySelectorAll<HTMLElement>('[data-favorite-entry]') ?? [])
+}
 /** `--ease-smooth-out`; framer needs the curve itself, not the variable. */
 const EASE_OUT = [0.22, 1, 0.36, 1] as const
 const quick = (reduced: boolean) => ({ duration: reduced ? 0 : 0.15, ease: EASE_OUT })
 
 export interface SelectorPanelV2Props extends SelectorPanelProps {
   /**
-   * Starred models, keyed by the store config id (`armableConfigId`). Shown
-   * as a section above the list. Empty until the favorites store lands.
+   * Where starred models live. Defaults to the app store (localStorage today,
+   * the backend later); the panel only reads `list` and calls `set`.
    */
-  favorites?: readonly FavoriteModel[]
+  favoritesStore?: FavoritesStore
   /** Where the agent tabs sit: a strip under search, or a rail left of the list. */
   agentRail?: 'top' | 'left'
 }
-
-/** Keys the Favorites copies apart from the same models in the list. */
-const FAVORITES_KEY_PREFIX = 'favorite\0'
 
 function SectionLabel({ id, children }: { id?: string; children: ReactNode }): React.JSX.Element {
   return (
@@ -94,6 +112,7 @@ function DenseModelRow({
   agentId,
   agentName,
   edit,
+  favorite,
   inFavorites = false,
   disabled,
   touch,
@@ -110,6 +129,8 @@ function DenseModelRow({
   agentName?: string
   /** Session options of the active model; adds the Edit button. */
   edit?: ChoiceSection[]
+  /** Adds the star. `entry` marks a row in the Favorites section (for focus). */
+  favorite?: { on: boolean; entry?: string; onToggle: () => void }
   /** A row in Favorites: its Edit is named apart from the list row's. */
   inFavorites?: boolean
   disabled: boolean
@@ -162,7 +183,7 @@ function DenseModelRow({
         className={cn(
           DENSE_ROW,
           denseRowSize(touch),
-          (editable || exiting) && 'min-w-0 flex-1 hover:bg-transparent'
+          (editable || favorite || exiting) && 'min-w-0 flex-1 hover:bg-transparent'
         )}
       >
         <span
@@ -179,6 +200,10 @@ function DenseModelRow({
         >
           {name}
         </span>
+        {/* The star's slot, always reserved so nothing moves when it shows. */}
+        {favorite ? (
+          <span aria-hidden="true" className={cn('shrink-0', touch ? 'w-11' : 'w-5')} />
+        ) : null}
         {levelOnEdit ? null : (
           <Check
             size={PICKER_ICON.check}
@@ -191,8 +216,9 @@ function DenseModelRow({
     )
     // Leads with the full name, which a long one truncates in the row.
     const tip = rowTooltip({ name, agentName, details: tooltip })
-    if (touch) return button
-    return (
+    const withTip = touch ? (
+      button
+    ) : (
       <Tooltip
         open={tipOpen}
         onOpenChange={(next) => {
@@ -211,6 +237,27 @@ function DenseModelRow({
           {tip}
         </TooltipContent>
       </Tooltip>
+    )
+    if (!favorite) return withTip
+    // The star is the row button's sibling, laid over its reserved slot
+    // (right of the name, left of the check), never nested in it.
+    return (
+      <div
+        data-favorite-entry={favorite.entry}
+        className={cn(
+          'group/fav relative flex min-w-0 flex-1 rounded-md',
+          // An editable row's hover already belongs to the row around Edit.
+          !editable && 'transition-colors duration-150 ease-out hover:bg-row-hover'
+        )}
+      >
+        {withTip}
+        <StarButton
+          on={favorite.on}
+          touch={touch}
+          disabled={disabled}
+          onClick={favorite.onToggle}
+        />
+      </div>
     )
   }
   if (!edit || !editable) {
@@ -233,6 +280,50 @@ function DenseModelRow({
       touch={touch}
       renderRow={renderRow}
     />
+  )
+}
+
+/**
+ * Star a model. Shows on row hover or focus, and always once starred (filled).
+ * Keyboard: like Edit, a Tab stop after its row; the arrow keys move between
+ * rows only. On touch, with no hover, it always shows.
+ */
+function StarButton({
+  on,
+  touch,
+  disabled,
+  onClick
+}: {
+  on: boolean
+  touch: boolean
+  disabled: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid="selector-favorite"
+      aria-pressed={on}
+      aria-label={on ? 'Remove from favorites' : 'Add to favorites'}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        // Right of it: the row's 8px padding, the 14px check, the 8px gap.
+        'absolute inset-y-0 right-7.5 flex items-center justify-center rounded-md',
+        'transition-[opacity,color] duration-150 ease-out motion-reduce:transition-none disabled:cursor-not-allowed',
+        touch ? 'w-11' : 'w-5',
+        on
+          ? 'text-foreground'
+          : cn(
+              'text-muted-foreground hover:text-foreground',
+              !touch &&
+                'opacity-0 focus-visible:opacity-100 group-focus-within/fav:opacity-100 group-hover/fav:opacity-100'
+            ),
+        ROW_FOCUS
+      )}
+    >
+      <Star size={14} aria-hidden="true" className={cn(on && '[&_path]:fill-current')} />
+    </button>
   )
 }
 
@@ -605,10 +696,13 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   const reduced = useReducedMotion() ?? false
   const rootRef = useRef<HTMLDivElement>(null)
   const width = useTouchStripWidth(rootRef, touch && agentRail === 'top')
+  const appStore = useFavoritesStore()
+  const favoritesStore = props.favoritesStore ?? appStore
+  const favorites = useFavoriteModels(favoritesStore)
   const state = useSelectorPanelState(props, {
     reserveMoreTab: false,
     stableTabCapacity: agentTrackCapacity({ rail: agentRail, touch, width }),
-    favorites: props.favorites
+    favorites
   })
   const { query, searching, showingMore, effectiveId, viewId, viewTab, tabs, view } = state
   const { effectiveCatalog, capabilities, nameOf, tabOf } = state
@@ -631,6 +725,42 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       ? Boolean(view.catalog?.options.some((m) => m.value === modelValue))
       : view.kind === 'search' && view.own.some((m) => m.value === modelValue))
 
+  const starred = new Set(favorites.map(favoriteId))
+  /** After unstarring from Favorites: the favorite row to focus next (null: none left). */
+  const refocus = useRef<{ next: string | null } | null>(null)
+  const toggleFavorite = (key: FavoriteKey, fromFavorites: boolean): void => {
+    const id = favoriteId(key)
+    const on = !starred.has(id)
+    if (!on && fromFavorites) {
+      const entries = favoriteEntries(listRef.current).map((el) => el.dataset.favoriteEntry)
+      const at = entries.indexOf(favoriteEntryId(key))
+      refocus.current = { next: entries[at + 1] ?? entries[at - 1] ?? null }
+    }
+    favoritesStore.set(key, on).catch((error: unknown) => {
+      toast.error('Could not update favorites.')
+      void logFrontendError({
+        level: 'warn',
+        source: 'SelectorPanelV2.favorites',
+        message: `Failed to ${on ? 'add' : 'remove'} favorite ${id.replace('\0', '/')}: ${String(error)}`
+      })
+    })
+  }
+  // The unstarred row has left the Favorites section: focus its neighbour,
+  // else the first row, else search. Before paint, so focus never drops to body.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the favorites list commits; the ref carries the target
+  useLayoutEffect(() => {
+    const pending = refocus.current
+    if (!pending) return
+    refocus.current = null
+    const list = listRef.current
+    const next = favoriteEntries(list).find((el) => el.dataset.favoriteEntry === pending.next)
+    const target =
+      next?.querySelector<HTMLElement>(LIST_ROW) ??
+      list?.querySelector<HTMLElement>(LIST_ROW) ??
+      searchRef.current
+    target?.focus()
+  }, [favorites])
+
   const rows = (
     configId: string | null,
     catalog: ModelCatalog | null,
@@ -642,29 +772,42 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   ): ReactNode => {
     // The row's own agent, never the open tab: Favorites and search mix agents.
     const tab = tabOf(configId)
-    return options.map((model) => (
-      <DenseModelRow
-        key={`${keyPrefix}${configId}\0${model.value}`}
-        name={model.name}
-        tooltip={
-          [model.description, configId === sw.currentConfigId ? capabilities : null]
-            .filter(Boolean)
-            .join('\n\n') || undefined
-        }
-        selected={model.value === selectedValue}
-        glyph={tab ? <TabGlyph tab={tab} /> : null}
-        agentId={configId}
-        agentName={mixed && configId !== effectiveId ? tab?.name : undefined}
-        // Only the active model has session options. Each of its rows (the list
-        // row, its Favorites copy) gets the same Edit over that one session state.
-        edit={configId === effectiveId && model.value === selectedValue ? edit : undefined}
-        inFavorites={keyPrefix === FAVORITES_KEY_PREFIX}
-        disabled={disabled}
-        touch={touch}
-        reduced={reduced}
-        onPick={() => state.pick(configId, catalog, model.value)}
-      />
-    ))
+    const inFavorites = keyPrefix === FAVORITES_PREFIX
+    return options.map((model) => {
+      const key = configId ? { configId, modelId: model.value } : null
+      return (
+        <DenseModelRow
+          key={`${keyPrefix}${configId}\0${model.value}`}
+          name={model.name}
+          tooltip={
+            [model.description, configId === sw.currentConfigId ? capabilities : null]
+              .filter(Boolean)
+              .join('\n\n') || undefined
+          }
+          selected={model.value === selectedValue}
+          glyph={tab ? <TabGlyph tab={tab} /> : null}
+          agentId={configId}
+          agentName={mixed && configId !== effectiveId ? tab?.name : undefined}
+          // Only the active model has session options. Each of its rows (the list
+          // row, its Favorites copy) gets the same Edit over that one session state.
+          edit={configId === effectiveId && model.value === selectedValue ? edit : undefined}
+          inFavorites={inFavorites}
+          favorite={
+            key
+              ? {
+                  on: starred.has(favoriteId(key)),
+                  entry: inFavorites ? favoriteEntryId(key) : undefined,
+                  onToggle: () => toggleFavorite(key, inFavorites)
+                }
+              : undefined
+          }
+          disabled={disabled}
+          touch={touch}
+          reduced={reduced}
+          onPick={() => state.pick(configId, catalog, model.value)}
+        />
+      )
+    })
   }
 
   const agentRow = (tab: AgentTab, key: string, onPick: () => void): React.JSX.Element => (
@@ -730,7 +873,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
                     [favorite.model],
                     favorite.configId === effectiveId ? modelValue : undefined,
                     true,
-                    FAVORITES_KEY_PREFIX
+                    FAVORITES_PREFIX
                   )
                 )}
               </div>

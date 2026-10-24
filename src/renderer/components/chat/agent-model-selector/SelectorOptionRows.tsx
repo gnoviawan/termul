@@ -628,7 +628,10 @@ export function EditableRow({
     </button>
   )
   const row = (trigger: ReactNode): React.JSX.Element => (
-    <div className={cn(EDIT_ROW_BOX, open && 'bg-row-hover')}>
+    <div
+      // `group/fav`: hovering Edit still shows the row's star.
+      className={cn('group/fav', EDIT_ROW_BOX, open && 'bg-row-hover')}
+    >
       {renderRow({
         ref: rowRef,
         open,
