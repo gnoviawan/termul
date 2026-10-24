@@ -35,6 +35,8 @@ Scripts:
   `src/`, `../../src/renderer` or `../../src/shared` change. A rebuild remounts
   the tree in the same window; state resets (GPUIX has no React Refresh on desktop).
 - `bun run build` writes the production bundle (`dist/main.js` sets `NODE_ENV=production`, then loads the minified `dist/main.bundle.js`; `--dev` builds React's development bundle instead); `bun run start` builds and runs it once.
+- `bun run build` also builds the browser-pane helper on Linux (see Browser
+  panes below); `bun run build:webview-host` builds only the helper.
 - `bun run typecheck` runs both tsc projects (see below).
 - `bun run check:react` proves the bundle shares one React 19 with `@gpuix/react`.
 - `bun run parity <scenario>` runs the pixel-parity harness.
@@ -249,3 +251,59 @@ authenticated `/ws` client; `seed.ts`, port picking and agent registration)
 and bundle their scenes with `buildClient` from `build.ts`. They keep server
 state and output under `/tmp/gpuix-o2` and `/tmp/gpuix-o3`; set
 `GPUIX_STATE_ROOT` to use another directory.
+
+## Browser panes (Linux X11, `native/webview-host`, `src/browser`)
+
+A browser tab is a WebKitGTK webview in a helper process, `termul-webview-host`
+(wry 0.55.1, the version `src-tauri` uses). The helper builds each webview as
+an X11 child window of the GPUIX window, so the X server moves and clips it
+with the app. The shared `BrowserPanel` and `useBrowserWebview` run unchanged:
+`main.tsx` registers a browser host through `src/renderer/lib/browser-host.ts`,
+and every `browser-api.ts` facade asks that host before its Tauri `invoke`.
+The same registration turns on the New browser tab entry points and webview
+occlusion (`nativeBrowserPanesAvailable()` in `browser-panes.ts`).
+
+The app and the helper speak JSON lines over stdio (`src/browser/protocol.ts`
+and `native/webview-host/src/protocol.rs`). Each command carries a `req` and
+gets one `ack`; the helper also reports navigation, load, title, page console
+output and keyboard ownership. Page console lines go to the client log as
+`browser-console: [<tab id>] <level>: <text>`.
+
+- **Build.** `bun run build` runs `cargo build` on `native/webview-host` and
+  hard-links the binary to `dist/termul-webview-host`, where the client looks
+  for it (`TERMUL_WEBVIEW_HOST_BIN` overrides). Cargo writes to
+  `$CARGO_TARGET_DIR`, else to the repo's `src-tauri/target` when that already
+  exists; with neither the helper is skipped instead of compiling GTK and
+  WebKit from scratch. `TERMUL_GPUIX_SKIP_WEBVIEW_HOST=1` skips it outright.
+- **Lifetime.** The helper starts with the first tab and runs one WebKit
+  context for all tabs under `<state dir>/webview` (one profile, as in the
+  desktop app): one network process, and a web process per tab that ends when
+  its tab closes. Closing the window, `quit`, stdin EOF or the app dying
+  (`PR_SET_PDEATHSIG`) ends the helper and its WebKit processes.
+- **Overlays.** Webviews paint above GPUIX. The ui twins' dialogs, sheets,
+  menus, popovers and selects register an occluder while open (boot hands
+  them the renderer's `useNativeWebviewOcclusion`, see
+  `src/ui/internal/occlusion.ts`), so the webviews unmap until the last
+  overlay closes, as on the desktop. Tooltips do not occlude, as on the web.
+- **Keyboard.** A button press anywhere on the display is watched through
+  XInput2 raw events. A press inside a webview gives it the X input focus; a
+  press elsewhere in the window, or any GPUIX focus change, gives it back.
+  While a webview does not have the keyboard, its X windows do not select key
+  events, so keys never follow the pointer into it.
+- **Unsupported.** Other platforms, a session without `DISPLAY`, and Wayland
+  sessions get no browser panes and log why (`browser panes off: ...`). GPUI
+  picks Wayland whenever `WAYLAND_DISPLAY` is set and does not fall back to
+  XWayland, so there is no X11 window to embed into.
+
+Checks, each under Xvfb with real X input through XTest (GPUIX automation input
+never reaches X) and a test server on a free port in 8190-8199:
+
+- `bun tools/browser/pane-check.ts` drives the real shell: URL bar, link,
+  back and forward, a split and a divider drag (with per-frame tracking from
+  a 30 fps strip capture), Preferences and a dropdown over the webview, keys
+  into the page and back to the composer, two tabs and their WebKit
+  processes, and quitting. PNGs and `results.json` go to
+  `/tmp/gpuix-b2/pane-check`.
+- `bun tools/browser/unsupported-check.ts [--case missing-helper|wayland]`
+  checks the unsupported state.
+
