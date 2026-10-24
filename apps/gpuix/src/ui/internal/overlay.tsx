@@ -32,6 +32,7 @@ import {
   useRef,
   useState
 } from 'react'
+import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 import { registerPortal } from '../../compat/dom-node'
 import { tw } from '../../style/tw'
 import { SANS_FAMILY } from '../../style/utilities'
@@ -231,6 +232,11 @@ export interface FloatingProps {
   returnFocus?: boolean
   /** The layer node from `useLayer`, so layers opened inside this one register under it. */
   layer?: LayerNode
+  /**
+   * Hide native browser webviews while open, as the web primitives do (they paint above GPUIX).
+   * Default true; tooltips pass false, like the web Tooltip.
+   */
+  occludes?: boolean
   children: ReactNode
 }
 
@@ -248,8 +254,10 @@ export function Floating({
   focusContent,
   returnFocus = true,
   layer,
+  occludes = true,
   children
 }: FloatingProps): ReactNode {
+  useNativeWebviewOcclusion(occludes && overlay.open)
   const triggerId = overlay.trigger?.id ?? null
   const offset =
     side === 'top' || side === 'bottom' ? { x: alignOffset, y: 0 } : { x: 0, y: alignOffset }

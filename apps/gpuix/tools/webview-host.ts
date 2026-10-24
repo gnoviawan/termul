@@ -9,7 +9,7 @@
  * holds wry and webkit2gtk from the desktop build. `TERMUL_GPUIX_SKIP_WEBVIEW_HOST=1` skips it.
  */
 
-import { linkSync, rmSync } from 'node:fs'
+import { linkSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { WEBVIEW_HOST_BIN } from '../src/browser/support'
 
@@ -42,6 +42,7 @@ export function buildWebviewHost(
     throw new Error(`cargo ${args.join(' ')} exited with ${result.exitCode}`)
   const built = path.join(targetDir, options.release ? 'release' : 'debug', WEBVIEW_HOST_BIN)
   const binary = path.join(outDir, WEBVIEW_HOST_BIN)
+  mkdirSync(outDir, { recursive: true })
   rmSync(binary, { force: true })
   linkSync(built, binary)
   return { kind: 'built', binary, ms: Math.round(performance.now() - started) }

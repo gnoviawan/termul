@@ -172,6 +172,19 @@ impl X {
         unsafe { (self.xlib.XFlush)(dpy) };
     }
 
+    /// Map or unmap a window on GDK's connection, so GDK sees the change in event order.
+    pub fn set_mapped(&self, win: Xid, mapped: bool) {
+        let dpy = gdk_display();
+        unsafe {
+            if mapped {
+                (self.xlib.XMapWindow)(dpy, win);
+            } else {
+                (self.xlib.XUnmapWindow)(dpy, win);
+            }
+            (self.xlib.XFlush)(dpy);
+        }
+    }
+
     /// Forget gate records of windows that no longer exist (a destroyed tab).
     pub fn forget(&mut self, top: Xid) {
         let dpy = gdk_display();

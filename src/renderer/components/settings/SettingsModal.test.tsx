@@ -1,7 +1,16 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  resetNativeWebviewOcclusionForTests,
+  useNativeWebviewOccluded
+} from '@/hooks/use-native-webview-occlusion'
 import { SettingsModal } from './SettingsModal'
+
+vi.mock('@/lib/tauri-runtime', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/tauri-runtime')>('@/lib/tauri-runtime')
+  return { ...actual, isTauriContext: () => true }
+})
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (
@@ -59,5 +68,34 @@ describe('SettingsModal Escape', () => {
   it('stays open while a shortcut recorder is recording', () => {
     const onClose = renderWith(<div data-shortcut-recorder="true" data-recording="true" />)
     expect(onClose).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsModal and browser-pane webviews', () => {
+  function Probe(): React.JSX.Element {
+    return <output>{useNativeWebviewOccluded() ? 'hidden' : 'shown'}</output>
+  }
+
+  it('hides native webviews while open and reveals them on close', () => {
+    resetNativeWebviewOcclusionForTests()
+    const view = render(
+      <>
+        <Probe />
+        <SettingsModal isOpen onClose={() => undefined} title="Preferences">
+          <button type="button">First</button>
+        </SettingsModal>
+      </>
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('hidden')
+
+    view.rerender(
+      <>
+        <Probe />
+        <SettingsModal isOpen={false} onClose={() => undefined} title="Preferences">
+          <button type="button">First</button>
+        </SettingsModal>
+      </>
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('shown')
   })
 })

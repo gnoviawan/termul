@@ -201,9 +201,10 @@ impl Host {
     }
 
     fn set_visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
-        let tab = self.tab(id)?;
-        tab.view.set_visible(visible).map_err(|e| e.to_string())?;
-        let container = tab.container;
+        let container = self.tab(id)?.container;
+        // Map state of the container only. wry's set_visible also hides the GTK widgets, and a
+        // webview hidden that way never repaints when shown again (measured: black until a reload).
+        self.x.set_mapped(container, visible);
         if let Some(tab) = self.tabs.get_mut(id) {
             tab.visible = visible;
         }

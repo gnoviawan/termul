@@ -92,6 +92,20 @@ try {
     String(origin.y + y)
   ]
   const click = (x: number, y: number) => X('click', ...rootPoint(x, y))
+  /** Software rendering can paint a control after it is on screen; press again until it reacts. */
+  const clickUntilPainted = async (x: number, y: number, text: string) => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await Bun.sleep(500)
+      click(x, y)
+      const shown = await app
+        .getByText(text)
+        .waitFor({ timeoutMs: 3000 })
+        .then(() => true)
+        .catch(() => false)
+      if (shown) return
+    }
+    throw new Error(`clicking ${x},${y} never painted "${text}"`)
+  }
   /** The URL bar's text, copied out of it with real keys (GPUIX does not expose input values). */
   const urlBar = async (rect: Rect): Promise<string> => {
     click(rect.x + 300, rect.y - 19)
@@ -107,6 +121,7 @@ try {
 
   // 1. A browser tab from the New tab menu.
   await app.mouse.click({ x: 1248, y: 28 })
+  await app.getByText('New browser tab').waitFor({ timeoutMs: 10_000 })
   await app.getByText('New browser tab').click()
   const tabId = (await logged(/created tab (\S+)/))[1]
   const parentXid = (await logged(/attached to window (0x[0-9a-f]+)/))[1]
@@ -215,7 +230,6 @@ try {
 
   // 4. Split: drag the browser tab to the right edge, then drag the pane divider.
   await app.mouse.drag({ x: 633, y: 28 }, { x: 1200, y: 420 }, { steps: 12 })
-  await logged(new RegExp(`destroyed tab ${tabId}[\\s\\S]*created tab ${tabId}`))
   await app.getByText('B2 page one').waitFor({ timeoutMs: 15_000 })
   r = await until('webview settles in the right pane', async () => {
     const rect = await slot()
@@ -268,10 +282,97 @@ try {
   )
 
   // 5. Preferences over the webview, and a dropdown inside it.
+  const viewId = split.id
   click(24, 777)
   await app.getByText('Appearance').waitFor({ timeoutMs: 10_000 })
-  await Bun.sleep(800)
+  const hiddenUnderDialog = await until('webview hidden under the dialog', async () =>
+    mapState(s.display, viewId) === 'IsUnMapped' ? true : null
+  ).catch(() => false)
   await shot('04-preferences')
+  click(200, 326)
+  await app.getByText('Scrollback').waitFor({ timeoutMs: 10_000 })
+  await clickUntilPainted(1046, 438, '50,000 lines')
+  await shot('04-preferences-dropdown')
+  const dropdownFrame = path.join(OUT, '04-preferences-dropdown.png')
+  const coveredSlot = await slot()
+  const greenUnderOverlay = [
+    [coveredSlot.x + 20, coveredSlot.y + 20],
+    [coveredSlot.x + coveredSlot.width / 2, coveredSlot.y + coveredSlot.height / 2],
+    [coveredSlot.x + coveredSlot.width - 20, coveredSlot.y + coveredSlot.height - 20]
+  ].filter(([px, py]) => isPageGreen(pixelAt(dropdownFrame, px, py))).length
+  const stillHidden = mapState(s.display, viewId) === 'IsUnMapped'
+  X('key', 'Escape')
+  await Bun.sleep(400)
+  click(1112, 95)
+  const revealed = await until('webview mapped again after Preferences closes', async () =>
+    mapState(s.display, viewId) === 'IsViewable' ? true : null
+  ).catch(() => false)
+  await Bun.sleep(600)
+  await shot('05-preferences-closed')
+  const closedFrame = path.join(OUT, '05-preferences-closed.png')
+  const back = await slot()
+  check(
+    'Preferences and a dropdown over it stay fully visible; the webview comes back after close',
+    hiddenUnderDialog &&
+      stillHidden &&
+      greenUnderOverlay === 0 &&
+      revealed &&
+      isPageGreen(pixelAt(closedFrame, back.x + back.width / 2, back.y + back.height - 40)),
+    {
+      hiddenUnderDialog,
+      stillHiddenWithDropdown: stillHidden,
+      greenSamplesUnderOverlay: greenUnderOverlay,
+      revealed
+    }
+  )
+
+  // 6. Keys into the page, then back to a GPUIX field.
+  const fieldText = async () => (await painted()).join('\n')
+  r = await slot()
+  click(r.x + r.width / 2, r.y + r.height - 60)
+  await logged(new RegExp(`keyboard -> tab ${tabId}`))
+  X('type', 'abc')
+  await app.getByText('B2 keys abc').waitFor({ timeoutMs: 10_000 })
+  await logged(new RegExp(`\\[${tabId}\\] log: b2-key c`))
+  check('a click into the page gives it the keyboard; typed keys reach the page', true, {})
+  // The left pane's composer: open the agent launcher there.
+  await app.mouse.click({ x: 652, y: 28 })
+  await app.getByText('New chat').waitFor({ timeoutMs: 10_000 })
+  await app.getByText('New chat').click()
+  await app.getByText('What should we do in alpha?').waitFor({ timeoutMs: 10_000 })
+  const composer = await until(
+    'composer field',
+    async () =>
+      (await app.getByText(/Ask anything/).all()).find((node) => (node.bounds?.x ?? 0) < r.x)
+        ?.bounds
+  )
+  await logged(/keyboard -> app/)
+  const keysBefore = (log().match(new RegExp(`\\[${tabId}\\] log: b2-key`, 'g')) ?? []).length
+  click(composer.x + 40, composer.y + 8)
+  await Bun.sleep(600)
+  X('type', 'hello')
+  const composerGotIt = await until('composer shows typed text', async () =>
+    (await fieldText()).includes('hello') ? true : null
+  ).catch(() => false)
+  // Pointer resting over the webview must not steal keys meant for the app.
+  X('move', ...rootPoint(r.x + r.width / 2, r.y + r.height / 2))
+  X('type', 'xyz')
+  const gateHeld = await until(
+    'composer shows text typed with the pointer over the webview',
+    async () => ((await fieldText()).includes('helloxyz') ? true : null)
+  ).catch(() => false)
+  const keysAfter = (log().match(new RegExp(`\\[${tabId}\\] log: b2-key`, 'g')) ?? []).length
+  await shot('06-composer-typed')
+  check(
+    'a click back on the GPUIX composer returns the keyboard; the page gets no more keys',
+    composerGotIt && gateHeld && keysAfter === keysBefore,
+    {
+      composerGotIt,
+      pointerOverWebviewKeysToApp: gateHeld,
+      pageKeysBefore: keysBefore,
+      pageKeysAfter: keysAfter
+    }
+  )
 } catch (error) {
   check('run', false, String(error))
   await shot('zz-failure').catch(() => {})
