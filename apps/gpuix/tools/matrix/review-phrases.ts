@@ -19,8 +19,6 @@ export const TINT =
   'Some words in labels and descriptions paint in an accent or warm colour (word runs pick up a colour the web text does not have).'
 export const SELECT =
   'Each native select renders as a chevron button plus every option laid out as plain text in the row, which squeezes the label column; the web shows one closed dropdown.'
-export const TAB_TRUNC =
-  'Pane tab titles truncate to three letters and an ellipsis ("Ter...", "note...") where the web shows the whole title, so two terminals cannot be told apart.'
 export const SHORT_TRANSCRIPT =
   'A short transcript sits at the bottom of the GPUIX pane, leaving the space above it empty, where the web starts it at the top.'
 export const TAB_TITLE =

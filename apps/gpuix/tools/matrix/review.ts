@@ -13,7 +13,6 @@ import {
   PROSE,
   SHORT_TRANSCRIPT,
   TAB_TITLE,
-  TAB_TRUNC,
   TINT,
   TITLE_TIP,
   TOAST,
@@ -157,7 +156,6 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Preview renders, but the "On this page" outline column is missing (still missing at fce9a3e2, after D1 brought EditorTocLayout back), headings are smaller and paragraph spacing is tighter.',
-      'The tab title truncates to "guid..." where the web shows "guide.md".',
       TITLE_TIP
     ],
     cause: 'native override needed',
@@ -167,7 +165,7 @@ export const REVIEWS: Record<string, Review> = {
   'editor.tabs': {
     status: 'partial',
     differences: [
-      'Switching tabs works; README preview shows the same outline and typography gaps as editor.markdown, and the tab title truncates to "READ...".'
+      'Switching tabs works; README preview shows the same outline and typography gaps as editor.markdown. The tab titles read README.md and app.ts in full, as on the web (C15 fixed in G3).'
     ],
     cause: 'native override needed',
     unit: 'E2 markdown preview parity',
@@ -294,10 +292,14 @@ export const REVIEWS: Record<string, Review> = {
   },
   'terminal.open': {
     status: 'partial',
-    differences: ['Terminal tab and prompt match.', TAB_TRUNC],
+    differences: [
+      'Terminal tab, its full "Terminal 1" title and the prompt match (C15 fixed in G3).',
+      LAMP,
+      'The status-bar Terminal button\'s title tooltip paints under the pointer after the click; the web frame shows none.'
+    ],
     cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 2
+    unit: 'C7 svg fill utilities',
+    impact: 1
   },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
   'terminal.file-link': {
@@ -309,24 +311,16 @@ export const REVIEWS: Record<string, Review> = {
   },
   'terminal.new-tab-menu': { status: 'ported', differences: ['The new tab menu matches.'] },
   'terminal.tab-reorder': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both; in GPUIX the active tab moves to the front, but both titles read "Ter...", so the order is inferred from the active tab, not read.',
-      TAB_TRUNC
-    ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 1
+      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G3).'
+    ]
   },
   'terminal.split': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1).",
-      TAB_TRUNC
-    ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 1
+      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title (C15 fixed in G3)."
+    ]
   },
   'statusbar.items': {
     status: 'partial',

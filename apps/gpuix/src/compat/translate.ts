@@ -309,7 +309,27 @@ function layoutFixes(style: StyleDesc, classes: string): StyleDesc {
     out.minWidth = 0
   }
   if (out.minHeight === undefined && clips && out.flexGrow === 1) out.minHeight = 0
+  // Taffy sizes a content-sized flex row wrongly when an item has
+  // `flex-shrink: 0` and a negative margin: each px of `-mr-1` takes about
+  // 23 px off the row, so a pane tab with a `w-6 shrink-0 -mr-1` close slot
+  // came out 26 px wide (C15). A shrinkable item whose min size is its fixed
+  // size lays out the same and sizes the row right.
+  if (out.flexShrink === 0 && hasNegativeMargin(out)) {
+    const sized = { width: typeof out.width === 'number', height: typeof out.height === 'number' }
+    if (sized.width || sized.height) {
+      out.flexShrink = 1
+      if (sized.width && out.minWidth === undefined) out.minWidth = out.width
+      if (sized.height && out.minHeight === undefined) out.minHeight = out.height
+    }
+  }
   return out
+}
+
+function hasNegativeMargin(style: StyleDesc): boolean {
+  for (const side of [style.marginLeft, style.marginRight, style.marginTop, style.marginBottom]) {
+    if (typeof side === 'number' && side < 0) return true
+  }
+  return false
 }
 
 function translate(tw: Tw, tag: string, className: string): Translation {
