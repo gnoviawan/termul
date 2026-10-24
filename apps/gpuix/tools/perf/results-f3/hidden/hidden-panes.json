@@ -1,0 +1,252 @@
+{
+  "args": {
+    "runs": "3",
+    "panes": "1,4,8",
+    "out": "/tmp/gpuix-f3/hidden2/hidden-panes.json",
+    "rows": "150",
+    "seconds": "8",
+    "hz": "20"
+  },
+  "samples": [
+    {
+      "mode": "none",
+      "panes": 0,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.004171343,
+      "uiCpuPct": 10.11972339533162
+    },
+    {
+      "mode": "hidden",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001896398,
+      "uiCpuPct": 45.11430566512066
+    },
+    {
+      "mode": "parked",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.002586281,
+      "uiCpuPct": 9.12205097660977
+    },
+    {
+      "mode": "compat",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.012570567000001,
+      "uiCpuPct": 8.11225304744327
+    },
+    {
+      "mode": "hidden",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.023202225999999,
+      "uiCpuPct": 71.16859128261989
+    },
+    {
+      "mode": "parked",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.005291669,
+      "uiCpuPct": 10.86781139241961
+    },
+    {
+      "mode": "compat",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.002171306000001,
+      "uiCpuPct": 11.246947429445592
+    },
+    {
+      "mode": "hidden",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.269748180999999,
+      "uiCpuPct": 74.97205313028384
+    },
+    {
+      "mode": "parked",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.027243317,
+      "uiCpuPct": 10.838091803664708
+    },
+    {
+      "mode": "compat",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001297251999999,
+      "uiCpuPct": 25.49586567965692
+    },
+    {
+      "mode": "compat",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.025220108000001,
+      "uiCpuPct": 15.700503949342892
+    },
+    {
+      "mode": "parked",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.005863713999998,
+      "uiCpuPct": 13.615020676581057
+    },
+    {
+      "mode": "hidden",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001773299,
+      "uiCpuPct": 86.98071964710381
+    },
+    {
+      "mode": "compat",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001475081999999,
+      "uiCpuPct": 10.248110399601943
+    },
+    {
+      "mode": "parked",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001552187,
+      "uiCpuPct": 19.99612028525535
+    },
+    {
+      "mode": "hidden",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001650324,
+      "uiCpuPct": 70.11053686229542
+    },
+    {
+      "mode": "compat",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001872751999999,
+      "uiCpuPct": 11.247367058855726
+    },
+    {
+      "mode": "parked",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001312663,
+      "uiCpuPct": 8.873544003388483
+    },
+    {
+      "mode": "hidden",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001825406999998,
+      "uiCpuPct": 54.36259576714356
+    },
+    {
+      "mode": "none",
+      "panes": 0,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.012539016,
+      "uiCpuPct": 10.857981449609454
+    },
+    {
+      "mode": "none",
+      "panes": 0,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.259785164,
+      "uiCpuPct": 11.380441274634585
+    },
+    {
+      "mode": "hidden",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.010596801,
+      "uiCpuPct": 44.066629337271515
+    },
+    {
+      "mode": "parked",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001766048000002,
+      "uiCpuPct": 8.248179164960257
+    },
+    {
+      "mode": "compat",
+      "panes": 1,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001953331,
+      "uiCpuPct": 11.622162258771615
+    },
+    {
+      "mode": "hidden",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.054305861,
+      "uiCpuPct": 69.52802757486441
+    },
+    {
+      "mode": "parked",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.007453871000001,
+      "uiCpuPct": 19.356964460494986
+    },
+    {
+      "mode": "compat",
+      "panes": 4,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001490034,
+      "uiCpuPct": 19.49636871846662
+    },
+    {
+      "mode": "hidden",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001802875000001,
+      "uiCpuPct": 85.98062346043484
+    },
+    {
+      "mode": "parked",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.002594474,
+      "uiCpuPct": 13.995461142493474
+    },
+    {
+      "mode": "compat",
+      "panes": 8,
+      "rows": 150,
+      "hz": 20,
+      "wallS": 8.001365793,
+      "uiCpuPct": 18.496842142809903
+    }
+  ]
+}
