@@ -4,9 +4,10 @@ use super::*;
 use crate::browser_automation::engine::{CapabilityTable, EngineTraits};
 use crate::browser_automation::{ERR_INVALID_PARAMS, ERR_CAPABILITY};
 
-const ALL_VERBS: [&str; 25] = [
+const ALL_VERBS: [&str; 26] = [
     "navigate",
     "snapshot",
+    "read_text",
     "screenshot",
     "click",
     "fill",
@@ -74,6 +75,7 @@ fn expected_args_text_comes_from_the_registry() {
         ("switch_tab", "'tabId'"),
         ("handle_dialog", "'accept' (optional 'text', 'tabId')"),
         ("snapshot", "optional 'tabId'"),
+        ("read_text", "optional 'ref', 'cursor', 'limit', 'tabId'"),
         ("back", "optional 'tabId'"),
         ("list_tabs", "no arguments"),
         ("teleport", "action-specific fields"),
@@ -165,7 +167,7 @@ fn admit_refuses_unknown_and_withdrawn_verbs_before_any_side_effect() {
     assert_eq!(err.code, ERR_INVALID_PARAMS);
     assert_eq!(
         err.message,
-        "unknown action 'teleport'; valid actions: navigate, snapshot, click, fill, type, press, scroll, hover, upload, wait, new_tab, list_tabs, close_tab, back, forward, reload, select_option, check, uncheck, switch_tab, handle_dialog, console, network, drag"
+        "unknown action 'teleport'; valid actions: navigate, snapshot, read_text, click, fill, type, press, scroll, hover, upload, wait, new_tab, list_tabs, close_tab, back, forward, reload, select_option, check, uncheck, switch_tab, handle_dialog, console, network, drag"
     );
 
     let err = admit("screenshot", &mut Value::Null, &facts).unwrap_err();
@@ -275,7 +277,7 @@ fn an_engine_without_an_isolated_world_advertises_no_page_verb_and_does_not_clai
         );
     }
     assert!(schema.description.contains(
-        "Not available on this host: navigate, snapshot, screenshot, click, fill, type, press, scroll, hover, upload, wait, new_tab, back, forward, reload, select_option, check, uncheck, handle_dialog, console, network, drag."
+        "Not available on this host: navigate, snapshot, read_text, screenshot, click, fill, type, press, scroll, hover, upload, wait, new_tab, back, forward, reload, select_option, check, uncheck, handle_dialog, console, network, drag."
     ));
     assert!(schema.description.contains("cannot run page helpers in an isolated script world"));
     assert!(!schema.description.contains("page's own script context"));

@@ -45,6 +45,7 @@ pub const SCROLL: Helper = helper!("scroll");
 pub const HOVER: Helper = helper!("hover");
 pub const DRAG: Helper = helper!("drag");
 pub const CONTAINS_TEXT: Helper = helper!("contains_text");
+pub const READ_TEXT: Helper = helper!("read_text");
 pub const READY_STATE: Helper = helper!("ready_state");
 pub const FACTS: Helper = helper!("facts");
 pub const PREPARE_TEXT: Helper = helper!("prepare_text");
@@ -192,6 +193,13 @@ pub fn file_input(path: &str) -> Script {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn open_file_chooser(path: &str) -> Script {
     Script::new(OPEN_FILE_CHOOSER, json!({ "path": path }))
+}
+
+/// Up to `limit` UTF-16 units of the rendered text of the element at
+/// `path`, or of the whole document, from offset `cursor`, with the offset
+/// the slice ends at and the text's full length.
+pub fn read_text(path: Option<&str>, cursor: u64, limit: u64) -> Script {
+    Script::new(READ_TEXT, json!({ "path": path, "cursor": cursor, "limit": limit }))
 }
 
 /// Whether the page's visible text contains `text`.

@@ -272,6 +272,10 @@ impl DesktopBrowserHost {
                     ..Success::default()
                 })
             }
+            Verb::ReadText => {
+                let label = self.resolve_tab(session_id, args)?;
+                self.read_text(&label, args).await
+            }
             Verb::Screenshot => {
                 let label = self.resolve_tab(session_id, args)?;
                 let path = self.screenshot(session_id, &label).await?;

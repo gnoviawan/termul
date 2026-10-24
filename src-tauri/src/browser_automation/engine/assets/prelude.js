@@ -134,8 +134,20 @@ var TAG_ROLE = {
   HEADER: 'banner', FOOTER: 'contentinfo', FORM: 'form', IMG: 'img',
   UL: 'list', OL: 'list', LI: 'listitem', TABLE: 'table'
 };
+// Set once any page text in this helper's result was cut to its limit.
+var textCut = false;
+// The first `max` UTF-16 units of `text`, never ending inside a surrogate
+// pair, which would make the result invalid JSON.
+function clip(text, max) {
+  if (text.length <= max) return text;
+  textCut = true;
+  var end = max;
+  var last = text.charCodeAt(end - 1);
+  if (last >= 0xD800 && last <= 0xDBFF) end -= 1;
+  return text.slice(0, end);
+}
 function oneLine(value, max) {
-  return String(value).replace(/\s+/g, ' ').trim().slice(0, max);
+  return clip(String(value).replace(/\s+/g, ' ').trim(), max);
 }
 function inputType(el) {
   return oneLine(attr(el, 'type') || 'text', 32).toLowerCase();

@@ -68,7 +68,11 @@ pub struct PageData {
     /// Requests the page made, oldest first (`network`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<Vec<Value>>,
-    /// True when any field above was cut to its cap.
+    /// One page of an element's or the document's text (`read_text`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// True when any field above was cut to its cap, or the snapshot
+    /// helper cut a text block or name to its limit.
     pub truncated: bool,
 }
 
@@ -84,6 +88,7 @@ impl PageData {
             dialog: None,
             console: None,
             network: None,
+            text: None,
             truncated: url_cut || title_cut,
         }
     }
@@ -99,6 +104,7 @@ impl PageData {
             || self.dialog.is_some()
             || self.console.is_some()
             || self.network.is_some()
+            || self.text.is_some()
     }
 }
 
@@ -281,6 +287,38 @@ enum ResolveReply {
     Failed(HelperFailure),
 }
 
+/// One page of text the read-text helper returned: the slice, the offset
+/// it ends at, and the length of the whole text.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TextSlice {
+    pub text: String,
+    pub end: u64,
+    pub length: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TextReply {
+    Read(TextSlice),
+    Failed(HelperFailure),
+}
+
+/// A `read_text` page, cut to the snapshot cap.
+pub(super) fn cap_read_text(text: &str) -> (String, bool) {
+    let (kept, cut) = cap(text, SNAPSHOT_MAX_CHARS);
+    (kept.to_string(), cut)
+}
+
+/// Parse the read-text helper's result, or the failure it reported.
+pub(super) fn text_slice(out: Value, ref_id: Option<&str>) -> Result<TextSlice, BrowserError> {
+    match serde_json::from_value::<TextReply>(out) {
+        Ok(TextReply::Read(slice)) => Ok(slice),
+        Ok(TextReply::Failed(failure)) => Err(helper_failure(&failure.error, ref_id)),
+        Err(_) => Err(malformed_helper_result()),
+    }
+}
+
 fn malformed_helper_result() -> BrowserError {
     BrowserError::new(ERR_INTERNAL, "the page helper returned an unusable result")
         .with_reason("page_helper_malformed")
@@ -403,6 +441,9 @@ pub(super) struct PageSnapshot {
     pub items: Vec<SnapshotItem>,
     /// The helper stopped at its item cap.
     pub capped: bool,
+    /// The helper cut a text block or a name to its limit.
+    #[serde(default)]
+    pub cut: bool,
 }
 
 /// One line of the outline. Only `Node` items are actionable.
@@ -434,6 +475,9 @@ pub(super) enum SnapshotItem {
     Text {
         depth: usize,
         text: String,
+        /// Preformatted: its line breaks are content.
+        #[serde(default)]
+        pre: bool,
     },
     /// A frame the helper could not enter (cross-origin). `path` locates
     /// its frame element.
@@ -493,6 +537,12 @@ fn outline_text(text: &str) -> String {
     out
 }
 
+/// Preformatted page text on one outline line: each of its lines as
+/// [`outline_text`], with a literal `\n` where its line breaks were.
+fn outline_lines(text: &str) -> String {
+    text.split('\n').map(outline_text).collect::<Vec<_>>().join("\\n")
+}
+
 /// Shape a snapshot into page data plus the ref count: one outline line
 /// per item, with host refs minted by `mint` for its nodes in document
 /// order.
@@ -504,7 +554,7 @@ pub(super) fn shape_parsed(
     let mut page = PageData::meta(&snapshot.url, &snapshot.title);
     let (text, cut) = truncate_snapshot(&text);
     page.snapshot = Some(text);
-    page.truncated |= cut;
+    page.truncated |= cut || snapshot.cut;
     (page, count)
 }
 
@@ -562,8 +612,11 @@ fn format_snapshot(
                 "" => format!("{}- {}", indent(*depth), outline_text(role)),
                 name => format!("{}- {} \"{}\"", indent(*depth), outline_text(role), name),
             },
-            SnapshotItem::Text { depth, text } => {
+            SnapshotItem::Text { depth, text, pre: false } => {
                 format!("{}- text \"{}\"", indent(*depth), outline_text(text))
+            }
+            SnapshotItem::Text { depth, text, pre: true } => {
+                format!("{}- text \"{}\"", indent(*depth), outline_lines(text))
             }
             SnapshotItem::Frame { depth, name, unauthorized: None, .. } => {
                 format!("{}- iframe \"{}\" {UNREACHABLE_FRAME}", indent(*depth), outline_text(name))

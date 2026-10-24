@@ -36,6 +36,8 @@ const MAX_ITEMS: usize = 1600;
 struct Room {
     left: usize,
     capped: bool,
+    /// Some frame's helper cut page text to its limit.
+    cut: bool,
 }
 
 #[derive(Deserialize)]
@@ -73,10 +75,12 @@ impl DesktopBrowserHost {
         let mut room = Room {
             left: MAX_ITEMS.saturating_sub(page.items.len()),
             capped: page.capped,
+            cut: page.cut,
         };
         let items = std::mem::take(&mut page.items);
         page.items = self.splice(session_id, label, &frames, None, items, 0, &mut room).await;
         page.capped = room.capped;
+        page.cut = room.cut;
         Ok(page)
     }
 
@@ -124,6 +128,7 @@ impl DesktopBrowserHost {
             let found = inner_items.len();
             inner_items.truncate(room.left);
             room.capped |= inner.capped || inner_items.len() < found;
+            room.cut |= inner.cut;
             room.left -= inner_items.len();
             for nested in &mut inner_items {
                 *nested.depth_mut() += depth + 1;

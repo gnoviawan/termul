@@ -1,6 +1,7 @@
 //! Cases for console and network observation. Each checks the entries a
 //! fixture page produced, that a cursor pages past them, and that no URL
-//! in a reply carries the query strings the page used.
+//! in a reply carries the query strings the page used. And reading a page
+//! whose text is longer than the snapshot shows.
 
 use std::time::{Duration, Instant};
 
@@ -90,4 +91,39 @@ pub async fn network(c: &Ctx<'_>) -> CaseResult {
         return Err(mismatch(format!("a network url kept its query string: {entries:?}")));
     }
     pages_past(c, "network", &reply).await
+}
+
+/// A `<pre>` longer than one text block: the snapshot shows its start with
+/// its line breaks and says it cut text, and `read_text` pages give all of
+/// it.
+pub async fn long_text(c: &Ctx<'_>) -> CaseResult {
+    c.open("/long-text.html", "Long text fixture").await?;
+    let snap = c.call("snapshot", json!({})).await?;
+    let outline = snap["page"]["snapshot"].as_str().unwrap_or_default();
+    if !outline.contains(r#"- text "{\n"line 001": "abcdefghij"#) || outline.contains("line 100") {
+        return Err(mismatch(format!("the snapshot does not hold the block's start: {outline}")));
+    }
+    if snap["page"]["truncated"] != true {
+        return Err(mismatch("a cut text block left page.truncated false"));
+    }
+    let mut text = String::new();
+    let mut cursor = 0;
+    for _ in 0..10 {
+        let page = c.call("read_text", json!({ "cursor": cursor, "limit": 2000 })).await?;
+        text.push_str(page["page"]["text"].as_str().unwrap_or_default());
+        cursor = page["data"]["cursor"].as_u64().unwrap_or_default();
+        if page["data"]["more"] != true {
+            break;
+        }
+    }
+    let missing: Vec<String> = (1..=100)
+        .map(|n| format!("\"line {n:03}\": \"abcdefghij"))
+        .chain(["\"end\": true".to_string()])
+        .filter(|line| !text.contains(line.as_str()))
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(mismatch(format!("read_text pages lack {missing:?}")))
+    }
 }

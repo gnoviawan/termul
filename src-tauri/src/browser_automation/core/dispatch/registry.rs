@@ -5,7 +5,7 @@ use super::{opt, req, ActionSpec, ArgKey, Verb};
 use crate::browser_automation::budgets;
 use crate::browser_automation::engine::CapabilityId as Cap;
 
-pub static REGISTRY: [ActionSpec; 25] = [
+pub static REGISTRY: [ActionSpec; 26] = [
     ActionSpec {
         verb: Verb::Navigate,
         name: "navigate",
@@ -25,6 +25,16 @@ pub static REGISTRY: [ActionSpec; 25] = [
         mutating: false,
         budget: budgets::ACTION_EVAL,
         summary: "read the page as an outline (page.snapshot) with @eN refs for interactive elements. Take one after every navigation, then act on refs.",
+    },
+    ActionSpec {
+        verb: Verb::ReadText,
+        name: "read_text",
+        params: &[opt(ArgKey::Ref), opt(ArgKey::Cursor), opt(ArgKey::Limit), opt(ArgKey::TabId)],
+        one_of: &[],
+        requires: &[Cap::IsolatedEval],
+        mutating: false,
+        budget: budgets::ACTION_EVAL,
+        summary: "read the rendered text of the element ref, or of the whole page without ref, in pages: use it when page.truncated says the snapshot cut text.",
     },
     ActionSpec {
         verb: Verb::Screenshot,

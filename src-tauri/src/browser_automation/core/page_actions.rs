@@ -1,15 +1,15 @@
 //! Handlers for the form verbs (`select_option`, `check`, `uncheck`), the
-//! semantic `wait`, and `switch_tab`. Form verbs act only through the
-//! paths `fill` and `click` already use.
+//! semantic `wait`, `switch_tab` and `read_text`. Form verbs act only
+//! through the paths `fill` and `click` already use.
 
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::{mutated, required_ref, ResolvedRef};
+use super::{mutated, ref_arg, required_ref, ResolvedRef};
 use crate::browser_automation::budgets::{self, Deadline};
 use crate::browser_automation::core::reply::{
-    action_result, check_result, CheckState, Fidelity, Success,
+    action_result, cap_read_text, check_result, text_slice, CheckState, Fidelity, Success,
 };
 use crate::browser_automation::core::{
     BrowserError, DesktopBrowserHost, ERR_INTERNAL, ERR_TIMEOUT,
@@ -162,7 +162,43 @@ fn form_refusal(out: &Value, token: &str) -> Result<(), BrowserError> {
     }
 }
 
+/// The most text one `read_text` page carries, in UTF-16 units: inside
+/// the reply bound even when every unit is a three-byte character.
+pub(super) const READ_TEXT_MAX: u64 = 12_000;
+
 impl DesktopBrowserHost {
+    /// One page of the text of the element `ref` names, or of the whole
+    /// document, under `page.text`.
+    pub(super) async fn read_text(&self, label: &str, args: &Value) -> Result<Success, BrowserError> {
+        let cursor = args.get("cursor").and_then(Value::as_u64).unwrap_or(0);
+        let limit = match args.get("limit").and_then(Value::as_u64) {
+            None => READ_TEXT_MAX,
+            Some(0) => return Err(BrowserError::invalid("'limit' must be at least 1").with_arg_keys(&["limit"])),
+            Some(n) => n.min(READ_TEXT_MAX),
+        };
+        let token = ref_arg(args)?;
+        let out = match token {
+            Some(token) => {
+                let resolved = self.resolve_ref(label, token)?;
+                self.revalidate(label, token, &resolved).await?;
+                let script = assets::read_text(Some(&resolved.node.path), cursor, limit);
+                self.eval_ref(label, &resolved.node, script).await?
+            }
+            None => self.eval(label, assets::read_text(None, cursor, limit)).await?,
+        };
+        let slice = text_slice(out, token)?;
+        let (text, cut) = cap_read_text(&slice.text);
+        let mut page = self.page_meta(label).unwrap_or_default();
+        page.truncated |= cut;
+        page.text = Some(text);
+        Ok(Success {
+            tab: Some(self.tab_facts(label)?),
+            page: Some(page),
+            data: Some(json!({ "cursor": slice.end, "more": slice.end < slice.length, "length": slice.length })),
+            ..Success::default()
+        })
+    }
+
     pub(super) async fn select_option(
         &self,
         label: &str,

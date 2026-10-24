@@ -3,10 +3,18 @@ var MAX_DEPTH = 24;
 var LANDMARKS = ['heading', 'navigation', 'main', 'form', 'list', 'listitem', 'img', 'table'];
 var TEXT_TAGS = ['P', 'BLOCKQUOTE', 'PRE', 'TD', 'TH', 'LABEL', 'HGROUP', 'CAPTION', 'FIGCAPTION'];
 var SKIP_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'];
+// Text blocks carry far more than names, so a page's prose and data are
+// readable from the outline; `read_text` reads past this.
+var TEXT_MAX = 2000;
 var items = [];
 var capped = false;
 function push(item) {
   if (items.length < MAX_ITEMS) items.push(item); else capped = true;
+}
+// Preformatted text keeps its line breaks; each line loses trailing space.
+function preText(el) {
+  var text = textOf(el).replace(/\r\n?/g, '\n').replace(/[^\S\n]+$/gm, '').replace(/^\n+|\n+$/g, '');
+  return clip(text, TEXT_MAX);
 }
 function children(el) {
   var shadow = shadowOf(el);
@@ -51,8 +59,11 @@ function walk(el, depth) {
   }
   if (LANDMARKS.indexOf(role) >= 0) {
     push({ kind: 'landmark', depth: depth, role: role, name: name });
+  } else if (tag === 'PRE') {
+    var block = preText(el);
+    if (block) push({ kind: 'text', depth: depth, text: block, pre: true });
   } else if (TEXT_TAGS.indexOf(tag) >= 0) {
-    var text = name || textOf(el).replace(/\s+/g, ' ').trim().slice(0, 140);
+    var text = oneLine(textOf(el), TEXT_MAX);
     if (text) push({ kind: 'text', depth: depth, text: text });
   }
   var kids = children(el);
@@ -62,4 +73,4 @@ function walk(el, depth) {
 // frame's document, so a ref outlives no navigation of the frame.
 var guard = p.inFrame ? 'frame:' + docId(document) + '|' : '';
 walk(bodyOf(document) || docElOf(document), 0);
-return { url: location.href, title: titleOf(document) || '', items: items, capped: capped };
+return { url: location.href, title: titleOf(document) || '', items: items, capped: capped, cut: textCut };

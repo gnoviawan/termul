@@ -350,6 +350,12 @@ impl BrowserEngine for FakeEngine {
                 facts
             }
             "contains_text" => json!(script.params["text"] != "Loading"),
+            "read_text" => {
+                let text = "Sign in to continue";
+                let start = script.params["cursor"].as_u64().unwrap_or(0) as usize;
+                let end = (start + script.params["limit"].as_u64().unwrap_or(0) as usize).min(text.len());
+                json!({ "text": &text[start..end], "end": end, "length": text.len() })
+            }
             "frame_origin" => json!({ "x": 100.0, "y": 200.0 }),
             "location" => json!("https://example.com/page"),
             "checked_state" => json!({ "checked": *self.checked.lock(), "radio": false }),
@@ -622,7 +628,7 @@ impl Harness {
 }
 
 const REPLY_KEYS: [&str; 8] = ["ok", "code", "reason", "message", "fidelity", "tab", "page", "data"];
-const PAGE_KEYS: [&str; 7] = ["url", "title", "snapshot", "dialog", "console", "network", "truncated"];
+const PAGE_KEYS: [&str; 8] = ["url", "title", "snapshot", "dialog", "console", "network", "text", "truncated"];
 
 fn assert_closed_shape(reply: &Value) {
     let keys: Vec<&String> = reply.as_object().unwrap().keys().collect();
@@ -658,6 +664,8 @@ async fn every_verb_replies_with_the_closed_shape_and_fidelity_exactly_when_it_m
     let calls: Vec<(&str, Value, Option<&str>)> = vec![
         ("navigate", json!({ "url": "https://example.com/next" }), Some("trusted")),
         ("snapshot", json!({}), None),
+        ("read_text", json!({}), None),
+        ("read_text", json!({ "ref": "@e1", "cursor": 2, "limit": 3 }), None),
         ("screenshot", json!({}), None),
         ("click", json!({ "ref": "@e1" }), Some("trusted")),
         ("fill", json!({ "ref": "@e1", "value": "hunter2" }), Some("synthetic")),
