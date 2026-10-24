@@ -235,7 +235,9 @@ export function OptionRow({
         open={open}
         motionPreset="flyout"
         side="right"
-        align="end"
+        align="start"
+        // Line the first choice up with the row (the list has 4px padding).
+        alignOffset={-4}
         sideOffset={8}
         collisionPadding={8}
         onOpenAutoFocus={(event) => event.preventDefault()}
@@ -267,17 +269,19 @@ export function OptionSwitchRow({
 }): React.JSX.Element {
   return (
     <div className={cn('flex items-center gap-2 px-2 text-sm', denseRowSize(touch))}>
-      <span id={`selector-switch-${id}`} className="min-w-0 flex-1 truncate text-muted-foreground">
+      <label
+        htmlFor={`selector-switch-${id}`}
+        className="min-w-0 flex-1 cursor-pointer truncate text-muted-foreground"
+      >
         {label}
-      </span>
+      </label>
       <Switch
+        id={`selector-switch-${id}`}
         data-option-row=""
         data-testid={`selector-option-${id}`}
-        aria-labelledby={`selector-switch-${id}`}
         checked={checked}
         disabled={disabled}
         onCheckedChange={onToggle}
-        className="scale-90"
       />
     </div>
   )

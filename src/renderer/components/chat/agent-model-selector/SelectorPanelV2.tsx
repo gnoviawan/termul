@@ -1,10 +1,17 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { Check, MoreHorizontal, Search } from '@/components/icons'
 import { BAND_FOCUS_CLASS, INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
-import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { cn } from '@/lib/utils'
 import { flattenConfigOptionValues } from '../chat-input-bar-config'
 import { shouldShowSessionUsage } from '../context-usage-utils'
@@ -17,7 +24,7 @@ import {
   OptionSwitchRow,
   ROW_FOCUS
 } from './SelectorOptionRows'
-import type { SelectorPanelProps } from './SelectorPanel'
+import { type SelectorPanelProps, statusBadge } from './SelectorPanel'
 import {
   AgentRow,
   BusyBlock,
@@ -49,6 +56,9 @@ import { loadPersistedCatalog, useKnownCatalogs, useOtherAgentCatalog } from './
 const NO_IDS: readonly string[] = []
 const NO_FAVORITES: readonly FavoriteModel[] = []
 const LIST_ROW = '[data-selector-row]'
+/** `--ease-smooth-out`; framer needs the curve itself, not the variable. */
+const EASE_OUT = [0.22, 1, 0.36, 1] as const
+const quick = (reduced: boolean) => ({ duration: reduced ? 0 : 0.15, ease: EASE_OUT })
 
 export interface SelectorPanelV2Props extends SelectorPanelProps {
   /**
@@ -56,22 +66,6 @@ export interface SelectorPanelV2Props extends SelectorPanelProps {
    * as a section above the list. Empty until the favorites store lands.
    */
   favorites?: readonly FavoriteModel[]
-}
-
-function statusBadge(
-  entry: SupportedAcpAgentEntry | null,
-  installing: boolean,
-  armable: boolean
-): string | null {
-  if (!entry) return null
-  if (entry.status === 'ready' && !armable) return 'Not set up'
-  if (entry.status === 'install-required') return installing ? 'Installing…' : 'Install'
-  if (entry.status === 'needs-runtime') {
-    return entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'
-  }
-  if (entry.status === 'manual-install') return 'Manual install'
-  if (entry.status === 'unavailable') return 'Unavailable'
-  return null
 }
 
 function SectionLabel({ children }: { children: ReactNode }): React.JSX.Element {
@@ -83,7 +77,7 @@ function DenseModelRow({
   tooltip,
   selected,
   glyph,
-  meta,
+  agentName,
   disabled,
   touch,
   onPick
@@ -92,7 +86,8 @@ function DenseModelRow({
   tooltip?: string
   selected: boolean
   glyph?: ReactNode
-  meta?: string
+  /** Another agent's model: named for screen readers; the glyph shows it. */
+  agentName?: string
   disabled: boolean
   touch: boolean
   onPick: () => void
@@ -107,8 +102,10 @@ function DenseModelRow({
       className={cn(DENSE_ROW, denseRowSize(touch))}
     >
       {glyph ? <span className="inline-flex shrink-0">{glyph}</span> : null}
-      <span className="min-w-0 flex-1 truncate">{name}</span>
-      {meta ? <span className="shrink-0 text-xs text-muted-foreground">{meta}</span> : null}
+      <span className="min-w-0 flex-1 truncate">
+        {name}
+        {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
+      </span>
       <Check
         size={14}
         aria-hidden="true"
@@ -116,12 +113,13 @@ function DenseModelRow({
       />
     </button>
   )
-  if (!tooltip || touch) return button
+  const tip = [agentName, tooltip].filter(Boolean).join('\n\n')
+  if (!tip || touch) return button
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
       <TooltipContent side="right" className="max-w-64 whitespace-pre-line">
-        {tooltip}
+        {tip}
       </TooltipContent>
     </Tooltip>
   )
@@ -155,6 +153,11 @@ function AgentTabStrip({
   reduced: boolean
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  // One tab stop: the selected tab, or the first when none is selected.
+  const stop = Math.max(
+    items.findIndex((item) => item.selected),
+    0
+  )
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const tabs = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])
     const index = tabs.indexOf(document.activeElement as HTMLElement)
@@ -186,7 +189,7 @@ function AgentTabStrip({
       onKeyDown={onKeyDown}
       className={cn('flex border-b border-border', touch ? 'px-3' : 'px-1')}
     >
-      {items.map((item) => (
+      {items.map((item, index) => (
         <button
           key={item.key}
           type="button"
@@ -194,7 +197,7 @@ function AgentTabStrip({
           aria-selected={item.selected}
           aria-label={item.label}
           title={item.title}
-          tabIndex={item.selected ? 0 : -1}
+          tabIndex={index === stop ? 0 : -1}
           disabled={disabled}
           data-testid={`agent-tab-${item.key}`}
           onClick={item.onSelect}
@@ -212,7 +215,7 @@ function AgentTabStrip({
             <motion.span
               layoutId={`${id}-underline`}
               aria-hidden="true"
-              transition={{ duration: reduced ? 0 : 0.15, ease: 'easeOut' }}
+              transition={quick(reduced)}
               className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground"
             />
           ) : null}
@@ -342,7 +345,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   const [view, setView] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<{ configId: string; pick: SwitchModelPick } | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   const effectiveId = sw.armedConfigId ?? sw.currentConfigId
   const showingMore = view === MORE_AGENTS_VIEW
@@ -474,7 +477,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         }
         selected={model.value === selectedValue}
         glyph={showAgent && tab ? <TabGlyph tab={tab} /> : undefined}
-        meta={showAgent && configId !== effectiveId ? tab?.name : undefined}
+        agentName={showAgent && configId !== effectiveId ? tab?.name : undefined}
         disabled={disabled}
         touch={touch}
         onPick={() => pick(configId, catalog, model.value)}
@@ -503,7 +506,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           [favorite.model],
           favorite.configId === effectiveId ? modelValue : undefined,
           tabById.get(favorite.configId) ?? null,
-          favorite.configId !== effectiveId,
+          true,
           'favorite\0'
         )
       )
@@ -712,6 +715,15 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   }
   const showTabs = !searching && tabItems.length > 1
 
+  const listKey = searching ? 'search' : showingMore ? MORE_AGENTS_VIEW : (viewId ?? 'effective')
+  // The list remounts per view (`key`), so this runs once per view: open on
+  // the chosen model even when it sits below the fold.
+  const attachList = useCallback((node: HTMLDivElement | null) => {
+    listRef.current = node
+    const chosen = node?.querySelectorAll<HTMLElement>(`${LIST_ROW}[aria-pressed="true"]`)
+    chosen?.[chosen.length - 1]?.scrollIntoView?.({ block: 'nearest' }) // jsdom has none
+  }, [])
+
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== 'ArrowDown') return
     const first = Array.from(listRef.current?.querySelectorAll<HTMLElement>(LIST_ROW) ?? []).find(
@@ -788,14 +800,14 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         />
       ) : null}
       <motion.div
-        ref={listRef}
-        key={searching ? 'search' : showingMore ? MORE_AGENTS_VIEW : (viewId ?? 'effective')}
+        ref={attachList}
+        key={listKey}
         role={showTabs ? 'tabpanel' : undefined}
         aria-label={showTabs ? (showingMore ? 'More agents' : viewTab?.name) : undefined}
         data-testid="selector-list"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ duration: reduced ? 0 : 0.15, ease: 'easeOut' }}
+        transition={quick(reduced)}
         onKeyDown={onListKeyDown}
         className={cn('max-h-72 overflow-y-auto overscroll-contain', pad, 'py-1')}
       >

@@ -337,7 +337,7 @@ describe('SelectorPanelV2 favorites', () => {
     const names = within(list)
       .getAllByRole('button')
       .map((b) => b.textContent?.trim())
-    expect(names.slice(0, 2)).toEqual(['Opus via ClaudeClaude Agent', 'Claude Sonnet'])
+    expect(names.slice(0, 2)).toEqual(['Opus via Claude · Claude Agent', 'Claude Sonnet'])
     expect(names).not.toContain('gone')
   })
 

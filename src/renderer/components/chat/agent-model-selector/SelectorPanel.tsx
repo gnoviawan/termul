@@ -45,7 +45,7 @@ import { loadPersistedCatalog, useKnownCatalogs, useOtherAgentCatalog } from './
 
 const NO_IDS: readonly string[] = []
 
-function statusBadge(
+export function statusBadge(
   entry: SupportedAcpAgentEntry | null,
   installing: boolean,
   armable: boolean
