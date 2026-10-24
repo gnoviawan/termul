@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createFavoritesStore,
   FAVORITES_STORAGE_KEY,
@@ -181,5 +181,98 @@ describe('createFavoritesStore', () => {
     const shown = resolveFavorites(store.list(), (id) => (id === 'claude' ? catalog : null))
     expect(shown.map((f) => f.model.name)).toEqual(['Opus'])
     expect(store.list()).toHaveLength(2)
+  })
+})
+
+describe('createFavoritesStore across windows', () => {
+  const at = (minute: number): string => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString()
+  /** What another window does: write the key, then the browser fires `storage` here. */
+  function otherWindowWrites(key: string, items: readonly FavoriteModel[]): void {
+    const value = JSON.stringify(items)
+    localStorage.setItem(key, value)
+    window.dispatchEvent(
+      new StorageEvent('storage', { key, newValue: value, storageArea: localStorage })
+    )
+  }
+
+  afterEach(() => localStorage.clear())
+
+  it('a storage event for the favorites key reloads the list and notifies subscribers', () => {
+    const store = createFavoritesStore(localStorageAdapter())
+    const onChange = vi.fn()
+    const unsubscribe = store.subscribe(onChange)
+    expect(store.list()).toEqual([])
+
+    otherWindowWrites(FAVORITES_STORAGE_KEY, [{ ...SONNET, addedAt: at(1) }])
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(store.list()).toEqual([{ ...SONNET, addedAt: at(1) }])
+    unsubscribe()
+  })
+
+  it('ignores storage events for other keys', () => {
+    const store = createFavoritesStore(localStorageAdapter())
+    const onChange = vi.fn()
+    const unsubscribe = store.subscribe(onChange)
+    const before = store.list()
+
+    otherWindowWrites('termul.somethingElse', [{ ...SONNET, addedAt: at(1) }])
+
+    expect(onChange).not.toHaveBeenCalled()
+    expect(store.list()).toBe(before)
+    unsubscribe()
+  })
+
+  it('watches only while something is subscribed', () => {
+    const added: unknown[] = []
+    const events = {
+      addEventListener: vi.fn((_type: string, fn: unknown) => added.push(fn)),
+      removeEventListener: vi.fn()
+    }
+    const store = createFavoritesStore(
+      localStorageAdapter(memoryStorage(), FAVORITES_STORAGE_KEY, events as never)
+    )
+    expect(events.addEventListener).not.toHaveBeenCalled()
+
+    const first = store.subscribe(() => {})
+    const second = store.subscribe(() => {})
+    expect(events.addEventListener).toHaveBeenCalledTimes(1)
+    expect(events.addEventListener).toHaveBeenCalledWith('storage', added[0])
+
+    first()
+    expect(events.removeEventListener).not.toHaveBeenCalled()
+    second()
+    expect(events.removeEventListener).toHaveBeenCalledTimes(1)
+    expect(events.removeEventListener).toHaveBeenCalledWith('storage', added[0])
+  })
+
+  it('after the last unsubscribe, events no longer reach the store', () => {
+    const store = createFavoritesStore(localStorageAdapter())
+    const onChange = vi.fn()
+    store.subscribe(onChange)()
+
+    otherWindowWrites(FAVORITES_STORAGE_KEY, [{ ...SONNET, addedAt: at(1) }])
+
+    expect(onChange).not.toHaveBeenCalled()
+    expect(store.list()).toEqual([])
+    // Subscribing again catches up on what was written meanwhile.
+    store.subscribe(() => {})
+    expect(store.list()).toEqual([{ ...SONNET, addedAt: at(1) }])
+  })
+
+  it('a write in flight keeps its optimistic value through an outside change', async () => {
+    const write = deferred()
+    const base = localStorageAdapter()
+    const adapter: FavoritesAdapter = { ...base, put: () => write.promise }
+    const store = createFavoritesStore(adapter, clock())
+    const unsubscribe = store.subscribe(() => {})
+
+    const pending = store.set(OPUS, true)
+    otherWindowWrites(FAVORITES_STORAGE_KEY, [{ ...SONNET, addedAt: at(5) }])
+
+    expect(store.list().map((f) => f.modelId)).toEqual(['opus', 'sonnet'])
+    write.resolve()
+    await pending
+    unsubscribe()
   })
 })
