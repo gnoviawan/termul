@@ -424,7 +424,9 @@ export class CompatElement {
     const options = typeof xOrOptions === 'number' ? { left: xOrOptions, top: y } : (xOrOptions ?? {})
     const left = options.left ?? this.scrollLeft
     const top = options.top ?? this.scrollTop
-    renderer.scrollTo(this.elementId, left, top)
+    // GPUI's scroll offset is the content's shift, negative once scrolled; the
+    // getters above negate it, so the DOM's positive scrollTop goes in negated.
+    renderer.scrollTo(this.elementId, -left, -top)
     reads?.invalidate()
   }
 
