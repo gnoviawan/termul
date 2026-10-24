@@ -220,3 +220,68 @@ export function modelMatches(model: CatalogModel, query: string): boolean {
   if (!q) return true
   return [model.name, model.value, model.description ?? ''].join(' ').toLowerCase().includes(q)
 }
+
+/**
+ * Categories a context-window option arrives under. ACP reserves
+ * `model_config` for "context size or speed"; agents that predate it send
+ * `other`. A missing category is allowed too: ACP makes categories optional.
+ */
+const CONTEXT_OPTION_CATEGORIES: ReadonlySet<string> = new Set(['model_config', 'other'])
+/** `context`, `context_window`, `contextWindow`, `context-size`, … */
+const CONTEXT_OPTION_ID = /^context(?:[_-]?(?:window|size))?$/i
+
+/**
+ * Whether an agent config option picks the context window (Cursor's
+ * `context`: 300K | 1M, or 256K | 500K on some models). Matches the option
+ * id and category only, never a value label: the values change per model and
+ * the view renders whatever the agent sends.
+ */
+export function isContextOption(option: SessionConfigOption): boolean {
+  if (option.type !== 'select') return false
+  if (option.category != null && !CONTEXT_OPTION_CATEGORIES.has(option.category)) return false
+  if (!CONTEXT_OPTION_ID.test(option.id)) return false
+  return flattenConfigOptionValues(option).length > 0
+}
+
+/** The first context-window option, and the options left over. */
+export function splitContextOption(options: readonly SessionConfigOption[]): {
+  context: SessionConfigOption | null
+  rest: SessionConfigOption[]
+} {
+  const index = options.findIndex(isContextOption)
+  if (index < 0) return { context: null, rest: [...options] }
+  return { context: options[index], rest: options.filter((_, i) => i !== index) }
+}
+
+/**
+ * A starred model. `configId` is the STORE id that `armableConfigId` returns,
+ * never the registry agent id: picking a favorite arms that config.
+ */
+export interface FavoriteModel {
+  configId: string
+  value: string
+}
+
+/** The favorite for a model on an agent, or null when the agent cannot be armed. */
+export function favoriteFor(
+  entry: SupportedAcpAgentEntry,
+  agentConfigs: readonly { id: string }[],
+  value: string
+): FavoriteModel | null {
+  const configId = armableConfigId(entry, agentConfigs)
+  return configId ? { configId, value } : null
+}
+
+/**
+ * Favorites that still exist, in starred order, with the model each points
+ * at. A favorite whose agent has no known list, or whose model is gone, drops.
+ */
+export function resolveFavorites(
+  favorites: readonly FavoriteModel[],
+  catalogOf: (configId: string) => ModelCatalog | null
+): Array<FavoriteModel & { model: CatalogModel }> {
+  return favorites.flatMap((favorite) => {
+    const model = catalogOf(favorite.configId)?.options.find((m) => m.value === favorite.value)
+    return model ? [{ ...favorite, model }] : []
+  })
+}

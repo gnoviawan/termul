@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
+import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import {
   buildAgentTabs,
@@ -7,7 +8,11 @@ import {
   catalogFromPersisted,
   catalogFromSessionState,
   entryDisableReason,
-  modelMatches
+  favoriteFor,
+  isContextOption,
+  modelMatches,
+  resolveFavorites,
+  splitContextOption
 } from './selector-model'
 
 function config(id: string, name: string): StoredAgentConfig {
@@ -218,5 +223,126 @@ describe('capabilitySummary', () => {
     ['null capability fields', { promptCapabilities: null, mcpCapabilities: null }]
   ] as const)('is null for %s', (_name, capabilities) => {
     expect(capabilitySummary(capabilities)).toBeNull()
+  })
+})
+
+function select(
+  id: string,
+  category: string | undefined,
+  values: Array<[string, string]>,
+  name = 'Context'
+): SessionConfigOption {
+  return {
+    id,
+    name,
+    category,
+    type: 'select',
+    currentValue: values[0]?.[0] ?? '',
+    options: values.map(([value, label]) => ({ value, name: label }))
+  }
+}
+
+describe('isContextOption', () => {
+  const VALUES: Array<[string, string]> = [
+    ['300k', '300K'],
+    ['1m', '1M']
+  ]
+
+  it.each([
+    ['context', 'other'],
+    ['context', 'model_config'],
+    ['context', undefined],
+    ['context_window', 'model_config'],
+    ['contextWindow', 'other'],
+    ['context-size', 'model_config']
+  ])('matches id %s with category %s', (id, category) => {
+    expect(isContextOption(select(id, category, VALUES))).toBe(true)
+  })
+
+  it('rejects a context id under another category', () => {
+    expect(isContextOption(select('context', 'thought_level', VALUES))).toBe(false)
+    expect(isContextOption(select('context', 'model', VALUES))).toBe(false)
+  })
+
+  it('never matches on the value labels', () => {
+    // An effort-like option whose values happen to read like context sizes.
+    const lookalike = select('size', 'other', [
+      ['200k', '200K'],
+      ['1m', '1M']
+    ])
+    expect(isContextOption(lookalike)).toBe(false)
+    // A context option is found whatever its labels say.
+    expect(isContextOption(select('context', 'other', [['big', 'Large window']]))).toBe(true)
+  })
+
+  it('needs a select with at least one value', () => {
+    expect(isContextOption(select('context', 'other', []))).toBe(false)
+    expect(
+      isContextOption({ id: 'context', name: 'Context', type: 'boolean', currentValue: true })
+    ).toBe(false)
+  })
+
+  it('does not match ids that only contain the word', () => {
+    expect(isContextOption(select('max_context_tokens', 'other', VALUES))).toBe(false)
+    expect(isContextOption(select('embedded_context', 'other', VALUES))).toBe(false)
+  })
+})
+
+describe('splitContextOption', () => {
+  it('takes the first context option and keeps the rest in order', () => {
+    const mode = select('mode', 'other', [['plan', 'Plan']], 'Mode')
+    const context = select('context', 'model_config', [
+      ['256k', '256K'],
+      ['500k', '500K']
+    ])
+    const second = select('context_window', 'model_config', [['1m', '1M']])
+    expect(splitContextOption([mode, context, second])).toEqual({
+      context,
+      rest: [mode, second]
+    })
+  })
+
+  it('returns no context when the agent sends none', () => {
+    const mode = select('mode', 'other', [['plan', 'Plan']], 'Mode')
+    expect(splitContextOption([mode])).toEqual({ context: null, rest: [mode] })
+  })
+})
+
+describe('favorites', () => {
+  /** Registry configId differs from the stored id (imported custom agent). */
+  const STORED = config('custom-1', 'Claude Agent')
+  const IMPORTED = { ...entry({ ...STORED, configId: 'acp-registry:claude' }, 'claude') }
+
+  it('keys a favorite by the armable STORE id, never the agent id', () => {
+    expect(favoriteFor(IMPORTED, [STORED], 'opus')).toEqual({
+      configId: 'custom-1',
+      value: 'opus'
+    })
+  })
+
+  it('has no favorite for an agent that cannot be armed', () => {
+    expect(favoriteFor(entry(null, 'opencode'), [STORED], 'x')).toBeNull()
+  })
+
+  it('resolves favorites in starred order and drops missing ones', () => {
+    const catalog = {
+      id: 'model',
+      source: 'config' as const,
+      currentValue: null,
+      options: [
+        { value: 'opus', name: 'Opus' },
+        { value: 'haiku', name: 'Haiku' }
+      ]
+    }
+    const result = resolveFavorites(
+      [
+        { configId: 'a', value: 'haiku' },
+        { configId: 'a', value: 'gone' },
+        { configId: 'unknown', value: 'opus' },
+        { configId: 'a', value: 'opus' }
+      ],
+      (id) => (id === 'a' ? catalog : null)
+    )
+    expect(result.map((f) => f.model.name)).toEqual(['Haiku', 'Opus'])
   })
 })
