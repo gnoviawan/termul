@@ -1,9 +1,16 @@
 import { useRef } from 'react'
 import { AgentModelSelector } from '@/components/chat/agent-model-selector/AgentModelSelector'
 import { SelectorPanel } from '@/components/chat/agent-model-selector/SelectorPanel'
+import { SelectorPanelV2 } from '@/components/chat/agent-model-selector/SelectorPanelV2'
+import {
+  type FavoriteModel,
+  favoriteFor
+} from '@/components/chat/agent-model-selector/selector-model'
 import { Caption } from './kit'
 import {
+  MOCK_AGENT_CONFIGS,
   MOCK_DEFAULT_MODEL,
+  MOCK_ENTRIES,
   MOCK_NARROW_CONTEXT_MODEL,
   type MockSelectorState,
   useMockSelector
@@ -60,6 +67,54 @@ export function ModelSelectorV1() {
       <V1Column id="model-selector-v1-a" label="Context 300K · 1M" model={MOCK_DEFAULT_MODEL} />
       <V1Column
         id="model-selector-v1-b"
+        label="Context 256K · 500K"
+        model={MOCK_NARROW_CONTEXT_MODEL}
+      />
+    </div>
+  )
+}
+
+/**
+ * Mock favorites until the favorites store lands. Keyed the way the store
+ * will be: the agent's config id from `armableConfigId`, never the agent id.
+ */
+const MOCK_FAVORITES: FavoriteModel[] = (
+  [
+    ['cursor', 'claude-4.6-sonnet-thinking-max'],
+    ['claude-acp', 'opus-1m'],
+    ['codex-acp', 'gpt-5.4-codex']
+  ] as const
+).flatMap(([agentId, value]) => {
+  const entry = MOCK_ENTRIES.find((e) => e.agent.id === agentId)
+  const favorite = entry ? favoriteFor(entry, MOCK_AGENT_CONFIGS, value) : null
+  return favorite ? [favorite] : []
+})
+
+function V2Column({ id, label, model }: { id: string; label: string; model: string }) {
+  const state = useMockSelector(id, model)
+  const escapeRef = useRef<(() => boolean) | null>(null)
+  return (
+    // Room on the right for the session option flyout.
+    <div className="flex w-130 flex-col gap-3">
+      <Caption>{label}</Caption>
+      <div className={`${SURFACE} self-start`}>
+        <SelectorPanelV2 {...panelProps(state)} favorites={MOCK_FAVORITES} escapeRef={escapeRef} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Model picker v2, view only: same source and mock as v1. In the app it sits
+ * behind `localStorage['termul.modelPickerV2'] = '1'`. Visual direction after
+ * volt (MIT, github.com/LeulAria/volt), on Termul tokens.
+ */
+export function ModelSelectorV2() {
+  return (
+    <div className="flex gap-6 p-5">
+      <V2Column id="model-selector-v2-a" label="Context 300K · 1M" model={MOCK_DEFAULT_MODEL} />
+      <V2Column
+        id="model-selector-v2-b"
         label="Context 256K · 500K"
         model={MOCK_NARROW_CONTEXT_MODEL}
       />
