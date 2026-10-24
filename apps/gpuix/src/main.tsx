@@ -43,5 +43,10 @@ boot(config, {
   window: windowSize,
   fonts,
   hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null,
-  onRenderer: (renderer) => recordRendererStats(renderer, process.env.TERMUL_GPUIX_STATS)
+  onRenderer: (renderer) =>
+    recordRendererStats(
+      renderer,
+      process.env.TERMUL_GPUIX_STATS,
+      process.env.TERMUL_GPUIX_STATS_OPS === '1'
+    )
 })

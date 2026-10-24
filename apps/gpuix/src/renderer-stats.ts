@@ -4,6 +4,10 @@
  * long it blocked. Every read below is a synchronous round trip to the GPUI
  * UI thread, and the tree and bounds reads also make it paint a frame, so
  * their count shows how much of the UI thread's load JS asks for.
+ *
+ * With `ops`, each line also counts the mutation ops by kind, their JSON bytes,
+ * and how many distinct elements got a `setText`. It parses every batch, so
+ * it is for diagnostic runs, not for the timing ones.
  */
 
 import { appendFileSync } from 'node:fs'
@@ -21,12 +25,22 @@ const COUNTED = [
 
 type Counted = (typeof COUNTED)[number]
 
-export function recordRendererStats(renderer: object, file: string | undefined): void {
+export function recordRendererStats(renderer: object, file: string | undefined, ops = false): void {
   if (!file) return
   const target = renderer as Record<Counted, ((...args: unknown[]) => unknown) | undefined>
   const calls: Record<string, number> = {}
   const blockedMs: Record<string, number> = {}
   let batchBytes = 0
+  const opCount: Record<string, number> = {}
+  const opBytes: Record<string, number> = {}
+  const textIds = new Set<unknown>()
+  const countOps = (json: string) => {
+    for (const op of JSON.parse(json) as [string, unknown, ...unknown[]][]) {
+      opCount[op[0]] = (opCount[op[0]] ?? 0) + 1
+      opBytes[op[0]] = (opBytes[op[0]] ?? 0) + JSON.stringify(op).length
+      if (op[0] === 'setText') textIds.add(op[1])
+    }
+  }
   for (const name of COUNTED) {
     const original = target[name]
     if (typeof original !== 'function') continue
@@ -38,14 +52,24 @@ export function recordRendererStats(renderer: object, file: string | undefined):
       } finally {
         calls[name] = (calls[name] ?? 0) + 1
         blockedMs[name] = (blockedMs[name] ?? 0) + performance.now() - t0
-        if (name === 'applyBatch') batchBytes += (args[0] as string).length
+        if (name === 'applyBatch') {
+          batchBytes += (args[0] as string).length
+          if (ops) countOps(args[0] as string)
+        }
       }
     }
   }
   setInterval(() => {
-    const line = { t: Date.now(), calls: { ...calls }, blockedMs: { ...blockedMs }, batchBytes }
-    for (const key of Object.keys(calls)) delete calls[key]
-    for (const key of Object.keys(blockedMs)) delete blockedMs[key]
+    const line = {
+      t: Date.now(),
+      calls: { ...calls },
+      blockedMs: { ...blockedMs },
+      batchBytes,
+      ...(ops ? { opCount: { ...opCount }, opBytes: { ...opBytes }, textIds: textIds.size } : {})
+    }
+    for (const bag of [calls, blockedMs, opCount, opBytes])
+      for (const key of Object.keys(bag)) delete bag[key]
+    textIds.clear()
     batchBytes = 0
     appendFileSync(file, `${JSON.stringify(line)}\n`)
   }, 1000).unref()
