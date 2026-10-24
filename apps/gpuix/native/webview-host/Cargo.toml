@@ -1,0 +1,19 @@
+[package]
+name = "termul-webview-host"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Browser-pane webviews for the Termul GPUIX client: wry child windows inside the GPUIX X11 window, driven over JSON lines on stdio"
+
+[workspace]
+
+[dependencies]
+# Same wry as src-tauri/Cargo.lock.
+wry = "=0.55.1"
+gtk = "0.18"
+gdkx11 = "0.18"
+x11-dl = "2.21"
+raw-window-handle = "0.6"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
