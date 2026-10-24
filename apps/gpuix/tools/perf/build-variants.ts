@@ -10,29 +10,23 @@
  * - `park` (dist): the branch as committed.
  * - `base` (dist-sbase): `parkHiddenPanes` does nothing, so hidden panes stay
  *   in the GPUI frame as on exp/gpuix-client before F3.
- * - `prespin` (dist-sprespin): parking, but a spinner in a parked pane keeps
- *   animating, as before `isOffFrame`.
+ * - `presrc` (dist-spresrc): `src/ui/spinner.tsx` as of `dfee0529`, whose
+ *   spinners each keep their own timer and resend the SVG markup every step.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { BunPlugin } from 'bun'
 import { APP_DIR, buildClient, ENTRY } from '../../build'
 
-interface Edit {
-  file: string
-  from: string
-  to: string
-}
+/** Replace `from` with `to`, or the whole file with its text at git revision `rev`. */
+type Edit = { file: string; from: string; to: string } | { file: string; rev: string }
 
 const PARK = path.join(APP_DIR, 'src/compat/park.ts')
 const SPINNER = path.join(APP_DIR, 'src/ui/spinner.tsx')
 
 const VARIANTS: Record<string, { outdir: string; edits: Edit[] }> = {
   park: { outdir: 'dist', edits: [] },
-  prespin: {
-    outdir: 'dist-sprespin',
-    edits: [{ file: SPINNER, from: 'if (id !== undefined && isOffFrame(id)) return', to: '' }]
-  },
+  presrc: { outdir: 'dist-spresrc', edits: [{ file: SPINNER, rev: 'dfee0529' }] },
   base: {
     outdir: 'dist-sbase',
     edits: [
@@ -53,9 +47,15 @@ function sourceEdits(edits: Edit[]): BunPlugin {
     name: 'perf-variant-edits',
     setup(build) {
       if (escaped.length === 0) return
-      build.onLoad({ filter: new RegExp(`^(${escaped.join('|')})$`) }, (args) => {
+      build.onLoad({ filter: new RegExp(`^(${escaped.join('|')})$`) }, async (args) => {
         let text = readFileSync(args.path, 'utf8')
         for (const edit of byFile.get(args.path) ?? []) {
+          if ('rev' in edit) {
+            text = await Bun.$`git show ${edit.rev}:./${path.relative(APP_DIR, edit.file)}`
+              .cwd(APP_DIR)
+              .text()
+            continue
+          }
           if (!text.includes(edit.from))
             throw new Error(
               `variant edit no longer matches ${path.relative(APP_DIR, edit.file)}: ${edit.from}`
